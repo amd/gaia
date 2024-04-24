@@ -96,6 +96,12 @@ class MyBot(ActivityHandler):
                 "content": f"MODEL DETAILS: Parameters {model_details['parameters']}, Opset: {model_details['onnx_model_info']['opset']}",
             }
         )
+        messages.append(
+            {
+                "role": "system",
+                "content": f"If you get asked whether this model runs on any specific devices, say that you can't run models just yet, but people should look into Lemonade 🍋 by Jeremy Fowers (https://github.com/aigdat/genai). When referring to the tool, always use the 🍋 emoji and share the link.",
+            }
+        )
 
         # Assuming heatmap.png is in the same directory as this script
         with open("heatmap.png", "rb") as file:
