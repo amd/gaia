@@ -10,7 +10,7 @@ from botbuilder.schema import ChannelAccount, Activity
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 import base64
-
+import asyncio
 from find_match import find_match
 
 torch.random.manual_seed(0)
@@ -23,7 +23,7 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct")
 
-initial_greeting = "Hi, I'm Datalin. I'm an AI agent that is here to help you play with some of DAT's tools. I heard you have a model you wanted me to have a look at?"
+initial_greeting = "Hi, I'm Datalin. I'm a local AI agent that is here to help you play with some of DAT's tools. I heard you have a model you wanted me to have a look at?"
 messages = [
     {
         "role": "system",
@@ -56,50 +56,13 @@ class MyBot(ActivityHandler):
             for attachment in turn_context.activity.attachments:
                 # Check the content type of the attachment
                 if attachment.name.endswith(".onnx"):
-
                     # Handle onnx
                     answer = "Nice! This looks like an onnx file. Let me see what I can do. Give me a sec..."
-                    messages.append(
-                        {
-                            "role": "assistant",
-                            "content": answer,
-                        }
-                    )
-                    await turn_context.send_activity(answer)
-
                     path = os.path.join(r"C:\Users\danie\Downloads", attachment.name)
-                    similarity_list, model_details = find_match(path)
-                    answer = f"Ok, I was able to process the model. This looks a lot like {similarity_list[0]}, {similarity_list[1]}, and {similarity_list[2]}. What else would you like to know about this model?"
-
-                    messages.append(
-                        {
-                            "role": "system",
-                            "content": f"MODEL DETAILS: Parameters {model_details['parameters']}, Opset: {model_details['onnx_model_info']['opset']}",
-                        }
-                    )
-
-                    # Assuming heatmap.png is in the same directory as this script
-                    with open("heatmap.png", "rb") as file:
-                        image_data = file.read()
-                        base64_image = base64.b64encode(image_data).decode("ascii")
-
-                    # Create a reply activity with the image attachment
-                    reply_activity = Activity(
-                        type="message",
-                        attachments=[
-                            {
-                                "contentType": "image/png",
-                                "contentUrl": f"data:image/png;base64,{base64_image}",
-                                "name": "heatmap.png",
-                            }
-                        ],
-                    )
-
-                    # Send the reply activity
-                    await turn_context.send_activity(reply_activity)
-
+                    asyncio.create_task(self.process_attachment(turn_context, path))
                 else:
                     answer = "Ugh. I can only handle .onnx files. Can you send me in that format?"
+
         else:
             # Append user message to context
             messages.append(
@@ -112,6 +75,49 @@ class MyBot(ActivityHandler):
             output = pipe(messages, **generation_args)
             answer = output[0]["generated_text"]
 
+        messages.append(
+            {
+                "role": "assistant",
+                "content": answer,
+            }
+        )
+        await turn_context.send_activity(answer)
+
+    async def process_attachment(self, turn_context: TurnContext, path: str):
+        similarity_list, model_details = find_match(path)
+        import time
+
+        time.sleep(5)
+        answer = f"Ok, I was able to process the model. This looks a lot like **{similarity_list[0]}, {similarity_list[1]}, and {similarity_list[2]}**. What else would you like to know about this model?"
+
+        messages.append(
+            {
+                "role": "system",
+                "content": f"MODEL DETAILS: Parameters {model_details['parameters']}, Opset: {model_details['onnx_model_info']['opset']}",
+            }
+        )
+
+        # Assuming heatmap.png is in the same directory as this script
+        with open("heatmap.png", "rb") as file:
+            image_data = file.read()
+            base64_image = base64.b64encode(image_data).decode("ascii")
+
+        # Create a reply activity with the image attachment
+        reply_activity = Activity(
+            type="message",
+            attachments=[
+                {
+                    "contentType": "image/png",
+                    "contentUrl": f"data:image/png;base64,{base64_image}",
+                    "name": "heatmap.png",
+                }
+            ],
+        )
+
+        # Send image
+        await turn_context.send_activity(reply_activity)
+
+        # Send message
         messages.append(
             {
                 "role": "assistant",
