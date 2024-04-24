@@ -1,4 +1,5 @@
 import os
+import time
 from botbuilder.core import (
     ActivityHandler,
     TurnContext,
@@ -23,7 +24,7 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct")
 
-initial_greeting = "Hi, I'm Datalin. I'm a local AI agent that is here to help you play with some of DAT's tools. I heard you have a model you wanted me to have a look at?"
+initial_greeting = "Hi, I'm Datalin. I'm a local AI agent (and future RAG) that is here to help you with DAT's tools. I heard you have a model you wanted me to have a look at?"
 messages = [
     {
         "role": "system",
@@ -82,10 +83,11 @@ class MyBot(ActivityHandler):
             }
         )
         await turn_context.send_activity(answer)
+        if "parameters" in answer:
+            asyncio.create_task(self.suggest_confluence(turn_context))
 
     async def process_attachment(self, turn_context: TurnContext, path: str):
         similarity_list, model_details = find_match(path)
-        import time
 
         time.sleep(5)
         answer = f"Ok, I was able to process the model. This looks a lot like **{similarity_list[0]}, {similarity_list[1]}, and {similarity_list[2]}**. What else would you like to know about this model?"
@@ -124,6 +126,17 @@ class MyBot(ActivityHandler):
         await turn_context.send_activity(reply_activity)
 
         # Send message
+        messages.append(
+            {
+                "role": "assistant",
+                "content": answer,
+            }
+        )
+        await turn_context.send_activity(answer)
+
+    async def suggest_confluence(self, turn_context: TurnContext):
+        time.sleep(5)
+        answer = "By the way, while we were chatting I just checked **Confluence** and it looks like there is no intake report about this model there. Would you like me to create one? I can add something to [confluence.amd.com/display/AIG/](https://confluence.amd.com/display/AIG/)."
         messages.append(
             {
                 "role": "assistant",
