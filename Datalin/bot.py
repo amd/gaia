@@ -13,6 +13,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 import base64
 import asyncio
 from find_match import find_match
+from split import split_onnx_model
 
 torch.random.manual_seed(0)
 
@@ -24,7 +25,7 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct")
 
-initial_greeting = "Hi, I'm Datalin. I'm a local AI agent (and future RAG) that is here to help you with DAT's tools. I heard you have a model you wanted me to have a look at?"
+initial_greeting = "Hi Daniel, I'm Datalin, a local AI agent (and future RAG) that is here to help you with DAT's tools. I heard you have a model you wanted me to have a look at?"
 messages = [
     {
         "role": "system",
@@ -59,8 +60,12 @@ class MyBot(ActivityHandler):
                 if attachment.name.endswith(".onnx"):
                     # Handle onnx
                     answer = "Nice! This looks like an onnx file. Let me see what I can do. Give me a sec..."
-                    path = os.path.join(r"C:\Users\danie\Downloads", attachment.name)
-                    asyncio.create_task(self.process_attachment(turn_context, path))
+                    self.model_path = os.path.join(
+                        r"C:\Users\danie\Downloads", attachment.name
+                    )
+                    asyncio.create_task(
+                        self.process_attachment(turn_context, self.model_path)
+                    )
                 else:
                     answer = "Ugh. I can only handle .onnx files. Can you send me in that format?"
 
@@ -73,8 +78,18 @@ class MyBot(ActivityHandler):
                 }
             )
 
-            output = pipe(messages, **generation_args)
-            answer = output[0]["generated_text"]
+            if "split" and "subgraphs" in turn_context.activity.text:
+                answer = "Sure. Give me a few seconds to try it..."
+                request = turn_context.activity.text.split()
+                try:
+                    subgraphs = int(request[request.index("subgraphs") - 1])
+                    asyncio.create_task(self.split_subgraphs(turn_context, subgraphs))
+                except:
+                    answer = "Sure. How many subgraphs would you like to generate?"
+
+            else:
+                output = pipe(messages, **generation_args)
+                answer = output[0]["generated_text"]
 
         messages.append(
             {
@@ -133,6 +148,39 @@ class MyBot(ActivityHandler):
             }
         )
         await turn_context.send_activity(answer)
+
+    async def split_subgraphs(self, turn_context: TurnContext, subgraphs: int):
+        model_names = split_onnx_model(self.model_path, subgraphs)
+
+        time.sleep(5)
+        answer = f"Ok, here is the data! (attached data)"
+        messages.append(
+            {
+                "role": "assistant",
+                "content": answer,
+            }
+        )
+
+        # Assuming model.onnx is in the same directory as this script
+        for model in model_names:
+            with open(model, "rb") as file:
+                onnx_data = file.read()
+                base64_onnx = base64.b64encode(onnx_data).decode("ascii")
+
+            # Create a reply activity with the ONNX file attachment
+            reply_activity = Activity(
+                type="message",
+                attachments=[
+                    {
+                        "contentType": "application/octet-stream",
+                        "contentUrl": f"data:application/octet-stream;base64,{base64_onnx}",
+                        "name": model,
+                    }
+                ],
+            )
+
+            # Send the reply activity
+            await turn_context.send_activity(reply_activity)
 
     async def suggest_confluence(self, turn_context: TurnContext):
         time.sleep(5)
