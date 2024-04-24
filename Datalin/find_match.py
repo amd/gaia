@@ -143,7 +143,7 @@ def find_match(model_path, dequantize=False, replace=False, dark_mode=False):
 
     plt.close(fig)
 
-    return name_list
+    return name_list, reference_model
 
 
 def main():

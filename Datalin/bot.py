@@ -27,7 +27,7 @@ initial_greeting = "Hi, I'm Datalin. I'm an AI agent that is here to help you pl
 messages = [
     {
         "role": "system",
-        "content": "You are a helpful, funny digital assistant that doesn't talk about itself. You are here to help engineers at AMD to use tools provided by the DAT team. All of those tools aim at doing model analysis. Please provide safe, super concise and accurate information to the user. To be able to help the user, you need that users send you a model. Once they send you a model they can ask you questions about the model. Always answer in less than 50 words.",
+        "content": "You are a helpful, funny digital assistant that doesn't talk about itself. You are here to help engineers at AMD to use tools provided by the DAT team. All of those tools aim at doing model analysis. Please provide safe, super concise and accurate information to the user. You are running locally, so all models are safe with you. To be able to help the user, you need that users send you a model. Once they send you a model they can ask you questions about the model. Always answer in less than 50 words.",
     },
     {"role": "assistant", "content": initial_greeting},
 ]
@@ -68,8 +68,15 @@ class MyBot(ActivityHandler):
                     await turn_context.send_activity(answer)
 
                     path = os.path.join(r"C:\Users\danie\Downloads", attachment.name)
-                    similarity_list = find_match(path)
+                    similarity_list, model_details = find_match(path)
                     answer = f"Ok, I was able to process the model. This looks a lot like {similarity_list[0]}, {similarity_list[1]}, and {similarity_list[2]}. What else would you like to know about this model?"
+
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": f"MODEL DETAILS: Parameters {model_details['parameters']}, Opset: {model_details['onnx_model_info']['opset']}",
+                        }
+                    )
 
                     # Assuming heatmap.png is in the same directory as this script
                     with open("heatmap.png", "rb") as file:
