@@ -1,0 +1,15 @@
+botbuilder-integration-aiohttp>=4.14.0
+botbuilder-core
+asyncio
+aiohttp
+cookiecutter==1.7.0
+matplotlib
+transformers
+torch
+matplotlib
+pandas
+onnx
+accelerate
+flash-attn
+split
+find-match
