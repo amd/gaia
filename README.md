@@ -1,11 +1,15 @@
 # GAIA
-<img src="https://github.com/aigdat/gaia/assets/4722733/0db60b9b-05d5-4732-a74e-f67bc9bdb61b" alt="gaia" width="300">
+<img src="https://github.com/aigdat/gaia/assets/4722733/0db60b9b-05d5-4732-a74e-f67bc9bdb61b" alt="gaia" width="500">
 
 ## AIG Demo Hub
 
 AIG demo hub is the interface that allows you to interface with GAIA agents (e.g. Neo and Datalin).
 
 To install it, download and run the `AIG-Demo-Hub-4.14.1-windows-setup.exe` setup file.
+
+<img src="https://github.com/aigdat/gaia/raw/main/img/demo_hub_1.png"  width="500"/>
+
+<img src="https://github.com/aigdat/gaia/raw/main/img/demo_hub_2.png"  width="500"/>
 
 ## Agents
 
