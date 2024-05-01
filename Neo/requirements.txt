@@ -6,3 +6,4 @@ cookiecutter==1.7.0
 llama_index
 llama-hub
 unstructured
+python-dotenv
