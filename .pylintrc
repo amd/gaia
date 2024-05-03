@@ -16,7 +16,7 @@ jobs = 0
 # Control the amount of potential inferred values when inferring a single
 # object. This can help the performance when dealing with large functions or
 # complex, nested conditions.
-limit-inference-results = 200
+limit-inference-results = 100
 
 # Pickle collected data for later comparisons.
 persistent = no
@@ -275,7 +275,7 @@ indent-string = '    '
 
 # Maximum number of characters on a single line.  pylint has to be looser since
 # black doesn't always obey its own limit.  See pyproject.toml.
-max-line-length = 100
+max-line-length = 200
 
 # List of optional constructs for which whitespace checking is disabled. `dict-
 # separator` is used to allow tabulation in dicts, etc.: {1  : 1,\n222: 2}.
