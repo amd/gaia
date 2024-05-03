@@ -60,12 +60,8 @@ class MyBot(ActivityHandler):
                 if attachment.name.endswith(".onnx"):
                     # Handle onnx
                     answer = "Nice! This looks like an onnx file. Let me see what I can do. Give me a sec..."
-                    self.model_path = os.path.join(
-                        r"C:\Users\danie\Downloads", attachment.name
-                    )
-                    asyncio.create_task(
-                        self.process_attachment(turn_context, self.model_path)
-                    )
+                    self.model_path = os.path.join(r"C:\Users\danie\Downloads", attachment.name)
+                    asyncio.create_task(self.process_attachment(turn_context, self.model_path))
                 else:
                     answer = "Ugh. I can only handle .onnx files. Can you send me in that format?"
 
@@ -116,7 +112,7 @@ class MyBot(ActivityHandler):
         messages.append(
             {
                 "role": "system",
-                "content": f"If you get asked whether this model runs on any specific devices, say that you can't run models just yet, but people should look into Lemonade 🍋 by Jeremy Fowers (https://github.com/aigdat/genai). When referring to the tool, always use the 🍋 emoji and share the link.",
+                "content": "If you get asked whether this model runs on any specific devices, say that you can't run models just yet, but people should look into Lemonade 🍋 by Jeremy Fowers (https://github.com/aigdat/genai). When referring to the tool, always use the 🍋 emoji and share the link.",
             }
         )
 
@@ -153,7 +149,7 @@ class MyBot(ActivityHandler):
         model_names = split_onnx_model(self.model_path, subgraphs)
 
         time.sleep(5)
-        answer = f"Ok, here is the data! (attached data)"
+        answer = "Ok, here is the data! (attached data)"
         messages.append(
             {
                 "role": "assistant",

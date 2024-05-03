@@ -28,6 +28,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           conda install pylint
+          python -m pip install -r agents\Neo\requirements.txt
+          python -m pip install -r agents\Datalin\requirements.txt
+          python -m pip install -r agents\Picasso\requirements.txt
           python -m pip check
       - name: PyLint
         shell: bash -el {0}
