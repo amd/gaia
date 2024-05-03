@@ -20,9 +20,9 @@ Neo is an agent designed to help you setup and play with GitHub repos.
 To run Neo simply run the steps below:
 * `conda create -n gaia python=3.10`
 * `conda activate gaia`
-* `pip install -r Neo/requirements.txt`
+* `pip install -r agents/Neo/requirements.txt`
 * `set OPENAI_API_KEY=<your_key>` (This step will be removed once local LLMs are enabled)
-* `python Neo/app.py`
+* `python agents/Neo/app.py`
 * Open `AIG Demo Hub`, click on `Open Demo` and use `http://localhost:3978/api/messages`
 
 ### Datalin
@@ -32,8 +32,8 @@ Datalin is an agent designed to help you reason about ML models using some of DA
 To run Datalin simply run the steps below:
 * `conda create -n gaia python=3.10`
 * `conda activate gaia`
-* `pip install -r Datalin/requirements.txt`
-* `python Datalin/app.py`
+* `pip install -r agents/Datalin/requirements.txt`
+* `python agents/Datalin/app.py`
 * Open `AIG Demo Hub`, click on `Open Demo` and use `http://localhost:3978/api/messages`
 
 ### Create your own agent
