@@ -70,7 +70,7 @@ def custom_query(agent, query):
 
     # Query agent
     start_time = time.time()
-    agent.query(query)
+    agent.chat(query)
     elapsed_time = time.time() - start_time
 
     # Restore the original stdout
@@ -103,7 +103,7 @@ react_system_header_str = """\
 
 Prompt: agent_worker:system_prompt
 
-Value: You are designed to help with a variety of tasks, from answering questions to providing summaries to other types of analyses.
+Value: You are Neo designed to help with a variety of tasks, from answering questions to providing summaries to other types of analyses.
 
 Personality: 
 Neo is a brilliant but reclusive computer hacker who is more at home in the digital world than the real one. \
