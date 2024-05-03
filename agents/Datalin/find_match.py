@@ -11,7 +11,7 @@ def find_match(model_path, dequantize=False, replace=False, dark_mode=False):
 
     # Get all features
     models_json = []
-    for root, dirs, files in os.walk("features"):
+    for root, _, files in os.walk("features"):
         for file in files:
             if file.endswith(".json"):
                 models_json.append(os.path.join(root, file))
@@ -22,17 +22,17 @@ def find_match(model_path, dequantize=False, replace=False, dark_mode=False):
     if os.path.exists(target_model_path):
         print(f"{target_model_path} found.")
         if replace:
-            print(f"Replacing it!")
+            print("Replacing it!")
             encode_model(model_path=model_path, dequantize=dequantize)
         else:
             print(
-                f"Using encoded model found in the cache. Use `--replace` if you want to overwrite it."
+                "Using encoded model found in the cache. Use `--replace` if you want to overwrite it."
             )
     else:
-        print(f"Encoding model for the first time.")
+        print("Encoding model for the first time.")
         encode_model(model_path=model_path, dequantize=dequantize)
 
-    with open(target_model_path, "r") as json_file:
+    with open(target_model_path, "r", encoding="utf-8") as json_file:
         target_model = json.load(json_file)
 
     # Filter columns we will show
@@ -52,7 +52,7 @@ def find_match(model_path, dequantize=False, replace=False, dark_mode=False):
     scores = {}
     for reference_json in models_json:
         reference_name = (reference_json.split("\\")[-1]).split(".json")[0]
-        with open(reference_json, "r") as reference_json:
+        with open(reference_json, "r", encoding="utf-8") as reference_json:
             reference_model = json.load(reference_json)
 
         score = 0
@@ -84,7 +84,6 @@ def find_match(model_path, dequantize=False, replace=False, dark_mode=False):
     df_sorted = pd.concat([df_sorted.head(25), df_sorted.tail(5)])
 
     name_list = df_sorted["Name"].tolist()
-    score_list = df_sorted["Score"].tolist()
     df_sorted.drop("Score", axis=1, inplace=True)
     df_sorted.drop("Name", axis=1, inplace=True)
 
@@ -108,18 +107,6 @@ def find_match(model_path, dequantize=False, replace=False, dark_mode=False):
     # Rotate the tick labels and set their alignment
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
 
-    # Loop over data dimensions and create text annotations
-    for i in range(len(name_list)):
-        for j in range(len(df_sorted.columns)):
-            text = ax.text(
-                j,
-                i,
-                "",  # "{:.1f}".format(df_sorted.iloc[i, j]),
-                ha="center",
-                va="center",
-                color="w",
-            )
-
     ax.set_title(f"Model Similarity Heatmap - {model_name}")
 
     cb = plt.colorbar(
@@ -132,9 +119,7 @@ def find_match(model_path, dequantize=False, replace=False, dark_mode=False):
         # pad=0.02,
     )
     cb.set_ticks([0, 0.5, 1])  # Set colorbar ticks at 0, 0.5, and 1
-    cb.set_ticklabels(
-        ["0.0 (Low)", "0.5 (Medium)", "1.0 (High)"]
-    )  # Set corresponding labels
+    cb.set_ticklabels(["0.0 (Low)", "0.5 (Medium)", "1.0 (High)"])  # Set corresponding labels
     cb.set_label("Correlation Ratio", labelpad=-100)
 
     fig.tight_layout()
@@ -149,15 +134,9 @@ def find_match(model_path, dequantize=False, replace=False, dark_mode=False):
 def main():
     parser = argparse.ArgumentParser(description="Subgraph Similarity Plot")
     parser.add_argument("model_path", type=str, help="Path to the ONNX model file")
-    parser.add_argument(
-        "--dequantize", action="store_true", help="Remove quantization nodes"
-    )
-    parser.add_argument(
-        "--replace", action="store_true", help="Replace models previously encoded"
-    )
-    parser.add_argument(
-        "--dark-mode", action="store_true", help="Plot image in dark mode"
-    )
+    parser.add_argument("--dequantize", action="store_true", help="Remove quantization nodes")
+    parser.add_argument("--replace", action="store_true", help="Replace models previously encoded")
+    parser.add_argument("--dark-mode", action="store_true", help="Plot image in dark mode")
 
     args = parser.parse_args()
     find_match(args.model_path, args.dequantize, args.replace, args.dark_mode)

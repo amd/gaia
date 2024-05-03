@@ -1,13 +1,12 @@
 import os
 import json
 import hashlib
-import onnx
-import networkx as nx
 from collections import Counter
 from typing import Dict
 import numpy as np
-import onnx
 import argparse
+import onnx
+import networkx as nx
 
 
 def remove_node(model, op_type):
@@ -17,7 +16,7 @@ def remove_node(model, op_type):
     for node in graph.node:
         if node.op_type == op_type:
             for output_name in node.output:
-                for idx, input_node in enumerate(graph.node):
+                for _, input_node in enumerate(graph.node):
                     if output_name in input_node.input:
                         # Re-route inputs of subsequent nodes to inputs of op_type
                         for i, input_node_input in enumerate(input_node.input):
@@ -77,9 +76,7 @@ def populate_onnx_model_info(onnx_model) -> Dict:
     try:
         result_dict.update(
             {
-                "size on disk (KiB)": round(
-                    onnx_model.SerializeToString().__sizeof__() / 1024, 4
-                ),
+                "size on disk (KiB)": round(onnx_model.SerializeToString().__sizeof__() / 1024, 4),
             }
         )
     except ValueError:
@@ -163,7 +160,7 @@ def feature_extractor(path, rounds):
     :param rounds: Number of WL iterations.
     :return doc: Document collection object.
     """
-    edges, features, name = dataset_reader(path)
+    edges, features, _ = dataset_reader(path)
 
     # Create undirected graph
     graph = nx.from_edgelist(edges)
@@ -182,7 +179,7 @@ def dataset_reader(path):
     :return name: Name of the graph.
     """
     name = path2name(path)
-    data = json.load(open(path))
+    data = json.load(open(path, "r", encoding="utf-8"))
     edges = data["edges"]
 
     if "features" in data.keys():
@@ -210,9 +207,7 @@ class GraphConverter:
         self.edge_is_output_of_node = {}  # edge -> node
         self.node_has_inputs_check = {}
         self.node_has_outputs_check = {}
-        self.edge_expects_no_input_nodes = (
-            []
-        )  # This is an edge of an input node or identity node
+        self.edge_expects_no_input_nodes = []  # This is an edge of an input node or identity node
 
     def add_node(self, node_name, feature):
         # Keep track of node
@@ -288,10 +283,7 @@ class GraphConverter:
 
         # Create a list containing all edges
         all_edges = list(
-            set(
-                list(self.edge_is_output_of_node.keys())
-                + list(self.edge_is_input_of_node.keys())
-            )
+            set(list(self.edge_is_output_of_node.keys()) + list(self.edge_is_input_of_node.keys()))
         )
 
         # Add all edges to our IR
@@ -319,23 +311,19 @@ class GraphConverter:
 
         # Ensuse we are not finding other artifacts and thinking that those are nodes
         # We expect to have all existing graph nodes + inputs + outputs as nodes
-        nodes_found = len(
-            set(list(self.node_has_inputs_check) + list(self.node_has_outputs_check))
-        )
+        nodes_found = len(set(list(self.node_has_inputs_check) + list(self.node_has_outputs_check)))
         nodes_expected = (
-            len(onnx_model.graph.node)
-            + len(onnx_model.graph.input)
-            + len(onnx_model.graph.output)
+            len(onnx_model.graph.node) + len(onnx_model.graph.input) + len(onnx_model.graph.output)
         )
-        # print(
-        #    nodes_found == nodes_expected
-        # ), "Number of nodes found does not match number of nodes in the graph"
+        print(
+            nodes_found == nodes_expected
+        ), "Number of nodes found does not match number of nodes in the graph"
 
         # Check if all nodes have inputs and outputs assigned to them
         input_edges = [i.name for i in onnx_model.graph.input]
         output_edges = [o.name for o in onnx_model.graph.output]
         for node_name in self.node_has_inputs_check:
-            if self.node_has_inputs_check[node_name] == False:
+            if not self.node_has_inputs_check[node_name]:
                 if (
                     "Constant" not in node_name
                     and "Identity" not in node_name
@@ -343,7 +331,7 @@ class GraphConverter:
                 ):
                     print(f"\t\t{node_name} has no inputs!")
         for node_name in self.node_has_outputs_check:
-            if self.node_has_outputs_check[node_name] == False:
+            if not self.node_has_outputs_check[node_name]:
                 if "Identity" not in node_name and node_name not in output_edges:
                     print(f"{node_name} has no outputs!")
 
@@ -355,7 +343,7 @@ class GraphConverter:
 
 def find_onnx_files(directory):
     onnx_files = []
-    for root, dirs, files in os.walk(directory):
+    for root, _, files in os.walk(directory):
         for file in files:
             if file.endswith(".onnx"):
                 onnx_files.append(os.path.join(root, file))
@@ -395,7 +383,7 @@ def encode_model(model_path, model_name=None, dequantize=False):
         "op_list": subgraphs,
     }
     out_location = os.path.join("features", f"{model_name}.json")
-    with open(out_location, "w") as json_file:
+    with open(out_location, "w", encoding="utf-8") as json_file:
         json.dump(features, json_file)
     print(f"Model encoded and saved to {out_location}")
 
@@ -404,9 +392,7 @@ def main():
     parser = argparse.ArgumentParser(description="Encode ONNX model")
     parser.add_argument("model_path", type=str, help="Path to the ONNX model file")
     parser.add_argument("--model_name", type=str, help="Name of the model (optional)")
-    parser.add_argument(
-        "--dequantize", action="store_true", help="Remove quantization nodes"
-    )
+    parser.add_argument("--dequantize", action="store_true", help="Remove quantization nodes")
 
     args = parser.parse_args()
 
