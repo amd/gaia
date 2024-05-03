@@ -101,7 +101,9 @@ class MyBot(ActivityHandler):
         similarity_list, model_details = find_match(path)
 
         time.sleep(5)
-        answer = f"Ok, I was able to process the model. This looks a lot like **{similarity_list[0]}, {similarity_list[1]}, and {similarity_list[2]}**. What else would you like to know about this model?"
+        answer = (
+            f"Ok, I was able to process the model. This looks a lot like **{similarity_list[0]}, {similarity_list[1]}, and {similarity_list[2]}**. What else would you like to know about this model?"
+        )
 
         messages.append(
             {
@@ -189,9 +191,7 @@ class MyBot(ActivityHandler):
         )
         await turn_context.send_activity(answer)
 
-    async def on_members_added_activity(
-        self, members_added: ChannelAccount, turn_context: TurnContext
-    ):
+    async def on_members_added_activity(self, members_added: ChannelAccount, turn_context: TurnContext):
         for member_added in members_added:
             if member_added.id != turn_context.activity.recipient.id:
                 await turn_context.send_activity(initial_greeting)

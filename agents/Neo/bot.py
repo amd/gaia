@@ -204,7 +204,5 @@ class MyBot(ActivityHandler):
             )
             await turn_context.send_activity(act)
 
-    async def on_members_added_activity(
-        self, members_added: ChannelAccount, turn_context: TurnContext
-    ):
+    async def on_members_added_activity(self, members_added: ChannelAccount, turn_context: TurnContext):
         pass
