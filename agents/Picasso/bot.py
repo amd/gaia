@@ -73,7 +73,7 @@ def sdxl_prompt_generate(query: str) -> str:
     return sdxl_query_engine.query(query)
 
 
-def sdxl_image_generate(prompt: str):
+def sdxl_image_generate(_: str):
     """A function that generates an SDXL image given an input prompt"""
     with open("./img/bunny.png", "rb") as file:
         image_data = file.read()

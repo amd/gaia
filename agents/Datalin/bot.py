@@ -6,13 +6,11 @@ from botbuilder.core import (
     ActivityHandler,
     TurnContext,
 )
-
 from botbuilder.schema import ChannelAccount, Activity
-
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
-from find_match import find_match
-from split import split_onnx_model
+from find_match import find_match  # pylint: disable=import-error
+from split import split_onnx_model  # pylint: disable=import-error, no-name-in-module
 
 torch.random.manual_seed(0)
 
@@ -59,7 +57,10 @@ class MyBot(ActivityHandler):
                 if attachment.name.endswith(".onnx"):
                     # Handle onnx
                     answer = "Nice! This looks like an onnx file. Let me see what I can do. Give me a sec..."
-                    self.model_path = os.path.join(r"C:\Users\danie\Downloads", attachment.name)
+                    downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+                    self.model_path = (  # pylint: disable=attribute-defined-outside-init
+                        os.path.join(downloads_dir, attachment.name)
+                    )
                     asyncio.create_task(self.process_attachment(turn_context, self.model_path))
                 else:
                     answer = "Ugh. I can only handle .onnx files. Can you send me in that format?"
@@ -79,7 +80,7 @@ class MyBot(ActivityHandler):
                 try:
                     subgraphs = int(request[request.index("subgraphs") - 1])
                     asyncio.create_task(self.split_subgraphs(turn_context, subgraphs))
-                except:
+                except:  # pylint: disable=bare-except
                     answer = "Sure. How many subgraphs would you like to generate?"
 
             else:

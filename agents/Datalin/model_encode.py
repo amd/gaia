@@ -3,8 +3,8 @@ import json
 import hashlib
 from collections import Counter
 from typing import Dict
-import numpy as np
 import argparse
+import numpy as np
 import onnx
 import networkx as nx
 
@@ -173,21 +173,12 @@ def feature_extractor(path, rounds):
 def dataset_reader(path):
     """
     Function to read the graph and features from a json file.
-    :param path: The path to the graph json.
-    :return graph: The graph object.
-    :return features: Features hash table.
-    :return name: Name of the graph.
     """
     name = path2name(path)
     data = json.load(open(path, "r", encoding="utf-8"))
     edges = data["edges"]
-
-    if "features" in data.keys():
-        features = data["features"]
-        features = {int(k): v for k, v in features.items()}
-    else:
-        features = nx.degree(graph)
-        features = {int(k): v for k, v in features}
+    features = data["features"]
+    features = {int(k): v for k, v in features.items()}
 
     return edges, features, name
 
@@ -303,9 +294,8 @@ class GraphConverter:
                 edge_from_node = self.edge_is_output_of_node[edge]
                 try:
                     edges_to_node = self.edge_is_input_of_node[edge]
-                except:
+                except KeyError:
                     print(f"Could not find {edge}")
-                    continue
                 for edge_to_node in edges_to_node:
                     self.add_edge(edge_from_node, edge_to_node)
 
@@ -315,9 +305,8 @@ class GraphConverter:
         nodes_expected = (
             len(onnx_model.graph.node) + len(onnx_model.graph.input) + len(onnx_model.graph.output)
         )
-        print(
-            nodes_found == nodes_expected
-        ), "Number of nodes found does not match number of nodes in the graph"
+        if nodes_found == nodes_expected:
+            print("Number of nodes found does not match number of nodes in the graph")
 
         # Check if all nodes have inputs and outputs assigned to them
         input_edges = [i.name for i in onnx_model.graph.input]
@@ -337,7 +326,7 @@ class GraphConverter:
 
     def save(self, output_path):
         # Save JSON data to a file
-        with open(output_path, "w") as outfile:
+        with open(output_path, "w", encoding="utf-8") as outfile:
             json.dump({"edges": self.edges, "features": self.features}, outfile)
 
 
