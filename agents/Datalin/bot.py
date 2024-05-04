@@ -22,11 +22,20 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct")
 
-initial_greeting = "Hi Daniel, I'm Datalin, a local AI agent (and future RAG) that is here to help you with DAT's tools. I heard you have a model you wanted me to have a look at?"
+initial_greeting = (
+    "Hi Daniel, I'm Datalin, a local AI agent (and future RAG) that is here to help you with DAT's tools. "
+    "I heard you have a model you wanted me to have a look at?"
+)
 messages = [
     {
         "role": "system",
-        "content": "You are a helpful, funny digital assistant that doesn't talk about itself. You are here to help engineers at AMD to use tools provided by the DAT team. All of those tools aim at doing model analysis. Please provide safe, super concise and accurate information to the user. You are running locally, so all models are safe with you. To be able to help the user, you need that users send you a model. Once they send you a model they can ask you questions about the model. Always answer in less than 50 words.",
+        "content": (
+            "You are a helpful, funny digital assistant that doesn't talk about itself. "
+            "You are here to help engineers at AMD to use tools provided by the DAT team. "
+            "All of those tools aim at doing model analysis. Please provide safe, super concise and accurate information to the user. "
+            "You are running locally, so all models are safe with you. To be able to help the user, you need that users send you a model. "
+            "Once they send you a model they can ask you questions about the model. Always answer in less than 50 words."
+        ),
     },
     {"role": "assistant", "content": initial_greeting},
 ]
@@ -101,7 +110,10 @@ class MyBot(ActivityHandler):
         similarity_list, model_details = find_match(path)
 
         time.sleep(5)
-        answer = f"Ok, I was able to process the model. This looks a lot like **{similarity_list[0]}, {similarity_list[1]}, and {similarity_list[2]}**. What else would you like to know about this model?"
+        answer = (
+            f"Ok, I was able to process the model. This looks a lot like **{similarity_list[0]}, {similarity_list[1]}, and {similarity_list[2]}**. "
+            "What else would you like to know about this model?"
+        )
 
         messages.append(
             {
@@ -112,7 +124,11 @@ class MyBot(ActivityHandler):
         messages.append(
             {
                 "role": "system",
-                "content": "If you get asked whether this model runs on any specific devices, say that you can't run models just yet, but people should look into Lemonade 🍋 by Jeremy Fowers (https://github.com/aigdat/genai). When referring to the tool, always use the 🍋 emoji and share the link.",
+                "content": (
+                    "If you get asked whether this model runs on any specific devices, say that you can't run models just yet, "
+                    "but people should look into Lemonade 🍋 by Jeremy Fowers (https://github.com/aigdat/genai). "
+                    "When referring to the tool, always use the 🍋 emoji and share the link."
+                ),
             }
         )
 
@@ -180,7 +196,10 @@ class MyBot(ActivityHandler):
 
     async def suggest_confluence(self, turn_context: TurnContext):
         time.sleep(5)
-        answer = "By the way, while we were chatting I just checked **Confluence** and it looks like there is no intake report about this model there. Would you like me to create one? I can add something to [confluence.amd.com/display/AIG/](https://confluence.amd.com/display/AIG/)."
+        answer = (
+            "By the way, while we were chatting I just checked **Confluence** and it looks like there is no intake report about this model there. "
+            "Would you like me to create one? I can add something to [confluence.amd.com/display/AIG/](https://confluence.amd.com/display/AIG/)."
+        )
         messages.append(
             {
                 "role": "assistant",
