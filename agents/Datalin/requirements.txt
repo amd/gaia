@@ -10,6 +10,4 @@ matplotlib
 pandas
 onnx
 accelerate
-flash-attn
 split
-find-match

@@ -1,19 +1,16 @@
 import os
 import time
+import base64
+import asyncio
 from botbuilder.core import (
     ActivityHandler,
     TurnContext,
-    TurnContext,
 )
-
 from botbuilder.schema import ChannelAccount, Activity
-
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
-import base64
-import asyncio
-from find_match import find_match
-from split import split_onnx_model
+from find_match import find_match  # pylint: disable=import-error
+from split import split_onnx_model  # pylint: disable=import-error, no-name-in-module
 
 torch.random.manual_seed(0)
 
@@ -25,11 +22,20 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct")
 
-initial_greeting = "Hi Daniel, I'm Datalin, a local AI agent (and future RAG) that is here to help you with DAT's tools. I heard you have a model you wanted me to have a look at?"
+initial_greeting = (
+    "Hi Daniel, I'm Datalin, a local AI agent (and future RAG) that is here to help you with DAT's tools. "
+    "I heard you have a model you wanted me to have a look at?"
+)
 messages = [
     {
         "role": "system",
-        "content": "You are a helpful, funny digital assistant that doesn't talk about itself. You are here to help engineers at AMD to use tools provided by the DAT team. All of those tools aim at doing model analysis. Please provide safe, super concise and accurate information to the user. You are running locally, so all models are safe with you. To be able to help the user, you need that users send you a model. Once they send you a model they can ask you questions about the model. Always answer in less than 50 words.",
+        "content": (
+            "You are a helpful, funny digital assistant that doesn't talk about itself. "
+            "You are here to help engineers at AMD to use tools provided by the DAT team. "
+            "All of those tools aim at doing model analysis. Please provide safe, super concise and accurate information to the user. "
+            "You are running locally, so all models are safe with you. To be able to help the user, you need that users send you a model. "
+            "Once they send you a model they can ask you questions about the model. Always answer in less than 50 words."
+        ),
     },
     {"role": "assistant", "content": initial_greeting},
 ]
@@ -60,12 +66,11 @@ class MyBot(ActivityHandler):
                 if attachment.name.endswith(".onnx"):
                     # Handle onnx
                     answer = "Nice! This looks like an onnx file. Let me see what I can do. Give me a sec..."
-                    self.model_path = os.path.join(
-                        r"C:\Users\danie\Downloads", attachment.name
+                    downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+                    self.model_path = (  # pylint: disable=attribute-defined-outside-init
+                        os.path.join(downloads_dir, attachment.name)
                     )
-                    asyncio.create_task(
-                        self.process_attachment(turn_context, self.model_path)
-                    )
+                    asyncio.create_task(self.process_attachment(turn_context, self.model_path))
                 else:
                     answer = "Ugh. I can only handle .onnx files. Can you send me in that format?"
 
@@ -84,7 +89,7 @@ class MyBot(ActivityHandler):
                 try:
                     subgraphs = int(request[request.index("subgraphs") - 1])
                     asyncio.create_task(self.split_subgraphs(turn_context, subgraphs))
-                except:
+                except:  # pylint: disable=bare-except
                     answer = "Sure. How many subgraphs would you like to generate?"
 
             else:
@@ -105,7 +110,10 @@ class MyBot(ActivityHandler):
         similarity_list, model_details = find_match(path)
 
         time.sleep(5)
-        answer = f"Ok, I was able to process the model. This looks a lot like **{similarity_list[0]}, {similarity_list[1]}, and {similarity_list[2]}**. What else would you like to know about this model?"
+        answer = (
+            f"Ok, I was able to process the model. This looks a lot like **{similarity_list[0]}, {similarity_list[1]}, and {similarity_list[2]}**. "
+            "What else would you like to know about this model?"
+        )
 
         messages.append(
             {
@@ -116,7 +124,11 @@ class MyBot(ActivityHandler):
         messages.append(
             {
                 "role": "system",
-                "content": f"If you get asked whether this model runs on any specific devices, say that you can't run models just yet, but people should look into Lemonade 🍋 by Jeremy Fowers (https://github.com/aigdat/genai). When referring to the tool, always use the 🍋 emoji and share the link.",
+                "content": (
+                    "If you get asked whether this model runs on any specific devices, say that you can't run models just yet, "
+                    "but people should look into Lemonade 🍋 by Jeremy Fowers (https://github.com/aigdat/genai). "
+                    "When referring to the tool, always use the 🍋 emoji and share the link."
+                ),
             }
         )
 
@@ -153,7 +165,7 @@ class MyBot(ActivityHandler):
         model_names = split_onnx_model(self.model_path, subgraphs)
 
         time.sleep(5)
-        answer = f"Ok, here is the data! (attached data)"
+        answer = "Ok, here is the data! (attached data)"
         messages.append(
             {
                 "role": "assistant",
@@ -184,7 +196,10 @@ class MyBot(ActivityHandler):
 
     async def suggest_confluence(self, turn_context: TurnContext):
         time.sleep(5)
-        answer = "By the way, while we were chatting I just checked **Confluence** and it looks like there is no intake report about this model there. Would you like me to create one? I can add something to [confluence.amd.com/display/AIG/](https://confluence.amd.com/display/AIG/)."
+        answer = (
+            "By the way, while we were chatting I just checked **Confluence** and it looks like there is no intake report about this model there. "
+            "Would you like me to create one? I can add something to [confluence.amd.com/display/AIG/](https://confluence.amd.com/display/AIG/)."
+        )
         messages.append(
             {
                 "role": "assistant",

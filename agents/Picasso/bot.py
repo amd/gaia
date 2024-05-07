@@ -1,12 +1,11 @@
+import os
 import re
 import time
 import sys
-import openai
-import os
-import subprocess
 import base64
-from dotenv import load_dotenv
 from io import StringIO
+import openai
+from dotenv import load_dotenv
 
 from llama_index.core.tools import FunctionTool
 from llama_index.llms.openai import OpenAI
@@ -62,26 +61,26 @@ sdxl_prompts = """
 42. Plush toy: adorable concept illustration of a plush animal peacefully sitting on a child’s bed, soft lighting, gentle texture, dreamy atmosphere, pastel tones, matte finish, wide shot, by Yuko Shimizu, by Marc Brunet, by Joshua Middleton, children illustration, highly detailed, trending on artstation, fluffy, smooth, digital art, sharp focus
 """
 load_dotenv()
-openai.api_key = os.getenv('OPENAI_API_KEY')
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 sdxl_doc = Document(text=sdxl_prompts)
 sdxl_index = VectorStoreIndex.from_documents([sdxl_doc], show_progress=True)
 sdxl_query_engine = sdxl_index.as_query_engine()
 
 
-def sdxl_prompt_generate(query:str)->str:
+def sdxl_prompt_generate(query: str) -> str:
     """A function that receives a query from a user and produces a prompt that is used for SDXL image generation"""
-    return sdxl_query_engine.query(query) 
+    return sdxl_query_engine.query(query)
 
 
-def sdxl_image_generate(prompt:str):
+def sdxl_image_generate(_: str):
     """A function that generates an SDXL image given an input prompt"""
     with open("./img/bunny.png", "rb") as file:
         image_data = file.read()
         base64_image = base64.b64encode(image_data).decode("ascii")
     return base64_image
- 
- 
+
+
 def remove_color_formatting(text):
     # ANSI escape codes for color formatting
     ansi_escape = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
@@ -219,9 +218,11 @@ class MyBot(ActivityHandler):
             )
             await turn_context.send_activity(act)
 
-            if 'message' in message[0].lower() and \
-            ('prompt' in message[1].lower() or 'image' in message[1].lower() or\
-                'photo' in message[1].lower()):
+            if "message" in message[0].lower() and (
+                "prompt" in message[1].lower()
+                or "image" in message[1].lower()
+                or "photo" in message[1].lower()
+            ):
                 base64_image = sdxl_image_generate(message)
                 act = Activity(
                     type="message",
@@ -234,7 +235,6 @@ class MyBot(ActivityHandler):
                     ],
                 )
                 await turn_context.send_activity(act)
-
 
     async def on_members_added_activity(
         self, members_added: ChannelAccount, turn_context: TurnContext

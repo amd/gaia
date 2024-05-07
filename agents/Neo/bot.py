@@ -1,17 +1,15 @@
+import os
 import re
 import time
 import sys
-import openai
-import os
 import subprocess
-from dotenv import load_dotenv
 from io import StringIO
-
+import openai
+from dotenv import load_dotenv
 from llama_index.core.tools import FunctionTool
 from llama_index.llms.openai import OpenAI
 from llama_index.core.agent import ReActAgent
 from llama_index.core import PromptTemplate
-
 from botbuilder.core import ActivityHandler, TurnContext
 from botbuilder.schema import ChannelAccount, Activity
 
@@ -21,8 +19,10 @@ def multiply(a: int, b: int) -> int:
     """Multiply two integers and returns the result integer"""
     return a * b
 
+
 def exe_command(command, folder=None):
     """Windows command shell execution tool"""
+    original_dir = None
     try:
         original_dir = os.getcwd()  # Store the original working directory
 
@@ -31,13 +31,19 @@ def exe_command(command, folder=None):
             os.chdir(folder)
 
         # Create a subprocess and pipe the stdout and stderr streams
-        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        process = subprocess.Popen(
+            command,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+        )
 
         # Read and print the output and error streams in real-time
         for line in process.stdout:
-            print(line, end='')
+            print(line, end="")
         for line in process.stderr:
-            print(line, end='')
+            print(line, end="")
 
         # Wait for the subprocess to finish and get the return code
         return_code = process.wait()
@@ -173,7 +179,7 @@ react_system_prompt = PromptTemplate(react_system_header_str)
 
 # initialize llm
 load_dotenv()
-openai.api_key = os.getenv('OPENAI_API_KEY')
+openai.api_key = os.getenv("OPENAI_API_KEY")
 # llm = OpenAI(model="gpt-3.5-turbo-0613")
 llm = OpenAI(model="gpt-4")
 
@@ -198,7 +204,5 @@ class MyBot(ActivityHandler):
             )
             await turn_context.send_activity(act)
 
-    async def on_members_added_activity(
-        self, members_added: ChannelAccount, turn_context: TurnContext
-    ):
+    async def on_members_added_activity(self, members_added: ChannelAccount, turn_context: TurnContext):
         pass
