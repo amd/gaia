@@ -7,3 +7,4 @@ llama_index
 llama-hub
 unstructured
 python-dotenv
+llama-index-readers-github
