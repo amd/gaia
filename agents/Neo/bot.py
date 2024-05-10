@@ -18,6 +18,8 @@ from llama_index.readers.github import GithubRepositoryReader, GithubClient
 from botbuilder.core import ActivityHandler, TurnContext
 from botbuilder.schema import ChannelAccount, Activity
 
+from npu_llm import NpuLLM
+
 
 # define sample Tool
 def multiply(a: int, b: int) -> int:

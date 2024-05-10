@@ -45,7 +45,7 @@ class NpuLLM(CustomLLM):
         # print(f"{prompt}")
         input_ids = self.tokenizer(prompt, return_tensors="pt").input_ids
         response = self.model.generate(input_ids, max_new_tokens=30)
-        text = tokenizer.decode(response[0])
+        text = self.tokenizer.decode(response[0])
 
         return CompletionResponse(text=text)
 
