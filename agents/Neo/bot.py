@@ -6,10 +6,15 @@ import subprocess
 from io import StringIO
 import openai
 from dotenv import load_dotenv
-from llama_index.core.tools import FunctionTool
+
+from lemonade import leap
+
+from llama_index.core import PromptTemplate, VectorStoreIndex
 from llama_index.llms.openai import OpenAI
 from llama_index.core.agent import ReActAgent
-from llama_index.core import PromptTemplate
+from llama_index.core.tools import QueryEngineTool, FunctionTool, ToolMetadata
+from llama_index.readers.github import GithubRepositoryReader, GithubClient
+
 from botbuilder.core import ActivityHandler, TurnContext
 from botbuilder.schema import ChannelAccount, Activity
 
@@ -59,6 +64,62 @@ def exe_command(command, folder=None):
         return False
     finally:
         os.chdir(original_dir)  # Change back to the original working directory
+
+repo_engine = None
+repo_tool = None
+
+def create_repo_engine(owner:str, repo:str)->QueryEngineTool:
+    github_client = GithubClient(github_token=os.environ["GITHUB_TOKEN"], verbose=True)
+
+    repo_reader = GithubRepositoryReader(
+        github_client=github_client,
+        owner=owner,
+        repo=repo,
+        use_parser=False,
+        verbose=True,
+        filter_directories=(
+            ["docs"],
+            GithubRepositoryReader.FilterType.INCLUDE,
+        ),
+        filter_file_extensions=(
+            [
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".gif",
+                ".svg",
+                ".ico",
+                "json",
+                ".ipynb",
+            ],
+            GithubRepositoryReader.FilterType.EXCLUDE,
+        ),
+    )
+
+    repo_docs = repo_reader.load_data(branch="main")
+
+    # build index
+    repo_index = VectorStoreIndex.from_documents(repo_docs, show_progress=True)
+
+    # persist index
+    repo_index.storage_context.persist(persist_dir="./storage/repo")
+
+    global repo_engine
+    repo_engine = repo_index.as_query_engine(similarity_top_k=3)
+
+    global repo_tool
+    repo_tool = QueryEngineTool(
+        query_engine=repo_engine,
+        metadata=ToolMetadata(
+            name=f"{owner}/{repo}",
+            description=(
+                f"Provides information about {owner}/{repo} code repository. "
+                "Use a detailed plain text question as input to the tool."
+            ),
+        ),
+    )
+
+    return f"Sucessfully created {owner}/{repo} repo index, query engine and tool!"
 
 
 def remove_color_formatting(text):
@@ -179,9 +240,15 @@ react_system_prompt = PromptTemplate(react_system_header_str)
 
 # initialize llm
 load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# openai.api_key = os.getenv("OPENAI_API_KEY")
 # llm = OpenAI(model="gpt-3.5-turbo-0613")
-llm = OpenAI(model="gpt-4")
+# llm = OpenAI(model="gpt-4")
+
+model_name: str = "meta-llama/Llama-2-7b-chat-hf"
+model, tokenizer = leap.from_pretrained(
+    "meta-llama/Llama-2-7b-chat-hf", recipe="ryzenai-npu"
+)
+llm = NpuLLM(model_name, model, tokenizer)
 
 # initialize ReAct agent
 agent = ReActAgent.from_tools([multiply_tool, exe_tool], llm=llm, verbose=True)

@@ -18,10 +18,9 @@ To install it, download and run the `AIG-Demo-Hub-4.14.1-windows-setup.exe` setu
 Neo is an agent designed to help you setup and play with GitHub repos.
 
 To run Neo simply run the steps below:
-* `conda create -n gaia python=3.10`
+* `conda create -n gaia python=3.9`
 * `conda activate gaia`
-* `pip install -r agents/Neo/requirements.txt`
-* `set OPENAI_API_KEY=<your_key>` (This step will be removed once local LLMs are enabled)
+* `pip install -r agents/Neo/requirements.txt --upgrade`
 * `python agents/Neo/app.py`
 * Open `AIG Demo Hub`, click on `Open Demo` and use `http://localhost:3978/api/messages`
 

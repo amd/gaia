@@ -3,8 +3,14 @@ botbuilder-core
 asyncio
 aiohttp
 cookiecutter==1.7.0
-llama_index
-llama-hub
 unstructured
 python-dotenv
+llama_index
 llama-index-readers-github
+llama-index-embeddings-huggingface
+
+# comment out the line below if you do not have a GPU
+--index-url https://download.pytorch.org/whl/cu118
+torch
+torchvision
+torchaudio 
