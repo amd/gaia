@@ -1,0 +1,5 @@
+fastapi
+pydantic
+uvicorn
+#lemonade
+
