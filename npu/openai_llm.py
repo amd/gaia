@@ -1,7 +1,6 @@
 import time
-import requests
-
 from typing import Optional, List, Mapping, Any
+
 from lemonade import leap
 
 from llama_index.core import SimpleDirectoryReader, SummaryIndex, Settings
@@ -17,7 +16,7 @@ from llama_index.core.tools import QueryEngineTool, FunctionTool, ToolMetadata
 from llama_index.readers.github import GithubRepositoryReader, GithubClient
 from llama_index.core.llms.callbacks import llm_completion_callback
 
-class NpuLLM(CustomLLM):
+class LocalLLM(CustomLLM):
     context_window: int = 3900
     num_output: int = 256
     model_name: Any
@@ -64,62 +63,7 @@ class NpuLLM(CustomLLM):
             yield CompletionResponse(text=response, delta=token)
 
 
-class LocalLLM(CustomLLM):
-    context_window: int = 3900
-    num_output: int = 256
-    model_name: Any
-    server_url: str
-
-    def __init__(self, server_url:str = "http://localhost:8000/generate", model_name:str = "meta-llama/Llama-2-7b-chat-hf", **kwargs):
-        super().__init__(
-            server_url=server_url,
-            model_name=model_name,
-            **kwargs
-        )
-
-    @property
-    def metadata(self) -> LLMMetadata:
-        """Get LLM metadata."""
-        return LLMMetadata(
-            context_window=self.context_window,
-            num_output=self.num_output,
-            model_name=self.model_name,
-        )
-
-    @llm_completion_callback()
-    def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
-        payload = {"text": prompt}
-        headers = {"Content-Type": "application/json"}
-        response = requests.post(self.server_url, json=payload, headers=headers)
-        response.raise_for_status()  # Raise an exception for 4xx or 5xx status codes
-        data = response.json()
-        text = data["response"]
-
-        return CompletionResponse(text=text)
-
-
-    @llm_completion_callback()
-    def stream_complete(self, prompt: str, **kwargs: Any) -> CompletionResponseGen:
-        import websocket  # Import the websocket library
-
-        ws = websocket.WebSocket()
-        ws.connect(self.server_url.replace("http", "ws"))  # Connect to the WebSocket server
-        ws.send(prompt)  # Send the prompt to the server
-
-        response = ""
-        while True:
-            chunk = ws.recv()  # Receive a chunk of generated text from the server
-            if not chunk:
-                break
-            response += chunk
-            yield CompletionResponse(text=response, delta=chunk)
-
-        ws.close()  # Close the WebSocket connection
-
-
 def test_query_engine(queries, query_engine):
-    # from Neo.system_prompt import react_system_header_str
-    print(f"Query Engine prompts:\n{query_engine.get_prompts()}")
     for query in queries:
         start = time.time()
         response = query_engine.query(query)
@@ -145,11 +89,14 @@ def test_agent(queries, agent):
 
 
 if __name__ == "__main__":
-    llm = LocalLLM()
+    # define our LLM
+
+    llm = OpenAILLM()
     Settings.llm = llm
 
     # define embed model
     Settings.embed_model = "local:BAAI/bge-base-en-v1.5"
+
 
     # Load the your data
     documents = SimpleDirectoryReader(
@@ -185,27 +132,26 @@ if __name__ == "__main__":
     # ---------------------
     # Test the query engine
     # ---------------------
-    test_query_engine(queries, query_engine)
+    # test_query_engine(queries, query_engine)
 
     # ---------------------
     # Build the ReAct agent
     # ---------------------
-    # query_engine_tools = [
-    #     QueryEngineTool(
-    #         query_engine=query_engine,
-    #         metadata=ToolMetadata(
-    #             name="repo",
-    #             description=(
-    #                 "Provides information about code repository. "
-    #                 "Use a detailed plain text question as input to the tool."
-    #             ),
-    #         ),
-    #     ),
-    # ]
+    query_engine_tools = [
+        QueryEngineTool(
+            query_engine=query_engine,
+            metadata=ToolMetadata(
+                name="repo",
+                description=(
+                    "Provides information about code repository. "
+                    "Use a detailed plain text question as input to the tool."
+                ),
+            ),
+        ),
+    ]
 
-    # from Neo.system_prompt import react_system_prompt
-
-    # agent = ReActAgent.from_tools(query_engine_tools, llm=llm, verbose=True)
+    agent = ReActAgent.from_tools(query_engine_tools, llm=llm, verbose=True)
+    # TODO: Update w/ shorter prompt
     # agent.update_prompts({"agent_worker:system_prompt": react_system_prompt})
 
-    # # test_agent(queries, agent)
+    test_agent(queries, agent)

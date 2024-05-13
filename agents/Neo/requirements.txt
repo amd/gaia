@@ -1,11 +1,6 @@
-botbuilder-integration-aiohttp>=4.14.0
-botbuilder-core
-asyncio
-aiohttp
 cookiecutter==1.7.0
 unstructured
 python-dotenv
-llama_index
 llama-index-readers-github
 llama-index-embeddings-huggingface
 

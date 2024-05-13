@@ -17,62 +17,23 @@ from llama_index.core.tools import QueryEngineTool, FunctionTool, ToolMetadata
 from llama_index.readers.github import GithubRepositoryReader, GithubClient
 from llama_index.core.llms.callbacks import llm_completion_callback
 
-class NpuLLM(CustomLLM):
-    context_window: int = 3900
-    num_output: int = 256
-    model_name: Any
-    model: Any
-    tokenizer: Any
-
-    def __init__(self, model_name: str, model: Any, tokenizer: Any, **kwargs):
-        super().__init__(
-            model_name=model_name,
-            model=model,
-            tokenizer=tokenizer,
-            **kwargs
-        )
-
-    @property
-    def metadata(self) -> LLMMetadata:
-        """Get LLM metadata."""
-        return LLMMetadata(
-            context_window=self.context_window,
-            num_output=self.num_output,
-            model_name=self.model_name,
-        )
-
-    @llm_completion_callback()
-    def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
-        # print(f"{prompt}")
-        input_ids = self.tokenizer(prompt, return_tensors="pt").input_ids
-        response = self.model.generate(input_ids, max_new_tokens=30)
-        text = self.tokenizer.decode(response[0])
-
-        return CompletionResponse(text=text)
-
-    @llm_completion_callback()
-    def stream_complete(
-        self, prompt: str, **kwargs: Any
-    ) -> CompletionResponseGen:
-        input_ids = self.tokenizer(prompt, return_tensors="pt").input_ids
-        response = self.model.generate(input_ids, max_new_tokens=30)
-        text = tokenizer.decode(response[0])
-
-        response = ""
-        for token in text:
-            response += token
-            yield CompletionResponse(text=response, delta=token)
-
 
 class LocalLLM(CustomLLM):
     context_window: int = 3900
     num_output: int = 256
     model_name: Any
     server_url: str
+    api_key: str
 
-    def __init__(self, server_url:str = "http://localhost:8000/generate", model_name:str = "meta-llama/Llama-2-7b-chat-hf", **kwargs):
+    def __init__(
+        self, server_url: str = "http://localhost:1234/v1",
+        api_key: str = "lm-studio",
+        model_name: str = "LM Studio Community/Phi-3-mini-4k-instruct-GGUF",
+        **kwargs
+    ):
         super().__init__(
             server_url=server_url,
+            api_key=api_key,
             model_name=model_name,
             **kwargs
         )
@@ -88,64 +49,63 @@ class LocalLLM(CustomLLM):
 
     @llm_completion_callback()
     def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
-        payload = {"text": prompt}
-        headers = {"Content-Type": "application/json"}
-        response = requests.post(self.server_url, json=payload, headers=headers)
+        url = f"{self.server_url}/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+        data = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": kwargs.get("temperature", 0.7)
+        }
+
+        response = requests.post(url, headers=headers, json=data)
         response.raise_for_status()  # Raise an exception for 4xx or 5xx status codes
-        data = response.json()
-        text = data["response"]
+
+        completion_data = response.json()
+        text = completion_data["choices"][0]["message"]["content"]
 
         return CompletionResponse(text=text)
-
 
     @llm_completion_callback()
     def stream_complete(self, prompt: str, **kwargs: Any) -> CompletionResponseGen:
         import websocket  # Import the websocket library
 
-        ws = websocket.WebSocket()
-        ws.connect(self.server_url.replace("http", "ws"))  # Connect to the WebSocket server
-        ws.send(prompt)  # Send the prompt to the server
+        url = f"{self.server_url}/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+        data = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": kwargs.get("temperature", 0.7),
+            "stream": True
+        }
+
+        ws = websocket.create_connection(url, header=headers)
+        ws.send(json.dumps(data))
 
         response = ""
         while True:
-            chunk = ws.recv()  # Receive a chunk of generated text from the server
+            chunk = ws.recv()
             if not chunk:
                 break
-            response += chunk
-            yield CompletionResponse(text=response, delta=chunk)
+            chunk_data = json.loads(chunk)
+            delta = chunk_data["choices"][0]["delta"].get("content", "")
+            response += delta
+            yield CompletionResponse(text=response, delta=delta)
 
         ws.close()  # Close the WebSocket connection
 
 
-def test_query_engine(queries, query_engine):
-    # from Neo.system_prompt import react_system_header_str
-    print(f"Query Engine prompts:\n{query_engine.get_prompts()}")
-    for query in queries:
-        start = time.time()
-        response = query_engine.query(query)
-        latency = time.time() - start
-
-        print(f"Query: {query}")
-        print(f"Response: {response}")
-        print(f"{latency} secs\n")
-        print('-------------------------------------------------------------------')
-
-
-def test_agent(queries, agent):
-    hint = "(do not answer implictly, instead use the readme tool)"
-    for query in queries:
-        start = time.time()
-        response = agent.chat(f"{query}\n{hint}")
-        latency = time.time() - start
-
-        print(f"Query: {query}")
-        print(f"Response: {response}")
-        print(f"{latency} secs\n")
-        print('-------------------------------------------------------------------')
-
-
 if __name__ == "__main__":
-    llm = LocalLLM()
+    llm = LLMServer()
     Settings.llm = llm
 
     # define embed model
