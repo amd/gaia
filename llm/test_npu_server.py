@@ -52,15 +52,16 @@ if __name__ == "__main__":
 
 # How can I make a delicious pizza from scratch? [/INST]
 # """,
-        """\
-<s>[INST] <<SYS>>
-You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
+#         """\
+# <s>[INST] <<SYS>>
+# You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
 
-If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.
-<</SYS>>
+# If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.
+# <</SYS>>
 
-What are the main themes in Shakespeare's play Romeo and Juliet? [/INST]
-"""
+# What are the main themes in Shakespeare's play Romeo and Juliet? [/INST]
+# """
+    "Tell me a joke about a bee"
     ]
     for query in queries:
         run_query(query)

@@ -7,7 +7,7 @@ import threading
 from typing import Optional, List, Mapping, Any
 from lemonade import leap
 
-from llama_index.core import SimpleDirectoryReader, SummaryIndex, Settings
+from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, SummaryIndex, Settings
 from llama_index.core.callbacks import CallbackManager
 from llama_index.core.llms import (
     CustomLLM,
@@ -112,9 +112,11 @@ class LocalLLM(CustomLLM):
         response_complete = threading.Event()
 
         def on_message(ws, message):
-            response_queue.append(message)
-            if "</s>" in message:
+            if message.endswith('</s>'):
+                response_queue.append(message.rstrip('</s>'))
                 response_complete.set()
+            else:
+                response_queue.append(message)
 
         def on_error(ws, error):
             print(f"Error: {error}")
@@ -138,12 +140,15 @@ class LocalLLM(CustomLLM):
         ws_thread = threading.Thread(target=ws.run_forever)
         ws_thread.start()
 
-        while True:
+        while not response_complete.is_set():
             if response_queue:
                 message = response_queue.pop(0)
                 yield CompletionResponse(text=message, delta=message)
-            if response_complete.is_set():
-                break
+
+        # may need to pop once more, FIXME
+        if response_queue:
+            message = response_queue.pop(0)
+            yield CompletionResponse(text=message, delta=message)
 
         ws.close()
         ws_thread.join()
@@ -201,15 +206,20 @@ if __name__ == "__main__":
 
     # Load the your data
     documents = SimpleDirectoryReader(
-        input_files=["./README.md"]
+        # input_files=["./README.md"]
+        input_files=["./data/jokes.txt"]
     ).load_data()
-    index = SummaryIndex.from_documents(documents)
+    # index = SummaryIndex.from_documents(documents)
+    index = VectorStoreIndex.from_documents(documents)
 
     streaming_mode = True
+
+    Settings.chunk_size = 64
+    Settings.chunk_overlap = 0
     query_engine = index.as_query_engine(
         verbose=True,
         # verbose=False,
-        similarity_top_k=1,
+        similarity_top_k=3,
         response_mode="compact",
         streaming=streaming_mode
     )
@@ -229,8 +239,9 @@ if __name__ == "__main__":
         "generated a report, collect the statistics and summarize in a spreadsheet",
     ]
     queries = [
-        "how do i install dependencies?",
-        "generate the commands to install dependencies"
+        "tell me a joke about a bee.",
+        "tell me a joke about a storm cloud.",
+        "tell me a joke about spiderman."
     ]
 
     # ---------------------

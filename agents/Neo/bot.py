@@ -2,13 +2,14 @@ import os
 import re
 import time
 import sys
+import asyncio
 import subprocess
 from io import StringIO
 import openai
 from dotenv import load_dotenv
 
 from lemonade import leap
-# from agents.Neo.system_prompt import react_system_prompt
+from agents.Neo.system_prompt import react_system_prompt, react_system_prompt_small
 
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, SummaryIndex, Settings
 from llama_index.llms.openai import OpenAI
@@ -132,78 +133,74 @@ def remove_color_formatting(text):
 
 
 def custom_engine_query(query_engine, query):
-
-    # Redirect stdout to a variable
-    original_stdout = sys.stdout
-    captured_output = StringIO()
-    sys.stdout = captured_output
-
-    # Query engine
+    print(f"Query: {query}")
     start_time = time.time()
-    query_engine.query(query)
+    streaming_response = query_engine.query(query)
+    response = ""
+    for text in streaming_response.response_gen:
+        if text:
+            response += text
+            # Print the streaming response to the console
+            print(text, end="", flush=True)
     elapsed_time = time.time() - start_time
-
-    # Restore the original stdout
-    sys.stdout = original_stdout
-
-    # Parse response
-    messages = []
-    response = remove_color_formatting(captured_output.getvalue())
-    print(response)
     tps = len(response.split()) / elapsed_time
-    valid_message_types = ["thought", "action input", "observation", "answer", "assistant"]
 
-    for line in response.split("\n"):
-        message_type = line.split(":")[0].lower()
-        if message_type in valid_message_types:
-            # Only messages of type "message" appear in the main chat window
-            # if message_type == "answer":
-            if message_type == "assistant":
-                message_type = "message"
-            message_content = " ".join(line.split(":")[1:])
-            messages.append([message_type, message_content, tps])
-
-    # Print captured message
-    print(captured_output.getvalue())
-
-    return messages
+    # strip end characters
+    response = response.rstrip("</s>")
+    return response, tps
 
 
 def custom_agent_query(agent, query):
-
-    # Redirect stdout to a variable
-    original_stdout = sys.stdout
-    captured_output = StringIO()
-    sys.stdout = captured_output
-
-    # Query agent
+    print(f"Query: {query}")
     start_time = time.time()
-    agent.chat(query)
+    streaming_response = agent.chat(query)
+    response = ""
+    for text in streaming_response.response_gen:
+        if text:
+            response += text
+            # Print the streaming response to the console
+            print(text, end="", flush=True)
     elapsed_time = time.time() - start_time
-
-    # Restore the original stdout
-    sys.stdout = original_stdout
-
-    # Parse response
-    messages = []
-    response = remove_color_formatting(captured_output.getvalue())
     tps = len(response.split()) / elapsed_time
-    valid_message_types = ["thought", "action input", "observation", "answer", "assistant"]
-    for line in response.split("\n"):
-        message_type = line.split(":")[0].lower()
-        if message_type in valid_message_types:
-            # Only messages of type "message" appear in the main chat window
-            # if message_type == "answer":
-            if message_type == "assistant":
-                message_type = "message"
-            message_content = " ".join(line.split(":")[1:])
-            messages.append([message_type, message_content, tps])
 
-    # Print captured message
-    print(captured_output.getvalue())
+    # strip end characters
+    response = response.rstrip("</s>")
+    return response, tps
 
-    return messages
+# def custom_agent_query(agent, query):
 
+#     # Redirect stdout to a variable
+#     original_stdout = sys.stdout
+#     captured_output = StringIO()
+#     sys.stdout = captured_output
+
+#     # Query agent
+#     start_time = time.time()
+#     agent.chat(query)
+#     elapsed_time = time.time() - start_time
+
+#     # Restore the original stdout
+#     sys.stdout = original_stdout
+
+#     # Parse response
+#     messages = []
+#     response = remove_color_formatting(captured_output.getvalue())
+#     tps = len(response.split()) / elapsed_time
+#     valid_message_types = ["thought", "action input", "observation", "answer", "assistant"]
+#     for line in response.split("\n"):
+#         message_type = line.split(":")[0].lower()
+#         if message_type in valid_message_types:
+#             # Only messages of type "message" appear in the main chat window
+#             # if message_type == "answer":
+#             if message_type == "assistant":
+#                 message_type = "message"
+#             message_content = " ".join(line.split(":")[1:])
+#             messages.append([message_type, message_content, tps])
+
+#     # Print captured message
+#     print(captured_output.getvalue())
+
+#     return messages
 
 multiply_tool = FunctionTool.from_defaults(fn=multiply)
 exe_tool = FunctionTool.from_defaults(fn=exe_command)
@@ -220,20 +217,25 @@ Settings.embed_model = "local:BAAI/bge-base-en-v1.5"
 
 # initialize ReAct agent
 # TODO: Disable the ReAct agent for now due to slowness/bad UX.
-# agent = ReActAgent.from_tools([multiply_tool, exe_tool], llm=llm, verbose=True)
-# agent.update_prompts({"agent_worker:system_prompt": react_system_prompt})
+agent = ReActAgent.from_tools([multiply_tool, exe_tool], llm=llm, verbose=True, streaming=True, is_dummy_stream=True)
+agent.update_prompts({"agent_worker:system_prompt": react_system_prompt_small})
 
 # use query engine instead for now.
+Settings.chunk_size = 64
+Settings.chunk_overlap = 0
 documents = SimpleDirectoryReader(
-    input_files=["./README.md"]
+    # input_files=["./README_small.md"]
+    input_files=["./data/jokes.txt"]
 ).load_data()
-index = SummaryIndex.from_documents(documents)
+# index = SummaryIndex.from_documents(documents)
+index = VectorStoreIndex.from_documents(documents)
 
 query_engine = index.as_query_engine(
-    # verbose=True,
-    verbose=False,
-    similarity_top_k=1,
-    response_mode="compact"
+    verbose=True,
+    # verbose=False,
+    similarity_top_k=3,
+    response_mode="compact",
+    streaming=True
 )
 
 
@@ -241,18 +243,16 @@ class MyBot(ActivityHandler):
 
     async def on_message_activity(self, turn_context: TurnContext):
         # Send message to agent and get response
-        # response = custom_agent_query(agent, turn_context.activity.text)
-        response = custom_engine_query(query_engine, turn_context.activity.text)
+        response, tps = custom_engine_query(query_engine, turn_context.activity.text)
+        # response, tps = custom_agent_query(agent, turn_context.activity.text)
 
-        # Send message to Demo Hub
-        for message in response:
-            message_type, message_content, message_tps = message
-            act = Activity(
-                type=message_type,
-                text=message_content,
-                channel_data={"tokens_per_second": message_tps},
-            )
-            await turn_context.send_activity(act)
+        # Send the entire response as a single message
+        act = Activity(
+            type="message",
+            text=response,
+            channel_data={"tokens_per_second": tps},
+        )
+        await turn_context.send_activity(act)
 
     async def on_members_added_activity(self, members_added: ChannelAccount, turn_context: TurnContext):
         pass
