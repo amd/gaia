@@ -5,5 +5,7 @@ aiohttp
 fastapi
 pydantic
 uvicorn
+openai
 llama_index
+websocket
 

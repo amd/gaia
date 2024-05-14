@@ -1,5 +1,8 @@
+import sys
 import time
 import requests
+import websocket
+import threading
 
 from typing import Optional, List, Mapping, Any
 from lemonade import leap
@@ -17,7 +20,7 @@ from llama_index.core.tools import QueryEngineTool, FunctionTool, ToolMetadata
 from llama_index.readers.github import GithubRepositoryReader, GithubClient
 from llama_index.core.llms.callbacks import llm_completion_callback
 
-class NpuLLM(CustomLLM):
+class LocalLLMLegacy(CustomLLM):
     context_window: int = 3900
     num_output: int = 256
     model_name: Any
@@ -70,7 +73,12 @@ class LocalLLM(CustomLLM):
     model_name: Any
     server_url: str
 
-    def __init__(self, server_url:str = "http://localhost:8000/generate", model_name:str = "meta-llama/Llama-2-7b-chat-hf", **kwargs):
+    def __init__(
+        self,
+        server_url:str = "localhost:8000",
+        model_name:str = "meta-llama/Llama-2-7b-chat-hf",
+        **kwargs
+    ):
         super().__init__(
             server_url=server_url,
             model_name=model_name,
@@ -90,7 +98,7 @@ class LocalLLM(CustomLLM):
     def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
         payload = {"text": prompt}
         headers = {"Content-Type": "application/json"}
-        response = requests.post(self.server_url, json=payload, headers=headers)
+        response = requests.post(f'http://{self.server_url}/generate', json=payload, headers=headers)
         response.raise_for_status()  # Raise an exception for 4xx or 5xx status codes
         data = response.json()
         text = data["response"]
@@ -100,26 +108,49 @@ class LocalLLM(CustomLLM):
 
     @llm_completion_callback()
     def stream_complete(self, prompt: str, **kwargs: Any) -> CompletionResponseGen:
-        import websocket  # Import the websocket library
+        response_queue = []
+        response_complete = threading.Event()
 
-        ws = websocket.WebSocket()
-        ws.connect(self.server_url.replace("http", "ws"))  # Connect to the WebSocket server
-        ws.send(prompt)  # Send the prompt to the server
+        def on_message(ws, message):
+            response_queue.append(message)
+            if "</s>" in message:
+                response_complete.set()
 
-        response = ""
+        def on_error(ws, error):
+            print(f"Error: {error}")
+
+        def on_close(ws, close_status_code, close_msg):
+            if not response_complete.is_set():
+                print("WebSocket connection closed unexpectedly")
+
+        def on_open(ws):
+            ws.send(prompt)
+
+        websocket.enableTrace(False)
+        ws = websocket.WebSocketApp(
+            f"ws://{self.server_url}/ws",
+            on_open=on_open,
+            on_message=on_message,
+            on_error=on_error,
+            on_close=on_close
+        )
+
+        ws_thread = threading.Thread(target=ws.run_forever)
+        ws_thread.start()
+
         while True:
-            chunk = ws.recv()  # Receive a chunk of generated text from the server
-            if not chunk:
+            if response_queue:
+                message = response_queue.pop(0)
+                yield CompletionResponse(text=message, delta=message)
+            if response_complete.is_set():
                 break
-            response += chunk
-            yield CompletionResponse(text=response, delta=chunk)
 
-        ws.close()  # Close the WebSocket connection
+        ws.close()
+        ws_thread.join()
 
 
 def test_query_engine(queries, query_engine):
-    # from Neo.system_prompt import react_system_header_str
-    print(f"Query Engine prompts:\n{query_engine.get_prompts()}")
+    # print(f"Query Engine prompts:\n{query_engine.get_prompts()}")
     for query in queries:
         start = time.time()
         response = query_engine.query(query)
@@ -128,6 +159,23 @@ def test_query_engine(queries, query_engine):
         print(f"Query: {query}")
         print(f"Response: {response}")
         print(f"{latency} secs\n")
+        print('-------------------------------------------------------------------')
+
+
+def test_query_engine_stream(queries, query_engine):
+    # print(f"Query Engine prompts:\n{query_engine.get_prompts()}")
+    for query in queries:
+        print(f"Query: {query}")
+        print(f"Response:")
+        start = time.time()
+        streaming_response = query_engine.query(query)
+        for text in streaming_response.response_gen:
+            if text:
+                sys.stdout.write(text)
+                sys.stdout.flush()
+        latency = time.time() - start
+
+        print(f"\n{latency} secs\n")
         print('-------------------------------------------------------------------')
 
 
@@ -157,15 +205,18 @@ if __name__ == "__main__":
     ).load_data()
     index = SummaryIndex.from_documents(documents)
 
-    # query_engine = index.as_query_engine()
+    streaming_mode = True
     query_engine = index.as_query_engine(
-        # verbose=True,
-        verbose=False,
+        verbose=True,
+        # verbose=False,
         similarity_top_k=1,
-        response_mode="compact"
+        response_mode="compact",
+        streaming=streaming_mode
     )
 
     queries = [
+        "how do i install dependencies?",
+        "generate the commands to install dependencies"
         "give me the link to Turnkey tests",
         "give me the link to Turnkey instructions",
         "what is TurnkeyML's mission?",
@@ -185,7 +236,10 @@ if __name__ == "__main__":
     # ---------------------
     # Test the query engine
     # ---------------------
-    test_query_engine(queries, query_engine)
+    if streaming_mode:
+        test_query_engine_stream(queries, query_engine)
+    else:
+        test_query_engine(queries, query_engine)
 
     # ---------------------
     # Build the ReAct agent

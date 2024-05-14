@@ -1,6 +1,7 @@
 import time
 import requests
 
+from openai import OpenAI
 from typing import Optional, List, Mapping, Any
 from lemonade import leap
 
@@ -20,23 +21,27 @@ from llama_index.core.llms.callbacks import llm_completion_callback
 
 class LocalLLM(CustomLLM):
     context_window: int = 3900
-    num_output: int = 256
-    model_name: Any
-    server_url: str
-    api_key: str
+    num_output: int = 500
+    max_tokens: int = -1
+    model_name: str
+    temperature: float
+    client: Any
 
     def __init__(
-        self, server_url: str = "http://localhost:1234/v1",
-        api_key: str = "lm-studio",
-        model_name: str = "LM Studio Community/Phi-3-mini-4k-instruct-GGUF",
+        self, 
+        client,
+        # model_name: str = "LM Studio Community/Phi-3-mini-4k-instruct-GGUF",
+        model_name: str = "LM Studio Community/Meta-Llama-3-8B-Instruct-GGUF",
+        temperature: float = 0.7,
         **kwargs
     ):
         super().__init__(
-            server_url=server_url,
-            api_key=api_key,
+            client=client,
             model_name=model_name,
+            temperature=temperature,
             **kwargs
         )
+
 
     @property
     def metadata(self) -> LLMMetadata:
@@ -47,65 +52,92 @@ class LocalLLM(CustomLLM):
             model_name=self.model_name,
         )
 
+
     @llm_completion_callback()
     def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
-        url = f"{self.server_url}/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
-        }
-        data = {
-            "model": self.model_name,
-            "messages": [
+        print("-----------------------------------------------")
+        print(prompt)
+        print("-----------------------------------------------")
+        completion = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=[
                 {"role": "user", "content": prompt}
             ],
-            "temperature": kwargs.get("temperature", 0.7)
-        }
-
-        response = requests.post(url, headers=headers, json=data)
-        response.raise_for_status()  # Raise an exception for 4xx or 5xx status codes
-
-        completion_data = response.json()
-        text = completion_data["choices"][0]["message"]["content"]
+            temperature=self.temperature,
+            stream=False
+        )
+        text = completion.choices[0].message.content
+        print(text)
 
         return CompletionResponse(text=text)
 
+
     @llm_completion_callback()
     def stream_complete(self, prompt: str, **kwargs: Any) -> CompletionResponseGen:
-        import websocket  # Import the websocket library
-
-        url = f"{self.server_url}/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
-        }
-        data = {
-            "model": self.model_name,
-            "messages": [
+        completion = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=[
                 {"role": "user", "content": prompt}
             ],
-            "temperature": kwargs.get("temperature", 0.7),
-            "stream": True
-        }
-
-        ws = websocket.create_connection(url, header=headers)
-        ws.send(json.dumps(data))
+            temperature=self.temperature,
+            stream=True
+        )
 
         response = ""
-        while True:
-            chunk = ws.recv()
-            if not chunk:
-                break
-            chunk_data = json.loads(chunk)
-            delta = chunk_data["choices"][0]["delta"].get("content", "")
-            response += delta
-            yield CompletionResponse(text=response, delta=delta)
+        for chunk in completion:
+            text = chunk.choices[0].delta.content
+            if text:
+                response += text
+                yield CompletionResponse(text=response, delta=chunk)
 
-        ws.close()  # Close the WebSocket connection
 
+def test_query_engine(queries, query_engine):
+    # from Neo.system_prompt import react_system_header_str
+    # print(f"Query Engine prompts:\n{query_engine.get_prompts()}")
+    for query in queries:
+        print(f"Query: {query}")
+
+        print(f"Response:")
+        start = time.time()
+        response = query_engine.query(query)
+        latency = time.time() - start
+        print(f"{response}")
+
+        print(f"\n{latency} secs\n")
+        print('-------------------------------------------------------------------')
+
+
+def test_query_engine_stream(queries, query_engine):
+    # from Neo.system_prompt import react_system_header_str
+    print(f"Query Engine prompts:\n{query_engine.get_prompts()}")
+    for query in queries:
+        print(f"Query: {query}")
+        streaming_response = query_engine.query(query)
+
+        print(f"Response:")
+        start = time.time()
+        print_response_stream.print_response_stream()
+        latency = time.time() - start
+
+        print(f"\n{latency} secs\n")
+        print('-------------------------------------------------------------------')
+
+
+def test_agent(queries, agent):
+    hint = "(do not answer implictly, instead use the readme tool)"
+    for query in queries:
+        start = time.time()
+        response = agent.chat(f"{query}\n{hint}")
+        latency = time.time() - start
+
+        print(f"Query: {query}")
+        print(f"Response: {response}")
+        print(f"{latency} secs\n")
+        print('-------------------------------------------------------------------')
 
 if __name__ == "__main__":
-    llm = LLMServer()
+    client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
+    llm = LocalLLM(client)
     Settings.llm = llm
 
     # define embed model
@@ -119,10 +151,11 @@ if __name__ == "__main__":
 
     # query_engine = index.as_query_engine()
     query_engine = index.as_query_engine(
-        # verbose=True,
-        verbose=False,
+        verbose=True,
+        # verbose=False,
         similarity_top_k=1,
-        response_mode="compact"
+        response_mode="compact",
+        streaming=True
     )
 
     queries = [

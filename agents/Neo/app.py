@@ -15,8 +15,8 @@ from botbuilder.core import (
 from botbuilder.core.integration import aiohttp_error_middleware
 from botbuilder.schema import Activity, ActivityTypes
 
-from bot import MyBot  # pylint: disable=import-error
-from config import DefaultConfig  # pylint: disable=import-error
+from agents.Neo.bot import MyBot  # pylint: disable=import-error
+from agents.Neo.config import DefaultConfig  # pylint: disable=import-error
 
 CONFIG = DefaultConfig()
 
@@ -77,6 +77,13 @@ async def messages(req: Request) -> Response:
 
 APP = web.Application(middlewares=[aiohttp_error_middleware])
 APP.router.add_post("/api/messages", messages)
+
+def run():
+    try:
+        web.run_app(APP, host="localhost", port=CONFIG.PORT)
+    except Exception as error:
+        raise error
+
 
 if __name__ == "__main__":
     try:

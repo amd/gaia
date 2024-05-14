@@ -18,12 +18,12 @@ async def generate_response(message: Message):
     input_ids = tokenizer(message.text, return_tensors="pt").input_ids
     response = model.generate(
         input_ids,
-        max_new_tokens=30,
-        do_sample=True,
-        top_k=50,
-        top_p=0.95,
-        temperature=0.7,
-        pad_token_id=tokenizer.eos_token_id,
+        max_new_tokens=300,
+        # do_sample=True,
+        # top_k=50,
+        # top_p=0.95,
+        # temperature=0.7,
+        # pad_token_id=tokenizer.eos_token_id,
     )
     generated_text = tokenizer.decode(response[0], skip_special_tokens=True)
 
@@ -40,7 +40,7 @@ async def stream_response(websocket: WebSocket):
 
     # Set up the generation parameters
     generation_kwargs = {
-        "max_new_tokens": 30,
+        "max_new_tokens": 300,
         "do_sample": True,
         "top_k": 50,
         "top_p": 0.95,

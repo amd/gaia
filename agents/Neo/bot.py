@@ -8,9 +8,9 @@ import openai
 from dotenv import load_dotenv
 
 from lemonade import leap
-from Neo.system_prompt import react_system_prompt
+# from agents.Neo.system_prompt import react_system_prompt
 
-from llama_index.core import VectorStoreIndex
+from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, SummaryIndex, Settings
 from llama_index.llms.openai import OpenAI
 from llama_index.core.agent import ReActAgent
 from llama_index.core.tools import QueryEngineTool, FunctionTool, ToolMetadata
@@ -19,7 +19,7 @@ from llama_index.readers.github import GithubRepositoryReader, GithubClient
 from botbuilder.core import ActivityHandler, TurnContext
 from botbuilder.schema import ChannelAccount, Activity
 
-from npu_llm import NpuLLM
+from llm.npu_llm import LocalLLM
 
 
 # define sample Tool
@@ -131,7 +131,45 @@ def remove_color_formatting(text):
     return ansi_escape.sub("", text)
 
 
-def custom_query(agent, query):
+def custom_engine_query(query_engine, query):
+
+    # Redirect stdout to a variable
+    original_stdout = sys.stdout
+    captured_output = StringIO()
+    sys.stdout = captured_output
+
+    # Query engine
+    start_time = time.time()
+    query_engine.query(query)
+    elapsed_time = time.time() - start_time
+
+    # Restore the original stdout
+    sys.stdout = original_stdout
+
+    # Parse response
+    messages = []
+    response = remove_color_formatting(captured_output.getvalue())
+    print(response)
+    tps = len(response.split()) / elapsed_time
+    valid_message_types = ["thought", "action input", "observation", "answer", "assistant"]
+
+    for line in response.split("\n"):
+        message_type = line.split(":")[0].lower()
+        if message_type in valid_message_types:
+            # Only messages of type "message" appear in the main chat window
+            # if message_type == "answer":
+            if message_type == "assistant":
+                message_type = "message"
+            message_content = " ".join(line.split(":")[1:])
+            messages.append([message_type, message_content, tps])
+
+    # Print captured message
+    print(captured_output.getvalue())
+
+    return messages
+
+
+def custom_agent_query(agent, query):
 
     # Redirect stdout to a variable
     original_stdout = sys.stdout
@@ -171,30 +209,43 @@ multiply_tool = FunctionTool.from_defaults(fn=multiply)
 exe_tool = FunctionTool.from_defaults(fn=exe_command)
 
 # initialize llm
-load_dotenv()
+# load_dotenv()
 # openai.api_key = os.getenv("OPENAI_API_KEY")
 # llm = OpenAI(model="gpt-3.5-turbo-0613")
 # llm = OpenAI(model="gpt-4")
 
-model_name: str = "meta-llama/Llama-2-7b-chat-hf"
-model, tokenizer = leap.from_pretrained(
-    "meta-llama/Llama-2-7b-chat-hf", recipe="ryzenai-npu"
-)
-llm = NpuLLM(model_name, model, tokenizer)
+llm = LocalLLM()
+Settings.llm = llm
+Settings.embed_model = "local:BAAI/bge-base-en-v1.5"
 
 # initialize ReAct agent
-agent = ReActAgent.from_tools([multiply_tool, exe_tool], llm=llm, verbose=True)
-agent.update_prompts({"agent_worker:system_prompt": react_system_prompt})
+# TODO: Disable the ReAct agent for now due to slowness/bad UX.
+# agent = ReActAgent.from_tools([multiply_tool, exe_tool], llm=llm, verbose=True)
+# agent.update_prompts({"agent_worker:system_prompt": react_system_prompt})
+
+# use query engine instead for now.
+documents = SimpleDirectoryReader(
+    input_files=["./README.md"]
+).load_data()
+index = SummaryIndex.from_documents(documents)
+
+query_engine = index.as_query_engine(
+    # verbose=True,
+    verbose=False,
+    similarity_top_k=1,
+    response_mode="compact"
+)
 
 
 class MyBot(ActivityHandler):
 
     async def on_message_activity(self, turn_context: TurnContext):
         # Send message to agent and get response
-        agent_response = custom_query(agent, turn_context.activity.text)
+        # response = custom_agent_query(agent, turn_context.activity.text)
+        response = custom_engine_query(query_engine, turn_context.activity.text)
 
         # Send message to Demo Hub
-        for message in agent_response:
+        for message in response:
             message_type, message_content, message_tps = message
             act = Activity(
                 type=message_type,
