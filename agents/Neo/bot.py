@@ -69,10 +69,12 @@ def exe_command(command, folder=None):
     finally:
         os.chdir(original_dir)  # Change back to the original working directory
 
+
 repo_engine = None
 repo_tool = None
 
-def create_repo_engine(owner:str, repo:str)->QueryEngineTool:
+
+def create_repo_engine(owner: str, repo: str) -> QueryEngineTool:
     github_client = GithubClient(github_token=os.environ["GITHUB_TOKEN"], verbose=True)
 
     repo_reader = GithubRepositoryReader(
@@ -116,10 +118,7 @@ def create_repo_engine(owner:str, repo:str)->QueryEngineTool:
         query_engine=repo_engine,
         metadata=ToolMetadata(
             name=f"{owner}/{repo}",
-            description=(
-                f"Provides information about {owner}/{repo} code repository. "
-                "Use a detailed plain text question as input to the tool."
-            ),
+            description=(f"Provides information about {owner}/{repo} code repository. " "Use a detailed plain text question as input to the tool."),
         ),
     )
 
@@ -130,25 +129,6 @@ def remove_color_formatting(text):
     # ANSI escape codes for color formatting
     ansi_escape = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
     return ansi_escape.sub("", text)
-
-
-def custom_engine_query(query_engine, query):
-    print(f"\nQuery: {query}")
-    start_time = time.time()
-    streaming_response = query_engine.query(query)
-    print("Answer: ", end="", flush=True)
-    response = ""
-    for text in streaming_response.response_gen:
-        if text:
-            response += text
-            # Print the streaming response to the console
-            print(text, end="", flush=True)
-    elapsed_time = time.time() - start_time
-    tps = len(response.split()) / elapsed_time
-
-    # strip end characters
-    response = response.rstrip("</s>")
-    return response, tps
 
 
 def custom_agent_query(agent, query):
@@ -167,6 +147,7 @@ def custom_agent_query(agent, query):
     # strip end characters
     response = response.rstrip("</s>")
     return response, tps
+
 
 # def custom_agent_query(agent, query):
 
@@ -236,7 +217,7 @@ query_engine = index.as_query_engine(
     # verbose=False,
     similarity_top_k=3,
     response_mode="compact",
-    streaming=True
+    streaming=True,
 )
 
 
@@ -244,8 +225,30 @@ class MyBot(ActivityHandler):
 
     async def on_message_activity(self, turn_context: TurnContext):
         # Send message to agent and get response
-        response, tps = custom_engine_query(query_engine, turn_context.activity.text)
-        # response, tps = custom_agent_query(agent, turn_context.activity.text)
+        query = turn_context.activity.text
+        print(f"\nQuery: {query}")
+        start_time = time.time()
+        streaming_response = query_engine.query(query)
+        print("Answer: ", end="", flush=True)
+        response = ""
+        for text in streaming_response.response_gen:
+            if text:
+                response += text
+
+                # Send streaming
+                act = Activity(
+                    type="streaming",
+                    text=text,
+                )
+                await turn_context.send_activity(act)
+
+                # Print the streaming response to the console
+                print(text, end="", flush=True)
+        elapsed_time = time.time() - start_time
+        tps = len(response.split()) / elapsed_time
+
+        # strip end characters
+        response = response.rstrip("</s>")
 
         # Send the entire response as a single message
         act = Activity(
@@ -255,9 +258,7 @@ class MyBot(ActivityHandler):
         )
         await turn_context.send_activity(act)
 
-    async def on_members_added_activity(
-        self, members_added: ChannelAccount, turn_context: TurnContext
-    ):
+    async def on_members_added_activity(self, members_added: ChannelAccount, turn_context: TurnContext):
         initial_greeting = "Hi I'm Neo, I can generate jokes for you. Just ask me to tell you a joke about anything. For example, 'tell me a joke about lemons'"
         for member_added in members_added:
             if member_added.id != turn_context.activity.recipient.id:
