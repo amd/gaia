@@ -255,5 +255,10 @@ class MyBot(ActivityHandler):
         )
         await turn_context.send_activity(act)
 
-    async def on_members_added_activity(self, members_added: ChannelAccount, turn_context: TurnContext):
-        pass
+    async def on_members_added_activity(
+        self, members_added: ChannelAccount, turn_context: TurnContext
+    ):
+        initial_greeting = "Hi I'm Neo, I can generate jokes for you. Just ask me to tell you a joke about anything. For example, 'tell me a joke about lemons'"
+        for member_added in members_added:
+            if member_added.id != turn_context.activity.recipient.id:
+                await turn_context.send_activity(initial_greeting)
