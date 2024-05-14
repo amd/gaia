@@ -235,12 +235,8 @@ class MyBot(ActivityHandler):
             if text:
                 response += text
 
-                # Send streaming
-                act = Activity(
-                    type="streaming",
-                    text=text,
-                )
-                await turn_context.send_activity(act)
+                # Send streaming message
+                asyncio.create_task(self.send_stream(act))
 
                 # Print the streaming response to the console
                 print(text, end="", flush=True)
@@ -263,3 +259,10 @@ class MyBot(ActivityHandler):
         for member_added in members_added:
             if member_added.id != turn_context.activity.recipient.id:
                 await turn_context.send_activity(initial_greeting)
+
+    async def send_stream(self, turn_context: TurnContext, streamed_message):
+        act = Activity(
+            type="streaming",
+            text=streamed_message,
+        )
+        await turn_context.send_activity(act)
