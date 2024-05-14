@@ -194,7 +194,7 @@ class MyBot(ActivityHandler):
                 response += text
 
                 # Send streaming message
-                asyncio.create_task(self.send_stream(act))
+                asyncio.create_task(self.send_stream(turn_context, text))
 
                 # Print the streaming response to the console
                 print(text, end="", flush=True)
