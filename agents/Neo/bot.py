@@ -148,50 +148,8 @@ def custom_agent_query(agent, query):
     response = response.rstrip("</s>")
     return response, tps
 
-
-# def custom_agent_query(agent, query):
-
-#     # Redirect stdout to a variable
-#     original_stdout = sys.stdout
-#     captured_output = StringIO()
-#     sys.stdout = captured_output
-
-#     # Query agent
-#     start_time = time.time()
-#     agent.chat(query)
-#     elapsed_time = time.time() - start_time
-
-#     # Restore the original stdout
-#     sys.stdout = original_stdout
-
-#     # Parse response
-#     messages = []
-#     response = remove_color_formatting(captured_output.getvalue())
-#     tps = len(response.split()) / elapsed_time
-#     valid_message_types = ["thought", "action input", "observation", "answer", "assistant"]
-#     for line in response.split("\n"):
-#         message_type = line.split(":")[0].lower()
-#         if message_type in valid_message_types:
-#             # Only messages of type "message" appear in the main chat window
-#             # if message_type == "answer":
-#             if message_type == "assistant":
-#                 message_type = "message"
-#             message_content = " ".join(line.split(":")[1:])
-#             messages.append([message_type, message_content, tps])
-
-#     # Print captured message
-#     print(captured_output.getvalue())
-
-#     return messages
-
 multiply_tool = FunctionTool.from_defaults(fn=multiply)
 exe_tool = FunctionTool.from_defaults(fn=exe_command)
-
-# initialize llm
-# load_dotenv()
-# openai.api_key = os.getenv("OPENAI_API_KEY")
-# llm = OpenAI(model="gpt-3.5-turbo-0613")
-# llm = OpenAI(model="gpt-4")
 
 llm = LocalLLM()
 Settings.llm = llm
@@ -199,8 +157,8 @@ Settings.embed_model = "local:BAAI/bge-base-en-v1.5"
 
 # initialize ReAct agent
 # TODO: Disable the ReAct agent for now due to slowness/bad UX.
-agent = ReActAgent.from_tools([multiply_tool, exe_tool], llm=llm, verbose=True, streaming=True, is_dummy_stream=True)
-agent.update_prompts({"agent_worker:system_prompt": react_system_prompt_small})
+# agent = ReActAgent.from_tools([multiply_tool, exe_tool], llm=llm, verbose=True, streaming=True, is_dummy_stream=True)
+# agent.update_prompts({"agent_worker:system_prompt": react_system_prompt_small})
 
 # use query engine instead for now.
 Settings.chunk_size = 64
@@ -215,7 +173,7 @@ index = VectorStoreIndex.from_documents(documents)
 query_engine = index.as_query_engine(
     verbose=True,
     # verbose=False,
-    similarity_top_k=3,
+    similarity_top_k=1,
     response_mode="compact",
     streaming=True,
 )
@@ -229,7 +187,7 @@ class MyBot(ActivityHandler):
         print(f"\nQuery: {query}")
         start_time = time.time()
         streaming_response = query_engine.query(query)
-        print("Answer: ", end="", flush=True)
+        print("Answer: ", end="")
         response = ""
         for text in streaming_response.response_gen:
             if text:
@@ -240,6 +198,7 @@ class MyBot(ActivityHandler):
 
                 # Print the streaming response to the console
                 print(text, end="", flush=True)
+
         elapsed_time = time.time() - start_time
         tps = len(response.split()) / elapsed_time
 
