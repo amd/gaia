@@ -150,8 +150,8 @@ class LocalLLM(CustomLLM):
             message = response_queue.pop(0)
             yield CompletionResponse(text=message, delta=message)
 
-        ws.close()
-        ws_thread.join()
+        # ws.close()
+        # ws_thread.join()
 
 
 def test_query_engine(queries, query_engine):

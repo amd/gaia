@@ -133,9 +133,10 @@ def remove_color_formatting(text):
 
 
 def custom_engine_query(query_engine, query):
-    print(f"Query: {query}")
+    print(f"\nQuery: {query}")
     start_time = time.time()
     streaming_response = query_engine.query(query)
+    print("Answer: ", end="", flush=True)
     response = ""
     for text in streaming_response.response_gen:
         if text:
