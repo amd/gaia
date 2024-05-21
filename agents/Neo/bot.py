@@ -69,10 +69,8 @@ def exe_command(command, folder=None):
     finally:
         os.chdir(original_dir)  # Change back to the original working directory
 
-
 repo_engine = None
 repo_tool = None
-
 
 def create_repo_engine(owner: str, repo: str) -> QueryEngineTool:
     github_client = GithubClient(github_token=os.environ["GITHUB_TOKEN"], verbose=True)
@@ -122,7 +120,7 @@ def create_repo_engine(owner: str, repo: str) -> QueryEngineTool:
         ),
     )
 
-    return f"Successfully created {owner}/{repo} repo index, query engine and tool!"
+    return f"Successfully created {owner}/{repo} repo index and tools!"
 
 
 def remove_color_formatting(text):
@@ -164,15 +162,12 @@ Settings.embed_model = "local:BAAI/bge-base-en-v1.5"
 Settings.chunk_size = 64
 Settings.chunk_overlap = 0
 documents = SimpleDirectoryReader(
-    # input_files=["./README_small.md"]
-    input_files=["./data/jokes.txt"]
+    input_files=["./README_small.md"]
 ).load_data()
-# index = SummaryIndex.from_documents(documents)
 index = VectorStoreIndex.from_documents(documents)
 
 query_engine = index.as_query_engine(
     verbose=True,
-    # verbose=False,
     similarity_top_k=1,
     response_mode="compact",
     streaming=True,
