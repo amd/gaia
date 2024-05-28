@@ -95,23 +95,30 @@ def remove_color_formatting(text):
     return ansi_escape.sub("", text)
 
 
-def custom_engine_query(query_engine, query):
-    print(f"\nQuery: {query}")
-    start_time = time.time()
-    streaming_response = query_engine.query(query)
-    print("Answer: ", end="", flush=True)
-    response = ""
-    for text in streaming_response.response_gen:
-        if text:
-            response += text
-            # Print the streaming response to the console
-            print(text, end="", flush=True)
-    elapsed_time = time.time() - start_time
-    tps = len(response.split()) / elapsed_time
+# async def custom_engine_query(query_engine, query, turn_context: TurnContext):
+#     print(f"\nQuery: {query}")
+#     start_time = time.time()
+#     streaming_response = query_engine.query(query)
+#     print("Answer: ", end="", flush=True)
+#     response = ""
+#     for text in streaming_response.response_gen:
+#         if text:
+#             response += text
 
-    # strip end characters
-    response = response.rstrip("</s>")
-    return response, tps
+#             # Send streaming
+#             act = Activity(
+#                 type="streaming",
+#                 text=text,
+#             )
+#             await turn_context.send_activity(act)
+#             # Print the streaming response to the console
+#             print(text, end="", flush=True)
+#     elapsed_time = time.time() - start_time
+#     tps = len(response.split()) / elapsed_time
+
+#     # strip end characters
+#     response = response.rstrip("</s>")
+#     return response, tps
 
 
 def custom_agent_query(agent, query):
@@ -211,7 +218,30 @@ class MyBot(ActivityHandler):
             # await turn_context.send_activity(act)
 
         elif yt_doc and yt_index and yt_engine:
-            response, tps = custom_engine_query(yt_engine, message)
+            # response, tps = custom_engine_query(yt_engine, message, turn_context)
+            query = turn_context.activity.text
+            print(f"\nQuery: {query}")
+            start_time = time.time()
+            streaming_response = yt_engine.query(query)
+            print("Answer: ", end="", flush=True)
+            response = ""
+            for text in streaming_response.response_gen:
+                if text:
+                    response += text
+
+                    # Send streaming
+                    act = Activity(
+                        type="streaming",
+                        text=text,
+                    )
+                    await turn_context.send_activity(act)
+                    # Print the streaming response to the console
+                    print(text, end="", flush=True)
+            elapsed_time = time.time() - start_time
+            tps = len(response.split()) / elapsed_time
+
+            # strip end characters
+            response = response.rstrip("</s>")
         else:
             response = "Hey! Can you share a youtube link with me? I can't query a youtube video until you share a link with me :)"
 
