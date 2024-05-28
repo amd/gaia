@@ -10,8 +10,10 @@ model, tokenizer = leap.from_pretrained(
     "meta-llama/Llama-2-7b-chat-hf", recipe="ryzenai-npu"
 )
 
+
 class Message(BaseModel):
     text: str
+
 
 @app.post("/generate")
 async def generate_response(message: Message):
@@ -31,6 +33,7 @@ async def generate_response(message: Message):
     generated_text = generated_text.replace(message.text, "").strip()
 
     return {"response": generated_text}
+
 
 @app.websocket("/stream")
 async def stream_response(websocket: WebSocket):
@@ -62,6 +65,8 @@ async def stream_response(websocket: WebSocket):
 
     await websocket.close()
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)

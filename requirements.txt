@@ -7,7 +7,8 @@ pydantic
 uvicorn
 openai
 llama_index
-websocket
+websockets
+websocket-client
 wordcloud
 
 # comment out the line below if you do not have a GPU
