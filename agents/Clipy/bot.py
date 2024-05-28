@@ -256,4 +256,7 @@ class MyBot(ActivityHandler):
     async def on_members_added_activity(
         self, members_added: ChannelAccount, turn_context: TurnContext
     ):
-        pass
+        initial_greeting = "Hi I'm Clipy, I can index and summarize youtube videos for you so you can easily query them. Just paste a link and I'll get on it! For example, 'please index this youtube video: https://www.youtube.com/watch?v=zjkBMFhNj_g&t=402s'"
+        for member_added in members_added:
+            if member_added.id != turn_context.activity.recipient.id:
+                await turn_context.send_activity(initial_greeting)
