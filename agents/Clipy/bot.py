@@ -11,7 +11,13 @@ from dotenv import load_dotenv
 from lemonade import leap
 from agents.Neo.system_prompt import react_system_prompt, react_system_prompt_small
 
-from llama_index.core import VectorStoreIndex, Document, SimpleDirectoryReader, DocumentSummaryIndex, Settings
+from llama_index.core import (
+    VectorStoreIndex,
+    Document,
+    SimpleDirectoryReader,
+    DocumentSummaryIndex,
+    Settings,
+)
 from llama_index.llms.openai import OpenAI
 from llama_index.core.agent import ReActAgent
 from llama_index.core.tools import QueryEngineTool, FunctionTool, ToolMetadata
@@ -23,18 +29,21 @@ from botbuilder.schema import ChannelAccount, Activity
 
 from llm.npu_llm import LocalLLM
 
+
 def extract_youtube_link(message):
-    youtube_link_pattern = r'https?://(?:www\.)?(?:youtube\.com|youtu\.be)/(?:watch\?v=)?(?:embed/)?(?:v/)?(?:shorts/)?(?:\S+)'
+    youtube_link_pattern = r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/(?:watch\?v=)?(?:embed/)?(?:v/)?(?:shorts/)?(?:\S+)"
     match = re.search(youtube_link_pattern, message)
     if match:
         return match.group()
     else:
         return None
 
-def get_youtube_transcript_doc(yt_links:list)->Document:
+
+def get_youtube_transcript_doc(yt_links: list) -> Document:
     return YoutubeTranscriptReader().load_data(ytlinks=yt_links)
 
-def build_index(doc:Document, persist_dir=None)->VectorStoreIndex:
+
+def build_index(doc: Document, persist_dir=None) -> VectorStoreIndex:
     if persist_dir:
         storage_context = StorageContext.from_defaults(persist_dir=persist_dir)
         index = VectorStoreIndex.load_from_storage(storage_context)
@@ -42,7 +51,8 @@ def build_index(doc:Document, persist_dir=None)->VectorStoreIndex:
         index = VectorStoreIndex.from_documents(doc, show_progress=True)
     return index
 
-def build_summary_index(doc:Document, persist_dir=None)->DocumentSummaryIndex:
+
+def build_summary_index(doc: Document, persist_dir=None) -> DocumentSummaryIndex:
     if persist_dir:
         storage_context = StorageContext.from_defaults(persist_dir=persist_dir)
         index = DocumentSummaryIndex.load_from_storage(storage_context)
@@ -63,18 +73,21 @@ def build_summary_index(doc:Document, persist_dir=None)->DocumentSummaryIndex:
         )
     return index
 
+
 def get_query_engine(index, similarity_top=3):
     query_engine = index.as_query_engine(
         verbose=True,
         # verbose=False,
         similarity_top_k=similarity_top,
         response_mode="compact",
-        streaming=True
+        streaming=True,
     )
     return query_engine
 
+
 def get_youtube_tool():
     return FunctionTool.from_defaults(fn=get_youtube_transcript_doc)
+
 
 def remove_color_formatting(text):
     # ANSI escape codes for color formatting
@@ -135,8 +148,8 @@ Settings.embed_model = "local:BAAI/bge-base-en-v1.5"
 # agent.update_prompts({"agent_worker:system_prompt": react_system_prompt_small})
 
 # use query engine instead for now.
-Settings.chunk_size = 64
-Settings.chunk_overlap = 0
+Settings.chunk_size = 256
+Settings.chunk_overlap = 16
 
 yt_doc = None
 yt_index = None
@@ -171,7 +184,7 @@ class MyBot(ActivityHandler):
         message_yt_link = extract_youtube_link(message)
         tps = 0
         if message_yt_link:
-            response = f"Thanks for the link. Extracting the transcript, building index and query engine from {message_yt_link}"
+            response = f"Thanks for the link. Extracting the transcript and building the index from {message_yt_link}"
             act = Activity(
                 type="message",
                 text=response,
@@ -186,22 +199,16 @@ class MyBot(ActivityHandler):
             yt_index = build_index(yt_doc)
             yt_engine = get_query_engine(yt_index)
 
-            response = f"All done! Generating a short summary..."
-            act = Activity(
-                type="message",
-                text=response,
-                channel_data={"tokens_per_second": tps},
-            )
-            await turn_context.send_activity(act)
+            response = f"All done!"
 
-            yt_summary = build_summary_index(yt_doc)
-            response = summary_index.get_document_summary(doc_id)
-            act = Activity(
-                type="message",
-                text=response,
-                channel_data={"tokens_per_second": tps},
-            )
-            await turn_context.send_activity(act)
+            # yt_summary = build_summary_index(yt_doc)
+            # response = summary_index.get_document_summary(doc_id)
+            # act = Activity(
+            #     type="message",
+            #     text=response,
+            #     channel_data={"tokens_per_second": tps},
+            # )
+            # await turn_context.send_activity(act)
 
         elif yt_doc and yt_index and yt_engine:
             response, tps = custom_engine_query(yt_engine, message)
@@ -216,5 +223,7 @@ class MyBot(ActivityHandler):
         )
         await turn_context.send_activity(act)
 
-    async def on_members_added_activity(self, members_added: ChannelAccount, turn_context: TurnContext):
+    async def on_members_added_activity(
+        self, members_added: ChannelAccount, turn_context: TurnContext
+    ):
         pass

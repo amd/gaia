@@ -11,7 +11,12 @@ from dotenv import load_dotenv
 from lemonade import leap
 from agents.Neo.system_prompt import react_system_prompt, react_system_prompt_small
 
-from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, SummaryIndex, Settings
+from llama_index.core import (
+    VectorStoreIndex,
+    SimpleDirectoryReader,
+    SummaryIndex,
+    Settings,
+)
 from llama_index.llms.openai import OpenAI
 from llama_index.core.agent import ReActAgent
 from llama_index.core.tools import QueryEngineTool, FunctionTool, ToolMetadata
@@ -24,7 +29,9 @@ from llm.npu_llm import LocalLLM
 
 
 def extract_github_owner_repo(message):
-    github_link_pattern = r'https?://(?:www\.)?github\.com/([a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)'
+    github_link_pattern = (
+        r"https?://(?:www\.)?github\.com/([a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)"
+    )
     match = re.search(github_link_pattern, message)
     if match:
         owner = match.group(1)
@@ -32,6 +39,7 @@ def extract_github_owner_repo(message):
         return owner, repo
     else:
         return None, None
+
 
 # define sample Tool
 def multiply(a: int, b: int) -> int:
@@ -79,8 +87,10 @@ def exe_command(command, folder=None):
     finally:
         os.chdir(original_dir)  # Change back to the original working directory
 
+
 repo_engine = None
 repo_tool = None
+
 
 def create_repo_engine(owner: str, repo: str) -> QueryEngineTool:
     github_client = GithubClient(github_token=os.environ["GITHUB_TOKEN"], verbose=True)
@@ -161,6 +171,7 @@ def custom_agent_query(agent, query):
     response = response.rstrip("</s>")
     return response, tps
 
+
 multiply_tool = FunctionTool.from_defaults(fn=multiply)
 exe_tool = FunctionTool.from_defaults(fn=exe_command)
 
@@ -190,7 +201,9 @@ Settings.embed_model = "local:BAAI/bge-base-en-v1.5"
 
 
 import nest_asyncio
+
 nest_asyncio.apply()
+
 
 class MyBot(ActivityHandler):
 
@@ -246,7 +259,9 @@ class MyBot(ActivityHandler):
             )
             await turn_context.send_activity(act)
 
-    async def on_members_added_activity(self, members_added: ChannelAccount, turn_context: TurnContext):
+    async def on_members_added_activity(
+        self, members_added: ChannelAccount, turn_context: TurnContext
+    ):
         initial_greeting = "Hi I'm Neo, I can index github projects for you so you can easily query them. Just paste a link and I'll get on it! For example, 'please index this repo: https://github.com/onnx/turnkeyml'"
         for member_added in members_added:
             if member_added.id != turn_context.activity.recipient.id:
