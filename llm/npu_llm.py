@@ -7,7 +7,12 @@ import threading
 from typing import Optional, List, Mapping, Any
 from lemonade import leap
 
-from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, SummaryIndex, Settings
+from llama_index.core import (
+    SimpleDirectoryReader,
+    VectorStoreIndex,
+    SummaryIndex,
+    Settings,
+)
 from llama_index.core.callbacks import CallbackManager
 from llama_index.core.llms import (
     CustomLLM,
@@ -20,6 +25,7 @@ from llama_index.core.tools import QueryEngineTool, FunctionTool, ToolMetadata
 from llama_index.readers.github import GithubRepositoryReader, GithubClient
 from llama_index.core.llms.callbacks import llm_completion_callback
 
+
 class LocalLLMLegacy(CustomLLM):
     context_window: int = 3900
     num_output: int = 256
@@ -29,10 +35,7 @@ class LocalLLMLegacy(CustomLLM):
 
     def __init__(self, model_name: str, model: Any, tokenizer: Any, **kwargs):
         super().__init__(
-            model_name=model_name,
-            model=model,
-            tokenizer=tokenizer,
-            **kwargs
+            model_name=model_name, model=model, tokenizer=tokenizer, **kwargs
         )
 
     @property
@@ -54,9 +57,7 @@ class LocalLLMLegacy(CustomLLM):
         return CompletionResponse(text=text)
 
     @llm_completion_callback()
-    def stream_complete(
-        self, prompt: str, **kwargs: Any
-    ) -> CompletionResponseGen:
+    def stream_complete(self, prompt: str, **kwargs: Any) -> CompletionResponseGen:
         input_ids = self.tokenizer(prompt, return_tensors="pt").input_ids
         response = self.model.generate(input_ids, max_new_tokens=30)
         text = tokenizer.decode(response[0])
@@ -75,15 +76,11 @@ class LocalLLM(CustomLLM):
 
     def __init__(
         self,
-        server_url:str = "localhost:8000",
-        model_name:str = "meta-llama/Llama-2-7b-chat-hf",
-        **kwargs
+        server_url: str = "localhost:8000",
+        model_name: str = "meta-llama/Llama-2-7b-chat-hf",
+        **kwargs,
     ):
-        super().__init__(
-            server_url=server_url,
-            model_name=model_name,
-            **kwargs
-        )
+        super().__init__(server_url=server_url, model_name=model_name, **kwargs)
 
     @property
     def metadata(self) -> LLMMetadata:
@@ -98,13 +95,14 @@ class LocalLLM(CustomLLM):
     def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
         payload = {"text": prompt}
         headers = {"Content-Type": "application/json"}
-        response = requests.post(f'http://{self.server_url}/generate', json=payload, headers=headers)
+        response = requests.post(
+            f"http://{self.server_url}/generate", json=payload, headers=headers
+        )
         response.raise_for_status()  # Raise an exception for 4xx or 5xx status codes
         data = response.json()
         text = data["response"]
 
         return CompletionResponse(text=text)
-
 
     @llm_completion_callback()
     def stream_complete(self, prompt: str, **kwargs: Any) -> CompletionResponseGen:
@@ -112,8 +110,8 @@ class LocalLLM(CustomLLM):
         response_complete = threading.Event()
 
         def on_message(ws, message):
-            if message.endswith('</s>'):
-                response_queue.append(message.rstrip('</s>'))
+            if message.endswith("</s>"):
+                response_queue.append(message.rstrip("</s>"))
                 response_complete.set()
             else:
                 response_queue.append(message)
@@ -127,6 +125,7 @@ class LocalLLM(CustomLLM):
 
         def on_open(ws):
             ws.send(prompt)
+            # print(f"prompt:\n{prompt}")
 
         websocket.enableTrace(False)
         ws = websocket.WebSocketApp(
@@ -134,7 +133,7 @@ class LocalLLM(CustomLLM):
             on_open=on_open,
             on_message=on_message,
             on_error=on_error,
-            on_close=on_close
+            on_close=on_close,
         )
 
         ws_thread = threading.Thread(target=ws.run_forever)
@@ -164,7 +163,7 @@ def test_query_engine(queries, query_engine):
         print(f"Query: {query}")
         print(f"Response: {response}")
         print(f"{latency} secs\n")
-        print('-------------------------------------------------------------------')
+        print("-------------------------------------------------------------------")
 
 
 def test_query_engine_stream(queries, query_engine):
@@ -181,7 +180,7 @@ def test_query_engine_stream(queries, query_engine):
         latency = time.time() - start
 
         print(f"\n{latency} secs\n")
-        print('-------------------------------------------------------------------')
+        print("-------------------------------------------------------------------")
 
 
 def test_agent(queries, agent):
@@ -194,7 +193,7 @@ def test_agent(queries, agent):
         print(f"Query: {query}")
         print(f"Response: {response}")
         print(f"{latency} secs\n")
-        print('-------------------------------------------------------------------')
+        print("-------------------------------------------------------------------")
 
 
 if __name__ == "__main__":
@@ -221,7 +220,7 @@ if __name__ == "__main__":
         # verbose=False,
         similarity_top_k=3,
         response_mode="compact",
-        streaming=streaming_mode
+        streaming=streaming_mode,
     )
 
     queries = [
@@ -241,7 +240,7 @@ if __name__ == "__main__":
     queries = [
         "tell me a joke about a bee.",
         "tell me a joke about a storm cloud.",
-        "tell me a joke about spiderman."
+        "tell me a joke about spiderman.",
     ]
 
     # ---------------------

@@ -17,6 +17,7 @@ To run an agent, simply run the steps below:
 * `conda create -n gaia python=3.9`
 * `conda activate gaia`
 * `pip install -r requirements.txt --upgrade`
+* `pip install -r ./agents/<agent_name>/requirements.txt`
 * `python run.py`
 * Open `AIG Demo Hub`, click on `Open Demo` and use `http://localhost:3978/api/messages`
 * NOTE: each agent is hosted on a separate port, connect the desired agent by modifying the target port above.
