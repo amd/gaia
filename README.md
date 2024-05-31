@@ -30,7 +30,7 @@ Install instructions below are for Microsoft Windows 10 OS and [Miniconda 24+](h
 1. Install gaia: `pip install -e .`
 1. Start gaia webserver and choose agent to run: `python run.py`
 1. Open `AIG Demo Hub`, click on `Open Demo` and use `http://localhost:<port>/api/messages`
-* NOTE: each agent is hosted on a separate port, connect the desired agent by modifying the target port above.
+* NOTE: each agent is hosted on a separate port, connect to the desired agent by modifying the target port above. See gaia web server shell for port details.
 
 ## Install GAIA Agents
 

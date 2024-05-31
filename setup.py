@@ -33,8 +33,8 @@ setup(
         "wordcloud",
         "python-dotenv",
         "torch",
-        "torchvision"
-        "torchaudio"
+        "torchvision",
+        "torchaudio",
         # "torch @ https://download.pytorch.org/whl/cu118/torch-1.13.1%2Bcu118-cp38-cp38-linux_x86_64.whl",
         # "torchvision @ https://download.pytorch.org/whl/cu118/torchvision-0.14.1%2Bcu118-cp38-cp38-linux_x86_64.whl",
         # "torchaudio @ https://download.pytorch.org/whl/cu118/torchaudio-0.13.1%2Bcu118-cp38-cp38-linux_x86_64.whl",
