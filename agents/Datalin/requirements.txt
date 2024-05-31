@@ -1,9 +1,0 @@
-cookiecutter
-matplotlib
-transformers
-torch
-matplotlib
-pandas
-onnx
-accelerate
-split

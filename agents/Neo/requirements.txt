@@ -1,3 +1,0 @@
-python-dotenv
-llama-index-readers-github
-llama-index-embeddings-huggingface
