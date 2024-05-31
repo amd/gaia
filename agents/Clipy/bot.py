@@ -95,64 +95,9 @@ def remove_color_formatting(text):
     return ansi_escape.sub("", text)
 
 
-# async def custom_engine_query(query_engine, query, turn_context: TurnContext):
-#     print(f"\nQuery: {query}")
-#     start_time = time.time()
-#     streaming_response = query_engine.query(query)
-#     print("Answer: ", end="", flush=True)
-#     response = ""
-#     for text in streaming_response.response_gen:
-#         if text:
-#             response += text
-
-#             # Send streaming
-#             act = Activity(
-#                 type="streaming",
-#                 text=text,
-#             )
-#             await turn_context.send_activity(act)
-#             # Print the streaming response to the console
-#             print(text, end="", flush=True)
-#     elapsed_time = time.time() - start_time
-#     tps = len(response.split()) / elapsed_time
-
-#     # strip end characters
-#     response = response.rstrip("</s>")
-#     return response, tps
-
-
-def custom_agent_query(agent, query):
-    print(f"Query: {query}")
-    start_time = time.time()
-    streaming_response = agent.chat(query)
-    response = ""
-    for text in streaming_response.response_gen:
-        if text:
-            response += text
-            # Print the streaming response to the console
-            print(text, end="", flush=True)
-    elapsed_time = time.time() - start_time
-    tps = len(response.split()) / elapsed_time
-
-    # strip end characters
-    response = response.rstrip("</s>")
-    return response, tps
-
-
-# initialize llm
-# load_dotenv()
-# openai.api_key = os.getenv("OPENAI_API_KEY")
-# llm = OpenAI(model="gpt-3.5-turbo-0613")
-# llm = OpenAI(model="gpt-4")
-
 llm = LocalLLM()
 Settings.llm = llm
 Settings.embed_model = "local:BAAI/bge-base-en-v1.5"
-
-# initialize ReAct agent
-# TODO: Disable the ReAct agent for now due to slowness/bad UX.
-# agent = ReActAgent.from_tools([multiply_tool, exe_tool], llm=llm, verbose=True, streaming=True, is_dummy_stream=True)
-# agent.update_prompts({"agent_worker:system_prompt": react_system_prompt_small})
 
 # use query engine instead for now.
 Settings.chunk_size = 256
