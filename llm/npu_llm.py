@@ -5,7 +5,6 @@ import websocket
 import threading
 
 from typing import Optional, List, Mapping, Any
-from lemonade import leap
 
 from llama_index.core import (
     SimpleDirectoryReader,

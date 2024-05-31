@@ -1,17 +1,7 @@
-import os
-import re
 import time
-import sys
 import asyncio
-import subprocess
-from io import StringIO
-import openai
-from dotenv import load_dotenv
-
-from lemonade import leap
 
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, SummaryIndex, Settings
-from llama_index.llms.openai import OpenAI
 from llama_index.core.agent import ReActAgent
 from llama_index.core.tools import QueryEngineTool, FunctionTool, ToolMetadata
 from llama_index.readers.github import GithubRepositoryReader, GithubClient
