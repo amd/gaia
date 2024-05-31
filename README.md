@@ -8,7 +8,6 @@ Welcome to the GAIA (Generative AI Is Awesome!) project! This repository serves 
 
 1. [Getting Started](#getting-started)
 1. [Install Agents](#install-specialized-tools)
-1. [Code Organization](#code-organization)
 1. [Contributing](#contributing)
 
 # Getting Started
@@ -21,6 +20,8 @@ To install it, run the `AIG-Demo-Hub-4.14.1-windows-setup.exe` setup file in the
 
 ## Install GAIA backend
 
+Install instructions below are for Microsoft Windows 10 OS and [Miniconda 24+](https://docs.anaconda.com/free/miniconda/).
+
 1. Clone repo: `git clone https://github.com/aigdat/gaia.git`
 1. Go to the root: `cd ./gaia`
 1. Create and activate a conda environment:
@@ -31,7 +32,11 @@ To install it, run the `AIG-Demo-Hub-4.14.1-windows-setup.exe` setup file in the
 1. Open `AIG Demo Hub`, click on `Open Demo` and use `http://localhost:<port>/api/messages`
 * NOTE: each agent is hosted on a separate port, connect the desired agent by modifying the target port above.
 
-## Running the Lemonade Ryzen AI NPU Web Server
+## Install GAIA Agents
+
+To install a specific agent, make sure to add the `[<agent>]` prefix, for example: `pip install -e .[neo]`
+
+# Running the Ryzen AI NPU Web Server
 
 GAIA requires a NPU web server to run properly. Setup the Ryzen AI NPU web server by following the directions below.
 1. Clone the lemonade repo, which is used for hosting LLMs via a web server: `git clone https://github.com/aigdat/genai.git`
@@ -51,7 +56,7 @@ INFO:     connection open
 ```
 NOTE: use command shell only, not powershell.
 
-## Running RyzenAI iGPU Web Server
+# Running RyzenAI iGPU Web Server
 
 To get setup initially, you will need to setup the Ryzen AI iGPU web server by following the directions below.
 1. Clone the lemonade repo, which is used for hosting LLMs via a web server: `git clone https://github.com/aigdat/genai.git`
