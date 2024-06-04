@@ -1,16 +1,23 @@
 # GAIA: The GenAI Sandbox
 
-Welcome to the GAIA (Generative AI Is Awesome!) project! This repository serves as a R&D center for new agentic workflows.
+Welcome to the GAIA (Generative AI Is Awesome!) project! This repository serves as a repository of local LLM agentic workflows demos and reference designs.
 
 <img src="https://github.com/aigdat/gaia/assets/4722733/0db60b9b-05d5-4732-a74e-f67bc9bdb61b" alt="gaia" width="500">
+
+# Getting Started
+
+To get started, please follow the instructions below. If you have a new machine and need to install all dependencies, start [here](#)
 
 ## Contents:
 
 1. [Getting Started](#getting-started)
-1. [Install Agents](#install-specialized-tools)
+1. [Install AIG Demo Hub](#install-aig-demo-hub)
+1. [Install GAIA Backend](#install-gaia-backend)
+1. [Install GAIA Agents](#install-gaia-agents)
 1. [Contributing](#contributing)
 
-# Getting Started
+
+# Installation
 
 ## Install AIG Demo Hub
 
@@ -18,7 +25,7 @@ AIG demo hub is the interface that allows you to interface with GAIA agents (e.g
 
 To install it, run the `AIG-Demo-Hub-4.14.1-windows-setup.exe` setup file in the repo first.
 
-## Install GAIA backend
+## Install GAIA Backend
 
 Install instructions below are for Microsoft Windows 10 OS and [Miniconda 24+](https://docs.anaconda.com/free/miniconda/).
 
@@ -27,21 +34,20 @@ Install instructions below are for Microsoft Windows 10 OS and [Miniconda 24+](h
 1. Create and activate a conda environment:
     1. `conda create -n gaia python=3.10`
     1. `conda activate gaia`
-1. Install gaia: `pip install -e .`
-1. Start gaia webserver and choose agent to run: `python run.py`
-1. Open `AIG Demo Hub`, click on `Open Demo` and use `http://localhost:<port>/api/messages`
-* NOTE: each agent is hosted on a separate port, connect to the desired agent by modifying the target port above. See gaia web server shell for port details.
+1. Install GAIA package and dependencies, note this command will install dependencies for all agents:
+    1. `pip install -e .[all]`
+1. To install dependencies for a single agent, make sure to add the `[<agent_name>]` suffix, for example:
+    1. `pip install -e .[neo]`
 
-## Install GAIA Agents
+## Install Lemonade Web Server
 
-To install a specific agent, make sure to add the `[<agent>]` prefix, for example: `pip install -e .[neo]`
+GAIA requires the Lemonade Web Server to run, follow the install directions below.
+1. Clone the lemonade repo, which is used for hosting local LLMs using a streaming web server: `git clone https://github.com/aigdat/genai.git`
+1. Follow the directions for setup (here)[https://github.com/aigdat/genai/blob/main/docs/easy_ryzenai_npu.md]
+1. Activate virtual environment: `conda activate ryzenai-transformers`
 
 # Running the Ryzen AI NPU Web Server
 
-GAIA requires a NPU web server to run properly. Setup the Ryzen AI NPU web server by following the directions below.
-1. Clone the lemonade repo, which is used for hosting LLMs via a web server: `git clone https://github.com/aigdat/genai.git`
-1. Follow directions for setup and running the Ryzen AI NPU described (here)[https://github.com/aigdat/genai/blob/main/docs/easy_ryzenai_npu.md]
-1. Activate virtual environment: `conda activate ryzenai-transformers`
 1. Run: `setup.bat`
 1. Run: `start_npu_server`
 1. You should see an output similar to the one below:
@@ -55,6 +61,17 @@ INFO:     ('::1', 50649) - "WebSocket /ws" [accepted]
 INFO:     connection open
 ```
 NOTE: use command shell only, not powershell.
+
+# Running the Neo Agent on NPU
+
+1. Make sure to include a github token in your `.env` file.
+`GITHUB_TOKEN=github_pat_abc123etc`
+1. Start the NPU web server by following the instructions [here](#running-the-ryzen-ai-npu-web-server)
+1. Start gaia webserver:  `python run.py`
+1. Choose the Neo agent to run:
+`Enter the agent you want to run (Clipy, Datalin, Joker, Neo, Picasso, All) [Default: Neo]: `
+1. Open `AIG Demo Hub`, click on `Open Demo` and use `http://localhost:<port>/api/messages`
+* NOTE: each agent is hosted on a separate port, connect to the desired agent by modifying the target port above. See gaia web server shell for port details.
 
 # Running RyzenAI iGPU Web Server
 

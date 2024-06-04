@@ -15,8 +15,8 @@ from botbuilder.core import (
 from botbuilder.core.integration import aiohttp_error_middleware
 from botbuilder.schema import Activity, ActivityTypes
 
-from bot import MyBot  # pylint: disable=import-error
-from config import DefaultConfig  # pylint: disable=import-error
+from agents.Datalin.bot import MyBot  # pylint: disable=import-error
+from agents.Datalin.config import DefaultConfig  # pylint: disable=import-error
 
 CONFIG = DefaultConfig()
 

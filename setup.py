@@ -26,7 +26,6 @@ setup(
         "pandas",
         "onnx",
         "accelerate",
-        "split",
         "llama_index",
         "websockets",
         "websocket-client",
@@ -40,6 +39,13 @@ setup(
         # "torchaudio @ https://download.pytorch.org/whl/cu118/torchaudio-0.13.1%2Bcu118-cp38-cp38-linux_x86_64.whl",
     ],
     extras_require={
+        "all": [
+            "llama-index-readers-youtube-transcript",
+            "llama-index-readers-github",
+            "llama-index-embeddings-huggingface",
+            "llama-index-readers-github",
+            "llama-index-embeddings-huggingface",
+        ],
         "clipy": [
             "llama-index-readers-youtube-transcript",
         ],
