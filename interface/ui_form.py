@@ -16,8 +16,9 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QImage, QKeySequence, QLinearGradient, QPainter,
     QPalette, QPixmap, QRadialGradient, QTransform)
 from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QHBoxLayout,
-    QPushButton, QSizePolicy, QSpacerItem, QTextEdit,
-    QVBoxLayout, QWidget)
+    QLabel, QPushButton, QSizePolicy, QSpacerItem,
+    QTextEdit, QVBoxLayout, QWidget)
+import rc_resource
 
 class Ui_Widget(object):
     def setupUi(self, Widget):
@@ -33,30 +34,44 @@ class Ui_Widget(object):
         Widget.setStyleSheet(u"color: rgb(0, 0, 0);")
         self.verticalLayout_3 = QVBoxLayout(Widget)
         self.verticalLayout_3.setObjectName(u"verticalLayout_3")
-        self.frame = QFrame(Widget)
-        self.frame.setObjectName(u"frame")
-        self.frame.setFrameShape(QFrame.StyledPanel)
-        self.frame.setFrameShadow(QFrame.Raised)
-        self.horizontalLayout = QHBoxLayout(self.frame)
+        self.verticalLayout_3.setContentsMargins(0, 0, 0, 0)
+        self.banner = QFrame(Widget)
+        self.banner.setObjectName(u"banner")
+        self.banner.setMinimumSize(QSize(0, 50))
+        self.banner.setStyleSheet(u"background-color: rgb(20, 20, 20);")
+        self.banner.setFrameShape(QFrame.StyledPanel)
+        self.banner.setFrameShadow(QFrame.Raised)
+        self.horizontalLayout = QHBoxLayout(self.banner)
         self.horizontalLayout.setObjectName(u"horizontalLayout")
-        self.pushButton_2 = QPushButton(self.frame)
-        self.pushButton_2.setObjectName(u"pushButton_2")
-        self.pushButton_2.setStyleSheet(u"color: rgb(255, 255, 255);")
+        self.horizontalLayout.setContentsMargins(9, 9, 0, 9)
+        self.label = QLabel(self.banner)
+        self.label.setObjectName(u"label")
+        self.label.setMinimumSize(QSize(0, 0))
+        self.label.setMaximumSize(QSize(164, 40))
+        self.label.setStyleSheet(u"")
+        self.label.setPixmap(QPixmap(u":/img/banner.PNG"))
+        self.label.setScaledContents(True)
 
-        self.horizontalLayout.addWidget(self.pushButton_2)
+        self.horizontalLayout.addWidget(self.label)
 
         self.horizontalSpacer_2 = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
         self.horizontalLayout.addItem(self.horizontalSpacer_2)
 
 
-        self.verticalLayout_3.addWidget(self.frame)
+        self.verticalLayout_3.addWidget(self.banner)
 
         self.verticalSpacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
         self.verticalLayout_3.addItem(self.verticalSpacer)
 
-        self.messagingFrame = QFrame(Widget)
+        self.frame = QFrame(Widget)
+        self.frame.setObjectName(u"frame")
+        self.frame.setFrameShape(QFrame.StyledPanel)
+        self.frame.setFrameShadow(QFrame.Raised)
+        self.verticalLayout = QVBoxLayout(self.frame)
+        self.verticalLayout.setObjectName(u"verticalLayout")
+        self.messagingFrame = QFrame(self.frame)
         self.messagingFrame.setObjectName(u"messagingFrame")
         self.messagingFrame.setLayoutDirection(Qt.LeftToRight)
         self.messagingFrame.setStyleSheet(u"border-radius: 10px;\n"
@@ -140,7 +155,10 @@ class Ui_Widget(object):
         self.verticalLayout_2.addWidget(self.frame_2)
 
 
-        self.verticalLayout_3.addWidget(self.messagingFrame)
+        self.verticalLayout.addWidget(self.messagingFrame)
+
+
+        self.verticalLayout_3.addWidget(self.frame)
 
 
         self.retranslateUi(Widget)
@@ -150,7 +168,7 @@ class Ui_Widget(object):
 
     def retranslateUi(self, Widget):
         Widget.setWindowTitle(QCoreApplication.translate("Widget", u"Widget", None))
-        self.pushButton_2.setText(QCoreApplication.translate("Widget", u"RYZEN AI LOGO", None))
+        self.label.setText("")
         self.comboBox_2.setItemText(0, QCoreApplication.translate("Widget", u"Llama 2 - 13B", None))
 
         self.comboBox.setItemText(0, QCoreApplication.translate("Widget", u"NPU", None))
