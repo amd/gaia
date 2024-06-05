@@ -1,6 +1,7 @@
 {
     "files": [
         "widget.py",
-        "form.ui"
+        "form.ui",
+        "resource.qrc"
     ]
 }

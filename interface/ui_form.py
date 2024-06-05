@@ -61,6 +61,33 @@ class Ui_Widget(object):
 
         self.verticalLayout_3.addWidget(self.banner)
 
+        self.verticalSpacer_2 = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
+
+        self.verticalLayout_3.addItem(self.verticalSpacer_2)
+
+        self.frame_4 = QFrame(Widget)
+        self.frame_4.setObjectName(u"frame_4")
+        self.frame_4.setFrameShape(QFrame.StyledPanel)
+        self.frame_4.setFrameShadow(QFrame.Raised)
+        self.horizontalLayout_3 = QHBoxLayout(self.frame_4)
+        self.horizontalLayout_3.setObjectName(u"horizontalLayout_3")
+        self.label_2 = QLabel(self.frame_4)
+        self.label_2.setObjectName(u"label_2")
+        sizePolicy1 = QSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Maximum)
+        sizePolicy1.setHorizontalStretch(0)
+        sizePolicy1.setVerticalStretch(0)
+        sizePolicy1.setHeightForWidth(self.label_2.sizePolicy().hasHeightForWidth())
+        self.label_2.setSizePolicy(sizePolicy1)
+        self.label_2.setMaximumSize(QSize(417, 150))
+        self.label_2.setPixmap(QPixmap(u":/img/welcome.png"))
+        self.label_2.setScaledContents(True)
+        self.label_2.setAlignment(Qt.AlignCenter)
+
+        self.horizontalLayout_3.addWidget(self.label_2)
+
+
+        self.verticalLayout_3.addWidget(self.frame_4)
+
         self.verticalSpacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
         self.verticalLayout_3.addItem(self.verticalSpacer)
@@ -142,11 +169,11 @@ class Ui_Widget(object):
 
         self.textEdit = QTextEdit(self.frame_2)
         self.textEdit.setObjectName(u"textEdit")
-        sizePolicy1 = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-        sizePolicy1.setHorizontalStretch(0)
-        sizePolicy1.setVerticalStretch(0)
-        sizePolicy1.setHeightForWidth(self.textEdit.sizePolicy().hasHeightForWidth())
-        self.textEdit.setSizePolicy(sizePolicy1)
+        sizePolicy2 = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        sizePolicy2.setHorizontalStretch(0)
+        sizePolicy2.setVerticalStretch(0)
+        sizePolicy2.setHeightForWidth(self.textEdit.sizePolicy().hasHeightForWidth())
+        self.textEdit.setSizePolicy(sizePolicy2)
         self.textEdit.setMaximumSize(QSize(16777215, 50))
 
         self.verticalLayout_4.addWidget(self.textEdit)
@@ -169,6 +196,7 @@ class Ui_Widget(object):
     def retranslateUi(self, Widget):
         Widget.setWindowTitle(QCoreApplication.translate("Widget", u"Widget", None))
         self.label.setText("")
+        self.label_2.setText("")
         self.comboBox_2.setItemText(0, QCoreApplication.translate("Widget", u"Llama 2 - 13B", None))
 
         self.comboBox.setItemText(0, QCoreApplication.translate("Widget", u"NPU", None))
