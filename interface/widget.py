@@ -1,6 +1,7 @@
 # This Python file uses the following encoding: utf-8
 import sys
 from datetime import datetime
+import textwrap
 
 from PySide6.QtWidgets import QApplication, QWidget, QApplication, QMainWindow, QFrame, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSpacerItem, QSizePolicy
 from PySide6.QtCore import Qt, QEvent
@@ -64,7 +65,8 @@ class Widget(QWidget):
         card_message_layout.setSpacing(0)
 
         # Create and add the push button and label to the card message frame
-        button = QPushButton(message)
+        chuncked_message = "\n".join(textwrap.wrap(message, width=75))
+        button = QPushButton(chuncked_message)
         if from_user:
             button.setStyleSheet("""
                     font-size: 12pt;
@@ -73,6 +75,7 @@ class Widget(QWidget):
                     background-color: #0A819A;
                     color: rgb(255, 255, 255);
                     padding: 8px 8px;
+                    text-align: left;
                 """)
         else:
             button.setStyleSheet("""
@@ -82,6 +85,7 @@ class Widget(QWidget):
                     background-color:rgb(77, 77, 77);
                     color: rgb(255, 255, 255);
                     padding: 8px 8px;
+                    text-align: left;
                 """)
         label = QLabel(datetime.now().strftime("%H:%M:%S"))
         label.setStyleSheet("color: rgb(255, 255, 255);")

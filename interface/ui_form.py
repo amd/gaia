@@ -24,12 +24,13 @@ class Ui_Widget(object):
     def setupUi(self, Widget):
         if not Widget.objectName():
             Widget.setObjectName(u"Widget")
-        Widget.resize(1190, 713)
+        Widget.resize(918, 780)
         sizePolicy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         sizePolicy.setHorizontalStretch(0)
         sizePolicy.setVerticalStretch(0)
         sizePolicy.setHeightForWidth(Widget.sizePolicy().hasHeightForWidth())
         Widget.setSizePolicy(sizePolicy)
+        Widget.setMinimumSize(QSize(750, 750))
         Widget.setAutoFillBackground(True)
         Widget.setStyleSheet(u"color: rgb(0, 0, 0);")
         self.verticalLayout_3 = QVBoxLayout(Widget)
@@ -86,6 +87,7 @@ class Ui_Widget(object):
 
         self.chat = QFrame(Widget)
         self.chat.setObjectName(u"chat")
+        self.chat.setMinimumSize(QSize(0, 0))
         self.chat.setFrameShape(QFrame.StyledPanel)
         self.chat.setFrameShadow(QFrame.Raised)
         self.verticalLayout_5 = QVBoxLayout(self.chat)
@@ -117,7 +119,7 @@ class Ui_Widget(object):
         self.scrollArea.setWidgetResizable(True)
         self.scrollAreaWidgetContents = QWidget()
         self.scrollAreaWidgetContents.setObjectName(u"scrollAreaWidgetContents")
-        self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 1170, 315))
+        self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 898, 382))
         self.verticalLayout_6 = QVBoxLayout(self.scrollAreaWidgetContents)
         self.verticalLayout_6.setObjectName(u"verticalLayout_6")
         self.verticalLayout_6.setContentsMargins(-1, 0, -1, 0)
