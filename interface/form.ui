@@ -506,6 +506,9 @@ padding: 8px 8px; </string>
    </item>
    <item>
     <widget class="QFrame" name="messaging">
+     <property name="enabled">
+      <bool>true</bool>
+     </property>
      <property name="styleSheet">
       <string notr="true">QPushButton {
     border-radius: 3px;
@@ -516,7 +519,11 @@ padding: 8px 8px; </string>
 QPushButton:hover {
     background-color: #4AA9BD;
 }
-</string>
+
+QPushButton:disabled {
+    background-color: gray;
+    border-color: gray;
+}</string>
      </property>
      <property name="frameShape">
       <enum>QFrame::StyledPanel</enum>
@@ -649,17 +656,17 @@ border: 1px solid #0A819A;;
                  </property>
                  <item>
                   <property name="text">
+                   <string>iGPU</string>
+                  </property>
+                 </item>
+                 <item>
+                  <property name="text">
                    <string>NPU</string>
                   </property>
                  </item>
                  <item>
                   <property name="text">
                    <string>CPU</string>
-                  </property>
-                 </item>
-                 <item>
-                  <property name="text">
-                   <string>iGPU</string>
                   </property>
                  </item>
                 </widget>
@@ -679,6 +686,9 @@ border: 1px solid #0A819A;;
                </item>
                <item>
                 <widget class="QPushButton" name="ask">
+                 <property name="enabled">
+                  <bool>true</bool>
+                 </property>
                  <property name="minimumSize">
                   <size>
                    <width>100</width>
@@ -707,6 +717,9 @@ border: 1px solid #0A819A;;
             </item>
             <item>
              <widget class="QTextEdit" name="prompt">
+              <property name="enabled">
+               <bool>true</bool>
+              </property>
               <property name="sizePolicy">
                <sizepolicy hsizetype="Expanding" vsizetype="Maximum">
                 <horstretch>0</horstretch>

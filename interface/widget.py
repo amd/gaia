@@ -41,6 +41,9 @@ class SetupLLM(QObject):
         self.ui.mainLayout.removeItem(self.ui.welcomeSpacerTop)
         self.ui.mainLayout.removeItem(self.ui.welcomeSpacerBottom)
 
+        # Enable send button again
+        self.ui.ask.setEnabled(True);
+
 
         self.finished.emit()
 
@@ -102,6 +105,9 @@ class Widget(QWidget):
         prompt = self.ui.prompt.toPlainText()
         self.ui.prompt.clear()
         if prompt:
+            # Disable send button
+            self.ui.ask.setEnabled(False);
+
             # Download model, setup server, and enable chat interface
             if not self.ui.chat.isVisible():
                 self.thread.start()
@@ -109,6 +115,10 @@ class Widget(QWidget):
             # Send message
             self.add_card(prompt, from_user = True)
             self.add_card("Hello dear user! It is also a pleasure to be around someone like youuuuuuu", from_user = False)
+
+            if not self.ui.loading.isVisible():
+                self.ui.ask.setEnabled(True);
+
 
     def split_into_chunks(self,message):
         return "\n".join(textwrap.wrap(message, width=75))

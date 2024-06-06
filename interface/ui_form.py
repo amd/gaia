@@ -277,6 +277,7 @@ class Ui_Widget(object):
 
         self.messaging = QFrame(Widget)
         self.messaging.setObjectName(u"messaging")
+        self.messaging.setEnabled(True)
         self.messaging.setStyleSheet(u"QPushButton {\n"
 "    border-radius: 3px;\n"
 "    border: 1px solid #0A819A;\n"
@@ -286,7 +287,11 @@ class Ui_Widget(object):
 "QPushButton:hover {\n"
 "    background-color: #4AA9BD;\n"
 "}\n"
-"")
+"\n"
+"QPushButton:disabled {\n"
+"    background-color: gray;\n"
+"    border-color: gray;\n"
+"}")
         self.messaging.setFrameShape(QFrame.StyledPanel)
         self.messaging.setFrameShadow(QFrame.Raised)
         self.verticalLayout = QVBoxLayout(self.messaging)
@@ -354,6 +359,7 @@ class Ui_Widget(object):
 
         self.ask = QPushButton(self.frame_3)
         self.ask.setObjectName(u"ask")
+        self.ask.setEnabled(True)
         self.ask.setMinimumSize(QSize(100, 25))
         self.ask.setFont(font)
         self.ask.setStyleSheet(u"")
@@ -368,6 +374,7 @@ class Ui_Widget(object):
 
         self.prompt = QTextEdit(self.frame_2)
         self.prompt.setObjectName(u"prompt")
+        self.prompt.setEnabled(True)
         sizePolicy2 = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         sizePolicy2.setHorizontalStretch(0)
         sizePolicy2.setVerticalStretch(0)
@@ -407,9 +414,9 @@ class Ui_Widget(object):
         self.model.setItemText(1, QCoreApplication.translate("Widget", u"LLama 3 - 8B", None))
 
         self.model.setPlaceholderText(QCoreApplication.translate("Widget", u"As", None))
-        self.device.setItemText(0, QCoreApplication.translate("Widget", u"NPU", None))
-        self.device.setItemText(1, QCoreApplication.translate("Widget", u"CPU", None))
-        self.device.setItemText(2, QCoreApplication.translate("Widget", u"iGPU", None))
+        self.device.setItemText(0, QCoreApplication.translate("Widget", u"iGPU", None))
+        self.device.setItemText(1, QCoreApplication.translate("Widget", u"NPU", None))
+        self.device.setItemText(2, QCoreApplication.translate("Widget", u"CPU", None))
 
         self.ask.setText(QCoreApplication.translate("Widget", u"Ask", None))
         self.prompt.setHtml(QCoreApplication.translate("Widget", u"<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0//EN\" \"http://www.w3.org/TR/REC-html40/strict.dtd\">\n"
