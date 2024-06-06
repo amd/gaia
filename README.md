@@ -47,9 +47,9 @@ Install instructions below are for Microsoft Windows OS and [Miniconda 24+](http
     1. `conda create -n gaia python=3.11`
     1. `conda activate gaia`
 1. Install GAIA package and dependencies, note this command will install dependencies for all agents:
-    1. `pip install -e .[all]`
-1. To install dependencies for a single agent, make sure to add the `[<agent_name>]` suffix, for example:
-    1. `pip install -e .[Neo]`
+    1. `pip install -e .`
+1. To install dependencies with cuda support, run:
+    1. `pip install -e .[cuda]`
 
 ## Install Lemonade Web Server
 
