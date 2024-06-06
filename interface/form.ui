@@ -43,7 +43,7 @@
      <property name="minimumSize">
       <size>
        <width>0</width>
-       <height>50</height>
+       <height>60</height>
       </size>
      </property>
      <property name="styleSheet">
@@ -189,7 +189,8 @@
 
 QPushButton:hover {
     background-color: #4AA9BD;
-}</string>
+}
+</string>
      </property>
      <property name="frameShape">
       <enum>QFrame::StyledPanel</enum>
@@ -268,14 +269,22 @@ border: 0px solid #0A819A;;
                 <widget class="QComboBox" name="comboBox_2">
                  <property name="minimumSize">
                   <size>
-                   <width>120</width>
+                   <width>150</width>
                    <height>25</height>
                   </size>
+                 </property>
+                 <property name="font">
+                  <font>
+                   <pointsize>12</pointsize>
+                  </font>
                  </property>
                  <property name="styleSheet">
                   <string notr="true">border-radius: 3px;
 border: 1px solid #0A819A;;
 </string>
+                 </property>
+                 <property name="placeholderText">
+                  <string>As</string>
                  </property>
                  <item>
                   <property name="text">
@@ -296,6 +305,11 @@ border: 1px solid #0A819A;;
                    <width>100</width>
                    <height>25</height>
                   </size>
+                 </property>
+                 <property name="font">
+                  <font>
+                   <pointsize>12</pointsize>
+                  </font>
                  </property>
                  <property name="styleSheet">
                   <string notr="true">border-radius: 3px;
@@ -340,6 +354,11 @@ border: 1px solid #0A819A;;
                    <height>25</height>
                   </size>
                  </property>
+                 <property name="font">
+                  <font>
+                   <pointsize>12</pointsize>
+                  </font>
+                 </property>
                  <property name="styleSheet">
                   <string notr="true"/>
                  </property>
@@ -369,6 +388,11 @@ border: 1px solid #0A819A;;
                 <height>50</height>
                </size>
               </property>
+              <property name="font">
+               <font>
+                <pointsize>12</pointsize>
+               </font>
+              </property>
               <property name="html">
                <string>&lt;!DOCTYPE HTML PUBLIC &quot;-//W3C//DTD HTML 4.0//EN&quot; &quot;http://www.w3.org/TR/REC-html40/strict.dtd&quot;&gt;
 &lt;html&gt;&lt;head&gt;&lt;meta name=&quot;qrichtext&quot; content=&quot;1&quot; /&gt;&lt;meta charset=&quot;utf-8&quot; /&gt;&lt;style type=&quot;text/css&quot;&gt;
@@ -376,8 +400,11 @@ p, li { white-space: pre-wrap; }
 hr { height: 1px; border-width: 0; }
 li.unchecked::marker { content: &quot;\2610&quot;; }
 li.checked::marker { content: &quot;\2612&quot;; }
-&lt;/style&gt;&lt;/head&gt;&lt;body style=&quot; font-family:'Segoe UI'; font-size:9pt; font-weight:400; font-style:normal;&quot;&gt;
-&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;Ask anything, anytime...&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+&lt;/style&gt;&lt;/head&gt;&lt;body style=&quot; font-family:'Segoe UI'; font-size:12pt; font-weight:400; font-style:normal;&quot;&gt;
+&lt;p style=&quot;-qt-paragraph-type:empty; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px; font-size:9pt;&quot;&gt;&lt;br /&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+              </property>
+              <property name="placeholderText">
+               <string>Ask anything, anytime...</string>
               </property>
              </widget>
             </item>

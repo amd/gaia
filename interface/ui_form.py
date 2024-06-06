@@ -37,7 +37,7 @@ class Ui_Widget(object):
         self.verticalLayout_3.setContentsMargins(0, 0, 0, 0)
         self.banner = QFrame(Widget)
         self.banner.setObjectName(u"banner")
-        self.banner.setMinimumSize(QSize(0, 50))
+        self.banner.setMinimumSize(QSize(0, 60))
         self.banner.setStyleSheet(u"background-color: rgb(20, 20, 20);")
         self.banner.setFrameShape(QFrame.StyledPanel)
         self.banner.setFrameShadow(QFrame.Raised)
@@ -102,7 +102,8 @@ class Ui_Widget(object):
 "\n"
 "QPushButton:hover {\n"
 "    background-color: #4AA9BD;\n"
-"}")
+"}\n"
+"")
         self.frame.setFrameShape(QFrame.StyledPanel)
         self.frame.setFrameShadow(QFrame.Raised)
         self.verticalLayout = QVBoxLayout(self.frame)
@@ -142,7 +143,10 @@ class Ui_Widget(object):
         self.comboBox_2.addItem("")
         self.comboBox_2.addItem("")
         self.comboBox_2.setObjectName(u"comboBox_2")
-        self.comboBox_2.setMinimumSize(QSize(120, 25))
+        self.comboBox_2.setMinimumSize(QSize(150, 25))
+        font = QFont()
+        font.setPointSize(12)
+        self.comboBox_2.setFont(font)
         self.comboBox_2.setStyleSheet(u"border-radius: 3px;\n"
 "border: 1px solid #0A819A;;\n"
 "")
@@ -155,6 +159,7 @@ class Ui_Widget(object):
         self.comboBox.addItem("")
         self.comboBox.setObjectName(u"comboBox")
         self.comboBox.setMinimumSize(QSize(100, 25))
+        self.comboBox.setFont(font)
         self.comboBox.setStyleSheet(u"border-radius: 3px;\n"
 "border: 1px solid #0A819A;;\n"
 "")
@@ -168,6 +173,7 @@ class Ui_Widget(object):
         self.pushButton = QPushButton(self.frame_3)
         self.pushButton.setObjectName(u"pushButton")
         self.pushButton.setMinimumSize(QSize(100, 25))
+        self.pushButton.setFont(font)
         self.pushButton.setStyleSheet(u"")
         icon = QIcon()
         icon.addFile(u":/img/send.png", QSize(), QIcon.Normal, QIcon.Off)
@@ -186,6 +192,7 @@ class Ui_Widget(object):
         sizePolicy2.setHeightForWidth(self.textEdit.sizePolicy().hasHeightForWidth())
         self.textEdit.setSizePolicy(sizePolicy2)
         self.textEdit.setMaximumSize(QSize(16777215, 50))
+        self.textEdit.setFont(font)
 
         self.verticalLayout_4.addWidget(self.textEdit)
 
@@ -211,6 +218,7 @@ class Ui_Widget(object):
         self.comboBox_2.setItemText(0, QCoreApplication.translate("Widget", u"Phi 3 Mini - 3B", None))
         self.comboBox_2.setItemText(1, QCoreApplication.translate("Widget", u"LLama 3 - 8B", None))
 
+        self.comboBox_2.setPlaceholderText(QCoreApplication.translate("Widget", u"As", None))
         self.comboBox.setItemText(0, QCoreApplication.translate("Widget", u"NPU", None))
         self.comboBox.setItemText(1, QCoreApplication.translate("Widget", u"CPU", None))
         self.comboBox.setItemText(2, QCoreApplication.translate("Widget", u"iGPU", None))
@@ -222,7 +230,8 @@ class Ui_Widget(object):
 "hr { height: 1px; border-width: 0; }\n"
 "li.unchecked::marker { content: \"\\2610\"; }\n"
 "li.checked::marker { content: \"\\2612\"; }\n"
-"</style></head><body style=\" font-family:'Segoe UI'; font-size:9pt; font-weight:400; font-style:normal;\">\n"
-"<p style=\" margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;\">Ask anything, anytime...</p></body></html>", None))
+"</style></head><body style=\" font-family:'Segoe UI'; font-size:12pt; font-weight:400; font-style:normal;\">\n"
+"<p style=\"-qt-paragraph-type:empty; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px; font-size:9pt;\"><br /></p></body></html>", None))
+        self.textEdit.setPlaceholderText(QCoreApplication.translate("Widget", u"Ask anything, anytime...", None))
     # retranslateUi
 
