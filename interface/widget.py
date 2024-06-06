@@ -22,8 +22,13 @@ class Widget(QWidget):
         # Connect ask to send_message
         self.ui.ask.clicked.connect(self.send_message)
 
+        # Ensure that we are scrolling to the bottom every time the range
+        # of the card scroll area changes
+        self.ui.scrollArea.verticalScrollBar().rangeChanged.connect(
+            self.scrollToBottom,
+        )
+
     def send_message(self):
-        print("Button pressed!")
         self.add_card("Hi there! it is a pleasure to have you here! Super happy to be around you!", from_user = True)
         self.add_card("Hello dear user! It is also a pleasure to be around someone like youuuuuuu", from_user = False)
 
@@ -79,6 +84,11 @@ class Widget(QWidget):
 
         # Add the card to the main layout
         self.ui.boardLayout.addWidget(card)
+
+    def scrollToBottom (self, minVal=None, maxVal=None):
+        # Additional params 'minVal' and 'maxVal' are declared because
+        # rangeChanged signal sends them, but we set it to optional
+        self.ui.scrollArea.verticalScrollBar().setValue(self.ui.scrollArea.verticalScrollBar().maximum())
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
