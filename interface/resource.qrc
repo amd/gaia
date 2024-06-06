@@ -2,5 +2,6 @@
     <qresource prefix="/">
         <file>img/banner.PNG</file>
         <file>img/welcome.png</file>
+        <file>img/send.png</file>
     </qresource>
 </RCC>

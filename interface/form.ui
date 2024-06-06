@@ -180,6 +180,17 @@
    </item>
    <item>
     <widget class="QFrame" name="frame">
+     <property name="styleSheet">
+      <string notr="true">QPushButton {
+    border-radius: 3px;
+    border: 1px solid #0A819A;
+    background-color: #0A819A;
+}
+
+QPushButton:hover {
+    background-color: #4AA9BD;
+}</string>
+     </property>
      <property name="frameShape">
       <enum>QFrame::StyledPanel</enum>
      </property>
@@ -258,7 +269,7 @@ border: 0px solid #0A819A;;
                  <property name="minimumSize">
                   <size>
                    <width>100</width>
-                   <height>0</height>
+                   <height>25</height>
                   </size>
                  </property>
                  <property name="styleSheet">
@@ -278,7 +289,7 @@ border: 1px solid #0A819A;;
                  <property name="minimumSize">
                   <size>
                    <width>100</width>
-                   <height>0</height>
+                   <height>25</height>
                   </size>
                  </property>
                  <property name="styleSheet">
@@ -321,16 +332,18 @@ border: 1px solid #0A819A;;
                  <property name="minimumSize">
                   <size>
                    <width>100</width>
-                   <height>0</height>
+                   <height>25</height>
                   </size>
                  </property>
                  <property name="styleSheet">
-                  <string notr="true">border-radius: 3px;
-border: 1px solid #0A819A;;
-</string>
+                  <string notr="true"/>
                  </property>
                  <property name="text">
                   <string>Ask</string>
+                 </property>
+                 <property name="icon">
+                  <iconset resource="resource.qrc">
+                   <normaloff>:/img/send.png</normaloff>:/img/send.png</iconset>
                  </property>
                 </widget>
                </item>

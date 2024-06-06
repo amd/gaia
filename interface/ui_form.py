@@ -94,6 +94,15 @@ class Ui_Widget(object):
 
         self.frame = QFrame(Widget)
         self.frame.setObjectName(u"frame")
+        self.frame.setStyleSheet(u"QPushButton {\n"
+"    border-radius: 3px;\n"
+"    border: 1px solid #0A819A;\n"
+"    background-color: #0A819A;\n"
+"}\n"
+"\n"
+"QPushButton:hover {\n"
+"    background-color: #4AA9BD;\n"
+"}")
         self.frame.setFrameShape(QFrame.StyledPanel)
         self.frame.setFrameShadow(QFrame.Raised)
         self.verticalLayout = QVBoxLayout(self.frame)
@@ -132,7 +141,7 @@ class Ui_Widget(object):
         self.comboBox_2 = QComboBox(self.frame_3)
         self.comboBox_2.addItem("")
         self.comboBox_2.setObjectName(u"comboBox_2")
-        self.comboBox_2.setMinimumSize(QSize(100, 0))
+        self.comboBox_2.setMinimumSize(QSize(100, 25))
         self.comboBox_2.setStyleSheet(u"border-radius: 3px;\n"
 "border: 1px solid #0A819A;;\n"
 "")
@@ -144,7 +153,7 @@ class Ui_Widget(object):
         self.comboBox.addItem("")
         self.comboBox.addItem("")
         self.comboBox.setObjectName(u"comboBox")
-        self.comboBox.setMinimumSize(QSize(100, 0))
+        self.comboBox.setMinimumSize(QSize(100, 25))
         self.comboBox.setStyleSheet(u"border-radius: 3px;\n"
 "border: 1px solid #0A819A;;\n"
 "")
@@ -157,10 +166,11 @@ class Ui_Widget(object):
 
         self.pushButton = QPushButton(self.frame_3)
         self.pushButton.setObjectName(u"pushButton")
-        self.pushButton.setMinimumSize(QSize(100, 0))
-        self.pushButton.setStyleSheet(u"border-radius: 3px;\n"
-"border: 1px solid #0A819A;;\n"
-"")
+        self.pushButton.setMinimumSize(QSize(100, 25))
+        self.pushButton.setStyleSheet(u"")
+        icon = QIcon()
+        icon.addFile(u":/img/send.png", QSize(), QIcon.Normal, QIcon.Off)
+        self.pushButton.setIcon(icon)
 
         self.horizontalLayout_2.addWidget(self.pushButton)
 
