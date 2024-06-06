@@ -31,7 +31,7 @@
   <property name="styleSheet">
    <string notr="true">color: rgb(0, 0, 0);</string>
   </property>
-  <layout class="QVBoxLayout" name="verticalLayout_3">
+  <layout class="QVBoxLayout" name="mainLayout">
    <property name="leftMargin">
     <number>0</number>
    </property>
@@ -119,6 +119,19 @@
     </widget>
    </item>
    <item>
+    <spacer name="welcomeSpacerTop">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+   <item>
     <widget class="QFrame" name="welcome">
      <property name="frameShape">
       <enum>QFrame::StyledPanel</enum>
@@ -157,6 +170,19 @@
       </item>
      </layout>
     </widget>
+   </item>
+   <item>
+    <spacer name="welcomeSpacerBottom">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
    </item>
    <item>
     <widget class="QFrame" name="chat">
@@ -210,7 +236,7 @@
            <x>0</x>
            <y>0</y>
            <width>898</width>
-           <height>382</height>
+           <height>274</height>
           </rect>
          </property>
          <layout class="QVBoxLayout" name="verticalLayout_6">

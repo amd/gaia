@@ -19,6 +19,8 @@ class Widget(QWidget):
         self.ui.setupUi(self)
         self.setStyleSheet("background-color: black;")
         self.setWindowTitle("RyzenAI GAIA")
+        self.card_count = 0
+        self.cards = {}
 
         # Connect ask to send_message
         self.ui.ask.clicked.connect(self.send_message)
@@ -31,6 +33,9 @@ class Widget(QWidget):
 
         # Install event filter to prompt text box
         self.ui.prompt.installEventFilter(self)
+
+        # Hide chat window initially
+        self.ui.chat.setVisible(False);
 
     def eventFilter(self, obj, event):
         """
@@ -47,8 +52,20 @@ class Widget(QWidget):
         prompt = self.ui.prompt.toPlainText()
         self.ui.prompt.clear()
         if prompt:
+            # Enable chat interface
+            if not self.ui.chat.isVisible():
+                self.ui.chat.setVisible(True);
+                self.ui.sampleCard_1.setVisible(False);
+                self.ui.sampleCard_2.setVisible(False);
+                self.ui.mainLayout.removeItem(self.ui.welcomeSpacerTop)
+                self.ui.mainLayout.removeItem(self.ui.welcomeSpacerBottom)
+
+            # Send message
             self.add_card(prompt, from_user = True)
             self.add_card("Hello dear user! It is also a pleasure to be around someone like youuuuuuu", from_user = False)
+
+    def split_into_chunks(self,message):
+        return "\n".join(textwrap.wrap(message, width=75))
 
     def add_card(self, message, from_user = True):
         # Create the main card frame
@@ -65,10 +82,10 @@ class Widget(QWidget):
         card_message_layout.setSpacing(0)
 
         # Create and add the push button and label to the card message frame
-        chuncked_message = "\n".join(textwrap.wrap(message, width=75))
-        button = QPushButton(chuncked_message)
+        chuncked_message = self.split_into_chunks(message)
+        message_frame = QPushButton(chuncked_message)
         if from_user:
-            button.setStyleSheet("""
+            message_frame.setStyleSheet("""
                     font-size: 12pt;
                     border-radius: 3px;
                     border: 1px solid #0A819A;
@@ -78,7 +95,7 @@ class Widget(QWidget):
                     text-align: left;
                 """)
         else:
-            button.setStyleSheet("""
+            message_frame.setStyleSheet("""
                     font-size: 12pt;
                     border-radius: 3px;
                     border: 1px solid rgb(0, 0, 0);
@@ -89,7 +106,7 @@ class Widget(QWidget):
                 """)
         label = QLabel(datetime.now().strftime("%H:%M:%S"))
         label.setStyleSheet("color: rgb(255, 255, 255);")
-        card_message_layout.addWidget(button)
+        card_message_layout.addWidget(message_frame)
         card_message_layout.addWidget(label)
 
         # Add the card message layout to the card
@@ -105,6 +122,20 @@ class Widget(QWidget):
 
         # Add the card to the main layout
         self.ui.boardLayout.addWidget(card)
+
+        # Keep track of card
+        card_id = str(self.card_count)
+        self.cards[card_id] = (message_frame, label)
+        self.card_count = self.card_count+1
+
+        return card_id
+
+    def update_card(self,card_id, message):
+        message_frame, label = self.cards[card_id]
+        chuncked_message = self.split_into_chunks(message)
+        message_frame.setText(chuncked_message)
+        label.setText(datetime.now().strftime("%H:%M:%S"))
+
 
     def scrollToBottom (self, minVal=None, maxVal=None):
         # Additional params 'minVal' and 'maxVal' are declared because

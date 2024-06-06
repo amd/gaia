@@ -33,9 +33,9 @@ class Ui_Widget(object):
         Widget.setMinimumSize(QSize(750, 750))
         Widget.setAutoFillBackground(True)
         Widget.setStyleSheet(u"color: rgb(0, 0, 0);")
-        self.verticalLayout_3 = QVBoxLayout(Widget)
-        self.verticalLayout_3.setObjectName(u"verticalLayout_3")
-        self.verticalLayout_3.setContentsMargins(0, 0, 0, 0)
+        self.mainLayout = QVBoxLayout(Widget)
+        self.mainLayout.setObjectName(u"mainLayout")
+        self.mainLayout.setContentsMargins(0, 0, 0, 0)
         self.banner = QFrame(Widget)
         self.banner.setObjectName(u"banner")
         self.banner.setMinimumSize(QSize(0, 60))
@@ -60,7 +60,11 @@ class Ui_Widget(object):
         self.horizontalLayout.addItem(self.horizontalSpacer_2)
 
 
-        self.verticalLayout_3.addWidget(self.banner)
+        self.mainLayout.addWidget(self.banner)
+
+        self.welcomeSpacerTop = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
+
+        self.mainLayout.addItem(self.welcomeSpacerTop)
 
         self.welcome = QFrame(Widget)
         self.welcome.setObjectName(u"welcome")
@@ -83,7 +87,11 @@ class Ui_Widget(object):
         self.horizontalLayout_3.addWidget(self.welcomeImg)
 
 
-        self.verticalLayout_3.addWidget(self.welcome)
+        self.mainLayout.addWidget(self.welcome)
+
+        self.welcomeSpacerBottom = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
+
+        self.mainLayout.addItem(self.welcomeSpacerBottom)
 
         self.chat = QFrame(Widget)
         self.chat.setObjectName(u"chat")
@@ -119,7 +127,7 @@ class Ui_Widget(object):
         self.scrollArea.setWidgetResizable(True)
         self.scrollAreaWidgetContents = QWidget()
         self.scrollAreaWidgetContents.setObjectName(u"scrollAreaWidgetContents")
-        self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 898, 382))
+        self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 898, 274))
         self.verticalLayout_6 = QVBoxLayout(self.scrollAreaWidgetContents)
         self.verticalLayout_6.setObjectName(u"verticalLayout_6")
         self.verticalLayout_6.setContentsMargins(-1, 0, -1, 0)
@@ -227,7 +235,7 @@ class Ui_Widget(object):
         self.verticalLayout_5.addWidget(self.scrollArea)
 
 
-        self.verticalLayout_3.addWidget(self.chat)
+        self.mainLayout.addWidget(self.chat)
 
         self.messaging = QFrame(Widget)
         self.messaging.setObjectName(u"messaging")
@@ -339,7 +347,7 @@ class Ui_Widget(object):
         self.verticalLayout.addWidget(self.frame_1)
 
 
-        self.verticalLayout_3.addWidget(self.messaging)
+        self.mainLayout.addWidget(self.messaging)
 
 
         self.retranslateUi(Widget)
