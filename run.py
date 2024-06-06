@@ -16,11 +16,11 @@ if __name__ == '__main__':
 
     # Map user input to the corresponding agent app
     agent_map = {
-        "Clipy": "src.gaia.agents.Clipy.app",
-        "Datalin": "src.gaia.agents.Datalin.app",
-        "Joker": "src.gaia.agents.Joker.app",
-        "Neo": "src.gaia.agents.Neo.app",
-        "Picasso": "src.gaia.agents.Picasso.app"
+        "Clipy": "gaia.agents.Clipy.app",
+        "Datalin": "gaia.agents.Datalin.app",
+        "Joker": "gaia.agents.Joker.app",
+        "Neo": "gaia.agents.Neo.app",
+        "Picasso": "gaia.agents.Picasso.app"
     }
 
     # Check if the user input is valid

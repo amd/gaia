@@ -15,8 +15,8 @@ from botbuilder.core import (
 from botbuilder.core.integration import aiohttp_error_middleware
 from botbuilder.schema import Activity, ActivityTypes
 
-from src.gaia.agents.Joker.bot import MyBot  # pylint: disable=import-error
-from src.gaia.agents.Joker.config import DefaultConfig  # pylint: disable=import-error
+from gaia.agents.Joker.bot import MyBot
+from gaia.agents.Joker.config import DefaultConfig
 
 CONFIG = DefaultConfig()
 

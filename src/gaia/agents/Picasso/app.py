@@ -15,8 +15,8 @@ from botbuilder.core import (
 from botbuilder.core.integration import aiohttp_error_middleware
 from botbuilder.schema import Activity, ActivityTypes
 
-from src.gaia.agents.Picasso.bot import MyBot  # pylint: disable=import-error
-from src.gaia.agents.Picasso.config import DefaultConfig  # pylint: disable=import-error
+from gaia.agents.Picasso.bot import MyBot
+from gaia.agents.Picasso.config import DefaultConfig
 
 CONFIG = DefaultConfig()
 

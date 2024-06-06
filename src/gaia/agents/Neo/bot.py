@@ -4,7 +4,8 @@ import time
 import subprocess
 from dotenv import load_dotenv
 
-# from src.gaia.agents.Neo.system_prompt import react_system_prompt_small
+# TODO: uncomment when ReAct agent is enabled again.
+# from gaia.agents.Neo.system_prompt import react_system_prompt_small
 
 from llama_index.core import (
     VectorStoreIndex,
@@ -19,7 +20,7 @@ from llama_index.readers.github import GithubRepositoryReader, GithubClient
 from botbuilder.core import ActivityHandler, TurnContext
 from botbuilder.schema import ChannelAccount, Activity
 
-from src.gaia.llm.npu_llm import LocalLLM
+from gaia.llm.npu_llm import LocalLLM
 
 
 def extract_github_owner_repo(message):

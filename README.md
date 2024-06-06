@@ -4,6 +4,18 @@ Welcome to the GAIA (Generative AI Is Awesome!) project! This repository serves 
 
 <img src="https://github.com/aigdat/gaia/assets/4722733/0db60b9b-05d5-4732-a74e-f67bc9bdb61b" alt="gaia" width="500">
 
+Currently, we support the following agents:
+
+| Agent Name | Function                     |
+| ---------- | ---------------------------- |
+|   Clipy    | Chat with youtube transcript |
+|   Datalin  | Onnx model visualizer        |
+|   Joker    | Simple joke generator        |
+|    Neo     | Chat with public GitHub repo |
+|  Picasso*  | AI art creator               |
+
+\* Picasso agent is currently under development and exists only as a mocup.
+
 # Getting Started
 
 To get started, please follow the instructions below. If you have a new machine and need to install all dependencies, start [here](#)
@@ -27,30 +39,34 @@ To install it, run the `AIG-Demo-Hub-4.14.1-windows-setup.exe` setup file in the
 
 ## Install GAIA Backend
 
-Install instructions below are for Microsoft Windows 10 OS and [Miniconda 24+](https://docs.anaconda.com/free/miniconda/).
+Install instructions below are for Microsoft Windows OS and [Miniconda 24+](https://docs.anaconda.com/free/miniconda/).
 
 1. Clone repo: `git clone https://github.com/aigdat/gaia.git`
 1. Go to the root: `cd ./gaia`
 1. Create and activate a conda environment:
-    1. `conda create -n gaia python=3.10`
+    1. `conda create -n gaia python=3.11`
     1. `conda activate gaia`
 1. Install GAIA package and dependencies, note this command will install dependencies for all agents:
     1. `pip install -e .[all]`
 1. To install dependencies for a single agent, make sure to add the `[<agent_name>]` suffix, for example:
-    1. `pip install -e .[neo]`
+    1. `pip install -e .[Neo]`
 
 ## Install Lemonade Web Server
 
 GAIA requires the Lemonade Web Server to run, follow the install directions below.
+1. Open a new command-line terminal.
 1. Clone the lemonade repo, which is used for hosting local LLMs using a streaming web server: `git clone https://github.com/aigdat/genai.git`
 1. Follow the directions for setup (here)[https://github.com/aigdat/genai/blob/main/docs/easy_ryzenai_npu.md]
 1. Activate virtual environment: `conda activate ryzenai-transformers`
 
 # Running the Ryzen AI NPU Web Server
 
+1. Open a new command-line terminal
+1. Activate the virtual environment described [here](#install-lemonade-web-server).
 1. Run: `setup.bat`
 1. Run: `start_npu_server`
 1. You should see an output similar to the one below:
+
 ```
 Info: Running tool: serve
 INFO:     Started server process [18836]

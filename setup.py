@@ -11,6 +11,13 @@ setup(
     package_dir={"": "src"},
     packages=[
         "gaia",
+        "gaia.llm",
+        "gaia.agents",
+        "gaia.agents.Clipy",
+        "gaia.agents.Datalin",
+        "gaia.agents.Joker",
+        "gaia.agents.Neo",
+        "gaia.agents.Picasso",
     ],
     install_requires=[
         "botbuilder-integration-aiohttp>=4.14.0",
@@ -34,29 +41,18 @@ setup(
         "torch",
         "torchvision",
         "torchaudio",
-        # "torch @ https://download.pytorch.org/whl/cu118/torch-1.13.1%2Bcu118-cp38-cp38-linux_x86_64.whl",
-        # "torchvision @ https://download.pytorch.org/whl/cu118/torchvision-0.14.1%2Bcu118-cp38-cp38-linux_x86_64.whl",
-        # "torchaudio @ https://download.pytorch.org/whl/cu118/torchaudio-0.13.1%2Bcu118-cp38-cp38-linux_x86_64.whl",
+        "llama-index-readers-youtube-transcript",
+        "llama-index-readers-github",
+        "llama-index-embeddings-huggingface",
+        "llama-index-readers-github",
+        "llama-index-embeddings-huggingface",
     ],
     extras_require={
-        "all": [
-            "llama-index-readers-youtube-transcript",
-            "llama-index-readers-github",
-            "llama-index-embeddings-huggingface",
-            "llama-index-readers-github",
-            "llama-index-embeddings-huggingface",
+        "cuda": [
+            "torch @ https://download.pytorch.org/whl/cu118/torch-1.13.1%2Bcu118-cp38-cp38-linux_x86_64.whl",
+            "torchvision @ https://download.pytorch.org/whl/cu118/torchvision-0.14.1%2Bcu118-cp38-cp38-linux_x86_64.whl",
+            "torchaudio @ https://download.pytorch.org/whl/cu118/torchaudio-0.13.1%2Bcu118-cp38-cp38-linux_x86_64.whl",
         ],
-        "clipy": [
-            "llama-index-readers-youtube-transcript",
-        ],
-        "joker": [
-            "llama-index-readers-github",
-            "llama-index-embeddings-huggingface",
-        ],
-        "neo": [
-            "llama-index-readers-github",
-            "llama-index-embeddings-huggingface",
-        ]
     },
     classifiers=[],
     entry_points={

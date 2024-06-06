@@ -9,8 +9,8 @@ from botbuilder.core import (
 from botbuilder.schema import ChannelAccount, Activity
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
-from src.gaia.agents.Datalin.find_match import find_match  # pylint: disable=import-error
-from src.gaia.agents.Datalin.split import split_onnx_model  # pylint: disable=import-error, no-name-in-module
+from gaia.agents.Datalin.find_match import find_match
+from gaia.agents.Datalin.split import split_onnx_model
 
 torch.random.manual_seed(0)
 
