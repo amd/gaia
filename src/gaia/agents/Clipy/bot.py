@@ -17,7 +17,7 @@ from llama_index.readers.youtube_transcript import YoutubeTranscriptReader
 from botbuilder.core import ActivityHandler, TurnContext
 from botbuilder.schema import ChannelAccount, Activity
 
-from llm.npu_llm import LocalLLM
+from src.gaia.llm.npu_llm import LocalLLM
 
 
 def extract_youtube_link(message):

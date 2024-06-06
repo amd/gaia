@@ -19,7 +19,7 @@ from llama_index.readers.github import GithubRepositoryReader, GithubClient
 from botbuilder.core import ActivityHandler, TurnContext
 from botbuilder.schema import ChannelAccount, Activity
 
-from llm.npu_llm import LocalLLM
+from src.gaia.llm.npu_llm import LocalLLM
 
 
 def extract_github_owner_repo(message):

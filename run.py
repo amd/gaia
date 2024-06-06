@@ -8,7 +8,7 @@ def run_agent(agent):
 
 if __name__ == '__main__':
     # Get user input for the desired agent
-    agent_choice = input("Enter the agent you want to run (Clipy, Datalin, Joker, Neo, Picasso, All) [Default: Neo]: ")
+    agent_choice = input("Enter the agent you want to run (Clipy, Datalin, Joker, Neo, Picasso) [Default: Neo]: ")
 
     # Set default agent to Neo if user enters nothing
     if agent_choice.strip() == "":
