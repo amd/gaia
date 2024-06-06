@@ -15,8 +15,8 @@ from botbuilder.core import (
 from botbuilder.core.integration import aiohttp_error_middleware
 from botbuilder.schema import Activity, ActivityTypes
 
-from agents.Neo.bot import MyBot  # pylint: disable=import-error
-from agents.Neo.config import DefaultConfig  # pylint: disable=import-error
+from src.gaia.agents.Neo.bot import MyBot  # pylint: disable=import-error
+from src.gaia.agents.Neo.config import DefaultConfig  # pylint: disable=import-error
 
 CONFIG = DefaultConfig()
 

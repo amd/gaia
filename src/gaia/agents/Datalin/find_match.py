@@ -4,7 +4,8 @@ import json
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-from agents.Datalin.model_encode import encode_model  # pylint: disable=import-error
+
+from src.gaia.agents.Datalin.model_encode import encode_model  # pylint: disable=import-error
 
 
 def find_match(model_path, dequantize=False, replace=False, dark_mode=False):

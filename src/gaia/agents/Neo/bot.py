@@ -4,7 +4,7 @@ import time
 import subprocess
 from dotenv import load_dotenv
 
-from agents.Neo.system_prompt import react_system_prompt, react_system_prompt_small
+# from src.gaia.agents.Neo.system_prompt import react_system_prompt_small
 
 from llama_index.core import (
     VectorStoreIndex,
