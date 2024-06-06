@@ -18,7 +18,7 @@ Currently, we support the following agents:
 
 # Getting Started
 
-To get started, please follow the instructions below. If you have a new machine and need to install all dependencies, start [here](#)
+To get started, please follow the instructions below. If you have a new machine and need to install all dependencies, start [here](#).
 
 ## Contents:
 
