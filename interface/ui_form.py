@@ -44,15 +44,15 @@ class Ui_Widget(object):
         self.horizontalLayout = QHBoxLayout(self.banner)
         self.horizontalLayout.setObjectName(u"horizontalLayout")
         self.horizontalLayout.setContentsMargins(9, 9, 0, 9)
-        self.label = QLabel(self.banner)
-        self.label.setObjectName(u"label")
-        self.label.setMinimumSize(QSize(0, 0))
-        self.label.setMaximumSize(QSize(164, 40))
-        self.label.setStyleSheet(u"")
-        self.label.setPixmap(QPixmap(u":/img/banner.PNG"))
-        self.label.setScaledContents(True)
+        self.bannerImg = QLabel(self.banner)
+        self.bannerImg.setObjectName(u"bannerImg")
+        self.bannerImg.setMinimumSize(QSize(0, 0))
+        self.bannerImg.setMaximumSize(QSize(164, 40))
+        self.bannerImg.setStyleSheet(u"")
+        self.bannerImg.setPixmap(QPixmap(u":/img/banner.PNG"))
+        self.bannerImg.setScaledContents(True)
 
-        self.horizontalLayout.addWidget(self.label)
+        self.horizontalLayout.addWidget(self.bannerImg)
 
         self.horizontalSpacer_2 = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
@@ -65,36 +65,140 @@ class Ui_Widget(object):
 
         self.verticalLayout_3.addItem(self.verticalSpacer_2)
 
-        self.frame_4 = QFrame(Widget)
-        self.frame_4.setObjectName(u"frame_4")
-        self.frame_4.setFrameShape(QFrame.StyledPanel)
-        self.frame_4.setFrameShadow(QFrame.Raised)
-        self.horizontalLayout_3 = QHBoxLayout(self.frame_4)
+        self.welcome = QFrame(Widget)
+        self.welcome.setObjectName(u"welcome")
+        self.welcome.setFrameShape(QFrame.StyledPanel)
+        self.welcome.setFrameShadow(QFrame.Raised)
+        self.horizontalLayout_3 = QHBoxLayout(self.welcome)
         self.horizontalLayout_3.setObjectName(u"horizontalLayout_3")
-        self.label_2 = QLabel(self.frame_4)
-        self.label_2.setObjectName(u"label_2")
+        self.welcomeImg = QLabel(self.welcome)
+        self.welcomeImg.setObjectName(u"welcomeImg")
         sizePolicy1 = QSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Maximum)
         sizePolicy1.setHorizontalStretch(0)
         sizePolicy1.setVerticalStretch(0)
-        sizePolicy1.setHeightForWidth(self.label_2.sizePolicy().hasHeightForWidth())
-        self.label_2.setSizePolicy(sizePolicy1)
-        self.label_2.setMaximumSize(QSize(417, 150))
-        self.label_2.setPixmap(QPixmap(u":/img/welcome.png"))
-        self.label_2.setScaledContents(True)
-        self.label_2.setAlignment(Qt.AlignCenter)
+        sizePolicy1.setHeightForWidth(self.welcomeImg.sizePolicy().hasHeightForWidth())
+        self.welcomeImg.setSizePolicy(sizePolicy1)
+        self.welcomeImg.setMaximumSize(QSize(417, 150))
+        self.welcomeImg.setPixmap(QPixmap(u":/img/welcome.png"))
+        self.welcomeImg.setScaledContents(True)
+        self.welcomeImg.setAlignment(Qt.AlignCenter)
 
-        self.horizontalLayout_3.addWidget(self.label_2)
+        self.horizontalLayout_3.addWidget(self.welcomeImg)
 
 
-        self.verticalLayout_3.addWidget(self.frame_4)
+        self.verticalLayout_3.addWidget(self.welcome)
 
         self.verticalSpacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
         self.verticalLayout_3.addItem(self.verticalSpacer)
 
-        self.frame = QFrame(Widget)
-        self.frame.setObjectName(u"frame")
-        self.frame.setStyleSheet(u"QPushButton {\n"
+        self.chat = QFrame(Widget)
+        self.chat.setObjectName(u"chat")
+        self.chat.setFrameShape(QFrame.StyledPanel)
+        self.chat.setFrameShadow(QFrame.Raised)
+        self.verticalLayout_5 = QVBoxLayout(self.chat)
+        self.verticalLayout_5.setObjectName(u"verticalLayout_5")
+        self.board = QFrame(self.chat)
+        self.board.setObjectName(u"board")
+        self.board.setEnabled(True)
+        self.board.setStyleSheet(u"background-color: rgb(20, 20, 20);")
+        self.board.setFrameShape(QFrame.StyledPanel)
+        self.board.setFrameShadow(QFrame.Raised)
+        self.boardLayout = QVBoxLayout(self.board)
+        self.boardLayout.setObjectName(u"boardLayout")
+        self.sampleCard_1 = QFrame(self.board)
+        self.sampleCard_1.setObjectName(u"sampleCard_1")
+        self.sampleCard_1.setFrameShape(QFrame.StyledPanel)
+        self.sampleCard_1.setFrameShadow(QFrame.Raised)
+        self.horizontalLayout_4 = QHBoxLayout(self.sampleCard_1)
+        self.horizontalLayout_4.setObjectName(u"horizontalLayout_4")
+        self.horizontalSpacer_3 = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+        self.horizontalLayout_4.addItem(self.horizontalSpacer_3)
+
+        self.frame_6 = QFrame(self.sampleCard_1)
+        self.frame_6.setObjectName(u"frame_6")
+        self.frame_6.setFrameShape(QFrame.StyledPanel)
+        self.frame_6.setFrameShadow(QFrame.Raised)
+        self.verticalLayout_7 = QVBoxLayout(self.frame_6)
+        self.verticalLayout_7.setObjectName(u"verticalLayout_7")
+        self.pushButton_2 = QPushButton(self.frame_6)
+        self.pushButton_2.setObjectName(u"pushButton_2")
+        self.pushButton_2.setMinimumSize(QSize(0, 0))
+        font = QFont()
+        font.setPointSize(12)
+        self.pushButton_2.setFont(font)
+        self.pushButton_2.setStyleSheet(u"border-radius: 3px;\n"
+"border: 1px solid #0A819A;\n"
+"background-color: #0A819A;\n"
+"color: rgb(255, 255, 255);\n"
+"padding: 8px 8px; ")
+
+        self.verticalLayout_7.addWidget(self.pushButton_2)
+
+        self.label_3 = QLabel(self.frame_6)
+        self.label_3.setObjectName(u"label_3")
+        self.label_3.setStyleSheet(u"color: rgb(255, 255, 255);")
+        self.label_3.setAlignment(Qt.AlignRight|Qt.AlignTrailing|Qt.AlignVCenter)
+
+        self.verticalLayout_7.addWidget(self.label_3)
+
+
+        self.horizontalLayout_4.addWidget(self.frame_6)
+
+
+        self.boardLayout.addWidget(self.sampleCard_1)
+
+        self.sampleCard_2 = QFrame(self.board)
+        self.sampleCard_2.setObjectName(u"sampleCard_2")
+        self.sampleCard_2.setFrameShape(QFrame.StyledPanel)
+        self.sampleCard_2.setFrameShadow(QFrame.Raised)
+        self.horizontalLayout_5 = QHBoxLayout(self.sampleCard_2)
+        self.horizontalLayout_5.setObjectName(u"horizontalLayout_5")
+        self.frame_7 = QFrame(self.sampleCard_2)
+        self.frame_7.setObjectName(u"frame_7")
+        self.frame_7.setFrameShape(QFrame.StyledPanel)
+        self.frame_7.setFrameShadow(QFrame.Raised)
+        self.verticalLayout_8 = QVBoxLayout(self.frame_7)
+        self.verticalLayout_8.setObjectName(u"verticalLayout_8")
+        self.pushButton_4 = QPushButton(self.frame_7)
+        self.pushButton_4.setObjectName(u"pushButton_4")
+        self.pushButton_4.setMinimumSize(QSize(0, 0))
+        self.pushButton_4.setFont(font)
+        self.pushButton_4.setStyleSheet(u"border-radius: 3px;\n"
+"border: 1px solid rgb(0, 0, 0);\n"
+"background-color:rgb(77, 77, 77);\n"
+"color: rgb(255, 255, 255);\n"
+"padding: 8px 8px; ")
+
+        self.verticalLayout_8.addWidget(self.pushButton_4)
+
+        self.label_4 = QLabel(self.frame_7)
+        self.label_4.setObjectName(u"label_4")
+        self.label_4.setStyleSheet(u"color: rgb(255, 255, 255);")
+        self.label_4.setAlignment(Qt.AlignLeading|Qt.AlignLeft|Qt.AlignVCenter)
+
+        self.verticalLayout_8.addWidget(self.label_4)
+
+
+        self.horizontalLayout_5.addWidget(self.frame_7)
+
+        self.horizontalSpacer_4 = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+        self.horizontalLayout_5.addItem(self.horizontalSpacer_4)
+
+
+        self.boardLayout.addWidget(self.sampleCard_2)
+
+
+        self.verticalLayout_5.addWidget(self.board)
+
+
+        self.verticalLayout_3.addWidget(self.chat)
+
+        self.messaging = QFrame(Widget)
+        self.messaging.setObjectName(u"messaging")
+        self.messaging.setStyleSheet(u"QPushButton {\n"
 "    border-radius: 3px;\n"
 "    border: 1px solid #0A819A;\n"
 "    background-color: #0A819A;\n"
@@ -104,22 +208,22 @@ class Ui_Widget(object):
 "    background-color: #4AA9BD;\n"
 "}\n"
 "")
-        self.frame.setFrameShape(QFrame.StyledPanel)
-        self.frame.setFrameShadow(QFrame.Raised)
-        self.verticalLayout = QVBoxLayout(self.frame)
+        self.messaging.setFrameShape(QFrame.StyledPanel)
+        self.messaging.setFrameShadow(QFrame.Raised)
+        self.verticalLayout = QVBoxLayout(self.messaging)
         self.verticalLayout.setObjectName(u"verticalLayout")
-        self.messagingFrame = QFrame(self.frame)
-        self.messagingFrame.setObjectName(u"messagingFrame")
-        self.messagingFrame.setLayoutDirection(Qt.LeftToRight)
-        self.messagingFrame.setStyleSheet(u"border-radius: 10px;\n"
+        self.frame_1 = QFrame(self.messaging)
+        self.frame_1.setObjectName(u"frame_1")
+        self.frame_1.setLayoutDirection(Qt.LeftToRight)
+        self.frame_1.setStyleSheet(u"border-radius: 10px;\n"
 "border: 1px solid #0A819A;;\n"
 "color: rgb(255, 255, 255);")
-        self.messagingFrame.setFrameShape(QFrame.StyledPanel)
-        self.messagingFrame.setFrameShadow(QFrame.Raised)
-        self.verticalLayout_2 = QVBoxLayout(self.messagingFrame)
+        self.frame_1.setFrameShape(QFrame.StyledPanel)
+        self.frame_1.setFrameShadow(QFrame.Raised)
+        self.verticalLayout_2 = QVBoxLayout(self.frame_1)
         self.verticalLayout_2.setObjectName(u"verticalLayout_2")
         self.verticalLayout_2.setContentsMargins(-1, 0, -1, -1)
-        self.frame_2 = QFrame(self.messagingFrame)
+        self.frame_2 = QFrame(self.frame_1)
         self.frame_2.setObjectName(u"frame_2")
         self.frame_2.setStyleSheet(u"border-radius: 0px;\n"
 "border: 0px solid #0A819A;;\n"
@@ -139,71 +243,69 @@ class Ui_Widget(object):
         self.horizontalLayout_2 = QHBoxLayout(self.frame_3)
         self.horizontalLayout_2.setObjectName(u"horizontalLayout_2")
         self.horizontalLayout_2.setContentsMargins(0, 0, 0, -1)
-        self.comboBox_2 = QComboBox(self.frame_3)
-        self.comboBox_2.addItem("")
-        self.comboBox_2.addItem("")
-        self.comboBox_2.setObjectName(u"comboBox_2")
-        self.comboBox_2.setMinimumSize(QSize(150, 25))
-        font = QFont()
-        font.setPointSize(12)
-        self.comboBox_2.setFont(font)
-        self.comboBox_2.setStyleSheet(u"border-radius: 3px;\n"
+        self.model = QComboBox(self.frame_3)
+        self.model.addItem("")
+        self.model.addItem("")
+        self.model.setObjectName(u"model")
+        self.model.setMinimumSize(QSize(150, 25))
+        self.model.setFont(font)
+        self.model.setStyleSheet(u"border-radius: 3px;\n"
 "border: 1px solid #0A819A;;\n"
 "")
 
-        self.horizontalLayout_2.addWidget(self.comboBox_2)
+        self.horizontalLayout_2.addWidget(self.model)
 
-        self.comboBox = QComboBox(self.frame_3)
-        self.comboBox.addItem("")
-        self.comboBox.addItem("")
-        self.comboBox.addItem("")
-        self.comboBox.setObjectName(u"comboBox")
-        self.comboBox.setMinimumSize(QSize(100, 25))
-        self.comboBox.setFont(font)
-        self.comboBox.setStyleSheet(u"border-radius: 3px;\n"
+        self.device = QComboBox(self.frame_3)
+        self.device.addItem("")
+        self.device.addItem("")
+        self.device.addItem("")
+        self.device.setObjectName(u"device")
+        self.device.setMinimumSize(QSize(100, 25))
+        self.device.setFont(font)
+        self.device.setStyleSheet(u"border-radius: 3px;\n"
 "border: 1px solid #0A819A;;\n"
 "")
 
-        self.horizontalLayout_2.addWidget(self.comboBox)
+        self.horizontalLayout_2.addWidget(self.device)
 
         self.horizontalSpacer = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
         self.horizontalLayout_2.addItem(self.horizontalSpacer)
 
-        self.pushButton = QPushButton(self.frame_3)
-        self.pushButton.setObjectName(u"pushButton")
-        self.pushButton.setMinimumSize(QSize(100, 25))
-        self.pushButton.setFont(font)
-        self.pushButton.setStyleSheet(u"")
+        self.ask = QPushButton(self.frame_3)
+        self.ask.setObjectName(u"ask")
+        self.ask.setMinimumSize(QSize(100, 25))
+        self.ask.setFont(font)
+        self.ask.setStyleSheet(u"")
         icon = QIcon()
         icon.addFile(u":/img/send.png", QSize(), QIcon.Normal, QIcon.Off)
-        self.pushButton.setIcon(icon)
+        self.ask.setIcon(icon)
 
-        self.horizontalLayout_2.addWidget(self.pushButton)
+        self.horizontalLayout_2.addWidget(self.ask)
 
 
         self.verticalLayout_4.addWidget(self.frame_3)
 
-        self.textEdit = QTextEdit(self.frame_2)
-        self.textEdit.setObjectName(u"textEdit")
+        self.prompt = QTextEdit(self.frame_2)
+        self.prompt.setObjectName(u"prompt")
         sizePolicy2 = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         sizePolicy2.setHorizontalStretch(0)
         sizePolicy2.setVerticalStretch(0)
-        sizePolicy2.setHeightForWidth(self.textEdit.sizePolicy().hasHeightForWidth())
-        self.textEdit.setSizePolicy(sizePolicy2)
-        self.textEdit.setMaximumSize(QSize(16777215, 50))
-        self.textEdit.setFont(font)
+        sizePolicy2.setHeightForWidth(self.prompt.sizePolicy().hasHeightForWidth())
+        self.prompt.setSizePolicy(sizePolicy2)
+        self.prompt.setMaximumSize(QSize(16777215, 50))
+        self.prompt.setFont(font)
 
-        self.verticalLayout_4.addWidget(self.textEdit)
+        self.verticalLayout_4.addWidget(self.prompt)
 
 
         self.verticalLayout_2.addWidget(self.frame_2)
 
 
-        self.verticalLayout.addWidget(self.messagingFrame)
+        self.verticalLayout.addWidget(self.frame_1)
 
 
-        self.verticalLayout_3.addWidget(self.frame)
+        self.verticalLayout_3.addWidget(self.messaging)
 
 
         self.retranslateUi(Widget)
@@ -213,18 +315,22 @@ class Ui_Widget(object):
 
     def retranslateUi(self, Widget):
         Widget.setWindowTitle(QCoreApplication.translate("Widget", u"Widget", None))
-        self.label.setText("")
-        self.label_2.setText("")
-        self.comboBox_2.setItemText(0, QCoreApplication.translate("Widget", u"Phi 3 Mini - 3B", None))
-        self.comboBox_2.setItemText(1, QCoreApplication.translate("Widget", u"LLama 3 - 8B", None))
+        self.bannerImg.setText("")
+        self.welcomeImg.setText("")
+        self.pushButton_2.setText(QCoreApplication.translate("Widget", u"Hi there! How are you today? Can you please help me with something?", None))
+        self.label_3.setText(QCoreApplication.translate("Widget", u"5:53:01", None))
+        self.pushButton_4.setText(QCoreApplication.translate("Widget", u"Absolutely! How can I help you today?", None))
+        self.label_4.setText(QCoreApplication.translate("Widget", u"5:53:02", None))
+        self.model.setItemText(0, QCoreApplication.translate("Widget", u"Phi 3 Mini - 3B", None))
+        self.model.setItemText(1, QCoreApplication.translate("Widget", u"LLama 3 - 8B", None))
 
-        self.comboBox_2.setPlaceholderText(QCoreApplication.translate("Widget", u"As", None))
-        self.comboBox.setItemText(0, QCoreApplication.translate("Widget", u"NPU", None))
-        self.comboBox.setItemText(1, QCoreApplication.translate("Widget", u"CPU", None))
-        self.comboBox.setItemText(2, QCoreApplication.translate("Widget", u"iGPU", None))
+        self.model.setPlaceholderText(QCoreApplication.translate("Widget", u"As", None))
+        self.device.setItemText(0, QCoreApplication.translate("Widget", u"NPU", None))
+        self.device.setItemText(1, QCoreApplication.translate("Widget", u"CPU", None))
+        self.device.setItemText(2, QCoreApplication.translate("Widget", u"iGPU", None))
 
-        self.pushButton.setText(QCoreApplication.translate("Widget", u"Ask", None))
-        self.textEdit.setHtml(QCoreApplication.translate("Widget", u"<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0//EN\" \"http://www.w3.org/TR/REC-html40/strict.dtd\">\n"
+        self.ask.setText(QCoreApplication.translate("Widget", u"Ask", None))
+        self.prompt.setHtml(QCoreApplication.translate("Widget", u"<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0//EN\" \"http://www.w3.org/TR/REC-html40/strict.dtd\">\n"
 "<html><head><meta name=\"qrichtext\" content=\"1\" /><meta charset=\"utf-8\" /><style type=\"text/css\">\n"
 "p, li { white-space: pre-wrap; }\n"
 "hr { height: 1px; border-width: 0; }\n"
@@ -232,6 +338,6 @@ class Ui_Widget(object):
 "li.checked::marker { content: \"\\2612\"; }\n"
 "</style></head><body style=\" font-family:'Segoe UI'; font-size:12pt; font-weight:400; font-style:normal;\">\n"
 "<p style=\"-qt-paragraph-type:empty; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px; font-size:9pt;\"><br /></p></body></html>", None))
-        self.textEdit.setPlaceholderText(QCoreApplication.translate("Widget", u"Ask anything, anytime...", None))
+        self.prompt.setPlaceholderText(QCoreApplication.translate("Widget", u"Ask anything, anytime...", None))
     # retranslateUi
 
