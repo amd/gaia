@@ -15,8 +15,8 @@ from botbuilder.core import (
 from botbuilder.core.integration import aiohttp_error_middleware
 from botbuilder.schema import Activity, ActivityTypes
 
-from src.gaia.agents.Clipy.bot import MyBot
-from src.gaia.agents.Clipy.config import DefaultConfig
+from gaia.agents.Clipy.bot import MyBot
+from gaia.agents.Clipy.config import DefaultConfig
 
 CONFIG = DefaultConfig()
 
