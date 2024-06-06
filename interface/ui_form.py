@@ -89,6 +89,44 @@ class Ui_Widget(object):
 
         self.mainLayout.addWidget(self.welcome)
 
+        self.loading = QFrame(Widget)
+        self.loading.setObjectName(u"loading")
+        self.loading.setStyleSheet(u"color: rgb(255, 255, 255);")
+        self.loading.setFrameShape(QFrame.StyledPanel)
+        self.loading.setFrameShadow(QFrame.Raised)
+        self.horizontalLayout_6 = QHBoxLayout(self.loading)
+        self.horizontalLayout_6.setObjectName(u"horizontalLayout_6")
+        self.horizontalSpacer_5 = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+        self.horizontalLayout_6.addItem(self.horizontalSpacer_5)
+
+        self.frame_4 = QFrame(self.loading)
+        self.frame_4.setObjectName(u"frame_4")
+        self.frame_4.setFrameShape(QFrame.StyledPanel)
+        self.frame_4.setFrameShadow(QFrame.Raised)
+        self.verticalLayout_3 = QVBoxLayout(self.frame_4)
+        self.verticalLayout_3.setObjectName(u"verticalLayout_3")
+        self.loadingGif = QLabel(self.frame_4)
+        self.loadingGif.setObjectName(u"loadingGif")
+
+        self.verticalLayout_3.addWidget(self.loadingGif)
+
+        self.loadingLabel = QLabel(self.frame_4)
+        self.loadingLabel.setObjectName(u"loadingLabel")
+        self.loadingLabel.setAlignment(Qt.AlignCenter)
+
+        self.verticalLayout_3.addWidget(self.loadingLabel)
+
+
+        self.horizontalLayout_6.addWidget(self.frame_4)
+
+        self.horizontalSpacer_6 = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+        self.horizontalLayout_6.addItem(self.horizontalSpacer_6)
+
+
+        self.mainLayout.addWidget(self.loading)
+
         self.welcomeSpacerBottom = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
         self.mainLayout.addItem(self.welcomeSpacerBottom)
@@ -127,7 +165,7 @@ class Ui_Widget(object):
         self.scrollArea.setWidgetResizable(True)
         self.scrollAreaWidgetContents = QWidget()
         self.scrollAreaWidgetContents.setObjectName(u"scrollAreaWidgetContents")
-        self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 898, 274))
+        self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 898, 251))
         self.verticalLayout_6 = QVBoxLayout(self.scrollAreaWidgetContents)
         self.verticalLayout_6.setObjectName(u"verticalLayout_6")
         self.verticalLayout_6.setContentsMargins(-1, 0, -1, 0)
@@ -359,6 +397,8 @@ class Ui_Widget(object):
         Widget.setWindowTitle(QCoreApplication.translate("Widget", u"Widget", None))
         self.bannerImg.setText("")
         self.welcomeImg.setText("")
+        self.loadingGif.setText(QCoreApplication.translate("Widget", u"LOADING ANIMATION", None))
+        self.loadingLabel.setText(QCoreApplication.translate("Widget", u"LOADING MESSAGE", None))
         self.pushButton_2.setText(QCoreApplication.translate("Widget", u"Hi there! How are you today? Can you please help me with something?", None))
         self.label_3.setText(QCoreApplication.translate("Widget", u"5:53:01", None))
         self.pushButton_4.setText(QCoreApplication.translate("Widget", u"Absolutely! How can I help you today?", None))

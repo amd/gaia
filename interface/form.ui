@@ -172,6 +172,76 @@
     </widget>
    </item>
    <item>
+    <widget class="QFrame" name="loading">
+     <property name="styleSheet">
+      <string notr="true">color: rgb(255, 255, 255);</string>
+     </property>
+     <property name="frameShape">
+      <enum>QFrame::StyledPanel</enum>
+     </property>
+     <property name="frameShadow">
+      <enum>QFrame::Raised</enum>
+     </property>
+     <layout class="QHBoxLayout" name="horizontalLayout_6">
+      <item>
+       <spacer name="horizontalSpacer_5">
+        <property name="orientation">
+         <enum>Qt::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <widget class="QFrame" name="frame_4">
+        <property name="frameShape">
+         <enum>QFrame::StyledPanel</enum>
+        </property>
+        <property name="frameShadow">
+         <enum>QFrame::Raised</enum>
+        </property>
+        <layout class="QVBoxLayout" name="verticalLayout_3">
+         <item>
+          <widget class="QLabel" name="loadingGif">
+           <property name="text">
+            <string>LOADING ANIMATION</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="loadingLabel">
+           <property name="text">
+            <string>LOADING MESSAGE</string>
+           </property>
+           <property name="alignment">
+            <set>Qt::AlignCenter</set>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <spacer name="horizontalSpacer_6">
+        <property name="orientation">
+         <enum>Qt::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
     <spacer name="welcomeSpacerBottom">
      <property name="orientation">
       <enum>Qt::Vertical</enum>
@@ -236,7 +306,7 @@
            <x>0</x>
            <y>0</y>
            <width>898</width>
-           <height>274</height>
+           <height>251</height>
           </rect>
          </property>
          <layout class="QVBoxLayout" name="verticalLayout_6">

@@ -1,16 +1,48 @@
 # This Python file uses the following encoding: utf-8
 import sys
+import time
 from datetime import datetime
 import textwrap
 
 from PySide6.QtWidgets import QApplication, QWidget, QApplication, QMainWindow, QFrame, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSpacerItem, QSizePolicy
-from PySide6.QtCore import Qt, QEvent
+from PySide6.QtCore import Qt, QEvent, QSize, QObject, Signal, Slot, QThread
+from PySide6.QtGui import QMovie
 
 # Important:
 # You need to run the following command to generate the ui_form.py file
 #     pyside6-uic form.ui -o ui_form.py, or
 #     pyside2-uic form.ui -o ui_form.py
 from ui_form import Ui_Widget
+
+# SetupLLM class performs tasks in a separate thread
+class SetupLLM(QObject):
+    finished = Signal()
+
+    def __init__(self, ui):
+        super().__init__()
+        self.ui = ui
+
+    @Slot()
+    def do_work(self):
+        # Download model and setup server
+        self.ui.loading.setVisible(True);
+        self.ui.loadingLabel.setText("Downloading Phi 3 Mini...");
+        time.sleep(3);
+        self.ui.loadingLabel.setText("Initializing Server...");
+        time.sleep(3);
+        self.ui.loadingLabel.setText("Finishing up...");
+        time.sleep(3);
+        self.ui.loading.setVisible(False);
+
+        # Enable chat interface
+        self.ui.chat.setVisible(True);
+        self.ui.sampleCard_1.setVisible(False);
+        self.ui.sampleCard_2.setVisible(False);
+        self.ui.mainLayout.removeItem(self.ui.welcomeSpacerTop)
+        self.ui.mainLayout.removeItem(self.ui.welcomeSpacerBottom)
+
+
+        self.finished.emit()
 
 class Widget(QWidget):
     def __init__(self, parent=None):
@@ -34,8 +66,26 @@ class Widget(QWidget):
         # Install event filter to prompt text box
         self.ui.prompt.installEventFilter(self)
 
-        # Hide chat window initially
+        # Hide some of the components initially
         self.ui.chat.setVisible(False);
+        self.ui.loading.setVisible(False);
+
+        # Loading symbol
+        self.movie = QMovie("img\loading.gif")
+        self.movie.setScaledSize(QSize(300, 300))
+        self.ui.loadingGif.setFixedSize(QSize(300, 25))
+        self.ui.loadingGif.setMovie(self.movie)
+        self.movie.start()
+
+        # Create setup thread
+        self.thread = QThread()
+        self.worker = SetupLLM(self.ui)
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.do_work)
+        self.worker.finished.connect(self.thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self.thread.deleteLater)
+
 
     def eventFilter(self, obj, event):
         """
@@ -52,13 +102,9 @@ class Widget(QWidget):
         prompt = self.ui.prompt.toPlainText()
         self.ui.prompt.clear()
         if prompt:
-            # Enable chat interface
+            # Download model, setup server, and enable chat interface
             if not self.ui.chat.isVisible():
-                self.ui.chat.setVisible(True);
-                self.ui.sampleCard_1.setVisible(False);
-                self.ui.sampleCard_2.setVisible(False);
-                self.ui.mainLayout.removeItem(self.ui.welcomeSpacerTop)
-                self.ui.mainLayout.removeItem(self.ui.welcomeSpacerBottom)
+                self.thread.start()
 
             # Send message
             self.add_card(prompt, from_user = True)
