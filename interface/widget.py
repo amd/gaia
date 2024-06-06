@@ -18,32 +18,54 @@ from ui_form import Ui_Widget
 class SetupLLM(QObject):
     finished = Signal()
 
-    def __init__(self, ui):
+    def __init__(self, widget):
         super().__init__()
-        self.ui = ui
+        self.widget = widget
 
     @Slot()
     def do_work(self):
         # Download model and setup server
-        self.ui.loading.setVisible(True);
-        self.ui.loadingLabel.setText("Downloading Phi 3 Mini...");
+        widget.ui.loading.setVisible(True);
+        widget.ui.loadingLabel.setText("Downloading Phi 3 Mini...");
         time.sleep(3);
-        self.ui.loadingLabel.setText("Initializing Server...");
+        widget.ui.loadingLabel.setText("Initializing Server...");
         time.sleep(3);
-        self.ui.loadingLabel.setText("Finishing up...");
+        widget.ui.loadingLabel.setText("Finishing up...");
         time.sleep(3);
-        self.ui.loading.setVisible(False);
+        widget.ui.loading.setVisible(False);
 
         # Enable chat interface
-        self.ui.chat.setVisible(True);
-        self.ui.sampleCard_1.setVisible(False);
-        self.ui.sampleCard_2.setVisible(False);
-        self.ui.mainLayout.removeItem(self.ui.welcomeSpacerTop)
-        self.ui.mainLayout.removeItem(self.ui.welcomeSpacerBottom)
+        widget.ui.chat.setVisible(True);
+        widget.ui.sampleCard_1.setVisible(False);
+        widget.ui.sampleCard_2.setVisible(False);
+        widget.ui.mainLayout.removeItem(widget.ui.welcomeSpacerTop)
+        widget.ui.mainLayout.removeItem(widget.ui.welcomeSpacerBottom)
+
+        # Start streaming
+        widget.streamingThread.start()
+
+        self.finished.emit()
+
+class LLMStreaming(QObject):
+    finished = Signal()
+
+    def __init__(self, widget):
+        super().__init__()
+        self.widget = widget
+
+    @Slot()
+    def do_work(self):
+        last_card = str(widget.card_count-1)
+        sample_response = "Hello! I can assist you with a wide range of topics. Whether you have questions, need help with a problem, want to brainstorm ideas, or just want to have a conversation, feel free to let me know how I can help!"
+        words = sample_response.split()
+        streaming_message = ""
+        for word in words:
+            streaming_message += word + ' '
+            time.sleep(0.15)
+            widget.update_card(last_card, streaming_message)
 
         # Enable send button again
-        self.ui.ask.setEnabled(True);
-
+        widget.ui.ask.setEnabled(True);
 
         self.finished.emit()
 
@@ -81,13 +103,20 @@ class Widget(QWidget):
         self.movie.start()
 
         # Create setup thread
-        self.thread = QThread()
-        self.worker = SetupLLM(self.ui)
-        self.worker.moveToThread(self.thread)
-        self.thread.started.connect(self.worker.do_work)
-        self.worker.finished.connect(self.thread.quit)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.thread.finished.connect(self.thread.deleteLater)
+        self.setupThread = QThread()
+        self.setupWorker = SetupLLM(self)
+        self.setupWorker.moveToThread(self.setupThread)
+        self.setupThread.started.connect(self.setupWorker.do_work)
+        self.setupWorker.finished.connect(self.setupThread.quit)
+        self.setupWorker.finished.connect(self.setupWorker.deleteLater)
+        self.setupThread.finished.connect(self.setupThread.deleteLater)
+
+        # Create LLM streaming thread
+        self.streamingThread = QThread()
+        self.streamingWorker = LLMStreaming(self)
+        self.streamingWorker.moveToThread(self.streamingThread)
+        self.streamingThread.started.connect(self.streamingWorker.do_work)
+        self.streamingWorker.finished.connect(self.streamingThread.quit)
 
 
     def eventFilter(self, obj, event):
@@ -110,14 +139,14 @@ class Widget(QWidget):
 
             # Download model, setup server, and enable chat interface
             if not self.ui.chat.isVisible():
-                self.thread.start()
+                self.setupThread.start()
 
             # Send message
             self.add_card(prompt, from_user = True)
-            self.add_card("Hello dear user! It is also a pleasure to be around someone like youuuuuuu", from_user = False)
+            self.add_card("", from_user = False)
 
             if not self.ui.loading.isVisible():
-                self.ui.ask.setEnabled(True);
+                self.streamingThread.start()
 
 
     def split_into_chunks(self,message):
