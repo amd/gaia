@@ -245,6 +245,7 @@ class Ui_Widget(object):
         self.verticalLayout.setObjectName(u"verticalLayout")
         self.frame_1 = QFrame(self.messaging)
         self.frame_1.setObjectName(u"frame_1")
+        self.frame_1.setFont(font)
         self.frame_1.setLayoutDirection(Qt.LeftToRight)
         self.frame_1.setStyleSheet(u"border-radius: 10px;\n"
 "border: 1px solid #0A819A;;\n"
@@ -368,7 +369,7 @@ class Ui_Widget(object):
 "li.unchecked::marker { content: \"\\2610\"; }\n"
 "li.checked::marker { content: \"\\2612\"; }\n"
 "</style></head><body style=\" font-family:'Segoe UI'; font-size:12pt; font-weight:400; font-style:normal;\">\n"
-"<p style=\"-qt-paragraph-type:empty; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px; font-size:9pt;\"><br /></p></body></html>", None))
+"<p style=\"-qt-paragraph-type:empty; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;\"><br /></p></body></html>", None))
         self.prompt.setPlaceholderText(QCoreApplication.translate("Widget", u"Ask anything, anytime...", None))
     # retranslateUi
 

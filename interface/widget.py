@@ -3,7 +3,7 @@ import sys
 from datetime import datetime
 
 from PySide6.QtWidgets import QApplication, QWidget, QApplication, QMainWindow, QFrame, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSpacerItem, QSizePolicy
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QEvent
 
 # Important:
 # You need to run the following command to generate the ui_form.py file
@@ -28,9 +28,26 @@ class Widget(QWidget):
             self.scrollToBottom,
         )
 
+        # Install event filter to prompt text box
+        self.ui.prompt.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        """
+        Event filter used to send message when enter is pressed inside the prompt box
+        """
+        if event.type() == QEvent.KeyPress and not (event.modifiers() & Qt.ShiftModifier) and obj is self.ui.prompt:
+            if event.key() == Qt.Key_Return and self.ui.prompt.hasFocus():
+                # Send message and consume the event, preventing return from being added to prompt box
+                self.send_message()
+                return True
+        return super().eventFilter(obj, event)
+
     def send_message(self):
-        self.add_card("Hi there! it is a pleasure to have you here! Super happy to be around you!", from_user = True)
-        self.add_card("Hello dear user! It is also a pleasure to be around someone like youuuuuuu", from_user = False)
+        prompt = self.ui.prompt.toPlainText()
+        self.ui.prompt.clear()
+        if prompt:
+            self.add_card(prompt, from_user = True)
+            self.add_card("Hello dear user! It is also a pleasure to be around someone like youuuuuuu", from_user = False)
 
     def add_card(self, message, from_user = True):
         # Create the main card frame
