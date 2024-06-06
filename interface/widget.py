@@ -15,6 +15,7 @@ class Widget(QWidget):
         self.ui = Ui_Widget()
         self.ui.setupUi(self)
         self.setStyleSheet("background-color: black;")
+        self.setWindowTitle("RyzenAI GAIA")
 
 
 if __name__ == "__main__":

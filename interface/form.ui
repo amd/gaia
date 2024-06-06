@@ -268,7 +268,7 @@ border: 0px solid #0A819A;;
                 <widget class="QComboBox" name="comboBox_2">
                  <property name="minimumSize">
                   <size>
-                   <width>100</width>
+                   <width>120</width>
                    <height>25</height>
                   </size>
                  </property>
@@ -279,7 +279,12 @@ border: 1px solid #0A819A;;
                  </property>
                  <item>
                   <property name="text">
-                   <string>Llama 2 - 13B</string>
+                   <string>Phi 3 Mini - 3B</string>
+                  </property>
+                 </item>
+                 <item>
+                  <property name="text">
+                   <string>LLama 3 - 8B</string>
                   </property>
                  </item>
                 </widget>

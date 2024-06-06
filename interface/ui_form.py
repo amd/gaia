@@ -140,8 +140,9 @@ class Ui_Widget(object):
         self.horizontalLayout_2.setContentsMargins(0, 0, 0, -1)
         self.comboBox_2 = QComboBox(self.frame_3)
         self.comboBox_2.addItem("")
+        self.comboBox_2.addItem("")
         self.comboBox_2.setObjectName(u"comboBox_2")
-        self.comboBox_2.setMinimumSize(QSize(100, 25))
+        self.comboBox_2.setMinimumSize(QSize(120, 25))
         self.comboBox_2.setStyleSheet(u"border-radius: 3px;\n"
 "border: 1px solid #0A819A;;\n"
 "")
@@ -207,7 +208,8 @@ class Ui_Widget(object):
         Widget.setWindowTitle(QCoreApplication.translate("Widget", u"Widget", None))
         self.label.setText("")
         self.label_2.setText("")
-        self.comboBox_2.setItemText(0, QCoreApplication.translate("Widget", u"Llama 2 - 13B", None))
+        self.comboBox_2.setItemText(0, QCoreApplication.translate("Widget", u"Phi 3 Mini - 3B", None))
+        self.comboBox_2.setItemText(1, QCoreApplication.translate("Widget", u"LLama 3 - 8B", None))
 
         self.comboBox.setItemText(0, QCoreApplication.translate("Widget", u"NPU", None))
         self.comboBox.setItemText(1, QCoreApplication.translate("Widget", u"CPU", None))
