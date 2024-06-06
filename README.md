@@ -6,7 +6,7 @@ Welcome to the GAIA (Generative AI Is Awesome!) project! This repository serves 
 
 # Getting Started
 
-To get started, please follow the instructions below. If you have a new machine and need to install all dependencies, start [here](#)
+To get started, please follow the instructions below. If you have a new machine and need to install all dependencies, start [here](#).
 
 ## Contents:
 
