@@ -92,6 +92,27 @@ class Ui_Widget(object):
         self.verticalLayout_5.setObjectName(u"verticalLayout_5")
         self.scrollArea = QScrollArea(self.chat)
         self.scrollArea.setObjectName(u"scrollArea")
+        self.scrollArea.setStyleSheet(u"QScrollBar:vertical {\n"
+"            border: none;\n"
+"            background: #000000;\n"
+"            width: 5px;\n"
+"            margin: 0px 0px 0px 0px;\n"
+"        }\n"
+"        QScrollBar::handle:vertical {\n"
+"            background: #555;\n"
+"            min-height: 20px;\n"
+"            border-radius: 2px;\n"
+"        }\n"
+"        QScrollBar::handle:vertical:hover {\n"
+"            background: #0A819A;\n"
+"        }\n"
+"        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {\n"
+"            border: none;\n"
+"            background: none;\n"
+"        }\n"
+"        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {\n"
+"            background: none;\n"
+"        }")
         self.scrollArea.setFrameShape(QFrame.NoFrame)
         self.scrollArea.setWidgetResizable(True)
         self.scrollAreaWidgetContents = QWidget()
@@ -99,6 +120,7 @@ class Ui_Widget(object):
         self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 1170, 315))
         self.verticalLayout_6 = QVBoxLayout(self.scrollAreaWidgetContents)
         self.verticalLayout_6.setObjectName(u"verticalLayout_6")
+        self.verticalLayout_6.setContentsMargins(-1, 0, -1, 0)
         self.board = QFrame(self.scrollAreaWidgetContents)
         self.board.setObjectName(u"board")
         self.board.setEnabled(True)
@@ -190,6 +212,10 @@ class Ui_Widget(object):
 
 
         self.boardLayout.addWidget(self.sampleCard_2)
+
+        self.verticalSpacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
+
+        self.boardLayout.addItem(self.verticalSpacer)
 
 
         self.verticalLayout_6.addWidget(self.board)
