@@ -16,8 +16,8 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QImage, QKeySequence, QLinearGradient, QPainter,
     QPalette, QPixmap, QRadialGradient, QTransform)
 from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QHBoxLayout,
-    QLabel, QPushButton, QSizePolicy, QSpacerItem,
-    QTextEdit, QVBoxLayout, QWidget)
+    QLabel, QPushButton, QScrollArea, QSizePolicy,
+    QSpacerItem, QTextEdit, QVBoxLayout, QWidget)
 import rc_resource
 
 class Ui_Widget(object):
@@ -61,10 +61,6 @@ class Ui_Widget(object):
 
         self.verticalLayout_3.addWidget(self.banner)
 
-        self.verticalSpacer_2 = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
-
-        self.verticalLayout_3.addItem(self.verticalSpacer_2)
-
         self.welcome = QFrame(Widget)
         self.welcome.setObjectName(u"welcome")
         self.welcome.setFrameShape(QFrame.StyledPanel)
@@ -88,17 +84,22 @@ class Ui_Widget(object):
 
         self.verticalLayout_3.addWidget(self.welcome)
 
-        self.verticalSpacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
-
-        self.verticalLayout_3.addItem(self.verticalSpacer)
-
         self.chat = QFrame(Widget)
         self.chat.setObjectName(u"chat")
         self.chat.setFrameShape(QFrame.StyledPanel)
         self.chat.setFrameShadow(QFrame.Raised)
         self.verticalLayout_5 = QVBoxLayout(self.chat)
         self.verticalLayout_5.setObjectName(u"verticalLayout_5")
-        self.board = QFrame(self.chat)
+        self.scrollArea = QScrollArea(self.chat)
+        self.scrollArea.setObjectName(u"scrollArea")
+        self.scrollArea.setFrameShape(QFrame.NoFrame)
+        self.scrollArea.setWidgetResizable(True)
+        self.scrollAreaWidgetContents = QWidget()
+        self.scrollAreaWidgetContents.setObjectName(u"scrollAreaWidgetContents")
+        self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 1170, 315))
+        self.verticalLayout_6 = QVBoxLayout(self.scrollAreaWidgetContents)
+        self.verticalLayout_6.setObjectName(u"verticalLayout_6")
+        self.board = QFrame(self.scrollAreaWidgetContents)
         self.board.setObjectName(u"board")
         self.board.setEnabled(True)
         self.board.setStyleSheet(u"background-color: rgb(20, 20, 20);")
@@ -191,7 +192,11 @@ class Ui_Widget(object):
         self.boardLayout.addWidget(self.sampleCard_2)
 
 
-        self.verticalLayout_5.addWidget(self.board)
+        self.verticalLayout_6.addWidget(self.board)
+
+        self.scrollArea.setWidget(self.scrollAreaWidgetContents)
+
+        self.verticalLayout_5.addWidget(self.scrollArea)
 
 
         self.verticalLayout_3.addWidget(self.chat)
