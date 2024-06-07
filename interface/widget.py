@@ -54,7 +54,7 @@ class LLMStreaming(QObject):
     @Slot()
     def do_work(self):
         # Prompt LLM
-        _, message_frame, _ = widget.cards[str(widget.card_count-2)]
+        _, message_frame, _, _ = widget.cards[str(widget.card_count-2)]
         prompt = message_frame.text()
         response = self.widget.pipe(prompt, max_new_tokens=32)
         response = response[0]["generated_text"]
@@ -154,7 +154,7 @@ class Widget(QWidget):
         # Delete existing cards
         for card in self.cards:
             # Remove the frame from its parent layout if it has one
-            card_frame, _, _ = self.cards[card]
+            card_frame, _, _, _ = self.cards[card]
             if card_frame.parent():
                 card_frame.setParent(None)
             # Delete the frame
@@ -202,17 +202,8 @@ class Widget(QWidget):
         # Create and add the push button and label to the card message frame
         chuncked_message = self.split_into_chunks(message)
         message_frame = QPushButton(chuncked_message)
+        firstTokenAnimation = None
         if from_user:
-            message_frame.setStyleSheet("""
-                    font-size: 12pt;
-                    border-radius: 3px;
-                    border: 1px solid #0A819A;
-                    background-color: #0A819A;
-                    color: rgb(255, 255, 255);
-                    padding: 8px 8px;
-                    text-align: left;
-                """)
-        else:
             message_frame.setStyleSheet("""
                     font-size: 12pt;
                     border-radius: 3px;
@@ -222,6 +213,24 @@ class Widget(QWidget):
                     padding: 8px 8px;
                     text-align: left;
                 """)
+        else:
+            firstTokenAnimation = QLabel()
+            firstTokenMovie = QMovie("img\waiting_token.gif")
+            firstTokenMovie.setScaledSize(QSize(50, 50))
+            firstTokenAnimation.setFixedSize(QSize(50, 50))
+            firstTokenAnimation.setMovie(firstTokenMovie)
+            firstTokenMovie.start()
+            card_message_layout.addWidget(firstTokenAnimation)
+            message_frame.setStyleSheet("""
+                    font-size: 12pt;
+                    border-radius: 3px;
+                    border: 1px solid #0A819A;
+                    background-color: #0A819A;
+                    color: rgb(255, 255, 255);
+                    padding: 8px 8px;
+                    text-align: left;
+                """)
+            message_frame.setVisible(False)
         label = QLabel(datetime.now().strftime("%H:%M:%S"))
         label.setStyleSheet("color: rgb(255, 255, 255);")
         card_message_layout.addWidget(message_frame)
@@ -243,16 +252,18 @@ class Widget(QWidget):
 
         # Keep track of card
         card_id = str(self.card_count)
-        self.cards[card_id] = (card, message_frame, label)
+        self.cards[card_id] = (card, message_frame, label, firstTokenAnimation)
         self.card_count = self.card_count+1
 
         return card_id
 
     def update_card(self,card_id, message):
-        _, message_frame, label = self.cards[card_id]
+        _, message_frame, label, firstTokenAnimation = self.cards[card_id]
         chuncked_message = self.split_into_chunks(message)
         message_frame.setText(chuncked_message)
         label.setText(datetime.now().strftime("%H:%M:%S"))
+        firstTokenAnimation.setVisible(False)
+        message_frame.setVisible(True)
 
 
     def scrollToBottom (self, minVal=None, maxVal=None):
