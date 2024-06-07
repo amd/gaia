@@ -130,6 +130,9 @@ class Widget(QWidget):
         self.streamingWorker.finished.connect(self.streamingThread.quit)
 
     def make_chat_visible(self,visible):
+        if (visible and widget.ui.chat.isVisible()) or (not visible and not widget.ui.chat.isVisible()):
+            # Skip if we are already at the visibility we desire
+            return
         if visible:
             widget.ui.loadingLabel.setVisible(False);
             widget.ui.loading.setVisible(False)
