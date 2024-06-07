@@ -88,6 +88,8 @@ class Widget(QWidget):
         # Connect buttons
         self.ui.ask.clicked.connect(self.send_message)
         self.ui.restart.clicked.connect(self.restart_conversation)
+        self.ui.model.currentIndexChanged.connect(self.deployment_changed)
+        self.ui.device.currentIndexChanged.connect(self.deployment_changed)
 
         # Ensure that we are scrolling to the bottom every time the range
         # of the card scroll area changes
@@ -118,8 +120,6 @@ class Widget(QWidget):
         self.setupWorker.moveToThread(self.setupThread)
         self.setupThread.started.connect(self.setupWorker.do_work)
         self.setupWorker.finished.connect(self.setupThread.quit)
-        self.setupWorker.finished.connect(self.setupWorker.deleteLater)
-        self.setupThread.finished.connect(self.setupThread.deleteLater)
         self.setupThread.start()
 
         # Create LLM streaming thread
@@ -145,7 +145,6 @@ class Widget(QWidget):
             widget.ui.mainLayout.insertItem(widget.top_spacer_index, widget.ui.welcomeSpacerTop)
             widget.ui.mainLayout.insertItem(widget.bottom_spacer_index, widget.ui.welcomeSpacerBottom)
 
-
     def eventFilter(self, obj, event):
         """
         Event filter used to send message when enter is pressed inside the prompt box
@@ -156,6 +155,12 @@ class Widget(QWidget):
                 self.send_message()
                 return True
         return super().eventFilter(obj, event)
+
+    def deployment_changed(self):
+        self.restart_conversation()
+        self.setupThread.quit()
+        self.setupThread.wait()
+        self.setupThread.start()
 
     def restart_conversation(self):
         self.make_chat_visible(False)
