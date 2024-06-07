@@ -45,7 +45,9 @@ class SetupLLM(QObject):
         widget.ui.loadingLabel.setText(f"Initializing Server for {widget.ui.device.currentText()}...");
         gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         command = [sys.executable, os.path.join(gaia_folder,"agents","Example","agent.py")]
-        widget.server = subprocess.Popen(command)
+
+        # Note: Remove creationflags to run in non-debug mode
+        widget.server = subprocess.Popen(command, creationflags=subprocess.CREATE_NEW_CONSOLE)
 
         widget.ui.loadingLabel.setText(f"Downloading {widget.ui.model.currentText()}...");
         time.sleep(3);
