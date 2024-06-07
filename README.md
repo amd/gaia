@@ -14,7 +14,7 @@ Currently, we support the following agents:
 |    Neo     | Chat with public GitHub repo |
 |  Picasso*  | AI art creator               |
 
-\* Picasso agent is currently under development and exists only as a mocup.
+\* Picasso agent is currently under development and exists only as a mockup.
 
 # Getting Started
 
