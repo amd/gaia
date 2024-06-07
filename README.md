@@ -55,9 +55,7 @@ Install instructions below are for Microsoft Windows OS and [Miniconda 24+](http
 
 GAIA requires the Lemonade Web Server to run, follow the install directions below.
 1. Open a new command-line terminal.
-1. Clone the lemonade repo, which is used for hosting local LLMs using a streaming web server: `git clone https://github.com/aigdat/genai.git`
 1. Follow the directions for setup (here)[https://github.com/aigdat/genai/blob/main/docs/easy_ryzenai_npu.md]
-1. Activate virtual environment: `conda activate ryzenai-transformers`
 
 # Running the Ryzen AI NPU Web Server
 
