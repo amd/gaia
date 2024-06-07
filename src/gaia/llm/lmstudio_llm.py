@@ -49,7 +49,7 @@ class LocalLLM(CustomLLM):
 
 
     @llm_completion_callback()
-    def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
+    def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse: # pylint: disable=W0221
         print("-----------------------------------------------")
         print(prompt)
         print("-----------------------------------------------")
@@ -68,7 +68,7 @@ class LocalLLM(CustomLLM):
 
 
     @llm_completion_callback()
-    def stream_complete(self, prompt: str, **kwargs: Any) -> CompletionResponseGen:
+    def stream_complete(self, prompt: str, **kwargs: Any) -> CompletionResponseGen: # pylint: disable=W0221
         completion = self.client.chat.completions.create(
             model=self.model_name,
             messages=[

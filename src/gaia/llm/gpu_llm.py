@@ -53,7 +53,7 @@ class GpuLLM(CustomLLM):
         )
 
     @llm_completion_callback()
-    def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
+    def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse: # pylint: disable=W0221
         # print(f"{prompt}")
 
         output = self.pipe(prompt, **self.generation_args)
@@ -62,7 +62,7 @@ class GpuLLM(CustomLLM):
         return CompletionResponse(text=text)
 
     @llm_completion_callback()
-    def stream_complete(
+    def stream_complete( # pylint: disable=W0221
         self, prompt: str, **kwargs: Any
     ) -> CompletionResponseGen:
         output = self.pipe(prompt, **self.generation_args)

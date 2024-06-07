@@ -45,7 +45,7 @@ class LocalLLM(CustomLLM):
         )
 
     @llm_completion_callback()
-    def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
+    def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse: # pylint: disable=W0221
         payload = {"text": prompt}
         headers = {"Content-Type": "application/json"}
         response = requests.post(
@@ -58,7 +58,7 @@ class LocalLLM(CustomLLM):
         return CompletionResponse(text=text)
 
     @llm_completion_callback()
-    def stream_complete(self, prompt: str, **kwargs: Any) -> CompletionResponseGen:
+    def stream_complete(self, prompt: str, **kwargs: Any) -> CompletionResponseGen: # pylint: disable=W0221
         response_queue = []
         response_complete = threading.Event()
 
