@@ -137,7 +137,9 @@ class Ui_Widget(object):
         self.chat.setFrameShape(QFrame.StyledPanel)
         self.chat.setFrameShadow(QFrame.Raised)
         self.verticalLayout_5 = QVBoxLayout(self.chat)
+        self.verticalLayout_5.setSpacing(0)
         self.verticalLayout_5.setObjectName(u"verticalLayout_5")
+        self.verticalLayout_5.setContentsMargins(-1, -1, -1, 0)
         self.scrollArea = QScrollArea(self.chat)
         self.scrollArea.setObjectName(u"scrollArea")
         self.scrollArea.setStyleSheet(u"QScrollBar:vertical {\n"
@@ -165,7 +167,7 @@ class Ui_Widget(object):
         self.scrollArea.setWidgetResizable(True)
         self.scrollAreaWidgetContents = QWidget()
         self.scrollAreaWidgetContents.setObjectName(u"scrollAreaWidgetContents")
-        self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 898, 251))
+        self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 898, 249))
         self.verticalLayout_6 = QVBoxLayout(self.scrollAreaWidgetContents)
         self.verticalLayout_6.setObjectName(u"verticalLayout_6")
         self.verticalLayout_6.setContentsMargins(-1, 0, -1, 0)
@@ -177,6 +179,11 @@ class Ui_Widget(object):
         self.board.setFrameShadow(QFrame.Raised)
         self.boardLayout = QVBoxLayout(self.board)
         self.boardLayout.setObjectName(u"boardLayout")
+        self.boardLayout.setContentsMargins(-1, -1, -1, 9)
+        self.verticalSpacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
+
+        self.boardLayout.addItem(self.verticalSpacer)
+
         self.sampleCard_1 = QFrame(self.board)
         self.sampleCard_1.setObjectName(u"sampleCard_1")
         self.sampleCard_1.setFrameShape(QFrame.StyledPanel)
@@ -226,6 +233,7 @@ class Ui_Widget(object):
         self.sampleCard_2.setFrameShadow(QFrame.Raised)
         self.horizontalLayout_5 = QHBoxLayout(self.sampleCard_2)
         self.horizontalLayout_5.setObjectName(u"horizontalLayout_5")
+        self.horizontalLayout_5.setContentsMargins(-1, -1, -1, 0)
         self.frame_7 = QFrame(self.sampleCard_2)
         self.frame_7.setObjectName(u"frame_7")
         self.frame_7.setFrameShape(QFrame.StyledPanel)
@@ -261,16 +269,54 @@ class Ui_Widget(object):
 
         self.boardLayout.addWidget(self.sampleCard_2)
 
-        self.verticalSpacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
-
-        self.boardLayout.addItem(self.verticalSpacer)
-
 
         self.verticalLayout_6.addWidget(self.board)
 
         self.scrollArea.setWidget(self.scrollAreaWidgetContents)
 
         self.verticalLayout_5.addWidget(self.scrollArea)
+
+        self.frame = QFrame(self.chat)
+        self.frame.setObjectName(u"frame")
+        self.frame.setStyleSheet(u"")
+        self.frame.setFrameShape(QFrame.StyledPanel)
+        self.frame.setFrameShadow(QFrame.Raised)
+        self.horizontalLayout_7 = QHBoxLayout(self.frame)
+        self.horizontalLayout_7.setObjectName(u"horizontalLayout_7")
+        self.horizontalLayout_7.setContentsMargins(-1, 0, -1, 0)
+        self.horizontalSpacer_7 = QSpacerItem(40, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+        self.horizontalLayout_7.addItem(self.horizontalSpacer_7)
+
+        self.restart = QPushButton(self.frame)
+        self.restart.setObjectName(u"restart")
+        self.restart.setMaximumSize(QSize(16777215, 15))
+        font1 = QFont()
+        font1.setPointSize(9)
+        self.restart.setFont(font1)
+        self.restart.setStyleSheet(u"QPushButton {\n"
+"    color: rgb(77, 77, 77);\n"
+"     border-color: rgb(0, 0, 0); \n"
+"    background-color: rgb(0, 0, 0); \n"
+"    border-color: rgb(0, 0, 0); \n"
+"    qproperty-icon: url(\":/img/refresh.png\");\n"
+"}\n"
+"\n"
+"QPushButton:hover {\n"
+"    color: rgb(255, 255, 255); \n"
+"    background-color: rgb(0, 0, 0);\n"
+"    border-color: rgb(0, 0, 0); \n"
+"}\n"
+"")
+        icon = QIcon()
+        icon.addFile(u":/img/refresh.png", QSize(), QIcon.Normal, QIcon.Off)
+        self.restart.setIcon(icon)
+        self.restart.setIconSize(QSize(16, 11))
+
+        self.horizontalLayout_7.addWidget(self.restart)
+
+
+        self.verticalLayout_5.addWidget(self.frame)
 
 
         self.mainLayout.addWidget(self.chat)
@@ -296,6 +342,7 @@ class Ui_Widget(object):
         self.messaging.setFrameShadow(QFrame.Raised)
         self.verticalLayout = QVBoxLayout(self.messaging)
         self.verticalLayout.setObjectName(u"verticalLayout")
+        self.verticalLayout.setContentsMargins(-1, 9, -1, -1)
         self.frame_1 = QFrame(self.messaging)
         self.frame_1.setObjectName(u"frame_1")
         self.frame_1.setFont(font)
@@ -363,9 +410,9 @@ class Ui_Widget(object):
         self.ask.setMinimumSize(QSize(100, 25))
         self.ask.setFont(font)
         self.ask.setStyleSheet(u"")
-        icon = QIcon()
-        icon.addFile(u":/img/send.png", QSize(), QIcon.Normal, QIcon.Off)
-        self.ask.setIcon(icon)
+        icon1 = QIcon()
+        icon1.addFile(u":/img/send.png", QSize(), QIcon.Normal, QIcon.Off)
+        self.ask.setIcon(icon1)
 
         self.horizontalLayout_2.addWidget(self.ask)
 
@@ -410,6 +457,7 @@ class Ui_Widget(object):
         self.label_3.setText(QCoreApplication.translate("Widget", u"5:53:01", None))
         self.pushButton_4.setText(QCoreApplication.translate("Widget", u"Absolutely! How can I help you today?", None))
         self.label_4.setText(QCoreApplication.translate("Widget", u"5:53:02", None))
+        self.restart.setText(QCoreApplication.translate("Widget", u"Restart Conversation", None))
         self.model.setItemText(0, QCoreApplication.translate("Widget", u"Phi 3 Mini - 3B", None))
         self.model.setItemText(1, QCoreApplication.translate("Widget", u"LLama 3 - 8B", None))
 

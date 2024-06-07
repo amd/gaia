@@ -3,5 +3,7 @@
         <file>img/banner.PNG</file>
         <file>img/welcome.png</file>
         <file>img/send.png</file>
+        <file>img/refresh.png</file>
+        <file>img/refresh_gray.png</file>
     </qresource>
 </RCC>

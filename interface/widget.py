@@ -34,13 +34,10 @@ class SetupLLM(QObject):
         widget.ui.loadingLabel.setText("Finishing up...");
         time.sleep(3);
         widget.ui.loading.setVisible(False);
+        widget.llm_setup_completed = True
 
         # Enable chat interface
-        widget.ui.chat.setVisible(True);
-        widget.ui.sampleCard_1.setVisible(False);
-        widget.ui.sampleCard_2.setVisible(False);
-        widget.ui.mainLayout.removeItem(widget.ui.welcomeSpacerTop)
-        widget.ui.mainLayout.removeItem(widget.ui.welcomeSpacerBottom)
+        widget.make_chat_visible(True)
 
         # Start streaming
         widget.streamingThread.start()
@@ -57,8 +54,8 @@ class LLMStreaming(QObject):
     @Slot()
     def do_work(self):
         # Prompt LLM
-        prompt, _ = widget.cards[str(widget.card_count-2)]
-        prompt = prompt.text()
+        _, message_frame, _ = widget.cards[str(widget.card_count-2)]
+        prompt = message_frame.text()
         response = self.widget.pipe(prompt, max_new_tokens=32)
         response = response[0]["generated_text"]
 
@@ -71,8 +68,9 @@ class LLMStreaming(QObject):
             time.sleep(0.15)
             widget.update_card(last_card, streaming_message)
 
-        # Enable send button again
+        # Reenable send and restart buttons
         widget.ui.ask.setEnabled(True);
+        widget.ui.restart.setEnabled(True);
 
         self.finished.emit()
 
@@ -85,9 +83,11 @@ class Widget(QWidget):
         self.setWindowTitle("RyzenAI GAIA")
         self.card_count = 0
         self.cards = {}
+        self.llm_setup_completed = False
 
-        # Connect ask to send_message
+        # Connect buttons
         self.ui.ask.clicked.connect(self.send_message)
+        self.ui.restart.clicked.connect(self.restart_conversation)
 
         # Ensure that we are scrolling to the bottom every time the range
         # of the card scroll area changes
@@ -125,6 +125,17 @@ class Widget(QWidget):
         self.streamingThread.started.connect(self.streamingWorker.do_work)
         self.streamingWorker.finished.connect(self.streamingThread.quit)
 
+    def make_chat_visible(self,visible):
+        if visible:
+            widget.ui.chat.setVisible(True);
+            widget.ui.sampleCard_1.setVisible(False);
+            widget.ui.sampleCard_2.setVisible(False);
+            widget.ui.mainLayout.setStretch(widget.ui.mainLayout.indexOf(widget.ui.welcomeSpacerTop), 0)
+            widget.ui.mainLayout.setStretch(widget.ui.mainLayout.indexOf(widget.ui.welcomeSpacerBottom), 0)
+        else:
+            widget.ui.chat.setVisible(False);
+            widget.ui.mainLayout.setStretch(widget.ui.mainLayout.indexOf(widget.ui.welcomeSpacerTop), 1)
+            widget.ui.mainLayout.setStretch(widget.ui.mainLayout.indexOf(widget.ui.welcomeSpacerBottom), 1)
 
     def eventFilter(self, obj, event):
         """
@@ -137,15 +148,29 @@ class Widget(QWidget):
                 return True
         return super().eventFilter(obj, event)
 
+    def restart_conversation(self):
+        self.make_chat_visible(False)
+
+        # Delete existing cards
+        for card in self.cards:
+            # Remove the frame from its parent layout if it has one
+            card_frame, _, _ = self.cards[card]
+            if card_frame.parent():
+                card_frame.setParent(None)
+            # Delete the frame
+            card_frame.deleteLater()
+        self.cards = {}
+
     def send_message(self):
         prompt = self.ui.prompt.toPlainText()
         self.ui.prompt.clear()
         if prompt:
-            # Disable send button
+            # Disable send and restart buttons
             self.ui.ask.setEnabled(False);
+            self.ui.restart.setEnabled(False);
 
             # Download model, setup server, and enable chat interface
-            if not self.ui.chat.isVisible():
+            if not self.llm_setup_completed:
                 self.setupThread.start()
 
             # Send message
@@ -154,6 +179,7 @@ class Widget(QWidget):
 
             if not self.ui.loading.isVisible():
                 self.streamingThread.start()
+                self.make_chat_visible(True)
 
 
     def split_into_chunks(self,message):
@@ -217,13 +243,13 @@ class Widget(QWidget):
 
         # Keep track of card
         card_id = str(self.card_count)
-        self.cards[card_id] = (message_frame, label)
+        self.cards[card_id] = (card, message_frame, label)
         self.card_count = self.card_count+1
 
         return card_id
 
     def update_card(self,card_id, message):
-        message_frame, label = self.cards[card_id]
+        _, message_frame, label = self.cards[card_id]
         chuncked_message = self.split_into_chunks(message)
         message_frame.setText(chuncked_message)
         label.setText(datetime.now().strftime("%H:%M:%S"))

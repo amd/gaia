@@ -269,6 +269,12 @@
       <enum>QFrame::Raised</enum>
      </property>
      <layout class="QVBoxLayout" name="verticalLayout_5">
+      <property name="spacing">
+       <number>0</number>
+      </property>
+      <property name="bottomMargin">
+       <number>0</number>
+      </property>
       <item>
        <widget class="QScrollArea" name="scrollArea">
         <property name="styleSheet">
@@ -306,7 +312,7 @@
            <x>0</x>
            <y>0</y>
            <width>898</width>
-           <height>251</height>
+           <height>249</height>
           </rect>
          </property>
          <layout class="QVBoxLayout" name="verticalLayout_6">
@@ -331,6 +337,22 @@
              <enum>QFrame::Raised</enum>
             </property>
             <layout class="QVBoxLayout" name="boardLayout">
+             <property name="bottomMargin">
+              <number>9</number>
+             </property>
+             <item>
+              <spacer name="verticalSpacer">
+               <property name="orientation">
+                <enum>Qt::Vertical</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>20</width>
+                 <height>40</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
              <item>
               <widget class="QFrame" name="sampleCard_1">
                <property name="frameShape">
@@ -415,6 +437,9 @@ padding: 8px 8px; </string>
                 <enum>QFrame::Raised</enum>
                </property>
                <layout class="QHBoxLayout" name="horizontalLayout_5">
+                <property name="bottomMargin">
+                 <number>0</number>
+                </property>
                 <item>
                  <widget class="QFrame" name="frame_7">
                   <property name="frameShape">
@@ -481,24 +506,89 @@ padding: 8px 8px; </string>
                </layout>
               </widget>
              </item>
-             <item>
-              <spacer name="verticalSpacer">
-               <property name="orientation">
-                <enum>Qt::Vertical</enum>
-               </property>
-               <property name="sizeHint" stdset="0">
-                <size>
-                 <width>20</width>
-                 <height>40</height>
-                </size>
-               </property>
-              </spacer>
-             </item>
             </layout>
            </widget>
           </item>
          </layout>
         </widget>
+       </widget>
+      </item>
+      <item>
+       <widget class="QFrame" name="frame">
+        <property name="styleSheet">
+         <string notr="true"/>
+        </property>
+        <property name="frameShape">
+         <enum>QFrame::StyledPanel</enum>
+        </property>
+        <property name="frameShadow">
+         <enum>QFrame::Raised</enum>
+        </property>
+        <layout class="QHBoxLayout" name="horizontalLayout_7">
+         <property name="topMargin">
+          <number>0</number>
+         </property>
+         <property name="bottomMargin">
+          <number>0</number>
+         </property>
+         <item>
+          <spacer name="horizontalSpacer_7">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>0</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QPushButton" name="restart">
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>15</height>
+            </size>
+           </property>
+           <property name="font">
+            <font>
+             <pointsize>9</pointsize>
+            </font>
+           </property>
+           <property name="styleSheet">
+            <string notr="true">QPushButton {
+    color: rgb(77, 77, 77);
+     border-color: rgb(0, 0, 0); 
+    background-color: rgb(0, 0, 0); 
+    border-color: rgb(0, 0, 0); 
+    qproperty-icon: url(&quot;:/img/refresh.png&quot;);
+}
+
+QPushButton:hover {
+    color: rgb(255, 255, 255); 
+    background-color: rgb(0, 0, 0);
+    border-color: rgb(0, 0, 0); 
+}
+</string>
+           </property>
+           <property name="text">
+            <string>Restart Conversation</string>
+           </property>
+           <property name="icon">
+            <iconset resource="resource.qrc">
+             <normaloff>:/img/refresh.png</normaloff>:/img/refresh.png</iconset>
+           </property>
+           <property name="iconSize">
+            <size>
+             <width>16</width>
+             <height>11</height>
+            </size>
+           </property>
+          </widget>
+         </item>
+        </layout>
        </widget>
       </item>
      </layout>
@@ -532,6 +622,9 @@ QPushButton:disabled {
       <enum>QFrame::Raised</enum>
      </property>
      <layout class="QVBoxLayout" name="verticalLayout">
+      <property name="topMargin">
+       <number>9</number>
+      </property>
       <item>
        <widget class="QFrame" name="frame_1">
         <property name="font">
