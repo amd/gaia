@@ -1,9 +1,10 @@
 # This Python file uses the following encoding: utf-8
 import sys
 import time
+import aiohttp
+import asyncio
 from datetime import datetime
 import textwrap
-from transformers import pipeline
 
 from PySide6.QtWidgets import QApplication, QWidget, QApplication, QMainWindow, QFrame, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSpacerItem, QSizePolicy
 from PySide6.QtCore import Qt, QEvent, QSize, QObject, Signal, Slot, QThread
@@ -33,7 +34,6 @@ class SetupLLM(QObject):
 
         widget.ui.ask.setEnabled(False);
         widget.ui.loadingLabel.setText(f"Downloading {widget.ui.model.currentText()}...");
-        widget.pipe = pipeline("text2text-generation", model="facebook/blenderbot-400M-distill")
         widget.ui.loadingLabel.setText(f"Initializing Server for {widget.ui.device.currentText()}...");
         time.sleep(3);
         widget.ui.loadingLabel.setText("Finishing up...");
@@ -52,22 +52,22 @@ class LLMStreaming(QObject):
         super().__init__()
         self.widget = widget
 
+    async def prompt_llm(self,prompt):
+        complete_response = ""
+        last_card = str(widget.card_count-1)
+        async with aiohttp.ClientSession() as session:
+            async with session.post("http://127.0.0.1:8001/message", json={"prompt": prompt}) as response:
+                async for token in response.content:
+                    # Update card as we receive the stream
+                    complete_response = complete_response + token.decode().strip() + " "
+                    widget.update_card(last_card, complete_response)
+
     @Slot()
     def do_work(self):
-        # Prompt LLM
+        # Prompt LLM and stream results
         _, message_frame, _, _ = widget.cards[str(widget.card_count-2)]
         prompt = message_frame.text()
-        response = self.widget.pipe(prompt, max_new_tokens=32)
-        response = response[0]["generated_text"]
-
-        # Show streamed message
-        last_card = str(widget.card_count-1)
-        words = response.split()
-        streaming_message = ""
-        for word in words:
-            streaming_message += word + ' '
-            time.sleep(0.15)
-            widget.update_card(last_card, streaming_message)
+        asyncio.run(self.prompt_llm(prompt))
 
         # Reenable send and restart buttons
         widget.ui.ask.setEnabled(True);
@@ -165,8 +165,18 @@ class Widget(QWidget):
         self.setupThread.wait()
         self.setupThread.start()
 
+    # Request LLM server to also restart
+    async def request_restart(self):
+        async with aiohttp.ClientSession() as session:
+            async with session.post("http://127.0.0.1:8001/restart", json={}) as response:
+                await response.json()
+
     def restart_conversation(self):
+        # Disable chat
         self.make_chat_visible(False)
+
+        # Let server know that we are restarting the conversation
+        asyncio.run(self.request_restart())
 
         # Delete existing cards
         for card in self.cards:
