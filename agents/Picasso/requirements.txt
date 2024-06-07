@@ -1,9 +1,0 @@
-botbuilder-integration-aiohttp>=4.14.0
-botbuilder-core
-asyncio
-aiohttp
-cookiecutter==1.7.0
-llama_index
-llama-hub
-unstructured
-python-dotenv
