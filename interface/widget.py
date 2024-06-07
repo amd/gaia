@@ -3,7 +3,7 @@ import sys
 import time
 from datetime import datetime
 import textwrap
-from openai import OpenAI
+from transformers import pipeline
 
 from PySide6.QtWidgets import QApplication, QWidget, QApplication, QMainWindow, QFrame, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSpacerItem, QSizePolicy
 from PySide6.QtCore import Qt, QEvent, QSize, QObject, Signal, Slot, QThread
@@ -28,7 +28,7 @@ class SetupLLM(QObject):
         # Download model and setup server
         widget.ui.loading.setVisible(True);
         widget.ui.loadingLabel.setText("Downloading Phi 3 Mini...");
-        time.sleep(3);
+        widget.pipe = pipeline("text2text-generation", model="facebook/blenderbot-400M-distill")
         widget.ui.loadingLabel.setText("Initializing Server...");
         time.sleep(3);
         widget.ui.loadingLabel.setText("Finishing up...");
@@ -59,19 +59,11 @@ class LLMStreaming(QObject):
         # Prompt LLM
         prompt, _ = widget.cards[str(widget.card_count-2)]
         prompt = prompt.text()
-        client = OpenAI(api_key="ADD_IT_HERE")
-        completion = client.chat.completions.create(
-          model="gpt-3.5-turbo",
-          messages=[
-            {"role": "system", "content": "You are a useful assistant always happy to help."},
-            {"role": "user", "content": prompt}
-          ]
-        )
+        response = self.widget.pipe(prompt, max_new_tokens=32)
+        response = response[0]["generated_text"]
 
-        response = completion.choices[0].message.content
-
+        # Show streamed message
         last_card = str(widget.card_count-1)
-        sample_response = "Hello! I can assist you with a wide range of topics. Whether you have questions, need help with a problem, want to brainstorm ideas, or just want to have a conversation, feel free to let me know how I can help!"
         words = response.split()
         streaming_message = ""
         for word in words:
