@@ -26,21 +26,22 @@ class SetupLLM(QObject):
     @Slot()
     def do_work(self):
         # Download model and setup server
+        widget.ui.loading.setVisible(True)
         widget.ui.loading.setVisible(True);
+        widget.ui.loadingLabel.setVisible(True);
+        widget.ui.loadingGif.setVisible(True);
+
+        widget.ui.ask.setEnabled(False);
         widget.ui.loadingLabel.setText(f"Downloading {widget.ui.model.currentText()}...");
         widget.pipe = pipeline("text2text-generation", model="facebook/blenderbot-400M-distill")
         widget.ui.loadingLabel.setText(f"Initializing Server for {widget.ui.device.currentText()}...");
         time.sleep(3);
         widget.ui.loadingLabel.setText("Finishing up...");
         time.sleep(3);
-        widget.ui.loading.setVisible(False);
-        widget.llm_setup_completed = True
+        widget.ui.loadingLabel.setText(f"Ready to run {widget.ui.model.currentText()} on {widget.ui.device.currentText()}!")
+        widget.ui.loadingGif.setVisible(False);
 
-        # Enable chat interface
-        widget.make_chat_visible(True)
-
-        # Start streaming
-        widget.streamingThread.start()
+        widget.ui.ask.setEnabled(True);
 
         self.finished.emit()
 
@@ -83,7 +84,6 @@ class Widget(QWidget):
         self.setWindowTitle("RyzenAI GAIA")
         self.card_count = 0
         self.cards = {}
-        self.llm_setup_completed = False
 
         # Connect buttons
         self.ui.ask.clicked.connect(self.send_message)
@@ -104,7 +104,6 @@ class Widget(QWidget):
 
         # Hide some of the components initially
         self.ui.chat.setVisible(False);
-        self.ui.loading.setVisible(False);
 
         # Loading symbol
         self.movie = QMovie("img\loading.gif")
@@ -121,6 +120,7 @@ class Widget(QWidget):
         self.setupWorker.finished.connect(self.setupThread.quit)
         self.setupWorker.finished.connect(self.setupWorker.deleteLater)
         self.setupThread.finished.connect(self.setupThread.deleteLater)
+        self.setupThread.start()
 
         # Create LLM streaming thread
         self.streamingThread = QThread()
@@ -131,12 +131,16 @@ class Widget(QWidget):
 
     def make_chat_visible(self,visible):
         if visible:
+            widget.ui.loadingLabel.setVisible(False);
+            widget.ui.loading.setVisible(False)
             widget.ui.chat.setVisible(True);
             widget.ui.sampleCard_1.setVisible(False);
             widget.ui.sampleCard_2.setVisible(False);
             widget.ui.mainLayout.removeItem(widget.ui.welcomeSpacerTop)
             widget.ui.mainLayout.removeItem(widget.ui.welcomeSpacerBottom)
         else:
+            widget.ui.loadingLabel.setVisible(True);
+            widget.ui.loading.setVisible(True)
             widget.ui.chat.setVisible(False);
             widget.ui.mainLayout.insertItem(widget.top_spacer_index, widget.ui.welcomeSpacerTop)
             widget.ui.mainLayout.insertItem(widget.bottom_spacer_index, widget.ui.welcomeSpacerBottom)
@@ -147,7 +151,7 @@ class Widget(QWidget):
         Event filter used to send message when enter is pressed inside the prompt box
         """
         if event.type() == QEvent.KeyPress and not (event.modifiers() & Qt.ShiftModifier) and obj is self.ui.prompt:
-            if event.key() == Qt.Key_Return and self.ui.prompt.hasFocus():
+            if event.key() == Qt.Key_Return and self.ui.prompt.hasFocus() and widget.ui.ask.isEnabled():
                 # Send message and consume the event, preventing return from being added to prompt box
                 self.send_message()
                 return True
@@ -174,17 +178,13 @@ class Widget(QWidget):
             self.ui.ask.setEnabled(False);
             self.ui.restart.setEnabled(False);
 
-            # Download model, setup server, and enable chat interface
-            if not self.llm_setup_completed:
-                self.setupThread.start()
-
             # Send message
             self.add_card(prompt, from_user = True)
             self.add_card("...", from_user = False)
 
-            if not self.ui.loading.isVisible():
-                self.streamingThread.start()
-                self.make_chat_visible(True)
+            # Stream inputs from LLM
+            self.streamingThread.start()
+            self.make_chat_visible(True)
 
 
     def split_into_chunks(self,message):
