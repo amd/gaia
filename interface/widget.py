@@ -3,6 +3,7 @@ import sys
 import time
 from datetime import datetime
 import textwrap
+from openai import OpenAI
 
 from PySide6.QtWidgets import QApplication, QWidget, QApplication, QMainWindow, QFrame, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSpacerItem, QSizePolicy
 from PySide6.QtCore import Qt, QEvent, QSize, QObject, Signal, Slot, QThread
@@ -55,9 +56,23 @@ class LLMStreaming(QObject):
 
     @Slot()
     def do_work(self):
+        # Prompt LLM
+        prompt, _ = widget.cards[str(widget.card_count-2)]
+        prompt = prompt.text()
+        client = OpenAI(api_key="ADD_IT_HERE")
+        completion = client.chat.completions.create(
+          model="gpt-3.5-turbo",
+          messages=[
+            {"role": "system", "content": "You are a useful assistant always happy to help."},
+            {"role": "user", "content": prompt}
+          ]
+        )
+
+        response = completion.choices[0].message.content
+
         last_card = str(widget.card_count-1)
         sample_response = "Hello! I can assist you with a wide range of topics. Whether you have questions, need help with a problem, want to brainstorm ideas, or just want to have a conversation, feel free to let me know how I can help!"
-        words = sample_response.split()
+        words = response.split()
         streaming_message = ""
         for word in words:
             streaming_message += word + ' '
@@ -143,7 +158,7 @@ class Widget(QWidget):
 
             # Send message
             self.add_card(prompt, from_user = True)
-            self.add_card("", from_user = False)
+            self.add_card("...", from_user = False)
 
             if not self.ui.loading.isVisible():
                 self.streamingThread.start()
