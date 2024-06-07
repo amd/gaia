@@ -2,6 +2,7 @@
 import sys
 import os
 import time
+import socket
 import aiohttp
 import asyncio
 from datetime import datetime
@@ -46,8 +47,11 @@ class SetupLLM(QObject):
         gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         command = [sys.executable, os.path.join(gaia_folder,"agents","Example","agent.py")]
 
+        # Initialize server
         # Note: Remove creationflags to run in non-debug mode
         widget.server = subprocess.Popen(command, creationflags=subprocess.CREATE_NEW_CONSOLE)
+        while not is_server_available("127.0.0.1",8001):
+            time.sleep(1)
 
         widget.ui.loadingLabel.setText(f"Downloading {widget.ui.model.currentText()}...");
         time.sleep(3);
@@ -89,6 +93,19 @@ class LLMStreaming(QObject):
         widget.ui.restart.setEnabled(True);
 
         self.finished.emit()
+
+def is_server_available(host, port):
+    try:
+        # Create a socket object
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # Try connecting to the server
+        s.connect((host, port))
+        # If successful, close the connection and return True
+        s.close()
+        return True
+    except ConnectionRefusedError:
+        # If connection is refused, return False
+        return False
 
 class Widget(QWidget):    
     def __init__(self, parent=None):
