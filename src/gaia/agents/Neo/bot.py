@@ -2,19 +2,19 @@ import os
 import re
 import time
 import subprocess
-from dotenv import load_dotenv
+import nest_asyncio
 
 # TODO: uncomment when ReAct agent is enabled again.
 # from gaia.agents.Neo.system_prompt import react_system_prompt_small
 
 from llama_index.core import (
     VectorStoreIndex,
-    SimpleDirectoryReader,
-    SummaryIndex,
+    # SimpleDirectoryReader,
     Settings,
 )
-from llama_index.core.agent import ReActAgent
-from llama_index.core.tools import QueryEngineTool, FunctionTool, ToolMetadata
+# from llama_index.core.agent import ReActAgent
+# from llama_index.core.tools import ToolMetadata
+from llama_index.core.tools import QueryEngineTool, FunctionTool
 from llama_index.readers.github import GithubRepositoryReader, GithubClient
 
 from botbuilder.core import ActivityHandler, TurnContext
@@ -195,16 +195,12 @@ Settings.embed_model = "local:BAAI/bge-base-en-v1.5"
 # )
 
 
-import nest_asyncio
-
 nest_asyncio.apply()
 
 
 class MyBot(ActivityHandler):
 
     async def on_message_activity(self, turn_context: TurnContext):
-        global repo_engine
-
         message = turn_context.activity.text
         owner, repo = extract_github_owner_repo(message)
 

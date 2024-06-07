@@ -1,4 +1,5 @@
-import time, sys
+import sys
+import time
 from openai import OpenAI
 
 # Point to the local server

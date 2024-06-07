@@ -1,11 +1,10 @@
-from typing import Optional, List, Mapping, Any
+from typing import Any
 
 import time
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
 from llama_index.core import SimpleDirectoryReader, SummaryIndex, Settings
-from llama_index.core.callbacks import CallbackManager
 from llama_index.core.llms import (
     CustomLLM,
     CompletionResponse,
@@ -13,8 +12,7 @@ from llama_index.core.llms import (
     LLMMetadata,
 )
 from llama_index.core.agent import ReActAgent
-from llama_index.core.tools import QueryEngineTool, FunctionTool, ToolMetadata
-from llama_index.readers.github import GithubRepositoryReader, GithubClient
+from llama_index.core.tools import QueryEngineTool, ToolMetadata
 from llama_index.core.llms.callbacks import llm_completion_callback
 
 class GpuLLM(CustomLLM):
@@ -24,11 +22,11 @@ class GpuLLM(CustomLLM):
     torch.random.manual_seed(0)
 
     model = AutoModelForCausalLM.from_pretrained(
-        model_name, 
-        # device_map="cuda", 
-        device_map="cpu", 
-        torch_dtype="auto", 
-        trust_remote_code=True, 
+        model_name,
+        # device_map="cuda",
+        device_map="cpu",
+        torch_dtype="auto",
+        trust_remote_code=True,
     )
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 

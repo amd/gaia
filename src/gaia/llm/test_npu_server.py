@@ -1,14 +1,13 @@
-import websocket
 import time
-import json
+import websocket
 
-def on_message(ws, message):
+def on_message(ws, message):  # pylint: disable=W0613
     print(message, end="", flush=True)
 
-def on_error(ws, error):
+def on_error(ws, error): # pylint: disable=W0613
     print(f"Error: {error}")
 
-def on_close(ws, close_status_code, close_msg):
+def on_close(ws, close_status_code, close_msg): # pylint: disable=W0613
     print("WebSocket connection closed")
 
 def on_open(ws, query):

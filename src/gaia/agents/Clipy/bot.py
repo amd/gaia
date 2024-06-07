@@ -1,17 +1,15 @@
 import re
 import time
-from dotenv import load_dotenv
 
 from llama_index.core import (
     VectorStoreIndex,
     Document,
-    SimpleDirectoryReader,
     DocumentSummaryIndex,
     Settings,
+    get_response_synthesizer,
 )
-from llama_index.core.agent import ReActAgent
 from llama_index.core.tools import QueryEngineTool, FunctionTool, ToolMetadata
-from llama_index.readers.github import GithubRepositoryReader, GithubClient
+from llama_index.core.node_parser import SentenceSplitter
 from llama_index.readers.youtube_transcript import YoutubeTranscriptReader
 
 from botbuilder.core import ActivityHandler, TurnContext
@@ -33,35 +31,24 @@ def get_youtube_transcript_doc(yt_links: list) -> Document:
     return YoutubeTranscriptReader().load_data(ytlinks=yt_links)
 
 
-def build_index(doc: Document, persist_dir=None) -> VectorStoreIndex:
-    if persist_dir:
-        storage_context = StorageContext.from_defaults(persist_dir=persist_dir)
-        index = VectorStoreIndex.load_from_storage(storage_context)
-    else:
-        index = VectorStoreIndex.from_documents(doc, show_progress=True)
+def build_index(doc: Document) -> VectorStoreIndex:
+    index = VectorStoreIndex.from_documents(doc, show_progress=True)
     return index
 
 
-def build_summary_index(doc: Document, persist_dir=None) -> DocumentSummaryIndex:
-    if persist_dir:
-        storage_context = StorageContext.from_defaults(persist_dir=persist_dir)
-        index = DocumentSummaryIndex.load_from_storage(storage_context)
-    else:
-        # from https://docs.llamaindex.ai/en/stable/examples/index_structs/doc_summary/DocSummary/
-        index = DocumentSummaryIndex.from_documents(doc, show_progress=True)
-        splitter = SentenceSplitter(chunk_size=1024)
-
-        # default mode of building the index
-        response_synthesizer = get_response_synthesizer(
-            response_mode="tree_summarize", use_async=True
-        )
-        doc_summary_index = DocumentSummaryIndex.from_documents(
-            doc,
-            transformations=[splitter],
-            response_synthesizer=response_synthesizer,
-            show_progress=True,
-        )
-    return index
+def build_summary_index(doc: Document) -> DocumentSummaryIndex:
+    # from https://docs.llamaindex.ai/en/stable/examples/index_structs/doc_summary/DocSummary/
+    splitter = SentenceSplitter(chunk_size=1024)
+    response_synthesizer = get_response_synthesizer(
+        response_mode="tree_summarize", use_async=True
+    )
+    doc_summary_index = DocumentSummaryIndex.from_documents(
+        doc,
+        transformations=[splitter],
+        response_synthesizer=response_synthesizer,
+        show_progress=True,
+    )
+    return doc_summary_index
 
 
 def get_query_engine(index, similarity_top=3):
@@ -119,7 +106,7 @@ class MyBot(ActivityHandler):
     async def on_message_activity(self, turn_context: TurnContext):
         global yt_doc
         global yt_index
-        global yt_summary
+        # global yt_summary
         global yt_engine
 
         message = turn_context.activity.text
@@ -141,7 +128,7 @@ class MyBot(ActivityHandler):
             yt_index = build_index(yt_doc)
             yt_engine = get_query_engine(yt_index)
 
-            response = f"All done!"
+            response = "All done!"
 
             # yt_summary = build_summary_index(yt_doc)
             # response = summary_index.get_document_summary(doc_id)

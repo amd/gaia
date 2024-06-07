@@ -1,71 +1,25 @@
 import sys
 import time
+import threading
+from typing import Any
 import requests
 import websocket
-import threading
-
-from typing import Optional, List, Mapping, Any
 
 from llama_index.core import (
     SimpleDirectoryReader,
     VectorStoreIndex,
-    SummaryIndex,
+    # SummaryIndex,
     Settings,
 )
-from llama_index.core.callbacks import CallbackManager
 from llama_index.core.llms import (
     CustomLLM,
     CompletionResponse,
     CompletionResponseGen,
     LLMMetadata,
 )
-from llama_index.core.agent import ReActAgent
-from llama_index.core.tools import QueryEngineTool, FunctionTool, ToolMetadata
-from llama_index.readers.github import GithubRepositoryReader, GithubClient
+# from llama_index.core.agent import ReActAgent
+# from llama_index.core.tools import QueryEngineTool, ToolMetadata
 from llama_index.core.llms.callbacks import llm_completion_callback
-
-
-class LocalLLMLegacy(CustomLLM):
-    context_window: int = 3900
-    num_output: int = 256
-    model_name: Any
-    model: Any
-    tokenizer: Any
-
-    def __init__(self, model_name: str, model: Any, tokenizer: Any, **kwargs):
-        super().__init__(
-            model_name=model_name, model=model, tokenizer=tokenizer, **kwargs
-        )
-
-    @property
-    def metadata(self) -> LLMMetadata:
-        """Get LLM metadata."""
-        return LLMMetadata(
-            context_window=self.context_window,
-            num_output=self.num_output,
-            model_name=self.model_name,
-        )
-
-    @llm_completion_callback()
-    def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
-        # print(f"{prompt}")
-        input_ids = self.tokenizer(prompt, return_tensors="pt").input_ids
-        response = self.model.generate(input_ids, max_new_tokens=30)
-        text = self.tokenizer.decode(response[0])
-
-        return CompletionResponse(text=text)
-
-    @llm_completion_callback()
-    def stream_complete(self, prompt: str, **kwargs: Any) -> CompletionResponseGen:
-        input_ids = self.tokenizer(prompt, return_tensors="pt").input_ids
-        response = self.model.generate(input_ids, max_new_tokens=30)
-        text = tokenizer.decode(response[0])
-
-        response = ""
-        for token in text:
-            response += token
-            yield CompletionResponse(text=response, delta=token)
-
 
 class LocalLLM(CustomLLM):
     context_window: int = 3900
@@ -108,17 +62,17 @@ class LocalLLM(CustomLLM):
         response_queue = []
         response_complete = threading.Event()
 
-        def on_message(ws, message):
+        def on_message(ws, message): # pylint: disable=W0613
             if message.endswith("</s>"):
                 response_queue.append(message.rstrip("</s>"))
                 response_complete.set()
             else:
                 response_queue.append(message)
 
-        def on_error(ws, error):
+        def on_error(ws, error): # pylint: disable=W0613
             print(f"Error: {error}")
 
-        def on_close(ws, close_status_code, close_msg):
+        def on_close(ws, close_status_code, close_msg): # pylint: disable=W0613
             if not response_complete.is_set():
                 print("WebSocket connection closed unexpectedly")
 
@@ -169,7 +123,7 @@ def test_query_engine_stream(queries, query_engine):
     # print(f"Query Engine prompts:\n{query_engine.get_prompts()}")
     for query in queries:
         print(f"Query: {query}")
-        print(f"Response:")
+        print("Response:")
         start = time.time()
         streaming_response = query_engine.query(query)
         for text in streaming_response.response_gen:

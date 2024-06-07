@@ -1,10 +1,7 @@
 import time
 import asyncio
 
-from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, SummaryIndex, Settings
-from llama_index.core.agent import ReActAgent
-from llama_index.core.tools import QueryEngineTool, FunctionTool, ToolMetadata
-from llama_index.readers.github import GithubRepositoryReader, GithubClient
+from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings
 
 from botbuilder.core import ActivityHandler, TurnContext
 from botbuilder.schema import ChannelAccount, Activity

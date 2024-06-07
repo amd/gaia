@@ -1,19 +1,16 @@
 import time
-
+from typing import Any
 from openai import OpenAI
-from typing import Optional, List, Mapping, Any
 
 from llama_index.core import SimpleDirectoryReader, SummaryIndex, Settings
-from llama_index.core.callbacks import CallbackManager
 from llama_index.core.llms import (
     CustomLLM,
     CompletionResponse,
     CompletionResponseGen,
     LLMMetadata,
 )
-from llama_index.core.agent import ReActAgent
-from llama_index.core.tools import QueryEngineTool, FunctionTool, ToolMetadata
-from llama_index.readers.github import GithubRepositoryReader, GithubClient
+# from llama_index.core.agent import ReActAgent
+# from llama_index.core.tools import QueryEngineTool, ToolMetadata
 from llama_index.core.llms.callbacks import llm_completion_callback
 
 
@@ -26,7 +23,7 @@ class LocalLLM(CustomLLM):
     client: Any
 
     def __init__(
-        self, 
+        self,
         client,
         # model_name: str = "LM Studio Community/Phi-3-mini-4k-instruct-GGUF",
         model_name: str = "LM Studio Community/Meta-Llama-3-8B-Instruct-GGUF",
@@ -95,27 +92,11 @@ def test_query_engine(queries, query_engine):
     for query in queries:
         print(f"Query: {query}")
 
-        print(f"Response:")
+        print("Response:")
         start = time.time()
         response = query_engine.query(query)
         latency = time.time() - start
         print(f"{response}")
-
-        print(f"\n{latency} secs\n")
-        print('-------------------------------------------------------------------')
-
-
-def test_query_engine_stream(queries, query_engine):
-    # from Neo.system_prompt import react_system_header_str
-    print(f"Query Engine prompts:\n{query_engine.get_prompts()}")
-    for query in queries:
-        print(f"Query: {query}")
-        streaming_response = query_engine.query(query)
-
-        print(f"Response:")
-        start = time.time()
-        print_response_stream.print_response_stream()
-        latency = time.time() - start
 
         print(f"\n{latency} secs\n")
         print('-------------------------------------------------------------------')
