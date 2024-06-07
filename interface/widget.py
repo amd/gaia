@@ -1,10 +1,13 @@
 # This Python file uses the following encoding: utf-8
 import sys
+import os
 import time
 import aiohttp
 import asyncio
 from datetime import datetime
 import textwrap
+import subprocess
+
 
 from PySide6.QtWidgets import QApplication, QWidget, QApplication, QMainWindow, QFrame, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSpacerItem, QSizePolicy
 from PySide6.QtCore import Qt, QEvent, QSize, QObject, Signal, Slot, QThread
@@ -26,6 +29,12 @@ class SetupLLM(QObject):
 
     @Slot()
     def do_work(self):
+        # Close previously open servers, if any
+        if widget.server is not None:
+            print("Closing previous server")
+            widget.server.terminate()
+            widget.server = None
+
         # Download model and setup server
         widget.ui.loading.setVisible(True)
         widget.ui.loading.setVisible(True);
@@ -33,8 +42,12 @@ class SetupLLM(QObject):
         widget.ui.loadingGif.setVisible(True);
 
         widget.ui.ask.setEnabled(False);
-        widget.ui.loadingLabel.setText(f"Downloading {widget.ui.model.currentText()}...");
         widget.ui.loadingLabel.setText(f"Initializing Server for {widget.ui.device.currentText()}...");
+        gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        command = [sys.executable, os.path.join(gaia_folder,"agents","Example","agent.py")]
+        widget.server = subprocess.Popen(command)
+
+        widget.ui.loadingLabel.setText(f"Downloading {widget.ui.model.currentText()}...");
         time.sleep(3);
         widget.ui.loadingLabel.setText("Finishing up...");
         time.sleep(3);
@@ -75,7 +88,7 @@ class LLMStreaming(QObject):
 
         self.finished.emit()
 
-class Widget(QWidget):
+class Widget(QWidget):    
     def __init__(self, parent=None):
         super().__init__(parent)
         self.ui = Ui_Widget()
@@ -84,6 +97,7 @@ class Widget(QWidget):
         self.setWindowTitle("RyzenAI GAIA")
         self.card_count = 0
         self.cards = {}
+        self.server = None
 
         # Connect buttons
         self.ui.ask.clicked.connect(self.send_message)
@@ -128,6 +142,12 @@ class Widget(QWidget):
         self.streamingWorker.moveToThread(self.streamingThread)
         self.streamingThread.started.connect(self.streamingWorker.do_work)
         self.streamingWorker.finished.connect(self.streamingThread.quit)
+
+    def closeEvent(self, *args, **kwargs):
+            # Make sure server is killed when application exits
+            if self.server is not None:
+                print("Closing server")
+                self.server.terminate()
 
     def make_chat_visible(self,visible):
         if (visible and widget.ui.chat.isVisible()) or (not visible and not widget.ui.chat.isVisible()):
