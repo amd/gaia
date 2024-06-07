@@ -6,7 +6,7 @@ from transformers import pipeline
 
 class MyAgent:
     def __init__(self):
-        self.pipe = pipeline("text2text-generation", model="facebook/blenderbot-400M-distill")
+        self.pipe = None
 
     async def on_message_received(self, request):
         data = await request.json()
@@ -28,7 +28,14 @@ class MyAgent:
 
     async def on_chat_restarted(self, request):
         print("Client requested chat to restart")
-        response = {"status": "Done"}
+        response = {"status": "Success"}
+        return web.json_response(response)
+
+    async def on_load_llm(self, request):
+        print("Client requested to load LLM")
+        self.pipe = pipeline("text2text-generation", model="facebook/blenderbot-400M-distill")
+        print("Done!")
+        response = {"status": "Success"}
         return web.json_response(response)
 
 
@@ -36,6 +43,7 @@ app = web.Application()
 agent = MyAgent()
 app.router.add_post("/message", agent.on_message_received)
 app.router.add_post("/restart", agent.on_chat_restarted)
+app.router.add_post("/load_llm", agent.on_load_llm)
 
 if __name__ == "__main__":
     web.run_app(app, host="127.0.0.1", port=8001)

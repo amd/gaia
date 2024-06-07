@@ -28,6 +28,18 @@ class SetupLLM(QObject):
         super().__init__()
         self.widget = widget
 
+    # Request LLM server to load LLM
+    async def request_llm_load(self):
+        async with aiohttp.ClientSession() as session:
+            async with session.post("http://127.0.0.1:8001/load_llm", json={}) as response:
+                # Wait for response from server
+                response_data = await response.json()
+                # Check if LLM has been successfully loaded
+                if response_data.get('status') == 'Success':
+                    print("LLM has been loaded successfully!")
+                else:
+                    print("Failed to load LLM.")
+
     @Slot()
     def do_work(self):
         # Close previously open servers, if any
@@ -43,20 +55,25 @@ class SetupLLM(QObject):
         widget.ui.loadingGif.setVisible(True);
 
         widget.ui.ask.setEnabled(False);
-        widget.ui.loadingLabel.setText(f"Initializing Server for {widget.ui.device.currentText()}...");
-        gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        command = [sys.executable, os.path.join(gaia_folder,"agents","Example","agent.py")]
 
         # Initialize server
         # Note: Remove creationflags to run in non-debug mode
+        widget.ui.loadingLabel.setText(f"Initializing Server for {widget.ui.model.currentText()} on {widget.ui.device.currentText()}...");
+        gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        command = [sys.executable, os.path.join(gaia_folder,"agents","Example","agent.py")]
         widget.server = subprocess.Popen(command, creationflags=subprocess.CREATE_NEW_CONSOLE)
         while not is_server_available("127.0.0.1",8001):
             time.sleep(1)
 
-        widget.ui.loadingLabel.setText(f"Downloading {widget.ui.model.currentText()}...");
-        time.sleep(3);
+        # Load LLM into memory
+        widget.ui.loadingLabel.setText(f"Loading {widget.ui.model.currentText()}...");
+        asyncio.run(self.request_llm_load())
+
+        # Perform any other actions here
         widget.ui.loadingLabel.setText("Finishing up...");
         time.sleep(3);
+
+        # Done
         widget.ui.loadingLabel.setText(f"Ready to run {widget.ui.model.currentText()} on {widget.ui.device.currentText()}!")
         widget.ui.loadingGif.setVisible(False);
 
