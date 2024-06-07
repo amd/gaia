@@ -54,7 +54,7 @@ setup(
         ],
     },
     classifiers=[],
-    python_requires=">=3.8, <3.11",
+    python_requires=">=3.8, <3.12",
     long_description=open("README.md", "r", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
 )
