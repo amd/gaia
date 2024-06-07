@@ -27,9 +27,9 @@ class SetupLLM(QObject):
     def do_work(self):
         # Download model and setup server
         widget.ui.loading.setVisible(True);
-        widget.ui.loadingLabel.setText("Downloading Phi 3 Mini...");
+        widget.ui.loadingLabel.setText(f"Downloading {widget.ui.model.currentText()}...");
         widget.pipe = pipeline("text2text-generation", model="facebook/blenderbot-400M-distill")
-        widget.ui.loadingLabel.setText("Initializing Server...");
+        widget.ui.loadingLabel.setText(f"Initializing Server for {widget.ui.device.currentText()}...");
         time.sleep(3);
         widget.ui.loadingLabel.setText("Finishing up...");
         time.sleep(3);
