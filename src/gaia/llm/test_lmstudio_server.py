@@ -43,10 +43,10 @@ completion = client.chat.completions.create(
     stream=True
 )
 
-for chunk in completion:
-    text = chunk.choices[0].delta.content
-    if text:
-        sys.stdout.write(text)
-        sys.stdout.flush()
+# for chunk in completion:
+#     text = chunk.choices[0].delta.content
+#     if text:
+#         sys.stdout.write(text)
+#         sys.stdout.flush()
 latency = time.time() - start
 print(f"\n\n{latency} secs\n")
