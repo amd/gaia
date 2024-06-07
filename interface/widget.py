@@ -95,6 +95,10 @@ class Widget(QWidget):
             self.scrollToBottom,
         )
 
+        # Keep track of spacers indexes to properly remove and add them back
+        self.top_spacer_index = self.ui.mainLayout.indexOf(self.ui.welcomeSpacerTop)
+        self.bottom_spacer_index = self.ui.mainLayout.indexOf(self.ui.welcomeSpacerBottom)
+
         # Install event filter to prompt text box
         self.ui.prompt.installEventFilter(self)
 
@@ -130,12 +134,13 @@ class Widget(QWidget):
             widget.ui.chat.setVisible(True);
             widget.ui.sampleCard_1.setVisible(False);
             widget.ui.sampleCard_2.setVisible(False);
-            widget.ui.mainLayout.setStretch(widget.ui.mainLayout.indexOf(widget.ui.welcomeSpacerTop), 0)
-            widget.ui.mainLayout.setStretch(widget.ui.mainLayout.indexOf(widget.ui.welcomeSpacerBottom), 0)
+            widget.ui.mainLayout.removeItem(widget.ui.welcomeSpacerTop)
+            widget.ui.mainLayout.removeItem(widget.ui.welcomeSpacerBottom)
         else:
             widget.ui.chat.setVisible(False);
-            widget.ui.mainLayout.setStretch(widget.ui.mainLayout.indexOf(widget.ui.welcomeSpacerTop), 1)
-            widget.ui.mainLayout.setStretch(widget.ui.mainLayout.indexOf(widget.ui.welcomeSpacerBottom), 1)
+            widget.ui.mainLayout.insertItem(widget.top_spacer_index, widget.ui.welcomeSpacerTop)
+            widget.ui.mainLayout.insertItem(widget.bottom_spacer_index, widget.ui.welcomeSpacerBottom)
+
 
     def eventFilter(self, obj, event):
         """
