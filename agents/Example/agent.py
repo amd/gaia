@@ -32,9 +32,10 @@ class MyAgent:
         return web.json_response(response)
 
     async def on_load_llm(self, request):
-        print("Client requested to load LLM")
-        self.pipe = pipeline("text2text-generation", model="facebook/blenderbot-400M-distill")
-        print("Done!")
+        data = await request.json()
+        print(f"Client requested to load LLM ({data['model']})")
+        checkpoint = {"BlenderBot-400M": "facebook/blenderbot-400M-distill", "Phi 3 Mini 4k": "microsoft/Phi-3-mini-4k-instruct"}
+        self.pipe = pipeline("text2text-generation", model=checkpoint[data["model"]])
         response = {"status": "Success"}
         return web.json_response(response)
 

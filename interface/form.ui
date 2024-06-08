@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>918</width>
-    <height>780</height>
+    <height>777</height>
    </rect>
   </property>
   <property name="sizePolicy">
@@ -315,7 +315,7 @@
            <x>0</x>
            <y>0</y>
            <width>898</width>
-           <height>249</height>
+           <height>242</height>
           </rect>
          </property>
          <layout class="QVBoxLayout" name="verticalLayout_6">
@@ -722,12 +722,12 @@ border: 1px solid #0A819A;;
                  </property>
                  <item>
                   <property name="text">
-                   <string>Phi 3 Mini - 3B</string>
+                   <string>BlenderBot-400M</string>
                   </property>
                  </item>
                  <item>
                   <property name="text">
-                   <string>LLama 3 - 8B</string>
+                   <string>Phi 3 Mini 4k</string>
                   </property>
                  </item>
                 </widget>
@@ -752,17 +752,17 @@ border: 1px solid #0A819A;;
                  </property>
                  <item>
                   <property name="text">
+                   <string>CPU</string>
+                  </property>
+                 </item>
+                 <item>
+                  <property name="text">
                    <string>iGPU</string>
                   </property>
                  </item>
                  <item>
                   <property name="text">
                    <string>NPU</string>
-                  </property>
-                 </item>
-                 <item>
-                  <property name="text">
-                   <string>CPU</string>
                   </property>
                  </item>
                 </widget>

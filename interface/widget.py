@@ -31,7 +31,7 @@ class SetupLLM(QObject):
     # Request LLM server to load LLM
     async def request_llm_load(self):
         async with aiohttp.ClientSession() as session:
-            async with session.post("http://127.0.0.1:8001/load_llm", json={}) as response:
+            async with session.post("http://127.0.0.1:8001/load_llm", json={"model":widget.ui.model.currentText()}) as response:
                 # Wait for response from server
                 response_data = await response.json()
                 # Check if LLM has been successfully loaded

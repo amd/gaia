@@ -24,7 +24,7 @@ class Ui_Widget(object):
     def setupUi(self, Widget):
         if not Widget.objectName():
             Widget.setObjectName(u"Widget")
-        Widget.resize(918, 780)
+        Widget.resize(918, 777)
         sizePolicy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         sizePolicy.setHorizontalStretch(0)
         sizePolicy.setVerticalStretch(0)
@@ -167,7 +167,7 @@ class Ui_Widget(object):
         self.scrollArea.setWidgetResizable(True)
         self.scrollAreaWidgetContents = QWidget()
         self.scrollAreaWidgetContents.setObjectName(u"scrollAreaWidgetContents")
-        self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 898, 249))
+        self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 898, 242))
         self.verticalLayout_6 = QVBoxLayout(self.scrollAreaWidgetContents)
         self.verticalLayout_6.setObjectName(u"verticalLayout_6")
         self.verticalLayout_6.setContentsMargins(-1, 0, -1, 0)
@@ -458,13 +458,13 @@ class Ui_Widget(object):
         self.pushButton_4.setText(QCoreApplication.translate("Widget", u"Absolutely! How can I help you today?", None))
         self.label_4.setText(QCoreApplication.translate("Widget", u"5:53:02", None))
         self.restart.setText(QCoreApplication.translate("Widget", u"Restart Conversation", None))
-        self.model.setItemText(0, QCoreApplication.translate("Widget", u"Phi 3 Mini - 3B", None))
-        self.model.setItemText(1, QCoreApplication.translate("Widget", u"LLama 3 - 8B", None))
+        self.model.setItemText(0, QCoreApplication.translate("Widget", u"BlenderBot-400M", None))
+        self.model.setItemText(1, QCoreApplication.translate("Widget", u"Phi 3 Mini 4k", None))
 
         self.model.setPlaceholderText(QCoreApplication.translate("Widget", u"As", None))
-        self.device.setItemText(0, QCoreApplication.translate("Widget", u"iGPU", None))
-        self.device.setItemText(1, QCoreApplication.translate("Widget", u"NPU", None))
-        self.device.setItemText(2, QCoreApplication.translate("Widget", u"CPU", None))
+        self.device.setItemText(0, QCoreApplication.translate("Widget", u"CPU", None))
+        self.device.setItemText(1, QCoreApplication.translate("Widget", u"iGPU", None))
+        self.device.setItemText(2, QCoreApplication.translate("Widget", u"NPU", None))
 
         self.ask.setText(QCoreApplication.translate("Widget", u"Ask", None))
         self.prompt.setHtml(QCoreApplication.translate("Widget", u"<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0//EN\" \"http://www.w3.org/TR/REC-html40/strict.dtd\">\n"
