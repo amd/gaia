@@ -22,7 +22,6 @@ setup(
     install_requires=[
         "botbuilder-integration-aiohttp>=4.14.0",
         "botbuilder-core",
-        "asyncio",
         "aiohttp",
         "fastapi",
         "pydantic",
@@ -57,4 +56,5 @@ setup(
     python_requires=">=3.8, <3.12",
     long_description=open("README.md", "r", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
+    include_package_data=True,
 )
