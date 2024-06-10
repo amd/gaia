@@ -10,7 +10,19 @@ import textwrap
 import subprocess
 
 
-from PySide6.QtWidgets import QApplication, QWidget, QApplication, QMainWindow, QFrame, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSpacerItem, QSizePolicy
+from PySide6.QtWidgets import (
+    QApplication,
+    QWidget,
+    QApplication,
+    QMainWindow,
+    QFrame,
+    QHBoxLayout,
+    QVBoxLayout,
+    QPushButton,
+    QLabel,
+    QSpacerItem,
+    QSizePolicy,
+)
 from PySide6.QtCore import Qt, QEvent, QSize, QObject, Signal, Slot, QThread
 from PySide6.QtGui import QMovie
 
@@ -19,6 +31,7 @@ from PySide6.QtGui import QMovie
 #     pyside6-uic form.ui -o ui_form.py, or
 #     pyside2-uic form.ui -o ui_form.py
 from ui_form import Ui_Widget
+
 
 # SetupLLM class performs tasks in a separate thread
 class SetupLLM(QObject):
@@ -31,11 +44,14 @@ class SetupLLM(QObject):
     # Request LLM server to load LLM
     async def request_llm_load(self):
         async with aiohttp.ClientSession() as session:
-            async with session.post("http://127.0.0.1:8001/load_llm", json={"model":widget.ui.model.currentText()}) as response:
+            async with session.post(
+                "http://127.0.0.1:8001/load_llm",
+                json={"model": widget.ui.model.currentText()},
+            ) as response:
                 # Wait for response from server
                 response_data = await response.json()
                 # Check if LLM has been successfully loaded
-                if response_data.get('status') == 'Success':
+                if response_data.get("status") == "Success":
                     print("LLM has been loaded successfully!")
                 else:
                     print("Failed to load LLM.")
@@ -50,36 +66,46 @@ class SetupLLM(QObject):
 
         # Download model and setup server
         widget.ui.loading.setVisible(True)
-        widget.ui.loading.setVisible(True);
-        widget.ui.loadingLabel.setVisible(True);
-        widget.ui.loadingGif.setVisible(True);
+        widget.ui.loading.setVisible(True)
+        widget.ui.loadingLabel.setVisible(True)
+        widget.ui.loadingGif.setVisible(True)
 
-        widget.ui.ask.setEnabled(False);
+        widget.ui.ask.setEnabled(False)
 
         # Initialize server
         # Note: Remove creationflags to run in non-debug mode
-        widget.ui.loadingLabel.setText(f"Initializing Server for {widget.ui.model.currentText()} on {widget.ui.device.currentText()}...");
+        widget.ui.loadingLabel.setText(
+            f"Initializing Server for {widget.ui.model.currentText()} on {widget.ui.device.currentText()}..."
+        )
         gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        command = [sys.executable, os.path.join(gaia_folder,"agents","Example","agent.py")]
-        widget.server = subprocess.Popen(command, creationflags=subprocess.CREATE_NEW_CONSOLE)
-        while not is_server_available("127.0.0.1",8001):
+        command = [
+            sys.executable,
+            os.path.join(gaia_folder, "agents", "Example", "agent.py"),
+        ]
+        widget.server = subprocess.Popen(
+            command, creationflags=subprocess.CREATE_NEW_CONSOLE
+        )
+        while not is_server_available("127.0.0.1", 8001):
             time.sleep(1)
 
         # Load LLM into memory
-        widget.ui.loadingLabel.setText(f"Loading {widget.ui.model.currentText()}...");
+        widget.ui.loadingLabel.setText(f"Loading {widget.ui.model.currentText()}...")
         asyncio.run(self.request_llm_load())
 
         # Perform any other actions here
-        widget.ui.loadingLabel.setText("Finishing up...");
-        time.sleep(3);
+        widget.ui.loadingLabel.setText("Finishing up...")
+        time.sleep(3)
 
         # Done
-        widget.ui.loadingLabel.setText(f"Ready to run {widget.ui.model.currentText()} on {widget.ui.device.currentText()}!")
-        widget.ui.loadingGif.setVisible(False);
+        widget.ui.loadingLabel.setText(
+            f"Ready to run {widget.ui.model.currentText()} on {widget.ui.device.currentText()}!"
+        )
+        widget.ui.loadingGif.setVisible(False)
 
-        widget.ui.ask.setEnabled(True);
+        widget.ui.ask.setEnabled(True)
 
         self.finished.emit()
+
 
 class LLMStreaming(QObject):
     finished = Signal()
@@ -88,11 +114,13 @@ class LLMStreaming(QObject):
         super().__init__()
         self.widget = widget
 
-    async def prompt_llm(self,prompt):
+    async def prompt_llm(self, prompt):
         complete_response = ""
-        last_card = str(widget.card_count-1)
+        last_card = str(widget.card_count - 1)
         async with aiohttp.ClientSession() as session:
-            async with session.post("http://127.0.0.1:8001/message", json={"prompt": prompt}) as response:
+            async with session.post(
+                "http://127.0.0.1:8001/message", json={"prompt": prompt}
+            ) as response:
                 async for token in response.content:
                     # Update card as we receive the stream
                     complete_response = complete_response + token.decode().strip() + " "
@@ -101,30 +129,31 @@ class LLMStreaming(QObject):
     @Slot()
     def do_work(self):
         # Prompt LLM and stream results
-        _, message_frame, _, _ = widget.cards[str(widget.card_count-2)]
+        _, message_frame, _, _ = widget.cards[str(widget.card_count - 2)]
         prompt = message_frame.text()
         asyncio.run(self.prompt_llm(prompt))
 
         # Reenable send and restart buttons
-        widget.ui.ask.setEnabled(True);
-        widget.ui.restart.setEnabled(True);
+        widget.ui.ask.setEnabled(True)
+        widget.ui.restart.setEnabled(True)
 
         self.finished.emit()
 
+
 def is_server_available(host, port):
     try:
-        # Create a socket object
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        # Try connecting to the server
+        s.settimeout(1)
         s.connect((host, port))
-        # If successful, close the connection and return True
         s.close()
         return True
-    except ConnectionRefusedError:
+
+    except (ConnectionRefusedError, TimeoutError):
         # If connection is refused, return False
         return False
 
-class Widget(QWidget):    
+
+class Widget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.ui = Ui_Widget()
@@ -149,13 +178,15 @@ class Widget(QWidget):
 
         # Keep track of spacers indexes to properly remove and add them back
         self.top_spacer_index = self.ui.mainLayout.indexOf(self.ui.welcomeSpacerTop)
-        self.bottom_spacer_index = self.ui.mainLayout.indexOf(self.ui.welcomeSpacerBottom)
+        self.bottom_spacer_index = self.ui.mainLayout.indexOf(
+            self.ui.welcomeSpacerBottom
+        )
 
         # Install event filter to prompt text box
         self.ui.prompt.installEventFilter(self)
 
         # Hide some of the components initially
-        self.ui.chat.setVisible(False);
+        self.ui.chat.setVisible(False)
 
         # Loading symbol
         self.movie = QMovie("img\loading.gif")
@@ -180,36 +211,50 @@ class Widget(QWidget):
         self.streamingWorker.finished.connect(self.streamingThread.quit)
 
     def closeEvent(self, *args, **kwargs):
-            # Make sure server is killed when application exits
-            if self.server is not None:
-                print("Closing server")
-                self.server.terminate()
+        # Make sure server is killed when application exits
+        if self.server is not None:
+            print("Closing server")
+            self.server.terminate()
 
-    def make_chat_visible(self,visible):
-        if (visible and widget.ui.chat.isVisible()) or (not visible and not widget.ui.chat.isVisible()):
+    def make_chat_visible(self, visible):
+        if (visible and widget.ui.chat.isVisible()) or (
+            not visible and not widget.ui.chat.isVisible()
+        ):
             # Skip if we are already at the visibility we desire
             return
         if visible:
-            widget.ui.loadingLabel.setVisible(False);
+            widget.ui.loadingLabel.setVisible(False)
             widget.ui.loading.setVisible(False)
-            widget.ui.chat.setVisible(True);
-            widget.ui.sampleCard_1.setVisible(False);
-            widget.ui.sampleCard_2.setVisible(False);
+            widget.ui.chat.setVisible(True)
+            widget.ui.sampleCard_1.setVisible(False)
+            widget.ui.sampleCard_2.setVisible(False)
             widget.ui.mainLayout.removeItem(widget.ui.welcomeSpacerTop)
             widget.ui.mainLayout.removeItem(widget.ui.welcomeSpacerBottom)
         else:
-            widget.ui.loadingLabel.setVisible(True);
+            widget.ui.loadingLabel.setVisible(True)
             widget.ui.loading.setVisible(True)
-            widget.ui.chat.setVisible(False);
-            widget.ui.mainLayout.insertItem(widget.top_spacer_index, widget.ui.welcomeSpacerTop)
-            widget.ui.mainLayout.insertItem(widget.bottom_spacer_index, widget.ui.welcomeSpacerBottom)
+            widget.ui.chat.setVisible(False)
+            widget.ui.mainLayout.insertItem(
+                widget.top_spacer_index, widget.ui.welcomeSpacerTop
+            )
+            widget.ui.mainLayout.insertItem(
+                widget.bottom_spacer_index, widget.ui.welcomeSpacerBottom
+            )
 
     def eventFilter(self, obj, event):
         """
         Event filter used to send message when enter is pressed inside the prompt box
         """
-        if event.type() == QEvent.KeyPress and not (event.modifiers() & Qt.ShiftModifier) and obj is self.ui.prompt:
-            if event.key() == Qt.Key_Return and self.ui.prompt.hasFocus() and widget.ui.ask.isEnabled():
+        if (
+            event.type() == QEvent.KeyPress
+            and not (event.modifiers() & Qt.ShiftModifier)
+            and obj is self.ui.prompt
+        ):
+            if (
+                event.key() == Qt.Key_Return
+                and self.ui.prompt.hasFocus()
+                and widget.ui.ask.isEnabled()
+            ):
                 # Send message and consume the event, preventing return from being added to prompt box
                 self.send_message()
                 return True
@@ -224,7 +269,9 @@ class Widget(QWidget):
     # Request LLM server to also restart
     async def request_restart(self):
         async with aiohttp.ClientSession() as session:
-            async with session.post("http://127.0.0.1:8001/restart", json={}) as response:
+            async with session.post(
+                "http://127.0.0.1:8001/restart", json={}
+            ) as response:
                 await response.json()
 
     def restart_conversation(self):
@@ -249,22 +296,21 @@ class Widget(QWidget):
         self.ui.prompt.clear()
         if prompt:
             # Disable send and restart buttons
-            self.ui.ask.setEnabled(False);
-            self.ui.restart.setEnabled(False);
+            self.ui.ask.setEnabled(False)
+            self.ui.restart.setEnabled(False)
 
             # Send message
-            self.add_card(prompt, from_user = True)
-            self.add_card("...", from_user = False)
+            self.add_card(prompt, from_user=True)
+            self.add_card("...", from_user=False)
 
             # Stream inputs from LLM
             self.streamingThread.start()
             self.make_chat_visible(True)
 
-
-    def split_into_chunks(self,message):
+    def split_into_chunks(self, message):
         return "\n".join(textwrap.wrap(message, width=75))
 
-    def add_card(self, message, from_user = True):
+    def add_card(self, message, from_user=True):
         # Create the main card frame
         card = QFrame()
         card.setFrameShape(QFrame.NoFrame)
@@ -275,7 +321,7 @@ class Widget(QWidget):
         # Create the card message frame
         card_message = QFrame()
         card_message_layout = QVBoxLayout(card_message)
-        card_message_layout.setContentsMargins(9,0,9,0)
+        card_message_layout.setContentsMargins(9, 0, 9, 0)
         card_message_layout.setSpacing(0)
 
         # Create and add the push button and label to the card message frame
@@ -283,7 +329,8 @@ class Widget(QWidget):
         message_frame = QPushButton(chuncked_message)
         firstTokenAnimation = None
         if from_user:
-            message_frame.setStyleSheet("""
+            message_frame.setStyleSheet(
+                """
                     font-size: 12pt;
                     border-radius: 3px;
                     border: 1px solid rgb(0, 0, 0);
@@ -291,7 +338,8 @@ class Widget(QWidget):
                     color: rgb(255, 255, 255);
                     padding: 8px 8px;
                     text-align: left;
-                """)
+                """
+            )
         else:
             firstTokenAnimation = QLabel()
             firstTokenMovie = QMovie("img\waiting_token.gif")
@@ -300,7 +348,8 @@ class Widget(QWidget):
             firstTokenAnimation.setMovie(firstTokenMovie)
             firstTokenMovie.start()
             card_message_layout.addWidget(firstTokenAnimation)
-            message_frame.setStyleSheet("""
+            message_frame.setStyleSheet(
+                """
                     font-size: 12pt;
                     border-radius: 3px;
                     border: 1px solid #0A819A;
@@ -308,7 +357,8 @@ class Widget(QWidget):
                     color: rgb(255, 255, 255);
                     padding: 8px 8px;
                     text-align: left;
-                """)
+                """
+            )
             message_frame.setVisible(False)
         label = QLabel(datetime.now().strftime("%H:%M:%S"))
         label.setStyleSheet("color: rgb(255, 255, 255);")
@@ -332,11 +382,11 @@ class Widget(QWidget):
         # Keep track of card
         card_id = str(self.card_count)
         self.cards[card_id] = (card, message_frame, label, firstTokenAnimation)
-        self.card_count = self.card_count+1
+        self.card_count = self.card_count + 1
 
         return card_id
 
-    def update_card(self,card_id, message):
+    def update_card(self, card_id, message):
         _, message_frame, label, firstTokenAnimation = self.cards[card_id]
         chuncked_message = self.split_into_chunks(message)
         message_frame.setText(chuncked_message)
@@ -344,11 +394,13 @@ class Widget(QWidget):
         firstTokenAnimation.setVisible(False)
         message_frame.setVisible(True)
 
-
-    def scrollToBottom (self, minVal=None, maxVal=None):
+    def scrollToBottom(self, minVal=None, maxVal=None):
         # Additional params 'minVal' and 'maxVal' are declared because
         # rangeChanged signal sends them, but we set it to optional
-        self.ui.scrollArea.verticalScrollBar().setValue(self.ui.scrollArea.verticalScrollBar().maximum())
+        self.ui.scrollArea.verticalScrollBar().setValue(
+            self.ui.scrollArea.verticalScrollBar().maximum()
+        )
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
