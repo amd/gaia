@@ -22,7 +22,6 @@ setup(
     install_requires=[
         "botbuilder-integration-aiohttp>=4.14.0",
         "botbuilder-core",
-        "asyncio",
         "aiohttp",
         "fastapi",
         "pydantic",
