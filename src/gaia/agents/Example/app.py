@@ -49,5 +49,13 @@ app.router.add_post("/message", agent.on_message_received)
 app.router.add_post("/restart", agent.on_chat_restarted)
 app.router.add_post("/load_llm", agent.on_load_llm)
 
+
+def run():
+    try:
+        web.run_app(app, host="localhost", port=8001)
+    except Exception as error:
+        raise error
+
+
 if __name__ == "__main__":
     web.run_app(app, host="127.0.0.1", port=8001)
