@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 import asyncio
 
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings
@@ -13,11 +14,10 @@ Settings.llm = llm
 Settings.embed_model = "local:BAAI/bge-base-en-v1.5"
 
 # use query engine instead for now.
+joke_data = Path(__file__).parent / "data" / "jokes.txt"
 Settings.chunk_size = 64
 Settings.chunk_overlap = 0
-documents = SimpleDirectoryReader(
-    input_files=["./data/jokes.txt"]
-).load_data()
+documents = SimpleDirectoryReader(input_files=[joke_data]).load_data()
 index = VectorStoreIndex.from_documents(documents)
 
 query_engine = index.as_query_engine(
@@ -26,6 +26,7 @@ query_engine = index.as_query_engine(
     response_mode="compact",
     streaming=True,
 )
+
 
 class MyBot(ActivityHandler):
 
@@ -61,7 +62,9 @@ class MyBot(ActivityHandler):
         )
         await turn_context.send_activity(act)
 
-    async def on_members_added_activity(self, members_added: ChannelAccount, turn_context: TurnContext):
+    async def on_members_added_activity(
+        self, members_added: ChannelAccount, turn_context: TurnContext
+    ):
         initial_greeting = "Hi I'm Joker, I can generate jokes for you. Just ask me to tell you a joke about anything. For example, 'tell me a joke about lemons'"
         for member_added in members_added:
             if member_added.id != turn_context.activity.recipient.id:
