@@ -1,44 +1,75 @@
 from aiohttp import web
 import asyncio
+import websockets
+from threading import Thread
+import lemonade
+from lemonade.tools.general import Serve
+from lemonade.tools.ort_genai.dml_og import DmlOgLoad
 
-from transformers import pipeline
+
+def launch_llm_server():
+    state = lemonade.initialize_state(
+        eval_id=f"gaiaexe_server",
+    )
+    state = DmlOgLoad().run(
+        state,
+        checkpoint="microsoft/Phi-3-mini-4k-instruct",
+        device="igpu",
+        dtype="int4",
+    )
+    state = Serve().run(state, max_new_tokens=60)
 
 
 class MyAgent:
     def __init__(self):
         self.pipe = None
 
-    async def on_message_received(self, request):
-        data = await request.json()
+    async def prompt_llm_server(self, prompt, ui_request):
+        uri = "ws://localhost:8000/ws"
+
+        async with websockets.connect(uri) as llm_server_websocket:
+            await llm_server_websocket.send(prompt)
+
+            timeout_duration = 2
+
+            response = web.StreamResponse()
+            await response.prepare(ui_request)
+            while True:
+                try:
+                    # Receive messages
+                    token = await asyncio.wait_for(
+                        llm_server_websocket.recv(), timeout=timeout_duration
+                    )
+                    if token:
+                        print(token)
+                        if token == "</s>":
+                            break
+                        await response.write(f"{token}\n".encode("utf-8"))
+                except asyncio.TimeoutError:
+                    # No token received for a while. Ending communication
+                    break
+            await response.write_eof()
+            await llm_server_websocket.close()
+            return response
+
+    async def on_message_received(self, ui_request):
+        data = await ui_request.json()
         print("Message received:", data)
 
         # Prompt llm
-        llm_response = self.pipe(data["prompt"], max_new_tokens=32)[0]["generated_text"]
+        await self.prompt_llm_server(data["prompt"], ui_request)
 
-        # Stream response back
-        # Note: if your pipeline enables real streaming, simply send them as they become available
-        response = web.StreamResponse()
-        await response.prepare(request)
-        for token in llm_response.split(" "):
-            print(f"Streaming: {token}")
-            await response.write(f"{token}\n".encode("utf-8"))
-            await asyncio.sleep(0.12)
-        await response.write_eof()
-        return response
-
-    async def on_chat_restarted(self, request):
+    async def on_chat_restarted(self, ui_request):
         print("Client requested chat to restart")
         response = {"status": "Success"}
         return web.json_response(response)
 
-    async def on_load_llm(self, request):
-        data = await request.json()
+    async def on_load_llm(self, ui_request):
+        data = await ui_request.json()
         print(f"Client requested to load LLM ({data['model']})")
-        checkpoint = {
-            "BlenderBot-400M": "facebook/blenderbot-400M-distill",
-            "Phi 3 Mini 4k": "microsoft/Phi-3-mini-4k-instruct",
-        }
-        self.pipe = pipeline("text2text-generation", model=checkpoint[data["model"]])
+        llm_thread = Thread(target=launch_llm_server)
+        llm_thread.daemon = True
+        llm_thread.start()
         response = {"status": "Success"}
         return web.json_response(response)
 
