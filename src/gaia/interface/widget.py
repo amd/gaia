@@ -237,7 +237,7 @@ class Widget(QWidget):
             self.ui.agent.setVisible(False)
 
         # Loading symbol
-        self.movie = QMovie("img\loading.gif")
+        self.movie = QMovie(":/img\loading.gif")
         self.movie.setScaledSize(QSize(300, 300))
         self.ui.loadingGif.setFixedSize(QSize(300, 25))
         self.ui.loadingGif.setMovie(self.movie)
@@ -404,7 +404,7 @@ class Widget(QWidget):
             )
         else:
             firstTokenAnimation = QLabel()
-            firstTokenMovie = QMovie("img\waiting_token.gif")
+            firstTokenMovie = QMovie(":/img\waiting_token.gif")
             firstTokenMovie.setScaledSize(QSize(50, 50))
             firstTokenAnimation.setFixedSize(QSize(50, 50))
             firstTokenAnimation.setMovie(firstTokenMovie)
