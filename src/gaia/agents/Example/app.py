@@ -18,11 +18,14 @@ class MyAgent:
         # Send prompt to LLM server
         await self.llm_server_websocket.send(prompt)
 
-        # Wait for response
+        # Prepare stream
+        if stream_to_ui:
+            ui_response = web.StreamResponse()
+            await ui_response.prepare(ui_request)
+
+        # Listen to LLM server
         response = ""
         timeout_duration = 2
-        ui_response = web.StreamResponse()
-        await ui_response.prepare(ui_request)
         while True:
             try:
                 # Receive messages
@@ -38,7 +41,10 @@ class MyAgent:
             except asyncio.TimeoutError:
                 # No token received for a while. Ending communication
                 break
-        await ui_response.write_eof()
+
+        if stream_to_ui:
+            # Signal the end of the stream
+            await ui_response.write_eof()
         return response
 
     async def on_message_received(self, ui_request):
@@ -60,9 +66,10 @@ class MyAgent:
         data = await ui_request.json()
         print(f"Client requested to load LLM ({data['model']})")
 
-        # async with websockets.connect(uri) as llm_server_websocket:
+        # Create socket to talk to LLM server
         uri = "ws://localhost:8000/ws"
         self.llm_server_websocket = await websockets.connect(uri)
+
         response = {"status": "Success"}
         return web.json_response(response)
 

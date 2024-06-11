@@ -77,13 +77,11 @@ class SetupLLM(QObject):
 
         # Initialize Agent server
         # Note: Remove creationflags to run in non-debug mode
-        widget.ui.loadingLabel.setText(
-            f"Initializing Agent Server..."
-        )
+        widget.ui.loadingLabel.setText(f"Initializing Agent Server...")
         gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         command = [
             sys.executable,
-            os.path.join(gaia_folder, "src","gaia","agents", "Example", "app.py"),
+            os.path.join(gaia_folder, "src", "gaia", "agents", "Example", "app.py"),
         ]
         widget.agent_server = subprocess.Popen(
             command, creationflags=subprocess.CREATE_NEW_CONSOLE
@@ -93,10 +91,14 @@ class SetupLLM(QObject):
         time.sleep(3)
 
         # Initialize LLM server
-        widget.ui.loadingLabel.setText(f"Initializing LLM server for {widget.ui.model.currentText()}...")
+        widget.ui.loadingLabel.setText(
+            f"Initializing LLM server for {widget.ui.model.currentText()}..."
+        )
         command = [
             sys.executable,
-            os.path.join(gaia_folder, "src","gaia","agents", "Example", "llm_server.py"),
+            os.path.join(
+                gaia_folder, "src", "gaia", "agents", "Example", "llm_server.py"
+            ),
         ]
         widget.llm_server = subprocess.Popen(
             command, creationflags=subprocess.CREATE_NEW_CONSOLE
@@ -136,7 +138,7 @@ class LLMStreaming(QObject):
             ) as response:
                 async for token in response.content:
                     # Update card as we receive the stream
-                    complete_response = complete_response + token.decode().strip() + " "
+                    complete_response = complete_response + token.decode()[:-1]
                     widget.update_card(last_card, complete_response)
 
     @Slot()
