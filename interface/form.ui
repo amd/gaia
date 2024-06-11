@@ -722,11 +722,6 @@ border: 1px solid #0A819A;;
                  </property>
                  <item>
                   <property name="text">
-                   <string>BlenderBot-400M</string>
-                  </property>
-                 </item>
-                 <item>
-                  <property name="text">
                    <string>Phi 3 Mini 4k</string>
                   </property>
                  </item>
@@ -736,7 +731,7 @@ border: 1px solid #0A819A;;
                 <widget class="QComboBox" name="device">
                  <property name="minimumSize">
                   <size>
-                   <width>100</width>
+                   <width>150</width>
                    <height>25</height>
                   </size>
                  </property>
@@ -752,17 +747,12 @@ border: 1px solid #0A819A;;
                  </property>
                  <item>
                   <property name="text">
-                   <string>CPU</string>
+                   <string>iGPU (int4)</string>
                   </property>
                  </item>
                  <item>
                   <property name="text">
-                   <string>iGPU</string>
-                  </property>
-                 </item>
-                 <item>
-                  <property name="text">
-                   <string>NPU</string>
+                   <string>iGPU (int8)</string>
                   </property>
                  </item>
                 </widget>

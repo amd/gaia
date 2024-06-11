@@ -1,23 +1,6 @@
 from aiohttp import web
 import asyncio
 import websockets
-from threading import Thread
-import lemonade
-from lemonade.tools.general import Serve
-from lemonade.tools.ort_genai.dml_og import DmlOgLoad
-
-
-def launch_llm_server():
-    state = lemonade.initialize_state(
-        eval_id=f"gaiaexe_server",
-    )
-    state = DmlOgLoad().run(
-        state,
-        checkpoint="microsoft/Phi-3-mini-4k-instruct",
-        device="igpu",
-        dtype="int4",
-    )
-    state = Serve().run(state, max_new_tokens=60)
 
 
 class MyAgent:
@@ -28,7 +11,6 @@ class MyAgent:
         # Ensure websocket gets closed
         if self.llm_server_websocket:
             if not self.llm_server_websocket.closed:
-                # Close the WebSocket connection if it's not already closed
                 asyncio.ensure_future(self.llm_server_websocket.close())
 
     async def prompt_llm_server(self, prompt, ui_request):
@@ -71,13 +53,9 @@ class MyAgent:
     async def on_load_llm(self, ui_request):
         data = await ui_request.json()
         print(f"Client requested to load LLM ({data['model']})")
-        llm_thread = Thread(target=launch_llm_server)
-        llm_thread.daemon = True
-        llm_thread.start()
-
-        uri = "ws://localhost:8000/ws"
 
         # async with websockets.connect(uri) as llm_server_websocket:
+        uri = "ws://localhost:8000/ws"
         self.llm_server_websocket = await websockets.connect(uri)
         response = {"status": "Success"}
         return web.json_response(response)

@@ -41,7 +41,7 @@ class SetupLLM(QObject):
         super().__init__()
         self.widget = widget
 
-    # Request LLM server to load LLM
+    # Request Agent Server to update connection to LLM Server
     async def request_llm_load(self):
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -59,37 +59,50 @@ class SetupLLM(QObject):
     @Slot()
     def do_work(self):
         # Close previously open servers, if any
-        if widget.server is not None:
-            print("Closing previous server")
-            widget.server.terminate()
-            widget.server = None
+        if widget.agent_server is not None:
+            print("Closing open Agent server")
+            widget.agent_server.terminate()
+            widget.agent_server = None
+        if widget.llm_server is not None:
+            print("Closing open Agent server")
+            widget.llm_server.terminate()
+            widget.llm_server = None
 
-        # Download model and setup server
+        # Switch visibility of UI elements
         widget.ui.loading.setVisible(True)
         widget.ui.loading.setVisible(True)
         widget.ui.loadingLabel.setVisible(True)
         widget.ui.loadingGif.setVisible(True)
-
         widget.ui.ask.setEnabled(False)
 
-        # Initialize server
+        # Initialize Agent server
         # Note: Remove creationflags to run in non-debug mode
         widget.ui.loadingLabel.setText(
-            f"Initializing Server for {widget.ui.model.currentText()} on {widget.ui.device.currentText()}..."
+            f"Initializing Agent Server..."
         )
         gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         command = [
             sys.executable,
             os.path.join(gaia_folder, "src","gaia","agents", "Example", "app.py"),
         ]
-        widget.server = subprocess.Popen(
+        widget.agent_server = subprocess.Popen(
             command, creationflags=subprocess.CREATE_NEW_CONSOLE
         )
         while not is_server_available("127.0.0.1", 8001):
             time.sleep(1)
+        time.sleep(3)
 
-        # Load LLM into memory
-        widget.ui.loadingLabel.setText(f"Loading {widget.ui.model.currentText()}...")
+        # Initialize LLM server
+        widget.ui.loadingLabel.setText(f"Initializing LLM server for {widget.ui.model.currentText()}...")
+        command = [
+            sys.executable,
+            os.path.join(gaia_folder, "src","gaia","agents", "Example", "llm_server.py"),
+        ]
+        widget.llm_server = subprocess.Popen(
+            command, creationflags=subprocess.CREATE_NEW_CONSOLE
+        )
+        while not is_server_available("127.0.0.1", 8000):
+            time.sleep(1)
         asyncio.run(self.request_llm_load())
 
         # Perform any other actions here
@@ -162,7 +175,8 @@ class Widget(QWidget):
         self.setWindowTitle("RyzenAI GAIA")
         self.card_count = 0
         self.cards = {}
-        self.server = None
+        self.agent_server = None
+        self.llm_server = None
 
         # Connect buttons
         self.ui.ask.clicked.connect(self.send_message)
@@ -211,10 +225,13 @@ class Widget(QWidget):
         self.streamingWorker.finished.connect(self.streamingThread.quit)
 
     def closeEvent(self, *args, **kwargs):
-        # Make sure server is killed when application exits
-        if self.server is not None:
-            print("Closing server")
-            self.server.terminate()
+        # Make sure servers are killed when application exits
+        if self.agent_server is not None:
+            print("Closing agent server")
+            self.agent_server.terminate()
+        if self.llm_server is not None:
+            print("Closing LLM server")
+            self.llm_server.terminate()
 
     def make_chat_visible(self, visible):
         if (visible and widget.ui.chat.isVisible()) or (
