@@ -8,19 +8,21 @@ class MyAgent:
         self.llm_server_websocket = None
 
     def __del__(self):
-        # Ensure websocket gets closed
+        # Ensure websocket gets closed when agent is deleted
         if self.llm_server_websocket:
             if not self.llm_server_websocket.closed:
                 asyncio.ensure_future(self.llm_server_websocket.close())
 
-    async def prompt_llm_server(self, prompt, ui_request):
+    async def prompt_llm_server(self, prompt, ui_request, stream_to_ui=True):
 
+        # Send prompt to LLM server
         await self.llm_server_websocket.send(prompt)
 
+        # Wait for response
+        response = ""
         timeout_duration = 2
-
-        response = web.StreamResponse()
-        await response.prepare(ui_request)
+        ui_response = web.StreamResponse()
+        await ui_response.prepare(ui_request)
         while True:
             try:
                 # Receive messages
@@ -28,22 +30,26 @@ class MyAgent:
                     self.llm_server_websocket.recv(), timeout=timeout_duration
                 )
                 if token:
-                    print(token)
                     if token == "</s>":
                         break
-                    await response.write(f"{token}\n".encode("utf-8"))
+                    if stream_to_ui:
+                        await ui_response.write(f"{token}\n".encode("utf-8"))
+                    response += token
             except asyncio.TimeoutError:
                 # No token received for a while. Ending communication
                 break
-        await response.write_eof()
+        await ui_response.write_eof()
         return response
 
     async def on_message_received(self, ui_request):
         data = await ui_request.json()
         print("Message received:", data)
 
-        # Prompt llm
-        await self.prompt_llm_server(data["prompt"], ui_request)
+        # Prompt LLM server
+        response = await self.prompt_llm_server(
+            data["prompt"], ui_request, stream_to_ui=True
+        )
+        print(f"Message streamed: {response}")
 
     async def on_chat_restarted(self, ui_request):
         print("Client requested chat to restart")
