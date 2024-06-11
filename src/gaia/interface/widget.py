@@ -3,6 +3,7 @@ import sys
 import os
 import time
 import socket
+import json
 import aiohttp
 import asyncio
 from datetime import datetime
@@ -63,7 +64,7 @@ class SetupLLM(QObject):
             self.widget.agent_server.terminate()
             self.widget.agent_server = None
         if self.widget.llm_server is not None:
-            print("Closing open Agent server")
+            print("Closing open LLM server")
             self.widget.llm_server.terminate()
             self.widget.llm_server = None
 
@@ -75,16 +76,18 @@ class SetupLLM(QObject):
         self.widget.ui.ask.setEnabled(False)
 
         # Initialize Agent server
-        # Note: Remove creationflags to run in non-debug mode
         self.widget.ui.loadingLabel.setText(f"Initializing Agent Server...")
         gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         command = [
             sys.executable,
             os.path.join(gaia_folder, "agents", "Example", "app.py"),
         ]
-        print(command)
+        if self.widget.settings["debug_mode"]:
+            creationflags = subprocess.CREATE_NEW_CONSOLE
+        else:
+            creationflags = 0
         self.widget.agent_server = subprocess.Popen(
-            command, creationflags=subprocess.CREATE_NEW_CONSOLE
+            command, creationflags=creationflags
         )
         while not is_server_available("127.0.0.1", 8001):
             time.sleep(1)
@@ -98,9 +101,7 @@ class SetupLLM(QObject):
             sys.executable,
             os.path.join(gaia_folder, "agents", "Example", "llm_server.py"),
         ]
-        self.widget.llm_server = subprocess.Popen(
-            command, creationflags=subprocess.CREATE_NEW_CONSOLE
-        )
+        self.widget.llm_server = subprocess.Popen(command, creationflags=creationflags)
         while not is_server_available("127.0.0.1", 8000):
             time.sleep(1)
         asyncio.run(self.request_llm_load())
@@ -179,6 +180,10 @@ class Widget(QWidget):
         self.cards = {}
         self.agent_server = None
         self.llm_server = None
+
+        # Read settings
+        with open("settings.json", "r") as file:
+            self.settings = json.load(file)
 
         # Connect buttons
         self.ui.ask.clicked.connect(self.send_message)
