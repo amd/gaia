@@ -45,7 +45,7 @@ class SetupLLM(QObject):
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 "http://127.0.0.1:8001/load_llm",
-                json={"model": widget.ui.model.currentText()},
+                json={"model": self.widget.ui.model.currentText()},
             ) as response:
                 # Wait for response from server
                 response_data = await response.json()
@@ -58,32 +58,32 @@ class SetupLLM(QObject):
     @Slot()
     def do_work(self):
         # Close previously open servers, if any
-        if widget.agent_server is not None:
+        if self.widget.agent_server is not None:
             print("Closing open Agent server")
-            widget.agent_server.terminate()
-            widget.agent_server = None
-        if widget.llm_server is not None:
+            self.widget.agent_server.terminate()
+            self.widget.agent_server = None
+        if self.widget.llm_server is not None:
             print("Closing open Agent server")
-            widget.llm_server.terminate()
-            widget.llm_server = None
+            self.widget.llm_server.terminate()
+            self.widget.llm_server = None
 
         # Switch visibility of UI elements
-        widget.ui.loading.setVisible(True)
-        widget.ui.loading.setVisible(True)
-        widget.ui.loadingLabel.setVisible(True)
-        widget.ui.loadingGif.setVisible(True)
-        widget.ui.ask.setEnabled(False)
+        self.widget.ui.loading.setVisible(True)
+        self.widget.ui.loading.setVisible(True)
+        self.widget.ui.loadingLabel.setVisible(True)
+        self.widget.ui.loadingGif.setVisible(True)
+        self.widget.ui.ask.setEnabled(False)
 
         # Initialize Agent server
         # Note: Remove creationflags to run in non-debug mode
-        widget.ui.loadingLabel.setText(f"Initializing Agent Server...")
+        self.widget.ui.loadingLabel.setText(f"Initializing Agent Server...")
         gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         command = [
             sys.executable,
             os.path.join(gaia_folder, "agents", "Example", "app.py"),
         ]
         print(command)
-        widget.agent_server = subprocess.Popen(
+        self.widget.agent_server = subprocess.Popen(
             command, creationflags=subprocess.CREATE_NEW_CONSOLE
         )
         while not is_server_available("127.0.0.1", 8001):
@@ -91,14 +91,14 @@ class SetupLLM(QObject):
         time.sleep(3)
 
         # Initialize LLM server
-        widget.ui.loadingLabel.setText(
-            f"Initializing LLM server for {widget.ui.model.currentText()}..."
+        self.widget.ui.loadingLabel.setText(
+            f"Initializing LLM server for {self.widget.ui.model.currentText()}..."
         )
         command = [
             sys.executable,
             os.path.join(gaia_folder, "agents", "Example", "llm_server.py"),
         ]
-        widget.llm_server = subprocess.Popen(
+        self.widget.llm_server = subprocess.Popen(
             command, creationflags=subprocess.CREATE_NEW_CONSOLE
         )
         while not is_server_available("127.0.0.1", 8000):
@@ -106,16 +106,16 @@ class SetupLLM(QObject):
         asyncio.run(self.request_llm_load())
 
         # Perform any other actions here
-        widget.ui.loadingLabel.setText("Finishing up...")
+        self.widget.ui.loadingLabel.setText("Finishing up...")
         time.sleep(3)
 
         # Done
-        widget.ui.loadingLabel.setText(
-            f"Ready to run {widget.ui.model.currentText()} on {widget.ui.device.currentText()}!"
+        self.widget.ui.loadingLabel.setText(
+            f"Ready to run {self.widget.ui.model.currentText()} on {self.widget.ui.device.currentText()}!"
         )
-        widget.ui.loadingGif.setVisible(False)
+        self.widget.ui.loadingGif.setVisible(False)
 
-        widget.ui.ask.setEnabled(True)
+        self.widget.ui.ask.setEnabled(True)
 
         self.finished.emit()
 
@@ -129,7 +129,7 @@ class LLMStreaming(QObject):
 
     async def prompt_llm(self, prompt):
         complete_response = ""
-        last_card = str(widget.card_count - 1)
+        last_card = str(self.widget.card_count - 1)
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 "http://127.0.0.1:8001/message", json={"prompt": prompt}
@@ -139,18 +139,18 @@ class LLMStreaming(QObject):
                     complete_response = (
                         complete_response + token.decode().replace("\u0000", "\n")[:-1]
                     )
-                    widget.update_card(last_card, complete_response)
+                    self.widget.update_card(last_card, complete_response)
 
     @Slot()
     def do_work(self):
         # Prompt LLM and stream results
-        _, message_frame, _, _ = widget.cards[str(widget.card_count - 2)]
+        _, message_frame, _, _ = self.widget.cards[str(self.widget.card_count - 2)]
         prompt = message_frame.text()
         asyncio.run(self.prompt_llm(prompt))
 
         # Reenable send and restart buttons
-        widget.ui.ask.setEnabled(True)
-        widget.ui.restart.setEnabled(True)
+        self.widget.ui.ask.setEnabled(True)
+        self.widget.ui.restart.setEnabled(True)
 
         self.finished.emit()
 
@@ -236,28 +236,28 @@ class Widget(QWidget):
             self.llm_server.terminate()
 
     def make_chat_visible(self, visible):
-        if (visible and widget.ui.chat.isVisible()) or (
-            not visible and not widget.ui.chat.isVisible()
+        if (visible and self.ui.chat.isVisible()) or (
+            not visible and not self.ui.chat.isVisible()
         ):
             # Skip if we are already at the visibility we desire
             return
         if visible:
-            widget.ui.loadingLabel.setVisible(False)
-            widget.ui.loading.setVisible(False)
-            widget.ui.chat.setVisible(True)
-            widget.ui.sampleCard_1.setVisible(False)
-            widget.ui.sampleCard_2.setVisible(False)
-            widget.ui.mainLayout.removeItem(widget.ui.welcomeSpacerTop)
-            widget.ui.mainLayout.removeItem(widget.ui.welcomeSpacerBottom)
+            self.ui.loadingLabel.setVisible(False)
+            self.ui.loading.setVisible(False)
+            self.ui.chat.setVisible(True)
+            self.ui.sampleCard_1.setVisible(False)
+            self.ui.sampleCard_2.setVisible(False)
+            self.ui.mainLayout.removeItem(self.ui.welcomeSpacerTop)
+            self.ui.mainLayout.removeItem(self.ui.welcomeSpacerBottom)
         else:
-            widget.ui.loadingLabel.setVisible(True)
-            widget.ui.loading.setVisible(True)
-            widget.ui.chat.setVisible(False)
-            widget.ui.mainLayout.insertItem(
-                widget.top_spacer_index, widget.ui.welcomeSpacerTop
+            self.ui.loadingLabel.setVisible(True)
+            self.ui.loading.setVisible(True)
+            self.ui.chat.setVisible(False)
+            self.ui.mainLayout.insertItem(
+                self.top_spacer_index, self.ui.welcomeSpacerTop
             )
-            widget.ui.mainLayout.insertItem(
-                widget.bottom_spacer_index, widget.ui.welcomeSpacerBottom
+            self.ui.mainLayout.insertItem(
+                self.bottom_spacer_index, self.ui.welcomeSpacerBottom
             )
 
     def eventFilter(self, obj, event):
@@ -272,7 +272,7 @@ class Widget(QWidget):
             if (
                 event.key() == Qt.Key_Return
                 and self.ui.prompt.hasFocus()
-                and widget.ui.ask.isEnabled()
+                and self.ui.ask.isEnabled()
             ):
                 # Send message and consume the event, preventing return from being added to prompt box
                 self.send_message()
@@ -425,11 +425,9 @@ class Widget(QWidget):
         )
 
 
-app = QApplication(sys.argv)
-widget = Widget()
-
-
 def main():
+    app = QApplication(sys.argv)
+    widget = Widget()
     widget.show()
     sys.exit(app.exec())
 
