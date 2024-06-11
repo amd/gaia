@@ -9,7 +9,6 @@ from datetime import datetime
 import textwrap
 import subprocess
 
-
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -26,11 +25,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QEvent, QSize, QObject, Signal, Slot, QThread
 from PySide6.QtGui import QMovie
 
-# Important:
-# You need to run the following command to generate the ui_form.py file
-#     pyside6-uic form.ui -o ui_form.py, or
-#     pyside2-uic form.ui -o ui_form.py
-from ui_form import Ui_Widget
+# This is a temporary workaround since the Qt Creator generated files
+# do not import from the gui package.
+sys.path.insert(0, str(os.path.dirname(os.path.abspath(__file__))))
+
+from gaia.interface.ui_form import Ui_Widget
 
 
 # SetupLLM class performs tasks in a separate thread
@@ -97,9 +96,7 @@ class SetupLLM(QObject):
         )
         command = [
             sys.executable,
-            os.path.join(
-                gaia_folder, "agents", "Example", "llm_server.py"
-            ),
+            os.path.join(gaia_folder, "agents", "Example", "llm_server.py"),
         ]
         widget.llm_server = subprocess.Popen(
             command, creationflags=subprocess.CREATE_NEW_CONSOLE
@@ -428,8 +425,14 @@ class Widget(QWidget):
         )
 
 
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    widget = Widget()
+app = QApplication(sys.argv)
+widget = Widget()
+
+
+def main():
     widget.show()
     sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
