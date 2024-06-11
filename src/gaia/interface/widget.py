@@ -74,6 +74,8 @@ class SetupLLM(QObject):
         self.widget.ui.loadingLabel.setVisible(True)
         self.widget.ui.loadingGif.setVisible(True)
         self.widget.ui.ask.setEnabled(False)
+        self.widget.ui.model.setEnabled(False)
+        self.widget.ui.device.setEnabled(False)
 
         # Initialize Agent server
         self.widget.ui.loadingLabel.setText(f"Initializing Agent Server...")
@@ -117,6 +119,8 @@ class SetupLLM(QObject):
         self.widget.ui.loadingGif.setVisible(False)
 
         self.widget.ui.ask.setEnabled(True)
+        self.widget.ui.model.setEnabled(True)
+        self.widget.ui.device.setEnabled(True)
 
         self.finished.emit()
 
@@ -213,7 +217,7 @@ class Widget(QWidget):
         # Install event filter to prompt text box
         self.ui.prompt.installEventFilter(self)
 
-        # Hide some of the components initially
+        # Hide/disable some of the components initially
         self.ui.chat.setVisible(False)
 
         # Loading symbol
