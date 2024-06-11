@@ -81,8 +81,9 @@ class SetupLLM(QObject):
         gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         command = [
             sys.executable,
-            os.path.join(gaia_folder, "src", "gaia", "agents", "Example", "app.py"),
+            os.path.join(gaia_folder, "agents", "Example", "app.py"),
         ]
+        print(command)
         widget.agent_server = subprocess.Popen(
             command, creationflags=subprocess.CREATE_NEW_CONSOLE
         )
@@ -97,7 +98,7 @@ class SetupLLM(QObject):
         command = [
             sys.executable,
             os.path.join(
-                gaia_folder, "src", "gaia", "agents", "Example", "llm_server.py"
+                gaia_folder, "agents", "Example", "llm_server.py"
             ),
         ]
         widget.llm_server = subprocess.Popen(
