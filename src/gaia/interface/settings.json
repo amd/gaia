@@ -1,13 +1,17 @@
 {
-    "debug_mode": true,
+    "dev_mode": true,
     "agents": [
         "Example"
     ],
     "models": {
         "Phi 3 Mini 4k": {
             "checkpoint": "microsoft/Phi-3-mini-4k-instruct",
-            "device": "iGPU",
-            "dtype": "int4"
+            "device": {
+                "iGPU": [
+                    "int4",
+                    "int8"
+                ]
+            }
         }
     },
     "hide_agents": true,

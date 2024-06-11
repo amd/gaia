@@ -82,7 +82,7 @@ class SetupLLM(QObject):
             sys.executable,
             os.path.join(gaia_folder, "agents", "Example", "app.py"),
         ]
-        if self.widget.settings["debug_mode"]:
+        if self.widget.settings["dev_mode"]:
             creationflags = subprocess.CREATE_NEW_CONSOLE
         else:
             creationflags = 0
@@ -185,9 +185,16 @@ class Widget(QWidget):
         with open("settings.json", "r") as file:
             self.settings = json.load(file)
 
+        # Populate all models and update device list
+        for model in self.settings["models"]:
+            self.ui.model.addItem(model)
+        self.ui.model.setCurrentIndex(0)
+        self.update_device_list()
+
         # Connect buttons
         self.ui.ask.clicked.connect(self.send_message)
         self.ui.restart.clicked.connect(self.restart_conversation)
+        self.ui.model.currentIndexChanged.connect(self.update_device_list)
         self.ui.model.currentIndexChanged.connect(self.deployment_changed)
         self.ui.device.currentIndexChanged.connect(self.deployment_changed)
 
@@ -239,6 +246,13 @@ class Widget(QWidget):
         if self.llm_server is not None:
             print("Closing LLM server")
             self.llm_server.terminate()
+
+    def update_device_list(self):
+        selected_model = self.ui.model.currentText()
+        model_device_settings = self.settings["models"][selected_model]["device"]
+        for device in model_device_settings:
+            for dtype in model_device_settings[device]:
+                self.ui.device.addItem(f"{device} ({dtype})")
 
     def make_chat_visible(self, visible):
         if (visible and self.ui.chat.isVisible()) or (

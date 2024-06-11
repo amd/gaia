@@ -376,7 +376,6 @@ class Ui_Widget(object):
         self.horizontalLayout_2.setObjectName(u"horizontalLayout_2")
         self.horizontalLayout_2.setContentsMargins(0, 0, 0, -1)
         self.model = QComboBox(self.frame_3)
-        self.model.addItem("")
         self.model.setObjectName(u"model")
         self.model.setMinimumSize(QSize(150, 25))
         self.model.setFont(font)
@@ -387,8 +386,6 @@ class Ui_Widget(object):
         self.horizontalLayout_2.addWidget(self.model)
 
         self.device = QComboBox(self.frame_3)
-        self.device.addItem("")
-        self.device.addItem("")
         self.device.setObjectName(u"device")
         self.device.setMinimumSize(QSize(150, 25))
         self.device.setFont(font)
@@ -456,12 +453,7 @@ class Ui_Widget(object):
         self.pushButton_4.setText(QCoreApplication.translate("Widget", u"Absolutely! How can I help you today?", None))
         self.label_4.setText(QCoreApplication.translate("Widget", u"5:53:02", None))
         self.restart.setText(QCoreApplication.translate("Widget", u"Restart Conversation", None))
-        self.model.setItemText(0, QCoreApplication.translate("Widget", u"Phi 3 Mini 4k", None))
-
         self.model.setPlaceholderText(QCoreApplication.translate("Widget", u"As", None))
-        self.device.setItemText(0, QCoreApplication.translate("Widget", u"iGPU (int4)", None))
-        self.device.setItemText(1, QCoreApplication.translate("Widget", u"iGPU (int8)", None))
-
         self.ask.setText(QCoreApplication.translate("Widget", u"Ask", None))
         self.prompt.setHtml(QCoreApplication.translate("Widget", u"<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0//EN\" \"http://www.w3.org/TR/REC-html40/strict.dtd\">\n"
 "<html><head><meta name=\"qrichtext\" content=\"1\" /><meta charset=\"utf-8\" /><style type=\"text/css\">\n"

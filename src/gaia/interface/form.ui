@@ -720,11 +720,6 @@ border: 1px solid #0A819A;;
                  <property name="placeholderText">
                   <string>As</string>
                  </property>
-                 <item>
-                  <property name="text">
-                   <string>Phi 3 Mini 4k</string>
-                  </property>
-                 </item>
                 </widget>
                </item>
                <item>
@@ -745,16 +740,6 @@ border: 1px solid #0A819A;;
 border: 1px solid #0A819A;;
 </string>
                  </property>
-                 <item>
-                  <property name="text">
-                   <string>iGPU (int4)</string>
-                  </property>
-                 </item>
-                 <item>
-                  <property name="text">
-                   <string>iGPU (int8)</string>
-                  </property>
-                 </item>
                 </widget>
                </item>
                <item>
