@@ -375,6 +375,16 @@ class Ui_Widget(object):
         self.horizontalLayout_2 = QHBoxLayout(self.frame_3)
         self.horizontalLayout_2.setObjectName(u"horizontalLayout_2")
         self.horizontalLayout_2.setContentsMargins(0, 0, 0, -1)
+        self.agent = QComboBox(self.frame_3)
+        self.agent.setObjectName(u"agent")
+        self.agent.setMinimumSize(QSize(100, 25))
+        self.agent.setFont(font)
+        self.agent.setStyleSheet(u"border-radius: 3px;\n"
+"border: 1px solid #0A819A;;\n"
+"")
+
+        self.horizontalLayout_2.addWidget(self.agent)
+
         self.model = QComboBox(self.frame_3)
         self.model.setObjectName(u"model")
         self.model.setMinimumSize(QSize(150, 25))

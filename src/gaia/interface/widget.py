@@ -82,7 +82,9 @@ class SetupLLM(QObject):
         gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         command = [
             sys.executable,
-            os.path.join(gaia_folder, "agents", "Example", "app.py"),
+            os.path.join(
+                gaia_folder, "agents", self.widget.ui.agent.currentText(), "app.py"
+            ),
         ]
         if self.widget.settings["dev_mode"]:
             creationflags = subprocess.CREATE_NEW_CONSOLE
@@ -93,28 +95,29 @@ class SetupLLM(QObject):
         )
         while not is_server_available("127.0.0.1", 8001):
             time.sleep(1)
-        time.sleep(3)
 
         # Initialize LLM server
+        selected_model = self.widget.ui.model.currentText()
         self.widget.ui.loadingLabel.setText(
-            f"Initializing LLM server for {self.widget.ui.model.currentText()}..."
+            f"Initializing LLM server for {selected_model} on {self.widget.ui.device.currentText()}..."
         )
         command = [
             sys.executable,
-            os.path.join(gaia_folder, "agents", "Example", "llm_server.py"),
+            os.path.join(
+                gaia_folder,
+                "agents",
+                self.widget.ui.agent.currentText(),
+                "llm_server.py",
+            ),
         ]
         self.widget.llm_server = subprocess.Popen(command, creationflags=creationflags)
         while not is_server_available("127.0.0.1", 8000):
             time.sleep(1)
         asyncio.run(self.request_llm_load())
 
-        # Perform any other actions here
-        self.widget.ui.loadingLabel.setText("Finishing up...")
-        time.sleep(3)
-
         # Done
         self.widget.ui.loadingLabel.setText(
-            f"Ready to run {self.widget.ui.model.currentText()} on {self.widget.ui.device.currentText()}!"
+            f"Ready to run {selected_model} on {self.widget.ui.device.currentText()}!"
         )
         self.widget.ui.loadingGif.setVisible(False)
 
@@ -186,7 +189,8 @@ class Widget(QWidget):
         self.llm_server = None
 
         # Read settings
-        with open("settings.json", "r") as file:
+        gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(gaia_folder, "interface", "settings.json"), "r") as file:
             self.settings = json.load(file)
 
         # Populate all models and update device list
@@ -195,12 +199,18 @@ class Widget(QWidget):
         self.ui.model.setCurrentIndex(0)
         self.update_device_list()
 
+        # Populate agents
+        for agent in self.settings["agents"]:
+            self.ui.agent.addItem(agent)
+        self.ui.agent.setCurrentIndex(0)
+
         # Connect buttons
         self.ui.ask.clicked.connect(self.send_message)
         self.ui.restart.clicked.connect(self.restart_conversation)
         self.ui.model.currentIndexChanged.connect(self.update_device_list)
         self.ui.model.currentIndexChanged.connect(self.deployment_changed)
         self.ui.device.currentIndexChanged.connect(self.deployment_changed)
+        self.ui.agent.currentIndexChanged.connect(self.deployment_changed)
 
         # Ensure that we are scrolling to the bottom every time the range
         # of the card scroll area changes
@@ -219,6 +229,12 @@ class Widget(QWidget):
 
         # Hide/disable some of the components initially
         self.ui.chat.setVisible(False)
+        if self.settings["hide_agents"]:
+            self.ui.agent.setVisible(False)
+        if self.settings["hide_agents"]:
+            self.ui.agent.setVisible(False)
+        if self.settings["hide_agents"]:
+            self.ui.agent.setVisible(False)
 
         # Loading symbol
         self.movie = QMovie("img\loading.gif")

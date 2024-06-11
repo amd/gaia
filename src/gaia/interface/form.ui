@@ -700,6 +700,26 @@ border: 0px solid #0A819A;;
                 <number>0</number>
                </property>
                <item>
+                <widget class="QComboBox" name="agent">
+                 <property name="minimumSize">
+                  <size>
+                   <width>100</width>
+                   <height>25</height>
+                  </size>
+                 </property>
+                 <property name="font">
+                  <font>
+                   <pointsize>12</pointsize>
+                  </font>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">border-radius: 3px;
+border: 1px solid #0A819A;;
+</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
                 <widget class="QComboBox" name="model">
                  <property name="minimumSize">
                   <size>

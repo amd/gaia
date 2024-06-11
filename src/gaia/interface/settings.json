@@ -1,7 +1,10 @@
 {
     "dev_mode": true,
     "agents": [
-        "Example"
+        "Example",
+        "Clipy",
+        "Joker",
+        "Neo"
     ],
     "models": {
         "Phi 3 Mini 4k": {
