@@ -138,7 +138,9 @@ class LLMStreaming(QObject):
             ) as response:
                 async for token in response.content:
                     # Update card as we receive the stream
-                    complete_response = complete_response + token.decode()[:-1]
+                    complete_response = (
+                        complete_response + token.decode().replace("\u0000", "\n")[:-1]
+                    )
                     widget.update_card(last_card, complete_response)
 
     @Slot()
@@ -326,8 +328,12 @@ class Widget(QWidget):
             self.streamingThread.start()
             self.make_chat_visible(True)
 
-    def split_into_chunks(self, message):
-        return "\n".join(textwrap.wrap(message, width=75))
+    def split_into_chunks(self, message, chuck_size=75):
+        chunks = []
+        lines = message.split("\n")
+        for line in lines:
+            chunks.extend(textwrap.wrap(line, width=chuck_size))
+        return "\n".join(chunks)
 
     def add_card(self, message, from_user=True):
         # Create the main card frame

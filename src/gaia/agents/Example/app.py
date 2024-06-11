@@ -36,7 +36,10 @@ class MyAgent:
                     if token == "</s>":
                         break
                     if stream_to_ui:
-                        await ui_response.write(f"{token}\n".encode("utf-8"))
+                        encoded_token = (token.replace("\n", "\u0000") + "\n").encode(
+                            "utf-8"
+                        )
+                        await ui_response.write(encoded_token)
                     response += token
             except asyncio.TimeoutError:
                 # No token received for a while. Ending communication
