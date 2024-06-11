@@ -25,8 +25,11 @@ class MyAgent:
         self.llm_server_websocket = None
 
     def __del__(self):
-        if self.llm_server_websocket is not None:
-            self.llm_server_websocket.close()
+        # Ensure websocket gets closed
+        if self.llm_server_websocket:
+            if not self.llm_server_websocket.closed:
+                # Close the WebSocket connection if it's not already closed
+                asyncio.ensure_future(self.llm_server_websocket.close())
 
     async def prompt_llm_server(self, prompt, ui_request):
 
