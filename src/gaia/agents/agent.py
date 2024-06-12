@@ -7,13 +7,14 @@ class Agent:
     def __init__(self, host, port):
         # Initialize Agent Server
         self.app = web.Application()
-        self.app.router.add_post("/message", self.on_message_received)
-        self.app.router.add_post("/restart", self.on_chat_restarted)
-        self.app.router.add_post("/load_llm", self.on_load_llm)
+        self.app.router.add_post("/prompt", self._on_prompt_received)
+        self.app.router.add_post("/restart", self._on_chat_restarted)
+        self.app.router.add_post("/load_llm", self._on_load_llm)
         web.run_app(self.app, host="127.0.0.1", port=8001)
 
-        # Placeholder for LLM Server Websocket
+        # Placeholder for LLM Server Websocket and others
         self.llm_server_websocket = None
+        self.latest_prompt_request = None
 
     def __del__(self):
         # Ensure websocket gets closed when agent is deleted
@@ -21,7 +22,7 @@ class Agent:
             if not self.llm_server_websocket.closed:
                 asyncio.ensure_future(self.llm_server_websocket.close())
 
-    async def prompt_llm_server(self, prompt, ui_request, stream_to_ui=True):
+    async def prompt_llm_server(self, prompt, stream_to_ui=True):
 
         # Send prompt to LLM server
         await self.llm_server_websocket.send(prompt)
@@ -29,7 +30,7 @@ class Agent:
         # Prepare stream
         if stream_to_ui:
             ui_response = web.StreamResponse()
-            await ui_response.prepare(ui_request)
+            await ui_response.prepare(self.latest_prompt_request)
 
         # Listen to LLM server
         response = ""
@@ -58,16 +59,22 @@ class Agent:
             await ui_response.write_eof()
         return response
 
-    async def on_message_received(self, ui_request):
-        data = await ui_request.json()
-        print("Message received:", data)
+    async def prompt_reveived(self, prompt):
+        print("Message received:", prompt)
 
-    async def on_chat_restarted(self, ui_request):
+    async def chat_restarted(self):
         print("Client requested chat to restart")
-        response = {"status": "Success"}
-        return web.json_response(response)
 
-    async def on_load_llm(self, ui_request):
+    async def _on_prompt_received(self, ui_request):
+        data = await ui_request.json()
+        self.latest_prompt_request = ui_request
+        await self.prompt_reveived(data["prompt"])
+
+    async def _on_chat_restarted(self, _):
+        await self.chat_restarted()
+        return web.Response()
+
+    async def _on_load_llm(self, ui_request):
         data = await ui_request.json()
         print(f"Client requested to load LLM ({data['model']})")
 

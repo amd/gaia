@@ -1,4 +1,3 @@
-from aiohttp import web
 from gaia.agents.agent import Agent
 
 
@@ -6,20 +5,15 @@ class MyAgent(Agent):
     def __init__(self, host, port):
         super().__init__(host, port)
 
-    async def on_message_received(self, ui_request):
-        data = await ui_request.json()
-        print("Message received:", data)
+    async def prompt_reveived(self, prompt):
+        print("Message received:", prompt)
 
-        # Prompt LLM server
-        response = await self.prompt_llm_server(
-            data["prompt"], ui_request, stream_to_ui=True
-        )
+        # Prompt LLM server and stream results directly to UI
+        response = await self.prompt_llm_server(prompt, stream_to_ui=True)
         print(f"Message streamed: {response}")
 
-    async def on_chat_restarted(self, ui_request):
+    async def chat_restarted(self):
         print("Client requested chat to restart")
-        response = {"status": "Success"}
-        return web.json_response(response)
 
 
 if __name__ == "__main__":
