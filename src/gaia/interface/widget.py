@@ -152,7 +152,7 @@ class LLMStreaming(QObject):
         last_card = str(self.widget.card_count - 1)
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                "http://127.0.0.1:8001/message", json={"prompt": prompt}
+                "http://127.0.0.1:8001/prompt", json={"prompt": prompt}
             ) as response:
                 async for token in response.content:
                     # Update card as we receive the stream
@@ -345,7 +345,7 @@ class Widget(QWidget):
             async with session.post(
                 "http://127.0.0.1:8001/restart", json={}
             ) as response:
-                await response.json()
+                await response.read()
 
     def restart_conversation(self):
         # Disable chat
