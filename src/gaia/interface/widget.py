@@ -110,9 +110,8 @@ class SetupLLM(QObject):
             sys.executable,
             os.path.join(
                 gaia_folder,
-                "agents",
-                self.widget.ui.agent.currentText(),
-                "llm_server.py",
+                "llm",
+                "server.py",
             ),
             "--checkpoint",
             model_settings["checkpoint"],
