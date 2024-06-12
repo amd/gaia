@@ -122,7 +122,6 @@ class SetupLLM(QObject):
             "--dtype",
             selected_dtype.lower(),
         ]
-        print(command)
         self.widget.llm_server = subprocess.Popen(command, creationflags=creationflags)
         while not is_server_available("127.0.0.1", 8000):
             time.sleep(1)

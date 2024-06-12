@@ -5,6 +5,13 @@ import websockets
 
 class MyAgent:
     def __init__(self):
+        # Initialize Agent Server
+        self.app = web.Application()
+        self.app.router.add_post("/message", self.on_message_received)
+        self.app.router.add_post("/restart", self.on_chat_restarted)
+        self.app.router.add_post("/load_llm", self.on_load_llm)
+
+        # Placeholder for LLM Server Websocket
         self.llm_server_websocket = None
 
     def __del__(self):
@@ -77,19 +84,6 @@ class MyAgent:
         return web.json_response(response)
 
 
-app = web.Application()
-agent = MyAgent()
-app.router.add_post("/message", agent.on_message_received)
-app.router.add_post("/restart", agent.on_chat_restarted)
-app.router.add_post("/load_llm", agent.on_load_llm)
-
-
-def run():
-    try:
-        web.run_app(app, host="localhost", port=8001)
-    except Exception as error:
-        raise error
-
-
 if __name__ == "__main__":
-    web.run_app(app, host="127.0.0.1", port=8001)
+    agent = MyAgent()
+    web.run_app(agent.app, host="127.0.0.1", port=8001)
