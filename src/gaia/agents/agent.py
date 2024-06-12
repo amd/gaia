@@ -10,7 +10,7 @@ class Agent:
         self.app.router.add_post("/prompt", self._on_prompt_received)
         self.app.router.add_post("/restart", self._on_chat_restarted)
         self.app.router.add_post("/load_llm", self._on_load_llm)
-        web.run_app(self.app, host="127.0.0.1", port=8001)
+        web.run_app(self.app, host=host, port=port)
 
         # Placeholder for LLM Server Websocket and others
         self.llm_server_websocket = None
