@@ -1,7 +1,7 @@
 import argparse
-import lemonade
-from lemonade.tools.general import Serve
-from lemonade.tools.ort_genai.dml_og import DmlOgLoad
+import lemonade  # pylint: disable=import-error
+from lemonade.tools.general import Serve  # pylint: disable=import-error
+from lemonade.tools.ort_genai.dml_og import DmlOgLoad  # pylint: disable=import-error
 
 
 def launch_llm_server(checkpoint, device, dtype, max_new_tokens):
