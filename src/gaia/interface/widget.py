@@ -4,17 +4,15 @@ import os
 import time
 import socket
 import json
-import aiohttp
 import asyncio
 from datetime import datetime
 import textwrap
 import subprocess
+import aiohttp
 
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
-    QApplication,
-    QMainWindow,
     QFrame,
     QHBoxLayout,
     QVBoxLayout,
@@ -30,7 +28,7 @@ from PySide6.QtGui import QMovie
 # do not import from the gui package.
 sys.path.insert(0, str(os.path.dirname(os.path.abspath(__file__))))
 
-from gaia.interface.ui_form import Ui_Widget
+from gaia.interface.ui_form import Ui_Widget  # pylint: disable=wrong-import-position
 
 
 # SetupLLM class performs tasks in a separate thread
@@ -78,7 +76,7 @@ class SetupLLM(QObject):
         self.widget.ui.device.setEnabled(False)
 
         # Initialize Agent server
-        self.widget.ui.loadingLabel.setText(f"Initializing Agent Server...")
+        self.widget.ui.loadingLabel.setText("Initializing Agent Server...")
         gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         command = [
             sys.executable,
@@ -203,7 +201,11 @@ class Widget(QWidget):
 
         # Read settings
         gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        with open(os.path.join(gaia_folder, "interface", "settings.json"), "r") as file:
+        with open(
+            os.path.join(gaia_folder, "interface", "settings.json"),
+            "r",
+            encoding="utf-8",
+        ) as file:
             self.settings = json.load(file)
 
         # Populate all models and update device list
@@ -250,7 +252,7 @@ class Widget(QWidget):
             self.ui.agent.setVisible(False)
 
         # Loading symbol
-        self.movie = QMovie(":/img\loading.gif")
+        self.movie = QMovie(r":/img/loading.gif")
         self.movie.setScaledSize(QSize(300, 300))
         self.ui.loadingGif.setFixedSize(QSize(300, 25))
         self.ui.loadingGif.setMovie(self.movie)
@@ -271,7 +273,7 @@ class Widget(QWidget):
         self.streamingThread.started.connect(self.streamingWorker.do_work)
         self.streamingWorker.finished.connect(self.streamingThread.quit)
 
-    def closeEvent(self, *args, **kwargs):
+    def closeEvent(self, *args, **kwargs):  # pylint: disable=unused-argument
         # Make sure servers are killed when application exits
         if self.agent_server is not None:
             print("Closing agent server")
@@ -419,7 +421,7 @@ class Widget(QWidget):
             )
         else:
             firstTokenAnimation = QLabel()
-            firstTokenMovie = QMovie(":/img\waiting_token.gif")
+            firstTokenMovie = QMovie(r":/img/waiting_token.gif")
             firstTokenMovie.setScaledSize(QSize(50, 50))
             firstTokenAnimation.setFixedSize(QSize(50, 50))
             firstTokenAnimation.setMovie(firstTokenMovie)
@@ -471,7 +473,9 @@ class Widget(QWidget):
         firstTokenAnimation.setVisible(False)
         message_frame.setVisible(True)
 
-    def scrollToBottom(self, minVal=None, maxVal=None):
+    def scrollToBottom(
+        self, minVal=None, maxVal=None  # pylint: disable=unused-argument
+    ):
         # Additional params 'minVal' and 'maxVal' are declared because
         # rangeChanged signal sends them, but we set it to optional
         self.ui.scrollArea.verticalScrollBar().setValue(

@@ -6,7 +6,7 @@ from lemonade.tools.ort_genai.dml_og import DmlOgLoad
 
 def launch_llm_server(checkpoint, device, dtype, max_new_tokens):
     state = lemonade.initialize_state(
-        eval_id=f"gaiaexe_server",
+        eval_id="gaiaexe_server",
     )
     state = DmlOgLoad().run(
         state,
