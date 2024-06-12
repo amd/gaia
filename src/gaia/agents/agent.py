@@ -4,12 +4,13 @@ import websockets
 
 
 class Agent:
-    def __init__(self):
+    def __init__(self, host, port):
         # Initialize Agent Server
         self.app = web.Application()
         self.app.router.add_post("/message", self.on_message_received)
         self.app.router.add_post("/restart", self.on_chat_restarted)
         self.app.router.add_post("/load_llm", self.on_load_llm)
+        web.run_app(self.app, host="127.0.0.1", port=8001)
 
         # Placeholder for LLM Server Websocket
         self.llm_server_websocket = None

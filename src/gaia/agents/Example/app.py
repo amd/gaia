@@ -3,8 +3,8 @@ from gaia.agents.agent import Agent
 
 
 class MyAgent(Agent):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, host, port):
+        super().__init__(host, port)
 
     async def on_message_received(self, ui_request):
         data = await ui_request.json()
@@ -23,5 +23,4 @@ class MyAgent(Agent):
 
 
 if __name__ == "__main__":
-    agent = MyAgent()
-    web.run_app(agent.app, host="127.0.0.1", port=8001)
+    agent = MyAgent(host="127.0.0.1", port=8001)
