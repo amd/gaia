@@ -178,7 +178,7 @@ class LLMStreaming(QObject):
 def is_server_available(host, port):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(1)
+        s.settimeout(3)
         s.connect((host, port))
         s.close()
         return True
