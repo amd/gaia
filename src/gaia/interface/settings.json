@@ -16,6 +16,7 @@
             }
         }
     },
+    "max_new_tokens": 60,
     "hide_agents": true,
     "hide_models": false,
     "hide_devices": false

@@ -98,6 +98,11 @@ class SetupLLM(QObject):
 
         # Initialize LLM server
         selected_model = self.widget.ui.model.currentText()
+        selected_device_dtype = self.widget.ui.device.currentText()
+        selected_device, selected_dtype = self.widget.device_list_mapping[
+            selected_device_dtype
+        ]
+        model_settings = self.widget.settings["models"][selected_model]
         self.widget.ui.loadingLabel.setText(
             f"Initializing LLM server for {selected_model} on {self.widget.ui.device.currentText()}..."
         )
@@ -109,7 +114,16 @@ class SetupLLM(QObject):
                 self.widget.ui.agent.currentText(),
                 "llm_server.py",
             ),
+            "--checkpoint",
+            model_settings["checkpoint"],
+            "--max_new_tokens",
+            str(self.widget.settings["max_new_tokens"]),
+            "--device",
+            selected_device.lower(),
+            "--dtype",
+            selected_dtype.lower(),
         ]
+        print(command)
         self.widget.llm_server = subprocess.Popen(command, creationflags=creationflags)
         while not is_server_available("127.0.0.1", 8000):
             time.sleep(1)
@@ -187,6 +201,7 @@ class Widget(QWidget):
         self.cards = {}
         self.agent_server = None
         self.llm_server = None
+        self.device_list_mapping = {}
 
         # Read settings
         gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -272,7 +287,9 @@ class Widget(QWidget):
         model_device_settings = self.settings["models"][selected_model]["device"]
         for device in model_device_settings:
             for dtype in model_device_settings[device]:
-                self.ui.device.addItem(f"{device} ({dtype})")
+                device_dtype_text = f"{device} ({dtype})"
+                self.ui.device.addItem(device_dtype_text)
+                self.device_list_mapping[device_dtype_text] = (device, dtype)
 
     def make_chat_visible(self, visible):
         if (visible and self.ui.chat.isVisible()) or (
