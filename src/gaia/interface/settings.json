@@ -1,0 +1,23 @@
+{
+    "dev_mode": true,
+    "agents": [
+        "Example",
+        "Clipy",
+        "Joker",
+        "Neo"
+    ],
+    "models": {
+        "Phi 3 Mini 4k": {
+            "checkpoint": "microsoft/Phi-3-mini-4k-instruct",
+            "device": {
+                "iGPU": [
+                    "int4"
+                ]
+            }
+        }
+    },
+    "max_new_tokens": 60,
+    "hide_agents": true,
+    "hide_models": false,
+    "hide_devices": false
+}

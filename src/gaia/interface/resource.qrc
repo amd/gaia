@@ -1,0 +1,11 @@
+<RCC>
+    <qresource prefix="/">
+        <file>img/banner.PNG</file>
+        <file>img/welcome.png</file>
+        <file>img/send.png</file>
+        <file>img/refresh.png</file>
+        <file>img/refresh_gray.png</file>
+        <file>img/waiting_token.gif</file>
+        <file>img/loading.gif</file>
+    </qresource>
+</RCC>

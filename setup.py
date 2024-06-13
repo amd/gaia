@@ -44,6 +44,7 @@ setup(
         "llama-index-readers-youtube-transcript",
         "llama-index-readers-github",
         "llama-index-embeddings-huggingface",
+        "pyside6",
     ],
     extras_require={
         "cuda": [
@@ -53,6 +54,7 @@ setup(
         ],
     },
     classifiers=[],
+    entry_points={"console_scripts": ["gaia = gaia.interface.widget:main"]},
     python_requires=">=3.8, <3.12",
     long_description=open("README.md", "r", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
