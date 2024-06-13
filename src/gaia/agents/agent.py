@@ -1,6 +1,6 @@
-from aiohttp import web
 import asyncio
 import websockets
+from aiohttp import web
 
 
 class Agent:
@@ -59,7 +59,7 @@ class Agent:
             await ui_response.write_eof()
         return response
 
-    async def prompt_reveived(self, prompt):
+    async def prompt_received(self, prompt):
         print("Message received:", prompt)
 
     async def chat_restarted(self):
@@ -68,7 +68,7 @@ class Agent:
     async def _on_prompt_received(self, ui_request):
         data = await ui_request.json()
         self.latest_prompt_request = ui_request
-        await self.prompt_reveived(data["prompt"])
+        await self.prompt_received(data["prompt"])
 
     async def _on_chat_restarted(self, _):
         await self.chat_restarted()

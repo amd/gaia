@@ -5,7 +5,7 @@ class MyAgent(Agent):
     def __init__(self, host, port):
         super().__init__(host, port)
 
-    async def prompt_reveived(self, prompt):
+    async def prompt_received(self, prompt):
         print("Message received:", prompt)
 
         # Prompt LLM server and stream results directly to UI
