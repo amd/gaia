@@ -1,10 +1,8 @@
 {
     "dev_mode": true,
     "agents": [
-        "Example",
-        "Clipy",
         "Joker",
-        "Neo"
+        "Example"
     ],
     "models": {
         "Phi 3 Mini 4k": {
@@ -17,7 +15,7 @@
         }
     },
     "max_new_tokens": 60,
-    "hide_agents": true,
+    "hide_agents": false,
     "hide_models": false,
     "hide_devices": false
 }

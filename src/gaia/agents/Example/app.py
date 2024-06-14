@@ -4,6 +4,7 @@ from gaia.agents.agent import Agent
 class MyAgent(Agent):
     def __init__(self, host, port):
         super().__init__(host, port)
+        self.initialize_server()
 
     async def prompt_received(self, prompt):
         print("Message received:", prompt)

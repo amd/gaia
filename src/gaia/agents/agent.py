@@ -1,26 +1,32 @@
+from typing import Any, Callable
 import asyncio
 import websockets
 from aiohttp import web
+from llama_index.core.llms import LLMMetadata
 
 
 class Agent:
     def __init__(self, host, port):
+        # Placeholder for LLM Server Websocket and others
+        self.llm_server_websocket = None
+        self.latest_prompt_request = None
+        self.host = host
+        self.port = port
+
         # Initialize Agent Server
         self.app = web.Application()
         self.app.router.add_post("/prompt", self._on_prompt_received)
         self.app.router.add_post("/restart", self._on_chat_restarted)
         self.app.router.add_post("/load_llm", self._on_load_llm)
-        web.run_app(self.app, host=host, port=port)
-
-        # Placeholder for LLM Server Websocket and others
-        self.llm_server_websocket = None
-        self.latest_prompt_request = None
 
     def __del__(self):
         # Ensure websocket gets closed when agent is deleted
         if self.llm_server_websocket:
             if not self.llm_server_websocket.closed:
                 asyncio.ensure_future(self.llm_server_websocket.close())
+
+    def initialize_server(self):
+        web.run_app(self.app, host=self.host, port=self.port)
 
     async def prompt_llm_server(self, prompt, stream_to_ui=True):
 
@@ -84,3 +90,27 @@ class Agent:
 
         response = {"status": "Success"}
         return web.json_response(response)
+
+
+class LocalLLM:
+    prompt_llm_server: Callable = None
+
+    def __init__(self, prompt_llm_server: Callable = None):
+        self.prompt_llm_server = prompt_llm_server
+
+    async def astream(
+        self,
+        prompt: Any,
+        **prompt_args: Any,
+    ) -> str:
+
+        # Format prompt
+        prompt.conditionals[0] = (lambda _: False,) + prompt.conditionals[0][1:]
+        formatted_prompt = prompt.format(prompt, **prompt_args)
+
+        # Prompt LLM and steam content to UI
+        return await self.prompt_llm_server(prompt=formatted_prompt, stream_to_ui=True)
+
+    @property
+    def metadata(self) -> LLMMetadata:
+        return LLMMetadata()

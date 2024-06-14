@@ -74,6 +74,7 @@ class SetupLLM(QObject):
         self.widget.ui.ask.setEnabled(False)
         self.widget.ui.model.setEnabled(False)
         self.widget.ui.device.setEnabled(False)
+        self.widget.ui.agent.setEnabled(False)
 
         # Initialize Agent server
         self.widget.ui.loadingLabel.setText("Initializing Agent Server...")
@@ -134,6 +135,7 @@ class SetupLLM(QObject):
         self.widget.ui.ask.setEnabled(True)
         self.widget.ui.model.setEnabled(True)
         self.widget.ui.device.setEnabled(True)
+        self.widget.ui.agent.setEnabled(True)
 
         self.finished.emit()
 
