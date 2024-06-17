@@ -8,7 +8,7 @@ def run_agent(agent):
 
 if __name__ == '__main__':
     # Get user input for the desired agent
-    agent_choice = input("Enter the agent you want to run (Clipy, Datalin, Joker, Neo, Picasso) [Default: Neo]: ")
+    agent_choice = input("Enter the agent you want to run (Clipy, Datalin, Joker, Neo, Maven, Picasso) [Default: Neo]: ")
 
     # Set default agent to Neo if user enters nothing
     if agent_choice.strip() == "":
@@ -16,11 +16,12 @@ if __name__ == '__main__':
 
     # Map user input to the corresponding agent app
     agent_map = {
-        "Clipy": "gaia.agents.Clipy.app",
-        "Datalin": "gaia.agents.Datalin.app",
-        "Joker": "gaia.agents.Joker.app",
-        "Neo": "gaia.agents.Neo.app",
-        "Picasso": "gaia.agents.Picasso.app"
+        "Clipy": "agents.Clipy.app",
+        "Datalin": "agents.Datalin.app",
+        "Joker": "agents.Joker.app",
+        "Neo": "agents.Neo.app",
+        "Picasso": "agents.Picasso.app",
+        "Maven": "agents.Maven.app",
     }
 
     # Check if the user input is valid
