@@ -8,8 +8,7 @@ import asyncio
 from datetime import datetime
 import textwrap
 import subprocess
-import aiohttp
-
+from aiohttp import web, ClientSession
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -41,7 +40,7 @@ class SetupLLM(QObject):
 
     # Request Agent Server to update connection to LLM Server
     async def request_llm_load(self):
-        async with aiohttp.ClientSession() as session:
+        async with ClientSession() as session:
             async with session.post(
                 "http://127.0.0.1:8001/load_llm",
                 json={"model": self.widget.ui.model.currentText()},
@@ -137,10 +136,12 @@ class SetupLLM(QObject):
         self.widget.ui.device.setEnabled(True)
         self.widget.ui.agent.setEnabled(True)
 
+        asyncio.run(self.widget.request_restart())
+
         self.finished.emit()
 
 
-class LLMStreaming(QObject):
+class StreamToAgent(QObject):
     finished = Signal()
 
     def __init__(self, widget):
@@ -148,18 +149,11 @@ class LLMStreaming(QObject):
         self.widget = widget
 
     async def prompt_llm(self, prompt):
-        complete_response = ""
-        last_card = str(self.widget.card_count - 1)
-        async with aiohttp.ClientSession() as session:
+        async with ClientSession() as session:
             async with session.post(
                 "http://127.0.0.1:8001/prompt", json={"prompt": prompt}
             ) as response:
-                async for token in response.content:
-                    # Update card as we receive the stream
-                    complete_response = (
-                        complete_response + token.decode().replace("\u0000", "\n")[:-1]
-                    )
-                    self.widget.update_card(last_card, complete_response)
+                await response.read()
 
     @Slot()
     def do_work(self):
@@ -172,6 +166,44 @@ class LLMStreaming(QObject):
         self.widget.ui.ask.setEnabled(True)
         self.widget.ui.restart.setEnabled(True)
 
+        self.finished.emit()
+
+
+class StreamFromAgent(QObject):
+    finished = Signal()
+    add_card = Signal(str, str)
+    update_card = Signal(str, str)
+
+    def __init__(self, widget):
+        super().__init__()
+        self.widget = widget
+        self.app = web.Application()
+        self.host = "127.0.0.1"
+        self.port = 8002
+        self.app.router.add_post("/stream_to_ui", self.receive_stream_from_agent)
+        self.complete_message = ""
+        self.agent_card_count = 0
+
+    @property
+    def last_agent_card_id(self):
+        return f"agent_{self.agent_card_count}"
+
+    async def receive_stream_from_agent(self, request):
+        data = await request.json()
+        token = data["token"]
+        new_card = data["new_card"]
+        if new_card:
+            self.complete_message = token
+            self.agent_card_count += 1
+            self.add_card.emit(self.complete_message, self.last_agent_card_id)
+        else:
+            self.complete_message = self.complete_message + token
+            self.update_card.emit(self.last_agent_card_id, self.complete_message)
+        return web.json_response({"status": "Received"})
+
+    @Slot()
+    def do_work(self):
+        web.run_app(self.app, host=self.host, port=self.port)
         self.finished.emit()
 
 
@@ -223,7 +255,9 @@ class Widget(QWidget):
 
         # Connect buttons
         self.ui.ask.clicked.connect(self.send_message)
-        self.ui.restart.clicked.connect(self.restart_conversation)
+        self.ui.restart.clicked.connect(
+            lambda: self.restart_conversation(notify_agent_server=True)
+        )
         self.ui.model.currentIndexChanged.connect(self.update_device_list)
         self.ui.model.currentIndexChanged.connect(self.deployment_changed)
         self.ui.device.currentIndexChanged.connect(self.deployment_changed)
@@ -268,12 +302,21 @@ class Widget(QWidget):
         self.setupWorker.finished.connect(self.setupThread.quit)
         self.setupThread.start()
 
-        # Create LLM streaming thread
-        self.streamingThread = QThread()
-        self.streamingWorker = LLMStreaming(self)
-        self.streamingWorker.moveToThread(self.streamingThread)
-        self.streamingThread.started.connect(self.streamingWorker.do_work)
-        self.streamingWorker.finished.connect(self.streamingThread.quit)
+        # Create threads for interfacing with the agent
+        self.agentSendThread = QThread()
+        self.agentSendWorker = StreamToAgent(self)
+        self.agentSendWorker.moveToThread(self.agentSendThread)
+        self.agentSendThread.started.connect(self.agentSendWorker.do_work)
+        self.agentSendWorker.finished.connect(self.agentSendThread.quit)
+
+        self.agentReceiveThread = QThread()
+        self.agentReceiveWorker = StreamFromAgent(self)
+        self.agentReceiveWorker.moveToThread(self.agentReceiveThread)
+        self.agentReceiveThread.started.connect(self.agentReceiveWorker.do_work)
+        self.agentReceiveWorker.finished.connect(self.agentReceiveThread.quit)
+        self.agentReceiveWorker.add_card.connect(self.add_card)
+        self.agentReceiveWorker.update_card.connect(self.update_card)
+        self.agentReceiveThread.start()
 
     def closeEvent(self, *args, **kwargs):  # pylint: disable=unused-argument
         # Make sure servers are killed when application exits
@@ -338,25 +381,22 @@ class Widget(QWidget):
         return super().eventFilter(obj, event)
 
     def deployment_changed(self):
-        self.restart_conversation()
+        self.restart_conversation(notify_agent_server=False)
         self.setupThread.quit()
         self.setupThread.wait()
         self.setupThread.start()
 
     # Request LLM server to also restart
     async def request_restart(self):
-        async with aiohttp.ClientSession() as session:
+        async with ClientSession() as session:
             async with session.post(
                 "http://127.0.0.1:8001/restart", json={}
             ) as response:
                 await response.read()
 
-    def restart_conversation(self):
+    def restart_conversation(self, notify_agent_server):
         # Disable chat
         self.make_chat_visible(False)
-
-        # Let server know that we are restarting the conversation
-        asyncio.run(self.request_restart())
 
         # Delete existing cards
         for card in self.cards:
@@ -367,6 +407,11 @@ class Widget(QWidget):
             # Delete the frame
             card_frame.deleteLater()
         self.cards = {}
+        self.card_count = 0
+
+        # Let agent server know that we are restarting the conversation
+        if notify_agent_server:
+            asyncio.run(self.request_restart())
 
     def send_message(self):
         prompt = self.ui.prompt.toPlainText()
@@ -378,10 +423,12 @@ class Widget(QWidget):
 
             # Send message
             self.add_card(prompt, from_user=True)
-            self.add_card("...", from_user=False)
 
-            # Stream inputs from LLM
-            self.streamingThread.start()
+            # Create a placeholder "loading" message
+            self.add_card("", from_user=False, card_id="loading")
+
+            # Send prompt to agent
+            self.agentSendThread.start()
             self.make_chat_visible(True)
 
     def split_into_chunks(self, message, chuck_size=75):
@@ -391,77 +438,93 @@ class Widget(QWidget):
             chunks.extend(textwrap.wrap(line, width=chuck_size))
         return "\n".join(chunks)
 
-    def add_card(self, message, from_user=True):
-        # Create the main card frame
-        card = QFrame()
-        card.setFrameShape(QFrame.NoFrame)
-        card_layout = QHBoxLayout(card)
-        card_layout.setContentsMargins(9, 0, 9, 0)
-        card_layout.setSpacing(0)
+    def add_card(self, message="", card_id=None, from_user=False):
+        self.make_chat_visible(True)
 
-        # Create the card message frame
-        card_message = QFrame()
-        card_message_layout = QVBoxLayout(card_message)
-        card_message_layout.setContentsMargins(9, 0, 9, 0)
-        card_message_layout.setSpacing(0)
-
-        # Create and add the push button and label to the card message frame
         chuncked_message = self.split_into_chunks(message)
-        message_frame = QPushButton(chuncked_message)
-        firstTokenAnimation = None
-        if from_user:
-            message_frame.setStyleSheet(
-                """
-                    font-size: 12pt;
-                    border-radius: 3px;
-                    border: 1px solid rgb(0, 0, 0);
-                    background-color:rgb(77, 77, 77);
-                    color: rgb(255, 255, 255);
-                    padding: 8px 8px;
-                    text-align: left;
-                """
-            )
-        else:
-            firstTokenAnimation = QLabel()
-            firstTokenMovie = QMovie(r":/img/waiting_token.gif")
-            firstTokenMovie.setScaledSize(QSize(50, 50))
-            firstTokenAnimation.setFixedSize(QSize(50, 50))
-            firstTokenAnimation.setMovie(firstTokenMovie)
-            firstTokenMovie.start()
-            card_message_layout.addWidget(firstTokenAnimation)
-            message_frame.setStyleSheet(
-                """
-                    font-size: 12pt;
-                    border-radius: 3px;
-                    border: 1px solid #0A819A;
-                    background-color: #0A819A;
-                    color: rgb(255, 255, 255);
-                    padding: 8px 8px;
-                    text-align: left;
-                """
-            )
-            message_frame.setVisible(False)
-        label = QLabel(datetime.now().strftime("%H:%M:%S"))
-        label.setStyleSheet("color: rgb(255, 255, 255);")
-        card_message_layout.addWidget(message_frame)
-        card_message_layout.addWidget(label)
 
-        # Add the card message layout to the card
-        spacer = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        if from_user:
-            card_layout.addItem(spacer)
-            card_layout.addWidget(card_message)
-            label.setAlignment(Qt.AlignRight)
-        else:
-            card_layout.addWidget(card_message)
-            card_layout.addItem(spacer)
-            label.setAlignment(Qt.AlignLeft)
+        # If there is already a "loading" card waiting we will take that one
+        if "loading" in self.cards and not from_user:
+            card, message_frame, label, firstTokenAnimation = self.cards.pop("loading")
+            message_frame.setVisible(True)
+            message_frame.setText(chuncked_message)
+            firstTokenAnimation.setVisible(False)
 
-        # Add the card to the main layout
-        self.ui.boardLayout.addWidget(card)
+        else:
+            # Create the main card frame
+            card = QFrame()
+            card.setFrameShape(QFrame.NoFrame)
+            card_layout = QHBoxLayout(card)
+            card_layout.setContentsMargins(9, 0, 9, 0)
+            card_layout.setSpacing(0)
+
+            # Create the card message frame
+            card_message = QFrame()
+            card_message_layout = QVBoxLayout(card_message)
+            card_message_layout.setContentsMargins(9, 0, 9, 0)
+            card_message_layout.setSpacing(0)
+
+            # Create and add the push button and label to the card message frame
+            message_frame = QPushButton(chuncked_message)
+            firstTokenAnimation = None
+            if from_user:
+                message_frame.setStyleSheet(
+                    """
+                        font-size: 12pt;
+                        border-radius: 3px;
+                        border: 1px solid rgb(0, 0, 0);
+                        background-color:rgb(77, 77, 77);
+                        color: rgb(255, 255, 255);
+                        padding: 8px 8px;
+                        text-align: left;
+                    """
+                )
+            else:
+                firstTokenAnimation = QLabel()
+                firstTokenMovie = QMovie(r":/img/waiting_token.gif")
+                firstTokenMovie.setScaledSize(QSize(50, 50))
+                firstTokenAnimation.setFixedSize(QSize(50, 50))
+                firstTokenAnimation.setMovie(firstTokenMovie)
+                card_message_layout.addWidget(firstTokenAnimation)
+                message_frame.setStyleSheet(
+                    """
+                        font-size: 12pt;
+                        border-radius: 3px;
+                        border: 1px solid #0A819A;
+                        background-color: #0A819A;
+                        color: rgb(255, 255, 255);
+                        padding: 8px 8px;
+                        text-align: left;
+                    """
+                )
+                if message == "":
+                    message_frame.setVisible(False)
+                    firstTokenMovie.start()
+                else:
+                    firstTokenAnimation.setVisible(False)
+
+            label = QLabel(datetime.now().strftime("%H:%M:%S"))
+            label.setStyleSheet("color: rgb(255, 255, 255);")
+            card_message_layout.addWidget(message_frame)
+            card_message_layout.addWidget(label)
+
+            # Add the card message layout to the card
+            spacer = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
+            if from_user:
+                card_layout.addItem(spacer)
+                card_layout.addWidget(card_message)
+                label.setAlignment(Qt.AlignRight)
+            else:
+                card_layout.addWidget(card_message)
+                card_layout.addItem(spacer)
+                label.setAlignment(Qt.AlignLeft)
+
+            # Add the card to the main layout
+            self.ui.boardLayout.addWidget(card)
 
         # Keep track of card
-        card_id = str(self.card_count)
+        if card_id is None:
+            card_id = str(self.card_count)
         self.cards[card_id] = (card, message_frame, label, firstTokenAnimation)
         self.card_count = self.card_count + 1
 

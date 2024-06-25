@@ -6,14 +6,22 @@ class MyAgent(Agent):
         super().__init__(host, port)
         self.initialize_server()
 
-    async def prompt_received(self, prompt):
+    def prompt_received(self, prompt):
         print("Message received:", prompt)
 
         # Prompt LLM server and stream results directly to UI
-        response = await self.prompt_llm_server(prompt, stream_to_ui=True)
+        new_card = True
+        response = ""
+        for token in self.prompt_llm_server(prompt=prompt):
+
+            # Stream token to UI
+            self.stream_to_ui(token, new_card=new_card)
+            new_card = False
+            response += token
+
         print(f"Message streamed: {response}")
 
-    async def chat_restarted(self):
+    def chat_restarted(self):
         print("Client requested chat to restart")
 
 

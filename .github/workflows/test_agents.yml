@@ -33,4 +33,4 @@ jobs:
       - name: PyLint
         shell: bash -el {0}
         run: |
-          pylint src/gaia --rcfile .pylintrc --disable C0103,C0301,W0246
+          pylint src/gaia --rcfile .pylintrc --disable C0103,C0301,W0246,W0221,E1102

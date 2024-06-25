@@ -1,8 +1,15 @@
 from typing import Any, Callable
-import asyncio
-import websockets
+from websocket import create_connection
+from websocket._exceptions import WebSocketTimeoutException
 from aiohttp import web
-from llama_index.core.llms import LLMMetadata
+import requests
+from llama_index.core.llms import (
+    LLMMetadata,
+    CustomLLM,
+    CompletionResponse,
+    CompletionResponseGen,
+)
+from llama_index.core.llms.callbacks import llm_completion_callback
 
 
 class Agent:
@@ -22,95 +29,101 @@ class Agent:
     def __del__(self):
         # Ensure websocket gets closed when agent is deleted
         if self.llm_server_websocket:
-            if not self.llm_server_websocket.closed:
-                asyncio.ensure_future(self.llm_server_websocket.close())
+            if self.llm_server_websocket.connected:
+                self.llm_server_websocket.close()
 
     def initialize_server(self):
         web.run_app(self.app, host=self.host, port=self.port)
 
-    async def prompt_llm_server(self, prompt, stream_to_ui=True):
+    def prompt_llm_server(self, prompt):
+
+        # Create socket to talk to LLM server
+        uri = "ws://localhost:8000/ws"
+        self.llm_server_websocket = create_connection(uri)
 
         # Send prompt to LLM server
-        await self.llm_server_websocket.send(prompt)
+        print(f"Sending prompt to LLM server: {prompt}")
+        self.llm_server_websocket.send(prompt)
 
-        # Prepare stream
-        if stream_to_ui:
-            ui_response = web.StreamResponse()
-            await ui_response.prepare(self.latest_prompt_request)
-
-        # Listen to LLM server
-        response = ""
-        timeout_duration = 2
+        # Listen to LLM server until we receive </s> or no new
+        # tokens have been received in a while
         while True:
             try:
-                # Receive messages
-                token = await asyncio.wait_for(
-                    self.llm_server_websocket.recv(), timeout=timeout_duration
-                )
+                token = self.llm_server_websocket.recv()
+
+                # Set timeout after first token:
+                self.llm_server_websocket.sock.settimeout(5)
+
                 if token:
                     if token == "</s>":
-                        break
-                    if stream_to_ui:
-                        encoded_token = (token.replace("\n", "\u0000") + "\n").encode(
-                            "utf-8"
-                        )
-                        await ui_response.write(encoded_token)
-                    response += token
-            except asyncio.TimeoutError:
-                # No token received for a while. Ending communication
+                        return
+                    yield token
+            except WebSocketTimeoutException:
                 break
 
-        if stream_to_ui:
-            # Signal the end of the stream
-            await ui_response.write_eof()
-        return response
+        if self.llm_server_websocket.connected:
+            self.llm_server_websocket.close()
 
-    async def prompt_received(self, prompt):
+    def prompt_received(self, prompt):
         print("Message received:", prompt)
 
-    async def chat_restarted(self):
+    def chat_restarted(self):
         print("Client requested chat to restart")
 
     async def _on_prompt_received(self, ui_request):
         data = await ui_request.json()
         self.latest_prompt_request = ui_request
-        await self.prompt_received(data["prompt"])
+        self.prompt_received(data["prompt"])
+        return web.Response()
 
     async def _on_chat_restarted(self, _):
-        await self.chat_restarted()
+        self.chat_restarted()
         return web.Response()
 
     async def _on_load_llm(self, ui_request):
         data = await ui_request.json()
         print(f"Client requested to load LLM ({data['model']})")
 
-        # Create socket to talk to LLM server
-        uri = "ws://localhost:8000/ws"
-        self.llm_server_websocket = await websockets.connect(uri)
-
         response = {"status": "Success"}
         return web.json_response(response)
 
+    def stream_to_ui(self, token, new_card=False):
+        data = {"token": token, "new_card": new_card}
+        url = "http://127.0.0.1:8002/stream_to_ui"
+        requests.post(url, json=data)
 
-class LocalLLM:
+
+class LocalLLM(CustomLLM):
     prompt_llm_server: Callable = None
-
-    def __init__(self, prompt_llm_server: Callable = None):
-        self.prompt_llm_server = prompt_llm_server
-
-    async def astream(
-        self,
-        prompt: Any,
-        **prompt_args: Any,
-    ) -> str:
-
-        # Format prompt
-        prompt.conditionals[0] = (lambda _: False,) + prompt.conditionals[0][1:]
-        formatted_prompt = prompt.format(prompt, **prompt_args)
-
-        # Prompt LLM and steam content to UI
-        return await self.prompt_llm_server(prompt=formatted_prompt, stream_to_ui=True)
+    stream_to_ui: Callable = None
+    context_window: int = 3900
+    num_output: int = 256
+    model_name: str = "custom"
 
     @property
     def metadata(self) -> LLMMetadata:
-        return LLMMetadata()
+        """Get LLM metadata."""
+        return LLMMetadata(
+            context_window=self.context_window,
+            num_output=self.num_output,
+            model_name=self.model_name,
+        )
+
+    @llm_completion_callback()
+    def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
+        response = self.prompt_llm_server(prompt=prompt)
+        self.stream_to_ui(response, new_card=True)
+        return CompletionResponse(text=response)
+
+    @llm_completion_callback()
+    def stream_complete(self, prompt: str, **kwargs: Any) -> CompletionResponseGen:
+        response = ""
+        new_card = True
+        for token in self.prompt_llm_server(prompt=prompt):
+
+            # Stream token to UI
+            self.stream_to_ui(token, new_card=new_card)
+            new_card = False
+
+            response += token
+            yield CompletionResponse(text=response, delta=token)

@@ -10,7 +10,9 @@ class MyAgent(Agent):
         super().__init__(host, port)
 
         # Define model
-        Settings.llm = LocalLLM(self.prompt_llm_server)
+        Settings.llm = LocalLLM(
+            prompt_llm_server=self.prompt_llm_server, stream_to_ui=self.stream_to_ui
+        )
         Settings.embed_model = "local:BAAI/bge-base-en-v1.5"
 
         # Load the joker data
@@ -31,18 +33,19 @@ class MyAgent(Agent):
         # Initialize agent server
         self.initialize_server()
 
-    async def prompt_received(self, prompt):
+    def prompt_received(self, prompt):
         print("Message received:", prompt)
 
         # Call agent
-        response = await self.query_engine.aquery(prompt)
+        response = self.query_engine.query(prompt)
         print(f"Agent Response: {response}")
 
-    async def chat_restarted(self):
+    def chat_restarted(self):
         print("Client requested chat to restart")
+        self.stream_to_ui("Hi, I'm joker", new_card=True)
+        self.stream_to_ui("I'm here to tell you jokes.", new_card=True)
+        self.stream_to_ui(" Feel free to ask anything.", new_card=False)
 
-
-# streaming_response = query_engine.query(query)
 
 if __name__ == "__main__":
     agent = MyAgent(host="127.0.0.1", port=8001)
