@@ -8,6 +8,7 @@ Currently, we support the following agents:
 
 | Agent Name | Function                     |
 | ---------- | ---------------------------- |
+|   Maven    | Online research assistant    |
 |   Clipy    | Chat with youtube transcript |
 |   Datalin  | Onnx model visualizer        |
 |   Joker    | Simple joke generator        |
@@ -30,12 +31,6 @@ To get started, please follow the instructions below. If you have a new machine 
 
 
 # Installation
-
-## Install AIG Demo Hub
-
-AIG demo hub is the interface that allows you to interface with GAIA agents (e.g. Clipy, Datalin, Neo, Picasso, etc.).
-
-To install it, run the `AIG-Demo-Hub-4.14.1-windows-setup.exe` setup file in the repo first.
 
 ## Install GAIA Backend
 
@@ -108,3 +103,12 @@ The best way to contribute is to add a new agent that covers a unique use-case. 
 
 ### Create your own agent
 You can learn how to create your own agent by following [these instructions](https://learn.microsoft.com/en-us/azure/bot-service/bot-service-quickstart-create-bot).
+
+# Testing
+Run this to validate the LLM and transformers libary on NPU:
+`transformers\models\llm>python run_awq.py --model_name llama-2-7b --task profilemodel1k --target aie`
+
+# STRIX Machine Setup
+Make sure to use the latest driver found here:
+
+Set `set MLADF=2x4x4` in your cmd terminal.

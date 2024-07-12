@@ -1,4 +1,7 @@
+import time
+from collections import OrderedDict
 from typing import Any, Callable
+from transformers import GPT2Tokenizer
 from websocket import create_connection
 from websocket._exceptions import WebSocketTimeoutException
 from aiohttp import web
@@ -6,19 +9,42 @@ import requests
 from llama_index.core.llms import (
     LLMMetadata,
     CustomLLM,
-    CompletionResponse,
-    CompletionResponseGen,
 )
 from llama_index.core.llms.callbacks import llm_completion_callback
+
+from llama_index.llms.llama_cpp.llama_utils import (
+    messages_to_prompt,
+)
+from llama_index.core.base.llms.types import (
+    ChatMessage,
+    ChatResponse,
+    CompletionResponse,
+    CompletionResponseGen,
+    MessageRole,
+)
 
 
 class Agent:
     def __init__(self, host, port):
         # Placeholder for LLM Server Websocket and others
+        self.llm_server_uri = "ws://localhost:8000/ws"
         self.llm_server_websocket = None
         self.latest_prompt_request = None
         self.host = host
         self.port = port
+
+        # performance stats
+        # in = input tokens
+        # ttft = time-to-first-token
+        # out = output tokens
+        # tps = tokens-per-second
+        self.stats = OrderedDict([
+            ('in', None),
+            ('ttft', None),
+            ('out', None),
+            ('tps', None)
+        ])
+        self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
         # Initialize Agent Server
         self.app = web.Application()
@@ -32,43 +58,83 @@ class Agent:
             if self.llm_server_websocket.connected:
                 self.llm_server_websocket.close()
 
+    def _clear_stats(self):
+        for key, _ in self.stats.items():
+            self.stats[key] = None
+
+    def count_tokens(self, text):
+        return len(self.tokenizer.encode(text))
+
+    def get_time_to_first_token(self):
+        return self.stats['ttft']
+
+    def get_tokens_per_second(self):
+        return self.stats['tps']
+
     def initialize_server(self):
         web.run_app(self.app, host=self.host, port=self.port)
 
     def prompt_llm_server(self, prompt):
+        ws = create_connection(self.llm_server_uri)
+        try:
+            print(f"Sending prompt to LLM server:\n{prompt}")
+            prompt_tokens = self.count_tokens(prompt)
+            start_time = time.perf_counter()
+            ws.send(prompt)
 
-        # Create socket to talk to LLM server
-        uri = "ws://localhost:8000/ws"
-        self.llm_server_websocket = create_connection(uri)
+            first_chunk = True
+            full_response = ""
 
-        # Send prompt to LLM server
-        print(f"Sending prompt to LLM server: {prompt}")
-        self.llm_server_websocket.send(prompt)
+            self._clear_stats()
 
-        # Listen to LLM server until we receive </s> or no new
-        # tokens have been received in a while
-        while True:
-            try:
-                token = self.llm_server_websocket.recv()
+            while True:
+                try:
+                    if first_chunk:
+                        ws.sock.settimeout(None)  # No timeout for first chunk
+                    else:
+                        ws.sock.settimeout(5)  # 5 second timeout after first chunk
 
-                # Set timeout after first token:
-                self.llm_server_websocket.sock.settimeout(5)
+                    chunk = ws.recv()
+                    current_time = time.perf_counter()
 
-                if token:
-                    if token == "</s>":
-                        return
-                    yield token
-            except WebSocketTimeoutException:
-                break
+                    if first_chunk:
+                        self.stats['ttft'] = current_time - start_time
+                        self.stats['in'] = prompt_tokens
+                        first_chunk = False
 
-        if self.llm_server_websocket.connected:
-            self.llm_server_websocket.close()
+                    if chunk:
+                        if "</s>" in chunk:
+                            chunk = chunk.replace("</s>", "")
+                            full_response += chunk
+
+                            total_time = current_time - start_time
+                            total_tokens = self.count_tokens(full_response)
+                            self.stats['out'] = total_tokens
+                            self.stats['tps'] = total_tokens / total_time if total_time > 0 else 0.0
+
+                            yield chunk
+                            break
+                        full_response += chunk
+                        yield chunk
+
+                except WebSocketTimeoutException:
+                    break
+
+        finally:
+            self._clear_stats()
+            ws.close()
 
     def prompt_received(self, prompt):
         print("Message received:", prompt)
 
     def chat_restarted(self):
         print("Client requested chat to restart")
+
+    def print(self, input_str: str):
+        for i, word in enumerate(input_str.split(" ")):
+            new_card = i == 0
+            self.stream_to_ui(f"{word} ", new_card=new_card)
+            time.sleep(0.1)
 
     async def _on_prompt_received(self, ui_request):
         data = await ui_request.json()
@@ -87,8 +153,8 @@ class Agent:
         response = {"status": "Success"}
         return web.json_response(response)
 
-    def stream_to_ui(self, token, new_card=False):
-        data = {"token": token, "new_card": new_card}
+    def stream_to_ui(self, chunk, new_card=True):
+        data = {"chunk": chunk, "new_card": new_card, "stats": self.stats}
         url = "http://127.0.0.1:8002/stream_to_ui"
         requests.post(url, json=data)
 
@@ -99,6 +165,29 @@ class LocalLLM(CustomLLM):
     context_window: int = 3900
     num_output: int = 256
     model_name: str = "custom"
+
+    async def achat(
+        self,
+        messages: Any,
+        **kwargs: Any,
+    ) -> str:
+
+        formatted_message = messages_to_prompt(messages)
+
+        # Prompt LLM and steam content to UI
+        text_response = await self.prompt_llm_server(
+            prompt=formatted_message, stream_to_ui=True
+        )
+
+        response = ChatResponse(
+            message=ChatMessage(
+                role=MessageRole.ASSISTANT,
+                content=text_response,
+                additional_kwargs={},
+            ),
+            raw={"text": text_response},
+        )
+        return response
 
     @property
     def metadata(self) -> LLMMetadata:
@@ -119,11 +208,11 @@ class LocalLLM(CustomLLM):
     def stream_complete(self, prompt: str, **kwargs: Any) -> CompletionResponseGen:
         response = ""
         new_card = True
-        for token in self.prompt_llm_server(prompt=prompt):
+        for chunk in self.prompt_llm_server(prompt=prompt):
 
-            # Stream token to UI
-            self.stream_to_ui(token, new_card=new_card)
+            # Stream chunk to UI
+            self.stream_to_ui(chunk, new_card=new_card)
             new_card = False
 
-            response += token
-            yield CompletionResponse(text=response, delta=token)
+            response += chunk
+            yield CompletionResponse(text=response, delta=chunk)

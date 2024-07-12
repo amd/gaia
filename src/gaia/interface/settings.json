@@ -1,10 +1,24 @@
 {
     "dev_mode": true,
+    "llm_server": true,
+    "show_label": true,
+
     "agents": [
         "Joker",
+        "Clipy",
+        "Neo",
+        "Maven",
         "Example"
     ],
     "models": {
+        "LLama 2 7B": {
+            "checkpoint": "meta-llama/Llama-2-7b-chat-hf",
+            "device": {
+                "NPU": [
+                    "int4"
+                ]
+            }
+        },
         "Phi 3 Mini 4k": {
             "checkpoint": "microsoft/Phi-3-mini-4k-instruct",
             "device": {
@@ -12,9 +26,17 @@
                     "int4"
                 ]
             }
+        },
+        "LLama 3 8B": {
+            "checkpoint": "meta-llama/Meta-Llama-3-8B",
+            "device": {
+                "iGPU": [
+                    "int4"
+                ]
+            }
         }
     },
-    "max_new_tokens": 60,
+    "max_new_tokens": 600,
     "hide_agents": false,
     "hide_models": false,
     "hide_devices": false

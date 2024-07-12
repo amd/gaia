@@ -120,10 +120,11 @@ class SetupLLM(QObject):
             "--dtype",
             selected_dtype.lower(),
         ]
-        self.widget.llm_server = subprocess.Popen(command, creationflags=creationflags)
-        while not is_server_available("127.0.0.1", 8000):
-            time.sleep(1)
-        asyncio.run(self.request_llm_load())
+        if self.widget.settings["llm_server"]:
+            self.widget.llm_server = subprocess.Popen(command, creationflags=creationflags)
+            while not is_server_available("127.0.0.1", 8000):
+                time.sleep(1)
+            asyncio.run(self.request_llm_load())
 
         # Done
         self.widget.ui.loadingLabel.setText(
@@ -171,8 +172,8 @@ class StreamToAgent(QObject):
 
 class StreamFromAgent(QObject):
     finished = Signal()
-    add_card = Signal(str, str)
-    update_card = Signal(str, str)
+    add_card = Signal(str, str, bool, dict)
+    update_card = Signal(str, str, dict)
 
     def __init__(self, widget):
         super().__init__()
@@ -190,15 +191,16 @@ class StreamFromAgent(QObject):
 
     async def receive_stream_from_agent(self, request):
         data = await request.json()
-        token = data["token"]
+        chunk = data["chunk"]
         new_card = data["new_card"]
+        stats = data.get("stats")
         if new_card:
-            self.complete_message = token
+            self.complete_message = chunk
             self.agent_card_count += 1
-            self.add_card.emit(self.complete_message, self.last_agent_card_id)
+            self.add_card.emit(self.complete_message, self.last_agent_card_id, False, stats)
         else:
-            self.complete_message = self.complete_message + token
-            self.update_card.emit(self.last_agent_card_id, self.complete_message)
+            self.complete_message = self.complete_message + chunk
+            self.update_card.emit(self.complete_message, self.last_agent_card_id, stats)
         return web.json_response({"status": "Received"})
 
     @Slot()
@@ -318,8 +320,13 @@ class Widget(QWidget):
         self.agentReceiveWorker.update_card.connect(self.update_card)
         self.agentReceiveThread.start()
 
+    def _format_value(self, val):
+        if isinstance(val, float):
+            return f"{val:.1f}"
+        return str(val)
+
     def closeEvent(self, *args, **kwargs):  # pylint: disable=unused-argument
-        # Make sure servers are killed when application exits
+        # Make sure  servers are killed when application exits
         if self.agent_server is not None:
             print("Closing agent server")
             self.agent_server.terminate()
@@ -422,10 +429,10 @@ class Widget(QWidget):
             self.ui.restart.setEnabled(False)
 
             # Send message
-            self.add_card(prompt, from_user=True)
+            self.add_card(message=prompt, card_id=None, from_user=True)
 
             # Create a placeholder "loading" message
-            self.add_card("", from_user=False, card_id="loading")
+            self.add_card(message="", card_id="loading", from_user=False)
 
             # Send prompt to agent
             self.agentSendThread.start()
@@ -438,7 +445,7 @@ class Widget(QWidget):
             chunks.extend(textwrap.wrap(line, width=chuck_size))
         return "\n".join(chunks)
 
-    def add_card(self, message="", card_id=None, from_user=False):
+    def add_card(self, message="", card_id=None, from_user=False, stats=None):
         self.make_chat_visible(True)
 
         chuncked_message = self.split_into_chunks(message)
@@ -503,7 +510,12 @@ class Widget(QWidget):
                 else:
                     firstTokenAnimation.setVisible(False)
 
-            label = QLabel(datetime.now().strftime("%H:%M:%S"))
+            label_text = f'{datetime.now().strftime("%H:%M:%S")}   '
+            if stats:
+                label_text += "   ".join(f"{key}: {self._format_value(val)}"
+                                       for key, val in stats.items() if val is not None)
+            label = QLabel(label_text)
+            label.setVisible(self.settings["show_label"])
             label.setStyleSheet("color: rgb(255, 255, 255);")
             card_message_layout.addWidget(message_frame)
             card_message_layout.addWidget(label)
@@ -530,11 +542,15 @@ class Widget(QWidget):
 
         return card_id
 
-    def update_card(self, card_id, message):
+    def update_card(self, message, card_id, stats=None):
         _, message_frame, label, firstTokenAnimation = self.cards[card_id]
         chuncked_message = self.split_into_chunks(message)
         message_frame.setText(chuncked_message)
-        label.setText(datetime.now().strftime("%H:%M:%S"))
+        label_text = f'{datetime.now().strftime("%H:%M:%S")}   '
+        if stats:
+            label_text += "   ".join(f"{key}: {self._format_value(val)}"
+                                   for key, val in stats.items() if val is not None)
+        label.setText(label_text)
         firstTokenAnimation.setVisible(False)
         message_frame.setVisible(True)
 
