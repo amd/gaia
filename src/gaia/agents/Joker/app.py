@@ -1,3 +1,5 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
 import os
 import argparse
 from collections import deque
@@ -99,10 +101,11 @@ class MyAgent(Agent):
 
     def chat_restarted(self):
         print("Client requested chat to restart")
-        self.stream_to_ui("Hi, I'm Joker,", new_card=True)
-        self.stream_to_ui(" I'm here to tell you jokes.", new_card=False)
-        self.stream_to_ui(" Feel free to ask anything.", new_card=False)
         self.chat_history.clear()
+        intro = "Hi, Joker, who are you in one sentence?"
+        print("User:", intro)
+        response = self.chat(intro)
+        print(f"Response: {response}")
 
 
 def main():

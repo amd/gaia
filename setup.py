@@ -1,18 +1,20 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
 from setuptools import setup
 
 ipex_version = "2.2.0"
 
 setup(
     name="gaia",
-    version="0.1.0",
+    version="0.4.0",
     description="GAIA genAI sandbox",
-    author="Kalin Ovtcharov",
-    author_email="kalin.ovtcharov@amd.com",
+    author="AMD",
     package_dir={"": "src"},
     packages=[
         "gaia",
         "gaia.llm",
         "gaia.agents",
+        "gaia.agents.Chatty",
         "gaia.agents.Clipy",
         "gaia.agents.Datalin",
         "gaia.agents.Joker",
@@ -21,18 +23,16 @@ setup(
         "gaia.agents.Maven",
     ],
     install_requires=[
-        "botbuilder-integration-aiohttp>=4.14.0",
-        "botbuilder-core",
         "aiohttp",
         "fastapi",
-        "pydantic",
+        "pydantic==1.10.12",
         "jupyter",
         "ipywidgets",
         "uvicorn",
         "openai",
         "matplotlib",
         "transformers",
-        "torch",
+        "sentencepiece",
         "pandas",
         "onnx",
         "accelerate",
@@ -42,6 +42,7 @@ setup(
         "wordcloud",
         "python-dotenv",
         "pylint",
+        "regex",
         "torch",
         "torchvision",
         "torchaudio",
@@ -50,7 +51,7 @@ setup(
         "google-api-python-client",
         "arize-phoenix[evals,llama-index]",
         "llama-index-callbacks-arize-phoenix",
-        "llama-index-llms-ollama",
+        # "llama-index-llms-ollama",
         "llama-index-llms-llama-cpp",
         "llama-index-tools-arxiv",
         "llama-index-tools-wikipedia",

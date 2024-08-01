@@ -1,7 +1,9 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
 import time
 from collections import OrderedDict
 from typing import Any, Callable
-from transformers import GPT2Tokenizer
+from transformers import LlamaTokenizer
 from websocket import create_connection
 from websocket._exceptions import WebSocketTimeoutException
 from aiohttp import web
@@ -44,7 +46,8 @@ class Agent:
             ('out', None),
             ('tps', None)
         ])
-        self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+        # Load the LLaMA tokenizer
+        self.tokenizer = LlamaTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
 
         # Initialize Agent Server
         self.app = web.Application()
@@ -98,8 +101,9 @@ class Agent:
                     current_time = time.perf_counter()
 
                     if first_chunk:
-                        self.stats['ttft'] = current_time - start_time
-                        self.stats['in'] = prompt_tokens
+                        self.stats['IN'] = prompt_tokens
+                        self.stats['TTFT'] = current_time - start_time
+                        start_time = time.perf_counter()
                         first_chunk = False
 
                     if chunk:
@@ -109,8 +113,8 @@ class Agent:
 
                             total_time = current_time - start_time
                             total_tokens = self.count_tokens(full_response)
-                            self.stats['out'] = total_tokens
-                            self.stats['tps'] = total_tokens / total_time if total_time > 0 else 0.0
+                            self.stats['OUT'] = total_tokens
+                            self.stats['TPS'] = (total_tokens-1) / total_time if total_time > 0 and total_tokens > 1 else 0.0
 
                             yield chunk
                             break
@@ -131,6 +135,7 @@ class Agent:
         print("Client requested chat to restart")
 
     def print(self, input_str: str):
+        print(input_str)
         for i, word in enumerate(input_str.split(" ")):
             new_card = i == 0
             self.stream_to_ui(f"{word} ", new_card=new_card)

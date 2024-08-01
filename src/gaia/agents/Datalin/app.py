@@ -1,85 +1,174 @@
-# Copyright (c) Microsoft Corporation. All rights reserved.
-# Licensed under the MIT License.
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
-import sys
-import traceback
-from datetime import datetime
-
-from aiohttp import web
-from aiohttp.web import Request, Response, json_response
-from botbuilder.core import (
-    BotFrameworkAdapterSettings,
-    TurnContext,
-    BotFrameworkAdapter,
-)
-from botbuilder.core.integration import aiohttp_error_middleware
-from botbuilder.schema import Activity, ActivityTypes
-
-from gaia.agents.Datalin.bot import MyBot
-from gaia.agents.Datalin.config import DefaultConfig
-
-CONFIG = DefaultConfig()
-
-# Create adapter.
-# See https://aka.ms/about-bot-adapter to learn more about how bots work.
-SETTINGS = BotFrameworkAdapterSettings(CONFIG.APP_ID, CONFIG.APP_PASSWORD)
-ADAPTER = BotFrameworkAdapter(SETTINGS)
+import os
+import time
+import base64
+import asyncio
+import argparse
+from collections import deque
+from gaia.agents.agent import Agent
+from gaia.agents.Datalin.find_match import find_match
+from gaia.agents.Datalin.split import split_onnx_model
 
 
-# Catch-all for errors.
-async def on_error(context: TurnContext, error: Exception):
-    # This check writes out errors to console log .vs. app insights.
-    # NOTE: In production environment, you should consider logging this to Azure
-    #       application insights.
-    print(f"\n [on_turn_error] unhandled error: {error}", file=sys.stderr)
-    traceback.print_exc()
+class MyAgent(Agent):
+    def __init__(self, host, port):
+        super().__init__(host, port)
 
-    # Send a message to the user
-    await context.send_activity("The bot encountered an error or bug.")
-    await context.send_activity("To continue to run this bot, please fix the bot source code.")
-    # Send a trace activity if we're talking to the Bot Framework Emulator
-    if context.activity.channel_id == "emulator":
-        # Create a trace activity that contains the error object
-        trace_activity = Activity(
-            label="TurnError",
-            name="on_turn_error Trace",
-            timestamp=datetime.utcnow(),
-            type=ActivityTypes.trace,
-            value=f"{error}",
-            value_type="https://www.botframework.com/schemas/error",
+        self.n_chat_messages = 4
+        self.chat_history = deque(maxlen=self.n_chat_messages * 2)  # Store both user and assistant messages
+
+        self.llm_system_prompt = (
+            "[INST] <<SYS>>\n"
+            "You are a helpful, funny digital assistant that doesn't talk about itself.\n"
+            "You are here to help engineers at AMD to use tools provided by the DAT team.\n"
+            "All of those tools aim at doing model analysis. Please provide safe, super concise and accurate information to the user.\n"
+            "You are running locally, so all models are safe with you. To be able to help the user, you need that users send you a model.\n"
+            "Once they send you a model they can ask you questions about the model. Always answer in less than 50 words.\n"
+            "If you get asked whether a model runs on any specific devices, say that you can't run models just yet,\n"
+            "but people should look into Lemonade 🍋 by Jeremy Fowers (https://github.com/aigdat/genai).\n"
+            "When referring to the tool, always use the 🍋 emoji and share the link.\n"
+            "<</SYS>>\n\n"
         )
-        # Send a trace activity, which will be displayed in Bot Framework Emulator
-        await context.send_activity(trace_activity)
+
+        # Initialize agent server
+        self.initialize_server()
+
+    def get_chat_history(self):
+        return list(self.chat_history)
+
+    def prompt_llm(self, query):
+        response = ""
+        new_card = True
+        self.chat_history.append(f"User: {query}")
+        prompt = self.llm_system_prompt + '\n'.join(self.chat_history) + "[/INST]\nAssistant: "
+
+        # print(prompt)
+        for chunk in self.prompt_llm_server(prompt=prompt):
+
+            # Stream chunk to UI
+            self.stream_to_ui(chunk, new_card=new_card)
+            new_card = False
+
+            response += chunk
+        self.chat_history.append(f"Assistant: {response}")
+        return response
+
+    def prompt_received(self, prompt):
+        print("User:", prompt)
+        response = self.prompt_llm(prompt)
+        print(f"Response: {response}")
+
+    def process_attachments(self, user_query:str, attachments:list):
+        if attachments:
+            # Iterate through each attachment
+            for attachment in attachments:
+                # Check the content type of the attachment
+                if attachment.endswith(".onnx"):
+                    # Handle onnx
+                    self.print("Nice! This looks like an onnx file. Let me see what I can do. Give me a sec...")
+                    downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+                    self.model_path = (  # pylint: disable=attribute-defined-outside-init
+                        os.path.join(downloads_dir, attachment.name)
+                    )
+                    asyncio.create_task(self.process_attachment(self.model_path))
+                else:
+                    self.print("Ugh. I can only handle .onnx files. Can you send me in that format?")
+
+        else:
+            if "split" and "subgraphs" in user_query:
+                self.print("Sure. Give me a few seconds to try it...")
+                request = user_query.split()
+                try:
+                    subgraphs = int(request[request.index("subgraphs") - 1])
+                    asyncio.create_task(self.split_subgraphs(subgraphs))
+                except:  # pylint: disable=bare-except
+                    self.print("Sure. How many subgraphs would you like to generate?")
+
+            else:
+                answer = self.prompt_llm(user_query)
+
+                if "parameters" in answer:
+                    asyncio.create_task(self.suggest_confluence())
+
+    async def process_attachment(self, path: str):
+        similarity_list, model_details = find_match(path)
+
+        time.sleep(5)
+        self.print(
+            f"Ok, I was able to process the model. This looks a lot like **{similarity_list[0]}, {similarity_list[1]}, and {similarity_list[2]}**. "
+            "What else would you like to know about this model?"
+        )
+
+        self.print(f"MODEL DETAILS: Parameters {model_details['parameters']}, Opset: {model_details['onnx_model_info']['opset']}")
+
+        # Assuming heatmap.png is in the same directory as this script
+        with open("heatmap.png", "rb") as file:
+            image_data = file.read()
+            base64_image = base64.b64encode(image_data).decode("ascii") # pylint: disable=W0612
+
+        # TODO: display image
+
+    async def split_subgraphs(self, subgraphs: int):
+        model_names = split_onnx_model(self.model_path, subgraphs)
+
+        time.sleep(5)
+        self.print("Ok, here is the data! (attached data)")
+
+        # Assuming model.onnx is in the same directory as this script
+        for model in model_names:
+            with open(model, "rb") as file:
+                onnx_data = file.read()
+                base64_onnx = base64.b64encode(onnx_data).decode("ascii") # pylint: disable=W0612
+
+            # TODO: support file attachments.
 
 
-ADAPTER.on_turn_error = on_error
+    async def suggest_confluence(self):
+        time.sleep(5)
+        self.print(
+            "By the way, while we were chatting I just checked **Confluence** and it looks like there is no intake report about this model there. "
+            "Would you like me to create one? I can add something to [confluence.amd.com/display/AIG/](https://confluence.amd.com/display/AIG/)."
+        )
 
-# Create the Bot
-BOT = MyBot()
-
-
-# Listen for incoming requests on /api/messages
-async def messages(req: Request) -> Response:
-    # Main bot message handler.
-    if "application/json" in req.headers["Content-Type"]:
-        body = await req.json()
-    else:
-        return Response(status=415)
-
-    activity = Activity().deserialize(body)
-    auth_header = req.headers["Authorization"] if "Authorization" in req.headers else ""
-
-    response = await ADAPTER.process_activity(activity, auth_header, BOT.on_turn)
-    if response:
-        return json_response(data=response.body, status=response.status)
-    return Response(status=201)
+    def chat_restarted(self):
+        print("Client requested chat to restart")
+        # self.print("Hi there! I'm Chatty. What would you like to chat about today?")
+        self.chat_history.clear()
+        intro = (
+            "Introduce yourself in the following way:\n"
+            "Hi Daniel, I'm Datalin, a local AI agent (and future RAG) that is here to help you with DAT's tools.\n"
+            "I heard you have a model you wanted me to have a look at?\n"
+        )
+        print("User:", intro)
+        response = self.prompt_llm(intro)
+        print(f"Response: {response}")
 
 
-APP = web.Application(middlewares=[aiohttp_error_middleware])
-APP.router.add_post("/api/messages", messages)
+def main():
+    # LLM CLI for testing purposes.
+    parser = argparse.ArgumentParser(description="Interact with the Joker Agent CLI")
+    parser.add_argument("--host", default="127.0.0.1", help="Host address for the agent server")
+    parser.add_argument("--port", type=int, default=8001, help="Port for the agent server")
+    args = parser.parse_args()
+
+    agent = MyAgent(host=args.host, port=args.port)
+    print("Agent initialized. Type 'exit' to quit.")
+
+    while True:
+        try:
+            user_input = input("You: ").strip()
+            if user_input.lower() == 'exit':
+                print("Goodbye!")
+                break
+            elif user_input:
+                print("Agent: ", end="", flush=True)
+                agent.prompt_received(user_input)
+            else:
+                print("Please enter a valid input.")
+        except KeyboardInterrupt:
+            print("\nGoodbye!")
+            break
 
 if __name__ == "__main__":
-    try:
-        web.run_app(APP, host="localhost", port=CONFIG.PORT)
-    except Exception as error:
-        raise error
+    main()

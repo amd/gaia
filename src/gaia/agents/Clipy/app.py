@@ -1,8 +1,6 @@
-# Copyright (c) Microsoft Corporation. All rights reserved.
-# Licensed under the MIT License.
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 import re
-# import time
 import json
 import os
 import argparse

@@ -1,3 +1,5 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
 import argparse
 import lemonade  # pylint: disable=import-error
 from lemonade.tools.general import Serve  # pylint: disable=import-error

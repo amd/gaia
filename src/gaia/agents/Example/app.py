@@ -1,5 +1,6 @@
-from gaia.agents.agent import Agent
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
+from gaia.agents.agent import Agent
 
 class MyAgent(Agent):
     def __init__(self, host, port):

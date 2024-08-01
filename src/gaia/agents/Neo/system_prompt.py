@@ -1,3 +1,5 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
 from llama_index.core import PromptTemplate
 
 react_system_header_str = """\
