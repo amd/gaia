@@ -3,7 +3,7 @@
 from gaia.agents.agent import Agent
 
 class MyAgent(Agent):
-    def __init__(self, host, port):
+    def __init__(self, host="127.0.0.1", port=8001):
         super().__init__(host, port)
         self.initialize_server()
 
@@ -27,4 +27,4 @@ class MyAgent(Agent):
 
 
 if __name__ == "__main__":
-    agent = MyAgent(host="127.0.0.1", port=8001)
+    agent = MyAgent()

@@ -19,7 +19,7 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
 from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QHBoxLayout,
     QLabel, QPushButton, QScrollArea, QSizePolicy,
     QSpacerItem, QTextEdit, QVBoxLayout, QWidget)
-import rc_resource
+import gaia.interface.rc_resource as rc_resource
 
 class Ui_Widget(object):
     def setupUi(self, Widget):

@@ -7,9 +7,11 @@ import time
 import socket
 import json
 import asyncio
+from pathlib import Path
 from datetime import datetime
 import textwrap
 import subprocess
+import multiprocessing
 from aiohttp import web, ClientSession
 from PySide6.QtWidgets import (
     QApplication,
@@ -23,13 +25,20 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 from PySide6.QtCore import Qt, QEvent, QSize, QObject, Signal, Slot, QThread
-from PySide6.QtGui import QMovie
+from PySide6.QtGui import QMovie, QIcon
 
 # This is a temporary workaround since the Qt Creator generated files
 # do not import from the gui package.
 sys.path.insert(0, str(os.path.dirname(os.path.abspath(__file__))))
 
+import gaia.agents as agents  # pylint: disable=wrong-import-position
 from gaia.interface.ui_form import Ui_Widget  # pylint: disable=wrong-import-position
+from gaia.llm.server import launch_llm_server  # pylint: disable=wrong-import-position
+
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    gaia_folder = Path(__file__).parent / "gaia"
+else:
+    gaia_folder = Path(__file__).parent.parent
 
 
 # SetupLLM class performs tasks in a separate thread
@@ -79,20 +88,22 @@ class SetupLLM(QObject):
 
         # Initialize Agent server
         self.widget.ui.loadingLabel.setText("Initializing Agent Server...")
-        gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        command = [
-            sys.executable,
-            os.path.join(
-                gaia_folder, "agents", self.widget.ui.agent.currentText(), "app.py"
-            ),
-        ]
+
+        # Open using subprocess or multiprocessing depending on the selected settings
+        creationflags = subprocess.CREATE_NEW_CONSOLE
+        selected_agent = self.widget.ui.agent.currentText()
         if self.widget.settings["dev_mode"]:
-            creationflags = subprocess.CREATE_NEW_CONSOLE
+            app_dot_py = gaia_folder / "agents" / selected_agent / "app.py"
+            command = [sys.executable, app_dot_py]
+            self.widget.agent_server = subprocess.Popen(
+                command, creationflags=creationflags
+            )
         else:
-            creationflags = 0
-        self.widget.agent_server = subprocess.Popen(
-            command, creationflags=creationflags
-        )
+            self.widget.agent_server = multiprocessing.Process(
+                target=getattr(agents, selected_agent.lower())
+            )
+            self.widget.agent_server.start()
+
         while not is_server_available("127.0.0.1", 8001):
             time.sleep(1)
 
@@ -106,26 +117,36 @@ class SetupLLM(QObject):
         self.widget.ui.loadingLabel.setText(
             f"Initializing LLM server for {selected_model} on {self.widget.ui.device.currentText()}..."
         )
-        command = [
-            sys.executable,
-            os.path.join(
-                gaia_folder,
-                "llm",
-                "server.py",
-            ),
-            "--checkpoint",
-            model_settings["checkpoint"],
-            "--max_new_tokens",
-            str(self.widget.settings["max_new_tokens"]),
-            "--device",
-            selected_device.lower(),
-            "--dtype",
-            selected_dtype.lower(),
-        ]
+
+        llm_server_kwargs = {
+            "checkpoint": model_settings["checkpoint"],
+            "max_new_tokens": str(self.widget.settings["max_new_tokens"]),
+            "device": selected_device.lower(),
+            "dtype": selected_dtype.lower(),
+        }
+
+        if self.widget.settings["dev_mode"]:
+            server_dot_py = gaia_folder / "llm" / "server.py"
+            command = [
+                sys.executable,
+                server_dot_py,
+            ] + sum(
+                ([f"--{key}", str(value)] for key, value in llm_server_kwargs.items()),
+                [],
+            )
+            if self.widget.settings["llm_server"]:
+                self.widget.llm_server = subprocess.Popen(
+                    command, creationflags=creationflags
+                )
+        else:
+            if self.widget.settings["llm_server"]:
+                self.widget.llm_server = multiprocessing.Process(
+                    target=launch_llm_server, kwargs=llm_server_kwargs
+                )
+                self.widget.llm_server.start()
+                while not is_server_available("127.0.0.1", 8000):
+                    time.sleep(1)
         if self.widget.settings["llm_server"]:
-            self.widget.llm_server = subprocess.Popen(command, creationflags=creationflags)
-            while not is_server_available("127.0.0.1", 8000):
-                time.sleep(1)
             asyncio.run(self.request_llm_load())
 
         # Done
@@ -238,12 +259,8 @@ class Widget(QWidget):
         self.device_list_mapping = {}
 
         # Read settings
-        gaia_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        with open(
-            os.path.join(gaia_folder, "interface", "settings.json"),
-            "r",
-            encoding="utf-8",
-        ) as file:
+        settings_dot_json = gaia_folder / "interface" / "settings.json"
+        with open(settings_dot_json, "r", encoding="utf-8") as file:
             self.settings = json.load(file)
 
         # Populate all models and update device list
@@ -567,11 +584,14 @@ class Widget(QWidget):
 
 
 def main():
+    multiprocessing.freeze_support()
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(r":/img\gaia.ico"))
     widget = Widget()
     widget.show()
     sys.exit(app.exec())
 
 
 if __name__ == "__main__":
+
     main()

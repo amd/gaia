@@ -10,7 +10,7 @@ from gaia.agents.agent import Agent, LocalLLM
 
 
 class MyAgent(Agent):
-    def __init__(self, host, port):
+    def __init__(self, host="127.0.0.1", port=8001):
         super().__init__(host, port)
 
         # Define model
@@ -134,4 +134,4 @@ def main():
             break
 
 if __name__ == "__main__":
-    main()
+    agent = MyAgent()

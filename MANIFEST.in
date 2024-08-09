@@ -1,2 +1,3 @@
 include src/gaia/**/*
 recursive-include src/gaia/agents/Joker/data *
+recursive-include src/gaia/interface *
