@@ -133,16 +133,22 @@ class MyAgent(Agent):
 
     def chat_restarted(self):
         print("Client requested chat to restart")
-        # self.print("Hi there! I'm Chatty. What would you like to chat about today?")
+        # self.print("Hi there! I'm Chaty. What would you like to chat about today?")
         self.chat_history.clear()
         intro = (
             "Introduce yourself in the following way:\n"
-            "Hi Daniel, I'm Datalin, a local AI agent (and future RAG) that is here to help you with DAT's tools.\n"
+            "Hi, I'm Datalin, a local AI agent (and future RAG) that is here to help you with DAT's tools.\n"
             "I heard you have a model you wanted me to have a look at?\n"
         )
         print("User:", intro)
-        response = self.prompt_llm(intro)
-        print(f"Response: {response}")
+        try:
+            response = self.prompt_llm(intro)
+            print(f"Response: {response}")
+        except ConnectionRefusedError as e:
+            self.print(
+                f"Having trouble connecting to the LLM server, got:\n{str(e)}! "
+                # "For detailed step-by-step instruction, click on <this guide>." TODO
+            )
 
 
 def main():

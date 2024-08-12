@@ -42,7 +42,7 @@ class MyAgent(Agent):
         #     "{query_str}</s>\n"
         #     "<|assistant|>"
         # )
-        qa_prompt_tmpl_str = (
+        self.qa_prompt_tmpl_str = (
             "[INST] <<SYS>>\n"
             "You are Joker, a sarcastic and funny asistant with an attitude that likes to chat with the user.\n"
             "List of jokes below below to use in your response.\n"
@@ -67,7 +67,7 @@ class MyAgent(Agent):
             "User: {query_str} [/INST]\n"
             "Assistant: "
         )
-        qa_prompt_tmpl = PromptTemplate(qa_prompt_tmpl_str)
+        qa_prompt_tmpl = PromptTemplate(self.qa_prompt_tmpl_str)
         self.query_engine = index.as_query_engine(
             verbose=True,
             similarity_top_k=1,
@@ -102,10 +102,25 @@ class MyAgent(Agent):
     def chat_restarted(self):
         print("Client requested chat to restart")
         self.chat_history.clear()
-        intro = "Hi, Joker, who are you in one sentence?"
+        intro = "Hi, who are you in one sentence?"
+        prompt = self.qa_prompt_tmpl_str + '\n'.join(f"User: {intro}") + "[/INST]\nAssistant: "
         print("User:", intro)
-        response = self.chat(intro)
-        print(f"Response: {response}")
+        try:
+            new_card = True
+            for chunk in self.prompt_llm_server(prompt=prompt):
+
+                # Stream chunk to UI
+                self.stream_to_ui(chunk, new_card=new_card)
+                new_card = False
+                print(chunk, end="", flush=True)
+            print("\n")
+
+        except ConnectionRefusedError as e:
+            self.print(
+                f"Having trouble connecting to the LLM server, got:\n{str(e)}! "
+                # "For detailed step-by-step instruction, click on <this guide>." TODO
+            )
+
 
 
 def main():

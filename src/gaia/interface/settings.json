@@ -1,11 +1,12 @@
 {
-    "dev_mode": true,
-    "llm_server": true,
+    "dev_mode": false,
+    "llm_server": false,
     "show_label": true,
 
     "agents": [
+        "Clip",
+        "Chaty",
         "Joker",
-        "Clipy",
         "Neo",
         "Maven",
         "Example"

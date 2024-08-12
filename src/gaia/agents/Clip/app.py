@@ -3,7 +3,9 @@
 import re
 import json
 import os
+import time
 import argparse
+from collections import deque
 from dotenv import load_dotenv
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -45,8 +47,8 @@ class MyAgent(Agent):
         self.yt_query_engine = None
         self.yt_search_results = None
 
-        # TODO
-        # self.chat_history = []
+        self.n_chat_messages = 10
+        self.chat_history = deque(maxlen=self.n_chat_messages * 2)  # Store both user and assistant messages
 
         self.llm_states = [
             # state = 0, no index or search results produced yet.
@@ -57,25 +59,33 @@ class MyAgent(Agent):
             ("Index is currently not built and is empty.\n"
             "YouTube search results have been found:\n"
             f"{self.yt_search_results}"
-            "Ask the user which result to build index for.\n"),
-
-            # state = 2, index is built, use the query engine.
-            ("Index is currently built and is not empty.\n"
+            "Index is currently built and is not empty.\n"
             "You can now use the query engine to fetch information about the video.\n"
             "To access the index, use the query engine RAG tool by calling: {\"query_engine\" : \"query\"}\n"),
+
+            # # state = 1, search results produced but no index created yet.
+            # ("Index is currently not built and is empty.\n"
+            # "YouTube search results have been found:\n"
+            # f"{self.yt_search_results}"
+            # "Ask the user which result to build index for.\n"),
+
+            # # state = 2, index is built, use the query engine.
+            # ("Index is currently built and is not empty.\n"
+            # "You can now use the query engine to fetch information about the video.\n"
+            # "To access the index, use the query engine RAG tool by calling: {\"query_engine\" : \"query\"}\n"),
         ]
         # set llm state 0-2
         self.llm_state = 0
 
         self.llm_system_prompt = (
             "[INST] <<SYS>>\n"
-            "You are a YouTube-focused assistant called Clipy that helps user with YouTube by calling function tools.\n"
+            "You are a YouTube-focused assistant called Clip that helps user with YouTube by calling function tools.\n"
             "You are helpful by providing the necessary json-formatted queries in the form of {\"tool\" : \"query\"}:\n"
             "Do not include the results from the tools.\n"
             "In order to build the index, you have to first search YouTube.\n"
             "You only have ability to call the tools below, do not assume you have access to the output from the tools.\n"
             "1. {\"youtube_search\" : \"user_query\"}\n"
-            "2. {\"build_index\" : \"video_id\"}\n"
+            # "2. {\"build_index\" : \"video_id\"}\n"
             "3. {\"query_rag\" : \"user_query\"}\n"
             "4. {\"reset\" : \"\"}\n"
             "user_query is a query derived from the User comments.\n"
@@ -113,6 +123,7 @@ class MyAgent(Agent):
         # this system prompt has been verified to work with llama v2 7b 4bit on NPU.
         self.query_engine_system_prompt = (
             "[INST] <<SYS>>\n"
+            "You are a YouTube-focused assistant called Clip that helps user with YouTube by calling function tools.\n"
             "{context_str}\n\n"
             "Think step-by-step to answer the query in a crisp, short and concise manner based on the information provided.\n"
             "If the answer does not exist in the given information, simply answer 'I don't know!'\n"
@@ -122,12 +133,17 @@ class MyAgent(Agent):
             "{query_str} [/INST]\n"
         )
 
+        # TODO: temporary overwrite
+        self.llm_system_prompt = self.query_engine_system_prompt
+
         # Initialize agent server
         self.initialize_server()
 
     def youtube_search(self, query, max_results=3):
         try:
-            self.print(f"Running YouTube search with the following query: {query}")
+            msg = f"Running YouTube search with the following query: {query}"
+            self.print(msg)
+            self.chat_history.append(f"Asssistant: {msg}")
             search_response = self.youtube.search().list( # pylint: disable=E1101
                 q=query,
                 type="video",
@@ -136,8 +152,9 @@ class MyAgent(Agent):
             ).execute()
 
             videos = []
-
-            self.print("Found the following results:")
+            msg = "Found the following result:"
+            self.print(msg)
+            self.chat_history.append(f"Asssistant: {msg}")
             for i, search_result in enumerate(search_response.get("items", [])):
                 video_id = search_result["id"]["videoId"]
                 video = {
@@ -149,7 +166,9 @@ class MyAgent(Agent):
                     "publish_time": search_result["snippet"]["publishTime"],
                     "channel_title": search_result["snippet"]["channelTitle"]
                 }
-                self.print(f'{video["id"]} : {video["title"]}\n\n{video["description"]}\n{video["publish_time"]}    {video["video_id"]}\n\n')
+                msg = f'{video["id"]} : {video["title"]}\n\n{video["description"]}\n{video["publish_time"]}    {video["video_id"]}\n\n'
+                self.print(msg)
+                self.chat_history.append(f"Asssistant: {msg}")
                 videos.append(video)
 
             print(videos)
@@ -181,10 +200,15 @@ class MyAgent(Agent):
         else:
             return None, None
 
+    def get_chat_history(self):
+        return list(self.chat_history)
+
     def prompt_llm(self, query):
         response = ""
         new_card = True
-        prompt = f"{self.llm_system_prompt}\nUser: {query} [/INST]\nAssistant: "
+        self.chat_history.append(f"User: {query}")
+        prompt = self.llm_system_prompt + '\n'.join(self.chat_history) + "[/INST]\nAssistant: "
+
         # print(prompt)
         for chunk in self.prompt_llm_server(prompt=prompt):
 
@@ -193,27 +217,60 @@ class MyAgent(Agent):
             new_card = False
 
             response += chunk
+        self.chat_history.append(f"Assistant: {response}")
         return response
 
+
+    # TODO: temporary implementation
     def prompt_received(self, prompt):
+        print("Message received:", prompt)
+        message_yt_link = self.extract_youtube_link(prompt)
+        if message_yt_link:
+            self.print("Thanks for the link. Downloading the video transcript and building the index locally.")
+            yt_links = [message_yt_link]
+            yt_doc = self.get_youtube_transcript_doc(yt_links)
+            yt_doc[0].doc_id = "youtube_doc"
+            self.yt_vector_index = self.build_vector_index(yt_doc)
+            self.yt_query_engine = self.get_query_engine(self.yt_vector_index)
+            msg = "Index and query engine is now ready to be used on your PC. Feel free to ask any questions about the video!"
+            self.print(msg)
+            self.chat_history.append(f"Asssistant: {msg}")
+        elif self.yt_query_engine:
+            query = prompt
+            print(f"\nQuery: {query}")
+            streaming_response = self.yt_query_engine.query(query)
+            print("Answer: ", end="", flush=True)
+            response = ""
+            for text in streaming_response.response_gen:
+                if text:
+                    response += text
+                    # Print the streaming response to the console
+                    print(text, end="", flush=True)
+        else:
+            self.print("Hey! Can you share a youtube link with me? I can't query a youtube video until you share a link with me.")
+
+
+    def _prompt_received(self, prompt):
         print("Message received:", prompt)
 
         response = self.prompt_llm(prompt)
-        print(response)
+        # print(response)
 
         key, value = self.extract_json_data(response)
-        print(f"key: {key}, value: {value}, llm state: {self.llm_state}")
-        print(self.llm_states[self.llm_state])
-
+        # print(f"key: {key}, value: {value}, llm state: {self.llm_state}")
+        # print(self.llm_states[self.llm_state])
         if key == "youtube_search":
-            self.yt_search_results = self.youtube_search(value, max_results=3)
+            self.yt_search_results = self.youtube_search(value, max_results=1)
             self.yt_vector_index = None
             self.yt_query_engine = None
             self.llm_state = 1
 
-        if key == "build_index":
-            video = self.yt_search_results[value]
-            print(f"Fetching transcript from {video}.")
+        # if key == "build_index":
+            # video = self.yt_search_results[value]
+            video = self.yt_search_results[0]
+            msg = f"Fetching transcript from {video}."
+            self.print(msg)
+            self.chat_history.append(f"Asssistant: {msg}")
             video_id = video["video_id"]
             yt_url = [self.get_video_url(video_id)]
             yt_doc = self.get_youtube_transcript_doc(yt_url)
@@ -222,8 +279,19 @@ class MyAgent(Agent):
             self.yt_vector_index = self.build_vector_index(yt_doc)
             self.yt_query_engine = self.get_query_engine(self.yt_vector_index)
 
-            print("Done! Index and query engine is now ready to be used on your PC. Feel free to ask any questions about the video!")
-            self.llm_state = 2
+            msg = f"Index and query engine is now ready to be used on your PC. Feel free to ask any questions about the video! Running query through RAG engine: {value}"
+            self.print(msg)
+            self.chat_history.append(f"Asssistant: {msg}")
+            # self.llm_state = 2
+
+            # query with original subject
+            streaming_response = self.yt_query_engine.query(value)
+            print("Answer: ", end="", flush=True)
+            response = ""
+            for text in streaming_response.response_gen:
+                if text:
+                    response += text
+                    print(text, end="", flush=True)
 
         if key == "query_rag":
             query = value
@@ -244,11 +312,21 @@ class MyAgent(Agent):
 
     def chat_restarted(self):
         print("Client requested chat to restart")
-        # self.prompt_llm("Hello, who are you?")
-        self.print("Hi, I'm Clipy, an assistant that helps you search and find information on YouTube")
-        self.yt_vector_index = None
-        self.yt_query_engine = None
-        self.yt_search_results = None
+        self.chat_history.clear()
+        intro = "Hi, who are you in one sentence?"
+        print("User:", intro)
+        try:
+            response = self.prompt_llm(intro)
+            print(f"Response: {response}")
+        except ConnectionRefusedError as e:
+            self.print(
+                f"Having trouble connecting to the LLM server, got:\n{str(e)}! "
+                # "For detailed step-by-step instruction, click on <this guide>." TODO
+            )
+        finally:
+            self.yt_vector_index = None
+            self.yt_query_engine = None
+            self.yt_search_results = None
 
     def extract_youtube_link(self, message):
         youtube_link_pattern = r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/(?:watch\?v=)?(?:embed/)?(?:v/)?(?:shorts/)?(?:\S+)"
@@ -258,14 +336,29 @@ class MyAgent(Agent):
         else:
             return None
 
+    def extract_video_id(self, url):
+        patterns = [
+            r'(?:https?:\/\/)?(?:www\.)?youtube\.com\/watch\?v=([^&]+)',
+            r'(?:https?:\/\/)?(?:www\.)?youtu\.be\/([^?]+)',
+            r'(?:https?:\/\/)?(?:www\.)?youtube\.com\/embed\/([^?]+)',
+            r'(?:https?:\/\/)?(?:www\.)?youtube\.com\/v\/([^?]+)',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return match.group(1)
+
+        return None
+
     def get_youtube_transcript_doc(self, yt_links: list) -> Document:
-        self.print(f"Fetching YouTube transcript from {yt_links}")
         return YoutubeTranscriptReader().load_data(ytlinks=yt_links)
 
     def build_vector_index(self, doc: Document) -> VectorStoreIndex:
-        self.print("Building vector index...")
+        start_time = time.perf_counter()
         index = VectorStoreIndex.from_documents(doc, show_progress=True)
-        self.print("Done!")
+        end_time = time.perf_counter()
+        self.print(f"Done building index. Took {(end_time - start_time):.1f} seconds to build.")
         return index
 
     def build_summary_index(self, doc: Document) -> DocumentSummaryIndex:
@@ -284,7 +377,7 @@ class MyAgent(Agent):
         return doc_summary_index
 
     def get_query_engine(self, index):
-        self.print("Building RAG query engine.")
+        # self.print("Building RAG query engine.")
         qa_prompt_tmpl = PromptTemplate(self.query_engine_system_prompt)
         query_engine = index.as_query_engine(
             verbose=True,
@@ -307,8 +400,8 @@ class MyAgent(Agent):
 
 
 def main():
-    # Clipy LLM CLI for testing purposes.
-    parser = argparse.ArgumentParser(description="Interact with the Clipy Agent CLI")
+    # Clip LLM CLI for testing purposes.
+    parser = argparse.ArgumentParser(description="Interact with the Clip Agent CLI")
     parser.add_argument(
         "--host", default="127.0.0.1", help="Host address for the agent server"
     )
@@ -318,7 +411,7 @@ def main():
     args = parser.parse_args()
 
     agent = MyAgent(host=args.host, port=args.port)
-    print("Clipy Agent initialized. Type 'exit' to quit.")
+    print("Clip Agent initialized. Type 'exit' to quit.")
 
     while True:
         try:

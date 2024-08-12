@@ -209,12 +209,18 @@ class MyAgent(Agent):
 
     def chat_restarted(self):
         print("Client requested chat to restart")
-        # self.print("Hi there! I'm Chatty. What would you like to chat about today?")
         self.chat_history.clear()
-        intro = "Hi, Picasso, who are you in one sentence?"
+        intro = "Hi, who are you in one sentence?"
         print("User:", intro)
-        response = self.prompt_llm(intro)
-        print(f"Response: {response}")
+        try:
+            response = self.prompt_llm(intro)
+            print(f"Response: {response}")
+        except ConnectionRefusedError as e:
+            self.print(
+                f"Having trouble connecting to the LLM server, got:\n{str(e)}! "
+                # "For detailed step-by-step instruction, click on <this guide>." TODO
+            )
+
 
     def sdxl_prompt_generate(self, query: str) -> str:
         """A function that receives a query from a user and produces a prompt that is used for SDXL image generation"""

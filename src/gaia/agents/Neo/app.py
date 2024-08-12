@@ -87,12 +87,32 @@ class MyAgent(Agent):
 
     def chat_restarted(self):
         print("Client requested chat to restart")
-        self.print(
-            "Hi I'm Neo, I can index github projects for you so you can easily query them. Just paste a link and I'll get on it!"
-        )
-        self.print(
-            "For example, 'please index this repo: https://github.com/onnx/turnkeyml'"
-        )
+        # self.chat_history.clear()
+        intro = "Hi, who are you in one sentence?"
+        # prompt = self.qa_prompt_tmpl_str + '\n'.join(f"User: {intro}") + "[/INST]\nAssistant: "
+        prompt = '\n'.join(f"User: {intro}") + "[/INST]\nAssistant: "
+        print("User:", intro)
+        try:
+            new_card = True
+            for chunk in self.prompt_llm_server(prompt=prompt):
+
+                # Stream chunk to UI
+                self.stream_to_ui(chunk, new_card=new_card)
+                new_card = False
+                print(chunk, end="", flush=True)
+            print("\n")
+
+        except ConnectionRefusedError as e:
+            self.print(
+                f"Having trouble connecting to the LLM server, got:\n{str(e)}! "
+                # "For detailed step-by-step instruction, click on <this guide>." TODO
+            )
+        finally:
+            self.print(
+                "I can index github projects for you so you can easily query them. Just paste a link and I'll get on it!\n"
+                "For example, 'please index this repo: https://github.com/onnx/turnkeyml'"
+            )
+
 
 
     def extract_github_owner_repo(self, message):

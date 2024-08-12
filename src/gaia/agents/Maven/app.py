@@ -5,7 +5,6 @@ import sys
 import json
 import hashlib
 import shutil
-import asyncio
 import logging
 import phoenix as px
 from pathlib import Path
@@ -75,11 +74,52 @@ class MyAgent(Agent):
         self.research_topic = "AVX512"
         self.number_of_videos = 3
 
+        self.llm_system_prompt = (
+            "[INST] <<SYS>>\n"
+            "You are Maven, an AI PC assistant for research designed to help the user with any research topic.\n"
+            "You are able to search the web and compile information, all done locally on the user's PC."
+            "You are friendly, inquisitive and keep your answers short and concise.\n"
+            "Your goal is to engage the User while providing helpful responses.\n"
+            "\n"
+            "Guidelines:\n"
+            "- Analyze queries step-by-step for accurate, brief answers.\n"
+            "- End each message with </s>.\n"
+            "- Use a natural, conversational tone.\n"
+            "- Avoid using expressions like *grins*, use emojis sparingly.\n"
+            "- Show curiosity by asking relevant follow-up questions.\n"
+            "- Break down complex problems when answering.\n"
+            "- Introduce yourself in one friendly sentence.\n"
+            "- Balance information with user engagement.\n"
+            "- Adapt to the user's language style and complexity.\n"
+            "- Admit uncertainty and ask for clarification when needed.\n"
+            "- Respect user privacy.\n"
+            "\n"
+            "Prioritize helpful, engaging interactions within ethical bounds.\n"
+            "<</SYS>>\n\n"
+        )
+
         # FIXME: temporary
         self.build_pdf_index("./data/pdf")
 
         # Initialize agent server
         self.initialize_server()
+
+    def prompt_llm(self, query):
+        response = ""
+        new_card = True
+        self.chat_history.append(f"User: {query}")
+        prompt = self.llm_system_prompt + '\n'.join(self.chat_history) + "[/INST]\nAssistant: "
+
+        # print(prompt)
+        for chunk in self.prompt_llm_server(prompt=prompt):
+
+            # Stream chunk to UI
+            self.stream_to_ui(chunk, new_card=new_card)
+            new_card = False
+
+            response += chunk
+        self.chat_history.append(f"Assistant: {response}")
+        return response
 
     def build_agents(self):
         # Build agents dictionary
@@ -670,8 +710,21 @@ class MyAgent(Agent):
         print(f"Agent Response: {response}")
 
     def chat_restarted(self):
-        self.next_state = "build_index"
         print("Client requested chat to restart")
+        self.chat_history.clear()
+        intro = "Hi, who are you in one sentence?"
+        print("User:", intro)
+        try:
+            response = self.prompt_llm(intro)
+            print(f"Response: {response}")
+        except ConnectionRefusedError as e:
+            self.print(
+                f"Having trouble connecting to the LLM server, got:\n{str(e)}! "
+                # "For detailed step-by-step instruction, click on <this guide>." TODO
+            )
+        finally:
+            self.next_state = "build_index"
+
 
 
 if __name__ == "__main__":

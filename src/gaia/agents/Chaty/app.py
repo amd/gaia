@@ -14,7 +14,7 @@ class MyAgent(Agent):
 
         self.llm_system_prompt = (
             "[INST] <<SYS>>\n"
-            "You are Chatty, a large langauge model running locally on the User's laptop offering the best privacy.\n"
+            "You are Chaty, a large language model running locally on the User's laptop offering privacy, zero cost and offline inference capability.\n"
             "You are friendly, inquisitive and keep your answers short and concise.\n"
             "Your goal is to engage the User while providing helpful responses.\n"
             "\n"
@@ -65,12 +65,17 @@ class MyAgent(Agent):
 
     def chat_restarted(self):
         print("Client requested chat to restart")
-        # self.print("Hi there! I'm Chatty. What would you like to chat about today?")
         self.chat_history.clear()
-        intro = "Hi, Chatty, who are you in one sentence?"
+        intro = "Hi, who are you in one sentence?"
         print("User:", intro)
-        response = self.prompt_llm(intro)
-        print(f"Response: {response}")
+        try:
+            response = self.prompt_llm(intro)
+            print(f"Response: {response}")
+        except ConnectionRefusedError as e:
+            self.print(
+                f"Having trouble connecting to the LLM server, got:\n{str(e)}! "
+                # "For detailed step-by-step instruction, click on <this guide>." TODO
+            )
 
 
 def main():

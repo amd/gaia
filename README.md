@@ -8,18 +8,15 @@ Currently, we support the following agents:
 
 | Agent Name | Function                     |
 | ---------- | ---------------------------- |
-|   Maven    | Online research assistant    |
-|   Clipy    | Chat with youtube transcript |
-|   Datalin  | Onnx model visualizer        |
+|   Chaty    | Vanilla LLM chatbot          |
 |   Joker    | Simple joke generator        |
+|   Clip     | YouTube search and Q&A agent |
+|   Maven    | Online research assistant    |
 |    Neo     | Chat with public GitHub repo |
+|   Datalin  | Onnx model visualizer        |
 |  Picasso*  | AI art creator               |
 
 \* Picasso agent is currently under development and exists only as a mockup.
-
-# Getting Started
-
-To get started, please follow the instructions below. If you have a new machine and need to install all dependencies, start [here](#).
 
 ## Contents:
 
@@ -30,21 +27,13 @@ To get started, please follow the instructions below. If you have a new machine 
 1. [Contributing](#contributing)
 
 
-# Installation
+# Getting Started
 
-## Install GAIA Backend
+To get started, please follow the instructions below. If you have a new machine and need to install all dependencies from scratch, start [here](#Complete-Installation-of-GAIA) instead.
 
-Install instructions below are for Microsoft Windows OS and [Miniconda 24+](https://docs.anaconda.com/free/miniconda/).
+1. Download and unzip the pre-installed package found [here](TBD).
 
-1. Clone repo: `git clone https://github.com/aigdat/gaia.git`
-1. Go to the root: `cd ./gaia`
-1. Create and activate a conda environment:
-    1. `conda create -n gaia python=3.11`
-    1. `conda activate gaia`
-1. Install GAIA package and dependencies, note this command will install dependencies for all agents:
-    1. `pip install -e .`
-1. To install dependencies with cuda support, run:
-    1. `pip install -e .[cuda]`
+# Running GAIA on Ryzen AI NPU
 
 ### Strix Machines
 For strix machines, plase make sure to:
@@ -57,9 +46,84 @@ Run this to validate the LLM and transformers libary is running properly on NPU:
 
 ## Install Lemonade Web Server
 
-GAIA requires the Lemonade Web Server to run, follow the install directions below.
-1. Open a new command-line terminal.
-1. Follow the directions for setup (here)[https://github.com/aigdat/genai/blob/main/docs/easy_ryzenai_npu.md]
+## Manual Start of GAIA App and NPU Web Server
+
+1. These instructions assume you have followed the directions in the ryzenai-npu drop `easy_ryzenai_npu_7-14.md`.
+1. Open a new command shell and go to the root <transformers> folder.
+1. Activate the conda environment: `conda activate ryzenai-transformers`
+1. Enable a performance option: `set MLADF=2x4x4`
+1. For STX machines, run: `setup_stx.bat`. For PHX machines, run: `setup_phx.bat`.
+1. Run the LLM web server: `start_npu_server.bat`
+1. You should see an output similar to the one following:
+
+```
+Info: Running tool: serve
+INFO:     Started server process [18836]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://localhost:8000 (Press CTRL+C to quit)
+INFO:     ('::1', 50649) - "WebSocket /ws" [accepted]
+INFO:     connection open
+```
+1. Open a new command shell and go to the root of the gaia project (`./gaia_internal/gaia`)
+1. Activate the GAIA virtual environment: `conda activate gaiaenv`
+    1. NOTE: If the environment does not exist, proceed to the manual installation steps [here](#Installation-of-GAIA-Environment)
+1. Start the application: `gaia`
+
+NOTE: Always use command shell only, NOT powershell. Do not use administrative mode.
+
+# Complete Installation of GAIA
+
+The following instructions can be used to do the full installation of GAIA from source and has been tested on Microsoft Windows OS and [Miniconda 24+](https://docs.anaconda.com/free/miniconda/).
+These instructions should only be used if other steps fail, otherwise most users should be following [these](#Automatically-Running-the-Ryzen-AI-NPU-Web-Server-and-GAIA).
+
+1. Clone the repo from [here](TBD)
+1. Open two command prompts, one for GAIA and another for the LLM web server called Lemonade.
+1. In the LLM web server command window, do the following:
+    1. Follow instruction to setup the `ryzenai-transformers` environment [here](#Complete-Installation-of-Transformers)
+    1. Follow instructions to setup the `lemonade` tool [here](https://github.com/aigdat/genai/blob/main/docs/easy_ryzenai_npu.md)
+    1. Execute `<transformers>/setup_stx.py` 
+    1. Set environment variable: `set MLADF=2x4x4`
+    1. Start lemonade web server: `lemonade ryzenai-npu-load --device stx -c meta-llama/Llama-2-7b-chat-hf serve --max-new-tokens 600`
+1. In the GAIA command window, do the following:
+    1. Go to the GAIA root: `cd ./gaia`
+    1. Create and activate a conda environment:
+        1. `conda create -n gaiaenv python=3.11`
+        1. `conda activate gaiaenv`
+    1. Install GAIA package and dependencies:
+        1. `pip install .`
+        NOTE: If actively developing, use `pip install -e .` to enable editable mode and create links to sources instead.
+    1. Run `gaia` and a UI should pop-up initializing the application.
+
+# Installation of Transformers
+
+1. Go to the root of <transformers> library.
+1. `conda env create --file=env.yaml`
+1. `conda activate ryzenai-transformers`
+1. `setup_stx.bat`
+1. `set MLADF=2x4x4`
+1. `build_dependencies.bat`
+1. `pip install ops\cpp --force-reinstall`
+1. `pip install ops\torch_cpp --force-reinstall`
+
+1. Copy the llama2 weights from here: llama-2-7b  into models\llm
+1. cd into `models\llm` and quantize the model
+    1. AWQ:  `python run_awq.py --model_name llama-2-7b --task quantize`
+    1. AWQPlus: `python run_awq.py --model_name llama-2-7b --task quantize --algorithm awqplus`
+
+1. The checkpoints are created in `models\llm\quantized_models\`
+1. Decode the model and run some example prompts: Go to `models\llm\` folder and run:
+    1. `python run_awq.py --model_name llama-2-7b --algorithm awqplus --task decode --fast_attention --fast_mlp --fast_norm`
+
+1. Run profiling for a specific prompt lengths:
+    1. `python run_awq.py --model_name llama-2-7b --algorithm awqplus --task profilemodel2k --fast_attention --fast_mlp --fast_norm`
+    1. `python run_awq.py --model_name llama-2-7b --algorithm awqplus --task profilemodel1k --fast_attention --fast_mlp --fast_norm`
+    1. `python run_awq.py --model_name llama-2-7b --algorithm awqplus --task profilemodel512 --fast_attention --fast_mlp --fast_norm`
+    1. `python run_awq.py --model_name llama-2-7b --algorithm awqplus --task profilemodel256 --fast_attention --fast_mlp --fast_norm`
+
+1. Run assisted generation
+    1. `cd models\llm_assisted_generation\`
+    1. `python assisted_generation.py --model_name llama-2-7b --task decode --assisted_generation`
 
 # Running the Ryzen AI NPU Web Server
 
@@ -80,17 +144,6 @@ INFO:     connection open
 ```
 NOTE: use command shell only, not powershell.
 
-# Running the Neo Agent on NPU
-
-1. Make sure to include a github token in your `.env` file.
-`GITHUB_TOKEN=github_pat_abc123etc`
-1. Start the NPU web server by following the instructions [here](#running-the-ryzen-ai-npu-web-server)
-1. Start gaia webserver:  `python run.py`
-1. Choose the Neo agent to run:
-`Enter the agent you want to run (Clipy, Datalin, Joker, Neo, Picasso, All) [Default: Neo]: `
-1. Open `AIG Demo Hub`, click on `Open Demo` and use `http://localhost:<port>/api/messages`
-* NOTE: each agent is hosted on a separate port, connect to the desired agent by modifying the target port above. See gaia web server shell for port details.
-
 # Running RyzenAI iGPU Web Server
 
 To get setup initially, you will need to setup the Ryzen AI iGPU web server by following the directions below.
@@ -108,7 +161,7 @@ If you decide to contribute, please:
 - write your code in keeping with the same style as the rest of this repo's code.
 - add a test under `./tests` that provides coverage of your new feature.
 
-The best way to contribute is to add a new agent that covers a unique use-case. You can use any of the agents such as Neo under ./agents folder as a starting point.
+The best way to contribute is to add a new agent that covers a unique use-case. You can use any of the agents/bots under ./agents folder as a starting point.
 
 ## Create your own agent
 
