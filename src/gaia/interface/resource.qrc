@@ -7,5 +7,6 @@
         <file>img/refresh_gray.png</file>
         <file>img/waiting_token.gif</file>
         <file>img/loading.gif</file>
+        <file>img/gaia.ico</file>
     </qresource>
 </RCC>

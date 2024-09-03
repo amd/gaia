@@ -1,18 +1,19 @@
 {
     "dev_mode": false,
-    "llm_server": false,
+    "llm_server": true,
     "show_label": true,
 
     "agents": [
-        "Clip",
         "Chaty",
         "Joker",
+        "Clip",
         "Neo",
         "Maven",
         "Example"
     ],
     "models": {
-        "LLama 2 7B": {
+        "LLama-2-7B (OGA-NPU)": {
+            "backend" : "oga",
             "checkpoint": "meta-llama/Llama-2-7b-chat-hf",
             "device": {
                 "NPU": [
@@ -20,18 +21,38 @@
                 ]
             }
         },
-        "Phi 3 Mini 4k": {
-            "checkpoint": "microsoft/Phi-3-mini-4k-instruct",
+        "LLama-2-7B (HF-CPU)": {
+            "backend" : "hf",
+            "checkpoint": "meta-llama/Llama-2-7b-chat-hf",
             "device": {
-                "iGPU": [
-                    "int4"
+                "CPU": [
+                    "bfloat16"
                 ]
             }
         },
-        "LLama 3 8B": {
+        "LLama-3.1-8B (HF-CPU)": {
+            "backend" : "hf",
+            "checkpoint": "meta-llama/Meta-Llama-3.1-8B",
+            "device": {
+                "CPU": [
+                    "bfloat16"
+                ]
+            }
+        },
+        "LLama-3-8B (HF-CPU)": {
+            "backend" : "hf",
             "checkpoint": "meta-llama/Meta-Llama-3-8B",
             "device": {
-                "iGPU": [
+                "CPU": [
+                    "bfloat16"
+                ]
+            }
+        },
+        "LLama-3-8B (OGA-NPU)": {
+            "backend" : "oga",
+            "checkpoint": "meta-llama/Meta-Llama-3-8B",
+            "device": {
+                "NPU": [
                     "int4"
                 ]
             }

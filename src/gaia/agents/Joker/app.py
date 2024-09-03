@@ -95,16 +95,16 @@ class MyAgent(Agent):
         return response
 
     def prompt_received(self, prompt):
-        print("User:", prompt)
+        self.log.info(f"User: {prompt}")
         response = self.chat(prompt)
-        print(f"Response: {response}")
+        self.log.info(f"Response: {response}")
 
     def chat_restarted(self):
-        print("Client requested chat to restart")
+        self.log.info("Client requested chat to restart")
         self.chat_history.clear()
         intro = "Hi, who are you in one sentence?"
         prompt = self.qa_prompt_tmpl_str + '\n'.join(f"User: {intro}") + "[/INST]\nAssistant: "
-        print("User:", intro)
+        self.log.info(f"User: {intro}")
         try:
             new_card = True
             for chunk in self.prompt_llm_server(prompt=prompt):
@@ -116,11 +116,8 @@ class MyAgent(Agent):
             print("\n")
 
         except ConnectionRefusedError as e:
-            self.print(
-                f"Having trouble connecting to the LLM server, got:\n{str(e)}! "
-                # "For detailed step-by-step instruction, click on <this guide>." TODO
-            )
-
+            self.print(f"Having trouble connecting to the LLM server, got:\n{str(e)}!")
+            self.log.error(str(e))
 
 
 def main():

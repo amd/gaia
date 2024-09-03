@@ -24,7 +24,7 @@ from gaia.agents.agent import Agent, LocalLLM
 
 
 class MyAgent(Agent):
-    def __init__(self, host, port):
+    def __init__(self, host="127.0.0.1", port=8001):
         super().__init__(host, port)
 
         self.repo_engine = None
@@ -67,31 +67,29 @@ class MyAgent(Agent):
         self.initialize_server()
 
     def prompt_received(self, prompt):
-        print("Message received:", prompt)
+        self.log.info("Message received:", prompt)
         owner, repo = self.extract_github_owner_repo(prompt)
 
         if owner and repo:
-            self.print(
-                f"Thanks for sharing the link. Indexing {owner}/{repo} repo now."
-            )
+            self.print(f"Thanks for sharing the link. Indexing {owner}/{repo} repo now.")
             self.create_repo_engine(owner, repo)
         else:
             # Send message to agent and get response
-            print(f"\nQuery: {prompt}")
+            self.log.info(f"\nQuery: {prompt}")
             response = self.repo_engine.query(prompt)
-            print(f"Answer: {response}")
+            self.log.info(f"Answer: {response}")
 
             # strip end characters
             response = response.rstrip("</s>")
 
 
     def chat_restarted(self):
-        print("Client requested chat to restart")
+        self.log.info("Client requested chat to restart")
         # self.chat_history.clear()
         intro = "Hi, who are you in one sentence?"
         # prompt = self.qa_prompt_tmpl_str + '\n'.join(f"User: {intro}") + "[/INST]\nAssistant: "
         prompt = '\n'.join(f"User: {intro}") + "[/INST]\nAssistant: "
-        print("User:", intro)
+        self.log.info(f"User: {intro}")
         try:
             new_card = True
             for chunk in self.prompt_llm_server(prompt=prompt):
@@ -103,10 +101,8 @@ class MyAgent(Agent):
             print("\n")
 
         except ConnectionRefusedError as e:
-            self.print(
-                f"Having trouble connecting to the LLM server, got:\n{str(e)}! "
-                # "For detailed step-by-step instruction, click on <this guide>." TODO
-            )
+            self.print(f"Having trouble connecting to the LLM server, got:\n{str(e)}!")
+            self.log.error(str(e))
         finally:
             self.print(
                 "I can index github projects for you so you can easily query them. Just paste a link and I'll get on it!\n"

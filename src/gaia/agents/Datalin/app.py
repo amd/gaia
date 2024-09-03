@@ -12,7 +12,7 @@ from gaia.agents.Datalin.split import split_onnx_model
 
 
 class MyAgent(Agent):
-    def __init__(self, host, port):
+    def __init__(self, host="127.0.0.1", port=8001):
         super().__init__(host, port)
 
         self.n_chat_messages = 4
@@ -43,7 +43,7 @@ class MyAgent(Agent):
         self.chat_history.append(f"User: {query}")
         prompt = self.llm_system_prompt + '\n'.join(self.chat_history) + "[/INST]\nAssistant: "
 
-        # print(prompt)
+        # self.log.info(prompt)
         for chunk in self.prompt_llm_server(prompt=prompt):
 
             # Stream chunk to UI
@@ -55,9 +55,9 @@ class MyAgent(Agent):
         return response
 
     def prompt_received(self, prompt):
-        print("User:", prompt)
+        self.log.info(f"User: {prompt}")
         response = self.prompt_llm(prompt)
-        print(f"Response: {response}")
+        self.log.info(f"Response: {response}")
 
     def process_attachments(self, user_query:str, attachments:list):
         if attachments:
@@ -145,10 +145,7 @@ class MyAgent(Agent):
             response = self.prompt_llm(intro)
             print(f"Response: {response}")
         except ConnectionRefusedError as e:
-            self.print(
-                f"Having trouble connecting to the LLM server, got:\n{str(e)}! "
-                # "For detailed step-by-step instruction, click on <this guide>." TODO
-            )
+            self.print(f"Having trouble connecting to the LLM server, got:\n{str(e)}!")
 
 
 def main():

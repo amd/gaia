@@ -3,37 +3,17 @@
 import argparse
 from collections import deque
 from gaia.agents.agent import Agent
+from gaia.agents.Chaty.prompts import ChatyPrompts
 
 
 class MyAgent(Agent):
-    def __init__(self, host, port):
+    def __init__(self, host="127.0.0.1", port=8001, model="meta-llama/Llama-2-7b-chat-hf"):
         super().__init__(host, port)
 
         self.n_chat_messages = 4
         self.chat_history = deque(maxlen=self.n_chat_messages * 2)  # Store both user and assistant messages
 
-        self.llm_system_prompt = (
-            "[INST] <<SYS>>\n"
-            "You are Chaty, a large language model running locally on the User's laptop offering privacy, zero cost and offline inference capability.\n"
-            "You are friendly, inquisitive and keep your answers short and concise.\n"
-            "Your goal is to engage the User while providing helpful responses.\n"
-            "\n"
-            "Guidelines:\n"
-            "- Analyze queries step-by-step for accurate, brief answers.\n"
-            "- End each message with </s>.\n"
-            "- Use a natural, conversational tone.\n"
-            "- Avoid using expressions like *grins*, use emojis sparingly.\n"
-            "- Show curiosity by asking relevant follow-up questions.\n"
-            "- Break down complex problems when answering.\n"
-            "- Introduce yourself in one friendly sentence.\n"
-            "- Balance information with user engagement.\n"
-            "- Adapt to the user's language style and complexity.\n"
-            "- Admit uncertainty and ask for clarification when needed.\n"
-            "- Respect user privacy.\n"
-            "\n"
-            "Prioritize helpful, engaging interactions within ethical bounds.\n"
-            "<</SYS>>\n\n"
-        )
+        self.llm_system_prompt = ChatyPrompts.get_system_prompt(model)
 
         # Initialize agent server
         self.initialize_server()
@@ -47,7 +27,7 @@ class MyAgent(Agent):
         self.chat_history.append(f"User: {query}")
         prompt = self.llm_system_prompt + '\n'.join(self.chat_history) + "[/INST]\nAssistant: "
 
-        # print(prompt)
+        # self.log.info(prompt)
         for chunk in self.prompt_llm_server(prompt=prompt):
 
             # Stream chunk to UI
@@ -59,24 +39,21 @@ class MyAgent(Agent):
         return response
 
     def prompt_received(self, prompt):
-        print("User:", prompt)
+        self.log.info(f"User: {prompt}")
         response = self.prompt_llm(prompt)
-        print(f"Response: {response}")
+        self.log.info(f"Response: {response}")
 
     def chat_restarted(self):
-        print("Client requested chat to restart")
+        self.log.info("Client requested chat to restart")
         self.chat_history.clear()
         intro = "Hi, who are you in one sentence?"
-        print("User:", intro)
+        self.log.info(f"User: {intro}")
         try:
             response = self.prompt_llm(intro)
-            print(f"Response: {response}")
+            self.log.info(f"Response: {response}")
         except ConnectionRefusedError as e:
-            self.print(
-                f"Having trouble connecting to the LLM server, got:\n{str(e)}! "
-                # "For detailed step-by-step instruction, click on <this guide>." TODO
-            )
-
+            self.print(f"Having trouble connecting to the LLM server, got:\n```{str(e)}```")
+            self.log.info(str(e))
 
 def main():
     # LLM CLI for testing purposes.

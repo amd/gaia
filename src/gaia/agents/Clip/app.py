@@ -25,7 +25,7 @@ from llama_index.readers.youtube_transcript import YoutubeTranscriptReader
 from gaia.agents.agent import Agent, LocalLLM
 
 class MyAgent(Agent):
-    def __init__(self, host, port):
+    def __init__(self, host="127.0.0.1", port=8001):
         super().__init__(host, port)
 
         load_dotenv()
@@ -319,10 +319,7 @@ class MyAgent(Agent):
             response = self.prompt_llm(intro)
             print(f"Response: {response}")
         except ConnectionRefusedError as e:
-            self.print(
-                f"Having trouble connecting to the LLM server, got:\n{str(e)}! "
-                # "For detailed step-by-step instruction, click on <this guide>." TODO
-            )
+            self.print( f"Having trouble connecting to the LLM server, got:\n{str(e)}!")
         finally:
             self.yt_vector_index = None
             self.yt_query_engine = None

@@ -14,7 +14,7 @@ class MyAgent(Agent):
         self.initialize_server()
 
     def prompt_received(self, prompt):
-        print("Message received:", prompt)
+        self.log.info("Message received:", prompt)
 
         # Prompt LLM server and stream results directly to UI
         new_card = True
@@ -26,13 +26,13 @@ class MyAgent(Agent):
             new_card = False
             response += token
 
-        print(f"Message streamed: {response}")
+        self.log.info(f"Message streamed: {response}")
 
     def chat_restarted(self):
-        print("Client requested chat to restart")
+        self.log.info("Client requested chat to restart")
         intro = "Hi, who are you in one sentence?"
         prompt = self.llm_system_prompt + '\n'.join(f"User: {intro}") + "[/INST]\nAssistant: "
-        print("User:", intro)
+        self.log.info(f"User: {intro}")
         try:
             new_card = True
             for chunk in self.prompt_llm_server(prompt=prompt):
@@ -43,10 +43,8 @@ class MyAgent(Agent):
                 print(chunk, end="", flush=True)
             print("\n")
         except ConnectionRefusedError as e:
-            self.print(
-                f"Having trouble connecting to the LLM server, got:\n{str(e)}! "
-                # "For detailed step-by-step instruction, click on <this guide>." TODO
-            )
+            self.print(f"Having trouble connecting to the LLM server, got:\n{str(e)}!")
+            self.log.error(str(e))
 
 
 

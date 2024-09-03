@@ -6,26 +6,19 @@ import json
 import hashlib
 import shutil
 import logging
-import phoenix as px
-from pathlib import Path
+from collections import deque
 
 from datetime import datetime, timedelta
 from youtube_search import YoutubeSearch
+import wikipedia
 
-from gaia.agents.agent import Agent, LocalLLM
-
-from llama_index.core import StorageContext, load_index_from_storage
-from llama_index.core.schema import IndexNode
-from llama_index.core.callbacks import CallbackManager
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.agent import ReActAgent
 from llama_index.core.objects import ObjectIndex
 
-
 from llama_index.core import (
     Settings,
     SimpleDirectoryReader,
-    SimpleKeywordTableIndex,
     VectorStoreIndex,
     PromptTemplate,
     SummaryIndex,
@@ -35,25 +28,25 @@ from llama_index.core import (
 
 from llama_index.llms.openai import OpenAI
 
-from llama_index.readers.wikipedia import WikipediaReader
 from llama_index.readers.papers import ArxivReader
 from llama_index.readers.youtube_transcript import YoutubeTranscriptReader
 from llama_index.readers.web import SimpleWebPageReader
 
 from llama_index.core.tools import QueryEngineTool, ToolMetadata
-from llama_index.tools.wikipedia.base import WikipediaToolSpec
 from llama_index.tools.duckduckgo import DuckDuckGoSearchToolSpec
 
-# import llama_index.core
-# llama_index.core.set_global_handler("arize_phoenix")
+from gaia.agents.agent import Agent, LocalLLM
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))
 
 
 class MyAgent(Agent):
-    def __init__(self, host, port, temp_dir="./temp"):
+    def __init__(self, host="127.0.0.1", port=8001, temp_dir="./temp"):
         super().__init__(host, port)
+
+        self.n_chat_messages = 4
+        self.chat_history = deque(maxlen=self.n_chat_messages * 2)  # Store both user and assistant messages
 
         # Define model and settings
         Settings.llm = LocalLLM(
@@ -101,6 +94,8 @@ class MyAgent(Agent):
         # FIXME: temporary
         self.build_pdf_index("./data/pdf")
 
+        self.top_agent = None
+
         # Initialize agent server
         self.initialize_server()
 
@@ -110,7 +105,7 @@ class MyAgent(Agent):
         self.chat_history.append(f"User: {query}")
         prompt = self.llm_system_prompt + '\n'.join(self.chat_history) + "[/INST]\nAssistant: "
 
-        # print(prompt)
+        # self.log.info(prompt)
         for chunk in self.prompt_llm_server(prompt=prompt):
 
             # Stream chunk to UI
@@ -129,7 +124,7 @@ class MyAgent(Agent):
 
         # Iterate over the combined documents
         for key, value in self.index_obj.items():
-            print(f"key: {key}, value: {value}")
+            self.log.info(f"key: {key}, value: {value}")
             # Define query engines for vector and summary indexes
             vector_query_engine = value["vector_query_engine"]
             summary_query_engine = value["summary_query_engine"]
@@ -251,13 +246,11 @@ class MyAgent(Agent):
             try:
                 # Remove the temporary directory and all its contents
                 shutil.rmtree(self.temp_dir)
-                print(f"Cleaned up temporary directory: {self.temp_dir}")
-            except Exception as e:
-                print(
-                    f"Failed to delete temporary directory: {self.temp_dir}. Reason: {e}"
-                )
+                self.log.info(f"Cleaned up temporary directory: {self.temp_dir}")
+            except Exception as e: # pylint:disable=W0718
+                self.log.error(f"Failed to delete temporary directory: {self.temp_dir}. Reason: {e}")
         else:
-            print(f"Temporary directory does not exist: {self.temp_dir}")
+            self.log.warning(f"Temporary directory does not exist: {self.temp_dir}")
 
     def _get_pdf_content(self, local_folder: str) -> str:
         pdf_files = [file for file in os.listdir(local_folder) if file.endswith(".pdf")]
@@ -316,7 +309,7 @@ class MyAgent(Agent):
         vector_query_engine.update_prompts(
             {"response_synthesizer:text_qa_template": qa_prompt_tmpl}
         )
-        # print(f"vector query engine prompts:\n{vector_query_engine.get_prompts()}")
+        # self.log.info(f"vector query engine prompts:\n{vector_query_engine.get_prompts()}")
 
         summary_query_engine = summary_index.as_query_engine(
             verbose=True,
@@ -324,7 +317,7 @@ class MyAgent(Agent):
             response_mode="compact",
             streaming=True,
         )
-        # print(f"summary query engine prompts:\n{summary_query_engine.get_prompts()}")
+        # self.log.info(f"summary query engine prompts:\n{summary_query_engine.get_prompts()}")
 
         self.index_obj[key] = {"vector_index": vector_index}
         self.index_obj[key].update({"summary_index": summary_index})
@@ -340,9 +333,7 @@ class MyAgent(Agent):
         # Check if the index already exists for the given hash
         if os.path.exists(vector_dir) and os.path.exists(summary_dir):
             # Load the existing index from the persist directory
-            print(
-                f"Found and loading an existing index in {vector_dir} and {summary_dir}."
-            )
+            self.log.info(f"Found and loading an existing index in {vector_dir} and {summary_dir}.")
             vector_index, summary_index = self._load_index(vector_dir, summary_dir)
             ret = f"SUCCESS: loaded existing {key} index."
         else:
@@ -357,7 +348,7 @@ class MyAgent(Agent):
 
         return ret
 
-    def _clean_wikipedia_text(page_text):
+    def _clean_wikipedia_text(self, page_text):
         lines = page_text.split("\n")
         cleaned_lines = []
         in_reference_section = False
@@ -394,23 +385,50 @@ class MyAgent(Agent):
 
         return "\n".join(cleaned_lines)
 
-    def _fetch_clean_wikipedia_page(topic):
+
+    def _clean_wikipedia_text(self, page_text):
+        lines = page_text.split('\n')
+        cleaned_lines = []
+        in_reference_section = False
+
+        for line in lines:
+            # Skip lines that are part of the references section
+            if "References" in line:
+                in_reference_section = True
+            if in_reference_section:
+                continue
+
+            # Skip lines that are part of the contents or media
+            if line.strip().lower().startswith(('contents', 'references', 'external links', 'see also', 'notes', 'further reading')):
+                continue
+
+            # Skip lines that are empty
+            if not line.strip():
+                continue
+
+            cleaned_lines.append(line)
+
+        return '\n'.join(cleaned_lines)
+
+
+    def _fetch_clean_wikipedia_page(self, topic):
         try:
             page = wikipedia.page(topic)
-            cleaned_text = clean_wikipedia_text(page.content)
+            cleaned_text = self._clean_wikipedia_text(page.content)
             return cleaned_text, page.title
         except wikipedia.exceptions.PageError:
-            print(f"Wikipedia page for topic '{topic}' does not exist.")
+            self.log.error(f"Wikipedia page for topic '{topic}' does not exist.")
             return None, None
         except wikipedia.exceptions.DisambiguationError as e:
-            print(f"Disambiguation error for topic '{topic}'. Options are: {e.options}")
+            self.log.error(f"Disambiguation error for topic '{topic}'. Options are: {e.options}")
             return None, None
-        except Exception as e:
-            print(f"An error occurred: {e}")
+        except Exception as e: # pylint:disable=W0718
+            self.log.error(f"An error occurred: {e}")
             return None, None
 
+
     def _get_wikipedia_documents(self, research_topic: str):
-        cleaned_page_text, page_title = self._fetch_clean_wikipedia_page(research_topic)
+        cleaned_page_text, _ = self._fetch_clean_wikipedia_page(research_topic)
 
         if cleaned_page_text:
             # Define the directory and file name
@@ -432,11 +450,9 @@ class MyAgent(Agent):
             return documents_wiki
 
         else:
-            print(
-                f"Could not retrieve or clean Wikipedia page for topic '{research_topic}'."
-            )
-
+            self.log.error(f"Could not retrieve or clean Wikipedia page for topic '{research_topic}'.")
             return None
+
 
     def build_wikipedia_index(self, research_topic: str):
         key = "wiki"
@@ -445,9 +461,7 @@ class MyAgent(Agent):
         # Check if the index already exists for the given hash
         if os.path.exists(vector_dir) and os.path.exists(summary_dir):
             # Load the existing index from the persist directory
-            print(
-                f"Found and loading an existing index in {vector_dir} and {summary_dir}."
-            )
+            self.log.info(f"Found and loading an existing index in {vector_dir} and {summary_dir}.")
             vector_index, summary_index = self._load_index(vector_dir, summary_dir)
             ret = f"SUCCESS: loaded existing {key} index."
         else:
@@ -469,9 +483,7 @@ class MyAgent(Agent):
         # Check if the index already exists for the given hash
         if os.path.exists(vector_dir) and os.path.exists(summary_dir):
             # Load the existing index from the persist directory
-            print(
-                f"Found and loading an existing index in {vector_dir} and {summary_dir}."
-            )
+            self.log.info(f"Found and loading an existing index in {vector_dir} and {summary_dir}.")
             vector_index, summary_index = self._load_index(vector_dir, summary_dir)
             ret = f"SUCCESS: loaded existing {key} index."
         else:
@@ -486,16 +498,16 @@ class MyAgent(Agent):
                     break
                 except ValueError as e:
                     if "No files found in .papers" in str(e):
-                        print(f"Attempt {attempt + 1} failed: {e}. Retrying...")
+                        self.log.error(f"Attempt {attempt + 1} failed: {e}. Retrying...")
                     else:
                         # Handle other ValueError exceptions
                         ret = f"An unexpected error occurred: {e}"
-                        print(ret)
+                        self.log.error(ret)
                         return ret
             else:
                 # If all attempts fail, handle the error gracefully
                 ret = f"Failed to load papers for topic '{research_topic}' after {retry_attempts} attempts."
-                print(ret)
+                self.log.error(ret)
                 return ret
 
             vector_index, summary_index = self._build_index(
@@ -576,9 +588,7 @@ class MyAgent(Agent):
         # Check if the index already exists for the given hash
         if os.path.exists(vector_dir) and os.path.exists(summary_dir):
             # Load the existing index from the persist directory
-            print(
-                f"Found and loading an existing index in {vector_dir} and {summary_dir}."
-            )
+            self.log.info(f"Found and loading an existing index in {vector_dir} and {summary_dir}.")
             vector_index, summary_index = self._load_index(vector_dir, summary_dir)
             ret = f"SUCCESS: loaded existing {key} index."
         else:
@@ -604,9 +614,7 @@ class MyAgent(Agent):
         # Check if the index already exists for the given hash
         if os.path.exists(vector_dir) and os.path.exists(summary_dir):
             # Load the existing index from the persist directory
-            print(
-                f"Found and loading an existing index in {vector_dir} and {summary_dir}."
-            )
+            self.log.info(f"Found and loading an existing index in {vector_dir} and {summary_dir}.")
             vector_index, summary_index = self._load_index(vector_dir, summary_dir)
             ret = f"SUCCESS: loaded existing {key} index."
         else:
@@ -626,15 +634,13 @@ class MyAgent(Agent):
         return ret
 
     def _prompt_received(self, prompt):
-        print("Message received:", prompt)
+        self.log.info("Message received:", prompt)
 
         if self.next_state == "build_index":
             # TODO: interact and extract research_topic, yt_links and local folder
             research_topic = prompt
             local_folder = "./data/pdf"
-            print(
-                f"Building indices using {research_topic} topic and {local_folder} folder."
-            )
+            self.log.info(f"Building indices using {research_topic} topic and {local_folder} folder.")
 
             self.build_pdf_index(local_folder)
             self.build_wikipedia_index(research_topic)
@@ -645,14 +651,14 @@ class MyAgent(Agent):
             self.stream_to_ui("Finished building indices!", new_card=True)
 
         elif self.next_state == "build_agent":
-            print("Building agent!")
+            self.log.info("Building agent!")
             self.build_agents()
             self.next_state = "interact_agent"
             self.stream_to_ui("Finished building agents!", new_card=True)
 
         elif self.next_state == "interact_agent":
             response = self.top_agent.query(prompt)
-            print(f"Agent Response: {response}")
+            self.log.info(f"Agent Response: {response}")
 
     def prompt_received(self, prompt):
         # query_engine = self.index_obj["pdf"]["vector_query_engine"]
@@ -665,63 +671,61 @@ class MyAgent(Agent):
         self.test_agent(prompt)
 
     def test_pdf_engine(self, prompt):
-        print("Message received:", prompt)
+        self.log.info("Message received:", prompt)
         self.build_pdf_index("./data/pdf")
         query_engine = self.index_obj["pdf"]["vector_query_engine"]
         response = query_engine.query(prompt)
-        print(f"Agent Response: {response}")
+        self.log.info(f"Agent Response: {response}")
 
     def test_wiki_engine(self, prompt):
-        print("Message received:", prompt)
+        self.log.info("Message received:", prompt)
         self.build_wikipedia_index(prompt)
         query_engine = self.index_obj["wiki"]["vector_query_engine"]
         response = query_engine.query(prompt)
-        print(f"Agent Response: {response}")
+        self.log.info(f"Agent Response: {response}")
 
     def test_arxiv_engine(self, prompt):
-        print("Message received:", prompt)
+        self.log.info("Message received:", prompt)
         self.build_arxiv_index(prompt)
         query_engine = self.index_obj["arxiv"]["vector_query_engine"]
         response = query_engine.query(prompt)
-        print(f"Agent Response: {response}")
+        self.log.info(f"Agent Response: {response}")
 
     def test_youtube_engine(self, prompt):
-        print("Message received:", prompt)
+        self.log.info("Message received:", prompt)
         self.build_youtube_index(prompt)
         query_engine = self.index_obj["youtube"]["vector_query_engine"]
         response = query_engine.query(prompt)
-        print(f"Agent Response: {response}")
+        self.log.info(f"Agent Response: {response}")
 
     def test_webpage_engine(self, prompt):
-        print("Message received:", prompt)
+        self.log.info("Message received:", prompt)
         self.build_webpage_index(prompt)
         query_engine = self.index_obj["webpage"]["vector_query_engine"]
         response = query_engine.query(prompt)
-        print(f"Agent Response: {response}")
+        self.log.info(f"Agent Response: {response}")
 
     def test_agent(self, prompt: str):
-        print("Message received:", prompt)
+        self.log.info("Message received:", prompt)
         # build 2 indices
         self.build_pdf_index("./data/pdf")
         # self.build_wikipedia_index("avx512")
         self.build_agents()
         # test agent
         response = self.top_agent.query(prompt)
-        print(f"Agent Response: {response}")
+        self.log.info(f"Agent Response: {response}")
 
     def chat_restarted(self):
-        print("Client requested chat to restart")
+        self.log.info("Client requested chat to restart")
         self.chat_history.clear()
         intro = "Hi, who are you in one sentence?"
-        print("User:", intro)
+        self.log.info(f"User: {intro}")
         try:
             response = self.prompt_llm(intro)
-            print(f"Response: {response}")
+            self.log.info(f"Response: {response}")
         except ConnectionRefusedError as e:
-            self.print(
-                f"Having trouble connecting to the LLM server, got:\n{str(e)}! "
-                # "For detailed step-by-step instruction, click on <this guide>." TODO
-            )
+            self.print(f"Having trouble connecting to the LLM server, got:\n{str(e)}!")
+            self.log.error(str(e))
         finally:
             self.next_state = "build_index"
 

@@ -1,22 +1,20 @@
 # GAIA: The GenAI Sandbox
 
-Welcome to the GAIA (Generative AI Is Awesome!) project! This repository serves as a repository of local LLM agentic workflows demos and reference designs.
+Welcome to the GAIA (Generative AI Is Awesome!) project! This repository serves as a repository of AI PC demos. Primarily, it consists of local LLM chatbot and agent demos running on the RyzenAI platform.
 
-<img src="https://github.com/aigdat/gaia/assets/4722733/0db60b9b-05d5-4732-a74e-f67bc9bdb61b" alt="gaia" width="500">
-
-Currently, we support the following agents:
+Currently, the following are supported:
 
 | Agent Name | Function                     |
 | ---------- | ---------------------------- |
 |   Chaty    | Vanilla LLM chatbot          |
 |   Joker    | Simple joke generator        |
 |   Clip     | YouTube search and Q&A agent |
-|   Maven    | Online research assistant    |
-|    Neo     | Chat with public GitHub repo |
-|   Datalin  | Onnx model visualizer        |
+|   Maven*   | Online research assistant    |
+|    Neo*    | Chat with public GitHub repo |
+|  Datalin*  | Onnx model visualizer        |
 |  Picasso*  | AI art creator               |
 
-\* Picasso agent is currently under development and exists only as a mockup.
+\* bot or agent is currently under development.
 
 ## Contents:
 
@@ -32,6 +30,8 @@ Currently, we support the following agents:
 To get started, please follow the instructions below. If you have a new machine and need to install all dependencies from scratch, start [here](#Complete-Installation-of-GAIA) instead.
 
 1. Download and unzip the pre-installed package found [here](TBD).
+1. Run `gaia.exe` and follow the steps.
+1. A quick tutorial can be found [here](TBD).
 
 # Running GAIA on Ryzen AI NPU
 
@@ -72,19 +72,24 @@ INFO:     connection open
 
 NOTE: Always use command shell only, NOT powershell. Do not use administrative mode.
 
+
 # Complete Installation of GAIA
 
 The following instructions can be used to do the full installation of GAIA from source and has been tested on Microsoft Windows OS and [Miniconda 24+](https://docs.anaconda.com/free/miniconda/).
-These instructions should only be used if other steps fail, otherwise most users should be following [these](#Automatically-Running-the-Ryzen-AI-NPU-Web-Server-and-GAIA).
+These instructions should only be used if other steps fail, otherwise most users should be following [these instructions](#Automatically-Running-the-Ryzen-AI-NPU-Web-Server-and-GAIA).
 
-1. Clone the repo from [here](TBD)
-1. Open two command prompts, one for GAIA and another for the LLM web server called Lemonade.
-1. In the LLM web server command window, do the following:
-    1. Follow instruction to setup the `ryzenai-transformers` environment [here](#Complete-Installation-of-Transformers)
-    1. Follow instructions to setup the `lemonade` tool [here](https://github.com/aigdat/genai/blob/main/docs/easy_ryzenai_npu.md)
-    1. Execute `<transformers>/setup_stx.py` 
-    1. Set environment variable: `set MLADF=2x4x4`
-    1. Start lemonade web server: `lemonade ryzenai-npu-load --device stx -c meta-llama/Llama-2-7b-chat-hf serve --max-new-tokens 600`
+
+## Installing third-party tools
+
+1. Download and install [miniconda](https://docs.anaconda.com/miniconda/)
+1. Download and install [Visual Studio Build Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe).
+    1. During installation, make sure to select "Desktop development with C++" workload.
+    1. After installation, you may need to restart your computer.
+
+
+## Installing GAIA tools
+
+1. Clone GAIA repo from [here](TBD)
 1. In the GAIA command window, do the following:
     1. Go to the GAIA root: `cd ./gaia`
     1. Create and activate a conda environment:
@@ -95,7 +100,18 @@ These instructions should only be used if other steps fail, otherwise most users
         NOTE: If actively developing, use `pip install -e .` to enable editable mode and create links to sources instead.
     1. Run `gaia` and a UI should pop-up initializing the application.
 
-# Installation of Transformers
+
+## Installing Lemonade web server
+
+1. In a new command terminal, do the following:
+    1. Follow instruction to setup the `ryzenai-transformers` environment [here](#Installation-of-Transformers)
+    1. Follow instructions to setup the `lemonade` tool [here](https://github.com/aigdat/genai/blob/main/docs/easy_ryzenai_npu.md)
+    1. Execute `<transformers>/setup_stx.py` 
+    1. Set environment variable: `set MLADF=2x4x4`
+    1. Start lemonade web server: `lemonade ryzenai-npu-load --device stx -c meta-llama/Llama-2-7b-chat-hf serve --max-new-tokens 600`
+
+
+## Installing AMD Transformers library
 
 1. Go to the root of <transformers> library.
 1. `conda env create --file=env.yaml`
@@ -167,9 +183,9 @@ The best way to contribute is to add a new agent that covers a unique use-case. 
 
 TBD
 
-# Packaging GAIA.exe
+# Packaging gaia.exe
 
-The section explains how to create a redistributable GAIA.exe binary.
+The section explains how to create a redistributable gaia.exe binary.
 
 > Note: the `pip` commands in this section do not use the `-e` option on purpose. This is because all packages must be in `site-packages` to facilitate packaging. If you are running into problems, try `pip list` and make sure that all packages are installed into site-packages and were not installed in-place via `-e`. 
 
@@ -179,16 +195,15 @@ Pre-requisites:
 1. Install lemonade with ort-genai support (clone genai, cd into genai): `pip install .[og]`
 1. Install gaia (clone this repo, cd into gaia): `pip install .`
 1. `pip install pyinstaller`
-1. Copy your `genai\src\lemonade\tools\ort_genai\models\Phi-3-mini-4k-instruct-onnx_int4_awq_block-128` folder into your `gaia-exe` environment, e.g., `miniconda3\envs\gaia-exe\Lib\site-packages\lemonade\tools\ort_genai\models\Phi-3-mini-4k-instruct-onnx_int4_awq_block-128`
-1. On `gaia\src\gaia\interface\settings.json` set `dev_mode` to `false`
+<!-- 1. Copy your `genai\src\lemonade\tools\ort_genai\models\Phi-3-mini-4k-instruct-onnx_int4_awq_block-128` folder into your `gaia-exe` environment, e.g., `miniconda3\envs\gaia-exe\Lib\site-packages\lemonade\tools\ort_genai\models\Phi-3-mini-4k-instruct-onnx_int4_awq_block-128` -->
+<!-- 1. On `gaia\src\gaia\interface\settings.json` set `dev_mode` to `false` -->
 
-> Note: if you make any changes to `gaia` or `lemonade` you need to `pip install .` that package again to include the changes in your next build.
+> Note: if you make any changes to `gaia` you need to `pip install .` that package again to include the changes in your next build.
 
 Build executable:
 1. Go to the repo root: `cd gaia`
 1. `conda activate gaia-exe`
-1. To build a basic executable for development purposes:
-`pyinstaller src\gaia\interface\widget.py -n gaia --collect-all lemonade --collect-all onnxruntime_directml --collect-all onnxruntime_genai_directml --collect-all onnxruntime_genai --collect-all gaia  --hidden-import=tiktoken_ext.openai_public --hidden-import=tiktoken_ext --noconfirm --icon src\gaia\interface\img\gaia.ico --add-data "src/gaia/interface/settings.json;gaia/interface" --onefile`
+1. To build a basic executable for development purposes: `build_exe.bat`
 
 1. This creates an executable at `dist/gaia/gaia.exe`
 

@@ -1,9 +1,11 @@
 # Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 import time
+import logging
 from collections import OrderedDict
 from typing import Any, Callable
 from transformers import LlamaTokenizer
+from huggingface_hub import HfFolder, HfApi
 from websocket import create_connection
 from websocket._exceptions import WebSocketTimeoutException
 from aiohttp import web
@@ -25,15 +27,19 @@ from llama_index.core.base.llms.types import (
     MessageRole,
 )
 
-
 class Agent:
-    def __init__(self, host, port):
+    def __init__(self, host="127.0.0.1", port=8001):
         # Placeholder for LLM Server Websocket and others
         self.llm_server_uri = "ws://localhost:8000/ws"
         self.llm_server_websocket = None
         self.latest_prompt_request = None
         self.host = host
         self.port = port
+        self.last_chunk = False
+
+        # Set up logging
+        logging.basicConfig(level=logging.DEBUG)
+        self.log = logging.getLogger(__name__)
 
         # performance stats
         # in = input tokens
@@ -46,14 +52,48 @@ class Agent:
             ('out', None),
             ('tps', None)
         ])
+        # last chunk in response
+        self.last = False
+
         # Load the LLaMA tokenizer
-        self.tokenizer = LlamaTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
+        self.tokenizer = self._initialize_tokenizer()
 
         # Initialize Agent Server
         self.app = web.Application()
         self.app.router.add_post("/prompt", self._on_prompt_received)
         self.app.router.add_post("/restart", self._on_chat_restarted)
         self.app.router.add_post("/load_llm", self._on_load_llm)
+
+    def _initialize_tokenizer(self):
+        try:
+            # Check if the user is logged in to Hugging Face
+            token = HfFolder.get_token()
+            if not token:
+                raise EnvironmentError("No Hugging Face token found. Please log in to Hugging Face.")
+
+            # Verify the token
+            api = HfApi()
+            try:
+                api.whoami(token)
+            except Exception:
+                raise EnvironmentError("Invalid Hugging Face token. Please provide a valid token.")
+
+            # Attempt to load the tokenizer
+            tokenizer = LlamaTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
+            return tokenizer
+        except EnvironmentError as e:
+            self.log.error(e)
+            from gaia.interface.widget import get_huggingface_token
+            token = get_huggingface_token()
+            if token:
+                # Try to initialize the tokenizer again after getting the token
+                return self._initialize_tokenizer()
+            else:
+                self.log.error("No token provided. Tokenizer initialization failed.")
+                return None
+        except Exception as e: # pylint:disable=W0718
+            self.log.error(f"An unexpected error occurred: {e}")
+            return None
 
     def __del__(self):
         # Ensure websocket gets closed when agent is deleted
@@ -78,17 +118,24 @@ class Agent:
         web.run_app(self.app, host=self.host, port=self.port)
 
     def prompt_llm_server(self, prompt):
-        ws = create_connection(self.llm_server_uri)
         try:
-            print(f"Sending prompt to LLM server:\n{prompt}")
+            ws = create_connection(self.llm_server_uri)
+        except Exception as e: # pylint:disable=W0718
+            self.print(f"My brain is not working:```{e}```")
+            return
+
+        try:
+            self.log.debug(f"Sending prompt to LLM server:\n{prompt}")
             prompt_tokens = self.count_tokens(prompt)
             start_time = time.perf_counter()
             ws.send(prompt)
 
             first_chunk = True
+            self.last_chunk = False
             full_response = ""
 
             self._clear_stats()
+            self.last = False
 
             while True:
                 try:
@@ -115,6 +162,7 @@ class Agent:
                             total_tokens = self.count_tokens(full_response)
                             self.stats['OUT'] = total_tokens
                             self.stats['TPS'] = (total_tokens-1) / total_time if total_time > 0 and total_tokens > 1 else 0.0
+                            self.last = True
 
                             yield chunk
                             break
@@ -123,21 +171,23 @@ class Agent:
 
                 except WebSocketTimeoutException:
                     break
-
         finally:
             self._clear_stats()
             ws.close()
 
     def prompt_received(self, prompt):
-        print("Message received:", prompt)
+        self.log.debug("Message received:", prompt)
 
     def chat_restarted(self):
-        print("Client requested chat to restart")
+        self.log.debug("Client requested chat to restart")
 
     def print(self, input_str: str):
-        print(input_str)
-        for i, word in enumerate(input_str.split(" ")):
+        self.log.debug(input_str)
+        input_lst = input_str.split(" ")
+        input_len = len(input_lst)
+        for i, word in enumerate(input_lst):
             new_card = i == 0
+            self.last = i == (input_len-1)
             self.stream_to_ui(f"{word} ", new_card=new_card)
             time.sleep(0.1)
 
@@ -153,13 +203,13 @@ class Agent:
 
     async def _on_load_llm(self, ui_request):
         data = await ui_request.json()
-        print(f"Client requested to load LLM ({data['model']})")
+        self.log.debug(f"Client requested to load LLM ({data['model']})")
 
         response = {"status": "Success"}
         return web.json_response(response)
 
     def stream_to_ui(self, chunk, new_card=True):
-        data = {"chunk": chunk, "new_card": new_card, "stats": self.stats}
+        data = {"chunk": chunk, "new_card": new_card, "stats": self.stats, "last":self.last}
         url = "http://127.0.0.1:8002/stream_to_ui"
         requests.post(url, json=data)
 

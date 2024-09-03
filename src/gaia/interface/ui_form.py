@@ -453,6 +453,7 @@ class Ui_Widget(object):
         QMetaObject.connectSlotsByName(Widget)
     # setupUi
 
+
     def retranslateUi(self, Widget):
         Widget.setWindowTitle(QCoreApplication.translate("Widget", u"Widget", None))
         self.bannerImg.setText("")
