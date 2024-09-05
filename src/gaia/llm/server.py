@@ -46,13 +46,12 @@ def get_cpu_args():
     parser.add_argument(
         "--checkpoint",
         type=str,
-        # default="meta-llama/Meta-Llama-3-8B",
-        default="",
+        default="meta-llama/Meta-Llama-3-8B",
         help="Checkpoint path",
     )
     parser.add_argument("--backend", type=str, default="hf", help="Device type [cpu, npu, igpu]")
     parser.add_argument("--device", type=str, default="cpu", help="Device type [cpu, npu, igpu]")
-    parser.add_argument("--dtype", type=str, default=torch.bfloat16, help="Data type [float32, bfloat16, int4]")
+    parser.add_argument("--dtype", type=str, default="bfloat16", help="Data type [float32, bfloat16, int4]")
     parser.add_argument("--max_new_tokens", type=int, default=100, help="Max new tokens to generate")
     args = parser.parse_args()
 

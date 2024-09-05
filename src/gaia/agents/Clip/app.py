@@ -25,6 +25,42 @@ from llama_index.readers.youtube_transcript import YoutubeTranscriptReader
 from gaia.agents.agent import Agent, LocalLLM
 
 class MyAgent(Agent):
+    """
+    The YouTube assistant acts as a knowledgeable companion for
+    YouTube-related tasks, providing search capabilities, index building, and
+    query answering functionality. It aims to assist users in finding
+    information, answering questions, and engaging in meaningful conversations
+    about YouTube content.
+
+    YouTube Search: The assistant can perform a YouTube search using the
+    youtube_search method. It takes a search query as input and retrieves a list
+    of videos matching the query. Each video in the search results is
+    represented as a dictionary with details such as the video title,
+    description, ID, URL, publish time, and channel title.
+
+    Building an Index: The assistant can build an index from a YouTube video. It
+    requires a YouTube video link as input. The assistant downloads the video
+    transcript and builds a vector index locally using the build_vector_index
+    method. This index can be used to perform efficient searches and fetch
+    information about the video.
+
+    Querying the Index: Once an index is built, the assistant can answer user
+    queries about the video using the query_rag method. It takes a user query as
+    input and uses the query engine to find relevant information from the index.
+    The assistant provides a concise and human-like response based on the
+    information available.
+
+    Chatting about YouTube Content: After the index is built, the assistant can
+    engage in a chat with the user about YouTube content. The assistant responds
+    to user queries and provides information based on the index. It aims to
+    answer questions in a natural and helpful manner, thinking step-by-step to
+    provide relevant information.
+
+    Resetting the Assistant: The assistant can be reset using the reset method.
+    This clears the chat history and resets the state of the assistant, allowing
+    for a fresh interaction with the user.
+    """
+
     def __init__(self, host="127.0.0.1", port=8001):
         super().__init__(host, port)
 
@@ -140,6 +176,23 @@ class MyAgent(Agent):
         self.initialize_server()
 
     def youtube_search(self, query, max_results=3):
+        """
+        Perform a YouTube search with the given query and retrieve a list of videos.
+        Args:
+            query (str): The search query.
+            max_results (int, optional): The maximum number of search results to retrieve. Defaults to 3.
+        Returns:
+            list: A list of dictionaries representing the videos found in the search results. Each dictionary contains the following keys:
+                - id (int): The index of the video in the search results.
+                - title (str): The title of the video.
+                - description (str): The description of the video.
+                - video_id (str): The ID of the video.
+                - video_url (str): The URL of the video.
+                - publish_time (str): The publish time of the video.
+                - channel_title (str): The title of the channel that uploaded the video.
+        Raises:
+            HttpError: If an HTTP error occurs during the search.
+        """
         try:
             msg = f"Running YouTube search with the following query: {query}"
             self.print(msg)
@@ -179,9 +232,25 @@ class MyAgent(Agent):
             return None
 
     def get_video_url(self, video_id:str):
+        """
+        Returns the URL of a YouTube video based on the given video ID.
+        Parameters:
+        - video_id (str): The ID of the YouTube video.
+        Returns:
+        - str: The URL of the YouTube video.
+        """
         return f"https://www.youtube.com/watch?v={video_id}"
 
     def extract_json_data(self, input_string):
+        """
+        Extracts the key and value from a JSON-formatted string.
+        Args:
+            input_string (str): The input string containing the JSON-formatted data.
+        Returns:
+            tuple: A tuple containing the key and value extracted from the JSON data.
+                   If the input string does not contain valid JSON data, (None, None) is returned.
+        """
+
         # Find the JSON-formatted part of the string
         json_match = re.search(r'\{.*?\}', input_string)
 
@@ -204,6 +273,14 @@ class MyAgent(Agent):
         return list(self.chat_history)
 
     def prompt_llm(self, query):
+        """
+        Prompt the LLM (Language Model) with a query and return the response.
+        Args:
+            query (str): The user's query.
+        Returns:
+            str: The response from the LLM.
+        """
+
         response = ""
         new_card = True
         self.chat_history.append(f"User: {query}")
