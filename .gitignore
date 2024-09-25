@@ -2,6 +2,7 @@
 *.pyc
 *.pyo
 *.pyd
+*.bak
 **/__pycache__/
 
 # Python distribution / packaging

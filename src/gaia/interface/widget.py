@@ -1179,13 +1179,15 @@ def get_huggingface_token():
     return dialog.token
 
 def main():
+    from gaia.llm.download_nltk_data import download_nltk_data
+    download_nltk_data()
+
     multiprocessing.freeze_support()
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(r":/img\gaia.ico"))
     widget = Widget()
     widget.show()
     sys.exit(app.exec())
-
 
 if __name__ == "__main__":
 
