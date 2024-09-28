@@ -8,6 +8,13 @@ on:
     branches: ["main"]
   pull_request:
     branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      upload_artifacts:
+        description: "Upload gaia.exe to Github"
+        required: true
+        default: "false"
+        type: boolean
 
 permissions:
   contents: read
@@ -39,8 +46,10 @@ jobs:
         shell: bash -el {0}
         run: |
           pyinstaller src\\gaia\\interface\\widget.py -n gaia --collect-all lemonade --collect-all onnxruntime_directml --collect-all onnxruntime_genai_directml --collect-all onnxruntime_genai --collect-all gaia --hidden-import=tiktoken_ext.openai_public --hidden-import=tiktoken_ext --noconfirm --icon src\\gaia\\interface\\img\\gaia.ico --add-data "src/gaia/interface/settings.json;gaia/interface" --onefile
-      # - name: Upload Executable
-      #   uses: actions/upload-artifact@v2
-      #   with:
-      #     name: gaia-executable
-      #     path: dist/gaia.exe
+
+      - name: Upload Executable
+        if: ${{ inputs.upload_artifacts == 'true' }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: gaia-executable
+          path: dist/gaia.exe
