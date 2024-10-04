@@ -5,54 +5,81 @@
 
     "agents": [
         "Chaty",
-        "Joker",
         "Clip",
+        "Joker",
         "Neo",
         "Maven",
         "Example"
     ],
     "models": {
-        "LLama-3 8B (OGA)": {
+        "llama-3.1 8b (ollama)": {
+            "backend" : "ollama",
+            "checkpoint": "llama3.1:8b",
+            "device": {
+                "cpu": [
+                    "Q4_0"
+                ]
+            }
+        },
+        "llama-3 8b (oga)": {
             "backend" : "oga",
             "checkpoint": "meta-llama/Meta-Llama-3-8B",
             "device": {
-                "NPU": [
+                "npu": [
                     "int4"
                 ]
             }
         },
-        "LLama-2 7B (OGA)": {
-            "backend" : "oga",
-            "checkpoint": "meta-llama/Llama-2-7b-chat-hf",
+        "llama-3.2 3b (ollama)": {
+            "backend" : "ollama",
+            "checkpoint": "llama3.2:3b",
             "device": {
-                "NPU": [
-                    "int4"
+                "cpu": [
+                    "Q4_K_M"
                 ]
             }
         },
-        "LLama-2 7B (HF)": {
+        "llama-3.2 1b (ollama)": {
+            "backend" : "ollama",
+            "checkpoint": "llama3.2:3b",
+            "device": {
+                "cpu": [
+                    "Q8_0"
+                ]
+            }
+        },
+        "llama-3 8b (hf)": {
             "backend" : "hf",
-            "checkpoint": "meta-llama/Llama-2-7b-chat-hf",
+            "checkpoint": "meta-llama/Meta-Llama-3-8B",
             "device": {
-                "CPU": [
+                "cpu": [
                     "bfloat16"
                 ]
             }
         },
-        "LLama-3.1-8B (HF)": {
+        "llama-2 7b (oga)": {
+            "backend" : "oga",
+            "checkpoint": "meta-llama/Llama-2-7b-chat-hf",
+            "device": {
+                "npu": [
+                    "int4"
+                ]
+            }
+        },
+        "llama-2 7b (hf)": {
+            "backend" : "hf",
+            "checkpoint": "meta-llama/Llama-2-7b-chat-hf",
+            "device": {
+                "cpu": [
+                    "bfloat16"
+                ]
+            }
+        },
+        "llama-3.1 8b (hf)": {
             "backend" : "hf",
             "checkpoint": "meta-llama/Meta-Llama-3.1-8B",
             "device": {
-                "CPU": [
-                    "bfloat16"
-                ]
-            }
-        },
-        "LLama-3-8B (HF)": {
-            "backend" : "hf",
-            "checkpoint": "meta-llama/Meta-Llama-3-8B",
-            "device": {
-                "CPU": [
+                "cpu": [
                     "bfloat16"
                 ]
             }

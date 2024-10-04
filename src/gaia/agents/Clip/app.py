@@ -1,12 +1,16 @@
 # Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
+# TODOs:
+# - add logger
+
 import re
 import json
 import os
 import time
-import argparse
+import logging
 from collections import deque
 from dotenv import load_dotenv
+
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -18,11 +22,14 @@ from llama_index.core import (
     PromptTemplate,
     get_response_synthesizer,
 )
-from llama_index.core.tools import FunctionTool
+from llama_index.core.agent import ReActAgent
+from llama_index.core.tools import FunctionTool, QueryEngineTool, ToolMetadata
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.readers.youtube_transcript import YoutubeTranscriptReader
 
 from gaia.agents.agent import Agent, LocalLLM
+from gaia.agents.Clip.prompts import Prompts
+# from gaia.llm.ollama_serve import OllamaServe
 
 class MyAgent(Agent):
     """
@@ -31,57 +38,47 @@ class MyAgent(Agent):
     query answering functionality. It aims to assist users in finding
     information, answering questions, and engaging in meaningful conversations
     about YouTube content.
-
-    YouTube Search: The assistant can perform a YouTube search using the
-    youtube_search method. It takes a search query as input and retrieves a list
-    of videos matching the query. Each video in the search results is
-    represented as a dictionary with details such as the video title,
-    description, ID, URL, publish time, and channel title.
-
-    Building an Index: The assistant can build an index from a YouTube video. It
-    requires a YouTube video link as input. The assistant downloads the video
-    transcript and builds a vector index locally using the build_vector_index
-    method. This index can be used to perform efficient searches and fetch
-    information about the video.
-
-    Querying the Index: Once an index is built, the assistant can answer user
-    queries about the video using the query_rag method. It takes a user query as
-    input and uses the query engine to find relevant information from the index.
-    The assistant provides a concise and human-like response based on the
-    information available.
-
-    Chatting about YouTube Content: After the index is built, the assistant can
-    engage in a chat with the user about YouTube content. The assistant responds
-    to user queries and provides information based on the index. It aims to
-    answer questions in a natural and helpful manner, thinking step-by-step to
-    provide relevant information.
-
-    Resetting the Assistant: The assistant can be reset using the reset method.
-    This clears the chat history and resets the state of the assistant, allowing
-    for a fresh interaction with the user.
     """
 
-    def __init__(self, host="127.0.0.1", port=8001):
+    def __init__(self, host="127.0.0.1", port=8001, backend="ollama", embed_model="local:BAAI/bge-small-en-v1.5", llm_model = "llama-3.1-8b-instant"):
         super().__init__(host, port)
+
+        assert backend == "cpu" or backend == "npu" or backend == "ollama", "Invalid backend specified."
+        self.backend = backend
 
         load_dotenv()
         youtube_api_key = os.getenv('YOUTUBE_API_KEY')
         assert youtube_api_key
         self.youtube = build("youtube", "v3", developerKey=youtube_api_key)
 
-        # Define model
-        self.llm = LocalLLM(prompt_llm_server=self.prompt_llm_server, stream_to_ui=self.stream_to_ui)
+        # TODO: FIXME
+        # if backend == "ollama":
+        #     self.ollama_llm = OllamaServe()
+        #     self.llm = self.ollama_llm
+        # else:
+        #     self.llm = LocalLLM(prompt_llm_server=self.prompt_llm_server)
+        #     self.llm_server_uri = "ws://localhost:8000/ws"
+        self.llm = LocalLLM(prompt_llm_server=self.prompt_llm_server)
+        self.llm_server_uri = "ws://localhost:8000/ws"
+
+        # Set up logging
+        logging.basicConfig(level=logging.DEBUG)
+        self.log = logging.getLogger(__name__)
+
         Settings.llm = self.llm
-        Settings.embed_model = "local:BAAI/bge-small-en-v1.5"
+        Settings.embed_model = embed_model
 
         Settings.chunk_size = 128
         Settings.chunk_overlap = 16
         self.similarity_top = 3
 
         # Initialize global variables
-        self.yt_vector_index = None
-        self.yt_query_engine = None
-        self.yt_search_results = None
+        self.summary_index = None
+        self.vector_index = None
+        self.query_engine = None
+        self.search_results = None
+        self.query_engine_tools = None
+        self.react_agent = None
 
         self.n_chat_messages = 10
         self.chat_history = deque(maxlen=self.n_chat_messages * 2)  # Store both user and assistant messages
@@ -94,83 +91,21 @@ class MyAgent(Agent):
             # state = 1, search results produced but no index created yet.
             ("Index is currently not built and is empty.\n"
             "YouTube search results have been found:\n"
-            f"{self.yt_search_results}"
-            "Index is currently built and is not empty.\n"
+            f"{self.search_results}\n"
+            "Ask the user which result to build the index for.\n"),
+
+            # state = 2, search results produced but no index created yet.
+            ("Index is currently built and is not empty.\n"
             "You can now use the query engine to fetch information about the video.\n"
             "To access the index, use the query engine RAG tool by calling: {\"query_engine\" : \"query\"}\n"),
-
-            # # state = 1, search results produced but no index created yet.
-            # ("Index is currently not built and is empty.\n"
-            # "YouTube search results have been found:\n"
-            # f"{self.yt_search_results}"
-            # "Ask the user which result to build index for.\n"),
-
-            # # state = 2, index is built, use the query engine.
-            # ("Index is currently built and is not empty.\n"
-            # "You can now use the query engine to fetch information about the video.\n"
-            # "To access the index, use the query engine RAG tool by calling: {\"query_engine\" : \"query\"}\n"),
         ]
         # set llm state 0-2
         self.llm_state = 0
 
-        self.llm_system_prompt = (
-            "[INST] <<SYS>>\n"
-            "You are a YouTube-focused assistant called Clip that helps user with YouTube by calling function tools.\n"
-            "You are helpful by providing the necessary json-formatted queries in the form of {\"tool\" : \"query\"}:\n"
-            "Do not include the results from the tools.\n"
-            "In order to build the index, you have to first search YouTube.\n"
-            "You only have ability to call the tools below, do not assume you have access to the output from the tools.\n"
-            "1. {\"youtube_search\" : \"user_query\"}\n"
-            # "2. {\"build_index\" : \"video_id\"}\n"
-            "3. {\"query_rag\" : \"user_query\"}\n"
-            "4. {\"reset\" : \"\"}\n"
-            "user_query is a query derived from the User comments.\n"
-            "video_id is a video ID string from the YouTube search results.\n"
-            "\n"
-            "Your tasks:\n"
-            "2. Output a json that will be used in an external search tool for YouTube videos\n"
-            "3. Call tool that can build an index from a video.\n"
-            "1. Chat about YouTube content once index is built\n"
-            "4. Answer questions from user using the index\n"
-            "\n"
-            "Guidelines:\n"
-            "- Answer a question given in a natural human-like manner.\n"
-            "- Think step-by-step when answering questions.\n"
-            "- When introducing yourself, keep it to just a single sentence, for example:\n"
-            "\"Assistant: Hi, I can help you find information you're looking for on YouTube. Just ask me about any topic!\"\n"
-            "- If no index exists, search YouTube and offer to build one\n"
-            "- If an index does exist, use the query engine to answer questions.\n"
-            "- If unsure, offer to search for more videos\n"
-            "- Keep your answers short, concise and helpful\n"
-            "- Search_query should be the subject of what the user is looking for, not a youtube link.\n"
-            "- Do NOT provide search results, those are being provided by the external tools.\n"
-            "- You can only provide the json formatted output to call the tools, you do not have access to the tools directly.\n"
-            "Current state of index:\n"
-            f"{self.llm_states[self.llm_state]}\n"
-            "\n"
-            "When using a tool, end your response with only the tool function call. Do not answer search results."
-            "Always use the most relevant tool for each task.\n"
-            "When needing to use a tool, your response should be formatted, here is an example script:\n"
-            "User: What kind of philanthropy did Mr. Beast do?"
-            "Assistant: To answer your question, I first need to search YouTube for the answer. Calling the following tool: {\"youtube_search\" : \"Mr Beast philanthropy\"} </s>\n"
-            "<</SYS>>\n\n"
-        )
+        self.llm_system_prompt = Prompts.get_system_prompt(llm_model)
 
         # this system prompt has been verified to work with llama v2 7b 4bit on NPU.
-        self.query_engine_system_prompt = (
-            "[INST] <<SYS>>\n"
-            "You are a YouTube-focused assistant called Clip that helps user with YouTube by calling function tools.\n"
-            "{context_str}\n\n"
-            "Think step-by-step to answer the query in a crisp, short and concise manner based on the information provided.\n"
-            "If the answer does not exist in the given information, simply answer 'I don't know!'\n"
-            "Do not mention or refer to the context or information provided in your response.\n"
-            "Answer directly without any preamble or explanatory phrases about the source of your information.\n"
-            "<</SYS>>\n\n"
-            "{query_str} [/INST]\n"
-        )
-
-        # TODO: temporary overwrite
-        self.llm_system_prompt = self.query_engine_system_prompt
+        self.query_engine_system_prompt = Prompts.get_query_engine_prompt(llm_model)
 
         # Initialize agent server
         self.initialize_server()
@@ -224,11 +159,11 @@ class MyAgent(Agent):
                 self.chat_history.append(f"Asssistant: {msg}")
                 videos.append(video)
 
-            print(videos)
+            self.print(videos)
             return videos
 
         except HttpError as e:
-            print(f"An HTTP error {e.resp.status} occurred:\n{e.content}")
+            self.print(f"An HTTP error {e.resp.status} occurred:\n{e.content}")
             return None
 
     def get_video_url(self, video_id:str):
@@ -267,6 +202,7 @@ class MyAgent(Agent):
             except json.JSONDecodeError:
                 return None, None
         else:
+            self.print("WARNING: No JSON data found in the input string.")
             return None, None
 
     def get_chat_history(self):
@@ -274,133 +210,53 @@ class MyAgent(Agent):
 
     def prompt_llm(self, query):
         """
-        Prompt the LLM (Language Model) with a query and return the response.
+        Prompt the LLM with a query and return the response.
         Args:
             query (str): The user's query.
         Returns:
             str: The response from the LLM.
         """
-
         response = ""
-        new_card = True
         self.chat_history.append(f"User: {query}")
-        prompt = self.llm_system_prompt + '\n'.join(self.chat_history) + "[/INST]\nAssistant: "
+
+        system_prompt = (
+            f"{self.llm_system_prompt}\n"
+            "Current state of index:\n"
+            f"{self.llm_states[self.llm_state]}\n"
+        )
+        prompt = system_prompt + '\n'.join(self.chat_history) + "[/INST]\nAssistant: "
 
         # print(prompt)
         for chunk in self.prompt_llm_server(prompt=prompt):
-
-            # Stream chunk to UI
-            self.stream_to_ui(chunk, new_card=new_card)
-            new_card = False
-
+            print(chunk, end="", flush=True)
             response += chunk
+        print("\n")
         self.chat_history.append(f"Assistant: {response}")
+
         return response
 
-
-    # TODO: temporary implementation
-    def prompt_received(self, prompt):
-        print("Message received:", prompt)
-        message_yt_link = self.extract_youtube_link(prompt)
-        if message_yt_link:
-            self.print("Thanks for the link. Downloading the video transcript and building the index locally.")
-            yt_links = [message_yt_link]
-            yt_doc = self.get_youtube_transcript_doc(yt_links)
-            yt_doc[0].doc_id = "youtube_doc"
-            self.yt_vector_index = self.build_vector_index(yt_doc)
-            self.yt_query_engine = self.get_query_engine(self.yt_vector_index)
-            msg = "Index and query engine is now ready to be used on your PC. Feel free to ask any questions about the video!"
-            self.print(msg)
-            self.chat_history.append(f"Asssistant: {msg}")
-        elif self.yt_query_engine:
-            query = prompt
-            print(f"\nQuery: {query}")
-            streaming_response = self.yt_query_engine.query(query)
-            print("Answer: ", end="", flush=True)
-            response = ""
-            for text in streaming_response.response_gen:
-                if text:
-                    response += text
-                    # Print the streaming response to the console
-                    print(text, end="", flush=True)
-        else:
-            self.print("Hey! Can you share a youtube link with me? I can't query a youtube video until you share a link with me.")
-
-
-    def _prompt_received(self, prompt):
-        print("Message received:", prompt)
-
-        response = self.prompt_llm(prompt)
-        # print(response)
-
-        key, value = self.extract_json_data(response)
-        # print(f"key: {key}, value: {value}, llm state: {self.llm_state}")
-        # print(self.llm_states[self.llm_state])
-        if key == "youtube_search":
-            self.yt_search_results = self.youtube_search(value, max_results=1)
-            self.yt_vector_index = None
-            self.yt_query_engine = None
-            self.llm_state = 1
-
-        # if key == "build_index":
-            # video = self.yt_search_results[value]
-            video = self.yt_search_results[0]
-            msg = f"Fetching transcript from {video}."
-            self.print(msg)
-            self.chat_history.append(f"Asssistant: {msg}")
-            video_id = video["video_id"]
-            yt_url = [self.get_video_url(video_id)]
-            yt_doc = self.get_youtube_transcript_doc(yt_url)
-            yt_doc[0].doc_id = video_id
-
-            self.yt_vector_index = self.build_vector_index(yt_doc)
-            self.yt_query_engine = self.get_query_engine(self.yt_vector_index)
-
-            msg = f"Index and query engine is now ready to be used on your PC. Feel free to ask any questions about the video! Running query through RAG engine: {value}"
-            self.print(msg)
-            self.chat_history.append(f"Asssistant: {msg}")
-            # self.llm_state = 2
-
-            # query with original subject
-            streaming_response = self.yt_query_engine.query(value)
-            print("Answer: ", end="", flush=True)
-            response = ""
-            for text in streaming_response.response_gen:
-                if text:
-                    response += text
-                    print(text, end="", flush=True)
-
-        if key == "query_rag":
-            query = value
-            print(f"\nQuery: {query}")
-            streaming_response = self.yt_query_engine.query(query)
-            print("Answer: ", end="", flush=True)
-            response = ""
-            for text in streaming_response.response_gen:
-                if text:
-                    response += text
-                    print(text, end="", flush=True)
-
-        if key == "reset":
-            self.yt_vector_index = None
-            self.yt_query_engine = None
-            self.yt_search_results = None
-            self.llm_state = 0
+    def reset(self):
+        self.chat_history.clear()
+        self.summary_index = None
+        self.vector_index = None
+        self.query_engine = None
+        self.search_results = None
+        self.llm_state = 0
 
     def chat_restarted(self):
-        print("Client requested chat to restart")
+        self.print("Client requested chat to restart")
         self.chat_history.clear()
         intro = "Hi, who are you in one sentence?"
-        print("User:", intro)
+        # print("User:", intro)
         try:
-            response = self.prompt_llm(intro)
-            print(f"Response: {response}")
+            self.prompt_llm(intro)
         except ConnectionRefusedError as e:
             self.print( f"Having trouble connecting to the LLM server, got:\n{str(e)}!")
         finally:
-            self.yt_vector_index = None
-            self.yt_query_engine = None
-            self.yt_search_results = None
+            self.summary_index = None
+            self.vector_index = None
+            self.query_engine = None
+            self.search_results = None
 
     def extract_youtube_link(self, message):
         youtube_link_pattern = r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/(?:watch\?v=)?(?:embed/)?(?:v/)?(?:shorts/)?(?:\S+)"
@@ -428,53 +284,130 @@ class MyAgent(Agent):
     def get_youtube_transcript_doc(self, yt_links: list) -> Document:
         return YoutubeTranscriptReader().load_data(ytlinks=yt_links)
 
-    def build_vector_index(self, doc: Document) -> VectorStoreIndex:
-        start_time = time.perf_counter()
-        index = VectorStoreIndex.from_documents(doc, show_progress=True)
-        end_time = time.perf_counter()
-        self.print(f"Done building index. Took {(end_time - start_time):.1f} seconds to build.")
-        return index
-
-    def build_summary_index(self, doc: Document) -> DocumentSummaryIndex:
+    def build_summary_index(self, doc: Document):
         # from https://docs.llamaindex.ai/en/stable/examples/index_structs/doc_summary/DocSummary/
         self.print("Building summary index")
         splitter = SentenceSplitter(chunk_size=1024)
         response_synthesizer = get_response_synthesizer(
             response_mode="tree_summarize", use_async=True
         )
-        doc_summary_index = DocumentSummaryIndex.from_documents(
+        self.summary_index = DocumentSummaryIndex.from_documents(
             doc,
             transformations=[splitter],
             response_synthesizer=response_synthesizer,
             show_progress=True,
         )
-        return doc_summary_index
 
-    def get_query_engine(self, index):
-        # self.print("Building RAG query engine.")
+    def print_summary(self, doc_id):
+        self.print(self.summary_index.get_document_summary(doc_id))
+
+    def build_vector_index(self, doc: Document) -> VectorStoreIndex:
+        start_time = time.perf_counter()
+        self.vector_index = VectorStoreIndex.from_documents(doc, show_progress=True)
+        end_time = time.perf_counter()
+        self.print(f"Done building index. Took {(end_time - start_time):.1f} seconds to build.")
+
+    def build_query_engine(self):
+        # print("Building RAG query engine.")
+        assert self.vector_index, "Vector index is not built yet."
         qa_prompt_tmpl = PromptTemplate(self.query_engine_system_prompt)
-        query_engine = index.as_query_engine(
+        self.query_engine = self.vector_index.as_query_engine(
             verbose=True,
             similarity_top_k=self.similarity_top,
             response_mode="compact",
             streaming=True,
         )
-        query_engine.update_prompts(
+        self.query_engine.update_prompts(
             {"response_synthesizer:text_qa_template": qa_prompt_tmpl}
         )
-        return query_engine
 
     def get_youtube_tool(self):
         return FunctionTool.from_defaults(fn=self.get_youtube_transcript_doc)
 
-    def remove_color_formatting(self, text):
-        # ANSI escape codes for color formatting
-        ansi_escape = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
-        return ansi_escape.sub("", text)
+    def build_query_engine_tools(self, desc=None):
+        assert self.query_engine, "Query engine is not built yet."
+        self.query_engine_tools = [
+            QueryEngineTool(
+                query_engine=self.query_engine,
+                metadata=ToolMetadata(
+                    name="youtube",
+                    description=(
+                        f"YouTube transcript of {desc}. "
+                        "Use a detailed plain text question as input to the tool."
+                    ),
+                ),
+            ),
+        ]
+
+    def build_react_agent(self):
+        # TODO: some questions to investigate:
+        # - can we pass a new query engine tool that is created dynamically?
+        # - can we stick with a ReAct agent for the whole interaction?
+        # - how does "workflows" fit into this framework?
+        self.react_agent = ReActAgent.from_tools(
+            self.query_engine_tools,
+            llm=self.llm,
+            verbose=True,
+        )
+
+    def run(self, prompt):
+        # print("Message received:", prompt)
+
+        response = self.prompt_llm(prompt)
+        # print(response)
+
+        key, value = self.extract_json_data(response)
+        # print(f"key: {key}, value: {value}, llm state: {self.llm_state}")
+        # print(self.llm_states[self.llm_state])
+        if key == "youtube_search":
+            self.search_results = self.youtube_search(value, max_results=3)
+            self.summary_index = None
+            self.vector_index = None
+            self.query_engine = None
+            self.llm_state = 1
+
+        elif key == "build_index":
+            # value in this case is the video_id
+            video = [vid for vid in self.search_results if vid["video_id"] == value][0]
+
+            assert video, f"Video with video_id {value} not found in search results."
+            msg = f"Fetching transcript from {video}."
+            self.print(msg)
+            self.chat_history.append(f"Asssistant: {msg}")
+
+            video_id = video["video_id"]
+            video_url = [self.get_video_url(video_id)]
+            doc = self.get_youtube_transcript_doc(video_url)
+            doc[0].doc_id = video_id
+
+            # TODO: Fixme, sometimes summary index fails, possibly due to incorrect llama index version?
+            # build and print summary index
+            # self.build_summary_index(doc)
+            # self.print_summary(video_id)
+
+            self.build_vector_index(doc)
+            self.build_query_engine()
+            self.build_query_engine_tools(desc=video["description"])
+            self.build_react_agent()
+
+            msg = "Index and query engine is now ready to be used on your PC. Feel free to ask any questions about the video!"
+            self.print(msg)
+            self.chat_history.append(f"Asssistant: {msg}")
+            self.llm_state = 2
+
+        elif key == "query_rag":
+            self.query_engine.query(value)
+
+        elif key == "reset":
+            msg = "Index and query engine are now cleared. Ready to search YouTube again!"
+            self.print(msg)
+        else:
+            pass
 
 
 def main():
     # Clip LLM CLI for testing purposes.
+    import argparse
     parser = argparse.ArgumentParser(description="Interact with the Clip Agent CLI")
     parser.add_argument(
         "--host", default="127.0.0.1", help="Host address for the agent server"

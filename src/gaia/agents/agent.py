@@ -27,6 +27,8 @@ from llama_index.core.base.llms.types import (
     MessageRole,
 )
 
+from gaia.interface.util import UIMessage
+
 class Agent:
     def __init__(self, host="127.0.0.1", port=8001):
         # Placeholder for LLM Server Websocket and others
@@ -82,22 +84,22 @@ class Agent:
             tokenizer = LlamaTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
             return tokenizer
         except EnvironmentError as e:
-            self.log.error(e)
-            from gaia.interface.widget import get_huggingface_token
+            UIMessage.error(str(e))
+            from gaia.interface.huggingface import get_huggingface_token
             token = get_huggingface_token()
             if token:
                 # Try to initialize the tokenizer again after getting the token
                 return self._initialize_tokenizer()
             else:
-                self.log.error("No token provided. Tokenizer initialization failed.")
+                UIMessage.error("No token provided. Tokenizer initialization failed.")
                 return None
         except Exception as e: # pylint:disable=W0718
-            self.log.error(f"An unexpected error occurred: {e}")
+            UIMessage.error(f"An unexpected error occurred: {e}")
             return None
 
     def __del__(self):
         # Ensure websocket gets closed when agent is deleted
-        if self.llm_server_websocket:
+        if hasattr(self, 'llm_server_websocket'):
             if self.llm_server_websocket.connected:
                 self.llm_server_websocket.close()
 
@@ -154,6 +156,7 @@ class Agent:
                         first_chunk = False
 
                     if chunk:
+                        print(chunk)
                         if "</s>" in chunk:
                             chunk = chunk.replace("</s>", "")
                             full_response += chunk
@@ -171,6 +174,10 @@ class Agent:
 
                 except WebSocketTimeoutException:
                     break
+                except Exception as e: # pylint:disable=W0718
+                    UIMessage.error(str(e))
+                    return
+
         finally:
             self._clear_stats()
             ws.close()

@@ -3,8 +3,8 @@
 import argparse
 from collections import deque
 from gaia.agents.agent import Agent
-from gaia.agents.Chaty.prompts import ChatyPrompts
-
+from gaia.interface.util import UIMessage
+from gaia.agents.Chaty.prompts import Prompts
 
 class MyAgent(Agent):
     def __init__(self, host="127.0.0.1", port=8001, model="meta-llama/Meta-Llama-3-8B"):
@@ -13,7 +13,7 @@ class MyAgent(Agent):
         self.n_chat_messages = 4
         self.chat_history = deque(maxlen=self.n_chat_messages * 2)  # Store both user and assistant messages
 
-        self.llm_system_prompt = ChatyPrompts.get_system_prompt(model)
+        self.llm_system_prompt = Prompts.get_system_prompt(model)
 
         # Initialize agent server
         self.initialize_server()
@@ -52,8 +52,7 @@ class MyAgent(Agent):
             response = self.prompt_llm(intro)
             self.log.info(f"Response: {response}")
         except ConnectionRefusedError as e:
-            self.print(f"Having trouble connecting to the LLM server, got:\n```{str(e)}```")
-            self.log.info(str(e))
+            UIMessage.error(f"Having trouble connecting to the LLM server.\n\n{str(e)}")
 
 def main():
     # LLM CLI for testing purposes.

@@ -30,3 +30,6 @@ pyinstaller src\gaia\interface\widget.py ^
     --debug=all
 
 pause
+
+@REM --collect-submodules llama_index
+@REM --add-data "C:\Users\kalin\miniconda3\envs\oga-npu-2\Lib\site-packages\llama_index;llama_index" ^

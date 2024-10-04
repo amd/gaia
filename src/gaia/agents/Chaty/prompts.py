@@ -1,4 +1,4 @@
-class ChatyPrompts:
+class Prompts:
     system_prompts = {
         "meta-llama/Meta-Llama-3-8B": """
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -9,4 +9,8 @@ You are a pirate chatbot who always responds in pirate speak!<|eot_id|>
 
     @staticmethod
     def get_system_prompt(model: str) -> str:
-        return ChatyPrompts.system_prompts.get(model, "No system prompt found for this model.")
+        prompt = Prompts.system_prompts.get(model)
+        if prompt is None:
+            available_models = ", ".join(Prompts.system_prompts.keys())
+            raise ValueError(f"No system prompt found for model '{model}'. Available models: {available_models}")
+        return prompt
