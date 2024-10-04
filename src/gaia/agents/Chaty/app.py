@@ -7,7 +7,7 @@ from gaia.agents.Chaty.prompts import ChatyPrompts
 
 
 class MyAgent(Agent):
-    def __init__(self, host="127.0.0.1", port=8001, model="meta-llama/Llama-2-7b-chat-hf"):
+    def __init__(self, host="127.0.0.1", port=8001, model="meta-llama/Meta-Llama-3-8B"):
         super().__init__(host, port)
 
         self.n_chat_messages = 4
@@ -24,10 +24,10 @@ class MyAgent(Agent):
     def prompt_llm(self, query):
         response = ""
         new_card = True
-        self.chat_history.append(f"User: {query}")
-        prompt = self.llm_system_prompt + '\n'.join(self.chat_history) + "[/INST]\nAssistant: "
+        self.chat_history.append(f"user: {query}")
+        prompt = self.llm_system_prompt + '\n'.join(self.chat_history) + "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\nassistant:"
 
-        # self.log.info(prompt)
+        self.log.info(prompt)
         for chunk in self.prompt_llm_server(prompt=prompt):
 
             # Stream chunk to UI

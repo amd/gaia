@@ -41,15 +41,14 @@ jobs:
       - name: PyLint
         shell: bash -el {0}
         run: |
-          pylint src/gaia --rcfile .pylintrc --disable C0103,C0301,W0246,W0221,E1102
-      - name: Build Executable
-        shell: bash -el {0}
-        run: |
-          pyinstaller src\\gaia\\interface\\widget.py -n gaia --collect-all lemonade --collect-all onnxruntime_directml --collect-all onnxruntime_genai_directml --collect-all onnxruntime_genai --collect-all gaia --hidden-import=tiktoken_ext.openai_public --hidden-import=tiktoken_ext --noconfirm --icon src\\gaia\\interface\\img\\gaia.ico --add-data "src/gaia/interface/settings.json;gaia/interface" --onefile
-
-      - name: Upload Executable
-        if: ${{ inputs.upload_artifacts == 'true' }}
-        uses: actions/upload-artifact@v3
-        with:
-          name: gaia-executable
-          path: dist/gaia.exe
+          pylint src/gaia --rcfile .pylintrc --disable C0103,C0301,W0246,W0221,E1102,R0401,E0401
+      # - name: Build Executable
+      #   shell: bash -el {0}
+      #   run: |
+      #     pyinstaller src\\gaia\\interface\\widget.py --name "gaia" --windowed --collect-all gaia --collect-all llama_cpp --collect-all llama_index --collect-all lemonade --collect-all turnkeyml --collect-all turnkeyml_models --hidden-import=tiktoken_ext.openai_public --hidden-import=tiktoken_ext --hidden-import=llama_cpp --hidden-import=llama_index --hidden-import=lemonade --hidden-import=turnkeyml --hidden-import=turnkeyml_models --noconfirm --icon src\\gaia\\interface\\img\\gaia.ico --add-data "src/gaia/interface/settings.json;gaia/interface" --add-data "src/gaia/interface/img/gaia.ico;gaia/interface/img" --add-data "src/gaia/interface/img/gaia.png;." --add-data "%CONDA_PREFIX%/lib/site-packages/lemonade;lemonade" --add-data "%CONDA_PREFIX%/lib/site-packages/turnkeyml;turnkeyml" --add-data "%CONDA_PREFIX%/lib/site-packages/turnkeyml_models;turnkeyml_models" --onefile --debug=all
+      # - name: Upload Executable
+      #   if: ${{ inputs.upload_artifacts == 'true' }}
+      #   uses: actions/upload-artifact@v3
+      #   with:
+      #     name: gaia-executable
+      #     path: dist/gaia.exe

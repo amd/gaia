@@ -2,13 +2,19 @@
 
 import argparse
 import torch
-import turnkeyml.llm.cache as cache
-from turnkeyml.llm.tools.chat import Serve
-from turnkeyml.llm.tools.huggingface_load import HuggingfaceLoad
-from turnkeyml.llm.tools.ort_genai.oga import OgaLoad
-# from turnkeyml.llm.tools.ryzenai_npu.ryzenai_npu import RyzenAINPULoad
-from turnkeyml.state import State
+# import turnkeyml.llm.cache as cache
+# from turnkeyml.llm.tools.chat import Serve
+# from turnkeyml.llm.tools.huggingface_load import HuggingfaceLoad
+# from turnkeyml.llm.tools.ort_genai.oga import OgaLoad
+# # from turnkeyml.llm.tools.ryzenai_npu.ryzenai_npu import RyzenAINPULoad
+# from turnkeyml.state import State
 
+# TODO: temporary solution using internal lemonade package/repo.
+import lemonade.cache as cache
+from lemonade.tools.chat import Serve
+from lemonade.tools.huggingface_load import HuggingfaceLoad
+from lemonade.tools.ort_genai.oga import OgaLoad
+from turnkeyml.state import State
 
 def launch_llm_server(backend, checkpoint, device, dtype, max_new_tokens):
     assert(device == "cpu" or device == "npu" or device == "igpu"), f"ERROR: {device} not supported, please select 'cpu' or 'npu'."

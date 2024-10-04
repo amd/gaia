@@ -12,7 +12,16 @@
         "Example"
     ],
     "models": {
-        "LLama-2-7B (OGA-NPU)": {
+        "LLama-3 8B (OGA)": {
+            "backend" : "oga",
+            "checkpoint": "meta-llama/Meta-Llama-3-8B",
+            "device": {
+                "NPU": [
+                    "int4"
+                ]
+            }
+        },
+        "LLama-2 7B (OGA)": {
             "backend" : "oga",
             "checkpoint": "meta-llama/Llama-2-7b-chat-hf",
             "device": {
@@ -21,7 +30,7 @@
                 ]
             }
         },
-        "LLama-2-7B (HF-CPU)": {
+        "LLama-2 7B (HF)": {
             "backend" : "hf",
             "checkpoint": "meta-llama/Llama-2-7b-chat-hf",
             "device": {
@@ -30,7 +39,7 @@
                 ]
             }
         },
-        "LLama-3.1-8B (HF-CPU)": {
+        "LLama-3.1-8B (HF)": {
             "backend" : "hf",
             "checkpoint": "meta-llama/Meta-Llama-3.1-8B",
             "device": {
@@ -39,21 +48,12 @@
                 ]
             }
         },
-        "LLama-3-8B (HF-CPU)": {
+        "LLama-3-8B (HF)": {
             "backend" : "hf",
             "checkpoint": "meta-llama/Meta-Llama-3-8B",
             "device": {
                 "CPU": [
                     "bfloat16"
-                ]
-            }
-        },
-        "LLama-3-8B (OGA-NPU)": {
-            "backend" : "oga",
-            "checkpoint": "meta-llama/Meta-Llama-3-8B",
-            "device": {
-                "NPU": [
-                    "int4"
                 ]
             }
         }
