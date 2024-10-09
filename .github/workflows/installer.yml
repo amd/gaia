@@ -1,0 +1,14 @@
+name: Installer
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v2
+    - name: Print done
+      run: |
+        print("done")
