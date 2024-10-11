@@ -25,7 +25,7 @@ setup(
         "gaia.interface",
     ],
     install_requires=[
-        # "turnkeyml[llm-oga-dml]==4.0.2",
+        "turnkeyml[llm-oga-dml]==4.0.2",
         "aiohttp",
         "fastapi",
         "pydantic==1.10.12",
@@ -50,7 +50,6 @@ setup(
         "torch>=2.0.0,<2.4",
         "torchvision<0.19.0",
         "torchaudio",
-        "wikipedia",
         "llama-cpp-python",
         "youtube_search",
         "google-api-python-client",

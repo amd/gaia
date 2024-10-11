@@ -2,19 +2,11 @@
 
 import argparse
 import torch
-# import turnkeyml.llm.cache as cache
-# from turnkeyml.llm.tools.chat import Serve
-# from turnkeyml.llm.tools.huggingface_load import HuggingfaceLoad
-# from turnkeyml.llm.tools.ort_genai.oga import OgaLoad
-# # from turnkeyml.llm.tools.ryzenai_npu.ryzenai_npu import RyzenAINPULoad
-# from turnkeyml.state import State
-
-# TODO: temporary solution using internal lemonade package/repo.
-# https://github.com/aigdat/gaia/issues/109
-import lemonade.cache as cache # pylint:disable=E0401
-from lemonade.tools.chat import Serve # pylint:disable=E0401
-from lemonade.tools.huggingface_load import HuggingfaceLoad # pylint:disable=E0401
-from lemonade.tools.ort_genai.oga import OgaLoad # pylint:disable=E0401
+import turnkeyml.llm.cache as cache
+from turnkeyml.llm.tools.chat import Serve
+from turnkeyml.llm.tools.huggingface_load import HuggingfaceLoad
+from turnkeyml.llm.tools.ort_genai.oga import OgaLoad
+# from turnkeyml.llm.tools.ryzenai_npu.ryzenai_npu import RyzenAINPULoad
 from turnkeyml.state import State # pylint:disable=E0401
 
 from gaia.llm.ollama_serve import OllamaServe

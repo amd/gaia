@@ -1,14 +1,69 @@
 name: Installer
 
 on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    
+  installer:
+    runs-on: windows-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
-    - uses: actions/checkout@v2
-    - name: Print done
-      run: |
-        print("done")
+      - uses: actions/checkout@v4
+
+      - name: Install NSIS
+        run: |
+          # Download NSIS installer
+          curl -L -o nsis.exe https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10-setup.exe
+          
+          # Install NSIS
+          Start-Process nsis.exe -ArgumentList '/S' -Wait
+
+      - name: Verify NSIS installation
+        run: |
+          # Check if NSIS is installed
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /VERSION
+
+      - name: Build the GAIA installer
+        run: |
+          cd installer
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' 'Installer.nsi'
+
+          if (Test-Path "GAIA_Installer.exe") {
+            Write-Host "GAIA_Installer.exe has been created successfully."
+          } else {
+            Write-Host "GAIA_Installer.exe was not found."
+            exit 1
+          }
+
+      - name: Download and Install Miniconda
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe" -OutFile "miniconda.exe"
+          Start-Process -FilePath "miniconda.exe" -ArgumentList "/S", "/D=$env:USERPROFILE\Miniconda3" -Wait
+
+      - name: Initialize Conda for CMD
+        shell: cmd
+        run: |
+          call %UserProfile%\Miniconda3\Scripts\activate.bat
+          call conda init cmd.exe
+
+      - name: Attempt to install GAIA using installer
+        shell: cmd
+        run: |
+          echo "::debug::Having issues debugging the installer? Check the installer README for tips on how to do that."
+          call %UserProfile%\Miniconda3\Scripts\activate.bat
+          cd installer
+          GAIA_Installer.exe /S
+
+      - name: Upload Installer
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: GaiaInstaller
+          path: |
+            installer\GAIA_Installer.exe
