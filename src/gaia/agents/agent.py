@@ -1,5 +1,6 @@
 # Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
+import os
 import time
 import asyncio
 from collections import OrderedDict
@@ -76,10 +77,13 @@ class Agent:
             # Check if the user is logged in to Hugging Face
             token = HfFolder.get_token()
             if not token:
+                token = os.getenv('HUGGINGFACE_ACCESS_TOKEN')
+
+            if not token:
                 UIMessage.error("No Hugging Face token found. Please log in to Hugging Face.")
 
             # Verify the token
-            api = HfApi()
+            api = HfApi(token=token)
             try:
                 api.whoami(token)
             except Exception:

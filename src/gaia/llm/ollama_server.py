@@ -1,5 +1,6 @@
 # Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
+import os
 import time
 import math
 import argparse
@@ -101,7 +102,8 @@ class OllamaClient:
                             raise Exception("Download cancelled by user")
 
                     progress_dialog.close()
-                    UIMessage.info("Model downloaded successfully.")
+                    if os.environ.get('QT_QPA_PLATFORM') != 'offscreen':
+                        UIMessage.info("Model downloaded successfully.")
                 except Exception as download_error:
                     progress_dialog.close()
                     UIMessage.error(f"{str(download_error)}")
