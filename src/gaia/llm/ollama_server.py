@@ -1,10 +1,12 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
 import time
 import math
 import argparse
-import logging
 import asyncio
 import subprocess
 from typing import Union, List, Dict, Any, Optional
+from urllib.parse import urlparse
 
 import requests
 import uvicorn
@@ -16,6 +18,8 @@ from pydantic import BaseModel
 import ollama
 from ollama import Client
 from ollama._types import ResponseError
+
+from gaia.logger import get_logger
 from gaia.interface.util import UIMessage
 
 class OllamaClient:
@@ -33,67 +37,29 @@ class OllamaClient:
 
     Args:
         model (str): The name of the model to use. Defaults to 'llama3.2:3b'.
-        host (str): The host URL for the Ollama API. Defaults to 'http://localhost:11434'.
+        host (str): The host URL for the Ollama API. Defaults to 'http://localhost'.
+        port (int): The port for the Ollama API. Defaults to 11434.
 
     Raises:
         AssertionError: If the specified model is not in the list of supported models.
     """
-    def __init__(self, model: str = 'llama3.2:3b', host: str = 'http://localhost:11434'):
+    def __init__(self, model: str = 'llama3.2:3b', host: str = 'http://localhost', port: int = 11434):
+        self.log = get_logger(__name__)
         self.model = model
         self.host = host
-        self.client = Client(host=host)
+        self.port = port
+        self.client = Client(host=f"{self.host}:{self.port}")
         self.ensure_ollama_running()
         self.ensure_model_available()
 
     def ensure_ollama_running(self):
         try:
-            response = requests.get(f"{self.host}/api/version", timeout=5)
+            response = requests.get(f"{self.host}:{self.port}/api/version", timeout=5)
             if response.status_code == 200:
-                print(f"Ollama server is already running. Version: {response.json().get('version')}")
+                self.log.info(f"Ollama model server is already running. Version: {response.json().get('version')}")
                 return
         except requests.RequestException:
-            print("Ollama server is not responding. Attempting to start it...")
-
-        # If we're here, the server isn't running or responding. Try to start it.
-        if not self.start_ollama_server():
-            error_message = (
-                "Unable to start Ollama server. "
-                "Please make sure Ollama is installed and can be run from the command line.\n"
-                "You can download Ollama from https://ollama.ai/download"
-            )
-            UIMessage.error(error_message)
-            raise ConnectionError(error_message)
-
-    def start_ollama_server(self):
-        print("Attempting to start Ollama server...")
-        try:
-            # Check if the server is already running
-            try:
-                response = requests.get(f"{self.host}/api/version", timeout=5)
-                if response.status_code == 200:
-                    print("Ollama server is already running.")
-                    return True
-            except requests.RequestException:
-                pass  # Server is not running, continue with startup
-
-            # Start the server
-            subprocess.Popen(['ollama', 'serve'], creationflags=subprocess.CREATE_NEW_CONSOLE)
-
-            # Wait for the server to start
-            for _ in range(30):  # Try for 30 seconds
-                time.sleep(1)
-                try:
-                    response = requests.get(f"{self.host}/api/version", timeout=5)
-                    if response.status_code == 200:
-                        print("Ollama server started successfully.")
-                        return True
-                except requests.RequestException:
-                    pass
-            print("Failed to start Ollama server after 30 seconds.")
-            return False
-        except FileNotFoundError:
-            print("Ollama executable not found. Please ensure it's installed and in your PATH.")
-            return False
+            self.log.error("Ollama server is not responding.")
 
     def ensure_model_available(self):
         try:
@@ -227,7 +193,7 @@ class OllamaClient:
     def push_model(self, name: str, **kwargs) -> Dict[str, Any]:
         return self.client.push(name, **kwargs)
 
-class OllamaServe:
+class OllamaClientServer:
     """
     Open a web server that apps can use to communicate with Ollama models.
 
@@ -247,18 +213,18 @@ class OllamaServe:
     Output: None (runs indefinitely until stopped)
     """
 
-    def __init__(self):
+    def __init__(self, host:str="http://localhost", port:int=8000):
+        self.host = host
+        self.port = port
+        self.log = get_logger(__name__)
         self.app = FastAPI()
         self.ollama_client = None
         self.setup_routes()
 
-        # Set up logging
-        logging.basicConfig(level=logging.DEBUG)
-        self.log = logging.getLogger(__name__)
 
-        # Suppress httpcore debug messages
-        logging.getLogger("httpcore").setLevel(logging.WARNING)
-        logging.getLogger("httpx").setLevel(logging.WARNING)
+    def get_host_port(self):
+        return self.host, self.port
+
 
     @staticmethod
     def parser(add_help: bool = True) -> argparse.ArgumentParser:
@@ -354,33 +320,109 @@ class OllamaServe:
             except WebSocketDisconnect:
                 self.log.info("WebSocket disconnected")
                 websocket_closed = True
-            except Exception as e: # pylint:disable=W0718
+            except Exception as e:
                 self.log.error(f"An error occurred: {str(e)}")
             finally:
                 if not websocket_closed:
                     await websocket.close()
 
-    def run(self, model: str):
+    def run(self, model:str):
         self.ollama_client = OllamaClient(model=model)
-        print(f"Launching Ollama Server with model: {model}")
-        uvicorn.run(self.app, host="localhost", port=8000)
+        self.log.info(f"Launching Ollama Server with model: {model}")
+
+        # Parse the host to remove any protocol
+        parsed_host = urlparse(self.host)
+        clean_host = parsed_host.netloc or parsed_host.path
+
+        uvicorn.run(self.app, host=clean_host, port=self.port)
 
 
-# Usage example
-if __name__ == '__main__':
+class OllamaModelServer:
+    def __init__(self, host:str='http://localhost', port:int=11434):
+        self.log = get_logger(__name__)
+        self.host = host
+        self.port = port
+        self.ollama_process = None
 
-    # Test ollama client
-    client = OllamaClient(model='llama3.1:8b')
-    stream = client.chat('Why is the sky blue?', 'You are a helpful assistant.')
-    for chunk in stream:
-        print(chunk['message']['content'], end='', flush=True)
 
-    # Test download
-    client.delete_model('smollm:135m')
-    client.set_model('smollm:135m')
+    def get_host_port(self):
+        return self.host, self.port
 
-    # Test ollama server
-    parser = OllamaServe.parser()
-    args = parser.parse_args()
-    server = OllamaServe()
-    server.run(model=args.model)
+
+    def start_ollama_model_server(self):
+        self.log.info("Attempting to start Ollama server...")
+        try:
+            # Check if the server is already running
+            try:
+                response = requests.get(f"{self.host}:{self.port}/api/version", timeout=5)
+                if response.status_code == 200:
+                    version = response.json().get('version', 'Unknown')
+                    self.log.warning(f"Ollama server is already running. Version: {version}")
+                    return True
+            except requests.RequestException:
+                pass  # Server is not running, continue with startup
+
+            # Start the server
+            self.log.info("Starting ollama model server.")
+            self.ollama_process = subprocess.Popen(['ollama', 'serve'], creationflags=subprocess.CREATE_NEW_CONSOLE)
+
+            # Wait for the server to start
+            for _ in range(30):  # Try for 30 seconds
+                time.sleep(1)
+                try:
+                    response = requests.get(f"{self.host}:{self.port}/api/version", timeout=5)
+                    if response.status_code == 200:
+                        self.log.info("Ollama server started successfully.")
+                        return True
+                except requests.RequestException:
+                    pass
+            self.log.error("Failed to start Ollama server after 30 seconds.")
+            return False
+        except FileNotFoundError:
+            self.log.error(
+                "Ollama executable not found."
+                "Please make sure Ollama is installed and can be run from the command line (ollama serve).\n"
+                "You can download Ollama from https://ollama.ai/download"
+            )
+            return False
+
+    def stop_ollama_model_server(self):
+        if self.ollama_process:
+            self.log.info("Stopping Ollama server...")
+            self.ollama_process.terminate()
+            self.ollama_process.wait()
+            self.ollama_process = None
+            self.log.info("Ollama server stopped.")
+
+    def run(self):
+        # If we're here, the server isn't running or responding. Try to start it.
+        if not self.start_ollama_model_server():
+            error_message = (
+                "Unable to start Ollama server. "
+                "Please make sure Ollama is installed and can be run from the command line (ollama serve).\n"
+                "You can download Ollama from https://ollama.ai/download"
+            )
+            UIMessage.error(error_message)
+            raise ConnectionError(error_message)
+        else:
+            return self.ollama_process
+
+
+def launch_ollama_model_server(host:str="http://localhost", port:int=11434):
+    try:
+        ollama_model_server = OllamaModelServer(host, port)
+        ollama_model_server.run()
+        return ollama_model_server
+    except Exception as e:
+        UIMessage.error(f"An unexpected error occurred:\n\n{str(e)}")
+        return
+
+
+def launch_ollama_client_server(model:str, host:str="http://localhost", port:int=8000):
+    try:
+        ollama_client_server = OllamaClientServer(host, port)
+        ollama_client_server.run(model=model)
+        return ollama_client_server
+    except Exception as e:
+        UIMessage.error(f"An unexpected error occurred:\n\n{str(e)}")
+        return

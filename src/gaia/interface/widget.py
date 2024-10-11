@@ -8,12 +8,12 @@ import time
 import socket
 import json
 import asyncio
-import logging
 from pathlib import Path
 from datetime import datetime
 import textwrap
 import subprocess
 import multiprocessing
+from urllib.parse import urlparse
 from aiohttp import web, ClientSession
 
 from PySide6.QtWidgets import (
@@ -35,10 +35,12 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
+from gaia.logger import get_logger
 import gaia.agents as agents
+from gaia.interface.util import UIMessage
 from gaia.interface.ui_form import Ui_Widget
 from gaia.llm.server import launch_llm_server
-
+from gaia.llm.ollama_server import launch_ollama_client_server, launch_ollama_model_server
 
 # This is a temporary workaround since the Qt Creator generated files
 # do not import from the gui package.
@@ -57,10 +59,7 @@ class SetupLLM(QObject):
     def __init__(self, widget):
         super().__init__()
         self.widget = widget
-
-        # Set up logging
-        logging.basicConfig(level=logging.DEBUG)
-        self.log = logging.getLogger(__name__)
+        self.log = get_logger(__name__)
 
     # Request Agent Server to update connection to LLM Server
     async def request_llm_load(self):
@@ -80,14 +79,8 @@ class SetupLLM(QObject):
     @Slot()
     def do_work(self):
         # Close previously open servers, if any
-        if self.widget.agent_server is not None:
-            self.log.debug("Closing open Agent server")
-            self.widget.agent_server.terminate()
-            self.widget.agent_server = None
-        if self.widget.llm_server is not None:
-            self.log.debug("Closing open LLM server")
-            self.widget.llm_server.terminate()
-            self.widget.llm_server = None
+        self.log.debug("SetupLLM do_work started")
+        self.widget.terminate_servers()
 
         # Switch visibility of UI elements
         self.widget.ui.loading.setVisible(True)
@@ -99,75 +92,12 @@ class SetupLLM(QObject):
         self.widget.ui.device.setEnabled(False)
         self.widget.ui.agent.setEnabled(False)
 
-        # Initialize Agent server
-        self.widget.ui.loadingLabel.setText("Initializing Agent Server...")
-
-        # Open using subprocess or multiprocessing depending on the selected settings
-        creationflags = subprocess.CREATE_NEW_CONSOLE
-        selected_agent = self.widget.ui.agent.currentText()
-        if self.widget.settings["dev_mode"]:
-            app_dot_py = gaia_folder / "agents" / selected_agent / "app.py"
-            command = [sys.executable, app_dot_py]
-            self.widget.agent_server = subprocess.Popen(
-                command, creationflags=creationflags
-            )
-        else:
-            self.widget.agent_server = multiprocessing.Process(
-                target=getattr(agents, selected_agent.lower())
-            )
-            self.widget.agent_server.start()
-
-        while not is_server_available("127.0.0.1", 8001):
-            time.sleep(1)
-
-        # Initialize LLM server
-        selected_model = self.widget.ui.model.currentText()
-        selected_device_dtype = self.widget.ui.device.currentText()
-
-        try:
-            selected_device, selected_dtype = self.widget.device_list_mapping[selected_device_dtype]
-        except KeyError:
-            self.log.error(f"Device '{selected_device_dtype}' not found in device_list_mapping. Available devices: {self.widget.device_list_mapping}")
-
-        model_settings = self.widget.settings["models"][selected_model]
-        self.widget.ui.loadingLabel.setText(
-            f"Initializing LLM server for {selected_model} on {self.widget.ui.device.currentText()}..."
-        )
-
-        llm_server_kwargs = {
-            "backend" : model_settings["backend"],
-            "checkpoint": model_settings["checkpoint"],
-            "max_new_tokens": int(self.widget.settings["max_new_tokens"]),
-            "device": selected_device.lower(),
-            "dtype": selected_dtype.lower(),
-        }
-        self.log.info(f"Starting LLM server with params: {llm_server_kwargs}")
-
-        if self.widget.settings["dev_mode"]:
-            server_dot_py = gaia_folder / "llm" / "server.py"
-            command = [
-                sys.executable,
-                server_dot_py,
-            ] + sum(
-                ([f"--{key}", str(value)] for key, value in llm_server_kwargs.items()),
-                [],
-            )
-            if self.widget.settings["llm_server"]:
-                self.widget.llm_server = subprocess.Popen(
-                    command, creationflags=creationflags
-                )
-        else:
-            if self.widget.settings["llm_server"]:
-                self.widget.llm_server = multiprocessing.Process(
-                    target=launch_llm_server, kwargs=llm_server_kwargs
-                )
-                self.widget.llm_server.start()
-                while not is_server_available("127.0.0.1", 8000):
-                    time.sleep(1)
         if self.widget.settings["llm_server"]:
-            asyncio.run(self.request_llm_load())
+            self.initialize_servers()
+        else:
+            self.log.debug("Skipping initilize_servers()")
 
-        # Done
+        selected_model = self.widget.ui.model.currentText()
         self.widget.ui.loadingLabel.setText(
             f"Ready to run {selected_model} on {self.widget.ui.device.currentText()}!"
         )
@@ -178,9 +108,192 @@ class SetupLLM(QObject):
         self.widget.ui.device.setEnabled(True)
         self.widget.ui.agent.setEnabled(True)
 
-        asyncio.run(self.widget.request_restart())
+        # asyncio.run(self.widget.request_restart())
 
+        self.log.debug("SetupLLM do_work finished")
         self.finished.emit()
+
+
+    def initialize_servers(self):
+        _, model_settings, _, _, _ = self.get_model_settings()
+
+        # Initialize Agent server
+        self.initialize_agent_server()
+
+        if model_settings["backend"] == "ollama":
+            # Initialize Ollama servers
+            self.initialize_ollama_model_server()
+            self.initialize_ollama_client_server()
+        else:
+            # Initialize LLM server
+            self.widget.ui.loadingLabel.setText(f"Initializing LLM server: {self.widget.ui.device.currentText()}...")
+            self.initialize_llm_server()
+
+
+    def initialize_agent_server(self):
+        # Open using subprocess or multiprocessing depending on the selected settings
+        selected_agent = self.widget.ui.agent.currentText()
+        self.log.info(f"Starting Agent {selected_agent} server...")
+        self.widget.ui.loadingLabel.setText(f"Initializing Agent {selected_agent} Server...")
+
+        if self.widget.settings["dev_mode"]:
+            app_dot_py = gaia_folder / "agents" / selected_agent / "app.py"
+            command = [sys.executable, app_dot_py]
+            self.widget.agent_server = subprocess.Popen(
+                command,
+                creationflags=subprocess.CREATE_NEW_CONSOLE
+
+            )
+        else:
+            self.widget.agent_server = multiprocessing.Process(
+                target=getattr(agents, selected_agent.lower())
+            )
+            self.widget.agent_server.start()
+
+        host="127.0.0.1"
+        port=8001
+        self.check_server_available(host, port)
+        self.log.info("Done.")
+
+
+    def initialize_llm_server(self):
+        _, model_settings, selected_device, selected_dtype, max_new_tokens = self.get_model_settings()
+        llm_server_kwargs = {
+            "backend" : model_settings["backend"],
+            "checkpoint": model_settings["checkpoint"],
+            "max_new_tokens": max_new_tokens,
+            "device": selected_device,
+            "dtype": selected_dtype,
+        }
+
+        self.log.info(f"Starting LLM server with params: {llm_server_kwargs}...")
+        if self.widget.settings["dev_mode"]:
+            server_dot_py = gaia_folder / "llm" / "server.py"
+            command = [
+                sys.executable,
+                server_dot_py,
+            ] + sum(
+                ([f"--{key}", str(value)] for key, value in llm_server_kwargs.items()),
+                [],
+            )
+            self.widget.llm_server = subprocess.Popen(
+                command,
+                creationflags=subprocess.CREATE_NEW_CONSOLE
+            )
+        else:
+            if self.widget.settings["llm_server"]:
+                self.widget.llm_server = multiprocessing.Process(
+                    target=launch_llm_server, kwargs=llm_server_kwargs
+                )
+                self.widget.llm_server.start()
+                self.check_server_available("127.0.0.1", 8000)
+        asyncio.run(self.request_llm_load())
+        self.log.info("Done.")
+
+
+    def initialize_ollama_model_server(self):
+        self.log.info("Initializing Ollama model server...")
+        self.widget.ui.loadingLabel.setText("Initializing Ollama model server...")
+
+        host = "http://localhost"
+        port = 11434
+
+        if self.widget.settings["dev_mode"]:
+            # Construct the command to run launch_ollama_model_server in a separate shell
+            command = [
+                sys.executable,
+                "-c",
+                f"from gaia.llm.ollama_server import launch_ollama_model_server; launch_ollama_model_server(host='{host}', port={port})"
+            ]
+            self.widget.ollama_model_server = subprocess.Popen(
+                command,
+                creationflags=subprocess.CREATE_NEW_CONSOLE
+            )
+        else:
+            self.widget.ollama_model_server = multiprocessing.Process(
+                target=launch_ollama_model_server,
+                kwargs={"host": host, "port": port}
+            )
+            self.widget.ollama_model_server.start()
+
+        self.check_server_available(host, port)
+        self.log.info("Done.")
+
+
+    def initialize_ollama_client_server(self):
+        _, model_settings, device, _, _ = self.get_model_settings()
+        checkpoint = model_settings["checkpoint"]
+
+        self.log.info(f"Initializing Ollama client server on {device} with {checkpoint} model...")
+        self.widget.ui.loadingLabel.setText(f"Initializing Ollama client server on {device} with {checkpoint} model...")
+
+        host = "http://localhost"
+        port = 8000
+        ollama_kwargs = {
+            "model" : checkpoint,
+            "host" : host,
+            "port" : port
+        }
+
+        if self.widget.settings["dev_mode"]:
+            command = [
+                sys.executable,
+                "-c",
+                f"from gaia.llm.ollama_server import launch_ollama_client_server; launch_ollama_client_server(model='{checkpoint}', host='{host}', port={port})"
+            ]
+
+            self.widget.ollama_client_server = subprocess.Popen(
+                command,
+                creationflags=subprocess.CREATE_NEW_CONSOLE
+            )
+        else:
+            self.widget.ollama_client_server = multiprocessing.Process(
+                target=launch_ollama_client_server, kwargs=ollama_kwargs
+            )
+            self.widget.ollama_client_server.start()
+
+        self.check_server_available(host, port)
+
+
+    def get_model_settings(self):
+        selected_model = self.widget.ui.model.currentText()
+        selected_device_dtype = self.widget.ui.device.currentText()
+
+        try:
+            selected_device, selected_dtype = self.widget.device_list_mapping[selected_device_dtype]
+        except KeyError:
+            self.log.error(f"Device '{selected_device_dtype}' not found in device_list_mapping. Available devices: {self.widget.device_list_mapping}")
+
+        model_settings = self.widget.settings["models"][selected_model]
+        max_new_tokens = int(self.widget.settings["max_new_tokens"])
+
+        return selected_model, model_settings, selected_device.lower(), selected_dtype.lower(), max_new_tokens
+
+
+    def check_server_available(self, host, port):
+        # Parse the host to remove any protocol
+        parsed_host = urlparse(host)
+        clean_host = parsed_host.netloc or parsed_host.path
+
+        for _ in range(30):
+            if self.is_server_available(clean_host, port):
+                return True
+            time.sleep(1)
+        UIMessage.error(f"Server unavailable at {host}:{port}")
+        return False
+
+
+    def is_server_available(self, host, port):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(3)
+            s.connect((host, port))
+            s.close()
+            return True
+
+        except (ConnectionRefusedError, TimeoutError):
+            # If connection is refused, return False
+            return False
 
 
 class StreamToAgent(QObject):
@@ -259,32 +372,15 @@ class StreamFromAgent(QObject):
         self.finished.emit()
 
 
-def is_server_available(host, port):
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(3)
-        s.connect((host, port))
-        s.close()
-        return True
-
-    except (ConnectionRefusedError, TimeoutError):
-        # If connection is refused, return False
-        return False
-
-
 class Widget(QWidget):
     def __init__(self, parent=None, server=True):
         super().__init__(parent)
 
         # control enabling of web server
         self.server = server
-
-        # Set up logging
-        logging.basicConfig(level=logging.DEBUG)
-        self.log = logging.getLogger(__name__)
-
-        # Configure the logging level for aiohttp.access
-        logging.getLogger('aiohttp.access').setLevel(logging.WARNING)
+        self.is_restarting = False
+        self.log = get_logger(__name__)
+        self.current_backend = None
 
         # Set size policy for the main widget
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -308,6 +404,8 @@ class Widget(QWidget):
         self.cards = {}
         self.agent_server = None
         self.llm_server = None
+        self.ollama_model_server = None
+        self.ollama_client_server = None
         self.device_list_mapping = {}
 
         # Adjust the width based on the content
@@ -332,9 +430,7 @@ class Widget(QWidget):
 
         # Connect buttons
         self.ui.ask.clicked.connect(self.send_message)
-        self.ui.restart.clicked.connect(
-            lambda: self.restart_conversation(notify_agent_server=True)
-        )
+        self.ui.restart.clicked.connect(self.restart_conversation())
         self.ui.model.currentIndexChanged.connect(self.update_device_list)
         self.ui.model.currentIndexChanged.connect(self.deployment_changed)
         self.ui.device.currentIndexChanged.connect(self.deployment_changed)
@@ -403,19 +499,55 @@ class Widget(QWidget):
         return str(val)
 
 
-    def closeEvent(self, *args, **kwargs):  # pylint: disable=unused-argument
-        # Make sure  servers are killed when application exits
+    def closeEvent(self, event):
+        self.terminate_servers()
+        super().closeEvent(event)
+
+    def terminate_servers(self):
+        # Make sure servers are killed when application exits
+        self.log.info("Terminating servers.")
         if self.agent_server is not None:
             self.log.debug("Closing agent server")
-            self.agent_server.terminate()
+            try:
+                self.agent_server.terminate()
+            except AttributeError:
+                self.log.warning("Agent server was already terminated or not initialized.")
+            self.agent_server = None
+
         if self.llm_server is not None:
             self.log.debug("Closing LLM server")
-            self.llm_server.terminate()
+            try:
+                self.llm_server.terminate()
+            except AttributeError:
+                self.log.warning("LLM server was already terminated or not initialized.")
+            self.llm_server = None
+
+        if self.ollama_model_server is not None:
+            self.log.debug("Closing Ollama model server")
+            try:
+                self.ollama_model_server.terminate()
+            except AttributeError:
+                self.log.warning("Ollama model server was already terminated or not initialized.")
+            self.ollama_model_server = None
+
+        if self.ollama_client_server is not None:
+            self.log.debug("Closing Ollama client server")
+            try:
+                self.ollama_client_server.terminate()
+            except AttributeError:
+                self.log.warning("Ollama client server was already terminated or not initialized.")
+            self.ollama_client_server = None
 
 
     def update_device_list(self):
+        self.log.debug("update_device_list called")
         selected_model = self.ui.model.currentText()
-        model_device_settings = self.settings["models"][selected_model]["device"]
+        model_settings = self.settings["models"][selected_model]
+        model_device_settings = model_settings["device"]
+        self.current_backend = model_settings["backend"]
+
+        # Disconnect the signal temporarily to prevent recursive calls
+        self.ui.device.currentIndexChanged.disconnect(self.deployment_changed)
 
         # Clear existing items
         self.ui.device.clear()
@@ -431,8 +563,52 @@ class Widget(QWidget):
         if self.ui.device.count() > 0:
             self.ui.device.setCurrentIndex(0)
 
+        # Reconnect the signal
+        self.ui.device.currentIndexChanged.connect(self.deployment_changed)
+
         # Log the updated device_list_mapping for debugging
         self.log.debug(f"Updated device_list_mapping: {self.device_list_mapping}")
+        self.log.debug(f"Current device text: {self.ui.device.currentText()}")
+        self.log.debug(f"Number of items in device combo box: {self.ui.device.count()}")
+
+
+    def deployment_changed(self):
+        self.log.debug("deployment_changed called")
+        if self.is_restarting:
+            self.log.debug("Skipping deployment_changed as restart is already in progress")
+            return
+
+        self.is_restarting = True
+        try:
+            # Show loading screen immediately
+            self.make_chat_visible(False)
+            self.ui.loadingLabel.setVisible(True)
+            self.ui.loading.setVisible(True)
+            self.ui.loadingGif.setVisible(True)
+
+            # Update the device list before restarting the conversation
+            self.update_device_list()
+            self.restart_conversation()
+
+            selected_model = self.ui.model.currentText()
+            model_settings = self.settings["models"][selected_model]
+            self.current_backend = model_settings["backend"]
+
+            # Update the loading label
+            self.ui.loadingLabel.setText(f"Switching to {selected_model}...")
+            self.ui.loadingLabel.setVisible(True)
+
+            if self.server:
+                self.log.debug("Starting setup thread")
+                self.setupThread.quit()
+                self.setupThread.wait()
+                self.setupThread.start()
+
+            # Call request_restart after starting the setup thread
+            asyncio.run(self.request_restart())
+
+        finally:
+            self.is_restarting = False
 
 
     def make_chat_visible(self, visible):
@@ -481,18 +657,9 @@ class Widget(QWidget):
         return super().eventFilter(obj, event)
 
 
-    def deployment_changed(self):
-        # Update the device list before restarting the conversation
-        self.update_device_list()
-        self.restart_conversation(notify_agent_server=False)
-        if self.server:
-            self.setupThread.quit()
-            self.setupThread.wait()
-            self.setupThread.start()
-
-
     # Request LLM server to also restart
     async def request_restart(self):
+        self.log.debug("request_restart called")
         if self.server:
             async with ClientSession() as session:
                 async with session.post(
@@ -501,7 +668,7 @@ class Widget(QWidget):
                     await response.read()
 
 
-    def restart_conversation(self, notify_agent_server):
+    def restart_conversation(self):
         # Disable chat
         self.make_chat_visible(False)
 
@@ -515,11 +682,6 @@ class Widget(QWidget):
             card_frame.deleteLater()
         self.cards = {}
         self.card_count = 0
-
-        # Let agent server know that we are restarting the conversation
-        if notify_agent_server:
-            asyncio.run(self.request_restart())
-
 
     def send_message(self):
         prompt = self.ui.prompt.toPlainText()
@@ -550,7 +712,7 @@ class Widget(QWidget):
 
 
     def add_card(self, message="", card_id=None, from_user=False, stats=None):
-        self.log.debug(f"add_card called with card_id: {card_id}")
+        # self.log.debug(f"add_card called with card_id: {card_id}")
         self.make_chat_visible(True)
 
         chunked_message = self.split_into_chunks(message)
@@ -640,12 +802,12 @@ class Widget(QWidget):
         self.card_count += 1
         self.repaint()
 
-        self.log.debug(f"Card added with id: {card_id}, content: {message}")
+        # self.log.debug(f"Card added with id: {card_id}, content: {message}")
         return card_id
 
 
     def update_card(self, message, card_id, stats=None, final_update=False, from_user=False):
-        self.log.debug(f"update_card called with message: {message}, card_id: {card_id}, final_update: {final_update}")
+        # self.log.debug(f"update_card called with message: {message}, card_id: {card_id}, final_update: {final_update}")
 
         if card_id not in self.cards:
             self.log.error(f"Card with id {card_id} not found.")
@@ -683,7 +845,7 @@ class Widget(QWidget):
                 existing_label.setText(message)
 
         self.repaint()
-        self.log.debug(f"Card {card_id} updated successfully. New content: {message}")
+        # self.log.debug(f"Card {card_id} updated successfully. New content: {message}")
 
 
     def format_message(self, message):
@@ -996,7 +1158,7 @@ class Widget(QWidget):
 class CustomWebPage(QWebEnginePage):
     def __init__(self, profile, parent=None):
         super().__init__(profile, parent)
-        self.log = logging.getLogger(__name__)
+        self.log = get_logger(__name__)
 
         # Enable JavaScript
         self.settings().setAttribute(QWebEngineSettings.JavascriptEnabled, True)

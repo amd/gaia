@@ -1,10 +1,11 @@
 import os
 import sys
-import logging
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox, QApplication, QProgressDialog
 from PySide6.QtGui import QIcon
+
+from gaia.logger import get_logger
 
 class UIBase:
     _app = None
@@ -20,7 +21,7 @@ class UIBase:
         try:
             # PyInstaller creates a temp folder and stores path in _MEIPASS
             base_path = sys._MEIPASS # pylint:disable=W0212,E1101
-        except Exception: # pylint:disable=W0718
+        except Exception:
             # If not running as a PyInstaller bundle, use the current file's directory
             base_path = os.path.dirname(os.path.abspath(__file__))
 
@@ -39,20 +40,17 @@ class UIMessage(UIBase):
         message_type (QMessageBox.Icon): Type of message (e.g., Information, Warning, Critical).
         """
         UIMessage._ensure_app()
-
-        # Set up logging
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-        logger = logging.getLogger(__name__)
+        log = get_logger(__name__)
 
         # Check message type
         if message_type == QMessageBox.Critical:
-            logger.error(f"{title}: {message}")
+            log.error(f"{title}: {message}")
         elif message_type == QMessageBox.Warning:
-            logger.warning(f"{title}: {message}")
+            log.warning(f"{title}: {message}")
         elif message_type == QMessageBox.Information:
-            logger.info(f"{title}: {message}")
+            log.info(f"{title}: {message}")
         else:
-            logger.info(f"{title}: {message}")
+            log.info(f"{title}: {message}")
 
         msg_box = QMessageBox()
         msg_box.setIcon(message_type)
@@ -65,7 +63,7 @@ class UIMessage(UIBase):
             if os.path.exists(icon_path):
                 msg_box.setWindowIcon(QIcon(icon_path))
             else:
-                logger.warning(f"Icon file not found at {icon_path}")
+                log.warning(f"Icon file not found at {icon_path}")
 
         msg_box.exec()
 

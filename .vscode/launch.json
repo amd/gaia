@@ -15,7 +15,9 @@
             },
             "console": "integratedTerminal",
             "justMyCode": false,
-            "subProcess": true
+            "subProcess": true,
+            "stopOnEntry": false,
+            "debugOptions": ["RedirectOutput"]
         }
     ]
 }

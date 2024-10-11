@@ -9,8 +9,6 @@ from turnkeyml.llm.tools.ort_genai.oga import OgaLoad
 # from turnkeyml.llm.tools.ryzenai_npu.ryzenai_npu import RyzenAINPULoad
 from turnkeyml.state import State # pylint:disable=E0401
 
-from gaia.llm.ollama_serve import OllamaServe
-
 from gaia.interface.util import UIMessage
 
 def launch_llm_server(backend, checkpoint, device, dtype, max_new_tokens):
@@ -33,12 +31,11 @@ def launch_llm_server(backend, checkpoint, device, dtype, max_new_tokens):
         except FileNotFoundError as e:
             UIMessage.error(f"Error: Unable to find the model files for {checkpoint}.\n\nMake sure they are placed in the correct location, e.g. C:/Users/<user>/miniconda3/envs/<venv>/Lib/site-packages/lemonade/tools/ort_genai/models/<model_folder>`\n\n{str(e)}")
             return
-        except Exception as e: #pylint:disable=W0718
+        except Exception as e:
             UIMessage.error(f"An unexpected error occurred:\n\n{str(e)}")
             return
+    return None
 
-    if backend == "ollama":
-        OllamaServe().run(model=checkpoint)
 
 def get_cpu_args():
     parser = argparse.ArgumentParser(description="Launch LLM server")

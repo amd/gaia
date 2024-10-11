@@ -1,5 +1,4 @@
 import os
-import logging
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -16,6 +15,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPalette, QFont
 
 from huggingface_hub import HfFolder, HfApi
+from gaia.logger import get_logger
 from gaia.interface.util import UIMessage
 
 class WindowDragMixin:
@@ -33,17 +33,13 @@ class HuggingFaceTokenDialog(QWidget, WindowDragMixin):
     def __init__(self):
         _app = None
         super().__init__()
+        self.log = get_logger(__name__)
         self.token = None
         self.token_verified = False
         self.setWindowTitle("Hugging Face Token")
         self.setFixedSize(400, 250)
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
-
-        # Set up logging
-        logging.basicConfig(level=logging.DEBUG)
-        self.log = logging.getLogger(__name__)
-
         self.setup_ui()
 
     def setup_ui(self):
@@ -162,7 +158,7 @@ class HuggingFaceTokenDialog(QWidget, WindowDragMixin):
             else:
                 UIMessage.warning("No Hugging Face token found. Please login by entering `huggingface-cli login` in the command shell.")
 
-        except Exception as e: # pylint:disable=W0718
+        except Exception as e:
             UIMessage.error(f"An error occurred while verifying login status: {str(e)}")
 
     def verify_token(self):
@@ -180,7 +176,7 @@ class HuggingFaceTokenDialog(QWidget, WindowDragMixin):
             api = HfApi()
             api.whoami(token)
             return True
-        except Exception as e: #pylint: disable=W0718
+        except Exception as e:
             UIMessage.error(str(e))
             return False
 

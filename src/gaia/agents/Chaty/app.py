@@ -35,7 +35,7 @@ class MyAgent(Agent):
             new_card = False
 
             response += chunk
-        self.chat_history.append(f"Assistant: {response}")
+        self.chat_history.append(response)
         return response
 
     def prompt_received(self, prompt):

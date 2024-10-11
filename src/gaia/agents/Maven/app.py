@@ -1,11 +1,9 @@
 # Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 import os
-import sys
 import json
 import hashlib
 import shutil
-import logging
 from collections import deque
 
 from datetime import datetime, timedelta
@@ -35,16 +33,14 @@ from llama_index.readers.web import SimpleWebPageReader
 from llama_index.core.tools import QueryEngineTool, ToolMetadata
 from llama_index.tools.duckduckgo import DuckDuckGoSearchToolSpec
 
+from gaia.logger import get_logger
 from gaia.agents.agent import Agent, LocalLLM
-
-logging.basicConfig(stream=sys.stdout, level=logging.INFO)
-logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))
-
 
 class MyAgent(Agent):
     def __init__(self, host="127.0.0.1", port=8001, temp_dir="./temp"):
         super().__init__(host, port)
 
+        self.log = get_logger(__name__)
         self.n_chat_messages = 4
         self.chat_history = deque(maxlen=self.n_chat_messages * 2)  # Store both user and assistant messages
 
@@ -105,7 +101,6 @@ class MyAgent(Agent):
         self.chat_history.append(f"User: {query}")
         prompt = self.llm_system_prompt + '\n'.join(self.chat_history) + "[/INST]\nAssistant: "
 
-        # self.log.info(prompt)
         for chunk in self.prompt_llm_server(prompt=prompt):
 
             # Stream chunk to UI
@@ -124,7 +119,7 @@ class MyAgent(Agent):
 
         # Iterate over the combined documents
         for key, value in self.index_obj.items():
-            self.log.info(f"key: {key}, value: {value}")
+            self.log.debug(f"key: {key}, value: {value}")
             # Define query engines for vector and summary indexes
             vector_query_engine = value["vector_query_engine"]
             summary_query_engine = value["summary_query_engine"]
@@ -247,7 +242,7 @@ class MyAgent(Agent):
                 # Remove the temporary directory and all its contents
                 shutil.rmtree(self.temp_dir)
                 self.log.info(f"Cleaned up temporary directory: {self.temp_dir}")
-            except Exception as e: # pylint:disable=W0718
+            except Exception as e:
                 self.log.error(f"Failed to delete temporary directory: {self.temp_dir}. Reason: {e}")
         else:
             self.log.warning(f"Temporary directory does not exist: {self.temp_dir}")
@@ -422,7 +417,7 @@ class MyAgent(Agent):
         except wikipedia.exceptions.DisambiguationError as e:
             self.log.error(f"Disambiguation error for topic '{topic}'. Options are: {e.options}")
             return None, None
-        except Exception as e: # pylint:disable=W0718
+        except Exception as e:
             self.log.error(f"An error occurred: {e}")
             return None, None
 

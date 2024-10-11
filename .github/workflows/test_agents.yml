@@ -14,7 +14,7 @@ on:
       upload_artifacts:
         description: "Upload gaia.exe to Github"
         required: true
-        default: "false"
+        default: false
         type: boolean
 
 permissions:
@@ -45,4 +45,4 @@ jobs:
       - name: PyLint
         shell: bash -el {0}
         run: |
-          pylint src/gaia --rcfile .pylintrc --disable C0103,C0301,W0246,W0221,E1102,R0401,E0401
+          pylint src/gaia --rcfile .pylintrc --disable C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718

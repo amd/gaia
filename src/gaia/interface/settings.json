@@ -1,5 +1,5 @@
 {
-    "dev_mode": false,
+    "dev_mode": true,
     "llm_server": true,
     "show_label": true,
 
@@ -12,21 +12,12 @@
         "Example"
     ],
     "models": {
-        "llama-3.1 8b (ollama)": {
+        "llama-3.2 1b (ollama)": {
             "backend" : "ollama",
-            "checkpoint": "llama3.1:8b",
+            "checkpoint": "llama3.2:1b",
             "device": {
                 "cpu": [
-                    "Q4_0"
-                ]
-            }
-        },
-        "llama-3 8b (oga)": {
-            "backend" : "oga",
-            "checkpoint": "meta-llama/Meta-Llama-3-8B",
-            "device": {
-                "npu": [
-                    "int4"
+                    "Q8_0"
                 ]
             }
         },
@@ -39,12 +30,21 @@
                 ]
             }
         },
-        "llama-3.2 1b (ollama)": {
+        "llama-3.1 8b (ollama)": {
             "backend" : "ollama",
-            "checkpoint": "llama3.2:3b",
+            "checkpoint": "llama3.1:8b",
             "device": {
                 "cpu": [
-                    "Q8_0"
+                    "Q4_0"
+                ]
+            }
+        },
+        "llama-3 8b (oga-npu)": {
+            "backend" : "oga",
+            "checkpoint": "meta-llama/Meta-Llama-3-8B",
+            "device": {
+                "npu": [
+                    "int4"
                 ]
             }
         },

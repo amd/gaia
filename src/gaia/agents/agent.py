@@ -1,7 +1,7 @@
 # Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 import time
-import logging
+import asyncio
 from collections import OrderedDict
 from typing import Any, Callable
 from transformers import LlamaTokenizer
@@ -27,6 +27,7 @@ from llama_index.core.base.llms.types import (
     MessageRole,
 )
 
+from gaia.logger import get_logger
 from gaia.interface.util import UIMessage
 
 class Agent:
@@ -37,11 +38,9 @@ class Agent:
         self.latest_prompt_request = None
         self.host = host
         self.port = port
+        self.app = None
         self.last_chunk = False
-
-        # Set up logging
-        logging.basicConfig(level=logging.DEBUG)
-        self.log = logging.getLogger(__name__)
+        self.log = get_logger(__name__)
 
         # performance stats
         # in = input tokens
@@ -60,25 +59,31 @@ class Agent:
         # Load the LLaMA tokenizer
         self.tokenizer = self._initialize_tokenizer()
 
-        # Initialize Agent Server
-        self.app = web.Application()
-        self.app.router.add_post("/prompt", self._on_prompt_received)
-        self.app.router.add_post("/restart", self._on_chat_restarted)
-        self.app.router.add_post("/load_llm", self._on_load_llm)
+
+    def get_host_port(self):
+        return self.host, self.port
+
+
+    async def create_app(self):
+        app = web.Application()
+        app.router.add_post("/prompt", self._on_prompt_received)
+        app.router.add_post("/restart", self._on_chat_restarted)
+        app.router.add_post("/load_llm", self._on_load_llm)
+        return app
 
     def _initialize_tokenizer(self):
         try:
             # Check if the user is logged in to Hugging Face
             token = HfFolder.get_token()
             if not token:
-                raise EnvironmentError("No Hugging Face token found. Please log in to Hugging Face.")
+                UIMessage.error("No Hugging Face token found. Please log in to Hugging Face.")
 
             # Verify the token
             api = HfApi()
             try:
                 api.whoami(token)
             except Exception:
-                raise EnvironmentError("Invalid Hugging Face token. Please provide a valid token.")
+                UIMessage.error("Invalid Hugging Face token. Please provide a valid token.")
 
             # Attempt to load the tokenizer
             tokenizer = LlamaTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
@@ -93,13 +98,13 @@ class Agent:
             else:
                 UIMessage.error("No token provided. Tokenizer initialization failed.")
                 return None
-        except Exception as e: # pylint:disable=W0718
+        except Exception as e:
             UIMessage.error(f"An unexpected error occurred: {e}")
             return None
 
     def __del__(self):
         # Ensure websocket gets closed when agent is deleted
-        if hasattr(self, 'llm_server_websocket'):
+        if hasattr(self, 'llm_server_websocket') and self.llm_server_websocket is not None:
             if self.llm_server_websocket.connected:
                 self.llm_server_websocket.close()
 
@@ -117,12 +122,29 @@ class Agent:
         return self.stats['tps']
 
     def initialize_server(self):
-        web.run_app(self.app, host=self.host, port=self.port)
+        max_retries = 5
+        for _ in range(max_retries):
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                self.app = loop.run_until_complete(self.create_app())
+                web.run_app(self.app, host=self.host, port=self.port)
+                break
+            except OSError as e:
+                if e.errno == 10048:  # Port is in use
+                    self.log.warning(f"Port {self.port} is in use, make sure a service is not already running on this port.")
+                else:
+                    UIMessage.error(str(e))
+            finally:
+                loop.close()
+        else:
+            UIMessage.error(f"Unable to bind to port ({self.port}) after {max_retries} attempts with ip ({self.host}).\nMake sure to kill any existing services using port {self.port} before running GAIA.")
+
 
     def prompt_llm_server(self, prompt):
         try:
             ws = create_connection(self.llm_server_uri)
-        except Exception as e: # pylint:disable=W0718
+        except Exception as e:
             self.print(f"My brain is not working:```{e}```")
             return
 
@@ -174,7 +196,7 @@ class Agent:
 
                 except WebSocketTimeoutException:
                     break
-                except Exception as e: # pylint:disable=W0718
+                except Exception as e:
                     UIMessage.error(str(e))
                     return
 

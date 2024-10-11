@@ -25,6 +25,8 @@ Currently, the following are supported:
 # Getting Started
 To get started, please follow the latest instructions [here](./docs/ort_genai.md). These instructions will setup the Onnx Runtime GenAI (ORT-GenAI) backend targeting the RyzenAI Neural Processing Unit (NPU). For legacy support, you can also use the Pytorch Eager Mode flow using the AMD transformers library described [here](./docs/ryzenai_npu.md).
 
+NOTE: Install ollama from [here](https://ollama.com/download) if you plan to run anything else other than the above.
+
 # Contributing
 This is a very new project whose codebase is under heavy development.  If you decide to contribute, please:
 - do so via a pull request.

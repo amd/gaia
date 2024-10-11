@@ -7,7 +7,6 @@ import re
 import json
 import os
 import time
-import logging
 from collections import deque
 from dotenv import load_dotenv
 
@@ -27,9 +26,9 @@ from llama_index.core.tools import FunctionTool, QueryEngineTool, ToolMetadata
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.readers.youtube_transcript import YoutubeTranscriptReader
 
+from gaia.logger import get_logger
 from gaia.agents.agent import Agent, LocalLLM
 from gaia.agents.Clip.prompts import Prompts
-# from gaia.llm.ollama_serve import OllamaServe
 
 class MyAgent(Agent):
     """
@@ -40,30 +39,19 @@ class MyAgent(Agent):
     about YouTube content.
     """
 
-    def __init__(self, host="127.0.0.1", port=8001, backend="ollama", embed_model="local:BAAI/bge-small-en-v1.5", llm_model = "llama-3.1-8b-instant"):
+    def __init__(self, host="127.0.0.1", port=8001, embed_model="local:BAAI/bge-small-en-v1.5", llm_model = "llama-3.1-8b-instant"):
         super().__init__(host, port)
-
-        assert backend == "cpu" or backend == "npu" or backend == "ollama", "Invalid backend specified."
-        self.backend = backend
 
         load_dotenv()
         youtube_api_key = os.getenv('YOUTUBE_API_KEY')
         assert youtube_api_key
         self.youtube = build("youtube", "v3", developerKey=youtube_api_key)
 
-        # TODO: FIXME
-        # if backend == "ollama":
-        #     self.ollama_llm = OllamaServe()
-        #     self.llm = self.ollama_llm
-        # else:
-        #     self.llm = LocalLLM(prompt_llm_server=self.prompt_llm_server)
-        #     self.llm_server_uri = "ws://localhost:8000/ws"
         self.llm = LocalLLM(prompt_llm_server=self.prompt_llm_server)
         self.llm_server_uri = "ws://localhost:8000/ws"
 
         # Set up logging
-        logging.basicConfig(level=logging.DEBUG)
-        self.log = logging.getLogger(__name__)
+        self.log = get_logger(__name__)
 
         Settings.llm = self.llm
         Settings.embed_model = embed_model
