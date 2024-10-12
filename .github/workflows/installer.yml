@@ -52,10 +52,34 @@ jobs:
           call %UserProfile%\Miniconda3\Scripts\activate.bat
           call conda init cmd.exe
 
+      - name: Install Ollama
+        shell: cmd
+        run: |
+          curl -L https://ollama.com/download/OllamaSetup.exe -o OllamaSetup.exe --progress-bar
+          echo Ollama download complete. Starting installation.
+          start /wait OllamaSetup.exe /VERYSILENT /SUPPRESSMSGBOXES /SP- /LOG="llama_install.log"
+          echo "Ollama installation log:"
+          type llama_install.log
+          echo "PATH=C:\Users\runneradmin\AppData\Local\Programs\Ollama;%PATH%" >> $GITHUB_ENV
+          del OllamaSetup.exe
+
+      - name: Verify Ollama Installation
+        shell: cmd
+        run: |
+          if exist "C:\Users\runneradmin\AppData\Local\Programs\Ollama\ollama.exe" (
+              echo "Ollama installed successfully."
+          ) else (
+              echo "Ollama installation failed. Executable not found."
+              exit 1
+          )
+          set PATH=%PATH%;C:\Users\runneradmin\AppData\Local\Programs\Ollama
+          ollama --version
+
       - name: Attempt to install GAIA using installer
         shell: cmd
         run: |
-          echo "::debug::Having issues debugging the installer? Check the installer README for tips on how to do that."
+          echo "Having issues debugging the installer? Check the installer README for tips on how to do that."
+          set PATH=%PATH%;C:\Users\runneradmin\AppData\Local\Programs\Ollama
           call %UserProfile%\Miniconda3\Scripts\activate.bat
           cd installer
           GAIA_Installer.exe /S

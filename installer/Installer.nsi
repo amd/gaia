@@ -79,11 +79,11 @@ Section "Install Main Components" SEC01
   FileWrite $0 "- Packaged GAIA repo$\n"
 
   ; Check if conda is available
-  ExecWait 'conda --version' $2
+  ExecWait 'where conda' $2
   FileWrite $0 "- Checked if conda is available$\n"
 
   ; If conda is not found, show a message and exit
-  StrCmp $2 "" conda_not_available conda_available
+  StrCmp $2 "0" conda_available conda_not_available
 
   conda_not_available:
     FileWrite $0 "*** conda_not_available ***$\n"
@@ -94,6 +94,23 @@ Section "Install Main Components" SEC01
 
   conda_available:
     FileWrite $0 "*** conda_available ***$\n"
+
+    ; Check if ollama is available
+    ExecWait 'where ollama' $2
+    FileWrite $0 "- Checked if conda is available$\n"
+
+    ; If ollama is not found, show a message and exit
+    StrCmp $2 "0" ollama_available ollama_not_available
+
+  ollama_not_available:
+    FileWrite $0 "*** ollama_not_available ***$\n"
+    ${IfNot} ${Silent}
+      MessageBox MB_OK "Ollama is not installed. Please install Ollama from ollama.com/download to proceed."
+    ${EndIf}
+    Quit ; Exit the installer after the message box is closed
+
+  ollama_available:
+    FileWrite $0 "*** ollama_available ***$\n"
     ; Create a Python 3.10 environment named "gaia_env" in the installation directory
     ExecWait 'conda create -p "$INSTDIR\gaia_env" python=3.10 -y' $R0
 
