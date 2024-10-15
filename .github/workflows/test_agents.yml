@@ -130,4 +130,3 @@ jobs:
           # Step 6: Stop the GAIA process
           Stop-Process -Id $gaiaProcess.Id
           Write-Host "GAIA process has been stopped."
-
