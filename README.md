@@ -23,7 +23,24 @@ Currently, the following are supported:
 1. [Contributing](#contributing)
 
 # Getting Started
-To get started, please follow the latest instructions [here](./docs/ort_genai.md). These instructions will setup the Onnx Runtime GenAI (ORT-GenAI) backend targeting the RyzenAI Neural Processing Unit (NPU). For legacy support, you can also use the Pytorch Eager Mode flow using the AMD transformers library described [here](./docs/ryzenai_npu.md).
+
+For a quick and easy setup on a new machine, install the latest version of the GAIA app from the [releases page](https://github.com/aigdat/gaia/releases). This installer handles all dependencies and creates a binary executable for your system.
+
+1. Download the latest GAIA app installer from the "Assets" section of the most recent release:
+   ![image](./data/img/gaia-installer.png)
+
+2. Unzip the downloaded file and run the installer by double-clicking the .exe file.
+
+3. Follow the on-screen instructions to complete the installation:
+
+   ![image](./data/img/gaia-setup.png)
+
+4. Once installation is complete, a GAIA desktop icon will be created for easy access.
+
+NOTE: The installation process may take 10-20 minutes, as it sets up all necessary components for a seamless GAIA experience.
+
+## Building from source
+To get started building from source, please follow the latest instructions [here](./docs/ort_genai.md). These instructions will setup the Onnx Runtime GenAI (ORT-GenAI) backend targeting the RyzenAI Neural Processing Unit (NPU). For legacy support, you can also use the Pytorch Eager Mode flow using the AMD transformers library described [here](./docs/ryzenai_npu.md).
 
 NOTE: Install ollama from [here](https://ollama.com/download) if you plan to run anything else other than the above.
 
