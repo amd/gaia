@@ -20,6 +20,7 @@ Currently, the following are supported:
 
 ## Contents:
 1. [Getting Started](#getting-started)
+1. [Running the GAIA CLI](#running-the-gaia-cli)
 1. [Contributing](#contributing)
 
 # Getting Started
@@ -42,7 +43,66 @@ NOTE: The installation process may take 10-20 minutes, as it sets up all necessa
 ## Building from source
 To get started building from source, please follow the latest instructions [here](./docs/ort_genai.md). These instructions will setup the Onnx Runtime GenAI (ORT-GenAI) backend targeting the RyzenAI Neural Processing Unit (NPU). For legacy support, you can also use the Pytorch Eager Mode flow using the AMD transformers library described [here](./docs/ryzenai_npu.md).
 
-NOTE: Install ollama from [here](https://ollama.com/download) if you plan to run anything else other than the above.
+NOTE: You may need to install ollama from [here](https://ollama.com/download) if you plan to run models with the ollama backend.
+
+# Running the GAIA CLI
+To quickly get started, you can try the GAIA CLI (`gaia-cli`) client using the following steps:
+- `pip install .`
+- `gaia-cli -h`
+
+A simple chat demo using `gaia-cli`:
+
+1. Start the servers:
+   ```
+   gaia-cli start
+   ```
+   This command initializes the necessary servers with the default model using the default backend.
+
+   ```
+   (gaiaenv) C:\Users\kalin\Work\gaia>gaia-cli start
+   [2024-10-14 18:34:09,556] | INFO | gaia.cli.start | cli.py:55 | Starting servers...
+   ...
+   [2024-10-14 18:34:23,769] | INFO | gaia.cli.wait_for_servers | cli.py:75 | All servers are ready.
+   Servers started successfully.
+   ```
+
+2. Begin a chat session:
+   ```
+   gaia-cli chat
+   ```
+   This opens an interactive chat interface where you can converse with the AI.
+   ```
+   Starting chat with Chaty. Type 'exit' to quit, 'restart' to clear chat history.
+   ```
+
+3. During the chat:
+   - Type your messages and press Enter to send.
+   - Type `exit` to exit the chat session.
+   ```
+   You: who are you in one sentence?
+   {"status": "Success", "response": "Yer lookin' fer me, matey? I be the swashbucklin' AI pirate bot, here to help ye with yer queries and share tales o' the seven seas!"}
+   You: exit
+   Chat session ended.
+   ```
+
+4. Terminate the servers when finished:
+   ```
+   gaia-cli stop
+   ```
+   This ensures all server processes are properly shut down.
+   ```
+   (gaiaenv) C:\Users\kalin\Work\gaia>gaia-cli stop
+   [2024-10-14 18:36:55,218] | INFO | gaia.cli.stop | cli.py:204 | Stopping servers...
+   ...
+   [2024-10-14 18:36:55,341] | INFO | gaia.cli.stop | cli.py:233 | All servers stopped.
+   Servers stopped successfully.
+   ```
+
+Note: You can customize the model and backend using different options. For example:
+- To use a different model: `gaia-cli start --model mistral:7b`
+- To switch to the Lemonade backend: `gaia-cli start --backend lemonade`
+
+For more options and detailed usage, refer to `gaia-cli --help`.
 
 # Contributing
 This is a very new project whose codebase is under heavy development.  If you decide to contribute, please:

@@ -57,7 +57,6 @@ class OllamaClient:
         try:
             response = requests.get(f"{self.host}:{self.port}/api/version", timeout=5)
             if response.status_code == 200:
-                self.log.info(f"Ollama model server is already running. Version: {response.json().get('version')}")
                 return
         except requests.RequestException:
             self.log.error("Ollama server is not responding.")
@@ -328,6 +327,17 @@ class OllamaClientServer:
                 if not websocket_closed:
                     await websocket.close()
 
+        @self.app.get("/health")
+        async def health_check():
+            if self.ollama_client is None:
+                return {"status": "error", "message": "Ollama client is not initialized"}
+            try:
+                # Try to get model info as a simple health check
+                self.ollama_client.client.show(self.ollama_client.model)
+                return {"status": "ok", "model": self.ollama_client.model}
+            except Exception as e:
+                return {"status": "error", "message": f"Error checking Ollama client: {str(e)}"}
+
     def run(self, model:str):
         self.ollama_client = OllamaClient(model=model)
         self.log.info(f"Launching Ollama Server with model: {model}")
@@ -359,7 +369,7 @@ class OllamaModelServer:
                 response = requests.get(f"{self.host}:{self.port}/api/version", timeout=5)
                 if response.status_code == 200:
                     version = response.json().get('version', 'Unknown')
-                    self.log.warning(f"Ollama server is already running. Version: {version}")
+                    self.log.info(f"Ollama server is already running. Version: {version}")
                     return True
             except requests.RequestException:
                 pass  # Server is not running, continue with startup
@@ -374,11 +384,11 @@ class OllamaModelServer:
                 try:
                     response = requests.get(f"{self.host}:{self.port}/api/version", timeout=5)
                     if response.status_code == 200:
-                        self.log.info("Ollama server started successfully.")
+                        self.log.info("Ollama model server started successfully.")
                         return True
                 except requests.RequestException:
                     pass
-            self.log.error("Failed to start Ollama server after 30 seconds.")
+            self.log.error("Failed to start Ollama model server after 30 seconds.")
             return False
         except FileNotFoundError:
             self.log.error(
@@ -390,17 +400,17 @@ class OllamaModelServer:
 
     def stop_ollama_model_server(self):
         if self.ollama_process:
-            self.log.info("Stopping Ollama server...")
+            self.log.info("Stopping Ollama model server...")
             self.ollama_process.terminate()
             self.ollama_process.wait()
             self.ollama_process = None
-            self.log.info("Ollama server stopped.")
+            self.log.info("Ollama model server stopped.")
 
     def run(self):
         # If we're here, the server isn't running or responding. Try to start it.
         if not self.start_ollama_model_server():
             error_message = (
-                "Unable to start Ollama server. "
+                "Unable to start Ollama model server. "
                 "Please make sure Ollama is installed and can be run from the command line (ollama serve).\n"
                 "You can download Ollama from https://ollama.ai/download"
             )

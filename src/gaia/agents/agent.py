@@ -32,13 +32,14 @@ from gaia.logger import get_logger
 from gaia.interface.util import UIMessage
 
 class Agent:
-    def __init__(self, host="127.0.0.1", port=8001):
+    def __init__(self, host="127.0.0.1", port=8001, model="meta-llama/Meta-Llama-3-8B", cli_mode=False):
         # Placeholder for LLM Server Websocket and others
         self.llm_server_uri = "ws://localhost:8000/ws"
         self.llm_server_websocket = None
         self.latest_prompt_request = None
         self.host = host
         self.port = port
+        self.model = model
         self.app = None
         self.last_chunk = False
         self.log = get_logger(__name__)
@@ -56,20 +57,22 @@ class Agent:
         ])
         # last chunk in response
         self.last = False
-
-        # Load the LLaMA tokenizer
+        self.cli_mode = cli_mode
         self.tokenizer = self._initialize_tokenizer()
-
 
     def get_host_port(self):
         return self.host, self.port
 
+    def set_cli_mode(self, mode: bool):
+        self.log.debug(f"Setting `cli_mode` to {mode}.")
+        self.cli_mode = mode
 
     async def create_app(self):
         app = web.Application()
         app.router.add_post("/prompt", self._on_prompt_received)
         app.router.add_post("/restart", self._on_chat_restarted)
         app.router.add_post("/load_llm", self._on_load_llm)
+        app.router.add_get("/health", self._on_health_check)
         return app
 
     def _initialize_tokenizer(self):
@@ -182,7 +185,6 @@ class Agent:
                         first_chunk = False
 
                     if chunk:
-                        print(chunk)
                         if "</s>" in chunk:
                             chunk = chunk.replace("</s>", "")
                             full_response += chunk
@@ -209,7 +211,7 @@ class Agent:
             ws.close()
 
     def prompt_received(self, prompt):
-        self.log.debug("Message received:", prompt)
+        return f"Function not implemented. {prompt}"
 
     def chat_restarted(self):
         self.log.debug("Client requested chat to restart")
@@ -227,8 +229,9 @@ class Agent:
     async def _on_prompt_received(self, ui_request):
         data = await ui_request.json()
         self.latest_prompt_request = ui_request
-        self.prompt_received(data["prompt"])
-        return web.Response()
+        response = self.prompt_received(data["prompt"])
+        json_response = {"status": "Success", "response": response}
+        return web.json_response(json_response)
 
     async def _on_chat_restarted(self, _):
         self.chat_restarted()
@@ -241,11 +244,28 @@ class Agent:
         response = {"status": "Success"}
         return web.json_response(response)
 
-    def stream_to_ui(self, chunk, new_card=True):
-        data = {"chunk": chunk, "new_card": new_card, "stats": self.stats, "last":self.last}
-        url = "http://127.0.0.1:8002/stream_to_ui"
-        requests.post(url, json=data)
+    async def _on_health_check(self, _):
+        return web.json_response({"status": "ok"})
 
+    def stream_to_ui(self, chunk, new_card=True):
+        if self.cli_mode:
+            return chunk
+        else:
+            data = {"chunk": chunk, "new_card": new_card, "stats": self.stats, "last":self.last}
+            url = "http://127.0.0.1:8002/stream_to_ui"
+            try:
+                requests.post(url, json=data)
+            except requests.exceptions.ConnectionError:
+                print("Warning: Unable to connect to UI server. Falling back to console output.")
+                print(chunk, end='', flush=True)
+
+
+    def run(self):
+        self.log.info("Launching Agent Server...")
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self.app = loop.run_until_complete(self.create_app())
+        web.run_app(self.app, host=self.host, port=self.port)
 
 class LocalLLM(CustomLLM):
     prompt_llm_server: Callable = None
@@ -304,3 +324,14 @@ class LocalLLM(CustomLLM):
 
             response += chunk
             yield CompletionResponse(text=response, delta=chunk)
+
+def launch_agent_server(agent_name="Chaty", host="127.0.0.1", port=8001, model="meta-llama/Meta-Llama-3-8B", cli_mode=False):
+    try:
+        agent_module = __import__(f"gaia.agents.{agent_name}.app", fromlist=["MyAgent"])
+        MyAgent = getattr(agent_module, "MyAgent")
+        agent = MyAgent(host=host, port=port, model=model, cli_mode=cli_mode)
+        agent.run()
+        return agent
+    except Exception as e:
+        UIMessage.error(f"An unexpected error occurred:\n\n{str(e)}")
+        return

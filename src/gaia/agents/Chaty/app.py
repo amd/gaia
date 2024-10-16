@@ -7,13 +7,12 @@ from gaia.interface.util import UIMessage
 from gaia.agents.Chaty.prompts import Prompts
 
 class MyAgent(Agent):
-    def __init__(self, host="127.0.0.1", port=8001, model="meta-llama/Meta-Llama-3-8B"):
-        super().__init__(host, port)
+    def __init__(self, host="127.0.0.1", port=8001, model="meta-llama/Meta-Llama-3-8B", cli_mode=False):
+        super().__init__(host, port, model, cli_mode)
 
         self.n_chat_messages = 4
         self.chat_history = deque(maxlen=self.n_chat_messages * 2)  # Store both user and assistant messages
-
-        self.llm_system_prompt = Prompts.get_system_prompt(model)
+        self.llm_system_prompt = Prompts.get_system_prompt("llama3-pirate")
 
         # Initialize agent server
         self.initialize_server()
@@ -39,9 +38,8 @@ class MyAgent(Agent):
         return response
 
     def prompt_received(self, prompt):
-        self.log.info(f"User: {prompt}")
         response = self.prompt_llm(prompt)
-        self.log.info(f"Response: {response}")
+        return response
 
     def chat_restarted(self):
         self.log.info("Client requested chat to restart")

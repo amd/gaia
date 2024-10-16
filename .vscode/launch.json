@@ -4,7 +4,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug Gaia",
+            "name": "Gaia UI Debug",
             "type": "python",
             "request": "launch",
             "module": "src.gaia.interface.widget",
@@ -18,6 +18,23 @@
             "subProcess": true,
             "stopOnEntry": false,
             "debugOptions": ["RedirectOutput"]
+        },
+        {
+            "name": "Gaia CLI Debug",
+            "type": "python",
+            "request": "launch",
+            "module": "gaia.cli",
+            "args": ["start"],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false,
+            "debugOptions": ["RedirectOutput"],
         }
+
     ]
 }
