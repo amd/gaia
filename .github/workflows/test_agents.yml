@@ -6,9 +6,17 @@ name: Lint and Test Agents
 on:
   push:
     branches: ["main"]
+    paths-ignore:
+      - 'docs/**'
+      - 'data/**'
+      - 'notebooks/**'
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - 'docs/**'
+      - 'data/**'
+      - 'notebooks/**'
   workflow_dispatch:
 
 permissions:
