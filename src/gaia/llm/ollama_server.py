@@ -44,11 +44,13 @@ class OllamaClient:
     Raises:
         AssertionError: If the specified model is not in the list of supported models.
     """
-    def __init__(self, model: str = 'llama3.2:3b', host: str = 'http://localhost', port: int = 11434):
+    def __init__(self, model: str = 'llama3.2:3b', host: str = 'http://localhost', port: int = 11434, cli_mode:bool=False):
         self.log = get_logger(__name__)
         self.model = model
         self.host = host
         self.port = port
+        self.cli_mode = cli_mode
+        self.model_downloading = False
         self.client = Client(host=f"{self.host}:{self.port}")
         self.ensure_ollama_running()
         self.ensure_model_available()
@@ -70,7 +72,8 @@ class OllamaClient:
                 print(f"Model {self.model} not found. Downloading now...")
                 progress_dialog, update_progress = UIMessage.progress(
                     message=f"Downloading model {self.model}...",
-                    title="Downloading Model"
+                    title="Downloading Model",
+                    cli_mode=self.cli_mode
                 )
                 total_size = None
 
@@ -88,24 +91,30 @@ class OllamaClient:
                                 # Convert bytes to GB
                                 downloaded_gb = round(downloaded / (1024 * 1024 * 1024), 2)
                                 total_gb = round(total_size / (1024 * 1024 * 1024), 2)
-                                progress_message = f"\n{status}\n{downloaded_gb:.2f} GB / {total_gb:.2f} GB"
-                                # print(f"{progress}, {percentage}, {downloaded_gb}, {total_gb}")
+                                if self.cli_mode:
+                                    progress_message = f"{status} {downloaded_gb:.2f} GB / {total_gb:.2f} GB"
+                                else:
+                                    progress_message = f"\n{status}\n{downloaded_gb:.2f} GB / {total_gb:.2f} GB"
                             else:
                                 percentage = 100
                                 progress_message = f"\n{status}"
-                                # print(f"{progress}")
 
                             update_progress(percentage, 100, progress_message)
 
-                        if progress_dialog.wasCanceled():
-                            raise Exception("Download cancelled by user")
+                        if progress_dialog is not None:
+                            if progress_dialog.wasCanceled():
+                                raise Exception("Download cancelled by user")
 
-                    progress_dialog.close()
+                    if progress_dialog is not None:
+                        progress_dialog.close()
                     if os.environ.get('QT_QPA_PLATFORM') != 'offscreen':
-                        UIMessage.info("Model downloaded successfully.")
+                        UIMessage.info("Model downloaded successfully.", cli_mode=self.cli_mode)
+                    self.model_downloading = False
                 except Exception as download_error:
-                    progress_dialog.close()
-                    UIMessage.error(f"{str(download_error)}")
+                    if progress_dialog is not None:
+                        progress_dialog.close()
+                    UIMessage.error(f"{str(download_error)}", cli_mode=self.cli_mode)
+                    self.model_downloading = False
                     raise
             else:
                 raise
@@ -214,9 +223,10 @@ class OllamaClientServer:
     Output: None (runs indefinitely until stopped)
     """
 
-    def __init__(self, host:str="http://localhost", port:int=8000):
+    def __init__(self, host:str="http://localhost", port:int=8000, cli_mode:bool=False):
         self.host = host
         self.port = port
+        self.cli_mode = cli_mode
         self.log = get_logger(__name__)
         self.app = FastAPI()
         self.ollama_client = None
@@ -334,12 +344,16 @@ class OllamaClientServer:
             try:
                 # Try to get model info as a simple health check
                 self.ollama_client.client.show(self.ollama_client.model)
-                return {"status": "ok", "model": self.ollama_client.model}
+                self.log.info(f"Model downloading: {self.ollama_client.model_downloading}")
+                if self.ollama_client.model_downloading:
+                    return {"status": "downloading", "model": self.ollama_client.model}
+                else:
+                    return {"status": "ok", "model": self.ollama_client.model}
             except Exception as e:
                 return {"status": "error", "message": f"Error checking Ollama client: {str(e)}"}
 
     def run(self, model:str):
-        self.ollama_client = OllamaClient(model=model)
+        self.ollama_client = OllamaClient(model=model, cli_mode=self.cli_mode)
         self.log.info(f"Launching Ollama Server with model: {model}")
 
         # Parse the host to remove any protocol
@@ -350,10 +364,11 @@ class OllamaClientServer:
 
 
 class OllamaModelServer:
-    def __init__(self, host:str='http://localhost', port:int=11434):
+    def __init__(self, host:str='http://localhost', port:int=11434, cli_mode:bool=False):
         self.log = get_logger(__name__)
         self.host = host
         self.port = port
+        self.cli_mode = cli_mode
         self.ollama_process = None
 
 
@@ -398,6 +413,7 @@ class OllamaModelServer:
             )
             return False
 
+
     def stop_ollama_model_server(self):
         if self.ollama_process:
             self.log.info("Stopping Ollama model server...")
@@ -405,6 +421,7 @@ class OllamaModelServer:
             self.ollama_process.wait()
             self.ollama_process = None
             self.log.info("Ollama model server stopped.")
+
 
     def run(self):
         # If we're here, the server isn't running or responding. Try to start it.
@@ -414,27 +431,31 @@ class OllamaModelServer:
                 "Please make sure Ollama is installed and can be run from the command line (ollama serve).\n"
                 "You can download Ollama from https://ollama.ai/download"
             )
-            UIMessage.error(error_message)
+            UIMessage.error(error_message, cli_mode=self.cli_mode)
             raise ConnectionError(error_message)
         else:
             return self.ollama_process
 
 
-def launch_ollama_model_server(host:str="http://localhost", port:int=11434):
+def launch_ollama_model_server(host:str="http://localhost", port:int=11434, cli_mode:bool=False):
     try:
-        ollama_model_server = OllamaModelServer(host, port)
+        ollama_model_server = OllamaModelServer(host, port, cli_mode)
         ollama_model_server.run()
         return ollama_model_server
     except Exception as e:
-        UIMessage.error(f"An unexpected error occurred:\n\n{str(e)}")
+        UIMessage.error(f"An unexpected error occurred:\n\n{str(e)}", cli_mode=cli_mode)
         return
 
 
-def launch_ollama_client_server(model:str, host:str="http://localhost", port:int=8000):
+def launch_ollama_client_server(model:str="llama3.2:3b", host:str="http://localhost", port:int=8000, cli_mode:bool=False):
     try:
-        ollama_client_server = OllamaClientServer(host, port)
+        ollama_client_server = OllamaClientServer(host, port, cli_mode)
         ollama_client_server.run(model=model)
         return ollama_client_server
     except Exception as e:
-        UIMessage.error(f"An unexpected error occurred:\n\n{str(e)}")
+        UIMessage.error(f"An unexpected error occurred:\n\n{str(e)}", cli_mode=cli_mode)
         return
+
+if __name__ == "__main__":
+    # launch_ollama_model_server()
+    launch_ollama_client_server(cli_mode=True)

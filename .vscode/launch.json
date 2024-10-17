@@ -4,7 +4,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Gaia UI Debug",
+            "name": "UI Debug",
             "type": "python",
             "request": "launch",
             "module": "src.gaia.interface.widget",
@@ -20,11 +20,11 @@
             "debugOptions": ["RedirectOutput"]
         },
         {
-            "name": "Gaia CLI Debug",
+            "name": "CLI Debug",
             "type": "python",
             "request": "launch",
             "module": "gaia.cli",
-            "args": ["start"],
+            "args": ["prompt", "hi"],
             "cwd": "${workspaceFolder}",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
@@ -34,6 +34,28 @@
             "subProcess": true,
             "stopOnEntry": false,
             "debugOptions": ["RedirectOutput"],
+        },
+        {
+            "name": "Pytest Debug (No Benchmark)",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests/test_gaia.py",
+                "-v",
+                "-s",
+                "-k", "test_prompt_sweep"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "PYTEST_DISABLE_BENCHMARK": "1"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false,
+            "debugOptions": ["RedirectOutput"]
         }
 
     ]

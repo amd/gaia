@@ -26,7 +26,6 @@ class MyAgent(Agent):
         self.chat_history.append(f"user: {query}")
         prompt = self.llm_system_prompt + '\n'.join(self.chat_history) + "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\nassistant:"
 
-        self.log.info(prompt)
         for chunk in self.prompt_llm_server(prompt=prompt):
 
             # Stream chunk to UI

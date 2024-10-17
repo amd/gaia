@@ -68,16 +68,50 @@ class GaiaCliClient:
         # Save server information
         self.save_server_info()
 
-    def wait_for_servers(self, timeout=60, check_interval=2):
-        self.log.info(f"Waiting up to {timeout} seconds for servers to be ready...")
+    def wait_for_servers(self, model_download_timeout=3600, server_ready_timeout=120, check_interval=5):
+        self.log.info("Waiting for model downloads and servers to be ready...")
+
+        # First, wait for model downloads to complete
         start_time = time.time()
         time.sleep(10)
-        while time.time() - start_time < timeout:
+        while time.time() - start_time < model_download_timeout:
+            if not self.check_models_downloading():
+                self.log.info("Model downloads completed.")
+                break
+            self.log.info("Models are still downloading. Continuing to wait...")
+            time.sleep(check_interval)
+        else:
+            error_message = f"Model download did not complete within {model_download_timeout} seconds."
+            self.log.error(error_message)
+            raise TimeoutError(error_message)
+
+        # Then, check for server readiness
+        start_time = time.time()
+        while time.time() - start_time < server_ready_timeout:
             if self.check_servers_ready():
                 self.log.info("All servers are ready.")
                 return
+            self.log.info("Servers are not ready yet. Continuing to wait...")
             time.sleep(check_interval)
-        raise TimeoutError("Servers failed to start within the specified timeout.")
+
+        error_message = f"Servers failed to start within {server_ready_timeout} seconds."
+        self.log.error(error_message)
+        raise TimeoutError(error_message)
+
+    def check_models_downloading(self):
+        # Implement this method to check if any server is still downloading models
+        # Return True if any server is downloading, False otherwise
+        if self.backend == "ollama":
+            try:
+                response = requests.get("http://localhost:8000/health", timeout=5)
+                self.log.info(response.json())
+                if response.status_code == 200:
+                    data = response.json()
+                    return data.get("status") == "downloading"
+            except requests.RequestException:
+                self.log.warning("Failed to check model download status.")
+                return True # Assume model is still downloading
+        return False
 
     def check_servers_ready(self):
         servers_to_check = [
@@ -90,8 +124,7 @@ class GaiaCliClient:
                 ("http://localhost:8000/health", "Ollama client server"),
             ])
         else:
-            # TODO: Add LLM server health check
-            # servers_to_check.append((f"http://localhost:8000/health", "LLM server"))
+            # TODO: Add LLM server health check for other backends
             pass
 
         for url, server_name in servers_to_check:
@@ -142,7 +175,11 @@ class GaiaCliClient:
         self.log.info("Starting Ollama servers...")
         self.ollama_model_server = multiprocessing.Process(
             target=launch_ollama_model_server,
-            kwargs={"host": "http://localhost", "port": 11434}
+            kwargs={
+                "host": "http://localhost",
+                "port": 11434,
+                "cli_mode": self.cli_mode
+            }
         )
         self.ollama_model_server.start()
         self.server_pids['ollama_model'] = self.ollama_model_server.pid
@@ -150,7 +187,12 @@ class GaiaCliClient:
 
         self.ollama_client_server = multiprocessing.Process(
             target=launch_ollama_client_server,
-            kwargs={"model": self.model, "host": "http://localhost", "port": 8000}
+            kwargs={
+                "model": self.model,
+                "host": "http://localhost",
+                "port": 8000,
+                "cli_mode": self.cli_mode
+            }
         )
         self.ollama_client_server.start()
         self.server_pids['ollama_client'] = self.ollama_client_server.pid
@@ -193,6 +235,22 @@ class GaiaCliClient:
             error_message = f"Error: {str(e)}"
             self.log.error(error_message)
             yield error_message
+
+    def get_stats(self):
+        url = f"{self.base_url}/stats"
+        try:
+            response = requests.get(url, timeout=10)
+            self.log.info(f"{url}: {response.json()}")
+            if response.status_code == 200:
+                stats = response.json()
+                self.log.info(f"Stats received: {stats}")
+                return stats
+            else:
+                self.log.error(f"Failed to get stats. Status code: {response.status_code}")
+                return None
+        except requests.RequestException as e:
+            self.log.error(f"Error while fetching stats: {str(e)}")
+            return None
 
     def restart_chat(self):
         url = f"{self.base_url}/restart"
@@ -268,11 +326,6 @@ class GaiaCliClient:
             cls.log.error(f"Server information file ({json_path}) is corrupted.")
             return None
 
-    async def prompt_and_capture(self, message):
-        async for chunk in self.send_message(message):
-            self.log.info(f"{chunk}")
-            yield chunk
-
 async def async_main(action, message=None, **kwargs):
     if action in ['start', 'stop']:
         if action == 'start':
@@ -296,9 +349,13 @@ async def async_main(action, message=None, **kwargs):
         if not message:
             return "Error: Message is required for prompt action."
         response = ""
-        async for chunk in client.prompt_and_capture(message):
+        async for chunk in client.prompt(message):
             response += chunk
-        return response
+        stats = client.get_stats()
+        if stats:
+            return {"response": response, "stats": stats}
+        else:
+            return {"response": response, "stats": {}}
     elif action == 'chat':
         # Note: Chat mode doesn't return a response, it's interactive
         await client.chat()

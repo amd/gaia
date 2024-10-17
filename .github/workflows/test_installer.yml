@@ -1,4 +1,6 @@
-name: Installer
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
+name: GAIA Installer Test
 
 on:
   push:
@@ -17,7 +19,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  installer:
+  gaia-installer-test:
     runs-on: windows-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:

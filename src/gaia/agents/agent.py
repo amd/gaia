@@ -45,15 +45,12 @@ class Agent:
         self.log = get_logger(__name__)
 
         # performance stats
-        # in = input tokens
         # ttft = time-to-first-token
-        # out = output tokens
-        # tps = tokens-per-second
         self.stats = OrderedDict([
-            ('in', None),
+            ('in_tokens', None),
             ('ttft', None),
-            ('out', None),
-            ('tps', None)
+            ('out_tokens', None),
+            ('tokens_per_sec', None)
         ])
         # last chunk in response
         self.last = False
@@ -73,6 +70,7 @@ class Agent:
         app.router.add_post("/restart", self._on_chat_restarted)
         app.router.add_post("/load_llm", self._on_load_llm)
         app.router.add_get("/health", self._on_health_check)
+        app.router.add_get("/stats", self._on_get_stats)
         return app
 
     def _initialize_tokenizer(self):
@@ -83,30 +81,30 @@ class Agent:
                 token = os.getenv('HUGGINGFACE_ACCESS_TOKEN')
 
             if not token:
-                UIMessage.error("No Hugging Face token found. Please log in to Hugging Face.")
+                UIMessage.error("No Hugging Face token found. Please log in to Hugging Face.", cli_mode=self.cli_mode)
 
             # Verify the token
             api = HfApi(token=token)
             try:
                 api.whoami(token)
             except Exception:
-                UIMessage.error("Invalid Hugging Face token. Please provide a valid token.")
+                UIMessage.error("Invalid Hugging Face token. Please provide a valid token.", cli_mode=self.cli_mode)
 
             # Attempt to load the tokenizer
             tokenizer = LlamaTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
             return tokenizer
         except EnvironmentError as e:
-            UIMessage.error(str(e))
+            UIMessage.error(str(e), cli_mode=self.cli_mode)
             from gaia.interface.huggingface import get_huggingface_token
             token = get_huggingface_token()
             if token:
                 # Try to initialize the tokenizer again after getting the token
                 return self._initialize_tokenizer()
             else:
-                UIMessage.error("No token provided. Tokenizer initialization failed.")
+                UIMessage.error("No token provided. Tokenizer initialization failed.", cli_mode=self.cli_mode)
                 return None
         except Exception as e:
-            UIMessage.error(f"An unexpected error occurred: {e}")
+            UIMessage.error(f"An unexpected error occurred: {e}", cli_mode=self.cli_mode)
             return None
 
     def __del__(self):
@@ -126,7 +124,7 @@ class Agent:
         return self.stats['ttft']
 
     def get_tokens_per_second(self):
-        return self.stats['tps']
+        return self.stats['tokens_per_sec']
 
     def initialize_server(self):
         max_retries = 5
@@ -141,11 +139,11 @@ class Agent:
                 if e.errno == 10048:  # Port is in use
                     self.log.warning(f"Port {self.port} is in use, make sure a service is not already running on this port.")
                 else:
-                    UIMessage.error(str(e))
+                    UIMessage.error(str(e), cli_mode=self.cli_mode)
             finally:
                 loop.close()
         else:
-            UIMessage.error(f"Unable to bind to port ({self.port}) after {max_retries} attempts with ip ({self.host}).\nMake sure to kill any existing services using port {self.port} before running GAIA.")
+            UIMessage.error(f"Unable to bind to port ({self.port}) after {max_retries} attempts with ip ({self.host}).\nMake sure to kill any existing services using port {self.port} before running GAIA.", cli_mode=self.cli_mode)
 
 
     def prompt_llm_server(self, prompt):
@@ -179,8 +177,8 @@ class Agent:
                     current_time = time.perf_counter()
 
                     if first_chunk:
-                        self.stats['IN'] = prompt_tokens
-                        self.stats['TTFT'] = current_time - start_time
+                        self.stats['in_tokens'] = prompt_tokens
+                        self.stats['ttft'] = current_time - start_time
                         start_time = time.perf_counter()
                         first_chunk = False
 
@@ -190,9 +188,9 @@ class Agent:
                             full_response += chunk
 
                             total_time = current_time - start_time
-                            total_tokens = self.count_tokens(full_response)
-                            self.stats['OUT'] = total_tokens
-                            self.stats['TPS'] = (total_tokens-1) / total_time if total_time > 0 and total_tokens > 1 else 0.0
+                            out_tokens = self.count_tokens(full_response)
+                            self.stats['out_tokens'] = out_tokens
+                            self.stats['tokens_per_sec'] = (out_tokens-1) / total_time if total_time > 0 and out_tokens > 1 else 0.0
                             self.last = True
 
                             yield chunk
@@ -203,11 +201,10 @@ class Agent:
                 except WebSocketTimeoutException:
                     break
                 except Exception as e:
-                    UIMessage.error(str(e))
+                    UIMessage.error(str(e), cli_mode=self.cli_mode)
                     return
 
         finally:
-            self._clear_stats()
             ws.close()
 
     def prompt_received(self, prompt):
@@ -230,7 +227,7 @@ class Agent:
         data = await ui_request.json()
         self.latest_prompt_request = ui_request
         response = self.prompt_received(data["prompt"])
-        json_response = {"status": "Success", "response": response}
+        json_response = {"status": "success", "response": response, "stats": self.stats}
         return web.json_response(json_response)
 
     async def _on_chat_restarted(self, _):
@@ -241,11 +238,16 @@ class Agent:
         data = await ui_request.json()
         self.log.debug(f"Client requested to load LLM ({data['model']})")
 
-        response = {"status": "Success"}
+        response = {"status": "success"}
         return web.json_response(response)
 
     async def _on_health_check(self, _):
         return web.json_response({"status": "ok"})
+
+    async def _on_get_stats(self, _):
+        response = {**self.stats, "status": "ok"}
+        self.log.debug(response)
+        return web.json_response(response)
 
     def stream_to_ui(self, chunk, new_card=True):
         if self.cli_mode:
@@ -256,9 +258,7 @@ class Agent:
             try:
                 requests.post(url, json=data)
             except requests.exceptions.ConnectionError:
-                print("Warning: Unable to connect to UI server. Falling back to console output.")
-                print(chunk, end='', flush=True)
-
+                self.log.warning("Unable to connect to UI server. Falling back to console output.")
 
     def run(self):
         self.log.info("Launching Agent Server...")
@@ -333,5 +333,5 @@ def launch_agent_server(agent_name="Chaty", host="127.0.0.1", port=8001, model="
         agent.run()
         return agent
     except Exception as e:
-        UIMessage.error(f"An unexpected error occurred:\n\n{str(e)}")
+        UIMessage.error(f"An unexpected error occurred:\n\n{str(e)}", cli_mode=cli_mode)
         return

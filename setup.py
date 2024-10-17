@@ -77,6 +77,12 @@ setup(
             "torchvision @ https://download.pytorch.org/whl/cu118/torchvision-0.18.1%2Bcu118-cp310-cp310-win_amd64.whl",
             "torchaudio @ https://download.pytorch.org/whl/cu118/torchaudio-2.3.1%2Bcu118-cp310-cp310-win_amd64.whl",
         ],
+        "pytest": [
+            "pytest",
+            "pytest-benchmark",
+            "pytest-mock",
+            "pytest-asyncio",
+        ]
     },
     classifiers=[],
     entry_points={

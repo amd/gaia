@@ -7,6 +7,8 @@ from PySide6.QtGui import QIcon
 
 from gaia.logger import get_logger
 
+log = get_logger(__name__)
+
 class UIBase:
     _app = None
 
@@ -29,84 +31,111 @@ class UIBase:
 
 class UIMessage(UIBase):
     @staticmethod
-    def display(message, title="Message", icon="gaia.ico", message_type=QMessageBox.Information):
+    def display(message, title="Message", icon="gaia.ico", cli_mode=False, message_type=QMessageBox.Information):
         """
-        Display a message in a window with an optional icon.
+        Display a message in a window with an optional icon or in the console if in CLI mode.
 
         Args:
         message (str): The message to display.
         title (str): The title of the message window.
         icon (str, optional): Name of the icon file in the 'img' folder.
+        cli_mode (bool): If True, display message in console instead of GUI.
         message_type (QMessageBox.Icon): Type of message (e.g., Information, Warning, Critical).
         """
-        UIMessage._ensure_app()
-        log = get_logger(__name__)
-
-        # Check message type
+        # Determine the appropriate log level based on message_type
         if message_type == QMessageBox.Critical:
-            log.error(f"{title}: {message}")
+            log_func = log.error
         elif message_type == QMessageBox.Warning:
-            log.warning(f"{title}: {message}")
-        elif message_type == QMessageBox.Information:
+            log_func = log.warning
+        else:
+            log_func = log.info
+
+        # Log the message
+        log_func(f"{title}: {message}")
+
+        if cli_mode:
+            # In CLI mode, just print the message to the console
             log.info(f"{title}: {message}")
         else:
-            log.info(f"{title}: {message}")
+            UIMessage._ensure_app()
 
-        msg_box = QMessageBox()
-        msg_box.setIcon(message_type)
-        msg_box.setWindowTitle(title)
-        msg_box.setText(message)
-        msg_box.setStandardButtons(QMessageBox.Ok)
+            msg_box = QMessageBox()
+            msg_box.setIcon(message_type)
+            msg_box.setWindowTitle(title)
+            msg_box.setText(message)
+            msg_box.setStandardButtons(QMessageBox.Ok)
 
-        if icon:
-            icon_path = UIMessage.resource_path(os.path.join("img", icon))
-            if os.path.exists(icon_path):
-                msg_box.setWindowIcon(QIcon(icon_path))
-            else:
-                log.warning(f"Icon file not found at {icon_path}")
+            if icon:
+                icon_path = UIMessage.resource_path(os.path.join("img", icon))
+                if os.path.exists(icon_path):
+                    msg_box.setWindowIcon(QIcon(icon_path))
+                else:
+                    log.warning(f"Icon file not found at {icon_path}")
 
-        msg_box.exec()
+            msg_box.exec()
 
     @staticmethod
-    def error(message, title='Error', icon="gaia.ico"):
+    def error(message, title='Error', cli_mode=False, icon="gaia.ico"):
         """
         Display an error message in a window with an optional icon.
         """
-        UIMessage.display(message, title, icon, QMessageBox.Critical)
+        if cli_mode:
+            log.error(f"{title}: {message}")
+        else:
+            UIMessage.display(message, title, icon, cli_mode, QMessageBox.Critical)
 
     @staticmethod
-    def info(message, title='Info', icon="gaia.ico"):
+    def info(message,title='Info', cli_mode=False, icon="gaia.ico"):
         """
         Display an information message in a window with an optional icon.
         """
-        UIMessage.display(message, title, icon, QMessageBox.Information)
+        if cli_mode:
+            log.info(f"{title}: {message}")
+        else:
+            UIMessage.display(message, title, icon, cli_mode, QMessageBox.Information)
 
     @staticmethod
-    def warning(message, title='Warning', icon="gaia.ico"):
+    def warning(message, title='Warning', cli_mode=False, icon="gaia.ico"):
         """
         Display a warning message in a window with an optional icon.
         """
-        UIMessage.display(message, title, icon, QMessageBox.Warning)
+        if cli_mode:
+            log.warning(f"{title}: {message}")
+        else:
+            UIMessage.display(message, title, icon, cli_mode, QMessageBox.Warning)
 
     @staticmethod
-    def progress(message: str = "Processing...", title: str = "Progress", icon="gaia.ico"):
+    def progress(message: str = "Processing...", title: str = "Progress", cli_mode=False, icon="gaia.ico"):
         """
-        Display a progress dialog for long-running operations like model downloads.
+        Display a progress indicator for long-running operations like model downloads.
+        In GUI mode, shows a progress dialog. In CLI mode, prints progress to console.
 
         Returns:
-        tuple: (QProgressDialog, function to update progress)
+        tuple: (ProgressHandler, function to update progress)
         """
+        if cli_mode:
+            print(f"{title}: {message}")
+
+            def update_progress_cli(current_value, max_value, status=None):
+                progress = int((current_value / max_value) * 100)
+                status_text = f" - {status}" if status else ""
+                print(f"\r[{'#' * (progress // 2)}{' ' * (50 - (progress // 2))}] {progress}%{status_text}", end='', flush=True)
+                if progress == 100:
+                    print()  # New line when complete
+
+            return None, update_progress_cli
+
         UIMessage._ensure_app()
 
         progress_dialog = QProgressDialog()
         progress_dialog.setWindowTitle(title)
-        progress_dialog.setLabelText(message)  # Set the message explicitly
+        progress_dialog.setLabelText(message)
         progress_dialog.setCancelButtonText("Cancel")
-        progress_dialog.setRange(0, 100)  # Set initial range
+        progress_dialog.setRange(0, 100)
         progress_dialog.setWindowModality(Qt.WindowModal)
         progress_dialog.setMinimumDuration(0)
         progress_dialog.setValue(0)
-        progress_dialog.setMinimumWidth(300)  # Ensure dialog is wide enough for messages
+        progress_dialog.setMinimumWidth(300)
         progress_dialog.show()
 
         if icon:
@@ -114,11 +143,10 @@ class UIMessage(UIBase):
             if os.path.exists(icon_path):
                 progress_dialog.setWindowIcon(QIcon(icon_path))
 
-        original_message = message  # Store the original message
+        original_message = message
 
-        def update_progress(current_value, max_value, status=None):
+        def update_progress_ui(current_value, max_value, status=None):
             if max_value > sys.maxsize:
-                # Scale down the values if they exceed the maximum integer size
                 scale = max_value / sys.maxsize
                 current_value = int(current_value / scale)
                 max_value = sys.maxsize
@@ -126,7 +154,6 @@ class UIMessage(UIBase):
             progress_dialog.setMaximum(max_value)
             progress_dialog.setValue(current_value)
 
-            # Update label text with original message and status
             if status:
                 progress_dialog.setLabelText(f"{original_message}\n{status}")
             else:
@@ -134,31 +161,39 @@ class UIMessage(UIBase):
 
             QApplication.processEvents()
 
-        return progress_dialog, update_progress
+        return progress_dialog, update_progress_ui
 
 
 def main():
-    # Examples of using the utility functions
-    # UIMessage.error("An error occurred")
-    # UIMessage.info("Operation completed successfully")
-    # UIMessage.warning("This is a warning")
-
-    # For a custom message type
-    # UIMessage.display("This is a custom message", message_type=QMessageBox.Question)
-
-    # Test function for UIMessage.progress()
-    def test_progress():
+    def test_progress(cli_mode):
         import time
-        progress_dialog, update_progress = UIMessage.progress("Simulating a long operation...")
+        progress_dialog, update_progress = UIMessage.progress("Simulating a long operation...", cli_mode=cli_mode)
         total_steps = 100
         for i in range(total_steps + 1):
-            time.sleep(0.05)  # Simulate some work being done
+            time.sleep(0.01)  # Simulate some work being done
             update_progress(i, total_steps, f"Step {i} of {total_steps}")
-            if progress_dialog.wasCanceled():
+            if not cli_mode and progress_dialog.wasCanceled():
                 break
-        progress_dialog.close()
+        if not cli_mode:
+            progress_dialog.close()
 
-    test_progress()
+    # Test both CLI and GUI modes
+    for cli_mode in [True, False]:
+        mode = "CLI" if cli_mode else "GUI"
+        print(f"\nTesting {mode} mode:")
+
+        # Test error, info, and warning messages
+        UIMessage.error("An error occurred", cli_mode=cli_mode)
+        UIMessage.info("Operation completed successfully", cli_mode=cli_mode)
+        UIMessage.warning("This is a warning", cli_mode=cli_mode)
+
+        # Test progress
+        print(f"\nTesting progress in {mode} mode:")
+        test_progress(cli_mode)
+
+        # For a custom message type (GUI only)
+        print("\nTesting custom message type (GUI only):")
+        UIMessage.display("This is a custom message", cli_mode=cli_mode, message_type=QMessageBox.Question)
 
 if __name__ == "__main__":
     main()

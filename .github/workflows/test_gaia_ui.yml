@@ -1,7 +1,9 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
 # This workflow will install Python dependencies, run tests and lint with a single version of Python
 # For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
 
-name: Lint and Test Agents
+name: GAIA UI Test
 
 on:
   push:
@@ -23,7 +25,7 @@ permissions:
   contents: read
 
 jobs:
-  gaia-agents:
+  gaia-ui-test:
     runs-on: windows-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
@@ -43,11 +45,6 @@ jobs:
           conda install pylint
           pip install -e .
           python -m pip check
-
-      - name: PyLint
-        shell: bash -el {0}
-        run: |
-          pylint src/gaia --rcfile .pylintrc --disable C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718
 
       - name: Install Ollama
         shell: cmd
