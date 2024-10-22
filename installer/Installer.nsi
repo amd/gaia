@@ -99,7 +99,13 @@ Section "Install Main Components" SEC01
   FileWrite $0 "- Checked if conda is available$\n"
 
   ; If conda is not found, show a message and exit
-  StrCmp $2 "0" conda_available conda_not_available
+  ; Otherwise, continue with the installation
+  ${If} ${MODE} == "NPU"
+    StrCmp $2 "0" create_env conda_not_available
+  ${Else}
+    ; Only check for ollama if not in NPU mode
+    StrCmp $2 "0" check_ollama conda_not_available
+  ${EndIf}
 
   conda_not_available:
     FileWrite $0 "*** conda_not_available ***$\n"
@@ -108,15 +114,15 @@ Section "Install Main Components" SEC01
     ${EndIf}
     Quit ; Exit the installer after the message box is closed
 
-  conda_available:
-    FileWrite $0 "*** conda_available ***$\n"
+  check_ollama:
+    FileWrite $0 "*** check_ollama ***$\n"
 
     ; Check if ollama is available
     ExecWait 'where ollama' $2
     FileWrite $0 "- Checked if conda is available$\n"
 
     ; If ollama is not found, show a message and exit
-    StrCmp $2 "0" ollama_available ollama_not_available
+    StrCmp $2 "0" create_env ollama_not_available
 
   ollama_not_available:
     FileWrite $0 "*** ollama_not_available ***$\n"
@@ -125,8 +131,8 @@ Section "Install Main Components" SEC01
     ${EndIf}
     Quit ; Exit the installer after the message box is closed
 
-  ollama_available:
-    FileWrite $0 "*** ollama_available ***$\n"
+  create_env:
+    FileWrite $0 "*** create_env ***$\n"
     ; Create a Python 3.10 environment named "gaia_env" in the installation directory
     ExecWait 'conda create -p "$INSTDIR\gaia_env" python=3.10 -y' $R0
 
@@ -144,7 +150,7 @@ Section "Install Main Components" SEC01
   env_created:
     FileWrite $0 "*** env_created ***$\n"
     ; Install GAIA
-    ExecWait '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"' $R0
+    ExecWait '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"[dev]' $R0
 
     ; Check if gaia installatation was successful (exit code should be 0)
     StrCmp $R0 0 gaia_installed gaia_install_failed

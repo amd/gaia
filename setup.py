@@ -32,7 +32,6 @@ setup(
         "jupyter",
         "ipywidgets",
         "uvicorn",
-        "ollama",
         "openai",
         "matplotlib",
         "transformers",
@@ -55,7 +54,6 @@ setup(
         "google-api-python-client",
         "arize-phoenix[evals,llama-index]",
         "llama-index-callbacks-arize-phoenix",
-        # "llama-index-llms-ollama",
         "llama-index-llms-llama-cpp",
         "llama-index-tools-arxiv",
         "llama-index-tools-wikipedia",
@@ -72,6 +70,9 @@ setup(
         "pytest",
     ],
     extras_require={
+        "dev": [
+            "ollama",
+        ],
         "cuda": [
             "torch @ https://download.pytorch.org/whl/cu118/torch-2.3.1%2Bcu118-cp310-cp310-win_amd64.whl",
             "torchvision @ https://download.pytorch.org/whl/cu118/torchvision-0.18.1%2Bcu118-cp310-cp310-win_amd64.whl",
