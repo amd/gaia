@@ -1,7 +1,25 @@
 ; GAIA Installer Script
+
+; Define command line parameters
+!define /ifndef MODE "GENERIC"  ; Default to GENERIC mode if not specified
+!define /ifndef OGA_TOKEN ""  ; Default to empty string if not specified
+!define /ifndef HF_TOKEN ""  ; Default to empty string if not specified
+
+; Define main variables
 Name "GAIA"
-OutFile "GAIA_Installer.exe"
 InstallDir "$LOCALAPPDATA\GAIA"
+!ifdef MODE
+  !if ${MODE} == "NPU"
+    OutFile "GAIA_NPU_Installer.exe"
+    !define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome_npu.bmp"
+  !else
+    OutFile "GAIA_Installer.exe"
+    !define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome.bmp"
+  !endif
+!else
+  OutFile "GAIA_Installer.exe"
+  !define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome.bmp"
+!endif
 
 ; Include modern UI elements
 !include "MUI2.nsh"
@@ -14,7 +32,6 @@ Var LogHandle
 !define GITHUB_REPO "https://github.com/aigdat/gaia.git"
 !define EMPTY_FILE_NAME "empty_file.txt"
 !define ICON_FILE "..\src\gaia\interface\img\gaia.ico"
-!define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome.bmp"
 
 ; Finish Page settings
 !define MUI_TEXT_FINISH_INFO_TITLE "GAIA installed successfully!"
@@ -46,7 +63,6 @@ LangString MUI_TEXT_ABORT_TITLE "${LANG_ENGLISH}" "Installation Aborted"
 LangString MUI_TEXT_ABORT_SUBTITLE "${LANG_ENGLISH}" "Installation has been aborted."
 LangString MUI_BUTTONTEXT_FINISH "${LANG_ENGLISH}" "Finish"
 
-
 ; Define a section for the installation
 Section "Install Main Components" SEC01
 
@@ -75,7 +91,7 @@ Section "Install Main Components" SEC01
 
   # Pack GAIA into the installer
   # Exclude hidden files (like .git, .gitignore) and the installation folder itself
-  File /r /x installer /x .* /x ..\*.pyc ..\*.*
+  File /r /x installer /x .* /x ..\*.pyc ..\*.* install_oga.py npu_settings.json
   FileWrite $0 "- Packaged GAIA repo$\n"
 
   ; Check if conda is available
@@ -141,9 +157,23 @@ Section "Install Main Components" SEC01
     Quit
 
   gaia_installed:
+    ${If} ${MODE} == "NPU"    
+      FileWrite $0 "- Downloading and installing OGA NPU dependencies$\n"
+      nsExec::Exec '"$INSTDIR\gaia_env\python.exe" install_oga.py $INSTDIR ${OGA_TOKEN}'
+      RMDir /r "$INSTDIR\install_oga.py"
+
+      FileWrite $0 "- Replacing settings.json with NPU-specific settings$\n"
+      Delete "$INSTDIR\src\gaia\interface\settings.json"
+      Rename "$INSTDIR\npu_settings.json" "$INSTDIR\src\gaia\interface\settings.json"
+
+      FileWrite $0 "- Setting up Hugging Face$\n"
+      nsExec::ExecToLog 'cmd /c echo set HF_TOKEN=${HF_TOKEN} > "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.bat"'
+
+    ${EndIf}
+
     FileWrite $0 "*** gaia_installed ***$\n"
     # Create a shortcut inside $INSTDIR
-    CreateShortcut "$INSTDIR\GAIA.lnk" "$SYSDIR\cmd.exe" "/C conda activate $INSTDIR\gaia_env && gaia" "$INSTDIR\src\gaia\interface\img\gaia.ico"
+    CreateShortcut "$INSTDIR\GAIA.lnk" "$SYSDIR\cmd.exe" "/C conda activate $INSTDIR\gaia_env > NUL 2>&1 && gaia" "$INSTDIR\src\gaia\interface\img\gaia.ico"
 
     # Create a desktop shortcut that points to the newly created shortcut in $INSTDIR
     CreateShortcut "$DESKTOP\GAIA.lnk" "$INSTDIR\GAIA.lnk"

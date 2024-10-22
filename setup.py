@@ -25,7 +25,7 @@ setup(
         "gaia.interface",
     ],
     install_requires=[
-        "turnkeyml[llm-oga-dml]==4.0.2",
+        "turnkeyml[llm-oga-dml]==4.0.3",
         "aiohttp",
         "fastapi",
         "pydantic==1.10.12",
