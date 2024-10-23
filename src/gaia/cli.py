@@ -13,7 +13,6 @@ from requests.exceptions import RequestException
 
 from gaia.logger import get_logger
 from gaia.llm.server import launch_llm_server
-from gaia.llm.ollama_server import launch_ollama_client_server, launch_ollama_model_server
 from gaia.agents.agent import launch_agent_server
 
 
@@ -21,6 +20,14 @@ from gaia.agents.agent import launch_agent_server
 current_dir = Path(__file__).resolve().parent
 parent_dir = current_dir.parent.parent.parent
 sys.path.append(str(parent_dir))
+
+try:
+    from gaia.llm.ollama_server import launch_ollama_client_server, launch_ollama_model_server
+    OLLAMA_AVAILABLE = True
+except ImportError:
+    OLLAMA_AVAILABLE = False
+    launch_ollama_client_server = None
+    launch_ollama_model_server = None
 
 class GaiaCliClient:
     log = get_logger(__name__)
@@ -34,10 +41,12 @@ class GaiaCliClient:
             max_new_tokens=512,
             backend="ollama",
             device="cpu",
-            dtype="int4"
+            dtype="int4",
+            enable_agent_server=True
         ):
         self.log = self.__class__.log  # Use the class-level logger for instances
         self.agent_name = agent_name
+        self.enable_agent_server = enable_agent_server
         self.host = host
         self.port = port
         self.base_url = f"http://{host}:{port}"
@@ -52,10 +61,13 @@ class GaiaCliClient:
         self.ollama_client_server = None
         self.cli_mode = True  # Set this to True for CLI mode
         self.server_pids = {}
+        self.log.info("Gaia CLI client initialized with the following settings:")
+        self.log.info(f"agent_name: {self.agent_name}\n host: {self.host}\n port: {self.port}\n model: {self.model}\n max_new_tokens: {self.max_new_tokens}\n backend: {self.backend}\n device: {self.device}\n dtype: {self.dtype}")
 
     def start(self):
         self.log.info("Starting servers...")
-        self.start_agent_server()
+        if self.enable_agent_server:
+            self.start_agent_server()
 
         if self.backend == "ollama":
             self.start_ollama_servers()
@@ -119,10 +131,13 @@ class GaiaCliClient:
         ]
 
         if self.backend == "ollama":
-            servers_to_check.extend([
-                ("http://localhost:11434/api/version", "Ollama model server"),
-                ("http://localhost:8000/health", "Ollama client server"),
-            ])
+            if OLLAMA_AVAILABLE:
+                servers_to_check.extend([
+                    ("http://localhost:11434/api/version", "Ollama model server"),
+                    ("http://localhost:8000/health", "Ollama client server"),
+                ])
+            else:
+                self.log.warning("Ollama backend selected but Ollama is not available.")
         else:
             # TODO: Add LLM server health check for other backends
             pass
@@ -172,6 +187,10 @@ class GaiaCliClient:
         self.log.debug(f"agent_server.pid: {self.agent_server.pid}")
 
     def start_ollama_servers(self):
+        if not OLLAMA_AVAILABLE:
+            self.log.warning("Ollama is not available. Skipping Ollama server startup.")
+            return
+
         self.log.info("Starting Ollama servers...")
         self.ollama_model_server = multiprocessing.Process(
             target=launch_ollama_model_server,
@@ -363,6 +382,18 @@ async def async_main(action, message=None, **kwargs):
 
 def run_cli(action, message=None, **kwargs):
     return asyncio.run(async_main(action, message, **kwargs))
+
+def start_servers():
+    # Start the servers
+    print("Starting servers...")
+    start_result = run_cli('start')
+    assert start_result == "Servers started successfully."
+
+def stop_servers():
+    # Stop the servers
+    print("\nStopping servers...")
+    stop_result = run_cli('stop')
+    assert stop_result == "Servers stopped successfully."
 
 def main():
     parser = argparse.ArgumentParser(

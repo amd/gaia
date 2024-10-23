@@ -34,7 +34,8 @@ from llama_index.core.tools import QueryEngineTool, ToolMetadata
 from llama_index.tools.duckduckgo import DuckDuckGoSearchToolSpec
 
 from gaia.logger import get_logger
-from gaia.agents.agent import Agent, LocalLLM
+from gaia.agents.agent import Agent
+from gaia.llm.llama_index_local import LocalLLM
 
 class MyAgent(Agent):
     def __init__(self, host="127.0.0.1", port=8001, temp_dir="./temp"):

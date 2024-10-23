@@ -2,14 +2,18 @@
 
 import argparse
 from collections import deque
+from dotenv import load_dotenv
+
 from gaia.agents.agent import Agent
 from gaia.interface.util import UIMessage
 from gaia.agents.Chaty.prompts import Prompts
+
 
 class MyAgent(Agent):
     def __init__(self, host="127.0.0.1", port=8001, model="meta-llama/Meta-Llama-3-8B", cli_mode=False):
         super().__init__(host, port, model, cli_mode)
 
+        load_dotenv()
         self.n_chat_messages = 4
         self.chat_history = deque(maxlen=self.n_chat_messages * 2)  # Store both user and assistant messages
         self.llm_system_prompt = Prompts.get_system_prompt("llama3-pirate")
@@ -22,18 +26,12 @@ class MyAgent(Agent):
 
     def prompt_llm(self, query):
         response = ""
-        new_card = True
         self.chat_history.append(f"user: {query}")
         prompt = self.llm_system_prompt + '\n'.join(self.chat_history) + "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\nassistant:"
 
         for chunk in self.prompt_llm_server(prompt=prompt):
-
-            # Stream chunk to UI
-            self.stream_to_ui(chunk, new_card=new_card)
-            new_card = False
-
             response += chunk
-        self.chat_history.append(response)
+        self.chat_history.append(f"Assistant: {response}")
         return response
 
     def prompt_received(self, prompt):
@@ -52,10 +50,9 @@ class MyAgent(Agent):
             UIMessage.error(f"Having trouble connecting to the LLM server.\n\n{str(e)}")
 
 def main():
-    # LLM CLI for testing purposes.
-    parser = argparse.ArgumentParser(description="Interact with the Agent CLI")
+    parser = argparse.ArgumentParser(description="Run the MyAgent chatbot")
     parser.add_argument("--host", default="127.0.0.1", help="Host address for the agent server")
-    parser.add_argument("--port", type=int, default=8001, help="Port for the agent server")
+    parser.add_argument("--port", type=int, default=8001, help="Port number for the agent server")
     args = parser.parse_args()
 
     agent = MyAgent(host=args.host, port=args.port)

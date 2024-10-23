@@ -4,29 +4,12 @@ import os
 import time
 import asyncio
 from collections import OrderedDict
-from typing import Any, Callable
 from transformers import LlamaTokenizer
 from huggingface_hub import HfFolder, HfApi
 from websocket import create_connection
 from websocket._exceptions import WebSocketTimeoutException
 from aiohttp import web
 import requests
-from llama_index.core.llms import (
-    LLMMetadata,
-    CustomLLM,
-)
-from llama_index.core.llms.callbacks import llm_completion_callback
-
-from llama_index.llms.llama_cpp.llama_utils import (
-    messages_to_prompt,
-)
-from llama_index.core.base.llms.types import (
-    ChatMessage,
-    ChatResponse,
-    CompletionResponse,
-    CompletionResponseGen,
-    MessageRole,
-)
 
 from gaia.logger import get_logger
 from gaia.interface.util import UIMessage
@@ -113,7 +96,7 @@ class Agent:
             if self.llm_server_websocket.connected:
                 self.llm_server_websocket.close()
 
-    def _clear_stats(self):
+    def clear_stats(self):
         for key, _ in self.stats.items():
             self.stats[key] = None
 
@@ -146,9 +129,9 @@ class Agent:
             UIMessage.error(f"Unable to bind to port ({self.port}) after {max_retries} attempts with ip ({self.host}).\nMake sure to kill any existing services using port {self.port} before running GAIA.", cli_mode=self.cli_mode)
 
 
-    def prompt_llm_server(self, prompt):
+    def prompt_llm_server(self, prompt, stream_to_ui=True):
         try:
-            ws = create_connection(self.llm_server_uri)
+            ws = create_connection(self.llm_server_uri, timeout=None)
         except Exception as e:
             self.print(f"My brain is not working:```{e}```")
             return
@@ -160,10 +143,11 @@ class Agent:
             ws.send(prompt)
 
             first_chunk = True
+            new_card = True
             self.last_chunk = False
             full_response = ""
 
-            self._clear_stats()
+            self.clear_stats()
             self.last = False
 
             while True:
@@ -178,7 +162,7 @@ class Agent:
 
                     if first_chunk:
                         self.stats['in_tokens'] = prompt_tokens
-                        self.stats['ttft'] = current_time - start_time
+                        self.stats['ttft'] = round(current_time - start_time, 2)
                         start_time = time.perf_counter()
                         first_chunk = False
 
@@ -190,11 +174,16 @@ class Agent:
                             total_time = current_time - start_time
                             out_tokens = self.count_tokens(full_response)
                             self.stats['out_tokens'] = out_tokens
-                            self.stats['tokens_per_sec'] = (out_tokens-1) / total_time if total_time > 0 and out_tokens > 1 else 0.0
+                            self.stats['tokens_per_sec'] = round((out_tokens-1) / total_time, 2) if total_time > 0 and out_tokens > 1 else 0.00
                             self.last = True
 
                             yield chunk
                             break
+
+                        if stream_to_ui:
+                            self.stream_to_ui(chunk, new_card=new_card)
+                            new_card = False
+
                         full_response += chunk
                         yield chunk
 
@@ -208,7 +197,7 @@ class Agent:
             ws.close()
 
     def prompt_received(self, prompt):
-        return f"Function not implemented. {prompt}"
+        return f"Function prompt_received() not implemented. prompt: {prompt}"
 
     def chat_restarted(self):
         self.log.debug("Client requested chat to restart")
@@ -266,64 +255,6 @@ class Agent:
         asyncio.set_event_loop(loop)
         self.app = loop.run_until_complete(self.create_app())
         web.run_app(self.app, host=self.host, port=self.port)
-
-class LocalLLM(CustomLLM):
-    prompt_llm_server: Callable = None
-    stream_to_ui: Callable = None
-    context_window: int = 3900
-    num_output: int = 256
-    model_name: str = "custom"
-
-    async def achat(
-        self,
-        messages: Any,
-        **kwargs: Any,
-    ) -> str:
-
-        formatted_message = messages_to_prompt(messages)
-
-        # Prompt LLM and steam content to UI
-        text_response = await self.prompt_llm_server(
-            prompt=formatted_message, stream_to_ui=True
-        )
-
-        response = ChatResponse(
-            message=ChatMessage(
-                role=MessageRole.ASSISTANT,
-                content=text_response,
-                additional_kwargs={},
-            ),
-            raw={"text": text_response},
-        )
-        return response
-
-    @property
-    def metadata(self) -> LLMMetadata:
-        """Get LLM metadata."""
-        return LLMMetadata(
-            context_window=self.context_window,
-            num_output=self.num_output,
-            model_name=self.model_name,
-        )
-
-    @llm_completion_callback()
-    def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
-        response = self.prompt_llm_server(prompt=prompt)
-        self.stream_to_ui(response, new_card=True)
-        return CompletionResponse(text=response)
-
-    @llm_completion_callback()
-    def stream_complete(self, prompt: str, **kwargs: Any) -> CompletionResponseGen:
-        response = ""
-        new_card = True
-        for chunk in self.prompt_llm_server(prompt=prompt):
-
-            # Stream chunk to UI
-            self.stream_to_ui(chunk, new_card=new_card)
-            new_card = False
-
-            response += chunk
-            yield CompletionResponse(text=response, delta=chunk)
 
 def launch_agent_server(agent_name="Chaty", host="127.0.0.1", port=8001, model="meta-llama/Meta-Llama-3-8B", cli_mode=False):
     try:

@@ -1,5 +1,6 @@
 import os
 import sys
+import inspect
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox, QApplication, QProgressDialog
@@ -50,8 +51,17 @@ class UIMessage(UIBase):
         else:
             log_func = log.info
 
+        # Get caller information
+        caller = inspect.currentframe().f_back.f_back
+        func_name = caller.f_code.co_name
+        filename = os.path.basename(caller.f_code.co_filename)
+        line_number = caller.f_lineno
+
+        # Prepare the full message with caller info
+        dbg_message = f"{filename}:{line_number} | {func_name} | {message}"
+
         # Log the message
-        log_func(f"{title}: {message}")
+        log_func(f"{title}: {dbg_message}")
 
         if cli_mode:
             # In CLI mode, just print the message to the console
@@ -79,18 +89,36 @@ class UIMessage(UIBase):
         """
         Display an error message in a window with an optional icon.
         """
+        # Get caller information
+        caller = inspect.currentframe().f_back
+        filename = os.path.basename(caller.f_code.co_filename)
+        func_name = caller.f_code.co_name
+        line_number = caller.f_lineno
+
+        # Prepare the full message with caller info
+        dbg_message = f"{filename}:{line_number} | {func_name} | {message}"
+
         if cli_mode:
-            log.error(f"{title}: {message}")
+            log.error(f"{title}: {dbg_message}")
         else:
             UIMessage.display(message, title, icon, cli_mode, QMessageBox.Critical)
 
     @staticmethod
-    def info(message,title='Info', cli_mode=False, icon="gaia.ico"):
+    def info(message, title='Info', cli_mode=False, icon="gaia.ico"):
         """
         Display an information message in a window with an optional icon.
         """
+        # Get caller information
+        caller = inspect.currentframe().f_back
+        filename = os.path.basename(caller.f_code.co_filename)
+        func_name = caller.f_code.co_name
+        line_number = caller.f_lineno
+
+        # Prepare the full message with caller info
+        dbg_message = f"{filename}:{line_number} | {func_name} | {message}"
+
         if cli_mode:
-            log.info(f"{title}: {message}")
+            log.info(f"{title}: {dbg_message}")
         else:
             UIMessage.display(message, title, icon, cli_mode, QMessageBox.Information)
 
@@ -99,8 +127,17 @@ class UIMessage(UIBase):
         """
         Display a warning message in a window with an optional icon.
         """
+        # Get caller information
+        caller = inspect.currentframe().f_back
+        filename = os.path.basename(caller.f_code.co_filename)
+        func_name = caller.f_code.co_name
+        line_number = caller.f_lineno
+
+        # Prepare the full message with caller info
+        dbg_message = f"{filename}:{line_number} | {func_name} | {message}"
+
         if cli_mode:
-            log.warning(f"{title}: {message}")
+            log.warning(f"{title}: {dbg_message}")
         else:
             UIMessage.display(message, title, icon, cli_mode, QMessageBox.Warning)
 
@@ -136,12 +173,18 @@ class UIMessage(UIBase):
         progress_dialog.setMinimumDuration(0)
         progress_dialog.setValue(0)
         progress_dialog.setMinimumWidth(300)
+
+        # Add these lines to make the dialog stay on top
+        progress_dialog.setWindowFlags(progress_dialog.windowFlags() | Qt.WindowStaysOnTopHint)
         progress_dialog.show()
 
         if icon:
             icon_path = UIMessage.resource_path(os.path.join("img", icon))
             if os.path.exists(icon_path):
                 progress_dialog.setWindowIcon(QIcon(icon_path))
+
+        progress_dialog.raise_()
+        progress_dialog.activateWindow()
 
         original_message = message
 

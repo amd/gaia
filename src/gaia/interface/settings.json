@@ -4,12 +4,7 @@
     "show_label": true,
 
     "agents": [
-        "Chaty",
-        "Clip",
-        "Joker",
-        "Neo",
-        "Maven",
-        "Example"
+        "Chaty"
     ],
     "models": {
         "llama-3.2 1b (ollama)": {
@@ -36,33 +31,6 @@
             "device": {
                 "cpu": [
                     "Q4_0"
-                ]
-            }
-        },
-        "llama-3 8b (hf)": {
-            "backend" : "hf",
-            "checkpoint": "meta-llama/Meta-Llama-3-8B",
-            "device": {
-                "cpu": [
-                    "bfloat16"
-                ]
-            }
-        },
-        "llama-2 7b (hf)": {
-            "backend" : "hf",
-            "checkpoint": "meta-llama/Llama-2-7b-chat-hf",
-            "device": {
-                "cpu": [
-                    "bfloat16"
-                ]
-            }
-        },
-        "llama-3.1 8b (hf)": {
-            "backend" : "hf",
-            "checkpoint": "meta-llama/Meta-Llama-3.1-8B",
-            "device": {
-                "cpu": [
-                    "bfloat16"
                 ]
             }
         },
@@ -126,6 +94,33 @@
             "device": {
                 "npu": [
                     "int4"
+                ]
+            }
+        },
+        "llama-3 8b (hf)": {
+            "backend" : "hf",
+            "checkpoint": "meta-llama/Meta-Llama-3-8B",
+            "device": {
+                "cpu": [
+                    "bfloat16"
+                ]
+            }
+        },
+        "llama-2 7b (hf)": {
+            "backend" : "hf",
+            "checkpoint": "meta-llama/Llama-2-7b-chat-hf",
+            "device": {
+                "cpu": [
+                    "bfloat16"
+                ]
+            }
+        },
+        "llama-3.1 8b (hf)": {
+            "backend" : "hf",
+            "checkpoint": "meta-llama/Meta-Llama-3.1-8B",
+            "device": {
+                "cpu": [
+                    "bfloat16"
                 ]
             }
         }

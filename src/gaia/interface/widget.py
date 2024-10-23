@@ -40,7 +40,15 @@ import gaia.agents as agents
 from gaia.interface.util import UIMessage
 from gaia.interface.ui_form import Ui_Widget
 from gaia.llm.server import launch_llm_server
-from gaia.llm.ollama_server import launch_ollama_client_server, launch_ollama_model_server
+
+# Conditional import for Ollama
+try:
+    from gaia.llm.ollama_server import launch_ollama_client_server, launch_ollama_model_server
+    OLLAMA_AVAILABLE = True
+except ImportError:
+    OLLAMA_AVAILABLE = False
+    launch_ollama_client_server = None
+    launch_ollama_model_server = None
 
 # This is a temporary workaround since the Qt Creator generated files
 # do not import from the gui package.
@@ -121,9 +129,12 @@ class SetupLLM(QObject):
         self.initialize_agent_server()
 
         if model_settings["backend"] == "ollama":
-            # Initialize Ollama servers
-            self.initialize_ollama_model_server()
-            self.initialize_ollama_client_server()
+            if OLLAMA_AVAILABLE:
+                # Initialize Ollama servers
+                self.initialize_ollama_model_server()
+                self.initialize_ollama_client_server()
+            else:
+                self.log.warning("Ollama backend selected but Ollama is not available.")
         else:
             # Initialize LLM server
             self.widget.ui.loadingLabel.setText(f"Initializing LLM server: {self.widget.ui.device.currentText()}...")
@@ -192,6 +203,10 @@ class SetupLLM(QObject):
 
 
     def initialize_ollama_model_server(self):
+        if not OLLAMA_AVAILABLE:
+            self.log.warning("Ollama is not available. Skipping Ollama model server initialization.")
+            return
+
         self.log.info("Initializing Ollama model server...")
         self.widget.ui.loadingLabel.setText("Initializing Ollama model server...")
 
@@ -221,6 +236,10 @@ class SetupLLM(QObject):
 
 
     def initialize_ollama_client_server(self):
+        if not OLLAMA_AVAILABLE:
+            self.log.warning("Ollama is not available. Skipping Ollama client server initialization.")
+            return
+
         _, model_settings, device, _, _ = self.get_model_settings()
         checkpoint = model_settings["checkpoint"]
 
@@ -270,16 +289,30 @@ class SetupLLM(QObject):
         return selected_model, model_settings, selected_device.lower(), selected_dtype.lower(), max_new_tokens
 
 
-    def check_server_available(self, host, port):
+    def check_server_available(self, host, port, timeout=3000, check_interval=5):
         # Parse the host to remove any protocol
         parsed_host = urlparse(host)
         clean_host = parsed_host.netloc or parsed_host.path
 
-        for _ in range(30):
+        start_time = time.time()
+        attempts = 0
+
+        while time.time() - start_time < timeout:
             if self.is_server_available(clean_host, port):
+                self.log.info(f"Server available at {host}:{port} after {attempts} attempts")
                 return True
-            time.sleep(1)
-        UIMessage.error(f"Server unavailable at {host}:{port}")
+
+            attempts += 1
+            elapsed_time = time.time() - start_time
+            self.log.info(f"Waiting for server at {host}:{port}... (Attempt {attempts}, Elapsed time: {elapsed_time:.1f}s)")
+
+            # Update the loading label with the current status
+            self.widget.ui.loadingLabel.setText(f"Waiting for server... (Attempt {attempts}, Elapsed time: {elapsed_time:.1f}s)")
+            QApplication.processEvents()  # Ensure the UI updates
+
+            time.sleep(check_interval)
+
+        UIMessage.error(f"Server unavailable at {host}:{port} after {timeout} seconds")
         return False
 
 
@@ -290,9 +323,7 @@ class SetupLLM(QObject):
             s.connect((host, port))
             s.close()
             return True
-
         except (ConnectionRefusedError, TimeoutError):
-            # If connection is refused, return False
             return False
 
 
@@ -400,6 +431,10 @@ class Widget(QWidget):
         self.content_layout = self.ui.boardLayout
         self.setStyleSheet("background-color: black;")
         self.setWindowTitle("RyzenAI GAIA")
+
+        # Set a much wider minimum width for the chat area
+        self.ui.scrollAreaWidgetContents.setMinimumWidth(800)
+
         self.card_count = 0
         self.cards = {}
         self.agent_server = None
@@ -522,21 +557,22 @@ class Widget(QWidget):
                 self.log.warning("LLM server was already terminated or not initialized.")
             self.llm_server = None
 
-        if self.ollama_model_server is not None:
-            self.log.debug("Closing Ollama model server")
-            try:
-                self.ollama_model_server.terminate()
-            except AttributeError:
-                self.log.warning("Ollama model server was already terminated or not initialized.")
-            self.ollama_model_server = None
+        if OLLAMA_AVAILABLE:
+            if self.ollama_model_server is not None:
+                self.log.debug("Closing Ollama model server")
+                try:
+                    self.ollama_model_server.terminate()
+                except AttributeError:
+                    self.log.warning("Ollama model server was already terminated or not initialized.")
+                self.ollama_model_server = None
 
-        if self.ollama_client_server is not None:
-            self.log.debug("Closing Ollama client server")
-            try:
-                self.ollama_client_server.terminate()
-            except AttributeError:
-                self.log.warning("Ollama client server was already terminated or not initialized.")
-            self.ollama_client_server = None
+            if self.ollama_client_server is not None:
+                self.log.debug("Closing Ollama client server")
+                try:
+                    self.ollama_client_server.terminate()
+                except AttributeError:
+                    self.log.warning("Ollama client server was already terminated or not initialized.")
+                self.ollama_client_server = None
 
 
     def update_device_list(self):
@@ -810,7 +846,10 @@ class Widget(QWidget):
         # self.log.debug(f"update_card called with message: {message}, card_id: {card_id}, final_update: {final_update}")
 
         if card_id not in self.cards:
-            self.log.error(f"Card with id {card_id} not found.")
+            self.log.warning(f"Card with id {card_id} not found. Creating a new card.")
+            new_card_id = self.add_card(message, card_id, from_user, stats)
+            if new_card_id != card_id:
+                self.log.error(f"Failed to create card with id {card_id}. New card created with id {new_card_id}")
             return
 
         _, message_frame, label, firstTokenAnimation = self.cards[card_id]
@@ -866,11 +905,12 @@ class Widget(QWidget):
                 formatted_parts.append(('code', code))
             # Found a url link
             elif part.startswith('http://') or part.startswith('https://'):
-                youtube_pattern = r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)\/(?:watch\?v=)?([^\s&]+)'
+                youtube_pattern = r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)\/(?:watch\?v=)?([^\s&\.]+)'
                 youtube_match = re.match(youtube_pattern, part)
                 if youtube_match:
                     # This is a YouTube link
-                    formatted_parts.append(('youtube', youtube_match.group(1)))
+                    video_id = youtube_match.group(1).strip("'")  # Remove any trailing single quotes
+                    formatted_parts.append(('youtube', video_id))
                 else:
                     # This is a general webpage link
                     formatted_parts.append(('webpage', part))
@@ -960,6 +1000,9 @@ class Widget(QWidget):
     def create_youtube_preview(self, layout, video_id):
         self.log.debug(f"Creating YouTube preview for video ID: {video_id}")
 
+        # Remove any extra characters from the video_id
+        video_id = video_id.strip("'")
+
         outer_frame = QFrame()
         outer_frame.setObjectName("youtubePreviewFrame")
         outer_frame.setStyleSheet("""
@@ -999,7 +1042,7 @@ class Widget(QWidget):
                 background-color: #0056b3;
             }
         """)
-        outer_layout.addWidget(open_button)  # Add the button to the layout
+        outer_layout.addWidget(open_button)
 
         layout.addWidget(outer_frame)
 
@@ -1009,7 +1052,7 @@ class Widget(QWidget):
         request = QNetworkRequest(QUrl(thumbnail_url))
         reply = self.network_manager.get(request)
         reply.setProperty("thumbnail_label", thumbnail_label)
-
+        reply.setProperty("video_id", video_id)
 
     @Slot(QNetworkReply)
     def on_network_request_finished(self, reply):
@@ -1018,22 +1061,29 @@ class Widget(QWidget):
         if error == QNetworkReply.NoError:
             self.log.debug("Network request successful")
             thumbnail_label = reply.property("thumbnail_label")
+            video_id = reply.property("video_id")
             if thumbnail_label:
                 data = reply.readAll()
                 pixmap = QPixmap()
                 if pixmap.loadFromData(data):
-                    self.log.debug("Thumbnail loaded successfully")
-                    thumbnail_label.setPixmap(pixmap.scaled(320, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    self.log.debug(f"Thumbnail loaded successfully for video ID: {video_id}")
+                    scaled_pixmap = pixmap.scaled(320, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    thumbnail_label.setPixmap(scaled_pixmap)
+                    if scaled_pixmap.isNull():
+                        self.log.error("Scaled pixmap is null")
+                        thumbnail_label.setText("Failed to scale thumbnail")
                 else:
-                    self.log.error("Failed to create pixmap from downloaded data")
+                    self.log.error(f"Failed to create pixmap from downloaded data for video ID: {video_id}")
                     thumbnail_label.setText("Failed to load thumbnail")
             else:
                 self.log.error("Thumbnail label not found in reply properties")
         else:
             self.log.error(f"Network request error: {reply.errorString()}")
             thumbnail_label = reply.property("thumbnail_label")
+            video_id = reply.property("video_id")
             if thumbnail_label:
-                thumbnail_label.setText(f"Error: {reply.errorString()}")
+                thumbnail_label.setText("Error: Unable to load thumbnail")
+            self.log.error(f"Failed to load thumbnail for video ID: {video_id}")
 
         reply.deleteLater()
 
@@ -1173,9 +1223,6 @@ class CustomWebPage(QWebEnginePage):
         return super().acceptNavigationRequest(url, _type, isMainFrame)
 
 def main():
-    from gaia.llm.download_nltk_data import download_nltk_data
-    download_nltk_data()
-
     multiprocessing.freeze_support()
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(r":/img\gaia.ico"))

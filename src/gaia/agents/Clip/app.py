@@ -7,6 +7,7 @@ import re
 import json
 import os
 import time
+import html
 from collections import deque
 from dotenv import load_dotenv
 
@@ -27,7 +28,9 @@ from llama_index.core.node_parser import SentenceSplitter
 from llama_index.readers.youtube_transcript import YoutubeTranscriptReader
 
 from gaia.logger import get_logger
-from gaia.agents.agent import Agent, LocalLLM
+from gaia.cli import run_cli, start_servers, stop_servers
+from gaia.agents.agent import Agent
+from gaia.llm.llama_index_local import LocalLLM
 from gaia.agents.Clip.prompts import Prompts
 
 class MyAgent(Agent):
@@ -39,8 +42,8 @@ class MyAgent(Agent):
     about YouTube content.
     """
 
-    def __init__(self, host="127.0.0.1", port=8001, embed_model="local:BAAI/bge-small-en-v1.5", llm_model = "llama-3.1-8b-instant"):
-        super().__init__(host, port)
+    def __init__(self, host="127.0.0.1", port=8001, embed_model="local:BAAI/bge-small-en-v1.5", model = "llama-3.1-8b-instant", cli_mode=False):
+        super().__init__(host, port, model, cli_mode)
 
         load_dotenv()
         youtube_api_key = os.getenv('YOUTUBE_API_KEY')
@@ -64,6 +67,7 @@ class MyAgent(Agent):
         self.summary_index = None
         self.vector_index = None
         self.query_engine = None
+        self.saved_query = None
         self.search_results = None
         self.query_engine_tools = None
         self.react_agent = None
@@ -90,10 +94,10 @@ class MyAgent(Agent):
         # set llm state 0-2
         self.llm_state = 0
 
-        self.llm_system_prompt = Prompts.get_system_prompt(llm_model)
+        self.llm_system_prompt = Prompts.get_system_prompt("llama3-clip")
 
         # this system prompt has been verified to work with llama v2 7b 4bit on NPU.
-        self.query_engine_system_prompt = Prompts.get_query_engine_prompt(llm_model)
+        self.query_engine_system_prompt = Prompts.get_query_engine_prompt("llama3-clip")
 
         # Initialize agent server
         self.initialize_server()
@@ -135,19 +139,19 @@ class MyAgent(Agent):
                 video_id = search_result["id"]["videoId"]
                 video = {
                     "id": i,
-                    "title": search_result["snippet"]["title"],
-                    "description": search_result["snippet"]["description"],
+                    "title": html.unescape(search_result["snippet"]["title"]),  # Decode HTML entities
+                    "description": html.unescape(search_result["snippet"]["description"]),  # Decode HTML entities
                     "video_id": video_id,
                     "video_url": f"https://www.youtube.com/watch?v={video_id}",
+                    "thumbnail_preview_url": f"https://img.youtube.com/vi/{video_id}/0.jpg",
                     "publish_time": search_result["snippet"]["publishTime"],
-                    "channel_title": search_result["snippet"]["channelTitle"]
+                    "channel_title": html.unescape(search_result["snippet"]["channelTitle"])  # Decode HTML entities
                 }
-                msg = f'{video["id"]} : {video["title"]}\n\n{video["description"]}\n{video["publish_time"]}    {video["video_id"]}\n\n'
+                msg = f'Search Result {video["id"]}:\nTitle: {video["title"]}\n\nDescription: {video["description"]}\n\nPublished: {video["publish_time"]}    Video ID: {video["video_id"]}\n\n'
                 self.print(msg)
                 self.chat_history.append(f"Asssistant: {msg}")
                 videos.append(video)
 
-            self.print(videos)
             return videos
 
         except HttpError as e:
@@ -185,12 +189,15 @@ class MyAgent(Agent):
 
                 # Extract the key and value
                 key, value = next(iter(json_data.items()))
+                self.log.debug(f"key: {key}, value: {value}, llm state: {self.llm_state}")
+                self.log.debug(f"llm state: {self.llm_states[self.llm_state]}")
 
                 return key, value
             except json.JSONDecodeError:
+                self.log.warning("No JSON data found in the input string.")
                 return None, None
         else:
-            self.print("WARNING: No JSON data found in the input string.")
+            self.log.warning("No JSON data found in the input string.")
             return None, None
 
     def get_chat_history(self):
@@ -212,13 +219,11 @@ class MyAgent(Agent):
             "Current state of index:\n"
             f"{self.llm_states[self.llm_state]}\n"
         )
-        prompt = system_prompt + '\n'.join(self.chat_history) + "[/INST]\nAssistant: "
+        prompt = system_prompt + '\n'.join(self.chat_history) + "<|eot_id|><|start_header_id|>Assistant: "
 
-        # print(prompt)
+        self.log.debug(f"Prompt:\n{prompt}")
         for chunk in self.prompt_llm_server(prompt=prompt):
-            print(chunk, end="", flush=True)
             response += chunk
-        print("\n")
         self.chat_history.append(f"Assistant: {response}")
 
         return response
@@ -228,6 +233,7 @@ class MyAgent(Agent):
         self.summary_index = None
         self.vector_index = None
         self.query_engine = None
+        self.saved_query = None
         self.search_results = None
         self.llm_state = 0
 
@@ -241,10 +247,7 @@ class MyAgent(Agent):
         except ConnectionRefusedError as e:
             self.print( f"Having trouble connecting to the LLM server, got:\n{str(e)}!")
         finally:
-            self.summary_index = None
-            self.vector_index = None
-            self.query_engine = None
-            self.search_results = None
+            self.reset()
 
     def extract_youtube_link(self, message):
         youtube_link_pattern = r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/(?:watch\?v=)?(?:embed/)?(?:v/)?(?:shorts/)?(?:\S+)"
@@ -274,7 +277,7 @@ class MyAgent(Agent):
 
     def build_summary_index(self, doc: Document):
         # from https://docs.llamaindex.ai/en/stable/examples/index_structs/doc_summary/DocSummary/
-        self.print("Building summary index")
+        self.print("Building a summary index...")
         splitter = SentenceSplitter(chunk_size=1024)
         response_synthesizer = get_response_synthesizer(
             response_mode="tree_summarize", use_async=True
@@ -290,13 +293,14 @@ class MyAgent(Agent):
         self.print(self.summary_index.get_document_summary(doc_id))
 
     def build_vector_index(self, doc: Document) -> VectorStoreIndex:
+        self.print("Building a vector index...")
         start_time = time.perf_counter()
         self.vector_index = VectorStoreIndex.from_documents(doc, show_progress=True)
         end_time = time.perf_counter()
-        self.print(f"Done building index. Took {(end_time - start_time):.1f} seconds to build.")
+        self.print(f"Done building local vector index. Took {(end_time - start_time):.1f} seconds.")
 
     def build_query_engine(self):
-        # print("Building RAG query engine.")
+        self.print("Building RAG query engine...")
         assert self.vector_index, "Vector index is not built yet."
         qa_prompt_tmpl = PromptTemplate(self.query_engine_system_prompt)
         self.query_engine = self.vector_index.as_query_engine(
@@ -338,20 +342,21 @@ class MyAgent(Agent):
             verbose=True,
         )
 
-    def run(self, prompt):
-        # print("Message received:", prompt)
-
+    def prompt_received(self, prompt):
         response = self.prompt_llm(prompt)
-        # print(response)
-
         key, value = self.extract_json_data(response)
-        # print(f"key: {key}, value: {value}, llm state: {self.llm_state}")
-        # print(self.llm_states[self.llm_state])
+        self.clear_stats()
+
         if key == "youtube_search":
             self.search_results = self.youtube_search(value, max_results=3)
             self.summary_index = None
             self.vector_index = None
             self.query_engine = None
+            self.saved_query = prompt
+
+            msg = "Finished YouTube search. Which result would you like to build an index for?"
+            self.print(msg)
+            self.chat_history.append(f"Asssistant: {msg}")
             self.llm_state = 1
 
         elif key == "build_index":
@@ -359,7 +364,8 @@ class MyAgent(Agent):
             video = [vid for vid in self.search_results if vid["video_id"] == value][0]
 
             assert video, f"Video with video_id {value} not found in search results."
-            msg = f"Fetching transcript from {video}."
+            video_url = video["video_url"]
+            msg = f"Fetching transcript from the following video: {video_url}."
             self.print(msg)
             self.chat_history.append(f"Asssistant: {msg}")
 
@@ -368,22 +374,25 @@ class MyAgent(Agent):
             doc = self.get_youtube_transcript_doc(video_url)
             doc[0].doc_id = video_id
 
-            # TODO: Fixme, sometimes summary index fails, possibly due to incorrect llama index version?
-            # build and print summary index
+            # Print a summary of the video
             # self.build_summary_index(doc)
             # self.print_summary(video_id)
 
             self.build_vector_index(doc)
             self.build_query_engine()
-            self.build_query_engine_tools(desc=video["description"])
-            self.build_react_agent()
+            # self.build_query_engine_tools(desc=video["description"])
+            # self.build_react_agent()
 
-            msg = "Index and query engine is now ready to be used on your PC. Feel free to ask any questions about the video!"
+            msg = f"Index and query engine is now ready to be used on your PC. Running your original query through the index!\n Query: \"{self.saved_query}\"\n\n"
             self.print(msg)
+            response = self.query_engine.query(self.saved_query)
+            self.print(response)
+
             self.chat_history.append(f"Asssistant: {msg}")
             self.llm_state = 2
 
-        elif key == "query_rag":
+        elif key == "query_engine":
+            self.log.debug(f"Querying RAG with value: {value}")
             self.query_engine.query(value)
 
         elif key == "reset":
@@ -423,6 +432,32 @@ def main():
             print("\nGoodbye!")
             break
 
+def run_prompt(prompt, model: str="llama3.2:3b"):
+    return run_cli('prompt', prompt, model=model)
+
+def run_chat(query, model: str="llama3.2:3b"):
+    return run_cli('chat', query, model=model)
+
+def main_test():
+    start_servers()
+
+    while True:
+        try:
+            user_input = input("You: ").strip()
+            if user_input.lower() == 'exit':
+                print("Goodbye!")
+                break
+            elif user_input:
+                print("Agent: ", end="", flush=True)
+                response = run_prompt(user_input)
+                print(response)
+            else:
+                print("Please enter a valid input.")
+        except KeyboardInterrupt:
+            print("\nGoodbye!")
+            break
+
+    stop_servers()
 
 if __name__ == "__main__":
     main()

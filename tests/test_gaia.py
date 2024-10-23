@@ -1,21 +1,11 @@
 # Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 import pytest
-from gaia.cli import run_cli
-
-
-def start_servers():
-    # Start the servers
-    print("Starting servers...")
-    start_result = run_cli('start')
-    assert start_result == f"Servers started successfully."
-
-
-def stop_servers():
-    # Stop the servers
-    print("\nStopping servers...")
-    stop_result = run_cli('stop')
-    assert stop_result == "Servers stopped successfully."
+from gaia.cli import run_cli, start_servers, stop_servers
+from memory_profiler import profile, memory_usage
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+import matplotlib.pyplot as plt
 
 
 @pytest.mark.parametrize("prompt", [
@@ -30,19 +20,26 @@ def stop_servers():
 def test_model_sweep(benchmark, prompt: str, model: str):
     print(f"\nStarting test_model_sweep with model: {model}...")
 
-    # Use benchmark to measure the latency of the prompt
+    @profile(precision=4)
     def run_prompt():
-        return run_cli('prompt', prompt, model=model)
+        return run_cli('prompt', prompt, model=model, agent_name="Chaty")
 
     # Run benchmark in pedantic mode with 1 round and 1 iteration
     result = benchmark.pedantic(run_prompt, rounds=1, iterations=1)
     response = result.get('response')
     stats = result.get('stats')
 
+    # Get detailed memory usage
+    mem_usage = memory_usage((run_prompt,), interval=0.1, timeout=None, max_iterations=1)
+
     # Add custom metrics to the benchmark
     if stats:
         for key, value in stats.items():
             benchmark.extra_info[key] = value
+
+    benchmark.extra_info['max_memory'] = max(mem_usage)
+    benchmark.extra_info['min_memory'] = min(mem_usage)
+    benchmark.extra_info['avg_memory'] = sum(mem_usage) / len(mem_usage)
 
     # Add your assertions here
     assert response is not None, "Response should not be None"
@@ -50,6 +47,18 @@ def test_model_sweep(benchmark, prompt: str, model: str):
     assert len(response) > 0, "Response should not be empty"
 
     print("Test completed successfully.")
+    print(f"Max memory usage: {max(mem_usage)} MiB")
+    print(f"Min memory usage: {min(mem_usage)} MiB")
+    print(f"Avg memory usage: {sum(mem_usage) / len(mem_usage)} MiB")
+
+    # Generate a detailed memory profile
+    plt.figure(figsize=(10, 5))
+    plt.plot(mem_usage)
+    plt.title(f'Memory Usage for {model}')
+    plt.xlabel('Time')
+    plt.ylabel('Memory usage (MiB)')
+    plt.savefig(f'memory_profile_{model.replace(":", "_")}.png')
+    plt.close()
 
 
 if __name__ == "__main__":
@@ -60,6 +69,6 @@ if __name__ == "__main__":
         "--benchmark-json=output.json",
         "-v",  # for verbose output
         "-s",  # to show print statements
-        "-k test_model_sweep[llama3.2:1b-Who"
+        "-k", "test_model_sweep[llama3.2:1b-Who"
     ])
     stop_servers()

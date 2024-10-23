@@ -6,7 +6,8 @@ from collections import deque
 from pathlib import Path
 from llama_index.core import Settings, PromptTemplate
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
-from gaia.agents.agent import Agent, LocalLLM
+from gaia.agents.agent import Agent
+from gaia.llm.llama_index_local import LocalLLM
 
 
 class MyAgent(Agent):

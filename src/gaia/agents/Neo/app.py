@@ -15,7 +15,8 @@ from llama_index.core.tools import QueryEngineTool
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.readers.github import GithubRepositoryReader, GithubClient
 
-from gaia.agents.agent import Agent, LocalLLM
+from gaia.agents.agent import Agent
+from gaia.llm.llama_index_local import LocalLLM
 
 # TODO: uncomment when ReAct agent is enabled again.
 # from llama_index.core.agent import ReActAgent
