@@ -110,9 +110,40 @@ Section "Install Main Components" SEC01
   conda_not_available:
     FileWrite $0 "*** conda_not_available ***$\n"
     ${IfNot} ${Silent}
-      MessageBox MB_OK "Conda is not installed. Please install Anaconda or Miniconda to proceed."
+      MessageBox MB_YESNO "Conda is not installed. Would you like to install Miniconda?" IDYES install_miniconda IDNO exit_installer
+    ${Else}
+      Goto install_miniconda
     ${EndIf}
-    Quit ; Exit the installer after the message box is closed
+  
+  exit_installer:
+    FileWrite $0 "- Something went wrong. Exiting installer$\n"
+    Quit
+    
+  install_miniconda:
+    ; Download Miniconda installer
+    FileWrite $0 "- User chose to install Miniconda$\n"
+    ExecWait 'curl -s -o "$TEMP\Miniconda3-latest-Windows-x86_64.exe" "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe"'
+  
+    ; Install Miniconda silently
+    ExecWait '"$TEMP\Miniconda3-latest-Windows-x86_64.exe" /InstallationType=JustMe /AddToPath=1 /RegisterPython=0 /S /D=$PROFILE\miniconda3' $2
+    ; Check if Miniconda installation was successful
+    ${If} $2 == 0
+      FileWrite $0 "- Miniconda installation successful$\n"
+      nsExec::ExecToStack '"$PROFILE\miniconda3\Scripts\conda.exe" init'
+      ${IfNot} ${Silent}
+        MessageBox MB_OK "Miniconda has been successfully installed."
+      ${EndIf}
+
+      StrCpy $R1 "$PROFILE\miniconda3\Scripts\conda.exe"
+      Goto create_env
+
+    ${Else}
+      FileWrite $0 "- Miniconda installation failed$\n"
+      ${IfNot} ${Silent}
+        MessageBox MB_OK "Error: Miniconda installation failed. Installation will be aborted."
+      ${EndIf}
+      Goto exit_installer
+    ${EndIf}
 
   check_ollama:
     FileWrite $0 "*** check_ollama ***$\n"
@@ -133,8 +164,12 @@ Section "Install Main Components" SEC01
 
   create_env:
     FileWrite $0 "*** create_env ***$\n"
+    ; Use the appropriate conda executable
+    ${If} $R1 == ""
+      StrCpy $R1 "conda"
+    ${EndIf}
     ; Create a Python 3.10 environment named "gaia_env" in the installation directory
-    ExecWait 'conda create -p "$INSTDIR\gaia_env" python=3.10 -y' $R0
+    ExecWait '"$R1" create -p "$INSTDIR\gaia_env" python=3.10 -y' $R0
 
     ; Check if the environment creation was successful (exit code should be 0)
     StrCmp $R0 0 env_created env_creation_failed
@@ -191,3 +226,4 @@ SectionEnd
 Function RunGAIA
   ExecShell "open" "$INSTDIR\GAIA.lnk"
 FunctionEnd
+

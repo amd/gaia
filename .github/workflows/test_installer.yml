@@ -50,18 +50,6 @@ jobs:
             exit 1
           }
 
-      - name: Download and Install Miniconda
-        shell: pwsh
-        run: |
-          Invoke-WebRequest -Uri "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe" -OutFile "miniconda.exe"
-          Start-Process -FilePath "miniconda.exe" -ArgumentList "/S", "/D=$env:USERPROFILE\Miniconda3" -Wait
-
-      - name: Initialize Conda for CMD
-        shell: cmd
-        run: |
-          call %UserProfile%\Miniconda3\Scripts\activate.bat
-          call conda init cmd.exe
-
       - name: Install Ollama
         shell: cmd
         run: |
@@ -90,7 +78,6 @@ jobs:
         run: |
           echo "Having issues debugging the installer? Check the installer README for tips on how to do that."
           set PATH=%PATH%;C:\Users\runneradmin\AppData\Local\Programs\Ollama
-          call %UserProfile%\Miniconda3\Scripts\activate.bat
           cd installer
           GAIA_Installer.exe /S
 
