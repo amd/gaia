@@ -2,14 +2,24 @@
 
 import argparse
 import torch
-import turnkeyml.llm.cache as cache
-from turnkeyml.llm.tools.chat import Serve
-from turnkeyml.llm.tools.huggingface_load import HuggingfaceLoad
-from turnkeyml.llm.tools.ort_genai.oga import OgaLoad
-# from turnkeyml.llm.tools.ryzenai_npu.ryzenai_npu import RyzenAINPULoad
-from turnkeyml.state import State # pylint:disable=E0401
 
 from gaia.interface.util import UIMessage
+
+USE_TKML = True
+if USE_TKML:
+    import turnkeyml.llm.cache as cache # pylint:disable=E0611
+    from turnkeyml.llm.tools.chat import Serve # pylint:disable=E0611
+    from turnkeyml.llm.tools.huggingface_load import HuggingfaceLoad # pylint:disable=E0611
+    from turnkeyml.llm.tools.ort_genai.oga import OgaLoad # pylint:disable=E0611
+    from turnkeyml.state import State # pylint:disable=E0401
+else:
+    # TODO: temporary solution using internal lemonade package/repo.
+    # https://github.com/aigdat/gaia/issues/109
+    import lemonade.cache as cache # pylint:disable=E0401
+    from lemonade.tools.chat import Serve # pylint:disable=E0401
+    from lemonade.tools.huggingface_load import HuggingfaceLoad # pylint:disable=E0401
+    from lemonade.tools.ort_genai.oga import OgaLoad # pylint:disable=E0401
+    from turnkeyml.state import State # pylint:disable=E0401,C0412
 
 def launch_llm_server(backend, checkpoint, device, dtype, max_new_tokens):
     assert(device == "cpu" or device == "npu" or device == "igpu"), f"ERROR: {device} not supported, please select 'cpu' or 'npu'."

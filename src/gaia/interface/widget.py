@@ -307,7 +307,7 @@ class SetupLLM(QObject):
             self.log.info(f"Waiting for server at {host}:{port}... (Attempt {attempts}, Elapsed time: {elapsed_time:.1f}s)")
 
             # Update the loading label with the current status
-            self.widget.ui.loadingLabel.setText(f"Waiting for server... (Attempt {attempts}, Elapsed time: {elapsed_time:.1f}s)")
+            self.widget.ui.loadingLabel.setText(f"Waiting for server... ({int(elapsed_time)}s)")
             QApplication.processEvents()  # Ensure the UI updates
 
             time.sleep(check_interval)

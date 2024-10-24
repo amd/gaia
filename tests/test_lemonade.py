@@ -2,54 +2,120 @@ import os
 import re
 import pytest
 import subprocess
-from datetime import datetime
+from dotenv import load_dotenv
+from gaia.logger import get_logger
+log = get_logger(__name__)
+
+load_dotenv()
+os.environ['HF_TOKEN'] = os.getenv('HUGGINGFACE_ACCESS_TOKEN')
+
+ENABLE_SMOKE_TESTS = False
+if ENABLE_SMOKE_TESTS:
+    MODELS_BACKEND = [
+        ("amd/Llama-3.1-8B-awq-g128-int4-asym-fp32-onnx-ryzen-strix", "oga-load --device npu --dtype int4"),
+        ("meta-llama/Llama-3.1-8B-Instruct", "huggingface-load --device cpu --dtype bfloat16"),
+        # ("amd/llama3-8b-instruct-oga-model-optimized", "oga-load --device npu --dtype int4"),
+        # ("amd/llama3-8b-instruct-oga-model-unoptimized", "oga-load --device npu --dtype int4"),
+    ]
+    MMLU_TESTS = "management"
+    PROMPT = "Hello, how are you?"
+else:
+    MODELS_BACKEND = [
+        ("meta-llama/Llama-3.2-1B", "huggingface-load --device cpu --dtype bfloat16"),
+        ("meta-llama/Llama-3.2-1B-Instruct", "huggingface-load --device cpu --dtype bfloat16"),
+
+        ("meta-llama/Llama-3.2-3B", "huggingface-load --device cpu --dtype bfloat16"),
+        ("meta-llama/Llama-3.2-3B-Instruct", "huggingface-load --device cpu --dtype bfloat16"),
+
+        ("meta-llama/Meta-Llama-3.1-8B", "huggingface-load --device cpu --dtype bfloat16"),
+        ("meta-llama/Llama-3.1-8B-Instruct", "huggingface-load --device cpu --dtype bfloat16"),
+        ("amd/Llama-3.1-8B-awq-g128-int4-asym-fp32-onnx-ryzen-strix", "oga-load --device npu --dtype int4"),
+
+        ("Qwen/Qwen1.5-7B-Chat", "huggingface-load --device cpu --dtype bfloat16"),
+        ("amd/Qwen1.5-7B-Chat-awq-g128-int4-asym-fp32-onnx-ryzen-strix", "oga-load --device npu --dtype int4"),
+
+        ("microsoft/Phi-3.5-mini-instruct", "huggingface-load --device cpu --dtype bfloat16"),
+        ("amd/Phi-3.5-mini-instruct-awq-g128-int4-asym-fp32-onnx-ryzen-strix", "oga-load --device npu --dtype int4"),
+
+        ("microsoft/Phi-3-mini-4k-instruct", "huggingface-load --device cpu --dtype bfloat16"),
+        ("amd/Phi-3-mini-4k-instruct-awq-g128-int4-asym-fp32-onnx-ryzen-strix", "oga-load --device npu --dtype int4"),
+
+        ("meta-llama/Llama-2-7b-hf", "huggingface-load --device cpu --dtype bfloat16"),
+        ("amd/Llama-2-7b-hf-awq-g128-int4-asym-fp32-onnx-ryzen-strix", "oga-load --device npu --dtype int4"),
+
+        # ("meta-llama/Llama-2-7b-chat", "huggingface-load --device cpu --dtype bfloat16"),
+        ("amd/Llama2-7b-chat-awq-g128-int4-asym-fp32-onnx-ryzen-strix", "oga-load --device npu --dtype int4"),
+
+        ("mistralai/Mistral-7B-Instruct-v0.3", "huggingface-load --device cpu --dtype bfloat16"),
+        ("amd/Mistral-7B-Instruct-v0.3-awq-g128-int4-asym-fp32-onnx-ryzen-strix", "oga-load --device npu --dtype int4"),
+    ]
+    MMLU_TESTS = "management philosophy anatomy mathematics"
+    PROMPT = (
+        "<|begin_of_text|><|start_header_id|>system<|end_header_id|>"
+        "You are a pirate chatbot who always responds in pirate speak!<|eot_id|>"
+        "<|start_header_id|>user<|end_header_id|>"
+        "user: Hi, who are you in one sentence?<|eot_id|>"
+        "<|start_header_id|>assistant<|end_header_id|>"
+        "assistant:"
+    )
 
 
-PROMPT = """
-<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-You are a pirate chatbot who always responds in pirate speak!<|eot_id|>
-<|start_header_id|>user<|end_header_id|>
-user: Hi, who are you in one sentence?<|eot_id|>
-<|start_header_id|>assistant<|end_header_id|>
-assistant:
-"""
-PROMPT = "Hello, how are you?"
+def handle_subprocess_error(result, model):
+    if result.returncode != 0:
+        error_message = result.stderr or result.stdout or ""
+        if isinstance(error_message, bytes):
+            error_message = error_message.decode('utf-8', errors='replace')
 
-@pytest.mark.parametrize("model, backend",[
-    ("meta-llama/Meta-Llama-3.1-8B",     "huggingface-load --device cpu --dtype bfloat16"),
-    ("meta-llama/Llama-3.1-8B-Instruct", "huggingface-load --device cpu --dtype bfloat16"),
-    ("amd/Llama-3.1-8B-awq-g128-int4-asym-fp32-onnx-ryzen-strix", "oga-load --device npu --dtype int4"),
-    ("amd/Llama-3.1-8B-awq-g128-int4-asym-fp32-onnx-ryzen-strix", "oga-load --device npu --dtype int4"),
-])
+        if "GatedRepoError" in error_message:
+            skip_reason = f"Access to model {model} is restricted. Please request access from Hugging Face."
+            log.warning(f"\nSkipping test: {skip_reason}")
+            pytest.skip(skip_reason)
+        else:
+            fail_reason = f"Command failed with return code {result.returncode}. Error: {error_message}"
+            log.error(f"\nFailing test: {fail_reason}")
+            pytest.fail(fail_reason)
+
+
+@pytest.mark.parametrize("model, backend", MODELS_BACKEND)
 def test_mmlu_accuracy(model, backend):
-    mmlu_test = "management"
-    cmd = f"lemonade -i {model} {backend} accuracy-mmlu --tests {mmlu_test}"
-    print(cmd)
+    cmd = f"lemonade -i {model} {backend} accuracy-mmlu --tests {MMLU_TESTS}"
+    log.info(f"\nCommand executed:\n{cmd}\n")
 
-    result = subprocess.run(cmd, shell=True, capture_output=False, text=True)
-    
-    # Check if the command was successful
-    assert result.returncode == 0, f"Command failed: {result.stderr}"
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    handle_subprocess_error(result, model)
+    log.info(result.stdout)
 
-@pytest.mark.parametrize("model, backend, tool",[
-    # ("meta-llama/Meta-Llama-3.1-8B",     "huggingface-load --device cpu --dtype bfloat16", "huggingface-bench"),
-    ("meta-llama/Llama-3.1-8B-Instruct", "huggingface-load --device cpu --dtype bfloat16", "huggingface-bench"),
-    # ("amd/Llama-3.1-8B-awq-g128-int4-asym-fp32-onnx-ryzen-strix", "oga-load --device npu --dtype int4", "oga-bench"),
-    # ("amd/Llama-3.1-8B-awq-g128-int4-asym-fp32-onnx-ryzen-strix", "oga-load --device npu --dtype int4", "oga-bench"),
-])
-def test_llm_chat(model, backend, tool):
-    cmd = f"lemonade -i {model} {backend} {tool} --prompt \"{PROMPT}\""
-    print(f"\nCommand executed:\n{cmd}\n")
 
-    result = subprocess.run(cmd, shell=True, capture_output=False, text=True)
+@pytest.mark.parametrize("model, backend",MODELS_BACKEND)
+def test_llm_prompt_bench(model, backend):
+    if "huggingface" in backend:
+        tool = "huggingface-bench"
+    else:
+        tool = "oga-bench" # TODO: needs to be implemented in lemonade.
+        pytest.skip("OGA-bench is not implemented yet")
 
-    # Check if the command was successful
-    assert result.returncode == 0, f"Command failed: {result.stderr}"
+    cmd = f"lemonade -i {model} {backend} {tool}"
+    log.info(f"\nCommand executed:\n{cmd}\n")
+
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    handle_subprocess_error(result, model)
+    log.info(result.stdout)
+
+
+def test_llm_prompt(model, backend):
+    cmd = f"lemonade -i {model} {backend} llm-prompt --prompt \"{PROMPT}\""
+    log.info(f"\nCommand executed:\n{cmd}\n")
+
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    handle_subprocess_error(result, model)
+    log.info(result.stdout)
+
 
 if __name__ == "__main__":
     pytest.main([
         __file__,
         "-v",  # for verbose output
         "-s",  # to show print statements
-        "-k test_llm_chat"
+        "-k test_mmlu_accuracy"
+        # "-k test_llm_prompt_bench"
     ])
