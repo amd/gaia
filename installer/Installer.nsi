@@ -24,6 +24,10 @@ InstallDir "$LOCALAPPDATA\GAIA"
 ; Include modern UI elements
 !include "MUI2.nsh"
 
+; Enable StrLoc function
+!include StrFunc.nsh
+${StrLoc}
+
 ; Include LogicLib for logging in silent mode
 !include LogicLib.nsh
 Var LogHandle
@@ -91,9 +95,9 @@ Section "Install Main Components" SEC01
 
   # Pack GAIA into the installer
   # Exclude hidden files (like .git, .gitignore) and the installation folder itself
-  File /r /x installer /x .* /x ..\*.pyc ..\*.* install_oga.py npu_settings.json
+  File /r /x installer /x .* /x ..\*.pyc ..\*.* install_oga.py npu_settings.json download_lfs_file.py npu_driver_utils.py amd_install_kipudrv.bat
   FileWrite $0 "- Packaged GAIA repo$\n"
-
+  
   ; Check if conda is available
   ExecWait 'where conda' $2
   FileWrite $0 "- Checked if conda is available$\n"
@@ -184,6 +188,64 @@ Section "Install Main Components" SEC01
 
   env_created:
     FileWrite $0 "*** env_created ***$\n"
+
+    ${If} ${MODE} == "NPU"    
+      ; If in silent mode, skip driver update
+      ${If} ${Silent}
+        Goto install_gaia
+      ${EndIf}
+
+      ; Get the current NPU driver version
+      nsExec::ExecToStack 'python npu_driver_utils.py --get-version'
+      Pop $2 ; Exit code
+      Pop $3 ; Command output (driver version)
+
+      ; Check if the command was successful and a driver version was found
+      FileWrite $0 "- Packaged GAIA repo$\n"
+      ${If} $2 != "0"
+      ${OrIf} $3 == ""
+        FileWrite $0 "- Failed to retrieve current NPU driver version$\n"
+        StrCpy $3 "Unknown"
+      ${EndIf}
+
+      ; Get only the last line of $3 if it contains multiple lines
+      StrCpy $4 $3 ; Copy $3 to $4 to preserve original value
+      StrCpy $5 "" ; Initialize $5 as an empty string
+      ${Do}
+        ${StrLoc} $6 $4 "$\n" ">" ; Find the next newline character
+        ${If} $6 == "" ; If no newline found, we're at the last line
+          StrCpy $5 $4 ; Copy the remaining text to $5
+          ${Break} ; Exit the loop
+        ${Else}
+          StrCpy $5 $4 "" $6 ; Copy the text after the newline to $5
+          IntOp $6 $6 + 1 ; Move past the newline character
+          StrCpy $4 $4 "" $6 ; Remove the processed part from $4
+        ${EndIf}
+      ${Loop}
+      StrCpy $3 $5 ; Set $3 to the last line
+      FileWrite $0 "- Driver version: $3$\n"
+
+      ${If} $3 == "Unknown"
+        MessageBox MB_YESNO "Current driver version could not be identified. Would you like to update to 32.0.203.219 anyways?" IDYES update_driver IDNO install_gaia
+      ${ElseIf} $3 != "32.0.203.219"
+        FileWrite $0 "- Current driver version ($3) is not the required version (32.0.203.219)$\n"
+        MessageBox MB_YESNO "Current driver version ($3) is not the required version (32.0.203.219). Would you like to update it?" IDYES update_driver IDNO install_gaia
+      ${Else}
+        FileWrite $0 "- No driver update needed.$\n"
+        GoTo install_gaia
+      ${EndIf}
+    ${EndIf}
+    GoTo install_gaia
+
+  update_driver:
+    FileWrite $0 "*** update_driver ***$\n"
+    nsExec::Exec '"$INSTDIR\gaia_env\python.exe" -m pip install requests'
+    nsExec::Exec '"$INSTDIR\gaia_env\python.exe" download_lfs_file.py ryzen_ai_13_preview/Win24AIDriver.zip $INSTDIR driver.zip ${OGA_TOKEN}'
+    nsExec::Exec '"$INSTDIR\gaia_env\python.exe" npu_driver_utils.py --update-driver --folder_path $INSTDIR'
+    RMDir /r "$INSTDIR\npu_driver_utils.py"
+
+  install_gaia:
+    FileWrite $0 "*** install_gaia ***$\n"
     ; Install GAIA
     ExecWait '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"[dev]' $R0
 
@@ -199,9 +261,13 @@ Section "Install Main Components" SEC01
 
   gaia_installed:
     ${If} ${MODE} == "NPU"    
+
+      ; Install OGA NPU dependencies
       FileWrite $0 "- Downloading and installing OGA NPU dependencies$\n"
-      nsExec::Exec '"$INSTDIR\gaia_env\python.exe" install_oga.py $INSTDIR ${OGA_TOKEN}'
+      nsExec::Exec '"$INSTDIR\gaia_env\python.exe" download_lfs_file.py ryzen_ai_13_preview/amd_oga_Oct4_2024.zip $INSTDIR oga-npu.zip ${OGA_TOKEN}'
+      nsExec::Exec '"$INSTDIR\gaia_env\python.exe" install_oga.py $INSTDIR'
       RMDir /r "$INSTDIR\install_oga.py"
+      RMDir /r "$INSTDIR\download_lfs_file.py"
 
       FileWrite $0 "- Replacing settings.json with NPU-specific settings$\n"
       Delete "$INSTDIR\src\gaia\interface\settings.json"

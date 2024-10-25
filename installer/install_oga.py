@@ -11,55 +11,17 @@ def unzip_file(zip_path, extract_to):
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         zip_ref.extractall(extract_to)
 
-def download_lfs_file(token, file, output_filename):
-    """Downloads a file from LFS"""
-    # Set up the headers for the request
-    headers = {
-        'Authorization': f'token {token}',
-        'Accept': 'application/vnd.github.v3+json'
-    }
-
-    response = requests.get(f'https://api.github.com/repos/aigdat/ryzenai-sw-ea/contents/{file}', headers=headers)
-
-    # Check if the request was successful
-    if response.status_code == 200:
-        # Parse the JSON response to get the download URL
-        content = response.json()
-        download_url = content.get('download_url')
-
-        if download_url:
-            # Download the file from the download URL
-            file_response = requests.get(download_url)
-
-            # Write the content to a file
-            with open(output_filename, 'wb') as file:
-                file.write(file_response.content)
-        else:
-            print("Download URL not found in the response.")
-    else:
-        print(f"Failed to fetch the content from GitHub API. Status code: {response.status_code}")
-        print(response.json())
-
 def main():
     # Set up argument parser
     parser = argparse.ArgumentParser(description='Install OGA NPU')
-    parser.add_argument('folder', type=str, help='Path to the folder containing oga-npu.zip')
-    parser.add_argument('token', type=str, help='LFS token')
+    parser.add_argument('folder_path', type=str, help='Install folder path')
 
     # Parse the arguments
     args = parser.parse_args()
-    folder_path = args.folder
+    folder_path = args.folder_path
 
     # Define the path to the zip file
     zip_file_path = os.path.join(folder_path, 'oga-npu.zip')
-
-    # Download OGA NPU zip file
-    download_lfs_file(token=args.token, file="ryzen_ai_13_preview/amd_oga_Oct4_2024.zip", output_filename=zip_file_path)
-
-    # Check if the zip file exists
-    if not os.path.isfile(zip_file_path):
-        print(f"Error: {zip_file_path} does not exist.")
-        return
 
     # Unzip the file
     unzip_file(zip_file_path, folder_path)
