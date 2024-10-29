@@ -1,3 +1,5 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
 import sys, re, time
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QTimer

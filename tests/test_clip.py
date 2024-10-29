@@ -1,3 +1,5 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
 from gaia.cli import start_servers, stop_servers, run_prompt
 from gaia.agents.Clip.app import MyAgent
 

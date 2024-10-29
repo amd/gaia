@@ -134,7 +134,8 @@ class SetupLLM(QObject):
                 self.initialize_ollama_model_server()
                 self.initialize_ollama_client_server()
             else:
-                self.log.warning("Ollama backend selected but Ollama is not available.")
+                error_message = "Ollama backend selected but Ollama is not available."
+                UIMessage.error(error_message)
         else:
             # Initialize LLM server
             self.widget.ui.loadingLabel.setText(f"Initializing LLM server: {self.widget.ui.device.currentText()}...")

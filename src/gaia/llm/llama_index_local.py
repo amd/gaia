@@ -1,3 +1,5 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
 from typing import Any, Callable
 
 from llama_index.core.llms import (

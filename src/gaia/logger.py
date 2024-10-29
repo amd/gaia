@@ -1,3 +1,5 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
 import logging
 import sys
 from pathlib import Path

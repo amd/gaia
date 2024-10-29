@@ -4,7 +4,7 @@
     "show_label": true,
 
     "agents": [
-        "Chaty"
+        "Llm"
     ],
     "models": {
         "llama-3.2 1b (ollama)": {

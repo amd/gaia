@@ -1,11 +1,8 @@
 # Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
-import os
 import time
 import asyncio
 from collections import OrderedDict
-from transformers import LlamaTokenizer
-from huggingface_hub import HfFolder, HfApi
 from websocket import create_connection
 from websocket._exceptions import WebSocketTimeoutException
 from aiohttp import web
@@ -13,6 +10,7 @@ import requests
 
 from gaia.logger import get_logger
 from gaia.interface.util import UIMessage
+from gaia.llm.tokenizer import Tokenizer
 
 class Agent:
     def __init__(self, host="127.0.0.1", port=8001, model="meta-llama/Meta-Llama-3-8B", cli_mode=False):
@@ -38,7 +36,7 @@ class Agent:
         # last chunk in response
         self.last = False
         self.cli_mode = cli_mode
-        self.tokenizer = self._initialize_tokenizer()
+        self.tokenizer = Tokenizer("meta-llama/Llama-2-7b-hf", cli_mode=self.cli_mode)
 
     def get_host_port(self):
         return self.host, self.port
@@ -56,40 +54,6 @@ class Agent:
         app.router.add_get("/stats", self._on_get_stats)
         return app
 
-    def _initialize_tokenizer(self):
-        try:
-            # Check if the user is logged in to Hugging Face
-            token = HfFolder.get_token()
-            if not token:
-                token = os.getenv('HUGGINGFACE_ACCESS_TOKEN')
-
-            if not token:
-                UIMessage.error("No Hugging Face token found. Please log in to Hugging Face.", cli_mode=self.cli_mode)
-
-            # Verify the token
-            api = HfApi(token=token)
-            try:
-                api.whoami(token)
-            except Exception:
-                UIMessage.error("Invalid Hugging Face token. Please provide a valid token.", cli_mode=self.cli_mode)
-
-            # Attempt to load the tokenizer
-            tokenizer = LlamaTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
-            return tokenizer
-        except EnvironmentError as e:
-            UIMessage.error(str(e), cli_mode=self.cli_mode)
-            from gaia.interface.huggingface import get_huggingface_token
-            token = get_huggingface_token()
-            if token:
-                # Try to initialize the tokenizer again after getting the token
-                return self._initialize_tokenizer()
-            else:
-                UIMessage.error("No token provided. Tokenizer initialization failed.", cli_mode=self.cli_mode)
-                return None
-        except Exception as e:
-            UIMessage.error(f"An unexpected error occurred: {e}", cli_mode=self.cli_mode)
-            return None
-
     def __del__(self):
         # Ensure websocket gets closed when agent is deleted
         if hasattr(self, 'llm_server_websocket') and self.llm_server_websocket is not None:
@@ -101,7 +65,7 @@ class Agent:
             self.stats[key] = None
 
     def count_tokens(self, text):
-        return len(self.tokenizer.encode(text))
+        return len(self.tokenizer.tokenizer.encode(text))
 
     def get_time_to_first_token(self):
         return self.stats['ttft']

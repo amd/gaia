@@ -29,7 +29,7 @@ setup(
         "aiohttp",
         "fastapi",
         "pydantic==1.10.12",
-        "uvicorn",
+        "uvicorn>=0.15.0",
         "transformers",
         "onnx==1.16.0",
         "accelerate",
@@ -85,7 +85,9 @@ setup(
             "pytest-asyncio",
             "memory_profiler",
             "matplotlib",
-        ]
+            "adjustText",
+            "plotly",
+        ],
     },
     classifiers=[],
     entry_points={

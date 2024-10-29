@@ -1,3 +1,5 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
 from gaia.llm.ollama_server import OllamaClient, OllamaClientServer
 from gaia.llm.ollama_server import launch_ollama_model_server, launch_ollama_client_server
 

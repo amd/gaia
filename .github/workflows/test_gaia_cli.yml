@@ -39,9 +39,10 @@ jobs:
           python -m pip check
 
       - name: PyLint
-        shell: bash -el {0}
+        shell: cmd
         run: |
-          pylint src/gaia --rcfile .pylintrc --disable C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718
+          pip install pylint
+          call util\lint.bat
 
       - name: Install Ollama
         shell: cmd
