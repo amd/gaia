@@ -192,6 +192,7 @@ class SetupLLM(QObject):
                 command,
                 creationflags=subprocess.CREATE_NEW_CONSOLE
             )
+            self.check_server_available("127.0.0.1", 8000)
         else:
             if self.widget.settings["llm_server"]:
                 self.widget.llm_server = multiprocessing.Process(
@@ -583,7 +584,7 @@ class Widget(QWidget):
         model_device_settings = model_settings["device"]
         self.current_backend = model_settings["backend"]
 
-        # Disconnect the signal temporarily to prevent recursive calls
+        # Safely disconnect the signal
         self.ui.device.currentIndexChanged.disconnect(self.deployment_changed)
 
         # Clear existing items
