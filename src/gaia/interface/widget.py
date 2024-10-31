@@ -431,7 +431,15 @@ class Widget(QWidget):
         self.ui = Ui_Widget()
         self.ui.setupUi(self)
         self.content_layout = self.ui.boardLayout
-        self.setStyleSheet("background-color: black;")
+        self.setStyleSheet("""
+            QWidget {
+                background-color: black;
+                border: none;
+            }
+            QFrame {
+                border: none;
+            }
+        """)
         self.setWindowTitle("RyzenAI GAIA")
 
         # Set a much wider minimum width for the chat area
