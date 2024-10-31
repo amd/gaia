@@ -23,26 +23,60 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Set up Miniconda with 64-bit Python
-        uses: conda-incubator/setup-miniconda@v2
-        with:
-          miniconda-version: "latest"
-          activate-environment: gaia
-          python-version: "3.10"
+      - name: Download and Install Miniconda
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe" -OutFile "miniconda.exe"
+          Start-Process -FilePath "miniconda.exe" -ArgumentList "/S", "/D=$env:USERPROFILE\Miniconda3" -Wait
+
+      - name: Initialize Conda
+        shell: pwsh
+        run: |
+          Write-Host "Step 1: Add Conda to system PATH"
+          $env:Path = "$env:USERPROFILE\Miniconda3;$env:USERPROFILE\Miniconda3\Scripts;$env:Path"
+          [System.Environment]::SetEnvironmentVariable("Path", $env:Path, [System.EnvironmentVariableTarget]::Machine)
+
+          Write-Host "Step 2: Initialize conda for both shells"
+          & "$env:USERPROFILE\Miniconda3\Scripts\conda.exe" init powershell
+          & "$env:USERPROFILE\Miniconda3\Scripts\conda.exe" init cmd.exe
+
+          Write-Host "Step 3: Create the environment at system level"
+          & "$env:USERPROFILE\Miniconda3\Scripts\conda.exe" create -n gaiaenv python=3.10 -y
 
       - name: Install dependencies
-        shell: bash -el {0}
+        shell: pwsh
         run: |
+          Write-Host "Step 1: Activate conda environment"
+          & "$env:USERPROFILE\Miniconda3\shell\condabin\conda-hook.ps1"
+          conda activate gaiaenv
+
+          Write-Host "Step 2: Install dependencies"
           python -m pip install --upgrade pip
-          conda install pylint
+          conda install pylint -y
           pip install -e .[test,dev]
+
+          Write-Host "Step 3: Verify installation"
+          $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
+          if (-not $gaiaPath) {
+            Write-Host "Error: gaia not installed correctly"
+            Write-Host "Current PATH: $env:Path"
+            exit 1
+          }
+          Write-Host "Found gaia at: $($gaiaPath.Source)"
           python -m pip check
 
       - name: PyLint
-        shell: cmd
+        shell: pwsh
         run: |
+          Write-Host "Step 1: Activate conda environment"
+          & "$env:USERPROFILE\Miniconda3\shell\condabin\conda-hook.ps1"
+          conda activate gaiaenv
+
+          Write-Host "Step 2: Install pylint"
           pip install pylint
-          call util\lint.bat
+
+          Write-Host "Step 3: Run pylint"
+          & ".\util\lint.bat"
 
       - name: Install Ollama
         shell: cmd
@@ -69,9 +103,27 @@ jobs:
 
       - name: Test GAIA
         timeout-minutes: 10
-        shell: bash -el {0}
+        shell: pwsh
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         run: |
+          Write-Host "Step 1: Activate and verify Conda environment"
+          $env:Path = "$env:USERPROFILE\Miniconda3;$env:USERPROFILE\Miniconda3\Scripts;$env:Path"
+          & "$env:USERPROFILE\Miniconda3\shell\condabin\conda-hook.ps1"
+          conda activate gaiaenv
+
+          Write-Host "Verify Python environment"
+          python -c "import sys; print(sys.executable)"
+
+          Write-Host "Find gaia executable location"
+          $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
+          if (-not $gaiaPath) {
+            Write-Host "Error: Cannot find gaia executable in PATH"
+            Write-Host "Current PATH: $env:Path"
+            exit 1
+          }
+          Write-Host "Found gaia at: $($gaiaPath.Source)"
+
+          Write-Host "Step 2: Install and run GAIA tests"
           python tests/test_gaia.py
