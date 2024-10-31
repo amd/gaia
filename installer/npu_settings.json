@@ -4,6 +4,7 @@
     "show_label": true,
 
     "agents": [
+        "Llm",
         "Chaty"
     ],
     "models": {
