@@ -143,22 +143,33 @@ class SetupLLM(QObject):
 
 
     def initialize_agent_server(self):
+        # Get model settings to access the checkpoint
+        selected_model = self.widget.ui.model.currentText()
+        model_settings = self.widget.settings["models"][selected_model]
+        checkpoint = model_settings["checkpoint"]
+
         # Open using subprocess or multiprocessing depending on the selected settings
         selected_agent = self.widget.ui.agent.currentText()
         self.log.info(f"Starting Agent {selected_agent} server...")
         self.widget.ui.loadingLabel.setText(f"Initializing Agent {selected_agent} Server...")
 
         if self.widget.settings["dev_mode"]:
-            app_dot_py = gaia_folder / "agents" / selected_agent / "app.py"
-            command = [sys.executable, app_dot_py]
+            app_dot_py = gaia_folder / "agents" / selected_agent.lower() / "app.py"
+            command = [sys.executable, str(app_dot_py), "--model", checkpoint]
             self.widget.agent_server = subprocess.Popen(
                 command,
                 creationflags=subprocess.CREATE_NEW_CONSOLE
-
             )
         else:
+            agent_module = getattr(agents, selected_agent.lower())
+            agent_class = getattr(agent_module, selected_agent)
             self.widget.agent_server = multiprocessing.Process(
-                target=getattr(agents, selected_agent.lower())
+                target=agent_class,
+                kwargs={
+                    "model": checkpoint,
+                    "host": "127.0.0.1",
+                    "port": 8001
+                }
             )
             self.widget.agent_server.start()
 

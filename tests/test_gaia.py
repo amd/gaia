@@ -26,22 +26,24 @@ def test_model_sweep(benchmark, prompt: str, model: str):
 
     # Run benchmark in pedantic mode with 1 round and 1 iteration
     result = benchmark.pedantic(run_prompt, rounds=1, iterations=1)
-    response = result.get('response')
-    stats = result.get('stats')
+    print(result)
+
+    # Handle both string and dictionary responses
+    response = result.get('response') if isinstance(result, dict) else result
+    stats = result.get('stats') if isinstance(result, dict) else None
 
     # Get detailed memory usage
     mem_usage = memory_usage((run_prompt,), interval=0.1, timeout=None, max_iterations=1)
 
     # Add custom metrics to the benchmark
-    if stats:
-        for key, value in stats.items():
-            benchmark.extra_info[key] = value
-
     benchmark.extra_info['max_memory'] = max(mem_usage)
     benchmark.extra_info['min_memory'] = min(mem_usage)
     benchmark.extra_info['avg_memory'] = sum(mem_usage) / len(mem_usage)
+    if stats:
+        benchmark.extra_info.update(stats)
 
     # Add your assertions here
+    assert "Error: 500" not in response, "Server returned 500 Internal Server Error"
     assert response is not None, "Response should not be None"
     assert isinstance(response, str), "Response should be a string"
     assert len(response) > 0, "Response should not be empty"

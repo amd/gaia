@@ -36,7 +36,7 @@
             "debugOptions": ["RedirectOutput"],
         },
         {
-            "name": "Pytest Debug (No Benchmark)",
+            "name": "GAIA Pytest Debug",
             "type": "python",
             "request": "launch",
             "module": "pytest",
@@ -44,18 +44,23 @@
                 "tests/test_gaia.py",
                 "-v",
                 "-s",
-                "-k", "test_prompt_sweep"
+                "-k", "test_model_sweep[llama3.2:1b-Who"
             ],
             "cwd": "${workspaceFolder}",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}",
-                "PYTEST_DISABLE_BENCHMARK": "1"
+                "PYTEST_DISABLE_BENCHMARK": "1",
+                "PYTHONBREAKPOINT": "debugpy.breakpoint",
+                "PYTHONDEBUG": "1"
             },
             "console": "integratedTerminal",
             "justMyCode": false,
             "subProcess": true,
             "stopOnEntry": false,
-            "debugOptions": ["RedirectOutput"]
+            "debugOptions": ["RedirectOutput"],
+            "debugPython": {
+                "subProcess": true
+            }
         }
 
     ]

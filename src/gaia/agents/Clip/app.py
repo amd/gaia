@@ -8,6 +8,7 @@ import json
 import os
 import time
 import html
+import argparse
 from collections import deque
 from dotenv import load_dotenv
 
@@ -28,7 +29,6 @@ from llama_index.core.node_parser import SentenceSplitter
 from llama_index.readers.youtube_transcript import YoutubeTranscriptReader
 
 from gaia.logger import get_logger
-from gaia.cli import run_cli, start_servers, stop_servers
 from gaia.agents.agent import Agent
 from gaia.llm.llama_index_local import LocalLLM
 from gaia.agents.Clip.prompts import Prompts
@@ -42,8 +42,8 @@ class MyAgent(Agent):
     about YouTube content.
     """
 
-    def __init__(self, host="127.0.0.1", port=8001, embed_model="local:BAAI/bge-small-en-v1.5", cli_mode=False):
-        super().__init__(host=host, port=port, cli_mode=cli_mode)
+    def __init__(self, model, host="127.0.0.1", port=8001, embed_model="local:BAAI/bge-small-en-v1.5", cli_mode=False):
+        super().__init__(model=model, host=host, port=port, cli_mode=cli_mode)
 
         load_dotenv()
         youtube_api_key = os.getenv('YOUTUBE_API_KEY')
@@ -403,61 +403,17 @@ class MyAgent(Agent):
 
 
 def main():
-    # Clip LLM CLI for testing purposes.
-    import argparse
-    parser = argparse.ArgumentParser(description="Interact with the Clip Agent CLI")
-    parser.add_argument(
-        "--host", default="127.0.0.1", help="Host address for the agent server"
-    )
-    parser.add_argument(
-        "--port", type=int, default=8001, help="Port for the agent server"
-    )
+    parser = argparse.ArgumentParser(description="Run the Clip agent")
+    parser.add_argument("--host", default="127.0.0.1", help="Host address for the agent server")
+    parser.add_argument("--port", type=int, default=8001, help="Port number for the agent server")
+    parser.add_argument("--model", required=True, help="Model name")
     args = parser.parse_args()
 
-    agent = MyAgent(host=args.host, port=args.port)
-    print("Clip Agent initialized. Type 'exit' to quit.")
-
-    while True:
-        try:
-            user_input = input("You: ").strip()
-            if user_input.lower() == "exit":
-                print("Goodbye!")
-                break
-            elif user_input:
-                print("Agent: ", end="", flush=True)
-                agent.prompt_received(user_input)
-            else:
-                print("Please enter a valid input.")
-        except KeyboardInterrupt:
-            print("\nGoodbye!")
-            break
-
-def run_prompt(prompt, model: str="llama3.2:3b"):
-    return run_cli('prompt', prompt, model=model)
-
-def run_chat(query, model: str="llama3.2:3b"):
-    return run_cli('chat', query, model=model)
-
-def main_test():
-    start_servers()
-
-    while True:
-        try:
-            user_input = input("You: ").strip()
-            if user_input.lower() == 'exit':
-                print("Goodbye!")
-                break
-            elif user_input:
-                print("Agent: ", end="", flush=True)
-                response = run_prompt(user_input)
-                print(response)
-            else:
-                print("Please enter a valid input.")
-        except KeyboardInterrupt:
-            print("\nGoodbye!")
-            break
-
-    stop_servers()
+    MyAgent(
+        model=args.model,
+        host=args.host,
+        port=args.port,
+    )
 
 if __name__ == "__main__":
     main()

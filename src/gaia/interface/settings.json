@@ -4,7 +4,8 @@
     "show_label": true,
 
     "agents": [
-        "Llm"
+        "Llm",
+        "Chaty"
     ],
     "models": {
         "llama-3.2 1b (ollama)": {
@@ -43,7 +44,7 @@
                 ]
             }
         },
-        "Phi 3 mini instruct(oga-npu)": {
+        "Phi 3 mini instruct (oga-npu)": {
             "backend" : "oga",
             "checkpoint": "amd/Phi-3-mini-4k-instruct-awq-g128-int4-asym-fp32-onnx-ryzen-strix",
             "device": {
