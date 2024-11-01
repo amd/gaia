@@ -475,7 +475,7 @@ class Widget(QWidget):
 
         # Connect buttons
         self.ui.ask.clicked.connect(self.send_message)
-        self.ui.restart.clicked.connect(self.restart_conversation())
+        self.ui.restart.clicked.connect(self.restart_conversation)
         self.ui.model.currentIndexChanged.connect(self.update_device_list)
         self.ui.model.currentIndexChanged.connect(self.deployment_changed)
         self.ui.device.currentIndexChanged.connect(self.deployment_changed)
