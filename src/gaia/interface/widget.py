@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QProgressBar,
     QComboBox,
+    QMessageBox,
 )
 from PySide6.QtCore import Qt, QUrl, QEvent, QSize, QObject, Signal, Slot, QThread
 from PySide6.QtGui import QPixmap, QDesktopServices, QMovie, QIcon
@@ -72,9 +73,17 @@ class SetupLLM(QObject):
     # Request Agent Server to update connection to LLM Server
     async def request_llm_load(self):
         async with ClientSession() as session:
+            # Get the model settings
+            selected_model = self.widget.ui.model.currentText()
+            model_settings = self.widget.settings["models"][selected_model]
+            checkpoint = model_settings["checkpoint"]
+
             async with session.post(
                 "http://127.0.0.1:8001/load_llm",
-                json={"model": self.widget.ui.model.currentText()},
+                json={
+                    "model": self.widget.ui.model.currentText(),
+                    "checkpoint": checkpoint
+                },
             ) as response:
                 # Wait for response from server
                 response_data = await response.json()
@@ -86,12 +95,10 @@ class SetupLLM(QObject):
 
     @Slot()
     def do_work(self):
-        # Close previously open servers, if any
         self.log.debug("SetupLLM do_work started")
         self.widget.terminate_servers()
 
         # Switch visibility of UI elements
-        self.widget.ui.loading.setVisible(True)
         self.widget.ui.loading.setVisible(True)
         self.widget.ui.loadingLabel.setVisible(True)
         self.widget.ui.loadingGif.setVisible(True)
@@ -102,21 +109,40 @@ class SetupLLM(QObject):
 
         if self.widget.settings["llm_server"]:
             self.initialize_servers()
+
+            # Wait for all servers to be fully ready
+            try:
+                # Check agent server
+                self.check_server_available("127.0.0.1", 8001)
+
+                # Check LLM server if not using Ollama
+                selected_model = self.widget.ui.model.currentText()
+                model_settings = self.widget.settings["models"][selected_model]
+                if model_settings["backend"] != "ollama":
+                    self.check_server_available("127.0.0.1", 8000)
+                else:
+                    # Check Ollama servers
+                    if OLLAMA_AVAILABLE:
+                        self.check_server_available("127.0.0.1", 11434)  # Ollama model server
+                        self.check_server_available("127.0.0.1", 8000)   # Ollama client server
+
+                # Only show ready message after all servers are confirmed available
+                selected_model = self.widget.ui.model.currentText()
+                self.widget.ui.loadingLabel.setText(
+                    f"Ready to run {selected_model} on {self.widget.ui.device.currentText()}!"
+                )
+            except Exception as e:
+                self.log.error(f"Error waiting for servers: {str(e)}")
+                self.widget.ui.loadingLabel.setText("Error: Servers failed to initialize properly")
+                return
         else:
-            self.log.debug("Skipping initilize_servers()")
+            self.log.debug("Skipping initialize_servers()")
 
-        selected_model = self.widget.ui.model.currentText()
-        self.widget.ui.loadingLabel.setText(
-            f"Ready to run {selected_model} on {self.widget.ui.device.currentText()}!"
-        )
         self.widget.ui.loadingGif.setVisible(False)
-
         self.widget.ui.ask.setEnabled(True)
         self.widget.ui.model.setEnabled(True)
         self.widget.ui.device.setEnabled(True)
         self.widget.ui.agent.setEnabled(True)
-
-        # asyncio.run(self.widget.request_restart())
 
         self.log.debug("SetupLLM do_work finished")
         self.finished.emit()
@@ -268,19 +294,20 @@ class SetupLLM(QObject):
         }
 
         if self.widget.settings["dev_mode"]:
-            command = [
-                sys.executable,
-                "-c",
-                f"from gaia.llm.ollama_server import launch_ollama_client_server; launch_ollama_client_server(model='{checkpoint}', host='{host}', port={port})"
-            ]
+            # Create a Python script string that imports and calls the function
+            script = (
+                "from gaia.llm.ollama_server import launch_ollama_client_server; "
+                f"launch_ollama_client_server(model='{checkpoint}', host='{host}', port={port})"
+            )
 
             self.widget.ollama_client_server = subprocess.Popen(
-                command,
+                [sys.executable, "-c", script],
                 creationflags=subprocess.CREATE_NEW_CONSOLE
             )
         else:
             self.widget.ollama_client_server = multiprocessing.Process(
-                target=launch_ollama_client_server, kwargs=ollama_kwargs
+                target=launch_ollama_client_server,
+                kwargs=ollama_kwargs
             )
             self.widget.ollama_client_server.start()
 
@@ -425,6 +452,7 @@ class Widget(QWidget):
         self.is_restarting = False
         self.log = get_logger(__name__)
         self.current_backend = None
+        self.switch_worker = None
 
         # Set size policy for the main widget
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -543,7 +571,6 @@ class Widget(QWidget):
         self.agentReceiveWorker = StreamFromAgent(self)
         self.agentReceiveWorker.moveToThread(self.agentReceiveThread)
         self.agentReceiveThread.started.connect(self.agentReceiveWorker.do_work)
-        self.agentReceiveWorker.finished.connect(self.agentReceiveThread.quit)
         self.agentReceiveWorker.add_card.connect(self.add_card)
         self.agentReceiveWorker.update_card.connect(self.update_card)
         self.agentReceiveThread.start()
@@ -603,8 +630,12 @@ class Widget(QWidget):
         model_device_settings = model_settings["device"]
         self.current_backend = model_settings["backend"]
 
-        # Safely disconnect the signal
-        self.ui.device.currentIndexChanged.disconnect(self.deployment_changed)
+        # Disconnect the signal temporarily to prevent recursive calls
+        try:
+            self.ui.device.currentIndexChanged.disconnect(self.deployment_changed)
+        except (TypeError, RuntimeError):
+            # Signal was not connected
+            pass
 
         # Clear existing items
         self.ui.device.clear()
@@ -636,37 +667,61 @@ class Widget(QWidget):
             return
 
         self.is_restarting = True
-        try:
-            # Show loading screen immediately
-            self.make_chat_visible(False)
-            self.ui.loadingLabel.setVisible(True)
-            self.ui.loading.setVisible(True)
-            self.ui.loadingGif.setVisible(True)
 
-            # Update the device list before restarting the conversation
-            self.update_device_list()
-            self.restart_conversation()
+        # Show loading screen immediately
+        self.ui.loading.setVisible(True)
+        self.ui.loadingLabel.setVisible(True)
+        self.ui.loadingGif.setVisible(True)
+        self.ui.loadingGif.setMovie(self.movie)
+        self.movie.start()
 
-            selected_model = self.ui.model.currentText()
-            model_settings = self.settings["models"][selected_model]
-            self.current_backend = model_settings["backend"]
+        # Update loading label with initial message
+        selected_model = self.ui.model.currentText()
+        self.ui.loadingLabel.setText(f"Switching to {selected_model}...")
 
-            # Update the loading label
-            self.ui.loadingLabel.setText(f"Switching to {selected_model}...")
-            self.ui.loadingLabel.setVisible(True)
+        # Disable UI elements
+        self.ui.ask.setEnabled(False)
+        self.ui.model.setEnabled(False)
+        self.ui.device.setEnabled(False)
+        self.ui.agent.setEnabled(False)
 
-            if self.server:
-                self.log.debug("Starting setup thread")
-                self.setupThread.quit()
-                self.setupThread.wait()
-                self.setupThread.start()
+        # Force UI update
+        QApplication.processEvents()
 
-            # Call request_restart after starting the setup thread
-            asyncio.run(self.request_restart())
+        # Create and start worker thread
+        self.switch_worker = ModelSwitchWorker(self)
+        self.switch_worker.finished.connect(self._on_switch_complete)
+        self.switch_worker.error.connect(self._on_switch_error)
+        self.switch_worker.start()
 
-        finally:
-            self.is_restarting = False
+    def _on_switch_complete(self):
+        self.is_restarting = False
+        self.ui.loadingGif.setVisible(False)
+        self.movie.stop()
 
+        # Re-enable UI elements
+        self.ui.ask.setEnabled(True)
+        self.ui.model.setEnabled(True)
+        self.ui.device.setEnabled(True)
+        self.ui.agent.setEnabled(True)
+
+        self.switch_worker.deleteLater()
+
+    def _on_switch_error(self, error_msg):
+        self.is_restarting = False
+        self.log.error(f"Model switch failed: {error_msg}")
+        self.ui.loadingLabel.setText("Error switching models!")
+        self.ui.loadingGif.setVisible(False)
+        self.movie.stop()
+
+        # Re-enable UI elements
+        self.ui.ask.setEnabled(True)
+        self.ui.model.setEnabled(True)
+        self.ui.device.setEnabled(True)
+        self.ui.agent.setEnabled(True)
+
+        self.switch_worker.deleteLater()
+        QMessageBox.critical(self, "Error", f"Failed to switch models: {error_msg}")
 
     def make_chat_visible(self, visible):
         if (visible and self.ui.chat.isVisible()) or (
@@ -718,11 +773,16 @@ class Widget(QWidget):
     async def request_restart(self):
         self.log.debug("request_restart called")
         if self.server:
-            async with ClientSession() as session:
-                async with session.post(
-                    "http://127.0.0.1:8001/restart", json={}
-                ) as response:
-                    await response.read()
+            try:
+                async with ClientSession() as session:
+                    async with session.post(
+                        "http://127.0.0.1:8001/restart",
+                        json={},
+                        timeout=5  # Add timeout
+                    ) as response:
+                        await response.read()
+            except Exception as e:
+                self.log.warning(f"Failed to request restart: {str(e)}")
 
 
     def restart_conversation(self):
@@ -1242,6 +1302,37 @@ class CustomWebPage(QWebEnginePage):
             QDesktopServices.openUrl(url)
             return False
         return super().acceptNavigationRequest(url, _type, isMainFrame)
+
+class ModelSwitchWorker(QThread):
+    finished = Signal()
+    error = Signal(str)
+
+    def __init__(self, widget):
+        super().__init__()
+        self.widget = widget
+        self.log = widget.log
+
+    def run(self):
+        try:
+            # Update the device list before restarting the conversation
+            self.widget.update_device_list()
+            self.widget.restart_conversation()
+
+            selected_model = self.widget.ui.model.currentText()
+            model_settings = self.widget.settings["models"][selected_model]
+            self.widget.current_backend = model_settings["backend"]
+
+            if self.widget.server:
+                self.log.debug("Starting setup thread")
+                # Just restart the existing setup thread
+                if not self.widget.setupThread.isRunning():
+                    self.widget.setupThread.start()
+                else:
+                    self.log.warning("Setup thread is already running")
+
+            self.finished.emit()
+        except Exception as e:
+            self.error.emit(str(e))
 
 def main():
     multiprocessing.freeze_support()
