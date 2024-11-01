@@ -13,7 +13,7 @@ from gaia.interface.util import UIMessage
 from gaia.llm.tokenizer import Tokenizer
 
 class Agent:
-    def __init__(self, host="127.0.0.1", port=8001, model="meta-llama/Meta-Llama-3-8B", cli_mode=False):
+    def __init__(self, model=None, host="127.0.0.1", port=8001, cli_mode=False):
         # Placeholder for LLM Server Websocket and others
         self.llm_server_uri = "ws://localhost:8000/ws"
         self.llm_server_websocket = None
@@ -36,7 +36,7 @@ class Agent:
         # last chunk in response
         self.last = False
         self.cli_mode = cli_mode
-        self.tokenizer = Tokenizer("meta-llama/Llama-2-7b-hf", cli_mode=self.cli_mode)
+        self.tokenizer = Tokenizer("microsoft/Phi-3-mini-4k-instruct", cli_mode=self.cli_mode)
 
     def get_host_port(self):
         return self.host, self.port
@@ -220,11 +220,11 @@ class Agent:
         self.app = loop.run_until_complete(self.create_app())
         web.run_app(self.app, host=self.host, port=self.port)
 
-def launch_agent_server(agent_name="Chaty", host="127.0.0.1", port=8001, model="meta-llama/Meta-Llama-3-8B", cli_mode=False):
+def launch_agent_server(model, agent_name="Chaty", host="127.0.0.1", port=8001, cli_mode=False):
     try:
         agent_module = __import__(f"gaia.agents.{agent_name}.app", fromlist=["MyAgent"])
         MyAgent = getattr(agent_module, "MyAgent")
-        agent = MyAgent(host=host, port=port, model=model, cli_mode=cli_mode)
+        agent = MyAgent(model=model, host=host, port=port, cli_mode=cli_mode)
         agent.run()
         return agent
     except Exception as e:

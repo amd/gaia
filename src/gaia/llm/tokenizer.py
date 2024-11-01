@@ -2,7 +2,7 @@
 
 import os
 
-from transformers import LlamaTokenizer
+from transformers import AutoTokenizer
 from huggingface_hub import HfFolder, HfApi
 
 from gaia.interface.util import UIMessage
@@ -34,7 +34,7 @@ class Tokenizer():
             os.environ['HF_TOKEN'] = token
 
             # Attempt to load the tokenizer
-            return LlamaTokenizer.from_pretrained(self.model)
+            return AutoTokenizer.from_pretrained(self.model)
         except EnvironmentError as e:
             UIMessage.error(str(e), cli_mode=self.cli_mode)
             from gaia.interface.huggingface import get_huggingface_token
@@ -148,7 +148,7 @@ def test_chunk_text(tokenizer, test_text):
 
 if __name__ == "__main__":
     # Test the tokenizer with a sample model
-    test_model = "meta-llama/Llama-2-7b-chat-hf"
+    test_model = "microsoft/Phi-3-mini-4k-instruct"
     tokenizer = Tokenizer(test_model)
 
     # Test encoding and decoding

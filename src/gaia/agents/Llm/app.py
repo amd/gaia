@@ -8,8 +8,8 @@ from gaia.interface.util import UIMessage
 
 
 class MyAgent(Agent):
-    def __init__(self, host="127.0.0.1", port=8001, model="meta-llama/Meta-Llama-3-8B", cli_mode=False):
-        super().__init__(host, port, model, cli_mode)
+    def __init__(self, host="127.0.0.1", port=8001, cli_mode=False):
+        super().__init__(host=host, port=port, cli_mode=cli_mode)
         load_dotenv()
 
         # Initialize agent server

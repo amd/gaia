@@ -52,7 +52,7 @@ def get_cpu_args():
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default="meta-llama/Meta-Llama-3-8B",
+        required=True,
         help="Checkpoint path",
     )
     parser.add_argument("--backend", type=str, default="hf", help="Device type [cpu, npu, igpu]")
@@ -68,7 +68,7 @@ def get_npu_args():
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default="meta-llama/Meta-Llama-3-8B",
+        required=True,
         help="Checkpoint path",
     )
     parser.add_argument("--backend", type=str, default="oga", help="Device type [cpu, npu, igpu]")

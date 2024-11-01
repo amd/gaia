@@ -42,8 +42,8 @@ class MyAgent(Agent):
     about YouTube content.
     """
 
-    def __init__(self, host="127.0.0.1", port=8001, embed_model="local:BAAI/bge-small-en-v1.5", model = "llama-3.1-8b-instant", cli_mode=False):
-        super().__init__(host, port, model, cli_mode)
+    def __init__(self, host="127.0.0.1", port=8001, embed_model="local:BAAI/bge-small-en-v1.5", cli_mode=False):
+        super().__init__(host=host, port=port, cli_mode=cli_mode)
 
         load_dotenv()
         youtube_api_key = os.getenv('YOUTUBE_API_KEY')
