@@ -1,6 +1,5 @@
-<!-- Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved. -->
-
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved. -->
 <ui version="4.0">
  <class>Widget</class>
  <widget class="QWidget" name="Widget">
@@ -715,9 +714,14 @@ border: 0px solid #0A819A;;
                   </font>
                  </property>
                  <property name="styleSheet">
-                  <string notr="true">border-radius: 3px;
-border: 1px solid #0A819A;;
-</string>
+                  <string notr="true">QComboBox {
+                   border-radius: 3px;
+                   border: 1px solid #0A819A;
+                   color: white;
+                  }
+                  QComboBox:disabled {
+                   color: gray;
+                  }</string>
                  </property>
                 </widget>
                </item>
@@ -735,9 +739,14 @@ border: 1px solid #0A819A;;
                   </font>
                  </property>
                  <property name="styleSheet">
-                  <string notr="true">border-radius: 3px;
-border: 1px solid #0A819A;;
-</string>
+                  <string notr="true">QComboBox {
+                   border-radius: 3px;
+                   border: 1px solid #0A819A;
+                   color: white;
+                  }
+                  QComboBox:disabled {
+                   color: gray;
+                  }</string>
                  </property>
                  <property name="placeholderText">
                   <string>As</string>
@@ -758,9 +767,14 @@ border: 1px solid #0A819A;;
                   </font>
                  </property>
                  <property name="styleSheet">
-                  <string notr="true">border-radius: 3px;
-border: 1px solid #0A819A;;
-</string>
+                  <string notr="true">QComboBox {
+                   border-radius: 3px;
+                   border: 1px solid #0A819A;
+                   color: white;
+                  }
+                  QComboBox:disabled {
+                   color: gray;
+                  }</string>
                  </property>
                 </widget>
                </item>

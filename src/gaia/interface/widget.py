@@ -164,7 +164,7 @@ class SetupLLM(QObject):
                 UIMessage.error(error_message)
         else:
             # Initialize LLM server
-            self.widget.ui.loadingLabel.setText(f"Initializing LLM server: {self.widget.ui.device.currentText()}...")
+            self.widget.ui.loadingLabel.setText(f"Initializing LLM server for {self.widget.ui.model.currentText()}...")
             self.initialize_llm_server()
 
 
@@ -174,8 +174,9 @@ class SetupLLM(QObject):
         model_settings = self.widget.settings["models"][selected_model]
         checkpoint = model_settings["checkpoint"]
 
-        # Open using subprocess or multiprocessing depending on the selected settings
-        selected_agent = self.widget.ui.agent.currentText()
+        # Convert "No Agent" back to "Llm" for internal use
+        selected_agent = "Llm" if self.widget.ui.agent.currentText() == "No Agent" else self.widget.ui.agent.currentText()
+
         self.log.info(f"Starting Agent {selected_agent} server...")
         self.widget.ui.loadingLabel.setText(f"Initializing Agent {selected_agent} Server...")
 
@@ -329,7 +330,7 @@ class SetupLLM(QObject):
         return selected_model, model_settings, selected_device.lower(), selected_dtype.lower(), max_new_tokens
 
 
-    def check_server_available(self, host, port, timeout=3000, check_interval=5):
+    def check_server_available(self, host, port, timeout=3000, check_interval=1):
         # Parse the host to remove any protocol
         parsed_host = urlparse(host)
         clean_host = parsed_host.netloc or parsed_host.path
@@ -345,10 +346,6 @@ class SetupLLM(QObject):
             attempts += 1
             elapsed_time = time.time() - start_time
             self.log.info(f"Waiting for server at {host}:{port}... (Attempt {attempts}, Elapsed time: {elapsed_time:.1f}s)")
-
-            # Update the loading label with the current status
-            self.widget.ui.loadingLabel.setText(f"Waiting for server... ({int(elapsed_time)}s)")
-            QApplication.processEvents()  # Ensure the UI updates
 
             time.sleep(check_interval)
 
@@ -396,9 +393,12 @@ class StreamToAgent(QObject):
 
         asyncio.run(self.prompt_llm(prompt))
 
-        # Reenable send and restart buttons
+        # Reenable send, restart buttons and dropdowns
         self.widget.ui.ask.setEnabled(True)
         self.widget.ui.restart.setEnabled(True)
+        self.widget.ui.model.setEnabled(True)
+        self.widget.ui.device.setEnabled(True)
+        self.widget.ui.agent.setEnabled(True)
 
         self.finished.emit()
 
@@ -509,7 +509,9 @@ class Widget(QWidget):
 
         # Populate agents
         for agent in self.settings["agents"]:
-            self.ui.agent.addItem(agent)
+            # Replace "Llm" with "No Agent" in the dropdown
+            display_name = "No Agent" if agent == "Llm" else agent
+            self.ui.agent.addItem(display_name)
         self.ui.agent.setCurrentIndex(0)
 
         # Connect buttons
@@ -672,8 +674,6 @@ class Widget(QWidget):
         self.ui.loading.setVisible(True)
         self.ui.loadingLabel.setVisible(True)
         self.ui.loadingGif.setVisible(True)
-        self.ui.loadingGif.setMovie(self.movie)
-        self.movie.start()
 
         # Update loading label with initial message
         selected_model = self.ui.model.currentText()
@@ -697,7 +697,6 @@ class Widget(QWidget):
     def _on_switch_complete(self):
         self.is_restarting = False
         self.ui.loadingGif.setVisible(False)
-        self.movie.stop()
 
         # Re-enable UI elements
         self.ui.ask.setEnabled(True)
@@ -712,7 +711,6 @@ class Widget(QWidget):
         self.log.error(f"Model switch failed: {error_msg}")
         self.ui.loadingLabel.setText("Error switching models!")
         self.ui.loadingGif.setVisible(False)
-        self.movie.stop()
 
         # Re-enable UI elements
         self.ui.ask.setEnabled(True)
@@ -804,9 +802,12 @@ class Widget(QWidget):
         prompt = self.ui.prompt.toPlainText()
         self.ui.prompt.clear()
         if prompt:
-            # Disable send and restart buttons
+            # Disable send, restart buttons and dropdowns
             self.ui.ask.setEnabled(False)
             self.ui.restart.setEnabled(False)
+            self.ui.model.setEnabled(False)
+            self.ui.device.setEnabled(False)
+            self.ui.agent.setEnabled(False)
 
             # Send message
             self.add_card(message=prompt, card_id=None, from_user=True)
@@ -1041,8 +1042,7 @@ class Widget(QWidget):
         message_frame.setStyleSheet(
             """
             font-size: 12pt;
-            border-radius: 3px;
-            border: 1px solid rgb(0, 0, 0);
+            border: none;
             background-color:rgb(77, 77, 77);
             color: rgb(255, 255, 255);
             padding: 8px 8px;

@@ -4,8 +4,8 @@
     "show_label": true,
 
     "agents": [
-        "Llm",
-        "Chaty"
+        "Chaty",
+        "Llm"
     ],
     "models": {
         "Phi 3.5 mini instruct (oga)": {

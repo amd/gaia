@@ -3,11 +3,10 @@
 ################################################################################
 ## Form generated from reading UI file 'form.ui'
 ##
-## Created by: Qt User Interface Compiler version 6.7.1
+## Created by: Qt User Interface Compiler version 6.8.0
 ##
 ## WARNING! All changes made in this file will be lost when recompiling UI file!
 ################################################################################
-
 
 from PySide6.QtCore import (QCoreApplication, QDate, QDateTime, QLocale,
     QMetaObject, QObject, QPoint, QRect,
@@ -310,7 +309,7 @@ class Ui_Widget(object):
 "}\n"
 "")
         icon = QIcon()
-        icon.addFile(u":/img/refresh.png", QSize(), QIcon.Normal, QIcon.Off)
+        icon.addFile(u":/img/refresh.png", QSize(), QIcon.Mode.Normal, QIcon.State.Off)
         self.restart.setIcon(icon)
         self.restart.setIconSize(QSize(16, 11))
 
@@ -380,9 +379,14 @@ class Ui_Widget(object):
         self.agent.setObjectName(u"agent")
         self.agent.setMinimumSize(QSize(100, 25))
         self.agent.setFont(font)
-        self.agent.setStyleSheet(u"border-radius: 3px;\n"
-"border: 1px solid #0A819A;;\n"
-"")
+        self.agent.setStyleSheet(u"QComboBox {\n"
+"                   border-radius: 3px;\n"
+"                   border: 1px solid #0A819A;\n"
+"                   color: white;\n"
+"                  }\n"
+"                  QComboBox:disabled {\n"
+"                   color: gray;\n"
+"                  }")
 
         self.horizontalLayout_2.addWidget(self.agent)
 
@@ -390,9 +394,14 @@ class Ui_Widget(object):
         self.model.setObjectName(u"model")
         self.model.setMinimumSize(QSize(150, 25))
         self.model.setFont(font)
-        self.model.setStyleSheet(u"border-radius: 3px;\n"
-"border: 1px solid #0A819A;;\n"
-"")
+        self.model.setStyleSheet(u"QComboBox {\n"
+"                   border-radius: 3px;\n"
+"                   border: 1px solid #0A819A;\n"
+"                   color: white;\n"
+"                  }\n"
+"                  QComboBox:disabled {\n"
+"                   color: gray;\n"
+"                  }")
 
         self.horizontalLayout_2.addWidget(self.model)
 
@@ -400,9 +409,14 @@ class Ui_Widget(object):
         self.device.setObjectName(u"device")
         self.device.setMinimumSize(QSize(150, 25))
         self.device.setFont(font)
-        self.device.setStyleSheet(u"border-radius: 3px;\n"
-"border: 1px solid #0A819A;;\n"
-"")
+        self.device.setStyleSheet(u"QComboBox {\n"
+"                   border-radius: 3px;\n"
+"                   border: 1px solid #0A819A;\n"
+"                   color: white;\n"
+"                  }\n"
+"                  QComboBox:disabled {\n"
+"                   color: gray;\n"
+"                  }")
 
         self.horizontalLayout_2.addWidget(self.device)
 
@@ -417,7 +431,7 @@ class Ui_Widget(object):
         self.ask.setFont(font)
         self.ask.setStyleSheet(u"")
         icon1 = QIcon()
-        icon1.addFile(u":/img/send.png", QSize(), QIcon.Normal, QIcon.Off)
+        icon1.addFile(u":/img/send.png", QSize(), QIcon.Mode.Normal, QIcon.State.Off)
         self.ask.setIcon(icon1)
 
         self.horizontalLayout_2.addWidget(self.ask)
@@ -452,7 +466,6 @@ class Ui_Widget(object):
 
         QMetaObject.connectSlotsByName(Widget)
     # setupUi
-
 
     def retranslateUi(self, Widget):
         Widget.setWindowTitle(QCoreApplication.translate("Widget", u"Widget", None))
