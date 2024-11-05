@@ -277,7 +277,7 @@ Section "Install Main Components" SEC01
       nsExec::ExecToLog 'cmd /c echo set HF_TOKEN=${HF_TOKEN} > "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.bat"'
 
       ; Append GIT_PYTHON_REFRESH=quiet to the activate script (needed when GIT is not installed)
-      nsExec::ExecToLog 'cmd /c echo set GIT_PYTHON_REFRESH=quiet >> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.bat"'
+      nsExec::ExecToLog 'cmd /c echo set GIT_PYTHON_REFRESH=quiet>> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.bat"'
 
 
     ${EndIf}
