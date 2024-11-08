@@ -41,7 +41,7 @@ jobs:
       - name: Build the GAIA installer
         run: |
           cd installer
-          & 'C:\Program Files (x86)\NSIS\makensis.exe' 'Installer.nsi'
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DOGA_TOKEN="${{ secrets.OGA_TOKEN }}" 'Installer.nsi'
 
           if (Test-Path "GAIA_Installer.exe") {
             Write-Host "GAIA_Installer.exe has been created successfully."
