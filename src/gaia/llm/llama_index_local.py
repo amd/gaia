@@ -26,6 +26,7 @@ class LocalLLM(CustomLLM):
     context_window: int = 3900
     num_output: int = 256
     model_name: str = "custom"
+    cli_mode: bool = False
 
     async def achat(
         self, # pylint: disable=W0613
@@ -36,9 +37,8 @@ class LocalLLM(CustomLLM):
         formatted_message = messages_to_prompt(messages)
 
         # Prompt LLM and steam content to UI
-        # TODO FIXME: make prompt_llm_server async
         text_response = await self.prompt_llm_server(
-            prompt=formatted_message, stream_to_ui=True
+            prompt=formatted_message, stream_to_ui=not self.cli_mode
         )
 
         response = ChatResponse(
@@ -61,16 +61,23 @@ class LocalLLM(CustomLLM):
         )
 
     @llm_completion_callback()
-    def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse: # pylint: disable=W0613
-        response = self.prompt_llm_server(prompt=prompt)
-        self.stream_to_ui(response, new_card=True)
+    def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
+        response = ""
+        new_card = True
+        for chunk in self.prompt_llm_server(prompt=prompt, stream_to_ui=False):
+
+            # Stream chunk to UI
+            self.stream_to_ui(chunk, new_card=new_card)
+            new_card = False
+
+            response += chunk
         return CompletionResponse(text=response)
 
     @llm_completion_callback()
     def stream_complete(self, prompt: str, **kwargs: Any) -> CompletionResponseGen: # pylint: disable=W0613
         response = ""
         new_card = True
-        for chunk in self.prompt_llm_server(prompt=prompt):
+        for chunk in self.prompt_llm_server(prompt=prompt, stream_to_ui=False):
 
             # Stream chunk to UI
             self.stream_to_ui(chunk, new_card=new_card)

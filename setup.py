@@ -14,6 +14,7 @@ setup(
         "gaia",
         "gaia.llm",
         "gaia.agents",
+        "gaia.agents.Llm",
         "gaia.agents.Chaty",
         "gaia.agents.Clip",
         "gaia.agents.Datalin",
@@ -53,12 +54,9 @@ setup(
             "pylint",
             "regex",
         ],
-        "clip": [
+        "llamaindex": [
             "llama_index",
             "llama-cpp-python",
-            "youtube_search",
-            "google-api-python-client",
-            "arize-phoenix[evals,llama-index]",
             "llama-index-callbacks-arize-phoenix",
             "llama-index-llms-llama-cpp",
             "llama-index-tools-arxiv",
@@ -69,9 +67,14 @@ setup(
             "llama-index-readers-github",
             "llama-index-readers-twitter",
             "llama-index-readers-wikipedia",
-            "llama-index-llms-groq",
             "llama-index-readers-youtube-transcript",
             "llama-index-embeddings-huggingface",
+        ],
+        "clip": [
+            "youtube_search",
+            "google-api-python-client",
+            "arize-phoenix[evals,llama-index]",
+            "gaia[llamaindex]",
         ],
         "cuda": [
             "torch @ https://download.pytorch.org/whl/cu118/torch-2.3.1%2Bcu118-cp310-cp310-win_amd64.whl",

@@ -21,9 +21,11 @@ else:
     from lemonade.tools.ort_genai.oga import OgaLoad # pylint:disable=E0401
     from turnkeyml.state import State # pylint:disable=E0401,C0412
 
-def launch_llm_server(backend, checkpoint, device, dtype, max_new_tokens):
-    assert(device == "cpu" or device == "npu" or device == "igpu"), f"ERROR: {device} not supported, please select 'cpu' or 'npu'."
-    assert(backend == "ollama" or backend == "groq" or backend == "hf" or backend == "oga"), f"ERROR: {backend} not supported, please select 'ollama','groq', 'hf' or 'oga'."
+def launch_llm_server(backend, checkpoint, device, dtype, max_new_tokens, cli_mode=False):
+    if not (device == "cpu" or device == "npu" or device == "igpu"):
+        raise ValueError(f"ERROR: {device} not supported, please select 'cpu', 'npu' or 'igpu'.")
+    if not (backend == "ollama" or backend == "hf" or backend == "oga"):
+        raise ValueError(f"ERROR: {backend} not supported, please select 'ollama', 'hf' or 'oga'.")
 
     if backend == "hf" or backend == "oga": # use lemonade
         try:
@@ -39,10 +41,14 @@ def launch_llm_server(backend, checkpoint, device, dtype, max_new_tokens):
             )
             state = Serve().run(state, max_new_tokens=max_new_tokens)
         except FileNotFoundError as e:
-            UIMessage.error(f"Error: Unable to find the model files for {checkpoint}.\n\nMake sure they are placed in the correct location, e.g. C:/Users/<user>/miniconda3/envs/<venv>/Lib/site-packages/lemonade/tools/ort_genai/models/<model_folder>`\n\n{str(e)}")
+            UIMessage.error(f"Error: Unable to find the model files for {checkpoint}.\n\n"
+                            "Make sure they are placed in the correct location, e.g. "
+                            "C:/Users/<user>/miniconda3/envs/<venv>/Lib/site-packages"
+                            f"/lemonade/tools/ort_genai/models/<model_folder>`\n\n{str(e)}",
+                            cli_mode=cli_mode)
             return
         except Exception as e:
-            UIMessage.error(f"An unexpected error occurred:\n\n{str(e)}")
+            UIMessage.error(f"An unexpected error occurred:\n\n{str(e)}", cli_mode=cli_mode)
             return
     return None
 
@@ -82,4 +88,4 @@ def get_npu_args():
 if __name__ == "__main__":
     args = get_cpu_args()
     # args = get_npu_args()
-    launch_llm_server(args.backend, args.checkpoint, args.device, args.dtype, args.max_new_tokens)
+    launch_llm_server(args.backend, args.checkpoint, args.device, args.dtype, args.max_new_tokens, cli_mode=True)

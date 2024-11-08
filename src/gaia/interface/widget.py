@@ -188,8 +188,7 @@ class SetupLLM(QObject):
                 creationflags=subprocess.CREATE_NEW_CONSOLE
             )
         else:
-            agent_module = getattr(agents, selected_agent.lower())
-            agent_class = getattr(agent_module, selected_agent)
+            agent_class = getattr(agents, selected_agent.lower())
             self.widget.agent_server = multiprocessing.Process(
                 target=agent_class,
                 kwargs={
@@ -507,12 +506,8 @@ class Widget(QWidget):
         self.ui.model.setCurrentIndex(0)
         self.update_device_list()
 
-        # Populate agents
-        for agent in self.settings["agents"]:
-            # Replace "Llm" with "No Agent" in the dropdown
-            display_name = "No Agent" if agent == "Llm" else agent
-            self.ui.agent.addItem(display_name)
-        self.ui.agent.setCurrentIndex(0)
+        # Populate available agents
+        self.update_available_agents()
 
         # Connect buttons
         self.ui.ask.clicked.connect(self.send_message)
@@ -626,6 +621,7 @@ class Widget(QWidget):
 
 
     def update_device_list(self):
+        """Update the device dropdown based on selected model."""
         self.log.debug("update_device_list called")
         selected_model = self.ui.model.currentText()
         model_settings = self.settings["models"][selected_model]
@@ -798,6 +794,10 @@ class Widget(QWidget):
         self.cards = {}
         self.card_count = 0
 
+        # Request agent to restart chat
+        if self.server:
+            asyncio.run(self.request_restart())
+
     def send_message(self):
         prompt = self.ui.prompt.toPlainText()
         self.ui.prompt.clear()
@@ -830,7 +830,6 @@ class Widget(QWidget):
 
 
     def add_card(self, message="", card_id=None, from_user=False, stats=None):
-        # self.log.debug(f"add_card called with card_id: {card_id}")
         self.make_chat_visible(True)
 
         chunked_message = self.split_into_chunks(message)
@@ -844,21 +843,32 @@ class Widget(QWidget):
             firstTokenAnimation.setVisible(False)
 
         else:
-            # Create the main card frame
+            # Create the main card frame with fixed width
             card = QFrame()
             card.setFrameShape(QFrame.NoFrame)
+            card.setFixedWidth(750)
             card_layout = QHBoxLayout(card)
-            card_layout.setContentsMargins(9, 0, 9, 0)
+            card_layout.setContentsMargins(5, 0, 5, 0)
             card_layout.setSpacing(0)
 
-            # Create the card message frame
+            # Create the card message frame with dynamic width for user messages
             card_message = QFrame()
+            if from_user:
+                card_message.setMaximumWidth(650)  # Set maximum width instead of fixed
+                card_message.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)  # Allow shrinking
+            else:
+                card_message.setFixedWidth(650)
             card_message_layout = QVBoxLayout(card_message)
-            card_message_layout.setContentsMargins(9, 0, 9, 0)
+            card_message_layout.setContentsMargins(5, 0, 5, 0)
             card_message_layout.setSpacing(0)
 
-            # Create the message frame (QFrame instead of QPushButton)
+            # Create the message frame with dynamic width for user messages
             message_frame = QFrame()
+            if from_user:
+                message_frame.setMaximumWidth(640)  # Set maximum width instead of fixed
+                message_frame.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)  # Allow shrinking
+            else:
+                message_frame.setFixedWidth(640)
             message_frame_layout = QVBoxLayout(message_frame)
             message_frame_layout.setContentsMargins(0, 0, 0, 0)
             message_frame_layout.setSpacing(0)
@@ -902,8 +912,9 @@ class Widget(QWidget):
             # Add the card message layout to the card
             spacer = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
             if from_user:
-                card_layout.addItem(spacer)
+                card.setLayoutDirection(Qt.RightToLeft)
                 card_layout.addWidget(card_message)
+                card_layout.addItem(spacer)
                 label.setAlignment(Qt.AlignRight)
             else:
                 card_layout.addWidget(card_message)
@@ -971,35 +982,43 @@ class Widget(QWidget):
 
     def format_message(self, message):
         # Split the message into parts (regular text, code blocks, and URLs)
-        parts = re.split(r'(```[\s\S]*?```|https?://\S+)', message)
+        parts = re.split(r'(```[\s\S]*?```|{.*?}|https?://\S+)', message)
 
         formatted_parts = []
         for part in parts:
             part = part.strip()
+            if not part:  # Skip empty parts
+                continue
+
             if part.startswith('```') and part.endswith('```'):
-                # This is a code block
+                # Handle code blocks
                 if '\n' in part:
-                    # Multi-line code block
                     code = part.split('\n', 1)[1].rsplit('\n', 1)[0]
                 else:
                     # Single-line code block
                     code = part[3:-3]  # Remove ``` from start and end
                 formatted_parts.append(('code', code))
-            # Found a url link
-            elif part.startswith('http://') or part.startswith('https://'):
-                youtube_pattern = r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)\/(?:watch\?v=)?([^\s&\.]+)'
-                youtube_match = re.match(youtube_pattern, part)
-                if youtube_match:
-                    # This is a YouTube link
-                    video_id = youtube_match.group(1).strip("'")  # Remove any trailing single quotes
-                    formatted_parts.append(('youtube', video_id))
-                else:
-                    # This is a general webpage link
-                    formatted_parts.append(('webpage', part))
+            elif part.startswith('{') and part.endswith('}'):
+                # Handle JSON parts - treat as code
+                formatted_parts.append(('code', part))
             else:
-                # This is regular text
-                if part:
-                    formatted_parts.append(('text', part))
+                # Process remaining parts for URLs
+                url_parts = re.split(r'(https?://\S+)', part)
+                for url_part in url_parts:
+                    url_part = url_part.strip()
+                    if not url_part:  # Skip empty parts
+                        continue
+
+                    if url_part.startswith('http://') or url_part.startswith('https://'):
+                        youtube_pattern = r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)\/(?:watch\?v=)?([^\s&\.]+)'
+                        youtube_match = re.match(youtube_pattern, url_part)
+                        if youtube_match:
+                            video_id = youtube_match.group(1).strip("'")
+                            formatted_parts.append(('youtube', video_id))
+                        else:
+                            formatted_parts.append(('webpage', url_part))
+                    else:
+                        formatted_parts.append(('text', url_part))
 
         return formatted_parts
 
@@ -1054,15 +1073,17 @@ class Widget(QWidget):
     def apply_code_style(self, message_frame):
         message_frame.setStyleSheet(
             """
-            font-family: 'Courier New', monospace;
-            font-size: 11pt;
+            QLabel {
+                font-family: 'Courier New', monospace;
+                font-size: 11pt;
                 border: 1px solid #2C2C2C;
                 border-radius: 3px;
                 background-color: #1E1E1E;
                 color: #D4D4D4;
                 padding: 8px;
             }
-        """)
+            """
+        )
 
 
     def apply_assistant_style(self, message_frame):
@@ -1286,6 +1307,35 @@ class Widget(QWidget):
             self.ui.scrollArea.verticalScrollBar().maximum()
         )
 
+    def update_available_agents(self):
+        """Update the agent dropdown with available agents."""
+        self.ui.agent.clear()
+        available_agents = []
+
+        # Get ordered list of agents from settings
+        ordered_agents = self.settings.get("agents", [])
+
+        for agent in ordered_agents:
+            # Map "Llm" to "No Agent" for display
+            if agent == "Llm":
+                available_agents.append("No Agent")
+            # For other agents, check if they exist in the agents module
+            else:
+                agent_module = agent.lower()
+                if hasattr(agents, agent_module) and getattr(agents, agent_module):
+                    available_agents.append(agent)
+
+        # Add agents to dropdown in the specified order
+        for agent in available_agents:
+            self.ui.agent.addItem(agent)
+
+        # Set default selection
+        self.ui.agent.setCurrentIndex(0)
+
+        # Hide agents dropdown if configured to do so
+        if self.settings["hide_agents"]:
+            self.ui.agent.setVisible(False)
+
 class CustomWebPage(QWebEnginePage):
     def __init__(self, profile, parent=None):
         super().__init__(profile, parent)
@@ -1294,8 +1344,8 @@ class CustomWebPage(QWebEnginePage):
         # Enable JavaScript
         self.settings().setAttribute(QWebEngineSettings.JavascriptEnabled, True)
 
-    def javaScriptConsoleMessage(self, message, lineNumber, sourceID):
-        self.log.debug(f"JS Console: {message} (line {lineNumber}, source: {sourceID})")
+    def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
+        self.log.debug(f"JS Console ({level}): {message} (line {lineNumber}, source: {sourceID})")
 
     def acceptNavigationRequest(self, url, _type, isMainFrame):
         if _type == QWebEnginePage.NavigationTypeLinkClicked:

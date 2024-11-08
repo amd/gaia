@@ -5,7 +5,6 @@ from collections import deque
 from dotenv import load_dotenv
 
 from gaia.agents.agent import Agent
-from gaia.interface.util import UIMessage
 from gaia.agents.Chaty.prompts import Prompts
 
 
@@ -40,13 +39,6 @@ class MyAgent(Agent):
     def chat_restarted(self):
         self.log.info("Client requested chat to restart")
         self.chat_history.clear()
-        intro = "Hi, who are you in one sentence?"
-        self.log.info(f"User: {intro}")
-        try:
-            response = self.prompt_llm(intro)
-            self.log.info(f"Response: {response}")
-        except ConnectionRefusedError as e:
-            UIMessage.error(f"Having trouble connecting to the LLM server.\n\n{str(e)}")
 
 def main():
     parser = argparse.ArgumentParser(description="Run the MyAgent chatbot")

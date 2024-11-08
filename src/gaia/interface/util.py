@@ -5,7 +5,7 @@ import sys
 import inspect
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QMessageBox, QApplication, QProgressDialog
+from PySide6.QtWidgets import QMessageBox, QApplication, QProgressDialog, QInputDialog
 from PySide6.QtGui import QIcon
 
 from gaia.logger import get_logger
@@ -208,6 +208,46 @@ class UIMessage(UIBase):
 
         return progress_dialog, update_progress_ui
 
+    @staticmethod
+    def input(message, title='Input', default_text='', cli_mode=False, icon="gaia.ico"):
+        """
+        Display an input dialog and return the user's text input.
+
+        Args:
+        message (str): The prompt message to display.
+        title (str): The title of the input window.
+        default_text (str): Default text to show in the input field.
+        cli_mode (bool): If True, use console input instead of GUI.
+        icon (str, optional): Name of the icon file in the 'img' folder.
+
+        Returns:
+        tuple: (bool, str) - (True if OK was pressed, entered text) for GUI mode
+               or (True, entered text) for CLI mode
+        """
+        if cli_mode:
+            try:
+                user_input = input(f"{title}: {message}\n")
+                log.info(f"{title}: {user_input}")
+                return True, user_input
+            except (KeyboardInterrupt, EOFError):
+                return False, ''
+        else:
+            UIMessage._ensure_app()
+
+            input_dialog = QInputDialog()
+            input_dialog.setWindowTitle(title)
+            input_dialog.setLabelText(message)
+            input_dialog.setTextValue(default_text)
+
+            if icon:
+                icon_path = UIMessage.resource_path(os.path.join("img", icon))
+                if os.path.exists(icon_path):
+                    input_dialog.setWindowIcon(QIcon(icon_path))
+
+            ok = input_dialog.exec()
+            log.info(f"{title}: {input_dialog.textValue()}")
+            return ok == 1, input_dialog.textValue()
+
 
 def main():
     def test_progress(cli_mode):
@@ -225,15 +265,15 @@ def main():
     # Test both CLI and GUI modes
     for cli_mode in [True, False]:
         mode = "CLI" if cli_mode else "GUI"
-        print(f"\nTesting {mode} mode:")
+        print(f"\nTesting {mode} mode:\n-----------------")
 
         # Test error, info, and warning messages
         UIMessage.error("An error occurred", cli_mode=cli_mode)
         UIMessage.info("Operation completed successfully", cli_mode=cli_mode)
         UIMessage.warning("This is a warning", cli_mode=cli_mode)
+        UIMessage.input("Please enter your name:", "Name Input", "John Doe", cli_mode=cli_mode)
 
         # Test progress
-        print(f"\nTesting progress in {mode} mode:")
         test_progress(cli_mode)
 
         # For a custom message type (GUI only)

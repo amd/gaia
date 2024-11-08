@@ -250,7 +250,7 @@ Section "Install Main Components" SEC01
     ${If} ${MODE} == "NPU"
       ExecWait '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"' $R0
     ${Else}
-      ExecWait '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"[dev]' $R0
+      ExecWait '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"[dev,clip]' $R0
     ${EndIf}
 
     ; Check if gaia installatation was successful (exit code should be 0)

@@ -141,15 +141,15 @@ class Agent:
                             self.stats['tokens_per_sec'] = round((out_tokens-1) / total_time, 2) if total_time > 0 and out_tokens > 1 else 0.00
                             self.last = True
 
-                            yield chunk
-                            break
-
                         if stream_to_ui:
                             self.stream_to_ui(chunk, new_card=new_card)
                             new_card = False
 
                         full_response += chunk
                         yield chunk
+
+                        if self.last:
+                            break
 
                 except WebSocketTimeoutException:
                     break

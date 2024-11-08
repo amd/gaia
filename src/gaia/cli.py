@@ -4,6 +4,7 @@ import sys
 import argparse
 import time
 import json
+import socket
 import asyncio
 import multiprocessing
 from pathlib import Path
@@ -157,6 +158,24 @@ class GaiaCliClient:
         self.log.info("All servers are ready.")
         return True
 
+    def check_ollama_servers_ready(self):
+        """Check if the Ollama model server and client server are ready to accept requests."""
+        return self.is_server_available("localhost", 11434) and self.is_server_available("localhost", 8000)
+
+    def check_llm_server_ready(self):
+        """Check if the LLM server is ready to accept requests."""
+        return self.is_server_available("localhost", 8000)
+
+    def is_server_available(self, host, port):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(3)
+            s.connect((host, port))
+            s.close()
+            return True
+        except (ConnectionRefusedError, TimeoutError):
+            return False
+
     def save_server_info(self):
         server_info = {
             "agent_name": self.agent_name,
@@ -227,6 +246,7 @@ class GaiaCliClient:
             "max_new_tokens": self.max_new_tokens,
             "device": self.device,
             "dtype": self.dtype,
+            "cli_mode": self.cli_mode
         }
         self.llm_server = multiprocessing.Process(
             target=launch_llm_server,
@@ -437,7 +457,7 @@ def main():
     parser.add_argument(
         "--backend",
         default="ollama",
-        choices=["lemonade", "ollama"],
+        choices=["oga", "hf", "ollama"],
         help="Backend to use for model inference (default: ollama)"
     )
     parser.add_argument(
