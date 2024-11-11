@@ -14,7 +14,9 @@ class MyAgent(Agent):
 
         load_dotenv()
         self.n_chat_messages = 4
-        self.chat_history = deque(maxlen=self.n_chat_messages * 2)  # Store both user and assistant messages
+        self.chat_history = deque(
+            maxlen=self.n_chat_messages * 2
+        )  # Store both user and assistant messages
 
         # Initialize agent server
         self.initialize_server()
@@ -25,7 +27,9 @@ class MyAgent(Agent):
     def prompt_llm(self, query):
         response = ""
         self.chat_history.append(f"user: {query}")
-        prompt = Prompts.get_system_prompt(self.model, list(self.chat_history))  # Use the static method directly
+        prompt = Prompts.get_system_prompt(
+            self.model, list(self.chat_history)
+        )  # Use the static method directly
 
         for chunk in self.prompt_llm_server(prompt=prompt):
             response += chunk
@@ -40,10 +44,15 @@ class MyAgent(Agent):
         self.log.info("Client requested chat to restart")
         self.chat_history.clear()
 
+
 def main():
     parser = argparse.ArgumentParser(description="Run the MyAgent chatbot")
-    parser.add_argument("--host", default="127.0.0.1", help="Host address for the agent server")
-    parser.add_argument("--port", type=int, default=8001, help="Port number for the agent server")
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="Host address for the agent server"
+    )
+    parser.add_argument(
+        "--port", type=int, default=8001, help="Port number for the agent server"
+    )
     parser.add_argument("--model", required=True, help="Model name")
     args = parser.parse_args()
 
@@ -52,6 +61,7 @@ def main():
         host=args.host,
         port=args.port,
     )
+
 
 if __name__ == "__main__":
     main()

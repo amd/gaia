@@ -2,6 +2,7 @@
 
 from gaia.agents.agent import Agent
 
+
 class MyAgent(Agent):
     def __init__(self, host="127.0.0.1", port=8001):
         super().__init__(host, port)
@@ -31,7 +32,11 @@ class MyAgent(Agent):
     def chat_restarted(self):
         self.log.info("Client requested chat to restart")
         intro = "Hi, who are you in one sentence?"
-        prompt = self.llm_system_prompt + '\n'.join(f"User: {intro}") + "[/INST]\nAssistant: "
+        prompt = (
+            self.llm_system_prompt
+            + "\n".join(f"User: {intro}")
+            + "[/INST]\nAssistant: "
+        )
         self.log.info(f"User: {intro}")
         try:
             new_card = True
@@ -45,7 +50,6 @@ class MyAgent(Agent):
         except ConnectionRefusedError as e:
             self.print(f"Having trouble connecting to the LLM server, got:\n{str(e)}!")
             self.log.error(str(e))
-
 
 
 if __name__ == "__main__":

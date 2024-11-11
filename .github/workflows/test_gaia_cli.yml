@@ -65,11 +65,11 @@ jobs:
           Write-Host "Found gaia at: $($gaiaPath.Source)"
           python -m pip check
 
-      # - name: Lint with Black
-      #   uses: psf/black@stable
-      #   with:
-      #     options: "--check --verbose"
-      #     src: "./src"
+      - name: Lint with Black
+        uses: psf/black@stable
+        with:
+          options: "--check --verbose --config pyproject.toml"
+          src: "./installer ./plot ./src ./tests"
 
       - name: PyLint
         shell: pwsh

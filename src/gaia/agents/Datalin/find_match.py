@@ -120,7 +120,9 @@ def find_match(model_path, dequantize=False, replace=False, dark_mode=False):
         # pad=0.02,
     )
     cb.set_ticks([0, 0.5, 1])  # Set colorbar ticks at 0, 0.5, and 1
-    cb.set_ticklabels(["0.0 (Low)", "0.5 (Medium)", "1.0 (High)"])  # Set corresponding labels
+    cb.set_ticklabels(
+        ["0.0 (Low)", "0.5 (Medium)", "1.0 (High)"]
+    )  # Set corresponding labels
     cb.set_label("Correlation Ratio", labelpad=-100)
 
     fig.tight_layout()
@@ -135,9 +137,15 @@ def find_match(model_path, dequantize=False, replace=False, dark_mode=False):
 def main():
     parser = argparse.ArgumentParser(description="Subgraph Similarity Plot")
     parser.add_argument("model_path", type=str, help="Path to the ONNX model file")
-    parser.add_argument("--dequantize", action="store_true", help="Remove quantization nodes")
-    parser.add_argument("--replace", action="store_true", help="Replace models previously encoded")
-    parser.add_argument("--dark-mode", action="store_true", help="Plot image in dark mode")
+    parser.add_argument(
+        "--dequantize", action="store_true", help="Remove quantization nodes"
+    )
+    parser.add_argument(
+        "--replace", action="store_true", help="Replace models previously encoded"
+    )
+    parser.add_argument(
+        "--dark-mode", action="store_true", help="Plot image in dark mode"
+    )
 
     args = parser.parse_args()
     find_match(args.model_path, args.dequantize, args.replace, args.dark_mode)

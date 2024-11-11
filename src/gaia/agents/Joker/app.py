@@ -28,7 +28,9 @@ class MyAgent(Agent):
         index = VectorStoreIndex.from_documents(documents)
 
         self.n_chat_messages = 4
-        self.chat_history = deque(maxlen=self.n_chat_messages * 2)  # Store both user and assistant messages
+        self.chat_history = deque(
+            maxlen=self.n_chat_messages * 2
+        )  # Store both user and assistant messages
 
         # phi3-mini system prompt
         # Prepare query engine
@@ -61,7 +63,7 @@ class MyAgent(Agent):
             "- Answer a question given in a natural human-like manner.\n"
             "- Think step-by-step when answering questions.\n"
             "- When introducing yourself, keep it to just a single sentence, for example:\n"
-            "\"Assistant: Hi, I can tell funny jokes. Just tell me a hint and I'll tell you a joke.\"\n"
+            '"Assistant: Hi, I can tell funny jokes. Just tell me a hint and I\'ll tell you a joke."\n'
             "- Keep your answers funny and concise\n"
             "\n"
             "<</SYS>>\n\n"
@@ -89,7 +91,7 @@ class MyAgent(Agent):
         # Add user query to chat history, construct the prompt and add response
         # to chat history.
         self.chat_history.append(f"User: {query}")
-        prompt = '\n'.join(self.chat_history)
+        prompt = "\n".join(self.chat_history)
         response = self.query_engine.query(prompt)
         self.chat_history.append(f"Assistant: {response}")
 
@@ -104,7 +106,11 @@ class MyAgent(Agent):
         self.log.info("Client requested chat to restart")
         self.chat_history.clear()
         intro = "Hi, who are you in one sentence?"
-        prompt = self.qa_prompt_tmpl_str + '\n'.join(f"User: {intro}") + "[/INST]\nAssistant: "
+        prompt = (
+            self.qa_prompt_tmpl_str
+            + "\n".join(f"User: {intro}")
+            + "[/INST]\nAssistant: "
+        )
         self.log.info(f"User: {intro}")
         try:
             new_card = True
@@ -124,8 +130,12 @@ class MyAgent(Agent):
 def main():
     # Joker LLM CLI for testing purposes.
     parser = argparse.ArgumentParser(description="Interact with the Joker Agent CLI")
-    parser.add_argument("--host", default="127.0.0.1", help="Host address for the agent server")
-    parser.add_argument("--port", type=int, default=8001, help="Port for the agent server")
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="Host address for the agent server"
+    )
+    parser.add_argument(
+        "--port", type=int, default=8001, help="Port for the agent server"
+    )
     args = parser.parse_args()
 
     agent = MyAgent(host=args.host, port=args.port)
@@ -134,7 +144,7 @@ def main():
     while True:
         try:
             user_input = input("You: ").strip()
-            if user_input.lower() == 'exit':
+            if user_input.lower() == "exit":
                 print("Goodbye!")
                 break
             elif user_input:
@@ -145,6 +155,7 @@ def main():
         except KeyboardInterrupt:
             print("\nGoodbye!")
             break
+
 
 if __name__ == "__main__":
     agent = MyAgent()

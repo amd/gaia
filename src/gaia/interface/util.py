@@ -12,6 +12,7 @@ from gaia.logger import get_logger
 
 log = get_logger(__name__)
 
+
 class UIBase:
     _app = None
 
@@ -22,19 +23,26 @@ class UIBase:
 
     @staticmethod
     def resource_path(relative_path):
-        """ Get absolute path to resource, works for dev and for PyInstaller """
+        """Get absolute path to resource, works for dev and for PyInstaller"""
         try:
             # PyInstaller creates a temp folder and stores path in _MEIPASS
-            base_path = sys._MEIPASS # pylint:disable=W0212,E1101
+            base_path = sys._MEIPASS  # pylint:disable=W0212,E1101
         except Exception:
             # If not running as a PyInstaller bundle, use the current file's directory
             base_path = os.path.dirname(os.path.abspath(__file__))
 
         return os.path.join(base_path, relative_path)
 
+
 class UIMessage(UIBase):
     @staticmethod
-    def display(message, title="Message", icon="gaia.ico", cli_mode=False, message_type=QMessageBox.Information):
+    def display(
+        message,
+        title="Message",
+        icon="gaia.ico",
+        cli_mode=False,
+        message_type=QMessageBox.Information,
+    ):
         """
         Display a message in a window with an optional icon or in the console if in CLI mode.
 
@@ -87,7 +95,7 @@ class UIMessage(UIBase):
             msg_box.exec()
 
     @staticmethod
-    def error(message, title='Error', cli_mode=False, icon="gaia.ico"):
+    def error(message, title="Error", cli_mode=False, icon="gaia.ico"):
         """
         Display an error message in a window with an optional icon.
         """
@@ -106,7 +114,7 @@ class UIMessage(UIBase):
             UIMessage.display(message, title, icon, cli_mode, QMessageBox.Critical)
 
     @staticmethod
-    def info(message, title='Info', cli_mode=False, icon="gaia.ico"):
+    def info(message, title="Info", cli_mode=False, icon="gaia.ico"):
         """
         Display an information message in a window with an optional icon.
         """
@@ -125,7 +133,7 @@ class UIMessage(UIBase):
             UIMessage.display(message, title, icon, cli_mode, QMessageBox.Information)
 
     @staticmethod
-    def warning(message, title='Warning', cli_mode=False, icon="gaia.ico"):
+    def warning(message, title="Warning", cli_mode=False, icon="gaia.ico"):
         """
         Display a warning message in a window with an optional icon.
         """
@@ -144,7 +152,12 @@ class UIMessage(UIBase):
             UIMessage.display(message, title, icon, cli_mode, QMessageBox.Warning)
 
     @staticmethod
-    def progress(message: str = "Processing...", title: str = "Progress", cli_mode=False, icon="gaia.ico"):
+    def progress(
+        message: str = "Processing...",
+        title: str = "Progress",
+        cli_mode=False,
+        icon="gaia.ico",
+    ):
         """
         Display a progress indicator for long-running operations like model downloads.
         In GUI mode, shows a progress dialog. In CLI mode, prints progress to console.
@@ -158,7 +171,11 @@ class UIMessage(UIBase):
             def update_progress_cli(current_value, max_value, status=None):
                 progress = int((current_value / max_value) * 100)
                 status_text = f" - {status}" if status else ""
-                print(f"\r[{'#' * (progress // 2)}{' ' * (50 - (progress // 2))}] {progress}%{status_text}", end='', flush=True)
+                print(
+                    f"\r[{'#' * (progress // 2)}{' ' * (50 - (progress // 2))}] {progress}%{status_text}",
+                    end="",
+                    flush=True,
+                )
                 if progress == 100:
                     print()  # New line when complete
 
@@ -177,7 +194,9 @@ class UIMessage(UIBase):
         progress_dialog.setMinimumWidth(300)
 
         # Add these lines to make the dialog stay on top
-        progress_dialog.setWindowFlags(progress_dialog.windowFlags() | Qt.WindowStaysOnTopHint)
+        progress_dialog.setWindowFlags(
+            progress_dialog.windowFlags() | Qt.WindowStaysOnTopHint
+        )
         progress_dialog.show()
 
         if icon:
@@ -209,7 +228,7 @@ class UIMessage(UIBase):
         return progress_dialog, update_progress_ui
 
     @staticmethod
-    def input(message, title='Input', default_text='', cli_mode=False, icon="gaia.ico"):
+    def input(message, title="Input", default_text="", cli_mode=False, icon="gaia.ico"):
         """
         Display an input dialog and return the user's text input.
 
@@ -230,7 +249,7 @@ class UIMessage(UIBase):
                 log.info(f"{title}: {user_input}")
                 return True, user_input
             except (KeyboardInterrupt, EOFError):
-                return False, ''
+                return False, ""
         else:
             UIMessage._ensure_app()
 
@@ -252,7 +271,10 @@ class UIMessage(UIBase):
 def main():
     def test_progress(cli_mode):
         import time
-        progress_dialog, update_progress = UIMessage.progress("Simulating a long operation...", cli_mode=cli_mode)
+
+        progress_dialog, update_progress = UIMessage.progress(
+            "Simulating a long operation...", cli_mode=cli_mode
+        )
         total_steps = 100
         for i in range(total_steps + 1):
             time.sleep(0.01)  # Simulate some work being done
@@ -271,14 +293,21 @@ def main():
         UIMessage.error("An error occurred", cli_mode=cli_mode)
         UIMessage.info("Operation completed successfully", cli_mode=cli_mode)
         UIMessage.warning("This is a warning", cli_mode=cli_mode)
-        UIMessage.input("Please enter your name:", "Name Input", "John Doe", cli_mode=cli_mode)
+        UIMessage.input(
+            "Please enter your name:", "Name Input", "John Doe", cli_mode=cli_mode
+        )
 
         # Test progress
         test_progress(cli_mode)
 
         # For a custom message type (GUI only)
         print("\nTesting custom message type (GUI only):")
-        UIMessage.display("This is a custom message", cli_mode=cli_mode, message_type=QMessageBox.Question)
+        UIMessage.display(
+            "This is a custom message",
+            cli_mode=cli_mode,
+            message_type=QMessageBox.Question,
+        )
+
 
 if __name__ == "__main__":
     main()

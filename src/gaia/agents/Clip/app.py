@@ -34,6 +34,7 @@ from gaia.agents.agent import Agent
 from gaia.llm.llama_index_local import LocalLLM
 from gaia.agents.Clip.prompts import Prompts
 
+
 class MyAgent(Agent):
     """
     The YouTube assistant acts as a knowledgeable companion for
@@ -44,26 +45,31 @@ class MyAgent(Agent):
     """
 
     def __init__(
-            self, model, host="127.0.0.1", port=8001,
-            embed_model="local:BAAI/bge-small-en-v1.5",
-            cli_mode=False
-        ):
+        self,
+        model,
+        host="127.0.0.1",
+        port=8001,
+        embed_model="local:BAAI/bge-small-en-v1.5",
+        cli_mode=False,
+    ):
         super().__init__(model=model, host=host, port=port, cli_mode=cli_mode)
 
         load_dotenv()
         self.log = get_logger(__name__)
 
-        youtube_api_key = os.getenv('YOUTUBE_API_KEY')
+        youtube_api_key = os.getenv("YOUTUBE_API_KEY")
         if not youtube_api_key:
-            ok, youtube_api_key = UIMessage.input(message="Please enter your YouTube API key:",
-                                                  title="YouTube API key needed", cli_mode=cli_mode)
+            ok, youtube_api_key = UIMessage.input(
+                message="Please enter your YouTube API key:",
+                title="YouTube API key needed",
+                cli_mode=cli_mode,
+            )
             if not ok or not youtube_api_key:
                 self.log.error("YouTube API key is not set.")
         self.youtube = build("youtube", "v3", developerKey=youtube_api_key)
 
         self.llm = LocalLLM(
-            prompt_llm_server=self.prompt_llm_server,
-            stream_to_ui=self.stream_to_ui
+            prompt_llm_server=self.prompt_llm_server, stream_to_ui=self.stream_to_ui
         )
         Settings.llm = self.llm
         Settings.embed_model = embed_model
@@ -82,23 +88,29 @@ class MyAgent(Agent):
         self.max_search_results = 1
 
         self.n_chat_messages = 10
-        self.chat_history = deque(maxlen=self.n_chat_messages * 2)  # Store both user and assistant messages
+        self.chat_history = deque(
+            maxlen=self.n_chat_messages * 2
+        )  # Store both user and assistant messages
 
         self.llm_states = [
             # state = 0, no index or search results produced yet.
-            ("Index is currently not built and is empty.\n"
-            "You need to perform YouTube search using the youtube_search tool before creating the index."),
-
+            (
+                "Index is currently not built and is empty.\n"
+                "You need to perform YouTube search using the youtube_search tool before creating the index."
+            ),
             # state = 1, search results produced but no index created yet.
-            ("Index is currently not built and is empty.\n"
-            "YouTube search results have been found:\n"
-            f"{self.search_results}\n"
-            "Ask the user which result to build the index for.\n"),
-
+            (
+                "Index is currently not built and is empty.\n"
+                "YouTube search results have been found:\n"
+                f"{self.search_results}\n"
+                "Ask the user which result to build the index for.\n"
+            ),
             # state = 2, search results produced but no index created yet.
-            ("Index is currently built and is not empty.\n"
-            "You can now use the query engine to fetch information about the video.\n"
-            "To access the index, use the query engine RAG tool by calling: {\"query_rag\" : \"query\"}\n"),
+            (
+                "Index is currently built and is not empty.\n"
+                "You can now use the query engine to fetch information about the video.\n"
+                'To access the index, use the query engine RAG tool by calling: {"query_rag" : "query"}\n'
+            ),
         ]
         # set llm state 0-2
         self.llm_state = 0
@@ -130,15 +142,15 @@ class MyAgent(Agent):
             HttpError: If an HTTP error occurs during the search.
         """
         try:
-            msg = f"Running YouTube search with the following: ```\"query\": \"{query}\"```"
+            msg = f'Running YouTube search with the following: ```"query": "{query}"```'
             self.print(msg)
             self.chat_history.append(f"Asssistant: {msg}")
-            search_response = self.youtube.search().list( # pylint: disable=E1101
-                q=query,
-                type="video",
-                part="id,snippet",
-                maxResults=max_results
-            ).execute()
+            search_response = (
+                # pylint: disable=no-member
+                self.youtube.search()
+                .list(q=query, type="video", part="id,snippet", maxResults=max_results)
+                .execute()
+            )
 
             videos = []
             msg = "Found the following result:"
@@ -148,13 +160,19 @@ class MyAgent(Agent):
                 video_id = search_result["id"]["videoId"]
                 video = {
                     "id": i,
-                    "title": html.unescape(search_result["snippet"]["title"]),  # Decode HTML entities
-                    "description": html.unescape(search_result["snippet"]["description"]),  # Decode HTML entities
+                    "title": html.unescape(
+                        search_result["snippet"]["title"]
+                    ),  # Decode HTML entities
+                    "description": html.unescape(
+                        search_result["snippet"]["description"]
+                    ),  # Decode HTML entities
                     "video_id": video_id,
                     "video_url": f"https://www.youtube.com/watch?v={video_id}",
                     "thumbnail_preview_url": f"https://img.youtube.com/vi/{video_id}/0.jpg",
                     "publish_time": search_result["snippet"]["publishTime"],
-                    "channel_title": html.unescape(search_result["snippet"]["channelTitle"])  # Decode HTML entities
+                    "channel_title": html.unescape(
+                        search_result["snippet"]["channelTitle"]
+                    ),  # Decode HTML entities
                 }
                 msg = f'Search Result {video["id"]}:\nTitle: {video["title"]}\n\nDescription: {video["description"]}\n\nPublished: {video["publish_time"]}    Video ID: {video["video_id"]}\n\n'
                 self.print(msg)
@@ -167,7 +185,7 @@ class MyAgent(Agent):
             self.print(f"An HTTP error {e.resp.status} occurred:\n{e.content}")
             return None
 
-    def get_video_url(self, video_id:str):
+    def get_video_url(self, video_id: str):
         """
         Returns the URL of a YouTube video based on the given video ID.
         Parameters:
@@ -188,7 +206,7 @@ class MyAgent(Agent):
         """
 
         # Find the JSON-formatted part of the string
-        json_match = re.search(r'\{.*?\}', input_string)
+        json_match = re.search(r"\{.*?\}", input_string)
 
         if json_match:
             json_str = json_match.group()
@@ -198,7 +216,9 @@ class MyAgent(Agent):
 
                 # Extract the key and value
                 key, value = next(iter(json_data.items()))
-                self.log.debug(f"key: {key}, value: {value}, llm state: {self.llm_state}")
+                self.log.debug(
+                    f"key: {key}, value: {value}, llm state: {self.llm_state}"
+                )
                 self.log.debug(f"llm state: {self.llm_states[self.llm_state]}")
 
                 return key, value
@@ -228,7 +248,11 @@ class MyAgent(Agent):
             "Current state of index:\n"
             f"{self.llm_states[self.llm_state]}\n"
         )
-        prompt = system_prompt + '\n'.join(self.chat_history) + "<|eot_id|><|start_header_id|>Assistant: "
+        prompt = (
+            system_prompt
+            + "\n".join(self.chat_history)
+            + "<|eot_id|><|start_header_id|>Assistant: "
+        )
 
         self.log.debug(f"Prompt:\n{prompt}")
         for chunk in self.prompt_llm_server(prompt=prompt):
@@ -264,10 +288,10 @@ class MyAgent(Agent):
 
     def extract_video_id(self, url):
         patterns = [
-            r'(?:https?:\/\/)?(?:www\.)?youtube\.com\/watch\?v=([^&]+)',
-            r'(?:https?:\/\/)?(?:www\.)?youtu\.be\/([^?]+)',
-            r'(?:https?:\/\/)?(?:www\.)?youtube\.com\/embed\/([^?]+)',
-            r'(?:https?:\/\/)?(?:www\.)?youtube\.com\/v\/([^?]+)',
+            r"(?:https?:\/\/)?(?:www\.)?youtube\.com\/watch\?v=([^&]+)",
+            r"(?:https?:\/\/)?(?:www\.)?youtu\.be\/([^?]+)",
+            r"(?:https?:\/\/)?(?:www\.)?youtube\.com\/embed\/([^?]+)",
+            r"(?:https?:\/\/)?(?:www\.)?youtube\.com\/v\/([^?]+)",
         ]
 
         for pattern in patterns:
@@ -358,7 +382,9 @@ class MyAgent(Agent):
         self.clear_stats()
 
         if key == "youtube_search":
-            self.search_results = self.youtube_search(value, max_results=self.max_search_results)
+            self.search_results = self.youtube_search(
+                value, max_results=self.max_search_results
+            )
             self.summary_index = None
             self.vector_index = None
             self.query_engine = None
@@ -385,9 +411,11 @@ class MyAgent(Agent):
                 self.build_vector_index(doc)
                 self.build_query_engine()
 
-                self.print("Index and query engine is now ready to be used on your PC. "
-                           "Running your original query through the index!\n\n"
-                           f"```\"query\": \"{self.saved_query}\"```")
+                self.print(
+                    "Index and query engine is now ready to be used on your PC. "
+                    "Running your original query through the index!\n\n"
+                    f'```"query": "{self.saved_query}"```'
+                )
                 response = self.query_engine.query(self.saved_query)
                 print(response)
 
@@ -415,9 +443,11 @@ class MyAgent(Agent):
             self.build_vector_index(doc)
             self.build_query_engine()
 
-            self.print("Index and query engine is now ready to be used on your PC. "
-                       "Running your original query through the index!\n\n"
-                       f"Query: \"{self.saved_query}\"")
+            self.print(
+                "Index and query engine is now ready to be used on your PC. "
+                "Running your original query through the index!\n\n"
+                f'Query: "{self.saved_query}"'
+            )
             response = self.query_engine.query(self.saved_query)
             print(response)
 
@@ -434,7 +464,9 @@ class MyAgent(Agent):
             self.llm_state = 2
 
         elif key == "reset":
-            msg = "Index and query engine are now cleared. Ready to search YouTube again!"
+            msg = (
+                "Index and query engine are now cleared. Ready to search YouTube again!"
+            )
             self.print(msg)
         else:
             pass
@@ -442,8 +474,12 @@ class MyAgent(Agent):
 
 def main():
     parser = argparse.ArgumentParser(description="Run the Clip agent")
-    parser.add_argument("--host", default="127.0.0.1", help="Host address for the agent server")
-    parser.add_argument("--port", type=int, default=8001, help="Port number for the agent server")
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="Host address for the agent server"
+    )
+    parser.add_argument(
+        "--port", type=int, default=8001, help="Port number for the agent server"
+    )
     parser.add_argument("--model", required=True, help="Model name")
     args = parser.parse_args()
 
@@ -452,6 +488,7 @@ def main():
         host=args.host,
         port=args.port,
     )
+
 
 if __name__ == "__main__":
     main()

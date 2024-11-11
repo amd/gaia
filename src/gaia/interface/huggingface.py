@@ -20,6 +20,7 @@ from huggingface_hub import HfFolder, HfApi
 from gaia.logger import get_logger
 from gaia.interface.util import UIMessage
 
+
 class WindowDragMixin:
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -30,6 +31,7 @@ class WindowDragMixin:
             delta = event.globalPosition().toPoint() - self.drag_start_position
             self.move(self.pos() + delta)
             self.drag_start_position = event.globalPosition().toPoint()
+
 
 class HuggingFaceTokenDialog(QWidget, WindowDragMixin):
     def __init__(self):
@@ -50,13 +52,15 @@ class HuggingFaceTokenDialog(QWidget, WindowDragMixin):
 
         content_frame = QFrame(self)
         content_frame.setObjectName("contentFrame")
-        content_frame.setStyleSheet("""
+        content_frame.setStyleSheet(
+            """
             #contentFrame {
                 background-color: #1e1e1e;
                 border-radius: 10px;
                 border: 1px solid #333333;
             }
-        """)
+        """
+        )
 
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(20)
@@ -70,15 +74,18 @@ class HuggingFaceTokenDialog(QWidget, WindowDragMixin):
 
         title_label = QLabel("Enter Hugging Face Token")
         title_label.setAlignment(Qt.AlignCenter)
-        title_label.setStyleSheet("""
+        title_label.setStyleSheet(
+            """
             font-size: 18px;
             font-weight: bold;
             color: #ffffff;
-        """)
+        """
+        )
 
         self.token_input = QLineEdit()
         self.token_input.setPlaceholderText("Enter your token here")
-        self.token_input.setStyleSheet("""
+        self.token_input.setStyleSheet(
+            """
             QLineEdit {
                 padding: 10px;
                 border: 1px solid #555555;
@@ -89,7 +96,8 @@ class HuggingFaceTokenDialog(QWidget, WindowDragMixin):
             QLineEdit:focus {
                 border: 2px solid #0078d4;
             }
-        """)
+        """
+        )
 
         button_layout = QHBoxLayout()
         button_layout.setSpacing(10)
@@ -100,9 +108,15 @@ class HuggingFaceTokenDialog(QWidget, WindowDragMixin):
         self.submit_button = QPushButton("Submit Token")
         self.cancel_button = QPushButton("Cancel")
 
-        for button in [self.cli_login_button, self.verify_button, self.submit_button, self.cancel_button]:
+        for button in [
+            self.cli_login_button,
+            self.verify_button,
+            self.submit_button,
+            self.cancel_button,
+        ]:
             button.setCursor(Qt.PointingHandCursor)
-            button.setStyleSheet("""
+            button.setStyleSheet(
+                """
                 QPushButton {
                     padding: 10px 0px;
                     border-radius: 5px;
@@ -121,7 +135,8 @@ class HuggingFaceTokenDialog(QWidget, WindowDragMixin):
                     background-color: #444444;
                     color: #888888;
                 }
-            """)
+            """
+            )
             button.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
 
         self.submit_button.setEnabled(False)
@@ -154,11 +169,17 @@ class HuggingFaceTokenDialog(QWidget, WindowDragMixin):
                     self.token_input.setText(self.token)
                     self.token_verified = True
                     self.submit_button.setEnabled(True)
-                    UIMessage.info("SUCCESS! You are already logged in to Hugging Face!")
+                    UIMessage.info(
+                        "SUCCESS! You are already logged in to Hugging Face!"
+                    )
                 else:
-                    UIMessage.warning("Existing token is invalid. Please enter a new token.")
+                    UIMessage.warning(
+                        "Existing token is invalid. Please enter a new token."
+                    )
             else:
-                UIMessage.warning("No Hugging Face token found. Please login by entering `huggingface-cli login` in the command shell.")
+                UIMessage.warning(
+                    "No Hugging Face token found. Please login by entering `huggingface-cli login` in the command shell."
+                )
 
         except Exception as e:
             UIMessage.error(f"An error occurred while verifying login status: {str(e)}")
@@ -200,6 +221,7 @@ class HuggingFaceTokenDialog(QWidget, WindowDragMixin):
         self.token_verified = False
         self.submit_button.setEnabled(False)
 
+
 def get_huggingface_token():
     app = QApplication.instance()
     if not app:
@@ -235,6 +257,7 @@ def get_huggingface_token():
 
     return dialog.token
 
+
 # Add the following test function at the bottom of the file
 def test_get_huggingface_token():
     print("Testing get_huggingface_token function...")
@@ -243,6 +266,7 @@ def test_get_huggingface_token():
         print(f"Token received: {token[:4]}...{token[-4:]}")
     else:
         print("No token received or dialog was cancelled.")
+
 
 if __name__ == "__main__":
     test_get_huggingface_token()

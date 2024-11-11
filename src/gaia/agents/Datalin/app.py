@@ -16,7 +16,9 @@ class MyAgent(Agent):
         super().__init__(host, port)
 
         self.n_chat_messages = 4
-        self.chat_history = deque(maxlen=self.n_chat_messages * 2)  # Store both user and assistant messages
+        self.chat_history = deque(
+            maxlen=self.n_chat_messages * 2
+        )  # Store both user and assistant messages
 
         self.llm_system_prompt = (
             "[INST] <<SYS>>\n"
@@ -41,7 +43,11 @@ class MyAgent(Agent):
         response = ""
         new_card = True
         self.chat_history.append(f"User: {query}")
-        prompt = self.llm_system_prompt + '\n'.join(self.chat_history) + "[/INST]\nAssistant: "
+        prompt = (
+            self.llm_system_prompt
+            + "\n".join(self.chat_history)
+            + "[/INST]\nAssistant: "
+        )
 
         # self.log.info(prompt)
         for chunk in self.prompt_llm_server(prompt=prompt):
@@ -59,21 +65,24 @@ class MyAgent(Agent):
         response = self.prompt_llm(prompt)
         self.log.info(f"Response: {response}")
 
-    def process_attachments(self, user_query:str, attachments:list):
+    def process_attachments(self, user_query: str, attachments: list):
         if attachments:
             # Iterate through each attachment
             for attachment in attachments:
                 # Check the content type of the attachment
                 if attachment.endswith(".onnx"):
                     # Handle onnx
-                    self.print("Nice! This looks like an onnx file. Let me see what I can do. Give me a sec...")
-                    downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
-                    self.model_path = (  # pylint: disable=attribute-defined-outside-init
-                        os.path.join(downloads_dir, attachment.name)
+                    self.print(
+                        "Nice! This looks like an onnx file. Let me see what I can do. Give me a sec..."
                     )
+                    downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+                    # pylint: disable=attribute-defined-outside-init
+                    self.model_path = os.path.join(downloads_dir, attachment.name)
                     asyncio.create_task(self.process_attachment(self.model_path))
                 else:
-                    self.print("Ugh. I can only handle .onnx files. Can you send me in that format?")
+                    self.print(
+                        "Ugh. I can only handle .onnx files. Can you send me in that format?"
+                    )
 
         else:
             if "split" and "subgraphs" in user_query:
@@ -100,12 +109,15 @@ class MyAgent(Agent):
             "What else would you like to know about this model?"
         )
 
-        self.print(f"MODEL DETAILS: Parameters {model_details['parameters']}, Opset: {model_details['onnx_model_info']['opset']}")
+        self.print(
+            f"MODEL DETAILS: Parameters {model_details['parameters']}, Opset: {model_details['onnx_model_info']['opset']}"
+        )
 
         # Assuming heatmap.png is in the same directory as this script
         with open("heatmap.png", "rb") as file:
             image_data = file.read()
-            base64_image = base64.b64encode(image_data).decode("ascii") # pylint: disable=W0612
+            # pylint: disable=W0612
+            base64_image = base64.b64encode(image_data).decode("ascii")
 
         # TODO: display image
 
@@ -119,10 +131,10 @@ class MyAgent(Agent):
         for model in model_names:
             with open(model, "rb") as file:
                 onnx_data = file.read()
-                base64_onnx = base64.b64encode(onnx_data).decode("ascii") # pylint: disable=W0612
+                # pylint: disable=W0612
+                base64_onnx = base64.b64encode(onnx_data).decode("ascii")
 
             # TODO: support file attachments.
-
 
     async def suggest_confluence(self):
         time.sleep(5)
@@ -151,8 +163,12 @@ class MyAgent(Agent):
 def main():
     # LLM CLI for testing purposes.
     parser = argparse.ArgumentParser(description="Interact with the Joker Agent CLI")
-    parser.add_argument("--host", default="127.0.0.1", help="Host address for the agent server")
-    parser.add_argument("--port", type=int, default=8001, help="Port for the agent server")
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="Host address for the agent server"
+    )
+    parser.add_argument(
+        "--port", type=int, default=8001, help="Port for the agent server"
+    )
     args = parser.parse_args()
 
     agent = MyAgent(host=args.host, port=args.port)
@@ -161,7 +177,7 @@ def main():
     while True:
         try:
             user_input = input("You: ").strip()
-            if user_input.lower() == 'exit':
+            if user_input.lower() == "exit":
                 print("Goodbye!")
                 break
             elif user_input:
@@ -172,6 +188,7 @@ def main():
         except KeyboardInterrupt:
             print("\nGoodbye!")
             break
+
 
 if __name__ == "__main__":
     main()

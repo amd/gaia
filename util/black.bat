@@ -1,0 +1,1 @@
+black installer plot src tests --verbose --config pyproject.toml

@@ -4,18 +4,20 @@ import subprocess
 import argparse
 import zipfile
 
+
 def unzip_file(zip_path, extract_to):
     """Unzips the specified zip file to the given directory."""
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
         zip_ref.extractall(extract_to)
+
 
 def update_driver(folder_path):
 
     # Define the path to the zip file
-    zip_file_path = os.path.join(folder_path, 'driver.zip')
+    zip_file_path = os.path.join(folder_path, "driver.zip")
 
     # Unzip the file
-    driver_path = os.path.join(folder_path, 'driver')
+    driver_path = os.path.join(folder_path, "driver")
     unzip_file(zip_file_path, driver_path)
 
     # Delete the zip file
@@ -63,7 +65,9 @@ def get_ipu_driver_version():
             for line in lines[1:]:
                 parts = line.strip().split()
                 if len(parts) > 1:
-                    return parts[-1]  # Return the last part of the line, which should be the driver version
+                    return parts[
+                        -1
+                    ]  # Return the last part of the line, which should be the driver version
 
     # Approach for collecting stats:
     # The philosophy here is to make stats collection non-blocking.
@@ -76,18 +80,28 @@ def get_ipu_driver_version():
 
     return "Driver not found"
 
+
 if __name__ == "__main__":
     # Set up argument parser
-    parser = argparse.ArgumentParser(description='Update NPU Driver')
-    parser.add_argument('--folder_path', type=str, help='Install folder path', default=None)
-    parser.add_argument('--get-version', action='store_true', default=False, help='Get current driver version')
-    parser.add_argument('--update-driver', action='store_true', default=False, help='Update driver')
+    parser = argparse.ArgumentParser(description="Update NPU Driver")
+    parser.add_argument(
+        "--folder_path", type=str, help="Install folder path", default=None
+    )
+    parser.add_argument(
+        "--get-version",
+        action="store_true",
+        default=False,
+        help="Get current driver version",
+    )
+    parser.add_argument(
+        "--update-driver", action="store_true", default=False, help="Update driver"
+    )
     # Parse the arguments
     args = parser.parse_args()
     folder_path = args.folder_path
 
     if args.get_version:
-        print(get_ipu_driver_version(), end='')
+        print(get_ipu_driver_version(), end="")
     elif args.update_driver:
         update_driver(folder_path)
     else:

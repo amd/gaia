@@ -19,6 +19,7 @@ from gaia.cli import GaiaCliClient
 from gaia.agents.agent import Agent
 from gaia.llm.llama_index_local import LocalLLM
 
+
 def test_query_engine():
     text = """
 From fairest creatures we desire increase,
@@ -39,15 +40,16 @@ And, tender churl, mak'st waste in niggarding:
     agent = Agent(cli_mode=True)
 
     Settings.llm = LocalLLM(
-        prompt_llm_server=agent.prompt_llm_server,
-        stream_to_ui=agent.stream_to_ui
+        prompt_llm_server=agent.prompt_llm_server, stream_to_ui=agent.stream_to_ui
     )
     Settings.embed_model = "local:BAAI/bge-small-en-v1.5"
     Settings.chunk_size = 128
     Settings.chunk_overlap = 16
     similarity_top = 3
 
-    vector_index = VectorStoreIndex.from_documents([Document(text=text)], show_progress=True)
+    vector_index = VectorStoreIndex.from_documents(
+        [Document(text=text)], show_progress=True
+    )
     query_engine = vector_index.as_query_engine(
         verbose=True,
         similarity_top_k=similarity_top,
@@ -57,8 +59,9 @@ And, tender churl, mak'st waste in niggarding:
 
     query = "What is the main theme of this sonnet?"
     response = query_engine.query(query)
-    assert(response is not None)
+    assert response is not None
     print(f"Response: {response}")
+
 
 def start_llm_server():
     backend = "oga"
@@ -78,6 +81,7 @@ def start_llm_server():
         print("Waiting for LLM server to start...")
         time.sleep(4)
 
+
 def start_ollama_server():
     backend = "ollama"
     device = "cpu"
@@ -96,7 +100,8 @@ def start_ollama_server():
         print("Waiting for Ollama servers to start...")
         time.sleep(4)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     multiprocessing.freeze_support()
 
     # start_llm_server()

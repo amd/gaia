@@ -2,6 +2,7 @@
 
 from gaia.logger import get_logger
 
+
 class Prompts:
     log = get_logger(__name__)
 
@@ -46,13 +47,17 @@ class Prompts:
         """Format the chat history according to the model's requirements."""
         matched_model = Prompts._match_model_name(model)
         format_template = Prompts.prompt_formats.get(matched_model)
-        Prompts.log.info(f"model:{model}, matched_model: {matched_model}, format_template:\n{format_template}")
+        Prompts.log.info(
+            f"model:{model}, matched_model: {matched_model}, format_template:\n{format_template}"
+        )
 
         if not format_template:
             raise ValueError(f"No format template found for model {matched_model}")
 
         # Start with the system message
-        system_msg = Prompts.system_messages.get(matched_model, "You are a helpful assistant.")
+        system_msg = Prompts.system_messages.get(
+            matched_model, "You are a helpful assistant."
+        )
         formatted_prompt = format_template["system"].format(system_message=system_msg)
 
         if matched_model == "llama3":
@@ -62,7 +67,10 @@ class Prompts:
                     formatted_prompt += format_template["user"].format(content=content)
                 elif entry.startswith("assistant: "):
                     content = entry[11:]
-                    formatted_prompt += format_template["assistant"].format(content=content) + "<|eot_id|>"
+                    formatted_prompt += (
+                        format_template["assistant"].format(content=content)
+                        + "<|eot_id|>"
+                    )
 
             if chat_history and chat_history[-1].startswith("user: "):
                 formatted_prompt += format_template["assistant"].format(content="")
@@ -78,7 +86,9 @@ class Prompts:
                     formatted_prompt += format_template["user"].format(content=content)
                 elif entry.startswith("assistant: "):
                     content = entry[11:]
-                    formatted_prompt += format_template["assistant"].format(content=content)
+                    formatted_prompt += format_template["assistant"].format(
+                        content=content
+                    )
 
             # Add final [INST] block if last message was from user
             if chat_history and chat_history[-1].startswith("user: "):
@@ -93,7 +103,9 @@ class Prompts:
                     formatted_prompt += format_template["user"].format(content=content)
                 elif entry.startswith("assistant: "):
                     content = entry[11:]
-                    formatted_prompt += format_template["assistant"].format(content=content)
+                    formatted_prompt += format_template["assistant"].format(
+                        content=content
+                    )
 
             # Add the final assistant token for the next response
             if chat_history and chat_history[-1].startswith("user: "):
@@ -103,7 +115,9 @@ class Prompts:
 
         elif matched_model == "llama2":
             # Start with system message
-            formatted_prompt = format_template["system"].format(system_message=system_msg)
+            formatted_prompt = format_template["system"].format(
+                system_message=system_msg
+            )
 
             for i, entry in enumerate(chat_history):
                 if entry.startswith("user: "):
@@ -131,8 +145,7 @@ class Prompts:
                 continue
 
             formatted_prompt += format_template["chat_entry"].format(
-                role=role,
-                content=content
+                role=role, content=content
             )
 
         # Add the assistant prefix for the next response
@@ -169,6 +182,7 @@ class Prompts:
 
         return Prompts.format_chat_history(model, chat_history)
 
+
 def main():
     """Test different prompt formats with sample conversations."""
     # Sample conversation
@@ -202,6 +216,7 @@ def main():
         except ValueError as e:
             print(f"Error: {e}")
 
+
 def test_llama2_format():
     """Specific test for Llama 2 format."""
     model = "meta-llama/Llama-2-7b-chat-hf"
@@ -215,6 +230,7 @@ def test_llama2_format():
     print("=" * 60)
     formatted = Prompts.get_system_prompt(model, chat_history)
     print(formatted)
+
 
 def test_llama3_format():
     """Specific test for Llama 3 format."""
@@ -230,6 +246,7 @@ def test_llama3_format():
     formatted = Prompts.get_system_prompt(model, chat_history)
     print(formatted)
 
+
 def test_qwen_format():
     """Specific test for Qwen format."""
     model = "amd/Qwen1.5-7B-Chat-awq-g128-int4-asym-fp32-onnx-ryzen-strix"
@@ -243,6 +260,7 @@ def test_qwen_format():
     print("=" * 60)
     formatted = Prompts.get_system_prompt(model, chat_history)
     print(formatted)
+
 
 if __name__ == "__main__":
     # Run all tests

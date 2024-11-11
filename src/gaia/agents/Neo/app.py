@@ -72,7 +72,9 @@ class MyAgent(Agent):
         owner, repo = self.extract_github_owner_repo(prompt)
 
         if owner and repo:
-            self.print(f"Thanks for sharing the link. Indexing {owner}/{repo} repo now.")
+            self.print(
+                f"Thanks for sharing the link. Indexing {owner}/{repo} repo now."
+            )
             self.create_repo_engine(owner, repo)
         else:
             # Send message to agent and get response
@@ -83,13 +85,12 @@ class MyAgent(Agent):
             # strip end characters
             response = response.rstrip("</s>")
 
-
     def chat_restarted(self):
         self.log.info("Client requested chat to restart")
         # self.chat_history.clear()
         intro = "Hi, who are you in one sentence?"
         # prompt = self.qa_prompt_tmpl_str + '\n'.join(f"User: {intro}") + "[/INST]\nAssistant: "
-        prompt = '\n'.join(f"User: {intro}") + "[/INST]\nAssistant: "
+        prompt = "\n".join(f"User: {intro}") + "[/INST]\nAssistant: "
         self.log.info(f"User: {intro}")
         try:
             new_card = True
@@ -109,8 +110,6 @@ class MyAgent(Agent):
                 "I can index github projects for you so you can easily query them. Just paste a link and I'll get on it!\n"
                 "For example, 'please index this repo: https://github.com/onnx/turnkeyml'"
             )
-
-
 
     def extract_github_owner_repo(self, message):
         github_link_pattern = (

@@ -23,6 +23,7 @@ from ollama._types import ResponseError
 from gaia.logger import get_logger
 from gaia.interface.util import UIMessage
 
+
 class OllamaClient:
     """
     A client for interacting with Ollama models.
@@ -44,7 +45,14 @@ class OllamaClient:
     Raises:
         AssertionError: If the specified model is not in the list of supported models.
     """
-    def __init__(self, model: str = 'llama3.2:3b', host: str = 'http://localhost', port: int = 11434, cli_mode:bool=False):
+
+    def __init__(
+        self,
+        model: str = "llama3.2:3b",
+        host: str = "http://localhost",
+        port: int = 11434,
+        cli_mode: bool = False,
+    ):
         self.log = get_logger(__name__)
         self.model = model
         self.host = host
@@ -67,29 +75,33 @@ class OllamaClient:
         try:
             # Try to get model info, which will fail if the model is not available
             self.client.show(self.model)
-        except ollama._types.ResponseError as e: # pylint:disable=W0212
+        except ollama._types.ResponseError as e:  # pylint:disable=W0212
             if "not found" in str(e):
                 print(f"Model {self.model} not found. Downloading now...")
                 progress_dialog, update_progress = UIMessage.progress(
                     message=f"Downloading model {self.model}...",
                     title="Downloading Model",
-                    cli_mode=self.cli_mode
+                    cli_mode=self.cli_mode,
                 )
                 total_size = None
 
                 try:
                     for progress in self.client.pull(self.model, stream=True):
-                        status = progress.get('status', '')
+                        status = progress.get("status", "")
 
-                        if 'status' in progress:
-                            total_size = progress.get('total', 0)
-                            downloaded = progress.get('completed', 0)
+                        if "status" in progress:
+                            total_size = progress.get("total", 0)
+                            downloaded = progress.get("completed", 0)
                             if total_size > 0 and downloaded > 0:
                                 total_size = int(total_size)
                                 downloaded = int(downloaded)
-                                percentage = min(100, math.floor((downloaded / total_size) * 100))
+                                percentage = min(
+                                    100, math.floor((downloaded / total_size) * 100)
+                                )
                                 # Convert bytes to GB
-                                downloaded_gb = round(downloaded / (1024 * 1024 * 1024), 2)
+                                downloaded_gb = round(
+                                    downloaded / (1024 * 1024 * 1024), 2
+                                )
                                 total_gb = round(total_size / (1024 * 1024 * 1024), 2)
                                 if self.cli_mode:
                                     progress_message = f"{status} {downloaded_gb:.2f} GB / {total_gb:.2f} GB"
@@ -107,8 +119,10 @@ class OllamaClient:
 
                     if progress_dialog is not None:
                         progress_dialog.close()
-                    if os.environ.get('QT_QPA_PLATFORM') != 'offscreen':
-                        UIMessage.info("Model downloaded successfully.", cli_mode=self.cli_mode)
+                    if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+                        UIMessage.info(
+                            "Model downloaded successfully.", cli_mode=self.cli_mode
+                        )
                     self.model_downloading = False
                 except Exception as download_error:
                     if progress_dialog is not None:
@@ -119,11 +133,11 @@ class OllamaClient:
             else:
                 raise
 
-    def set_model(self, model:str):
+    def set_model(self, model: str):
         self.model = model
         self.ensure_model_available()
 
-    def generate(self, prompt: str, stream:bool=True, **kwargs) -> Dict[str, Any]:
+    def generate(self, prompt: str, stream: bool = True, **kwargs) -> Dict[str, Any]:
         """
         Generate a response from the ollama model.
 
@@ -143,9 +157,17 @@ class OllamaClient:
                 "done": False
             }
         """
-        return self.client.generate(model=self.model, prompt=prompt, stream=stream, **kwargs)
+        return self.client.generate(
+            model=self.model, prompt=prompt, stream=stream, **kwargs
+        )
 
-    def chat(self, query:str, system_prompt:Optional[str]=None, stream:bool=True, **kwargs) -> Dict[str, Any]:
+    def chat(
+        self,
+        query: str,
+        system_prompt: Optional[str] = None,
+        stream: bool = True,
+        **kwargs,
+    ) -> Dict[str, Any]:
         """
         Generate a response from the ollama model.
 
@@ -156,15 +178,19 @@ class OllamaClient:
             **kwargs: Additional arguments to pass to the ollama model.
         """
 
-        messages=[{'role': 'user', 'content': query}]
+        messages = [{"role": "user", "content": query}]
         if system_prompt:
-            messages.insert(0, {'role': 'system', 'content': system_prompt})
+            messages.insert(0, {"role": "system", "content": system_prompt})
         try:
-            return self.client.chat(model=self.model, messages=messages, stream=stream, **kwargs)
-        except ollama._types.ResponseError as e: # pylint:disable=W0212
+            return self.client.chat(
+                model=self.model, messages=messages, stream=stream, **kwargs
+            )
+        except ollama._types.ResponseError as e:  # pylint:disable=W0212
             if "not found" in str(e):
                 self.ensure_model_available()
-                return self.client.chat(model=self.model, messages=messages, stream=stream, **kwargs)
+                return self.client.chat(
+                    model=self.model, messages=messages, stream=stream, **kwargs
+                )
             else:
                 raise
 
@@ -203,6 +229,7 @@ class OllamaClient:
     def push_model(self, name: str, **kwargs) -> Dict[str, Any]:
         return self.client.push(name, **kwargs)
 
+
 class OllamaClientServer:
     """
     Open a web server that apps can use to communicate with Ollama models.
@@ -223,7 +250,9 @@ class OllamaClientServer:
     Output: None (runs indefinitely until stopped)
     """
 
-    def __init__(self, host:str="http://localhost", port:int=8000, cli_mode:bool=False):
+    def __init__(
+        self, host: str = "http://localhost", port: int = 8000, cli_mode: bool = False
+    ):
         self.host = host
         self.port = port
         self.cli_mode = cli_mode
@@ -232,10 +261,8 @@ class OllamaClientServer:
         self.ollama_client = None
         self.setup_routes()
 
-
     def get_host_port(self):
         return self.host, self.port
-
 
     @staticmethod
     def parser(add_help: bool = True) -> argparse.ArgumentParser:
@@ -304,7 +331,7 @@ class OllamaClientServer:
         @self.app.post("/generate")
         async def generate_response(message: Message):
             response = self.ollama_client.generate(prompt=message.text, stream=False)
-            return {"response": response['response']}
+            return {"response": response["response"]}
 
         @self.app.websocket("/ws")
         async def stream_response(websocket: WebSocket):
@@ -320,12 +347,14 @@ class OllamaClientServer:
                     stream = self.ollama_client.generate(prompt=message, stream=True)
 
                     for chunk in stream:
-                        new_text = chunk['response']
+                        new_text = chunk["response"]
                         print(new_text, end="", flush=True)
                         await asyncio.sleep(0.1)  # Add a small delay (adjust as needed)
                         await websocket.send_text(new_text)
-                        if chunk['done']: # end of message
-                            await websocket.send_text("</s>") # indicates end of message
+                        if chunk["done"]:  # end of message
+                            await websocket.send_text(
+                                "</s>"
+                            )  # indicates end of message
                     print("\n")
 
             except WebSocketDisconnect:
@@ -340,19 +369,27 @@ class OllamaClientServer:
         @self.app.get("/health")
         async def health_check():
             if self.ollama_client is None:
-                return {"status": "error", "message": "Ollama client is not initialized"}
+                return {
+                    "status": "error",
+                    "message": "Ollama client is not initialized",
+                }
             try:
                 # Try to get model info as a simple health check
                 self.ollama_client.client.show(self.ollama_client.model)
-                self.log.info(f"Model downloading: {self.ollama_client.model_downloading}")
+                self.log.info(
+                    f"Model downloading: {self.ollama_client.model_downloading}"
+                )
                 if self.ollama_client.model_downloading:
                     return {"status": "downloading", "model": self.ollama_client.model}
                 else:
                     return {"status": "ok", "model": self.ollama_client.model}
             except Exception as e:
-                return {"status": "error", "message": f"Error checking Ollama client: {str(e)}"}
+                return {
+                    "status": "error",
+                    "message": f"Error checking Ollama client: {str(e)}",
+                }
 
-    def run(self, model:str):
+    def run(self, model: str):
         self.ollama_client = OllamaClient(model=model, cli_mode=self.cli_mode)
         self.log.info(f"Launching Ollama Server with model: {model}")
 
@@ -364,40 +401,48 @@ class OllamaClientServer:
 
 
 class OllamaModelServer:
-    def __init__(self, host:str='http://localhost', port:int=11434, cli_mode:bool=False):
+    def __init__(
+        self, host: str = "http://localhost", port: int = 11434, cli_mode: bool = False
+    ):
         self.log = get_logger(__name__)
         self.host = host
         self.port = port
         self.cli_mode = cli_mode
         self.ollama_process = None
 
-
     def get_host_port(self):
         return self.host, self.port
-
 
     def start_ollama_model_server(self):
         self.log.info("Attempting to start Ollama server...")
         try:
             # Check if the server is already running
             try:
-                response = requests.get(f"{self.host}:{self.port}/api/version", timeout=5)
+                response = requests.get(
+                    f"{self.host}:{self.port}/api/version", timeout=5
+                )
                 if response.status_code == 200:
-                    version = response.json().get('version', 'Unknown')
-                    self.log.info(f"Ollama server is already running. Version: {version}")
+                    version = response.json().get("version", "Unknown")
+                    self.log.info(
+                        f"Ollama server is already running. Version: {version}"
+                    )
                     return True
             except requests.RequestException:
                 pass  # Server is not running, continue with startup
 
             # Start the server
             self.log.info("Starting ollama model server.")
-            self.ollama_process = subprocess.Popen(['ollama', 'serve'], creationflags=subprocess.CREATE_NEW_CONSOLE)
+            self.ollama_process = subprocess.Popen(
+                ["ollama", "serve"], creationflags=subprocess.CREATE_NEW_CONSOLE
+            )
 
             # Wait for the server to start
             for _ in range(30):  # Try for 30 seconds
                 time.sleep(1)
                 try:
-                    response = requests.get(f"{self.host}:{self.port}/api/version", timeout=5)
+                    response = requests.get(
+                        f"{self.host}:{self.port}/api/version", timeout=5
+                    )
                     if response.status_code == 200:
                         self.log.info("Ollama model server started successfully.")
                         return True
@@ -413,7 +458,6 @@ class OllamaModelServer:
             )
             return False
 
-
     def stop_ollama_model_server(self):
         if self.ollama_process:
             self.log.info("Stopping Ollama model server...")
@@ -421,7 +465,6 @@ class OllamaModelServer:
             self.ollama_process.wait()
             self.ollama_process = None
             self.log.info("Ollama model server stopped.")
-
 
     def run(self):
         # If we're here, the server isn't running or responding. Try to start it.
@@ -437,7 +480,9 @@ class OllamaModelServer:
             return self.ollama_process
 
 
-def launch_ollama_model_server(host:str="http://localhost", port:int=11434, cli_mode:bool=False):
+def launch_ollama_model_server(
+    host: str = "http://localhost", port: int = 11434, cli_mode: bool = False
+):
     try:
         ollama_model_server = OllamaModelServer(host, port, cli_mode)
         ollama_model_server.run()
@@ -447,7 +492,12 @@ def launch_ollama_model_server(host:str="http://localhost", port:int=11434, cli_
         return
 
 
-def launch_ollama_client_server(model:str="llama3.2:3b", host:str="http://localhost", port:int=8000, cli_mode:bool=False):
+def launch_ollama_client_server(
+    model: str = "llama3.2:3b",
+    host: str = "http://localhost",
+    port: int = 8000,
+    cli_mode: bool = False,
+):
     try:
         ollama_client_server = OllamaClientServer(host, port, cli_mode)
         ollama_client_server.run(model=model)
@@ -455,6 +505,7 @@ def launch_ollama_client_server(model:str="llama3.2:3b", host:str="http://localh
     except Exception as e:
         UIMessage.error(f"An unexpected error occurred:\n\n{str(e)}", cli_mode=cli_mode)
         return
+
 
 if __name__ == "__main__":
     # launch_ollama_model_server()

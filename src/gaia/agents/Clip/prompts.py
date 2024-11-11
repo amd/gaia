@@ -71,7 +71,9 @@ Answer directly without any preamble or explanatory phrases about the source of 
         prompt = Prompts.system_prompts.get(model)
         if prompt is None:
             available_models = ", ".join(Prompts.system_prompts.keys())
-            raise ValueError(f"No system prompt found for model '{model}'. Available models: {available_models}")
+            raise ValueError(
+                f"No system prompt found for model '{model}'. Available models: {available_models}"
+            )
         return prompt
 
     @staticmethod
@@ -79,5 +81,7 @@ Answer directly without any preamble or explanatory phrases about the source of 
         prompt = Prompts.query_engine_prompts.get(model)
         if prompt is None:
             available_models = ", ".join(Prompts.query_engine_prompts.keys())
-            raise ValueError(f"No system prompt found for model '{model}'. Available models: {available_models}")
+            raise ValueError(
+                f"No system prompt found for model '{model}'. Available models: {available_models}"
+            )
         return prompt

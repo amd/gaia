@@ -44,7 +44,11 @@ from gaia.llm.server import launch_llm_server
 
 # Conditional import for Ollama
 try:
-    from gaia.llm.ollama_server import launch_ollama_client_server, launch_ollama_model_server
+    from gaia.llm.ollama_server import (
+        launch_ollama_client_server,
+        launch_ollama_model_server,
+    )
+
     OLLAMA_AVAILABLE = True
 except ImportError:
     OLLAMA_AVAILABLE = False
@@ -82,7 +86,7 @@ class SetupLLM(QObject):
                 "http://127.0.0.1:8001/load_llm",
                 json={
                     "model": self.widget.ui.model.currentText(),
-                    "checkpoint": checkpoint
+                    "checkpoint": checkpoint,
                 },
             ) as response:
                 # Wait for response from server
@@ -123,8 +127,12 @@ class SetupLLM(QObject):
                 else:
                     # Check Ollama servers
                     if OLLAMA_AVAILABLE:
-                        self.check_server_available("127.0.0.1", 11434)  # Ollama model server
-                        self.check_server_available("127.0.0.1", 8000)   # Ollama client server
+                        self.check_server_available(
+                            "127.0.0.1", 11434
+                        )  # Ollama model server
+                        self.check_server_available(
+                            "127.0.0.1", 8000
+                        )  # Ollama client server
 
                 # Only show ready message after all servers are confirmed available
                 selected_model = self.widget.ui.model.currentText()
@@ -133,7 +141,9 @@ class SetupLLM(QObject):
                 )
             except Exception as e:
                 self.log.error(f"Error waiting for servers: {str(e)}")
-                self.widget.ui.loadingLabel.setText("Error: Servers failed to initialize properly")
+                self.widget.ui.loadingLabel.setText(
+                    "Error: Servers failed to initialize properly"
+                )
                 return
         else:
             self.log.debug("Skipping initialize_servers()")
@@ -146,7 +156,6 @@ class SetupLLM(QObject):
 
         self.log.debug("SetupLLM do_work finished")
         self.finished.emit()
-
 
     def initialize_servers(self):
         _, model_settings, _, _, _ = self.get_model_settings()
@@ -164,9 +173,10 @@ class SetupLLM(QObject):
                 UIMessage.error(error_message)
         else:
             # Initialize LLM server
-            self.widget.ui.loadingLabel.setText(f"Initializing LLM server for {self.widget.ui.model.currentText()}...")
+            self.widget.ui.loadingLabel.setText(
+                f"Initializing LLM server for {self.widget.ui.model.currentText()}..."
+            )
             self.initialize_llm_server()
-
 
     def initialize_agent_server(self):
         # Get model settings to access the checkpoint
@@ -175,40 +185,42 @@ class SetupLLM(QObject):
         checkpoint = model_settings["checkpoint"]
 
         # Convert "No Agent" back to "Llm" for internal use
-        selected_agent = "Llm" if self.widget.ui.agent.currentText() == "No Agent" else self.widget.ui.agent.currentText()
+        selected_agent = (
+            "Llm"
+            if self.widget.ui.agent.currentText() == "No Agent"
+            else self.widget.ui.agent.currentText()
+        )
 
         self.log.info(f"Starting Agent {selected_agent} server...")
-        self.widget.ui.loadingLabel.setText(f"Initializing Agent {selected_agent} Server...")
+        self.widget.ui.loadingLabel.setText(
+            f"Initializing Agent {selected_agent} Server..."
+        )
 
         if self.widget.settings["dev_mode"]:
             app_dot_py = gaia_folder / "agents" / selected_agent.lower() / "app.py"
             command = [sys.executable, str(app_dot_py), "--model", checkpoint]
             self.widget.agent_server = subprocess.Popen(
-                command,
-                creationflags=subprocess.CREATE_NEW_CONSOLE
+                command, creationflags=subprocess.CREATE_NEW_CONSOLE
             )
         else:
             agent_class = getattr(agents, selected_agent.lower())
             self.widget.agent_server = multiprocessing.Process(
                 target=agent_class,
-                kwargs={
-                    "model": checkpoint,
-                    "host": "127.0.0.1",
-                    "port": 8001
-                }
+                kwargs={"model": checkpoint, "host": "127.0.0.1", "port": 8001},
             )
             self.widget.agent_server.start()
 
-        host="127.0.0.1"
-        port=8001
+        host = "127.0.0.1"
+        port = 8001
         self.check_server_available(host, port)
         self.log.info("Done.")
 
-
     def initialize_llm_server(self):
-        _, model_settings, selected_device, selected_dtype, max_new_tokens = self.get_model_settings()
+        _, model_settings, selected_device, selected_dtype, max_new_tokens = (
+            self.get_model_settings()
+        )
         llm_server_kwargs = {
-            "backend" : model_settings["backend"],
+            "backend": model_settings["backend"],
             "checkpoint": model_settings["checkpoint"],
             "max_new_tokens": max_new_tokens,
             "device": selected_device,
@@ -226,8 +238,7 @@ class SetupLLM(QObject):
                 [],
             )
             self.widget.llm_server = subprocess.Popen(
-                command,
-                creationflags=subprocess.CREATE_NEW_CONSOLE
+                command, creationflags=subprocess.CREATE_NEW_CONSOLE
             )
             self.check_server_available("127.0.0.1", 8000)
         else:
@@ -240,10 +251,11 @@ class SetupLLM(QObject):
         asyncio.run(self.request_llm_load())
         self.log.info("Done.")
 
-
     def initialize_ollama_model_server(self):
         if not OLLAMA_AVAILABLE:
-            self.log.warning("Ollama is not available. Skipping Ollama model server initialization.")
+            self.log.warning(
+                "Ollama is not available. Skipping Ollama model server initialization."
+            )
             return
 
         self.log.info("Initializing Ollama model server...")
@@ -257,41 +269,40 @@ class SetupLLM(QObject):
             command = [
                 sys.executable,
                 "-c",
-                f"from gaia.llm.ollama_server import launch_ollama_model_server; launch_ollama_model_server(host='{host}', port={port})"
+                f"from gaia.llm.ollama_server import launch_ollama_model_server; launch_ollama_model_server(host='{host}', port={port})",
             ]
             self.widget.ollama_model_server = subprocess.Popen(
-                command,
-                creationflags=subprocess.CREATE_NEW_CONSOLE
+                command, creationflags=subprocess.CREATE_NEW_CONSOLE
             )
         else:
             self.widget.ollama_model_server = multiprocessing.Process(
-                target=launch_ollama_model_server,
-                kwargs={"host": host, "port": port}
+                target=launch_ollama_model_server, kwargs={"host": host, "port": port}
             )
             self.widget.ollama_model_server.start()
 
         self.check_server_available(host, port)
         self.log.info("Done.")
 
-
     def initialize_ollama_client_server(self):
         if not OLLAMA_AVAILABLE:
-            self.log.warning("Ollama is not available. Skipping Ollama client server initialization.")
+            self.log.warning(
+                "Ollama is not available. Skipping Ollama client server initialization."
+            )
             return
 
         _, model_settings, device, _, _ = self.get_model_settings()
         checkpoint = model_settings["checkpoint"]
 
-        self.log.info(f"Initializing Ollama client server on {device} with {checkpoint} model...")
-        self.widget.ui.loadingLabel.setText(f"Initializing Ollama client server on {device} with {checkpoint} model...")
+        self.log.info(
+            f"Initializing Ollama client server on {device} with {checkpoint} model..."
+        )
+        self.widget.ui.loadingLabel.setText(
+            f"Initializing Ollama client server on {device} with {checkpoint} model..."
+        )
 
         host = "http://localhost"
         port = 8000
-        ollama_kwargs = {
-            "model" : checkpoint,
-            "host" : host,
-            "port" : port
-        }
+        ollama_kwargs = {"model": checkpoint, "host": host, "port": port}
 
         if self.widget.settings["dev_mode"]:
             # Create a Python script string that imports and calls the function
@@ -302,32 +313,39 @@ class SetupLLM(QObject):
 
             self.widget.ollama_client_server = subprocess.Popen(
                 [sys.executable, "-c", script],
-                creationflags=subprocess.CREATE_NEW_CONSOLE
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
             )
         else:
             self.widget.ollama_client_server = multiprocessing.Process(
-                target=launch_ollama_client_server,
-                kwargs=ollama_kwargs
+                target=launch_ollama_client_server, kwargs=ollama_kwargs
             )
             self.widget.ollama_client_server.start()
 
         self.check_server_available(host, port)
-
 
     def get_model_settings(self):
         selected_model = self.widget.ui.model.currentText()
         selected_device_dtype = self.widget.ui.device.currentText()
 
         try:
-            selected_device, selected_dtype = self.widget.device_list_mapping[selected_device_dtype]
+            selected_device, selected_dtype = self.widget.device_list_mapping[
+                selected_device_dtype
+            ]
         except KeyError:
-            self.log.error(f"Device '{selected_device_dtype}' not found in device_list_mapping. Available devices: {self.widget.device_list_mapping}")
+            self.log.error(
+                f"Device '{selected_device_dtype}' not found in device_list_mapping. Available devices: {self.widget.device_list_mapping}"
+            )
 
         model_settings = self.widget.settings["models"][selected_model]
         max_new_tokens = int(self.widget.settings["max_new_tokens"])
 
-        return selected_model, model_settings, selected_device.lower(), selected_dtype.lower(), max_new_tokens
-
+        return (
+            selected_model,
+            model_settings,
+            selected_device.lower(),
+            selected_dtype.lower(),
+            max_new_tokens,
+        )
 
     def check_server_available(self, host, port, timeout=3000, check_interval=1):
         # Parse the host to remove any protocol
@@ -339,18 +357,21 @@ class SetupLLM(QObject):
 
         while time.time() - start_time < timeout:
             if self.is_server_available(clean_host, port):
-                self.log.info(f"Server available at {host}:{port} after {attempts} attempts")
+                self.log.info(
+                    f"Server available at {host}:{port} after {attempts} attempts"
+                )
                 return True
 
             attempts += 1
             elapsed_time = time.time() - start_time
-            self.log.info(f"Waiting for server at {host}:{port}... (Attempt {attempts}, Elapsed time: {elapsed_time:.1f}s)")
+            self.log.info(
+                f"Waiting for server at {host}:{port}... (Attempt {attempts}, Elapsed time: {elapsed_time:.1f}s)"
+            )
 
             time.sleep(check_interval)
 
         UIMessage.error(f"Server unavailable at {host}:{port} after {timeout} seconds")
         return False
-
 
     def is_server_available(self, host, port):
         try:
@@ -430,10 +451,18 @@ class StreamFromAgent(QObject):
         if new_card:
             self.complete_message = chunk
             self.agent_card_count += 1
-            self.add_card.emit(self.complete_message, self.last_agent_card_id, False, stats)
+            self.add_card.emit(
+                self.complete_message, self.last_agent_card_id, False, stats
+            )
         else:
             self.complete_message = self.complete_message + chunk
-            self.update_card.emit(self.complete_message, self.last_agent_card_id, stats, final_update, False)
+            self.update_card.emit(
+                self.complete_message,
+                self.last_agent_card_id,
+                stats,
+                final_update,
+                False,
+            )
         return web.json_response({"status": "Received"})
 
     @Slot()
@@ -462,14 +491,15 @@ class Widget(QWidget):
 
         # Add a dictionary to store supported preview types and their handlers
         self.preview_handlers = {
-            'youtube': self.create_youtube_preview,
-            'webpage': self.create_webpage_preview,
+            "youtube": self.create_youtube_preview,
+            "webpage": self.create_webpage_preview,
         }
 
         self.ui = Ui_Widget()
         self.ui.setupUi(self)
         self.content_layout = self.ui.boardLayout
-        self.setStyleSheet("""
+        self.setStyleSheet(
+            """
             QWidget {
                 background-color: black;
                 border: none;
@@ -477,7 +507,8 @@ class Widget(QWidget):
             QFrame {
                 border: none;
             }
-        """)
+        """
+        )
         self.setWindowTitle("RyzenAI GAIA")
 
         # Set a much wider minimum width for the chat area
@@ -572,12 +603,10 @@ class Widget(QWidget):
         self.agentReceiveWorker.update_card.connect(self.update_card)
         self.agentReceiveThread.start()
 
-
     def _format_value(self, val):
         if isinstance(val, float):
             return f"{val:.1f}"
         return str(val)
-
 
     def closeEvent(self, event):
         self.terminate_servers()
@@ -591,7 +620,9 @@ class Widget(QWidget):
             try:
                 self.agent_server.terminate()
             except AttributeError:
-                self.log.warning("Agent server was already terminated or not initialized.")
+                self.log.warning(
+                    "Agent server was already terminated or not initialized."
+                )
             self.agent_server = None
 
         if self.llm_server is not None:
@@ -599,7 +630,9 @@ class Widget(QWidget):
             try:
                 self.llm_server.terminate()
             except AttributeError:
-                self.log.warning("LLM server was already terminated or not initialized.")
+                self.log.warning(
+                    "LLM server was already terminated or not initialized."
+                )
             self.llm_server = None
 
         if OLLAMA_AVAILABLE:
@@ -608,7 +641,9 @@ class Widget(QWidget):
                 try:
                     self.ollama_model_server.terminate()
                 except AttributeError:
-                    self.log.warning("Ollama model server was already terminated or not initialized.")
+                    self.log.warning(
+                        "Ollama model server was already terminated or not initialized."
+                    )
                 self.ollama_model_server = None
 
             if self.ollama_client_server is not None:
@@ -616,9 +651,10 @@ class Widget(QWidget):
                 try:
                     self.ollama_client_server.terminate()
                 except AttributeError:
-                    self.log.warning("Ollama client server was already terminated or not initialized.")
+                    self.log.warning(
+                        "Ollama client server was already terminated or not initialized."
+                    )
                 self.ollama_client_server = None
-
 
     def update_device_list(self):
         """Update the device dropdown based on selected model."""
@@ -657,11 +693,12 @@ class Widget(QWidget):
         self.log.debug(f"Current device text: {self.ui.device.currentText()}")
         self.log.debug(f"Number of items in device combo box: {self.ui.device.count()}")
 
-
     def deployment_changed(self):
         self.log.debug("deployment_changed called")
         if self.is_restarting:
-            self.log.debug("Skipping deployment_changed as restart is already in progress")
+            self.log.debug(
+                "Skipping deployment_changed as restart is already in progress"
+            )
             return
 
         self.is_restarting = True
@@ -742,7 +779,6 @@ class Widget(QWidget):
                 self.bottom_spacer_index, self.ui.welcomeSpacerBottom
             )
 
-
     def eventFilter(self, obj, event):
         """
         Event filter used to send message when enter is pressed inside the prompt box
@@ -762,7 +798,6 @@ class Widget(QWidget):
                 return True
         return super().eventFilter(obj, event)
 
-
     # Request LLM server to also restart
     async def request_restart(self):
         self.log.debug("request_restart called")
@@ -772,12 +807,11 @@ class Widget(QWidget):
                     async with session.post(
                         "http://127.0.0.1:8001/restart",
                         json={},
-                        timeout=5  # Add timeout
+                        timeout=5,  # Add timeout
                     ) as response:
                         await response.read()
             except Exception as e:
                 self.log.warning(f"Failed to request restart: {str(e)}")
-
 
     def restart_conversation(self):
         # Disable chat
@@ -820,14 +854,12 @@ class Widget(QWidget):
                 self.agentSendThread.start()
             self.make_chat_visible(True)
 
-
     def split_into_chunks(self, message, chuck_size=75):
         chunks = []
         lines = message.split("\n")
         for line in lines:
             chunks.extend(textwrap.wrap(line, width=chuck_size))
         return "\n".join(chunks)
-
 
     def add_card(self, message="", card_id=None, from_user=False, stats=None):
         self.make_chat_visible(True)
@@ -855,7 +887,9 @@ class Widget(QWidget):
             card_message = QFrame()
             if from_user:
                 card_message.setMaximumWidth(650)  # Set maximum width instead of fixed
-                card_message.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)  # Allow shrinking
+                card_message.setSizePolicy(
+                    QSizePolicy.Maximum, QSizePolicy.Preferred
+                )  # Allow shrinking
             else:
                 card_message.setFixedWidth(650)
             card_message_layout = QVBoxLayout(card_message)
@@ -866,7 +900,9 @@ class Widget(QWidget):
             message_frame = QFrame()
             if from_user:
                 message_frame.setMaximumWidth(640)  # Set maximum width instead of fixed
-                message_frame.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)  # Allow shrinking
+                message_frame.setSizePolicy(
+                    QSizePolicy.Maximum, QSizePolicy.Preferred
+                )  # Allow shrinking
             else:
                 message_frame.setFixedWidth(640)
             message_frame_layout = QVBoxLayout(message_frame)
@@ -900,8 +936,11 @@ class Widget(QWidget):
 
             label_text = f'{datetime.now().strftime("%H:%M:%S")}   '
             if stats:
-                label_text += "   ".join(f"{key}: {self._format_value(val)}"
-                                       for key, val in stats.items() if val is not None)
+                label_text += "   ".join(
+                    f"{key}: {self._format_value(val)}"
+                    for key, val in stats.items()
+                    if val is not None
+                )
             label = QLabel(label_text)
             label.setVisible(self.settings["show_label"])
             label.setStyleSheet("color: rgb(255, 255, 255);")
@@ -934,15 +973,18 @@ class Widget(QWidget):
         # self.log.debug(f"Card added with id: {card_id}, content: {message}")
         return card_id
 
-
-    def update_card(self, message, card_id, stats=None, final_update=False, from_user=False):
+    def update_card(
+        self, message, card_id, stats=None, final_update=False, from_user=False
+    ):
         # self.log.debug(f"update_card called with message: {message}, card_id: {card_id}, final_update: {final_update}")
 
         if card_id not in self.cards:
             self.log.warning(f"Card with id {card_id} not found. Creating a new card.")
             new_card_id = self.add_card(message, card_id, from_user, stats)
             if new_card_id != card_id:
-                self.log.error(f"Failed to create card with id {card_id}. New card created with id {new_card_id}")
+                self.log.error(
+                    f"Failed to create card with id {card_id}. New card created with id {new_card_id}"
+                )
             return
 
         _, message_frame, label, firstTokenAnimation = self.cards[card_id]
@@ -950,8 +992,11 @@ class Widget(QWidget):
         # Update timestamp and stats
         label_text = f'{datetime.now().strftime("%H:%M:%S")}   '
         if stats:
-            label_text += "   ".join(f"{key}: {self._format_value(val)}"
-                                   for key, val in stats.items() if val is not None)
+            label_text += "   ".join(
+                f"{key}: {self._format_value(val)}"
+                for key, val in stats.items()
+                if val is not None
+            )
         label.setText(label_text)
 
         # Hide the loading animation if it exists
@@ -969,7 +1014,9 @@ class Widget(QWidget):
                     child.widget().deleteLater()
             formatted_message = self.format_message(message)
             for part_type, part_content in formatted_message:
-                self.add_content_to_card(message_frame.layout(), part_type, part_content, from_user)
+                self.add_content_to_card(
+                    message_frame.layout(), part_type, part_content, from_user
+                )
         else:
             # If there's already content, update the first label
             existing_label = message_frame.layout().itemAt(0).widget()
@@ -979,10 +1026,9 @@ class Widget(QWidget):
         self.repaint()
         # self.log.debug(f"Card {card_id} updated successfully. New content: {message}")
 
-
     def format_message(self, message):
         # Split the message into parts (regular text, code blocks, and URLs)
-        parts = re.split(r'(```[\s\S]*?```|{.*?}|https?://\S+)', message)
+        parts = re.split(r"(```[\s\S]*?```|{.*?}|https?://\S+)", message)
 
         formatted_parts = []
         for part in parts:
@@ -990,41 +1036,42 @@ class Widget(QWidget):
             if not part:  # Skip empty parts
                 continue
 
-            if part.startswith('```') and part.endswith('```'):
+            if part.startswith("```") and part.endswith("```"):
                 # Handle code blocks
-                if '\n' in part:
-                    code = part.split('\n', 1)[1].rsplit('\n', 1)[0]
+                if "\n" in part:
+                    code = part.split("\n", 1)[1].rsplit("\n", 1)[0]
                 else:
                     # Single-line code block
                     code = part[3:-3]  # Remove ``` from start and end
-                formatted_parts.append(('code', code))
-            elif part.startswith('{') and part.endswith('}'):
+                formatted_parts.append(("code", code))
+            elif part.startswith("{") and part.endswith("}"):
                 # Handle JSON parts - treat as code
-                formatted_parts.append(('code', part))
+                formatted_parts.append(("code", part))
             else:
                 # Process remaining parts for URLs
-                url_parts = re.split(r'(https?://\S+)', part)
+                url_parts = re.split(r"(https?://\S+)", part)
                 for url_part in url_parts:
                     url_part = url_part.strip()
                     if not url_part:  # Skip empty parts
                         continue
 
-                    if url_part.startswith('http://') or url_part.startswith('https://'):
-                        youtube_pattern = r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)\/(?:watch\?v=)?([^\s&\.]+)'
+                    if url_part.startswith("http://") or url_part.startswith(
+                        "https://"
+                    ):
+                        youtube_pattern = r"(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)\/(?:watch\?v=)?([^\s&\.]+)"
                         youtube_match = re.match(youtube_pattern, url_part)
                         if youtube_match:
                             video_id = youtube_match.group(1).strip("'")
-                            formatted_parts.append(('youtube', video_id))
+                            formatted_parts.append(("youtube", video_id))
                         else:
-                            formatted_parts.append(('webpage', url_part))
+                            formatted_parts.append(("webpage", url_part))
                     else:
-                        formatted_parts.append(('text', url_part))
+                        formatted_parts.append(("text", url_part))
 
         return formatted_parts
 
-
     def add_content_to_card(self, card_layout, content_type, content, from_user):
-        if content_type == 'text':
+        if content_type == "text":
             label = QLabel(content)
             label.setWordWrap(True)
             label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -1034,20 +1081,20 @@ class Widget(QWidget):
                 self.apply_assistant_style(label)
             card_layout.addWidget(label)
 
-        elif content_type == 'code':
+        elif content_type == "code":
             code_label = QLabel(content)
             code_label.setWordWrap(True)
             code_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
             self.apply_code_style(code_label)
             card_layout.addWidget(code_label)
 
-        elif content_type == 'youtube':
+        elif content_type == "youtube":
             preview_frame = QFrame()
             preview_layout = QVBoxLayout(preview_frame)
             self.create_youtube_preview(preview_layout, content)
             card_layout.addWidget(preview_frame)
 
-        elif content_type == 'webpage':
+        elif content_type == "webpage":
             preview_frame = QFrame()
             preview_layout = QVBoxLayout(preview_frame)
             self.create_webpage_preview(preview_layout, content)
@@ -1055,7 +1102,6 @@ class Widget(QWidget):
 
         else:
             self.log.error(f"Unknown content type: {content_type}")
-
 
     def apply_user_style(self, message_frame):
         message_frame.setStyleSheet(
@@ -1068,7 +1114,6 @@ class Widget(QWidget):
             text-align: left;
             """
         )
-
 
     def apply_code_style(self, message_frame):
         message_frame.setStyleSheet(
@@ -1084,7 +1129,6 @@ class Widget(QWidget):
             }
             """
         )
-
 
     def apply_assistant_style(self, message_frame):
         message_frame.setStyleSheet(
@@ -1107,31 +1151,40 @@ class Widget(QWidget):
 
         outer_frame = QFrame()
         outer_frame.setObjectName("youtubePreviewFrame")
-        outer_frame.setStyleSheet("""
+        outer_frame.setStyleSheet(
+            """
             #youtubePreviewFrame {
                 border: 1px solid #cccccc;
                 border-radius: 5px;
                 background-color: #f0f0f0;
                 padding: 10px;
             }
-        """)
+        """
+        )
         outer_layout = QVBoxLayout(outer_frame)
 
         thumbnail_label = QLabel("Loading thumbnail...")
         thumbnail_label.setFixedSize(320, 180)
         thumbnail_label.setAlignment(Qt.AlignCenter)
-        thumbnail_label.setStyleSheet("""
+        thumbnail_label.setStyleSheet(
+            """
             QLabel {
                 background-color: #e0e0e0;
                 border: 1px solid #b0b0b0;
             }
-        """)
+        """
+        )
         outer_layout.addWidget(thumbnail_label)
 
         open_button = QPushButton("Watch on YouTube")
-        open_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(f"https://www.youtube.com/watch?v={video_id}")))
+        open_button.clicked.connect(
+            lambda: QDesktopServices.openUrl(
+                QUrl(f"https://www.youtube.com/watch?v={video_id}")
+            )
+        )
         open_button.setCursor(Qt.PointingHandCursor)
-        open_button.setStyleSheet("""
+        open_button.setStyleSheet(
+            """
             QPushButton {
                 background-color: #0066cc;
                 color: white;
@@ -1143,7 +1196,8 @@ class Widget(QWidget):
             QPushButton:hover {
                 background-color: #0056b3;
             }
-        """)
+        """
+        )
         outer_layout.addWidget(open_button)
 
         layout.addWidget(outer_frame)
@@ -1168,14 +1222,20 @@ class Widget(QWidget):
                 data = reply.readAll()
                 pixmap = QPixmap()
                 if pixmap.loadFromData(data):
-                    self.log.debug(f"Thumbnail loaded successfully for video ID: {video_id}")
-                    scaled_pixmap = pixmap.scaled(320, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    self.log.debug(
+                        f"Thumbnail loaded successfully for video ID: {video_id}"
+                    )
+                    scaled_pixmap = pixmap.scaled(
+                        320, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                    )
                     thumbnail_label.setPixmap(scaled_pixmap)
                     if scaled_pixmap.isNull():
                         self.log.error("Scaled pixmap is null")
                         thumbnail_label.setText("Failed to scale thumbnail")
                 else:
-                    self.log.error(f"Failed to create pixmap from downloaded data for video ID: {video_id}")
+                    self.log.error(
+                        f"Failed to create pixmap from downloaded data for video ID: {video_id}"
+                    )
                     thumbnail_label.setText("Failed to load thumbnail")
             else:
                 self.log.error("Thumbnail label not found in reply properties")
@@ -1189,20 +1249,21 @@ class Widget(QWidget):
 
         reply.deleteLater()
 
-
     def create_webpage_preview(self, layout, url):
         self.log.debug(f"Creating webpage preview for URL: {url}")
 
         outer_frame = QFrame()
         outer_frame.setObjectName("webpagePreviewFrame")
-        outer_frame.setStyleSheet("""
+        outer_frame.setStyleSheet(
+            """
             #webpagePreviewFrame {
                 border: 1px solid #d0d0d0;
                 border-radius: 4px;
                 background-color: #f8f8f8;
                 padding: 8px;
             }
-        """)
+        """
+        )
         outer_layout = QVBoxLayout(outer_frame)
         outer_layout.setContentsMargins(8, 8, 8, 8)
         outer_layout.setSpacing(8)
@@ -1218,7 +1279,8 @@ class Widget(QWidget):
         # Create a progress bar
         progress_bar = QProgressBar()
         progress_bar.setTextVisible(False)
-        progress_bar.setStyleSheet("""
+        progress_bar.setStyleSheet(
+            """
             QProgressBar {
                 border: 1px solid #d0d0d0;
                 border-radius: 2px;
@@ -1228,7 +1290,8 @@ class Widget(QWidget):
             QProgressBar::chunk {
                 background-color: #0066cc;
             }
-        """)
+        """
+        )
         outer_layout.addWidget(progress_bar)
 
         # Connect signals
@@ -1244,12 +1307,14 @@ class Widget(QWidget):
         # Add URL label
         url_label = QLabel(url)
         url_label.setWordWrap(True)
-        url_label.setStyleSheet("""
+        url_label.setStyleSheet(
+            """
             QLabel {
                 color: #333333;
                 font-size: 13px;
             }
-        """)
+        """
+        )
         outer_layout.addWidget(url_label)
 
         # Create button layout
@@ -1258,7 +1323,8 @@ class Widget(QWidget):
         # Add "Open in Browser" button
         open_button = QPushButton("Open in Browser")
         open_button.setCursor(Qt.PointingHandCursor)
-        open_button.setStyleSheet("""
+        open_button.setStyleSheet(
+            """
             QPushButton {
                 background-color: #0066cc;
                 color: white;
@@ -1270,14 +1336,16 @@ class Widget(QWidget):
             QPushButton:hover {
                 background-color: #0056b3;
             }
-        """)
+        """
+        )
         open_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(url)))
         button_layout.addWidget(open_button)
 
         # Add "Refresh" button
         refresh_button = QPushButton("Refresh")
         refresh_button.setCursor(Qt.PointingHandCursor)
-        refresh_button.setStyleSheet("""
+        refresh_button.setStyleSheet(
+            """
             QPushButton {
                 background-color: #28a745;
                 color: white;
@@ -1289,14 +1357,14 @@ class Widget(QWidget):
             QPushButton:hover {
                 background-color: #218838;
             }
-        """)
+        """
+        )
         refresh_button.clicked.connect(web_view.reload)
         button_layout.addWidget(refresh_button)
 
         outer_layout.addLayout(button_layout)
 
         layout.addWidget(outer_frame)
-
 
     def scrollToBottom(
         self, minVal=None, maxVal=None  # pylint: disable=unused-argument
@@ -1336,6 +1404,7 @@ class Widget(QWidget):
         if self.settings["hide_agents"]:
             self.ui.agent.setVisible(False)
 
+
 class CustomWebPage(QWebEnginePage):
     def __init__(self, profile, parent=None):
         super().__init__(profile, parent)
@@ -1345,13 +1414,16 @@ class CustomWebPage(QWebEnginePage):
         self.settings().setAttribute(QWebEngineSettings.JavascriptEnabled, True)
 
     def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
-        self.log.debug(f"JS Console ({level}): {message} (line {lineNumber}, source: {sourceID})")
+        self.log.debug(
+            f"JS Console ({level}): {message} (line {lineNumber}, source: {sourceID})"
+        )
 
     def acceptNavigationRequest(self, url, _type, isMainFrame):
         if _type == QWebEnginePage.NavigationTypeLinkClicked:
             QDesktopServices.openUrl(url)
             return False
         return super().acceptNavigationRequest(url, _type, isMainFrame)
+
 
 class ModelSwitchWorker(QThread):
     finished = Signal()
@@ -1384,6 +1456,7 @@ class ModelSwitchWorker(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
+
 def main():
     multiprocessing.freeze_support()
     app = QApplication(sys.argv)
@@ -1391,6 +1464,7 @@ def main():
     widget = Widget()
     widget.show()
     sys.exit(app.exec())
+
 
 if __name__ == "__main__":
 

@@ -12,6 +12,7 @@ from gaia.logger import get_logger
 from gaia.interface.util import UIMessage
 from gaia.llm.tokenizer import Tokenizer
 
+
 class Agent:
     def __init__(self, model=None, host="127.0.0.1", port=8001, cli_mode=False):
         # Placeholder for LLM Server Websocket and others
@@ -27,16 +28,20 @@ class Agent:
 
         # performance stats
         # ttft = time-to-first-token
-        self.stats = OrderedDict([
-            ('in_tokens', None),
-            ('ttft', None),
-            ('out_tokens', None),
-            ('tokens_per_sec', None)
-        ])
+        self.stats = OrderedDict(
+            [
+                ("in_tokens", None),
+                ("ttft", None),
+                ("out_tokens", None),
+                ("tokens_per_sec", None),
+            ]
+        )
         # last chunk in response
         self.last = False
         self.cli_mode = cli_mode
-        self.tokenizer = Tokenizer("microsoft/Phi-3-mini-4k-instruct", cli_mode=self.cli_mode)
+        self.tokenizer = Tokenizer(
+            "microsoft/Phi-3-mini-4k-instruct", cli_mode=self.cli_mode
+        )
 
     def get_host_port(self):
         return self.host, self.port
@@ -56,7 +61,10 @@ class Agent:
 
     def __del__(self):
         # Ensure websocket gets closed when agent is deleted
-        if hasattr(self, 'llm_server_websocket') and self.llm_server_websocket is not None:
+        if (
+            hasattr(self, "llm_server_websocket")
+            and self.llm_server_websocket is not None
+        ):
             if self.llm_server_websocket.connected:
                 self.llm_server_websocket.close()
 
@@ -68,10 +76,10 @@ class Agent:
         return len(self.tokenizer.tokenizer.encode(text))
 
     def get_time_to_first_token(self):
-        return self.stats['ttft']
+        return self.stats["ttft"]
 
     def get_tokens_per_second(self):
-        return self.stats['tokens_per_sec']
+        return self.stats["tokens_per_sec"]
 
     def initialize_server(self):
         max_retries = 5
@@ -84,14 +92,18 @@ class Agent:
                 break
             except OSError as e:
                 if e.errno == 10048:  # Port is in use
-                    self.log.warning(f"Port {self.port} is in use, make sure a service is not already running on this port.")
+                    self.log.warning(
+                        f"Port {self.port} is in use, make sure a service is not already running on this port."
+                    )
                 else:
                     UIMessage.error(str(e), cli_mode=self.cli_mode)
             finally:
                 loop.close()
         else:
-            UIMessage.error(f"Unable to bind to port ({self.port}) after {max_retries} attempts with ip ({self.host}).\nMake sure to kill any existing services using port {self.port} before running GAIA.", cli_mode=self.cli_mode)
-
+            UIMessage.error(
+                f"Unable to bind to port ({self.port}) after {max_retries} attempts with ip ({self.host}).\nMake sure to kill any existing services using port {self.port} before running GAIA.",
+                cli_mode=self.cli_mode,
+            )
 
     def prompt_llm_server(self, prompt, stream_to_ui=True):
         try:
@@ -125,8 +137,8 @@ class Agent:
                     current_time = time.perf_counter()
 
                     if first_chunk:
-                        self.stats['in_tokens'] = prompt_tokens
-                        self.stats['ttft'] = round(current_time - start_time, 2)
+                        self.stats["in_tokens"] = prompt_tokens
+                        self.stats["ttft"] = round(current_time - start_time, 2)
                         start_time = time.perf_counter()
                         first_chunk = False
 
@@ -137,8 +149,12 @@ class Agent:
 
                             total_time = current_time - start_time
                             out_tokens = self.count_tokens(full_response)
-                            self.stats['out_tokens'] = out_tokens
-                            self.stats['tokens_per_sec'] = round((out_tokens-1) / total_time, 2) if total_time > 0 and out_tokens > 1 else 0.00
+                            self.stats["out_tokens"] = out_tokens
+                            self.stats["tokens_per_sec"] = (
+                                round((out_tokens - 1) / total_time, 2)
+                                if total_time > 0 and out_tokens > 1
+                                else 0.00
+                            )
                             self.last = True
 
                         if stream_to_ui:
@@ -172,7 +188,7 @@ class Agent:
         input_len = len(input_lst)
         for i, word in enumerate(input_lst):
             new_card = i == 0
-            self.last = i == (input_len-1)
+            self.last = i == (input_len - 1)
             self.stream_to_ui(f"{word} ", new_card=new_card)
             time.sleep(0.1)
 
@@ -206,12 +222,19 @@ class Agent:
         if self.cli_mode:
             return chunk
         else:
-            data = {"chunk": chunk, "new_card": new_card, "stats": self.stats, "last":self.last}
+            data = {
+                "chunk": chunk,
+                "new_card": new_card,
+                "stats": self.stats,
+                "last": self.last,
+            }
             url = "http://127.0.0.1:8002/stream_to_ui"
             try:
                 requests.post(url, json=data)
             except requests.exceptions.ConnectionError:
-                self.log.warning("Unable to connect to UI server. Falling back to console output.")
+                self.log.warning(
+                    "Unable to connect to UI server. Falling back to console output."
+                )
 
     def run(self):
         self.log.info("Launching Agent Server...")
@@ -220,7 +243,10 @@ class Agent:
         self.app = loop.run_until_complete(self.create_app())
         web.run_app(self.app, host=self.host, port=self.port)
 
-def launch_agent_server(model, agent_name="Chaty", host="127.0.0.1", port=8001, cli_mode=False):
+
+def launch_agent_server(
+    model, agent_name="Chaty", host="127.0.0.1", port=8001, cli_mode=False
+):
     try:
         agent_module = __import__(f"gaia.agents.{agent_name}.app", fromlist=["MyAgent"])
         MyAgent = getattr(agent_module, "MyAgent")

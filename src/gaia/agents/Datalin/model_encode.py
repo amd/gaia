@@ -76,7 +76,9 @@ def populate_onnx_model_info(onnx_model) -> Dict:
     try:
         result_dict.update(
             {
-                "size on disk (KiB)": round(onnx_model.SerializeToString().__sizeof__() / 1024, 4),
+                "size on disk (KiB)": round(
+                    onnx_model.SerializeToString().__sizeof__() / 1024, 4
+                ),
             }
         )
     except ValueError:
@@ -198,7 +200,9 @@ class GraphConverter:
         self.edge_is_output_of_node = {}  # edge -> node
         self.node_has_inputs_check = {}
         self.node_has_outputs_check = {}
-        self.edge_expects_no_input_nodes = []  # This is an edge of an input node or identity node
+        self.edge_expects_no_input_nodes = (
+            []
+        )  # This is an edge of an input node or identity node
 
     def add_node(self, node_name, feature):
         # Keep track of node
@@ -274,7 +278,10 @@ class GraphConverter:
 
         # Create a list containing all edges
         all_edges = list(
-            set(list(self.edge_is_output_of_node.keys()) + list(self.edge_is_input_of_node.keys()))
+            set(
+                list(self.edge_is_output_of_node.keys())
+                + list(self.edge_is_input_of_node.keys())
+            )
         )
 
         # Add all edges to our IR
@@ -301,9 +308,13 @@ class GraphConverter:
 
         # Ensuse we are not finding other artifacts and thinking that those are nodes
         # We expect to have all existing graph nodes + inputs + outputs as nodes
-        nodes_found = len(set(list(self.node_has_inputs_check) + list(self.node_has_outputs_check)))
+        nodes_found = len(
+            set(list(self.node_has_inputs_check) + list(self.node_has_outputs_check))
+        )
         nodes_expected = (
-            len(onnx_model.graph.node) + len(onnx_model.graph.input) + len(onnx_model.graph.output)
+            len(onnx_model.graph.node)
+            + len(onnx_model.graph.input)
+            + len(onnx_model.graph.output)
         )
         if nodes_found == nodes_expected:
             print("Number of nodes found does not match number of nodes in the graph")
@@ -381,7 +392,9 @@ def main():
     parser = argparse.ArgumentParser(description="Encode ONNX model")
     parser.add_argument("model_path", type=str, help="Path to the ONNX model file")
     parser.add_argument("--model_name", type=str, help="Name of the model (optional)")
-    parser.add_argument("--dequantize", action="store_true", help="Remove quantization nodes")
+    parser.add_argument(
+        "--dequantize", action="store_true", help="Remove quantization nodes"
+    )
 
     args = parser.parse_args()
 

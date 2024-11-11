@@ -21,7 +21,9 @@ class MyAgent(Agent):
         super().__init__(host, port)
 
         self.n_chat_messages = 4
-        self.chat_history = deque(maxlen=self.n_chat_messages * 2)  # Store both user and assistant messages
+        self.chat_history = deque(
+            maxlen=self.n_chat_messages * 2
+        )  # Store both user and assistant messages
 
         sdxl_prompts = (
             "1. Warm portrait: portrait of a pretty blonde woman, a flower crown, earthy makeup, flowing maxi dress with colorful patterns and fringe, a sunset or nature scene, green and gold color scheme\n",
@@ -188,7 +190,11 @@ class MyAgent(Agent):
         response = ""
         new_card = True
         self.chat_history.append(f"User: {query}")
-        prompt = self.llm_system_prompt + '\n'.join(self.chat_history) + "[/INST]\nAssistant: "
+        prompt = (
+            self.llm_system_prompt
+            + "\n".join(self.chat_history)
+            + "[/INST]\nAssistant: "
+        )
 
         # print(prompt)
         for chunk in self.prompt_llm_server(prompt=prompt):
@@ -234,8 +240,12 @@ class MyAgent(Agent):
 def main():
     # LLM CLI for testing purposes.
     parser = argparse.ArgumentParser(description="Interact with the Agent CLI")
-    parser.add_argument("--host", default="127.0.0.1", help="Host address for the agent server")
-    parser.add_argument("--port", type=int, default=8001, help="Port for the agent server")
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="Host address for the agent server"
+    )
+    parser.add_argument(
+        "--port", type=int, default=8001, help="Port for the agent server"
+    )
     args = parser.parse_args()
 
     agent = MyAgent(host=args.host, port=args.port)
@@ -244,7 +254,7 @@ def main():
     while True:
         try:
             user_input = input("You: ").strip()
-            if user_input.lower() == 'exit':
+            if user_input.lower() == "exit":
                 print("Goodbye!")
                 break
             elif user_input:
@@ -255,6 +265,7 @@ def main():
         except KeyboardInterrupt:
             print("\nGoodbye!")
             break
+
 
 if __name__ == "__main__":
     main()

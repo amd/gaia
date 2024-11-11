@@ -37,13 +37,16 @@ from gaia.logger import get_logger
 from gaia.agents.agent import Agent
 from gaia.llm.llama_index_local import LocalLLM
 
+
 class MyAgent(Agent):
     def __init__(self, host="127.0.0.1", port=8001, temp_dir="./temp"):
         super().__init__(host, port)
 
         self.log = get_logger(__name__)
         self.n_chat_messages = 4
-        self.chat_history = deque(maxlen=self.n_chat_messages * 2)  # Store both user and assistant messages
+        self.chat_history = deque(
+            maxlen=self.n_chat_messages * 2
+        )  # Store both user and assistant messages
 
         # Define model and settings
         Settings.llm = LocalLLM(
@@ -100,7 +103,11 @@ class MyAgent(Agent):
         response = ""
         new_card = True
         self.chat_history.append(f"User: {query}")
-        prompt = self.llm_system_prompt + '\n'.join(self.chat_history) + "[/INST]\nAssistant: "
+        prompt = (
+            self.llm_system_prompt
+            + "\n".join(self.chat_history)
+            + "[/INST]\nAssistant: "
+        )
 
         for chunk in self.prompt_llm_server(prompt=prompt):
 
@@ -244,7 +251,9 @@ class MyAgent(Agent):
                 shutil.rmtree(self.temp_dir)
                 self.log.info(f"Cleaned up temporary directory: {self.temp_dir}")
             except Exception as e:
-                self.log.error(f"Failed to delete temporary directory: {self.temp_dir}. Reason: {e}")
+                self.log.error(
+                    f"Failed to delete temporary directory: {self.temp_dir}. Reason: {e}"
+                )
         else:
             self.log.warning(f"Temporary directory does not exist: {self.temp_dir}")
 
@@ -329,7 +338,9 @@ class MyAgent(Agent):
         # Check if the index already exists for the given hash
         if os.path.exists(vector_dir) and os.path.exists(summary_dir):
             # Load the existing index from the persist directory
-            self.log.info(f"Found and loading an existing index in {vector_dir} and {summary_dir}.")
+            self.log.info(
+                f"Found and loading an existing index in {vector_dir} and {summary_dir}."
+            )
             vector_index, summary_index = self._load_index(vector_dir, summary_dir)
             ret = f"SUCCESS: loaded existing {key} index."
         else:
@@ -381,9 +392,8 @@ class MyAgent(Agent):
 
         return "\n".join(cleaned_lines)
 
-
     def _clean_wikipedia_text(self, page_text):
-        lines = page_text.split('\n')
+        lines = page_text.split("\n")
         cleaned_lines = []
         in_reference_section = False
 
@@ -395,7 +405,20 @@ class MyAgent(Agent):
                 continue
 
             # Skip lines that are part of the contents or media
-            if line.strip().lower().startswith(('contents', 'references', 'external links', 'see also', 'notes', 'further reading')):
+            if (
+                line.strip()
+                .lower()
+                .startswith(
+                    (
+                        "contents",
+                        "references",
+                        "external links",
+                        "see also",
+                        "notes",
+                        "further reading",
+                    )
+                )
+            ):
                 continue
 
             # Skip lines that are empty
@@ -404,8 +427,7 @@ class MyAgent(Agent):
 
             cleaned_lines.append(line)
 
-        return '\n'.join(cleaned_lines)
-
+        return "\n".join(cleaned_lines)
 
     def _fetch_clean_wikipedia_page(self, topic):
         try:
@@ -416,12 +438,13 @@ class MyAgent(Agent):
             self.log.error(f"Wikipedia page for topic '{topic}' does not exist.")
             return None, None
         except wikipedia.exceptions.DisambiguationError as e:
-            self.log.error(f"Disambiguation error for topic '{topic}'. Options are: {e.options}")
+            self.log.error(
+                f"Disambiguation error for topic '{topic}'. Options are: {e.options}"
+            )
             return None, None
         except Exception as e:
             self.log.error(f"An error occurred: {e}")
             return None, None
-
 
     def _get_wikipedia_documents(self, research_topic: str):
         cleaned_page_text, _ = self._fetch_clean_wikipedia_page(research_topic)
@@ -446,9 +469,10 @@ class MyAgent(Agent):
             return documents_wiki
 
         else:
-            self.log.error(f"Could not retrieve or clean Wikipedia page for topic '{research_topic}'.")
+            self.log.error(
+                f"Could not retrieve or clean Wikipedia page for topic '{research_topic}'."
+            )
             return None
-
 
     def build_wikipedia_index(self, research_topic: str):
         key = "wiki"
@@ -457,7 +481,9 @@ class MyAgent(Agent):
         # Check if the index already exists for the given hash
         if os.path.exists(vector_dir) and os.path.exists(summary_dir):
             # Load the existing index from the persist directory
-            self.log.info(f"Found and loading an existing index in {vector_dir} and {summary_dir}.")
+            self.log.info(
+                f"Found and loading an existing index in {vector_dir} and {summary_dir}."
+            )
             vector_index, summary_index = self._load_index(vector_dir, summary_dir)
             ret = f"SUCCESS: loaded existing {key} index."
         else:
@@ -479,7 +505,9 @@ class MyAgent(Agent):
         # Check if the index already exists for the given hash
         if os.path.exists(vector_dir) and os.path.exists(summary_dir):
             # Load the existing index from the persist directory
-            self.log.info(f"Found and loading an existing index in {vector_dir} and {summary_dir}.")
+            self.log.info(
+                f"Found and loading an existing index in {vector_dir} and {summary_dir}."
+            )
             vector_index, summary_index = self._load_index(vector_dir, summary_dir)
             ret = f"SUCCESS: loaded existing {key} index."
         else:
@@ -494,7 +522,9 @@ class MyAgent(Agent):
                     break
                 except ValueError as e:
                     if "No files found in .papers" in str(e):
-                        self.log.error(f"Attempt {attempt + 1} failed: {e}. Retrying...")
+                        self.log.error(
+                            f"Attempt {attempt + 1} failed: {e}. Retrying..."
+                        )
                     else:
                         # Handle other ValueError exceptions
                         ret = f"An unexpected error occurred: {e}"
@@ -584,7 +614,9 @@ class MyAgent(Agent):
         # Check if the index already exists for the given hash
         if os.path.exists(vector_dir) and os.path.exists(summary_dir):
             # Load the existing index from the persist directory
-            self.log.info(f"Found and loading an existing index in {vector_dir} and {summary_dir}.")
+            self.log.info(
+                f"Found and loading an existing index in {vector_dir} and {summary_dir}."
+            )
             vector_index, summary_index = self._load_index(vector_dir, summary_dir)
             ret = f"SUCCESS: loaded existing {key} index."
         else:
@@ -610,7 +642,9 @@ class MyAgent(Agent):
         # Check if the index already exists for the given hash
         if os.path.exists(vector_dir) and os.path.exists(summary_dir):
             # Load the existing index from the persist directory
-            self.log.info(f"Found and loading an existing index in {vector_dir} and {summary_dir}.")
+            self.log.info(
+                f"Found and loading an existing index in {vector_dir} and {summary_dir}."
+            )
             vector_index, summary_index = self._load_index(vector_dir, summary_dir)
             ret = f"SUCCESS: loaded existing {key} index."
         else:
@@ -636,7 +670,9 @@ class MyAgent(Agent):
             # TODO: interact and extract research_topic, yt_links and local folder
             research_topic = prompt
             local_folder = "./data/pdf"
-            self.log.info(f"Building indices using {research_topic} topic and {local_folder} folder.")
+            self.log.info(
+                f"Building indices using {research_topic} topic and {local_folder} folder."
+            )
 
             self.build_pdf_index(local_folder)
             self.build_wikipedia_index(research_topic)
@@ -724,7 +760,6 @@ class MyAgent(Agent):
             self.log.error(str(e))
         finally:
             self.next_state = "build_index"
-
 
 
 if __name__ == "__main__":

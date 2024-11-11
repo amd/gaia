@@ -96,7 +96,7 @@ setup(
     entry_points={
         "console_scripts": [
             "gaia = gaia.interface.widget:main",
-            "gaia-cli = gaia.cli:main"
+            "gaia-cli = gaia.cli:main",
         ]
     },
     python_requires=">=3.8, <3.12",
