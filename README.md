@@ -2,7 +2,7 @@
 
 # GAIA: The GenAI Sandbox
 
-Welcome to the GAIA (Generative AI Is Awesome!) project! This repository serves as a repository of AI PC demos. Primarily, it consists of local LLM chatbot and agent demos running on the RyzenAI platform.
+Welcome to the GAIA (Generative AI Is Awesome!) project! This repository serves as a repository of AI PC demos. Primarily, it consists of local LLM chatbot and agent demos running on the RyzenAI platform. For more information on GAIA, see the [Frequently Asked Questions](docs/faq.md).
 
 Currently, the following are supported:
 
