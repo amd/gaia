@@ -56,9 +56,7 @@ setup(
         ],
         "llamaindex": [
             "llama_index",
-            "llama-cpp-python",
             "llama-index-callbacks-arize-phoenix",
-            "llama-index-llms-llama-cpp",
             "llama-index-tools-arxiv",
             "llama-index-tools-wikipedia",
             "llama-index-tools-duckduckgo",
