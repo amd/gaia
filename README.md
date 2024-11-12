@@ -13,7 +13,6 @@ Currently, the following are supported:
 |   Clip     | YouTube search and Q&A agent |
 |   Maven*   | Online research assistant    |
 |    Neo*    | Chat with public GitHub repo |
-|  Datalin*  | Onnx model visualizer        |
 |  Picasso*  | AI art creator               |
 
 \* bot or agent is currently under development.

@@ -1,3 +1,6 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
+
 class Prompts:
     system_prompts = {
         "llama3-clip": """

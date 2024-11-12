@@ -1,3 +1,5 @@
+#### Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
 # GAIA Installer
 
 ## Running the installer

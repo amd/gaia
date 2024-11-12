@@ -1,8 +1,5 @@
 # Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
-# TODOs:
-# - add logger
-
 import re
 import json
 import os

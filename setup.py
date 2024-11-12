@@ -17,7 +17,6 @@ setup(
         "gaia.agents.Llm",
         "gaia.agents.Chaty",
         "gaia.agents.Clip",
-        "gaia.agents.Datalin",
         "gaia.agents.Example",
         "gaia.agents.Joker",
         "gaia.agents.Maven",

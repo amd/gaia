@@ -1,3 +1,5 @@
+#### Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
 # GAIA (Generative AI is Awesome) FAQ
 
 ## Demo Introduction
