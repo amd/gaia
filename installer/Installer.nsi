@@ -3,12 +3,25 @@
 
 ; Define command line parameters
 !define /ifndef MODE "GENERIC"  ; Default to GENERIC mode if not specified
+!define /ifndef CI "OFF"  ; Default to OFF mode if not specified
 !define /ifndef OGA_TOKEN ""  ; Default to empty string if not specified
 !define /ifndef HF_TOKEN ""  ; Default to empty string if not specified
 
 ; Define main variables
 Name "GAIA"
-InstallDir "$LOCALAPPDATA\GAIA"
+
+; This is a compile-time fix to make sure that our selfhost CI runner can successfully install,
+; since LOCALAPPDATA points to C:\Windows for "system users"
+!ifdef CI
+  !if ${CI} == "ON"
+    InstallDir "C:\Users\jfowe\AppData\Local\GAIA"
+  !else
+    InstallDir "$LOCALAPPDATA\GAIA"
+  !endif
+!else
+  InstallDir "$LOCALAPPDATA\GAIA"
+!endif
+
 !ifdef MODE
   !if ${MODE} == "NPU"
     OutFile "GAIA_NPU_Installer.exe"
@@ -87,7 +100,7 @@ Section "Install Main Components" SEC01
 
   ; Create the installation directory if it doesn't exist
   CreateDirectory "$INSTDIR"
-  FileWrite $0 "- Install dir set$\n"
+  FileWrite $0 "- Install dir set to $INSTDIR $\n"
 
   ; Set the output path for future operations
   SetOutPath "$INSTDIR"
@@ -249,7 +262,12 @@ Section "Install Main Components" SEC01
     FileWrite $0 "*** install_gaia ***$\n"
     ; Install GAIA
     ${If} ${MODE} == "NPU"
-      ExecWait '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"' $R0
+      ; Give the NPU installer full dependencies in CI mode, otherwise give it minimal dependencies
+      ${If} ${CI} == "ON"
+        ExecWait '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"[dev,clip]' $R0
+      ${Else}
+        ExecWait '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"' $R0 
+      ${EndIf}
     ${Else}
       ExecWait '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"[dev,clip]' $R0
     ${EndIf}

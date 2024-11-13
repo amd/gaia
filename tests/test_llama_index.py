@@ -1,5 +1,6 @@
 # Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
+import argparse
 import time
 import multiprocessing
 from llama_index.core import (
@@ -66,14 +67,14 @@ And, tender churl, mak'st waste in niggarding:
 def start_llm_server():
     backend = "oga"
     device = "npu"
-    model = "amd/Llama2-7b-chat-awq-g128-int4-asym-fp32-onnx-ryzen-strix"
+    model = "amd/Phi-3.5-mini-instruct-awq-g128-int4-asym-fp32-onnx-ryzen-strix"
 
     client = GaiaCliClient(backend=backend, device=device, model=model)
     process = multiprocessing.Process(target=client.start_llm_server)
     process.start()
 
     # Wait for server to be ready
-    timeout = 60  # 60 second timeout
+    timeout = 360  # 360 second timeout
     start_time = time.time()
     while not client.check_llm_server_ready():
         if time.time() - start_time > timeout:
@@ -104,8 +105,20 @@ def start_ollama_server():
 if __name__ == "__main__":
     multiprocessing.freeze_support()
 
-    # start_llm_server()
-    start_ollama_server()
+    parser = argparse.ArgumentParser(description="A simple example using argparse")
+    parser.add_argument(
+        "--backend",
+        type=str,
+        help="Which software/hardware backend to run LLMs on",
+        choices=["ollama", "npu"],
+        default="ollama",
+    )
+    args = parser.parse_args()
+
+    if args.backend == "npu":
+        start_llm_server()
+    else:  # "ollama"
+        start_ollama_server()
 
     # Run the test
     test_query_engine()

@@ -1,0 +1,131 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
+name: GAIA NPU Local Tests
+
+on:
+  push:
+    branches: ["main"]
+    paths-ignore:
+      - 'docs/**'
+      - 'data/**'
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - 'docs/**'
+      - 'data/**'
+  workflow_dispatch:
+
+jobs:
+  gaia-npu-local-tests:
+    runs-on: stx
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install NSIS
+        run: |
+          # Download NSIS installer
+          Invoke-WebRequest -UserAgent "Wget" -Uri "https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10-setup.exe" -OutFile "nsis.exe"
+          
+          # Install NSIS
+          Start-Process nsis.exe -ArgumentList '/S' -Wait
+
+      - name: Verify NSIS installation
+        run: |
+          # Check if NSIS is installed
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /VERSION
+
+      - name: Build the GAIA installer for NPU
+        run: |
+          cd installer
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DCI=ON /DMODE=NPU /DOGA_TOKEN="${{ secrets.OGA_TOKEN }}" /DHF_TOKEN="${{ secrets.HF_TOKEN_INSTALLER }}" 'Installer.nsi'
+
+          if (Test-Path "GAIA_NPU_Installer.exe") {
+            Write-Host "GAIA_NPU_Installer.exe has been created successfully."
+          } else {
+            Write-Host "GAIA_NPU_Installer.exe was not found."
+            exit 1
+          }
+
+      - name: Attempt to install GAIA using installer
+        shell: cmd
+        run: |
+          echo "Having issues debugging the installer? Check the installer README for tips on how to do that."
+          set PATH=%PATH%;C:\Users\runneradmin\AppData\Local\Programs\Ollama
+          cd installer
+          GAIA_NPU_Installer.exe /S
+      
+      - name: Ensure GAIA can open properly
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        run: |
+          # Step 1: Ensure that nothing is running on ports 8000 and 8001
+          $portCheck = Test-NetConnection -ComputerName 127.0.0.1 -Port 8001
+          if ($portCheck.TcpTestSucceeded) {
+            Write-Host "Error: Port 8001 (agent) is already in use!"
+            exit 1
+          } else {
+            Write-Host "Port 8001 (agent) is free."
+          }
+          $portCheck = Test-NetConnection -ComputerName 127.0.0.1 -Port 8000
+          if ($portCheck.TcpTestSucceeded) {
+            Write-Host "Error: Port 8000 (llm server) is already in use!"
+            exit 1
+          } else {
+            Write-Host "Port 8000 (llm server) is free."
+          }
+
+          # Step 2: Start GAIA in the background
+          $env:QT_QPA_PLATFORM = "offscreen"
+          Write-Host "Environment variable QT_QPA_PLATFORM set to offscreen"
+          $gaiaOutput = "gaia_output.log"
+          $gaiaErrorOutput = "gaia_error.log"
+          $env:PATH = "$env:PATH;C:\Users\jfowe\AppData\Local\Programs\Ollama"
+          $gaiaProcess = Start-Process -FilePath "conda" -ArgumentList "run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env gaia" -RedirectStandardOutput $gaiaOutput -RedirectStandardError $gaiaErrorOutput -PassThru
+          Write-Host "Started GAIA..."
+
+          # Step 3: Wait for 360 seconds for GAIA to initialize
+          Start-Sleep -Seconds 360
+          Write-Host "Waited for 360 seconds."
+          Write-Host "GAIA Output:"
+          Get-Content $gaiaOutput
+          Get-Content $gaiaErrorOutput
+
+          # Step 4: Check if GAIA is still running
+          $gaiaRunning = Get-Process -Id $gaiaProcess.Id -ErrorAction SilentlyContinue
+          if (-not $gaiaRunning) {
+            Write-Host "Error: GAIA process exited unexpectedly!"
+            exit 1
+          } else {
+            Write-Host "GAIA process is still alive."
+          }
+
+          # Step 5: Check if GAIA servers are running
+          $portCheck = Test-NetConnection -ComputerName 127.0.0.1 -Port 8001
+          if (-not $portCheck.TcpTestSucceeded) {
+            Write-Host "Error: Agent server is not running on port 8001!"
+            exit 1
+          } else {
+            Write-Host "Agent server is running on port 8001."
+          }
+          $portCheck = Test-NetConnection -ComputerName 127.0.0.1 -Port 8000
+          if (-not $portCheck.TcpTestSucceeded) {
+            Write-Host "Error: LLM server is running on port 8000!"
+            exit 1
+          } else {
+            Write-Host "LLM server is running on port 8000."
+          }
+
+          # Step 6: Stop the GAIA process
+          Stop-Process -Id $gaiaProcess.Id
+          Write-Host "GAIA process has been stopped."
+
+      - name: Run unit tests
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        run: |
+          conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env python tests\test_llama_index.py --backend npu
+      
