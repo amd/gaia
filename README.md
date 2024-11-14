@@ -46,7 +46,7 @@ NOTE: You may need to install ollama from [here](https://ollama.com/download) if
 
 # Running the GAIA CLI
 To quickly get started, you can try the GAIA CLI (`gaia-cli`) client using the following steps:
-- `pip install .[dev]`
+- `pip install -e .`
 - `gaia-cli -h`
 
 A simple chat demo using `gaia-cli`:

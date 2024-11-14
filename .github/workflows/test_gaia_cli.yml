@@ -53,7 +53,7 @@ jobs:
           Write-Host "Step 2: Install dependencies"
           python -m pip install --upgrade pip
           conda install pylint -y
-          pip install -e .[test,dev,clip]
+          pip install -e .[test,clip]
 
           Write-Host "Step 3: Verify installation"
           $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue

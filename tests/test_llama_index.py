@@ -6,15 +6,8 @@ import multiprocessing
 from llama_index.core import (
     VectorStoreIndex,
     Document,
-    DocumentSummaryIndex,
     Settings,
-    PromptTemplate,
-    get_response_synthesizer,
 )
-from llama_index.core.agent import ReActAgent
-from llama_index.core.tools import FunctionTool, QueryEngineTool, ToolMetadata
-from llama_index.core.node_parser import SentenceSplitter
-from llama_index.readers.youtube_transcript import YoutubeTranscriptReader
 
 from gaia.cli import GaiaCliClient
 from gaia.agents.agent import Agent
