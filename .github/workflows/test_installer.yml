@@ -82,71 +82,14 @@ jobs:
           GAIA_Installer.exe /S
 
       - name: Ensure GAIA can open properly
-        shell: pwsh
+        timeout-minutes: 10
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
-          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
-        run: |
-          # Step 1: Ensure that nothing is running on ports 8000 and 8001
-          $portCheck = Test-NetConnection -ComputerName 127.0.0.1 -Port 8001
-          if ($portCheck.TcpTestSucceeded) {
-            Write-Host "Error: Port 8001 (agent) is already in use!"
-            exit 1
-          } else {
-            Write-Host "Port 8001 (agent) is free."
-          }
-          $portCheck = Test-NetConnection -ComputerName 127.0.0.1 -Port 8000
-          if ($portCheck.TcpTestSucceeded) {
-            Write-Host "Error: Port 8000 (llm server) is already in use!"
-            exit 1
-          } else {
-            Write-Host "Port 8000 (llm server) is free."
-          }
-
-          # Step 2: Start GAIA in the background
-          $env:QT_QPA_PLATFORM = "offscreen"
-          Write-Host "Environment variable QT_QPA_PLATFORM set to offscreen"
-          $gaiaOutput = "gaia_output.log"
-          $gaiaErrorOutput = "gaia_error.log"
-          $env:PATH = "$env:PATH;C:\Users\runneradmin\AppData\Local\Programs\Ollama"
-          $gaiaProcess = Start-Process -FilePath "C:\Windows\System32\cmd.exe" -ArgumentList "/C C:\Users\runneradmin\AppData\Local\GAIA\GAIA.lnk" -RedirectStandardOutput $gaiaOutput -RedirectStandardError $gaiaErrorOutput -PassThru
-          Write-Host "Started GAIA..."
-
-          # Step 3: Wait for 180 seconds for GAIA to initialize
-          Start-Sleep -Seconds 180
-          Write-Host "Waited for 180 seconds."
-          Write-Host "GAIA Output:"
-          Get-Content $gaiaOutput
-          Get-Content $gaiaErrorOutput
-
-          # Step 4: Check if GAIA is still running
-          $gaiaRunning = Get-Process -Id $gaiaProcess.Id -ErrorAction SilentlyContinue
-          if (-not $gaiaRunning) {
-            Write-Host "Error: GAIA process exited unexpectedly!"
-            exit 1
-          } else {
-            Write-Host "GAIA process is still alive."
-          }
-
-          # Step 5: Check if GAIA servers are running
-          $portCheck = Test-NetConnection -ComputerName 127.0.0.1 -Port 8001
-          if (-not $portCheck.TcpTestSucceeded) {
-            Write-Host "Error: Agent server is not running on port 8001!"
-            exit 1
-          } else {
-            Write-Host "Agent server is running on port 8001."
-          }
-          $portCheck = Test-NetConnection -ComputerName 127.0.0.1 -Port 8000
-          if (-not $portCheck.TcpTestSucceeded) {
-            Write-Host "Error: LLM server is running on port 8000!"
-            exit 1
-          } else {
-            Write-Host "LLM server is running on port 8000."
-          }
-
-          # Step 6: Stop the GAIA process
-          Stop-Process -Id $gaiaProcess.Id
-          Write-Host "GAIA process has been stopped."
+        uses: ./.github/actions/ui-testing
+        with:
+          username: "runneradmin"
+          huggingface_access_token: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          install_from_source: "false"
           
       - name: Upload Installer
         uses: actions/upload-artifact@v4

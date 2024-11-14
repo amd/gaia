@@ -97,88 +97,13 @@ jobs:
           ollama --version
 
       - name: Ensure GAIA can open properly
-        shell: pwsh
+        timeout-minutes: 10
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
-          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
-        run: |
-          Write-Host "Step 1: Activate and verify Conda environment"
-          $env:Path = "$env:USERPROFILE\Miniconda3;$env:USERPROFILE\Miniconda3\Scripts;$env:Path"
-          & "$env:USERPROFILE\Miniconda3\shell\condabin\conda-hook.ps1"
-          conda activate gaiaenv
-
-          Write-Host "Verify Python environment"
-          python -c "import sys; print(sys.executable)"
-
-          Write-Host "Find gaia executable location"
-          $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
-          if (-not $gaiaPath) {
-            Write-Host "Error: Cannot find gaia executable in PATH"
-            Write-Host "Current PATH: $env:Path"
-            exit 1
-          }
-          Write-Host "Found gaia at: $($gaiaPath.Source)"
-
-          Write-Host "Step 2: Ensure that nothing is running on ports 8000 and 8001"
-          $portCheck = Test-NetConnection -ComputerName 127.0.0.1 -Port 8001
-          if ($portCheck.TcpTestSucceeded) {
-            Write-Host "Error: Port 8001 (agent) is already in use!"
-            exit 1
-          } else {
-            Write-Host "Port 8001 (agent) is free."
-          }
-
-          $portCheck = Test-NetConnection -ComputerName 127.0.0.1 -Port 8000
-          if ($portCheck.TcpTestSucceeded) {
-            Write-Host "Error: Port 8000 (llm server) is already in use!"
-            exit 1
-          } else {
-            Write-Host "Port 8000 (llm server) is free."
-          }
-
-          Write-Host "Step 3: Start GAIA in the background"
-          $env:QT_QPA_PLATFORM = "offscreen"
-          Write-Host "Environment variable QT_QPA_PLATFORM set to offscreen"
-          $gaiaOutput = "gaia_output.log"
-          $gaiaErrorOutput = "gaia_error.log"
-          $env:PATH = "$env:PATH;C:\Users\runneradmin\AppData\Local\Programs\Ollama"
-          $gaiaProcess = Start-Process -NoNewWindow -FilePath "gaia" -RedirectStandardOutput $gaiaOutput -RedirectStandardError $gaiaErrorOutput -PassThru
-          Write-Host "Started GAIA..."
-
-          Write-Host "Step 4: Wait for 360 seconds for GAIA to initialize"
-          Start-Sleep -Seconds 180
-          Write-Host "Waited for 180 seconds."
-          Write-Host "GAIA Output:"
-          Get-Content $gaiaOutput
-          Get-Content $gaiaErrorOutput
-
-          Write-Host "Step 5: Check if GAIA is still running"
-          $gaiaRunning = Get-Process -Id $gaiaProcess.Id -ErrorAction SilentlyContinue
-          if (-not $gaiaRunning) {
-            Write-Host "Error: GAIA process exited unexpectedly!"
-            exit 1
-          } else {
-            Write-Host "GAIA process is still alive."
-          }
-
-          Write-Host "Step 6: Check if GAIA servers are running"
-          $portCheck = Test-NetConnection -ComputerName 127.0.0.1 -Port 8001
-          if (-not $portCheck.TcpTestSucceeded) {
-            Write-Host "Error: Agent server is not running on port 8001!"
-            exit 1
-          } else {
-            Write-Host "Agent server is running on port 8001."
-          }
-
-          $portCheck = Test-NetConnection -ComputerName 127.0.0.1 -Port 8000
-          if (-not $portCheck.TcpTestSucceeded) {
-            Write-Host "Error: LLM server is not running on port 8000!"
-            exit 1
-          } else {
-            Write-Host "LLM server is running on port 8000."
-          }
-
-
-          Write-Host "Step 9: Stop the GAIA process"
-          Stop-Process -Id $gaiaProcess.Id
-          Write-Host "GAIA process has been stopped."
+        uses: ./.github/actions/ui-testing
+        with:
+          username: "runneradmin"
+          huggingface_access_token: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          install_from_source: "true"
+      
+      
