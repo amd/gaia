@@ -6,6 +6,7 @@
     "agents": [
         "Chaty",
         "Clip",
+        "Joker",
         "Llm"
     ],
     "models": {

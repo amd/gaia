@@ -1,13 +1,23 @@
-# Import base LLM agent which is always required
 from gaia.agents.Llm.app import MyAgent as llm
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Optional imports for other agents
 try:
     from gaia.agents.Chaty.app import MyAgent as chaty
 except ImportError:
+    logger.warning("Chaty agent not available")
     chaty = None
 
 try:
     from gaia.agents.Clip.app import MyAgent as clip
 except ImportError:
+    logger.warning("Clip agent not available")
     clip = None
+
+try:
+    from gaia.agents.Joker.app import MyAgent as joker
+except ImportError:
+    logger.warning("Joker agent not available")
+    joker = None

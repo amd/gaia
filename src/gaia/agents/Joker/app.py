@@ -11,13 +11,14 @@ from gaia.llm.llama_index_local import LocalLLM
 
 
 class MyAgent(Agent):
-    def __init__(self, host="127.0.0.1", port=8001):
-        super().__init__(host, port)
+    def __init__(self, model, host="127.0.0.1", port=8001, cli_mode=False):
+        super().__init__(model=model, host=host, port=port, cli_mode=cli_mode)
 
         # Define model
-        Settings.llm = LocalLLM(
+        self.llm = LocalLLM(
             prompt_llm_server=self.prompt_llm_server, stream_to_ui=self.stream_to_ui
         )
+        Settings.llm = self.llm
         Settings.embed_model = "local:BAAI/bge-base-en-v1.5"
 
         # Load the joker data
@@ -25,7 +26,7 @@ class MyAgent(Agent):
         Settings.chunk_size = 128
         Settings.chunk_overlap = 0
         documents = SimpleDirectoryReader(input_files=[joke_data]).load_data()
-        index = VectorStoreIndex.from_documents(documents)
+        self.vector_index = VectorStoreIndex.from_documents(documents)
 
         self.n_chat_messages = 4
         self.chat_history = deque(
@@ -71,7 +72,7 @@ class MyAgent(Agent):
             "Assistant: "
         )
         qa_prompt_tmpl = PromptTemplate(self.qa_prompt_tmpl_str)
-        self.query_engine = index.as_query_engine(
+        self.query_engine = self.vector_index.as_query_engine(
             verbose=True,
             similarity_top_k=1,
             response_mode="compact",
@@ -87,75 +88,42 @@ class MyAgent(Agent):
     def get_chat_history(self):
         return list(self.chat_history)
 
-    def chat(self, query):
-        # Add user query to chat history, construct the prompt and add response
-        # to chat history.
+    def prompt_llm(self, query):
         self.chat_history.append(f"User: {query}")
         prompt = "\n".join(self.chat_history)
-        response = self.query_engine.query(prompt)
-        self.chat_history.append(f"Assistant: {response}")
 
+        # Get the streaming response and convert it to string
+        response = str(self.query_engine.query(prompt))
+
+        self.chat_history.append(f"Assistant: {response}")
         return response
 
     def prompt_received(self, prompt):
-        self.log.info(f"User: {prompt}")
-        response = self.chat(prompt)
-        self.log.info(f"Response: {response}")
+        response = self.prompt_llm(prompt)
+        return response
 
     def chat_restarted(self):
         self.log.info("Client requested chat to restart")
         self.chat_history.clear()
-        intro = "Hi, who are you in one sentence?"
-        prompt = (
-            self.qa_prompt_tmpl_str
-            + "\n".join(f"User: {intro}")
-            + "[/INST]\nAssistant: "
-        )
-        self.log.info(f"User: {intro}")
-        try:
-            new_card = True
-            for chunk in self.prompt_llm_server(prompt=prompt):
-
-                # Stream chunk to UI
-                self.stream_to_ui(chunk, new_card=new_card)
-                new_card = False
-                print(chunk, end="", flush=True)
-            print("\n")
-
-        except ConnectionRefusedError as e:
-            self.print(f"Having trouble connecting to the LLM server, got:\n{str(e)}!")
-            self.log.error(str(e))
 
 
 def main():
-    # Joker LLM CLI for testing purposes.
-    parser = argparse.ArgumentParser(description="Interact with the Joker Agent CLI")
+    parser = argparse.ArgumentParser(description="Run the Joker Agent")
     parser.add_argument(
         "--host", default="127.0.0.1", help="Host address for the agent server"
     )
     parser.add_argument(
-        "--port", type=int, default=8001, help="Port for the agent server"
+        "--port", type=int, default=8001, help="Port number for the agent server"
     )
+    parser.add_argument("--model", required=True, help="Model name")
     args = parser.parse_args()
 
-    agent = MyAgent(host=args.host, port=args.port)
-    print("Joker Agent initialized. Type 'exit' to quit.")
-
-    while True:
-        try:
-            user_input = input("You: ").strip()
-            if user_input.lower() == "exit":
-                print("Goodbye!")
-                break
-            elif user_input:
-                print("Agent: ", end="", flush=True)
-                agent.prompt_received(user_input)
-            else:
-                print("Please enter a valid input.")
-        except KeyboardInterrupt:
-            print("\nGoodbye!")
-            break
+    MyAgent(
+        model=args.model,
+        host=args.host,
+        port=args.port,
+    )
 
 
 if __name__ == "__main__":
-    agent = MyAgent()
+    main()
