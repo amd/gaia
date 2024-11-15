@@ -403,16 +403,18 @@ class MyAgent(Agent):
                 doc[0].doc_id = video_id
 
                 # Build a summary of the transcript
-                self.build_summary_index(doc)
+                # self.build_summary_index(doc)
 
                 self.build_vector_index(doc)
                 self.build_query_engine()
 
-                self.print(
+                msg = (
                     "Index and query engine is now ready to be used on your PC. "
                     "Running your original query through the index!\n\n"
                     f'```"query": "{self.saved_query}"```'
                 )
+                self.print(msg)
+                self.chat_history.append(f"Asssistant: {msg}")
                 response = self.query_engine.query(self.saved_query)
                 print(response)
 
@@ -435,7 +437,7 @@ class MyAgent(Agent):
             doc[0].doc_id = video_id
 
             # Build a summary of the transcript
-            self.build_summary_index(doc)
+            # self.build_summary_index(doc)
 
             self.build_vector_index(doc)
             self.build_query_engine()
