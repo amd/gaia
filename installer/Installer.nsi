@@ -62,6 +62,7 @@ Var LogHandle
 
 ; MUI Settings
 !insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_LICENSE "LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -80,6 +81,8 @@ LangString MUI_TEXT_FINISH_SUBTITLE "${LANG_ENGLISH}" "Thank you for installing 
 LangString MUI_TEXT_ABORT_TITLE "${LANG_ENGLISH}" "Installation Aborted"
 LangString MUI_TEXT_ABORT_SUBTITLE "${LANG_ENGLISH}" "Installation has been aborted."
 LangString MUI_BUTTONTEXT_FINISH "${LANG_ENGLISH}" "Finish"
+LangString MUI_TEXT_LICENSE_TITLE ${LANG_ENGLISH} "License Agreement"
+LangString MUI_TEXT_LICENSE_SUBTITLE ${LANG_ENGLISH} "Please review the license terms before installing GAIA."
 
 ; Define a section for the installation
 Section "Install Main Components" SEC01
