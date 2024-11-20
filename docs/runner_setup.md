@@ -7,6 +7,7 @@ Pre-requisites:
 - The laptop must already have the following software installed:
     - [git](https://git-scm.com/downloads/win)
     - [miniconda3](https://docs.anaconda.com/miniconda/)
+        - After installing, you must run `conda init` or you will hit confusing errors later
     - [ollama](https://ollama.com/download)
 
 Instructions:
@@ -17,9 +18,9 @@ Instructions:
     - When running `./config.cmd` in step 2, make the following choices:
          - Name of the runner group = `stx`
          - For the runner name, call it `NAME-stx-NUMBER`, where NAME is your alias and NUMBER would tell you this is the Nth STX machine you've added (e.g., `jefowers-stx-1` for Jeremy's first STX laptop)
-         - Accept the default for the work folder
          - Apply the label `stx`, as well as a label with your name to indicate that you are maintaining the runner (for example, Jeremy puts the label `jefowers` on his runners)
-         - Accept the default for running the runner as a service
+         - Accept the default for the work folder
+         - You want the runner to function as a service (respond Y)
          - User account to use for the service = `NT AUTHORITY\SYSTEM` (not the default of `NT AUTHORITY\NETWORK SERVICE`)
     
 1. Follow the instructions here for Windows, minding what we said in step 1: https://github.com/organizations/aigdat/settings/actions/runners/new
