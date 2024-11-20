@@ -150,7 +150,6 @@ Section "Install Main Components" SEC01
     ; Check if Miniconda installation was successful
     ${If} $2 == 0
       FileWrite $0 "- Miniconda installation successful$\n"
-      nsExec::ExecToStack '"$PROFILE\miniconda3\Scripts\conda.exe" init'
       ${IfNot} ${Silent}
         MessageBox MB_OK "Miniconda has been successfully installed."
       ${EndIf}
@@ -171,7 +170,7 @@ Section "Install Main Components" SEC01
 
     ; Check if ollama is available
     ExecWait 'where ollama' $2
-    FileWrite $0 "- Checked if conda is available$\n"
+    FileWrite $0 "- Checked if ollama is available$\n"
 
     ; If ollama is not found, show a message and exit
     StrCmp $2 "0" create_env ollama_not_available
@@ -189,6 +188,9 @@ Section "Install Main Components" SEC01
     ${If} $R1 == ""
       StrCpy $R1 "conda"
     ${EndIf}
+    ; Initialize conda (needed for systems where conda was previously installed but not initialized)
+    nsExec::ExecToStack '"$R1" init'
+
     ; Create a Python 3.10 environment named "gaia_env" in the installation directory
     ExecWait '"$R1" create -p "$INSTDIR\gaia_env" python=3.10 -y' $R0
 
