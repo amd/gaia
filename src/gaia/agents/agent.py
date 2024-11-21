@@ -2,7 +2,6 @@
 
 import time
 import asyncio
-from collections import OrderedDict
 from websocket import create_connection
 from websocket._exceptions import WebSocketTimeoutException
 from aiohttp import web
@@ -10,7 +9,6 @@ import requests
 
 from gaia.logger import get_logger
 from gaia.interface.util import UIMessage
-from gaia.llm.tokenizer import Tokenizer
 
 
 class Agent:
@@ -26,22 +24,9 @@ class Agent:
         self.last_chunk = False
         self.log = get_logger(__name__)
 
-        # performance stats
-        # ttft = time-to-first-token
-        self.stats = OrderedDict(
-            [
-                ("in_tokens", None),
-                ("ttft", None),
-                ("out_tokens", None),
-                ("tokens_per_sec", None),
-            ]
-        )
         # last chunk in response
         self.last = False
         self.cli_mode = cli_mode
-        self.tokenizer = Tokenizer(
-            "microsoft/Phi-3-mini-4k-instruct", cli_mode=self.cli_mode
-        )
 
     def get_host_port(self):
         return self.host, self.port
@@ -56,7 +41,6 @@ class Agent:
         app.router.add_post("/restart", self._on_chat_restarted)
         app.router.add_post("/load_llm", self._on_load_llm)
         app.router.add_get("/health", self._on_health_check)
-        app.router.add_get("/stats", self._on_get_stats)
         return app
 
     def __del__(self):
@@ -67,19 +51,6 @@ class Agent:
         ):
             if self.llm_server_websocket.connected:
                 self.llm_server_websocket.close()
-
-    def clear_stats(self):
-        for key, _ in self.stats.items():
-            self.stats[key] = None
-
-    def count_tokens(self, text):
-        return len(self.tokenizer.tokenizer.encode(text))
-
-    def get_time_to_first_token(self):
-        return self.stats["ttft"]
-
-    def get_tokens_per_second(self):
-        return self.stats["tokens_per_sec"]
 
     def initialize_server(self):
         max_retries = 5
@@ -114,8 +85,6 @@ class Agent:
 
         try:
             self.log.debug(f"Sending prompt to LLM server:\n{prompt}")
-            prompt_tokens = self.count_tokens(prompt)
-            start_time = time.perf_counter()
             ws.send(prompt)
 
             first_chunk = True
@@ -123,7 +92,6 @@ class Agent:
             self.last_chunk = False
             full_response = ""
 
-            self.clear_stats()
             self.last = False
 
             while True:
@@ -134,27 +102,13 @@ class Agent:
                         ws.sock.settimeout(5)  # 5 second timeout after first chunk
 
                     chunk = ws.recv()
-                    current_time = time.perf_counter()
-
                     if first_chunk:
-                        self.stats["in_tokens"] = prompt_tokens
-                        self.stats["ttft"] = round(current_time - start_time, 2)
-                        start_time = time.perf_counter()
                         first_chunk = False
 
                     if chunk:
                         if "</s>" in chunk:
                             chunk = chunk.replace("</s>", "")
                             full_response += chunk
-
-                            total_time = current_time - start_time
-                            out_tokens = self.count_tokens(full_response)
-                            self.stats["out_tokens"] = out_tokens
-                            self.stats["tokens_per_sec"] = (
-                                round((out_tokens - 1) / total_time, 2)
-                                if total_time > 0 and out_tokens > 1
-                                else 0.00
-                            )
                             self.last = True
 
                         if stream_to_ui:
@@ -196,7 +150,7 @@ class Agent:
         data = await ui_request.json()
         self.latest_prompt_request = ui_request
         response = self.prompt_received(data["prompt"])
-        json_response = {"status": "success", "response": response, "stats": self.stats}
+        json_response = {"status": "success", "response": response}
         return web.json_response(json_response)
 
     async def _on_chat_restarted(self, _):
@@ -213,11 +167,6 @@ class Agent:
     async def _on_health_check(self, _):
         return web.json_response({"status": "ok"})
 
-    async def _on_get_stats(self, _):
-        response = {**self.stats, "status": "ok"}
-        self.log.debug(response)
-        return web.json_response(response)
-
     def stream_to_ui(self, chunk, new_card=True):
         if self.cli_mode:
             return chunk
@@ -225,7 +174,6 @@ class Agent:
             data = {
                 "chunk": chunk,
                 "new_card": new_card,
-                "stats": self.stats,
                 "last": self.last,
             }
             url = "http://127.0.0.1:8002/stream_to_ui"

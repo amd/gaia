@@ -21,6 +21,10 @@ set DISABLED_CHECKS=C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718
 REM Exlude work-in-progress agents
 set EXCLUDE=src\gaia\agents\Maven\app.py,src\gaia\agents\Neo\app.py,ui_form.py
 
+REM Run black
+echo Running black...
+black installer plot src tests --config pyproject.toml
+
 REM Run pylint
 echo Running pylint...
 %PYTHON_PATH% -m %PYLINT_PATH% %SRC_DIR% --rcfile %PYLINT_CONFIG% --disable %DISABLED_CHECKS% --ignore-paths %EXCLUDE%

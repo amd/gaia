@@ -316,7 +316,6 @@ class MyAgent(Agent):
             show_progress=True,
         )
         end_time = time.perf_counter()
-        self.clear_stats()
         self.print(f"Done. Took {(end_time - start_time):.1f} seconds.")
 
     def print_summary(self, doc_id):
@@ -376,7 +375,6 @@ class MyAgent(Agent):
     def prompt_received(self, prompt):
         response = self.prompt_llm(prompt)
         key, value = self.extract_json_data(response)
-        self.clear_stats()
 
         if key == "youtube_search":
             self.search_results = self.youtube_search(

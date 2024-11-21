@@ -60,6 +60,12 @@ class OllamaClient:
         self.cli_mode = cli_mode
         self.model_downloading = False
         self.client = Client(host=f"{self.host}:{self.port}")
+        self.stats = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "time_to_first_token": 0,
+            "tokens_per_second": 0,
+        }
         self.ensure_ollama_running()
         self.ensure_model_available()
 
@@ -78,6 +84,7 @@ class OllamaClient:
         except ollama._types.ResponseError as e:  # pylint:disable=W0212
             if "not found" in str(e):
                 print(f"Model {self.model} not found. Downloading now...")
+                self.model_downloading = True
                 progress_dialog, update_progress = UIMessage.progress(
                     message=f"Downloading model {self.model}...",
                     title="Downloading Model",
@@ -137,7 +144,22 @@ class OllamaClient:
         self.model = model
         self.ensure_model_available()
 
-    def generate(self, prompt: str, stream: bool = True, **kwargs) -> Dict[str, Any]:
+    def _update_stats(self, response: Dict[str, Any]):
+        """Helper method to update stats from a response"""
+        if response.get("done", False):
+            eval_count = response["eval_count"]
+            eval_duration_ns = response["eval_duration"]
+            prompt_eval_duration_ns = response["prompt_eval_duration"]
+
+            time_to_first_token_s = prompt_eval_duration_ns / 10**9
+            tokens_per_second = eval_count / eval_duration_ns * 10**9
+
+            self.stats["input_tokens"] = response["prompt_eval_count"]
+            self.stats["output_tokens"] = eval_count
+            self.stats["time_to_first_token"] = time_to_first_token_s
+            self.stats["tokens_per_second"] = tokens_per_second
+
+    def generate(self, prompt: str, stream: bool = True, **kwargs):
         """
         Generate a response from the ollama model.
 
@@ -147,19 +169,23 @@ class OllamaClient:
             **kwargs: Additional arguments to pass to the ollama model.
 
         Returns:
-            Dict[str, Any]: The response from the ollama model.
-
-        Example:
-            {
-                "model": "llama3.2",
-                "created_at": "2023-08-04T08:52:19.385406455-07:00",
-                "response": "The",
-                "done": False
-            }
+            The response from the ollama model.
         """
-        return self.client.generate(
+        response_generator = self.client.generate(
             model=self.model, prompt=prompt, stream=stream, **kwargs
         )
+
+        if stream:
+            last_response = None
+            for response in response_generator:
+                last_response = response
+                yield response
+            if last_response:
+                self._update_stats(last_response)
+        else:
+            response = response_generator
+            self._update_stats(response)
+            return response
 
     def chat(
         self,
@@ -228,6 +254,9 @@ class OllamaClient:
 
     def push_model(self, name: str, **kwargs) -> Dict[str, Any]:
         return self.client.push(name, **kwargs)
+
+    def get_stats(self) -> Dict[str, Any]:
+        return self.stats
 
 
 class OllamaClientServer:
@@ -331,7 +360,7 @@ class OllamaClientServer:
         @self.app.post("/generate")
         async def generate_response(message: Message):
             response = self.ollama_client.generate(prompt=message.text, stream=False)
-            return {"response": response["response"]}
+            return {"response": response}
 
         @self.app.websocket("/ws")
         async def stream_response(websocket: WebSocket):
@@ -388,6 +417,10 @@ class OllamaClientServer:
                     "status": "error",
                     "message": f"Error checking Ollama client: {str(e)}",
                 }
+
+        @self.app.get("/stats")
+        async def stats():
+            return self.ollama_client.get_stats()
 
     def run(self, model: str):
         self.ollama_client = OllamaClient(model=model, cli_mode=self.cli_mode)

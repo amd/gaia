@@ -430,6 +430,7 @@ class StreamFromAgent(QObject):
 
     def __init__(self, widget):
         super().__init__()
+        self.log = get_logger(__name__)
         self.widget = widget
         self.app = web.Application()
         self.host = "127.0.0.1"
@@ -446,8 +447,12 @@ class StreamFromAgent(QObject):
         data = await request.json()
         chunk = data["chunk"]
         new_card = data["new_card"]
-        stats = data.get("stats")
         final_update = data.get("last")
+
+        stats = {}
+        if final_update:
+            stats = await self.get_stats()
+
         if new_card:
             self.complete_message = chunk
             self.agent_card_count += 1
@@ -469,6 +474,19 @@ class StreamFromAgent(QObject):
     def do_work(self):
         web.run_app(self.app, host=self.host, port=self.port)
         self.finished.emit()
+
+    async def get_stats(self):
+        """Fetch statistics from the agent server."""
+        try:
+            async with ClientSession() as session:
+                async with session.get("http://127.0.0.1:8000/stats") as response:
+                    stats = await response.json()
+                    if "decode_token_times" in stats:
+                        del stats["decode_token_times"]
+                    return stats
+        except Exception as e:
+            self.log.error(f"Failed to get stats from agent: {str(e)}")
+            return {}
 
 
 class Widget(QWidget):
