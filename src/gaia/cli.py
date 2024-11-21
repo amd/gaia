@@ -57,6 +57,8 @@ class GaiaCliClient:
         self.enable_agent_server = enable_agent_server
         self.host = host
         self.port = port
+        self.llm_port = 8000
+        self.ollama_port = 11434
         self.base_url = f"http://{host}:{port}"
         self.model = model
         self.max_new_tokens = max_new_tokens
@@ -71,7 +73,11 @@ class GaiaCliClient:
         self.server_pids = {}
         self.log.info("Gaia CLI client initialized with the following settings:")
         self.log.info(
-            f"agent_name: {self.agent_name}\n host: {self.host}\n port: {self.port}\n model: {self.model}\n max_new_tokens: {self.max_new_tokens}\n backend: {self.backend}\n device: {self.device}\n dtype: {self.dtype}"
+            f"agent_name: {self.agent_name}\n host: {self.host}\n"
+            f"port: {self.port}\n llm_port: {self.llm_port}\n"
+            f"ollama_port: {self.ollama_port}\n model: {self.model}\n"
+            f"max_new_tokens: {self.max_new_tokens}\n backend: {self.backend}\n"
+            f"device: {self.device}\n dtype: {self.dtype}"
         )
 
     def start(self):
@@ -129,7 +135,9 @@ class GaiaCliClient:
         # Return True if any server is downloading, False otherwise
         if self.backend == "ollama":
             try:
-                response = requests.get("http://localhost:8000/health", timeout=5)
+                response = requests.get(
+                    f"http://localhost:{self.llm_port}/health", timeout=5
+                )
                 self.log.info(response.json())
                 if response.status_code == 200:
                     data = response.json()
@@ -142,21 +150,21 @@ class GaiaCliClient:
     def check_servers_ready(self):
         servers_to_check = [
             (f"http://{self.host}:{self.port}/health", "Agent server"),
+            (f"http://localhost:{self.llm_port}/health", "LLM client server"),
         ]
 
         if self.backend == "ollama":
             if OLLAMA_AVAILABLE:
                 servers_to_check.extend(
                     [
-                        ("http://localhost:11434/api/version", "Ollama model server"),
-                        ("http://localhost:8000/health", "Ollama client server"),
+                        (
+                            f"http://localhost:{self.ollama_port}/api/version",
+                            "Ollama model server",
+                        ),
                     ]
                 )
             else:
                 self.log.warning("Ollama backend selected but Ollama is not available.")
-        else:
-            # TODO: Add LLM server health check for other backends
-            pass
 
         for url, server_name in servers_to_check:
             try:
@@ -176,12 +184,12 @@ class GaiaCliClient:
     def check_ollama_servers_ready(self):
         """Check if the Ollama model server and client server are ready to accept requests."""
         return self.is_server_available(
-            "localhost", 11434
-        ) and self.is_server_available("localhost", 8000)
+            "localhost", self.ollama_port
+        ) and self.is_server_available("localhost", self.llm_port)
 
     def check_llm_server_ready(self):
         """Check if the LLM server is ready to accept requests."""
-        return self.is_server_available("localhost", 8000)
+        return self.is_server_available("localhost", self.llm_port)
 
     def is_server_available(self, host, port):
         try:
@@ -234,7 +242,7 @@ class GaiaCliClient:
             target=launch_ollama_model_server,
             kwargs={
                 "host": "http://localhost",
-                "port": 11434,
+                "port": self.ollama_port,
                 "cli_mode": self.cli_mode,
             },
         )
@@ -247,7 +255,7 @@ class GaiaCliClient:
             kwargs={
                 "model": self.model,
                 "host": "http://localhost",
-                "port": 8000,
+                "port": self.llm_port,
                 "cli_mode": self.cli_mode,
             },
         )

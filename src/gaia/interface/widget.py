@@ -5,7 +5,6 @@ import sys
 import os
 import re
 import time
-import socket
 import json
 import asyncio
 from pathlib import Path
@@ -15,6 +14,7 @@ import subprocess
 import multiprocessing
 from urllib.parse import urlparse
 from aiohttp import web, ClientSession
+import requests
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -83,7 +83,7 @@ class SetupLLM(QObject):
             checkpoint = model_settings["checkpoint"]
 
             async with session.post(
-                "http://127.0.0.1:8001/load_llm",
+                f"http://127.0.0.1:{self.widget.agent_port}/load_llm",
                 json={
                     "model": self.widget.ui.model.currentText(),
                     "checkpoint": checkpoint,
@@ -117,22 +117,18 @@ class SetupLLM(QObject):
             # Wait for all servers to be fully ready
             try:
                 # Check agent server
-                self.check_server_available("127.0.0.1", 8001)
+                self.check_server_available("127.0.0.1", self.widget.agent_port)
+                # Check llm server
+                self.check_server_available("127.0.0.1", self.widget.llm_port)
 
                 # Check LLM server if not using Ollama
                 selected_model = self.widget.ui.model.currentText()
                 model_settings = self.widget.settings["models"][selected_model]
-                if model_settings["backend"] != "ollama":
-                    self.check_server_available("127.0.0.1", 8000)
-                else:
+                if model_settings["backend"] == "ollama" and OLLAMA_AVAILABLE:
                     # Check Ollama servers
-                    if OLLAMA_AVAILABLE:
-                        self.check_server_available(
-                            "127.0.0.1", 11434
-                        )  # Ollama model server
-                        self.check_server_available(
-                            "127.0.0.1", 8000
-                        )  # Ollama client server
+                    self.check_server_available(
+                        "127.0.0.1", self.widget.ollama_port, endpoint="/api/version"
+                    )  # Ollama model server
 
                 # Only show ready message after all servers are confirmed available
                 selected_model = self.widget.ui.model.currentText()
@@ -206,12 +202,16 @@ class SetupLLM(QObject):
             agent_class = getattr(agents, selected_agent.lower())
             self.widget.agent_server = multiprocessing.Process(
                 target=agent_class,
-                kwargs={"model": checkpoint, "host": "127.0.0.1", "port": 8001},
+                kwargs={
+                    "model": checkpoint,
+                    "host": "127.0.0.1",
+                    "port": self.widget.agent_port,
+                },
             )
             self.widget.agent_server.start()
 
         host = "127.0.0.1"
-        port = 8001
+        port = self.widget.agent_port
         self.check_server_available(host, port)
         self.log.info("Done.")
 
@@ -240,14 +240,14 @@ class SetupLLM(QObject):
             self.widget.llm_server = subprocess.Popen(
                 command, creationflags=subprocess.CREATE_NEW_CONSOLE
             )
-            self.check_server_available("127.0.0.1", 8000)
+            self.check_server_available("127.0.0.1", self.widget.llm_port)
         else:
             if self.widget.settings["llm_server"]:
                 self.widget.llm_server = multiprocessing.Process(
                     target=launch_llm_server, kwargs=llm_server_kwargs
                 )
                 self.widget.llm_server.start()
-                self.check_server_available("127.0.0.1", 8000)
+                self.check_server_available("127.0.0.1", self.widget.llm_port)
         asyncio.run(self.request_llm_load())
         self.log.info("Done.")
 
@@ -262,7 +262,7 @@ class SetupLLM(QObject):
         self.widget.ui.loadingLabel.setText("Initializing Ollama model server...")
 
         host = "http://localhost"
-        port = 11434
+        port = self.widget.ollama_port
 
         if self.widget.settings["dev_mode"]:
             # Construct the command to run launch_ollama_model_server in a separate shell
@@ -280,7 +280,8 @@ class SetupLLM(QObject):
             )
             self.widget.ollama_model_server.start()
 
-        self.check_server_available(host, port)
+        # Check if Ollama model server is ready, note this server uses a different endpoint for health check.
+        self.check_server_available(host, port, endpoint="/api/version")
         self.log.info("Done.")
 
     def initialize_ollama_client_server(self):
@@ -301,7 +302,7 @@ class SetupLLM(QObject):
         )
 
         host = "http://localhost"
-        port = 8000
+        port = self.widget.llm_port
         ollama_kwargs = {"model": checkpoint, "host": host, "port": port}
 
         if self.widget.settings["dev_mode"]:
@@ -347,7 +348,11 @@ class SetupLLM(QObject):
             max_new_tokens,
         )
 
-    def check_server_available(self, host, port, timeout=3000, check_interval=1):
+    def check_server_available(
+        self, host, port, endpoint="/health", timeout=3000, check_interval=1
+    ):
+        self.log.info(f"Checking server availability at {host}:{port}{endpoint}...")
+
         # Parse the host to remove any protocol
         parsed_host = urlparse(host)
         clean_host = parsed_host.netloc or parsed_host.path
@@ -356,31 +361,31 @@ class SetupLLM(QObject):
         attempts = 0
 
         while time.time() - start_time < timeout:
-            if self.is_server_available(clean_host, port):
+            if self.is_server_available(clean_host, port, endpoint):
                 self.log.info(
-                    f"Server available at {host}:{port} after {attempts} attempts"
+                    f"Server available at {host}:{port}{endpoint} after {attempts} attempts"
                 )
                 return True
 
             attempts += 1
             elapsed_time = time.time() - start_time
             self.log.info(
-                f"Waiting for server at {host}:{port}... (Attempt {attempts}, Elapsed time: {elapsed_time:.1f}s)"
+                f"Waiting for server at {host}:{port}{endpoint}... (Attempt {attempts}, Elapsed time: {elapsed_time:.1f}s)"
             )
 
             time.sleep(check_interval)
 
-        UIMessage.error(f"Server unavailable at {host}:{port} after {timeout} seconds")
+        UIMessage.error(
+            f"Server unavailable at {host}:{port}{endpoint} after {timeout} seconds"
+        )
         return False
 
-    def is_server_available(self, host, port):
+    def is_server_available(self, host, port, endpoint="/health"):
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(3)
-            s.connect((host, port))
-            s.close()
-            return True
-        except (ConnectionRefusedError, TimeoutError):
+            url = f"http://{host}:{port}{endpoint}"
+            response = requests.get(url, timeout=3)
+            return response.status_code == 200
+        except (requests.RequestException, ConnectionError):
             return False
 
 
@@ -394,7 +399,8 @@ class StreamToAgent(QObject):
     async def prompt_llm(self, prompt):
         async with ClientSession() as session:
             async with session.post(
-                "http://127.0.0.1:8001/prompt", json={"prompt": prompt}
+                f"http://127.0.0.1:{self.widget.agent_port}/prompt",
+                json={"prompt": prompt},
             ) as response:
                 await response.read()
 
@@ -434,7 +440,6 @@ class StreamFromAgent(QObject):
         self.widget = widget
         self.app = web.Application()
         self.host = "127.0.0.1"
-        self.port = 8002
         self.app.router.add_post("/stream_to_ui", self.receive_stream_from_agent)
         self.complete_message = ""
         self.agent_card_count = 0
@@ -472,7 +477,7 @@ class StreamFromAgent(QObject):
 
     @Slot()
     def do_work(self):
-        web.run_app(self.app, host=self.host, port=self.port)
+        web.run_app(self.app, host=self.host, port=self.widget.ui_port)
         self.finished.emit()
 
     async def get_stats(self):
@@ -495,6 +500,10 @@ class Widget(QWidget):
 
         # control enabling of web server
         self.server = server
+        self.llm_port = 8000
+        self.agent_port = 8001
+        self.ui_port = 8002
+        self.ollama_port = 11434
         self.is_restarting = False
         self.log = get_logger(__name__)
         self.current_backend = None
@@ -823,7 +832,7 @@ class Widget(QWidget):
             try:
                 async with ClientSession() as session:
                     async with session.post(
-                        "http://127.0.0.1:8001/restart",
+                        f"http://127.0.0.1:{self.agent_port}/restart",
                         json={},
                         timeout=5,  # Add timeout
                     ) as response:
