@@ -9,6 +9,9 @@ Topics:
     - [Check your runner's status](#check-your-runners-status)
     - [Actions are failing unexpectedly](#actions-are-failing-unexpectedly)
     - [Take a laptop off NIMBYS](#take-a-laptop-off-nimbys)
+- [Creating Workflows](#creating-workflows)
+    - [Capabilities and Limitations](#capabilities-and-limitations)
+    - [Workflow Examples](#workflow-examples)
 
 ## What is NIMBYS
 
@@ -90,3 +93,52 @@ Option 2, which requires physical/remote access to the laptop:
 - To reverse this action, run `Start-Service "actions.runner.*"`.
 
 Option 3 is to just turn the laptop off :)
+
+## Creating Workflows
+
+GitHub Workflows define the Actions that run on NIMBYS laptops to perform testing and experimentation tasks. This section will help you learn about what capabilities are available and show some examples of well-formed workflows.
+
+### Capabilities and Limitations
+
+Because NIMBYS uses self-hosted systems, we have to be careful about what we put into these workflows so that we avoid:
+- Corrupting the laptops, causing them to produce inconsistent results or failures.
+- Over-subscribing the capacity of the available laptops (3 at the time of this writing, scaling up to 12 in January 2025).
+
+> Note: we could relieve some of these limitations by implementing container-based actions on our self-hosted runners. Anyone should feel free to try and make that work.
+
+Here are some general guidelines to observe when creating or modifying NIMBYS workflows. If you aren't confident that you are properly following these guidelines, please contact someone to review your code before opening your PR.
+
+- Avoid triggering your workflow on NIMBYS before anyone has had a chance to review it against these guidelines. To avoid triggers, do not include `on: pull request:` in your workflow until after a reviewer has signed off.
+- Only map a workflow to NIMBYS with `runs on: stx` if it actually requires RyzenAI compute. If a step in your workflow can use generic compute (e.g., running a Hugging Face LLM on CPU), put that step on a generic non-NIMBYS runner like `runs on: windows-latest`. 
+- Be very considerate about installing software on to the runners:
+    - Installing software into the CWD (e.g., a path of `.\`) is always ok, because that will end up in `C:\actions-runner\_work\REPO`, which is always wiped between tests.
+    - Installing software into `AppData`, `Program Files`, etc. is not advisable because that software will persist across tests. See the [setup](#npu-runner-setup) section to see which software is already expected on the system.
+        - Note: GAIA tests do install some software, see [Workflow Examples](#workflow-examples) for an example of why these specific cases are ok.
+- Always create new conda environments in the CWD, for example `conda create -p .\my-env`.
+    - This way, the conda environment is located in `C:\actions-runner\_work\REPO`, which is wiped between tests.
+    - Do NOT create conda environments by name, for example `conda create -n dont-you-dare` since that will end up in the conda install location and will persist across tests.
+    - Make sure to activate your conda environment (e.g., `conda activate .\lemon-npu-ci`) before running any `pip install` commands. Otherwise your workflow will modify the base environment!
+- PowerShell scripts do not necessarily raise errors by programs they call.
+    - That means PowerShell can call a Python test, and then keep going and claim "success" even if that Python test fails and raises an error (non-zero exit code).
+    - You can add `if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }` after any line of script where it is that is particularly important to fail the workflow if the program in the preceding line raised an error.
+        - For example, this will make sure that lemonade installed correctly: 
+            1. pip install -e .[oga-npu]
+            2. if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+- Be considerate of how long your workflow will run for, and how often it will be triggered.
+    - All workflows go into the same queue and share the same pool of NIMBYS runners.
+    - A good target length for a NIMBYS workflow is 15 minutes.
+    - A single PR shouldn't kick off more than 2-4 NIMBYS workflow jobs.
+    - Workflows that take hour(s) to run, or PRs that kick off dozens of jobs (e.g., with a test matrix) could easily fill up all NIMBYS runners, causing peoples' CI/CD and other workflows to wait for a long time. This will make people cranky with you.
+- Be considerate of how much data your workflow will download.
+    - If you are going to download a lot of LLM weights, for example, please delete those files in a cleanup step in your workflow.
+    - It would be very bad to fill up a NIMBYS hard drive, since Windows machines misbehave pretty bad when their drives are full.
+
+### Workflow Examples
+
+At the time of this writing, we have published 4 workflows for NIMBYS:
+- [GAIA local npu tests](https://github.com/aigdat/gaia/blob/main/.github/workflows/local_npu_tests.yml)
+    - Installs NSIS into `Program Files`. This is ok because NSIS is a quick install of a very mature software.
+    - Installs GAIA into `AppData`. This is ok because the GAIA installer always deletes prior GAIA installs before attempting a new install. (Although it would still be preferable to install into `_work` if that was possible programmatically through an installer run-time option.)
+- [Lemonade OGA NPU tests](https://github.com/aigdat/genai/blob/main/.github/workflows/test_npu.yml)
+- [Lemonade OGA iGPU tests](https://github.com/aigdat/genai/blob/main/.github/workflows/test_dml.yml)
+- [Lemonade on-demand OGA LLM evaluation](https://github.com/aigdat/genai/blob/main/.github/workflows/oga_nimbys_ondemand.yml)
