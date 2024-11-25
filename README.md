@@ -109,3 +109,12 @@ This is a very new project whose codebase is under heavy development.  If you de
 - write your code in keeping with the same style as the rest of this repo's code.
 
 The best way to contribute is to add a new agent that covers a unique use-case. You can use any of the agents/bots under ./agents folder as a starting point.
+
+## UI Development
+If you're interested in contributing to GAIA's user interface, we provide a comprehensive guide for UI development using Qt Designer. This guide covers:
+- Setting up the UI development environment
+- Using Qt Designer to modify the interface
+- Compiling and testing UI changes
+- Working with assets and resources
+
+For detailed instructions, please refer to our [UI Development Guide](docs/ui.md).

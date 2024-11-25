@@ -6,6 +6,7 @@ import math
 import argparse
 import asyncio
 import subprocess
+from threading import Event
 from typing import Union, List, Dict, Any, Optional
 from urllib.parse import urlparse
 
@@ -68,6 +69,8 @@ class OllamaClient:
         }
         self.ensure_ollama_running()
         self.ensure_model_available()
+        self.stop_event = Event()
+        self.active_response = None
 
     def ensure_ollama_running(self):
         try:
@@ -171,17 +174,34 @@ class OllamaClient:
         Returns:
             The response from the ollama model.
         """
+        # Reset stop event before starting generation
+        self.stop_event.clear()
+
         response_generator = self.client.generate(
             model=self.model, prompt=prompt, stream=stream, **kwargs
         )
 
+        # Store the response generator for potential stopping
+        self.active_response = response_generator
+
         if stream:
             last_response = None
-            for response in response_generator:
-                last_response = response
-                yield response
-            if last_response:
-                self._update_stats(last_response)
+            try:
+                for response in response_generator:
+                    # Check if generation should be stopped
+                    if self.stop_event.is_set():
+                        response_generator.close()
+                        break
+
+                    last_response = response
+                    yield response
+
+                if last_response:
+                    self._update_stats(last_response)
+            finally:
+                # Clean up the active response reference
+                if hasattr(self, "active_response"):
+                    delattr(self, "active_response")
         else:
             response = response_generator
             self._update_stats(response)
@@ -257,6 +277,18 @@ class OllamaClient:
 
     def get_stats(self) -> Dict[str, Any]:
         return self.stats
+
+    def stop_generation(self) -> Dict[str, Any]:
+        """Stop the current generation."""
+        try:
+            self.stop_event.set()
+            # Close any active response
+            if hasattr(self, "active_response"):
+                self.active_response.close()
+            return {"terminated": True}
+        except Exception as e:
+            self.log.error(f"Error stopping generation: {str(e)}")
+            return {"terminated": False, "error": str(e)}
 
 
 class OllamaClientServer:
@@ -373,24 +405,29 @@ class OllamaClientServer:
                     if message == "done":
                         break
 
+                    self.ollama_client.stop_event.clear()
                     stream = self.ollama_client.generate(prompt=message, stream=True)
 
                     for chunk in stream:
+                        if websocket_closed:
+                            self.ollama_client.stop_generation()
+                            break
+
                         new_text = chunk["response"]
                         print(new_text, end="", flush=True)
                         await asyncio.sleep(0.1)  # Add a small delay (adjust as needed)
                         await websocket.send_text(new_text)
-                        if chunk["done"]:  # end of message
-                            await websocket.send_text(
-                                "</s>"
-                            )  # indicates end of message
+                        if chunk["done"]:
+                            await websocket.send_text("</s>")
                     print("\n")
 
             except WebSocketDisconnect:
                 self.log.info("WebSocket disconnected")
                 websocket_closed = True
+                self.ollama_client.stop_generation()
             except Exception as e:
                 self.log.error(f"An error occurred: {str(e)}")
+                self.ollama_client.stop_generation()
             finally:
                 if not websocket_closed:
                     await websocket.close()
@@ -421,6 +458,11 @@ class OllamaClientServer:
         @self.app.get("/stats")
         async def stats():
             return self.ollama_client.get_stats()
+
+        @self.app.get("/halt")
+        async def halt():
+            """Stop an in-progress generation."""
+            return self.ollama_client.stop_generation()
 
     def run(self, model: str):
         self.ollama_client = OllamaClient(model=model, cli_mode=self.cli_mode)

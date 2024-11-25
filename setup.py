@@ -6,7 +6,7 @@ ipex_version = "2.2.0"
 
 setup(
     name="gaia",
-    version="0.4.0",
+    version="0.4.4",
     description="GAIA genAI sandbox",
     author="AMD",
     package_dir={"": "src"},
@@ -91,6 +91,14 @@ setup(
             "adjustText",
             "plotly",
         ],
+        "ui-dev": [
+            "PyQt6",
+            "pyqt6-tools"
+        ],
+        "dev": [
+            "black",
+            "pylint",
+        ]
     },
     classifiers=[],
     entry_points={

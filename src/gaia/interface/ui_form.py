@@ -24,7 +24,7 @@ class Ui_Widget(object):
     def setupUi(self, Widget):
         if not Widget.objectName():
             Widget.setObjectName(u"Widget")
-        Widget.resize(918, 777)
+        Widget.resize(912, 755)
         sizePolicy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         sizePolicy.setHorizontalStretch(0)
         sizePolicy.setVerticalStretch(0)
@@ -167,7 +167,7 @@ class Ui_Widget(object):
         self.scrollArea.setWidgetResizable(True)
         self.scrollAreaWidgetContents = QWidget()
         self.scrollAreaWidgetContents.setObjectName(u"scrollAreaWidgetContents")
-        self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 898, 242))
+        self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 892, 235))
         self.verticalLayout_6 = QVBoxLayout(self.scrollAreaWidgetContents)
         self.verticalLayout_6.setObjectName(u"verticalLayout_6")
         self.verticalLayout_6.setContentsMargins(-1, 0, -1, 0)
@@ -288,9 +288,34 @@ class Ui_Widget(object):
 
         self.horizontalLayout_7.addItem(self.horizontalSpacer_7)
 
+        self.stop = QPushButton(self.frame)
+        self.stop.setObjectName(u"stop")
+        self.stop.setEnabled(True)
+        self.stop.setMaximumSize(QSize(16777215, 17))
+        self.stop.setStyleSheet(u"QPushButton {\n"
+"    color: rgb(77, 77, 77);\n"
+"     border-color: rgb(0, 0, 0); \n"
+"    background-color: rgb(0, 0, 0); \n"
+"    border-color: rgb(0, 0, 0); \n"
+"    qproperty-icon: url(\":/img/stop.png\");\n"
+"}\n"
+"\n"
+"QPushButton:hover {\n"
+"    color: rgb(255, 255, 255); \n"
+"    background-color: rgb(0, 0, 0);\n"
+"    border-color: rgb(0, 0, 0); \n"
+"}\n"
+"")
+        icon = QIcon()
+        icon.addFile(u":/img/stop.png", QSize(), QIcon.Mode.Normal, QIcon.State.Off)
+        self.stop.setIcon(icon)
+        self.stop.setIconSize(QSize(16, 11))
+
+        self.horizontalLayout_7.addWidget(self.stop)
+
         self.restart = QPushButton(self.frame)
         self.restart.setObjectName(u"restart")
-        self.restart.setMaximumSize(QSize(16777215, 15))
+        self.restart.setMaximumSize(QSize(16777215, 17))
         font1 = QFont()
         font1.setPointSize(9)
         self.restart.setFont(font1)
@@ -308,10 +333,11 @@ class Ui_Widget(object):
 "    border-color: rgb(0, 0, 0); \n"
 "}\n"
 "")
-        icon = QIcon()
-        icon.addFile(u":/img/refresh.png", QSize(), QIcon.Mode.Normal, QIcon.State.Off)
-        self.restart.setIcon(icon)
+        icon1 = QIcon()
+        icon1.addFile(u":/img/refresh.png", QSize(), QIcon.Mode.Normal, QIcon.State.Off)
+        self.restart.setIcon(icon1)
         self.restart.setIconSize(QSize(16, 11))
+        self.restart.setAutoRepeatInterval(98)
 
         self.horizontalLayout_7.addWidget(self.restart)
 
@@ -430,9 +456,9 @@ class Ui_Widget(object):
         self.ask.setMinimumSize(QSize(100, 25))
         self.ask.setFont(font)
         self.ask.setStyleSheet(u"")
-        icon1 = QIcon()
-        icon1.addFile(u":/img/send.png", QSize(), QIcon.Mode.Normal, QIcon.State.Off)
-        self.ask.setIcon(icon1)
+        icon2 = QIcon()
+        icon2.addFile(u":/img/send.png", QSize(), QIcon.Mode.Normal, QIcon.State.Off)
+        self.ask.setIcon(icon2)
 
         self.horizontalLayout_2.addWidget(self.ask)
 
@@ -477,7 +503,11 @@ class Ui_Widget(object):
         self.label_3.setText(QCoreApplication.translate("Widget", u"5:53:01", None))
         self.pushButton_4.setText(QCoreApplication.translate("Widget", u"Absolutely! How can I help you today?", None))
         self.label_4.setText(QCoreApplication.translate("Widget", u"5:53:02", None))
-        self.restart.setText(QCoreApplication.translate("Widget", u"Restart Conversation", None))
+        self.stop.setText(QCoreApplication.translate("Widget", u"Stop", None))
+        self.restart.setText(QCoreApplication.translate("Widget", u"Restart", None))
+#if QT_CONFIG(shortcut)
+        self.restart.setShortcut("")
+#endif // QT_CONFIG(shortcut)
         self.model.setPlaceholderText(QCoreApplication.translate("Widget", u"As", None))
         self.ask.setText(QCoreApplication.translate("Widget", u"Ask", None))
         self.prompt.setHtml(QCoreApplication.translate("Widget", u"<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0//EN\" \"http://www.w3.org/TR/REC-html40/strict.dtd\">\n"

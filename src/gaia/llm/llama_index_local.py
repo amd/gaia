@@ -59,7 +59,9 @@ class LocalLLM(CustomLLM):
         )
 
     @llm_completion_callback()
-    def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
+    def complete(
+        self, prompt: str, **kwargs: Any  # pylint: disable=W0613
+    ) -> CompletionResponse:
         response = ""
         new_card = True
         for chunk in self.prompt_llm_server(prompt=prompt, stream_to_ui=False):
@@ -73,8 +75,8 @@ class LocalLLM(CustomLLM):
 
     @llm_completion_callback()
     def stream_complete(
-        self, prompt: str, **kwargs: Any
-    ) -> CompletionResponseGen:  # pylint: disable=W0613
+        self, prompt: str, **kwargs: Any  # pylint: disable=W0613
+    ) -> CompletionResponseGen:
         response = ""
         new_card = True
         for chunk in self.prompt_llm_server(prompt=prompt, stream_to_ui=False):

@@ -7,8 +7,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>918</width>
-    <height>777</height>
+    <width>912</width>
+    <height>755</height>
    </rect>
   </property>
   <property name="sizePolicy">
@@ -315,8 +315,8 @@
           <rect>
            <x>0</x>
            <y>0</y>
-           <width>898</width>
-           <height>242</height>
+           <width>892</width>
+           <height>235</height>
           </rect>
          </property>
          <layout class="QVBoxLayout" name="verticalLayout_6">
@@ -549,11 +549,53 @@ padding: 8px 8px; </string>
           </spacer>
          </item>
          <item>
+          <widget class="QPushButton" name="stop">
+           <property name="enabled">
+            <bool>true</bool>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>17</height>
+            </size>
+           </property>
+           <property name="styleSheet">
+            <string notr="true">QPushButton {
+    color: rgb(77, 77, 77);
+     border-color: rgb(0, 0, 0); 
+    background-color: rgb(0, 0, 0); 
+    border-color: rgb(0, 0, 0); 
+    qproperty-icon: url(&quot;:/img/stop.png&quot;);
+}
+
+QPushButton:hover {
+    color: rgb(255, 255, 255); 
+    background-color: rgb(0, 0, 0);
+    border-color: rgb(0, 0, 0); 
+}
+</string>
+           </property>
+           <property name="text">
+            <string>Stop</string>
+           </property>
+           <property name="icon">
+            <iconset resource="resource.qrc">
+             <normaloff>:/img/stop.png</normaloff>:/img/stop.png</iconset>
+           </property>
+           <property name="iconSize">
+            <size>
+             <width>16</width>
+             <height>11</height>
+            </size>
+           </property>
+          </widget>
+         </item>
+         <item>
           <widget class="QPushButton" name="restart">
            <property name="maximumSize">
             <size>
              <width>16777215</width>
-             <height>15</height>
+             <height>17</height>
             </size>
            </property>
            <property name="font">
@@ -578,7 +620,7 @@ QPushButton:hover {
 </string>
            </property>
            <property name="text">
-            <string>Restart Conversation</string>
+            <string>Restart</string>
            </property>
            <property name="icon">
             <iconset resource="resource.qrc">
@@ -589,6 +631,12 @@ QPushButton:hover {
              <width>16</width>
              <height>11</height>
             </size>
+           </property>
+           <property name="shortcut">
+            <string/>
+           </property>
+           <property name="autoRepeatInterval">
+            <number>98</number>
            </property>
           </widget>
          </item>
@@ -871,6 +919,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
   </layout>
  </widget>
  <resources>
+  <include location="resource.qrc"/>
   <include location="resource.qrc"/>
  </resources>
  <connections/>

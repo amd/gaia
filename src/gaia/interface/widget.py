@@ -398,11 +398,18 @@ class StreamToAgent(QObject):
 
     async def prompt_llm(self, prompt):
         async with ClientSession() as session:
-            async with session.post(
-                f"http://127.0.0.1:{self.widget.agent_port}/prompt",
-                json={"prompt": prompt},
-            ) as response:
-                await response.read()
+            # Enable stop button when starting generation
+            self.widget.ui.stop.setEnabled(True)
+
+            try:
+                async with session.post(
+                    f"http://127.0.0.1:{self.widget.agent_port}/prompt",
+                    json={"prompt": prompt},
+                ) as response:
+                    await response.read()
+            finally:
+                # Disable stop button when generation is complete or fails
+                self.widget.ui.stop.setEnabled(False)
 
     @Slot()
     def do_work(self):
@@ -417,11 +424,15 @@ class StreamToAgent(QObject):
             self.log.error("Main label not found in message frame")
             return
 
+        # Disable stop button initially
+        self.widget.ui.stop.setEnabled(False)
+
         asyncio.run(self.prompt_llm(prompt))
 
         # Reenable send, restart buttons and dropdowns
         self.widget.ui.ask.setEnabled(True)
         self.widget.ui.restart.setEnabled(True)
+        # Note: Don't enable stop here since generation is complete
         self.widget.ui.model.setEnabled(True)
         self.widget.ui.device.setEnabled(True)
         self.widget.ui.agent.setEnabled(True)
@@ -570,6 +581,7 @@ class Widget(QWidget):
         # Connect buttons
         self.ui.ask.clicked.connect(self.send_message)
         self.ui.restart.clicked.connect(self.restart_conversation)
+        self.ui.stop.clicked.connect(self.stop_generation)
         self.ui.model.currentIndexChanged.connect(self.update_device_list)
         self.ui.model.currentIndexChanged.connect(self.deployment_changed)
         self.ui.device.currentIndexChanged.connect(self.deployment_changed)
@@ -629,6 +641,9 @@ class Widget(QWidget):
         self.agentReceiveWorker.add_card.connect(self.add_card)
         self.agentReceiveWorker.update_card.connect(self.update_card)
         self.agentReceiveThread.start()
+
+        # Initialize stop button as disabled
+        self.ui.stop.setEnabled(False)
 
     def _format_value(self, val):
         if isinstance(val, float):
@@ -840,6 +855,21 @@ class Widget(QWidget):
             except Exception as e:
                 self.log.warning(f"Failed to request restart: {str(e)}")
 
+    # Add new method to request stop
+    async def request_stop(self):
+        self.log.debug(f"request_stop called on port: {self.llm_port}")
+        if self.server:
+            try:
+                async with ClientSession() as session:
+                    async with session.get(
+                        f"http://127.0.0.1:{self.llm_port}/halt",
+                        json={},
+                        timeout=5,
+                    ) as response:
+                        await response.read()
+            except Exception as e:
+                self.log.error(f"Failed to request stop: {str(e)}")
+
     def restart_conversation(self):
         # Disable chat
         self.make_chat_visible(False)
@@ -859,6 +889,11 @@ class Widget(QWidget):
         if self.server:
             asyncio.run(self.request_restart())
 
+    def stop_generation(self):
+        # Request agent to stop generation
+        if self.server:
+            asyncio.run(self.request_stop())
+
     def send_message(self):
         prompt = self.ui.prompt.toPlainText()
         self.ui.prompt.clear()
@@ -866,6 +901,7 @@ class Widget(QWidget):
             # Disable send, restart buttons and dropdowns
             self.ui.ask.setEnabled(False)
             self.ui.restart.setEnabled(False)
+            self.ui.stop.setEnabled(True)
             self.ui.model.setEnabled(False)
             self.ui.device.setEnabled(False)
             self.ui.agent.setEnabled(False)
@@ -1034,6 +1070,8 @@ class Widget(QWidget):
 
         # Process and add new content
         if final_update:
+            # Disable stop button when generation is complete
+            self.ui.stop.setEnabled(False)
             # Clear existing content
             while message_frame.layout().count():
                 child = message_frame.layout().takeAt(0)

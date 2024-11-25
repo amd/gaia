@@ -14,7 +14,7 @@
             "backend" : "ollama",
             "checkpoint": "llama3.2:1b",
             "device": {
-                "cpu": [
+                "gpu": [
                     "Q8_0"
                 ]
             }
@@ -23,7 +23,7 @@
             "backend" : "ollama",
             "checkpoint": "llama3.2:3b",
             "device": {
-                "cpu": [
+                "gpu": [
                     "Q4_K_M"
                 ]
             }
@@ -32,7 +32,7 @@
             "backend" : "ollama",
             "checkpoint": "llama3.1:8b",
             "device": {
-                "cpu": [
+                "gpu": [
                     "Q4_0"
                 ]
             }
