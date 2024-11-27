@@ -1,4 +1,4 @@
-# NIMBYS Documentation
+# 🌩️ NIMBYS 🌩️ Documentation
 
 This page documents how to set up and maintain NIMBYS, a geo-distributed cloud of RyzenAI hardware.
 
@@ -13,7 +13,7 @@ Topics:
     - [Capabilities and Limitations](#capabilities-and-limitations)
     - [Workflow Examples](#workflow-examples)
 
-## What is NIMBYS
+## What is 🌩️ NIMBYS 🌩️
 
 NIMBYS is implemented as a pool of GitHub self-hosted runners. A "runner" is a computer that has installed GitHub's runner software, which runs a service that makes the laptop available to run GitHub Actions. In turn, Actions are defined by Workflows, which specify when the Action should run (manual trigger, CI, CD, etc.) and what the Action does (run tests, build packages, run an experiment, etc.). 
 
@@ -108,6 +108,8 @@ Because NIMBYS uses self-hosted systems, we have to be careful about what we put
 
 Here are some general guidelines to observe when creating or modifying NIMBYS workflows. If you aren't confident that you are properly following these guidelines, please contact someone to review your code before opening your PR.
 
+- Place a NIMBYS emoji 🌩️ in the name of all of your NIMBYS workflows, so that PR reviewers can see at a glance which workflows are using NIMBYS resources.
+    - Example: `name: Test Lemonade with DirectML 🌩️`
 - Avoid triggering your workflow on NIMBYS before anyone has had a chance to review it against these guidelines. To avoid triggers, do not include `on: pull request:` in your workflow until after a reviewer has signed off.
 - Only map a workflow to NIMBYS with `runs on: stx` if it actually requires RyzenAI compute. If a step in your workflow can use generic compute (e.g., running a Hugging Face LLM on CPU), put that step on a generic non-NIMBYS runner like `runs on: windows-latest`. 
 - Be very considerate about installing software on to the runners:
@@ -130,8 +132,11 @@ Here are some general guidelines to observe when creating or modifying NIMBYS wo
     - A single PR shouldn't kick off more than 2-4 NIMBYS workflow jobs.
     - Workflows that take hour(s) to run, or PRs that kick off dozens of jobs (e.g., with a test matrix) could easily fill up all NIMBYS runners, causing peoples' CI/CD and other workflows to wait for a long time. This will make people cranky with you.
 - Be considerate of how much data your workflow will download.
-    - If you are going to download a lot of LLM weights, for example, please delete those files in a cleanup step in your workflow.
     - It would be very bad to fill up a NIMBYS hard drive, since Windows machines misbehave pretty bad when their drives are full.
+    - Place your Hugging Face cache inside the `_work` directory so that it will be wiped after each job.
+        - Example: `$Env:HF_HOME=".\hf-cache"`
+    - Place your Lemonade cache inside the `_work` directory so that it will be wiped after each job.
+        - Example: `lemonade -d .\ci-cache` or `$Env:LEMONADE_CACHE_DIR=".\ci-cache"`. Use the environment variable, rather than the `-d` flag, wherever possible since it will apply to all lemonade calls within the job step.
 
 ### Workflow Examples
 

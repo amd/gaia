@@ -1,6 +1,6 @@
 # Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
-name: GAIA NPU Local Tests
+name: GAIA NPU Local Tests 🌩️
 
 on:
   push:
@@ -72,6 +72,11 @@ jobs:
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        shell: PowerShell
         run: |
+          $cwd = (Get-Item .\).FullName
+          $Env:LEMONADE_CACHE_DIR="$cwd\lemon-cache"
+          $Env:HF_HOME="$cwd\hf-cache"
+
           conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env python tests\test_llama_index.py --backend npu
       

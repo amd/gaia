@@ -16,6 +16,9 @@ runs:
         HUGGINGFACE_ACCESS_TOKEN: ${{ inputs.huggingface_access_token }}
         HF_TOKEN: ${{ inputs.huggingface_access_token }}
       run: |
+          $Env:HF_HOME = ".\hf-cache"
+          $Env:LEMONADE_CACHE_DIR = ".\lemon-cache"
+          
           $installFromSource = [System.Convert]::ToBoolean("${{ inputs.install_from_source }}")
 
           if ( $installFromSource ) {
