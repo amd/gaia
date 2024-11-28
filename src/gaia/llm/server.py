@@ -4,6 +4,7 @@ import argparse
 import torch
 
 from gaia.interface.util import UIMessage
+from gaia.interface.huggingface import set_huggingface_token
 
 USE_TKML = True
 if USE_TKML:
@@ -45,8 +46,36 @@ def launch_llm_server(
                 cache_dir=cache.DEFAULT_CACHE_DIR,
                 build_name=f"{checkpoint}_{device}_{dtype}",
             )
-            state = runtime().run(state, input=checkpoint, device=device, dtype=dtype)
+            try:
+                state = runtime().run(
+                    state, input=checkpoint, device=device, dtype=dtype
+                )
+
+            except Exception as e:
+                err = str(e)
+                if "gated repo" in err or "token" in err:
+                    # Get HuggingFace token through UI
+                    token = set_huggingface_token()
+                    if token:
+                        # Retry with the new token
+                        state = State(
+                            cache_dir=cache.DEFAULT_CACHE_DIR,
+                            build_name=f"{checkpoint}_{device}_{dtype}",
+                        )
+                        state = runtime().run(
+                            state, input=checkpoint, device=device, dtype=dtype
+                        )
+                    else:
+                        UIMessage.error(
+                            "No Hugging Face token provided. Cannot access gated model.",
+                            cli_mode=cli_mode,
+                        )
+                        return
+                else:
+                    UIMessage.error(err, cli_mode=cli_mode)
+                    raise
             state = Serve().run(state, max_new_tokens=max_new_tokens)
+
         except FileNotFoundError as e:
             UIMessage.error(
                 f"Error: Unable to find the model files for {checkpoint}.\n\n"
@@ -56,6 +85,7 @@ def launch_llm_server(
                 cli_mode=cli_mode,
             )
             return
+
         except Exception as e:
             UIMessage.error(
                 f"An unexpected error occurred:\n\n{str(e)}", cli_mode=cli_mode
