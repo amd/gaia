@@ -118,3 +118,6 @@ If you're interested in contributing to GAIA's user interface, we provide a comp
 - Working with assets and resources
 
 For detailed instructions, please refer to our [UI Development Guide](docs/ui.md).
+
+# License
+This project is licensed under the terms of the MIT license. See LICENSE.md for details.
