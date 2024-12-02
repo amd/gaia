@@ -1523,6 +1523,11 @@ class ModelSwitchWorker(QThread):
 
 
 def main():
+    if len(sys.argv) > 1:
+        raise Exception(
+            "Command line arguments are not supported. Please use the gaia-cli command line tool instead. If you need to change any settings, you can modify settings.json."
+        )
+
     multiprocessing.freeze_support()
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(r":/img\gaia.ico"))
