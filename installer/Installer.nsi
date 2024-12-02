@@ -269,12 +269,12 @@ Section "Install Main Components" SEC01
     ${If} ${MODE} == "NPU"
       ; Give the NPU installer full dependencies in CI mode, otherwise give it minimal dependencies
       ${If} ${CI} == "ON"
-        ExecWait '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"[clip]' $R0
+        ExecWait '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"[clip] --no-warn-script-location' $R0
       ${Else}
-        ExecWait '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"' $R0 
+        ExecWait '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR" --no-warn-script-location' $R0 
       ${EndIf}
     ${Else}
-      ExecWait '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"[clip]' $R0
+      ExecWait '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"[clip] --no-warn-script-location' $R0
     ${EndIf}
 
     ; Check if gaia installatation was successful (exit code should be 0)
