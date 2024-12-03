@@ -48,43 +48,6 @@ def main():
     # Delete the zip file
     os.remove(zip_file_path)
 
-    # Move contents of oga_npu_path to lemonade_models_path
-    oga_npu_path = os.path.join(folder_path, "amd_oga")
-    lemonade_models_path = os.path.join(
-        folder_path,
-        "gaia_env",
-        "Lib",
-        "site-packages",
-        "turnkeyml",
-        "llm",
-        "tools",
-        "ort_genai",
-        "models",
-    )
-
-    # Copy contents of amd_oga to lemonade's models folder
-    for item in os.listdir(oga_npu_path):
-        s = os.path.join(oga_npu_path, item)
-        d = os.path.join(lemonade_models_path, item)
-        if os.path.isdir(s):
-            shutil.copytree(s, d, dirs_exist_ok=True)
-        else:
-            shutil.copy2(s, d)
-
-    # Remove the original oga_npu_path
-    shutil.rmtree(oga_npu_path)
-
-    # Move DLLs from libs folder to models folder
-    libs_path = os.path.join(lemonade_models_path, "libs")
-    if os.path.exists(libs_path):
-        for file in os.listdir(libs_path):
-            if file.endswith(".dll"):
-                src = os.path.join(libs_path, file)
-                dst = os.path.join(lemonade_models_path, file)
-                shutil.move(src, dst)
-    else:
-        raise Exception("Libs folder not found in the models directory.")
-
 
 if __name__ == "__main__":
     main()
