@@ -55,16 +55,40 @@ runs:
             Write-Host "Port 8000 (llm server) is free."
           }
 
-          # Step 2: Start GAIA in the background
+          # Step 2: Start GAIA in the background with log capture
           $env:QT_QPA_PLATFORM = "offscreen"
           Write-Host "Environment variable QT_QPA_PLATFORM set to offscreen"
           $env:PATH = "$env:PATH;C:\Users\${{ inputs.username }}\AppData\Local\Programs\Ollama"
+
           if ( $installFromSource ) {
-            $gaiaProcess = Start-Process -NoNewWindow -FilePath "gaia" -PassThru
+            $gaiaProcess = Start-Process -NoNewWindow -FilePath "gaia" -RedirectStandardOutput "gaia.log" -RedirectStandardError "gaia_error.log" -PassThru
           } else {
-            $gaiaProcess = Start-Process -FilePath "conda" -ArgumentList "run -p C:\Users\${{ inputs.username }}\AppData\Local\GAIA\gaia_env gaia" -PassThru
+            $gaiaProcess = Start-Process -FilePath "conda" -ArgumentList "run -p C:\Users\${{ inputs.username }}\AppData\Local\GAIA\gaia_env gaia" -RedirectStandardOutput "gaia.log" -RedirectStandardError "gaia_error.log" -PassThru
           }
           Write-Host "Started GAIA..."
+
+          # Start log monitoring in background jobs
+          $logJob = Start-Job -ScriptBlock {
+            while($true) {
+              if(Test-Path "gaia.log") {
+                Get-Content "gaia.log" -Wait | ForEach-Object {
+                  Write-Host "[GAIA] $_"
+                }
+              }
+              Start-Sleep -Seconds 1
+            }
+          }
+
+          $errorLogJob = Start-Job -ScriptBlock {
+            while($true) {
+              if(Test-Path "gaia_error.log") {
+                Get-Content "gaia_error.log" -Wait | ForEach-Object {
+                  Write-Host "[GAIA ERROR] $_"
+                }
+              }
+              Start-Sleep -Seconds 1
+            }
+          }
 
           # Step 3: Check if GAIA servers are running
           Write-Host "Wait for the Agent and LLM ports to come up"
@@ -88,6 +112,10 @@ runs:
                 break
             }
 
+            # Receive any pending output from the log jobs
+            Receive-Job -Job $logJob
+            Receive-Job -Job $errorLogJob
+
             Start-Sleep -Seconds 30
           }
 
@@ -100,6 +128,16 @@ runs:
             Write-Host "GAIA process is still alive."
           }
 
-          # Step 5: Stop the GAIA process
+          # Step 5: Stop everything
+          Stop-Job -Job $logJob
+          Stop-Job -Job $errorLogJob
+          Remove-Job -Job $logJob
+          Remove-Job -Job $errorLogJob
           Stop-Process -Id $gaiaProcess.Id
           Write-Host "GAIA process has been stopped."
+
+          # Show final logs
+          Write-Host "=== Final GAIA Logs ==="
+          if(Test-Path "gaia.log") { Get-Content "gaia.log" }
+          Write-Host "=== Final GAIA Error Logs ==="
+          if(Test-Path "gaia_error.log") { Get-Content "gaia_error.log" }

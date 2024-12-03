@@ -1,5 +1,5 @@
 {
-    "dev_mode": true,
+    "dev_mode": false,
     "llm_server": true,
     "show_label": true,
 
