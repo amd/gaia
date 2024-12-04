@@ -7,6 +7,7 @@ import re
 import time
 import json
 import asyncio
+from threading import Lock
 from pathlib import Path
 from datetime import datetime
 import textwrap
@@ -68,87 +69,123 @@ else:
 # SetupLLM class performs tasks in a separate thread
 class SetupLLM(QObject):
     finished = Signal()
+    cancelled = Signal()
 
     def __init__(self, widget):
         super().__init__()
         self.widget = widget
         self.log = get_logger(__name__)
+        self._is_cancelled = False
+        self._lock = Lock()
+        self._workers_lock = Lock()
+        self.server_check_workers = []
 
-    # Request Agent Server to update connection to LLM Server
-    async def request_llm_load(self):
-        async with ClientSession() as session:
-            # Get the model settings
-            selected_model = self.widget.ui.model.currentText()
-            model_settings = self.widget.settings["models"][selected_model]
-            checkpoint = model_settings["checkpoint"]
+    def cancel(self):
+        """Signal that the operation should be cancelled."""
+        with self._lock:
+            self._is_cancelled = True
 
-            async with session.post(
-                f"http://127.0.0.1:{self.widget.agent_port}/load_llm",
-                json={
-                    "model": self.widget.ui.model.currentText(),
-                    "checkpoint": checkpoint,
-                },
-            ) as response:
-                # Wait for response from server
-                response_data = await response.json()
-                # Check if LLM has been successfully loaded
-                if response_data.get("status") == "Success":
-                    self.log.debug("LLM has been loaded successfully!")
-                else:
-                    self.log.error("Failed to load LLM.")
+        with self._workers_lock:
+            workers = (
+                self.server_check_workers.copy()
+            )  # Create a copy to iterate safely
+
+        for worker in workers:
+            if isinstance(worker, ServerCheckWorker):
+                worker.cancel()
+                worker.wait()
+            else:
+                self.log.error(f"Unexpected object in server_check_workers: {worker}")
+
+        self.cancelled.emit()
+
+    def is_cancelled(self):
+        """Thread-safe way to check cancellation status"""
+        with self._lock:
+            return self._is_cancelled
+
+    def on_server_check_complete(self, is_ready):
+        if not is_ready and not self._is_cancelled:
+            self.log.error("Server failed to become available")
+            self.widget.ui.loadingLabel.setText("Error: Server failed to initialize")
 
     @Slot()
     def do_work(self):
         self.log.debug("SetupLLM do_work started")
+        self._is_cancelled = False
         self.widget.terminate_servers()
 
         # Switch visibility of UI elements
         self.widget.ui.loading.setVisible(True)
         self.widget.ui.loadingLabel.setVisible(True)
         self.widget.ui.loadingGif.setVisible(True)
+        self.widget.ui.cancel.setVisible(True)
         self.widget.ui.ask.setEnabled(False)
         self.widget.ui.model.setEnabled(False)
         self.widget.ui.device.setEnabled(False)
         self.widget.ui.agent.setEnabled(False)
 
         if self.widget.settings["llm_server"]:
-            self.initialize_servers()
-
-            # Wait for all servers to be fully ready
             try:
-                # Check agent server
-                self.check_server_available("127.0.0.1", self.widget.agent_port)
-                # Check llm server
-                self.check_server_available("127.0.0.1", self.widget.llm_port)
+                self.initialize_servers()
+                if self._is_cancelled:
+                    return
 
-                # Check LLM server if not using Ollama
+                # Check all servers asynchronously
+                workers = []
+
+                # Check agent server
+                workers.append(
+                    self.check_server_available("127.0.0.1", self.widget.agent_port)
+                )
+
+                # Check LLM server
+                workers.append(
+                    self.check_server_available("127.0.0.1", self.widget.llm_port)
+                )
+
+                # Check Ollama server if needed
                 selected_model = self.widget.ui.model.currentText()
                 model_settings = self.widget.settings["models"][selected_model]
                 if model_settings["backend"] == "ollama" and OLLAMA_AVAILABLE:
-                    # Check Ollama servers
-                    self.check_server_available(
-                        "127.0.0.1", self.widget.ollama_port, endpoint="/api/version"
-                    )  # Ollama model server
+                    workers.append(
+                        self.check_server_available(
+                            "127.0.0.1",
+                            self.widget.ollama_port,
+                            endpoint="/api/version",
+                        )
+                    )
 
-                # Only show ready message after all servers are confirmed available
-                selected_model = self.widget.ui.model.currentText()
-                self.widget.ui.loadingLabel.setText(
-                    f"Ready to run {selected_model} on {self.widget.ui.device.currentText()}!"
-                )
+                # Wait for all workers to complete
+                for worker in workers:
+                    if isinstance(worker, ServerCheckWorker):
+                        worker.wait()
+                    else:
+                        self.log.error(
+                            f"Unexpected object in server_check_workers: {worker}"
+                        )
+                    if self._is_cancelled:
+                        return
+
+                if not self._is_cancelled:
+                    self.widget.ui.loadingLabel.setText(
+                        f"Ready to run {selected_model} on {self.widget.ui.device.currentText()}!"
+                    )
+
             except Exception as e:
-                self.log.error(f"Error waiting for servers: {str(e)}")
-                self.widget.ui.loadingLabel.setText(
-                    "Error: Servers failed to initialize properly"
-                )
+                if not self._is_cancelled:
+                    self.log.error(f"Error during setup: {str(e)}")
                 return
         else:
             self.log.debug("Skipping initialize_servers()")
 
-        self.widget.ui.loadingGif.setVisible(False)
-        self.widget.ui.ask.setEnabled(True)
-        self.widget.ui.model.setEnabled(True)
-        self.widget.ui.device.setEnabled(True)
-        self.widget.ui.agent.setEnabled(True)
+        if not self._is_cancelled:
+            self.widget.ui.loadingGif.setVisible(False)
+            self.widget.ui.cancel.setVisible(False)
+            self.widget.ui.ask.setEnabled(True)
+            self.widget.ui.model.setEnabled(True)
+            self.widget.ui.device.setEnabled(True)
+            self.widget.ui.agent.setEnabled(True)
 
         self.log.debug("SetupLLM do_work finished")
         self.finished.emit()
@@ -351,6 +388,7 @@ class SetupLLM(QObject):
     def check_server_available(
         self, host, port, endpoint="/health", timeout=3000, check_interval=1
     ):
+        """Check if server is available with a longer timeout for model downloads."""
         self.log.info(f"Checking server availability at {host}:{port}{endpoint}...")
 
         # Parse the host to remove any protocol
@@ -360,33 +398,78 @@ class SetupLLM(QObject):
         start_time = time.time()
         attempts = 0
 
-        while time.time() - start_time < timeout:
-            if self.is_server_available(clean_host, port, endpoint):
+        while (
+            time.time() - start_time < timeout and not self._is_cancelled
+        ):  # Check cancellation in while condition
+            try:
+                if self.is_server_available(clean_host, port, endpoint):
+                    self.log.info(
+                        f"Server available at {host}:{port}{endpoint} after {attempts} attempts"
+                    )
+                    return True
+
+                attempts += 1
+                elapsed_time = time.time() - start_time
                 self.log.info(
-                    f"Server available at {host}:{port}{endpoint} after {attempts} attempts"
+                    f"Waiting for server at {host}:{port}{endpoint}... (Attempt {attempts}, Elapsed time: {elapsed_time:.1f}s)"
                 )
-                return True
 
-            attempts += 1
-            elapsed_time = time.time() - start_time
-            self.log.info(
-                f"Waiting for server at {host}:{port}{endpoint}... (Attempt {attempts}, Elapsed time: {elapsed_time:.1f}s)"
+                # Use a shorter sleep interval and check cancellation more frequently
+                for _ in range(
+                    int(check_interval * 10)
+                ):  # Split sleep into smaller chunks
+                    if self._is_cancelled:
+                        self.log.info("Server check cancelled during sleep")
+                        return False
+                    time.sleep(0.1)  # Sleep in 100ms intervals
+
+            except Exception as e:
+                self.log.error(f"Error checking server: {str(e)}")
+                if self._is_cancelled:
+                    return False
+
+        if self._is_cancelled:
+            self.log.info("Server check cancelled")
+            return False
+        elif not self._is_cancelled:
+            UIMessage.error(
+                f"Server unavailable at {host}:{port}{endpoint} after {timeout} seconds"
             )
-
-            time.sleep(check_interval)
-
-        UIMessage.error(
-            f"Server unavailable at {host}:{port}{endpoint} after {timeout} seconds"
-        )
         return False
 
     def is_server_available(self, host, port, endpoint="/health"):
+        """Check if a server is available with a short timeout."""
         try:
             url = f"http://{host}:{port}{endpoint}"
-            response = requests.get(url, timeout=3)
+            response = requests.get(
+                url, timeout=1
+            )  # Shorter timeout for quicker cancellation
             return response.status_code == 200
         except (requests.RequestException, ConnectionError):
             return False
+
+    async def request_llm_load(self):
+        """Request Agent Server to update connection to LLM Server"""
+        async with ClientSession() as session:
+            # Get the model settings
+            selected_model = self.widget.ui.model.currentText()
+            model_settings = self.widget.settings["models"][selected_model]
+            checkpoint = model_settings["checkpoint"]
+
+            async with session.post(
+                f"http://127.0.0.1:{self.widget.agent_port}/load_llm",
+                json={
+                    "model": self.widget.ui.model.currentText(),
+                    "checkpoint": checkpoint,
+                },
+            ) as response:
+                # Wait for response from server
+                response_data = await response.json()
+                # Check if LLM has been successfully loaded
+                if response_data.get("status") == "Success":
+                    self.log.debug("LLM has been loaded successfully!")
+                else:
+                    self.log.error("Failed to load LLM.")
 
 
 class StreamToAgent(QObject):
@@ -424,17 +507,14 @@ class StreamToAgent(QObject):
             self.log.error("Main label not found in message frame")
             return
 
-        # Disable stop button initially
-        self.widget.ui.stop.setEnabled(False)
-
         asyncio.run(self.prompt_llm(prompt))
 
-        # Reenable send, restart buttons and dropdowns
         self.widget.ui.ask.setEnabled(True)
         self.widget.ui.restart.setEnabled(True)
-        # Note: Don't enable stop here since generation is complete
+        self.widget.ui.stop.setEnabled(False)
+        self.widget.ui.cancel.setEnabled(True)
         self.widget.ui.model.setEnabled(True)
-        self.widget.ui.device.setEnabled(True)
+        self.widget.ui.device.setEnabled(False)
         self.widget.ui.agent.setEnabled(True)
 
         self.finished.emit()
@@ -645,6 +725,11 @@ class Widget(QWidget):
         # Initialize stop button as disabled
         self.ui.stop.setEnabled(False)
 
+        # Connect cancel button to setupWorker's cancel method
+        self.ui.cancel.clicked.connect(self.cancel_loading)
+        if hasattr(self, "setupWorker"):
+            self.setupWorker.cancelled.connect(self.terminate_servers)
+
     def _format_value(self, val):
         if isinstance(val, float):
             return f"{val:.1f}"
@@ -666,7 +751,6 @@ class Widget(QWidget):
                     "Agent server was already terminated or not initialized."
                 )
             self.agent_server = None
-
         if self.llm_server is not None:
             self.log.debug("Closing LLM server")
             try:
@@ -745,10 +829,12 @@ class Widget(QWidget):
 
         self.is_restarting = True
 
-        # Show loading screen immediately
+        # Show loading screen and cancel button immediately
         self.ui.loading.setVisible(True)
         self.ui.loadingLabel.setVisible(True)
         self.ui.loadingGif.setVisible(True)
+        self.ui.cancel.setVisible(True)
+        self.ui.cancel.setEnabled(True)
 
         # Update loading label with initial message
         selected_model = self.ui.model.currentText()
@@ -772,6 +858,7 @@ class Widget(QWidget):
     def _on_switch_complete(self):
         self.is_restarting = False
         self.ui.loadingGif.setVisible(False)
+        self.ui.cancel.setVisible(False)
 
         # Re-enable UI elements
         self.ui.ask.setEnabled(True)
@@ -779,13 +866,17 @@ class Widget(QWidget):
         self.ui.device.setEnabled(True)
         self.ui.agent.setEnabled(True)
 
-        self.switch_worker.deleteLater()
+        # Check if switch_worker exists before trying to delete it
+        if hasattr(self, "switch_worker") and self.switch_worker is not None:
+            self.switch_worker.deleteLater()
+            self.switch_worker = None
 
     def _on_switch_error(self, error_msg):
         self.is_restarting = False
         self.log.error(f"Model switch failed: {error_msg}")
         self.ui.loadingLabel.setText("Error switching models!")
         self.ui.loadingGif.setVisible(False)
+        self.ui.cancel.setVisible(False)  # Hide cancel button on error
 
         # Re-enable UI elements
         self.ui.ask.setEnabled(True)
@@ -793,7 +884,8 @@ class Widget(QWidget):
         self.ui.device.setEnabled(True)
         self.ui.agent.setEnabled(True)
 
-        self.switch_worker.deleteLater()
+        if hasattr(self, "switch_worker"):
+            self.switch_worker.deleteLater()
         QMessageBox.critical(self, "Error", f"Failed to switch models: {error_msg}")
 
     def make_chat_visible(self, visible):
@@ -834,6 +926,7 @@ class Widget(QWidget):
                 event.key() == Qt.Key_Return
                 and self.ui.prompt.hasFocus()
                 and self.ui.ask.isEnabled()
+                and self.server  # Add check for server availability
             ):
                 # Send message and consume the event, preventing return from being added to prompt box
                 self.send_message()
@@ -893,6 +986,45 @@ class Widget(QWidget):
         # Request agent to stop generation
         if self.server:
             asyncio.run(self.request_stop())
+
+    def cancel_loading(self):
+        self.log.debug("Cancelling loading process")
+
+        # Cancel model switch worker if it exists and is still valid
+        if hasattr(self, "switch_worker") and self.switch_worker is not None:
+            self.switch_worker.cancel()
+            if self.switch_worker.isRunning():
+                self.switch_worker.wait()
+            self.switch_worker = None
+
+        # Cancel setup worker and all its server check workers
+        if self.server and hasattr(self, "setupWorker"):
+            self.setupWorker.cancel()
+            if hasattr(self, "setupThread") and self.setupThread.isRunning():
+                self.setupThread.quit()
+                self.setupThread.wait()
+
+        # Cancel agent send thread if running
+        if hasattr(self, "agentSendThread") and self.agentSendThread.isRunning():
+            self.agentSendThread.quit()
+            self.agentSendThread.wait()
+
+        # Terminate all servers
+        self.terminate_servers()
+
+        # Reset UI elements
+        self.ui.loadingGif.setVisible(False)
+        self.ui.loadingLabel.setText("Loading cancelled. Select a model to continue.")
+        self.ui.cancel.setVisible(False)
+
+        # Disable send button and keep other controls enabled
+        self.ui.ask.setEnabled(False)
+        self.ui.model.setEnabled(True)
+        self.ui.device.setEnabled(True)
+        self.ui.agent.setEnabled(True)
+
+        # Reset restart flag
+        self.is_restarting = False
 
     def send_message(self):
         prompt = self.ui.prompt.toPlainText()
@@ -1498,12 +1630,20 @@ class ModelSwitchWorker(QThread):
         super().__init__()
         self.widget = widget
         self.log = widget.log
+        self._is_cancelled = False
+
+    def cancel(self):
+        """Signal that the operation should be cancelled."""
+        self._is_cancelled = True
 
     def run(self):
         try:
             # Update the device list before restarting the conversation
             self.widget.update_device_list()
             self.widget.restart_conversation()
+
+            if self._is_cancelled:
+                return
 
             selected_model = self.widget.ui.model.currentText()
             model_settings = self.widget.settings["models"][selected_model]
@@ -1517,9 +1657,87 @@ class ModelSwitchWorker(QThread):
                 else:
                     self.log.warning("Setup thread is already running")
 
-            self.finished.emit()
+            if not self._is_cancelled:
+                self.finished.emit()
         except Exception as e:
-            self.error.emit(str(e))
+            if not self._is_cancelled:
+                self.error.emit(str(e))
+
+
+class ServerCheckWorker(QThread):
+    server_ready = Signal(bool)
+
+    def __init__(self, host, port, endpoint="/health", timeout=3000):
+        super().__init__()
+        self.host = host
+        self.port = port
+        self.endpoint = endpoint
+        self.timeout = timeout
+        self._is_cancelled = False
+        self.log = get_logger(__name__)
+
+    def cancel(self):
+        """Signal that the operation should be cancelled."""
+        self._is_cancelled = True
+
+    def run(self):
+        self.log.info(
+            f"Checking server availability at {self.host}:{self.port}{self.endpoint}..."
+        )
+
+        # Parse the host to remove any protocol
+        parsed_host = urlparse(self.host)
+        clean_host = parsed_host.netloc or parsed_host.path
+
+        start_time = time.time()
+        attempts = 0
+
+        while time.time() - start_time < self.timeout and not self._is_cancelled:
+            try:
+                if self.is_server_available(clean_host, self.port, self.endpoint):
+                    self.log.info(f"Server available after {attempts} attempts")
+                    self.server_ready.emit(True)
+                    return
+
+                attempts += 1
+                elapsed_time = time.time() - start_time
+                self.log.info(
+                    f"Waiting for server... (Attempt {attempts}, Elapsed time: {elapsed_time:.1f}s)"
+                )
+
+                # Sleep in small chunks to remain responsive to cancellation
+                for _ in range(10):  # 100ms * 10 = 1 second
+                    if self._is_cancelled:
+                        self.log.info("Server check cancelled")
+                        self.server_ready.emit(False)
+                        return
+                    time.sleep(0.1)
+
+            except Exception as e:
+                self.log.error(f"Error checking server: {str(e)}")
+                if self._is_cancelled:
+                    self.server_ready.emit(False)
+                    return
+
+        self.server_ready.emit(False)
+
+    def is_server_available(self, host, port, endpoint="/health"):
+        try:
+            url = f"http://{host}:{port}{endpoint}"
+            response = requests.get(url, timeout=1)
+            if response.status_code != 200:
+                self.log.warning(f"Server returned status code {response.status_code}")
+                return False
+            return True
+        except requests.Timeout:
+            self.log.debug(f"Timeout connecting to {url}")
+            return False
+        except requests.ConnectionError:
+            self.log.debug(f"Connection refused to {url}")
+            return False
+        except Exception as e:
+            self.log.error(f"Unexpected error checking server: {str(e)}")
+            return False
 
 
 def main():

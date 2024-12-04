@@ -24,7 +24,7 @@ class Ui_Widget(object):
     def setupUi(self, Widget):
         if not Widget.objectName():
             Widget.setObjectName(u"Widget")
-        Widget.resize(912, 755)
+        Widget.resize(902, 782)
         sizePolicy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         sizePolicy.setHorizontalStretch(0)
         sizePolicy.setVerticalStretch(0)
@@ -117,6 +117,21 @@ class Ui_Widget(object):
 
         self.verticalLayout_3.addWidget(self.loadingLabel)
 
+        self.cancel = QPushButton(self.frame_4)
+        self.cancel.setObjectName(u"cancel")
+        self.cancel.setMinimumSize(QSize(0, 24))
+        self.cancel.setStyleSheet(u"QPushButton {\n"
+"    border-radius: 3px;\n"
+"}\n"
+"\n"
+"QPushButton:hover {\n"
+"    border-radius: 3px;\n"
+"    font-weight: bold;\n"
+"}\n"
+"")
+
+        self.verticalLayout_3.addWidget(self.cancel)
+
 
         self.horizontalLayout_6.addWidget(self.frame_4)
 
@@ -167,7 +182,7 @@ class Ui_Widget(object):
         self.scrollArea.setWidgetResizable(True)
         self.scrollAreaWidgetContents = QWidget()
         self.scrollAreaWidgetContents.setObjectName(u"scrollAreaWidgetContents")
-        self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 892, 235))
+        self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 882, 230))
         self.verticalLayout_6 = QVBoxLayout(self.scrollAreaWidgetContents)
         self.verticalLayout_6.setObjectName(u"verticalLayout_6")
         self.verticalLayout_6.setContentsMargins(-1, 0, -1, 0)
@@ -206,7 +221,7 @@ class Ui_Widget(object):
         font = QFont()
         font.setPointSize(12)
         self.pushButton_2.setFont(font)
-        self.pushButton_2.setStyleSheet(u"border-radius: 3px;\n"
+        self.pushButton_2.setStyleSheet(u"border-radius: 6px;\n"
 "border: 1px solid #0A819A;\n"
 "background-color: #0A819A;\n"
 "color: rgb(255, 255, 255);\n"
@@ -244,7 +259,7 @@ class Ui_Widget(object):
         self.pushButton_4.setObjectName(u"pushButton_4")
         self.pushButton_4.setMinimumSize(QSize(0, 0))
         self.pushButton_4.setFont(font)
-        self.pushButton_4.setStyleSheet(u"border-radius: 3px;\n"
+        self.pushButton_4.setStyleSheet(u"border-radius: 6px;\n"
 "border: 1px solid rgb(0, 0, 0);\n"
 "background-color:rgb(77, 77, 77);\n"
 "color: rgb(255, 255, 255);\n"
@@ -293,14 +308,16 @@ class Ui_Widget(object):
         self.stop.setEnabled(True)
         self.stop.setMaximumSize(QSize(16777215, 17))
         self.stop.setStyleSheet(u"QPushButton {\n"
+"    border-radius: 3px;\n"
 "    color: rgb(77, 77, 77);\n"
-"     border-color: rgb(0, 0, 0); \n"
+"    border-color: rgb(0, 0, 0); \n"
 "    background-color: rgb(0, 0, 0); \n"
 "    border-color: rgb(0, 0, 0); \n"
 "    qproperty-icon: url(\":/img/stop.png\");\n"
 "}\n"
 "\n"
 "QPushButton:hover {\n"
+"    border-radius: 3px;\n"
 "    color: rgb(255, 255, 255); \n"
 "    background-color: rgb(0, 0, 0);\n"
 "    border-color: rgb(0, 0, 0); \n"
@@ -309,7 +326,7 @@ class Ui_Widget(object):
         icon = QIcon()
         icon.addFile(u":/img/stop.png", QSize(), QIcon.Mode.Normal, QIcon.State.Off)
         self.stop.setIcon(icon)
-        self.stop.setIconSize(QSize(16, 11))
+        self.stop.setIconSize(QSize(20, 11))
 
         self.horizontalLayout_7.addWidget(self.stop)
 
@@ -320,14 +337,16 @@ class Ui_Widget(object):
         font1.setPointSize(9)
         self.restart.setFont(font1)
         self.restart.setStyleSheet(u"QPushButton {\n"
+"    border-radius: 3px;\n"
 "    color: rgb(77, 77, 77);\n"
-"     border-color: rgb(0, 0, 0); \n"
+"    border-color: rgb(0, 0, 0); \n"
 "    background-color: rgb(0, 0, 0); \n"
 "    border-color: rgb(0, 0, 0); \n"
 "    qproperty-icon: url(\":/img/refresh.png\");\n"
 "}\n"
 "\n"
 "QPushButton:hover {\n"
+"    border-radius: 3px;\n"
 "    color: rgb(255, 255, 255); \n"
 "    background-color: rgb(0, 0, 0);\n"
 "    border-color: rgb(0, 0, 0); \n"
@@ -400,7 +419,6 @@ class Ui_Widget(object):
         self.frame_3.setFrameShadow(QFrame.Raised)
         self.horizontalLayout_2 = QHBoxLayout(self.frame_3)
         self.horizontalLayout_2.setObjectName(u"horizontalLayout_2")
-        self.horizontalLayout_2.setContentsMargins(0, 0, 0, -1)
         self.agent = QComboBox(self.frame_3)
         self.agent.setObjectName(u"agent")
         self.agent.setMinimumSize(QSize(100, 25))
@@ -418,7 +436,7 @@ class Ui_Widget(object):
 
         self.model = QComboBox(self.frame_3)
         self.model.setObjectName(u"model")
-        self.model.setMinimumSize(QSize(150, 25))
+        self.model.setMinimumSize(QSize(300, 25))
         self.model.setFont(font)
         self.model.setStyleSheet(u"QComboBox {\n"
 "                   border-radius: 3px;\n"
@@ -433,6 +451,7 @@ class Ui_Widget(object):
 
         self.device = QComboBox(self.frame_3)
         self.device.setObjectName(u"device")
+        self.device.setEnabled(False)
         self.device.setMinimumSize(QSize(150, 25))
         self.device.setFont(font)
         self.device.setStyleSheet(u"QComboBox {\n"
@@ -443,6 +462,7 @@ class Ui_Widget(object):
 "                  QComboBox:disabled {\n"
 "                   color: gray;\n"
 "                  }")
+        self.device.setFrame(True)
 
         self.horizontalLayout_2.addWidget(self.device)
 
@@ -453,9 +473,9 @@ class Ui_Widget(object):
         self.ask = QPushButton(self.frame_3)
         self.ask.setObjectName(u"ask")
         self.ask.setEnabled(True)
-        self.ask.setMinimumSize(QSize(100, 25))
+        self.ask.setMinimumSize(QSize(50, 25))
         self.ask.setFont(font)
-        self.ask.setStyleSheet(u"")
+        self.ask.setStyleSheet(u"border-radius: 6px;")
         icon2 = QIcon()
         icon2.addFile(u":/img/send.png", QSize(), QIcon.Mode.Normal, QIcon.State.Off)
         self.ask.setIcon(icon2)
@@ -499,6 +519,7 @@ class Ui_Widget(object):
         self.welcomeImg.setText("")
         self.loadingGif.setText(QCoreApplication.translate("Widget", u"LOADING ANIMATION", None))
         self.loadingLabel.setText(QCoreApplication.translate("Widget", u"LOADING MESSAGE", None))
+        self.cancel.setText(QCoreApplication.translate("Widget", u"CANCEL", None))
         self.pushButton_2.setText(QCoreApplication.translate("Widget", u"Hi there! How are you today? Can you please help me with something?", None))
         self.label_3.setText(QCoreApplication.translate("Widget", u"5:53:01", None))
         self.pushButton_4.setText(QCoreApplication.translate("Widget", u"Absolutely! How can I help you today?", None))
@@ -509,7 +530,7 @@ class Ui_Widget(object):
         self.restart.setShortcut("")
 #endif // QT_CONFIG(shortcut)
         self.model.setPlaceholderText(QCoreApplication.translate("Widget", u"As", None))
-        self.ask.setText(QCoreApplication.translate("Widget", u"Ask", None))
+        self.ask.setText("")
         self.prompt.setHtml(QCoreApplication.translate("Widget", u"<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0//EN\" \"http://www.w3.org/TR/REC-html40/strict.dtd\">\n"
 "<html><head><meta name=\"qrichtext\" content=\"1\" /><meta charset=\"utf-8\" /><style type=\"text/css\">\n"
 "p, li { white-space: pre-wrap; }\n"

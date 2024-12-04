@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved. -->
 <ui version="4.0">
  <class>Widget</class>
  <widget class="QWidget" name="Widget">
@@ -7,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>912</width>
-    <height>755</height>
+    <width>902</width>
+    <height>782</height>
    </rect>
   </property>
   <property name="sizePolicy">
@@ -226,6 +225,30 @@
            </property>
           </widget>
          </item>
+         <item>
+          <widget class="QPushButton" name="cancel">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>24</height>
+            </size>
+           </property>
+           <property name="styleSheet">
+            <string notr="true">QPushButton {
+    border-radius: 3px;
+}
+
+QPushButton:hover {
+    border-radius: 3px;
+    font-weight: bold;
+}
+</string>
+           </property>
+           <property name="text">
+            <string>CANCEL</string>
+           </property>
+          </widget>
+         </item>
         </layout>
        </widget>
       </item>
@@ -315,8 +338,8 @@
           <rect>
            <x>0</x>
            <y>0</y>
-           <width>892</width>
-           <height>235</height>
+           <width>882</width>
+           <height>230</height>
           </rect>
          </property>
          <layout class="QVBoxLayout" name="verticalLayout_6">
@@ -402,7 +425,7 @@
                       </font>
                      </property>
                      <property name="styleSheet">
-                      <string notr="true">border-radius: 3px;
+                      <string notr="true">border-radius: 6px;
 border: 1px solid #0A819A;
 background-color: #0A819A;
 color: rgb(255, 255, 255);
@@ -467,7 +490,7 @@ padding: 8px 8px; </string>
                       </font>
                      </property>
                      <property name="styleSheet">
-                      <string notr="true">border-radius: 3px;
+                      <string notr="true">border-radius: 6px;
 border: 1px solid rgb(0, 0, 0);
 background-color:rgb(77, 77, 77);
 color: rgb(255, 255, 255);
@@ -561,14 +584,16 @@ padding: 8px 8px; </string>
            </property>
            <property name="styleSheet">
             <string notr="true">QPushButton {
+    border-radius: 3px;
     color: rgb(77, 77, 77);
-     border-color: rgb(0, 0, 0); 
+    border-color: rgb(0, 0, 0); 
     background-color: rgb(0, 0, 0); 
     border-color: rgb(0, 0, 0); 
     qproperty-icon: url(&quot;:/img/stop.png&quot;);
 }
 
 QPushButton:hover {
+    border-radius: 3px;
     color: rgb(255, 255, 255); 
     background-color: rgb(0, 0, 0);
     border-color: rgb(0, 0, 0); 
@@ -584,7 +609,7 @@ QPushButton:hover {
            </property>
            <property name="iconSize">
             <size>
-             <width>16</width>
+             <width>20</width>
              <height>11</height>
             </size>
            </property>
@@ -605,14 +630,16 @@ QPushButton:hover {
            </property>
            <property name="styleSheet">
             <string notr="true">QPushButton {
+    border-radius: 3px;
     color: rgb(77, 77, 77);
-     border-color: rgb(0, 0, 0); 
+    border-color: rgb(0, 0, 0); 
     background-color: rgb(0, 0, 0); 
     border-color: rgb(0, 0, 0); 
     qproperty-icon: url(&quot;:/img/refresh.png&quot;);
 }
 
 QPushButton:hover {
+    border-radius: 3px;
     color: rgb(255, 255, 255); 
     background-color: rgb(0, 0, 0);
     border-color: rgb(0, 0, 0); 
@@ -739,15 +766,6 @@ border: 0px solid #0A819A;;
                <enum>QFrame::Raised</enum>
               </property>
               <layout class="QHBoxLayout" name="horizontalLayout_2">
-               <property name="leftMargin">
-                <number>0</number>
-               </property>
-               <property name="topMargin">
-                <number>0</number>
-               </property>
-               <property name="rightMargin">
-                <number>0</number>
-               </property>
                <item>
                 <widget class="QComboBox" name="agent">
                  <property name="minimumSize">
@@ -777,7 +795,7 @@ border: 0px solid #0A819A;;
                 <widget class="QComboBox" name="model">
                  <property name="minimumSize">
                   <size>
-                   <width>150</width>
+                   <width>300</width>
                    <height>25</height>
                   </size>
                  </property>
@@ -803,6 +821,9 @@ border: 0px solid #0A819A;;
                </item>
                <item>
                 <widget class="QComboBox" name="device">
+                 <property name="enabled">
+                  <bool>false</bool>
+                 </property>
                  <property name="minimumSize">
                   <size>
                    <width>150</width>
@@ -823,6 +844,9 @@ border: 0px solid #0A819A;;
                   QComboBox:disabled {
                    color: gray;
                   }</string>
+                 </property>
+                 <property name="frame">
+                  <bool>true</bool>
                  </property>
                 </widget>
                </item>
@@ -846,7 +870,7 @@ border: 0px solid #0A819A;;
                  </property>
                  <property name="minimumSize">
                   <size>
-                   <width>100</width>
+                   <width>50</width>
                    <height>25</height>
                   </size>
                  </property>
@@ -856,10 +880,10 @@ border: 0px solid #0A819A;;
                   </font>
                  </property>
                  <property name="styleSheet">
-                  <string notr="true"/>
+                  <string notr="true">border-radius: 6px;</string>
                  </property>
                  <property name="text">
-                  <string>Ask</string>
+                  <string/>
                  </property>
                  <property name="icon">
                   <iconset resource="resource.qrc">
