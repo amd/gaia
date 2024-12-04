@@ -5,7 +5,6 @@
 !define /ifndef MODE "GENERIC"  ; Default to GENERIC mode if not specified
 !define /ifndef CI "OFF"  ; Default to OFF mode if not specified
 !define /ifndef OGA_TOKEN ""  ; Default to empty string if not specified
-!define /ifndef HF_TOKEN ""  ; Default to empty string if not specified
 
 ; Define main variables
 Name "GAIA"
@@ -292,6 +291,7 @@ Section "Install Main Components" SEC01
     ; Install OGA NPU dependencies
     FileWrite $0 "- Downloading and installing OGA NPU dependencies$\n"
     nsExec::ExecToLog 'cmd /c echo set AMD_OGA=$INSTDIR\amd_oga> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.bat"'
+    nsExec::ExecToLog 'cmd /c echo set GIT_PYTHON_REFRESH=quiet>> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.bat"'
     nsExec::Exec '"$INSTDIR\gaia_env\python.exe" download_lfs_file.py ryzen_ai_13_preview/amd_oga_Oct4_2024.zip $INSTDIR oga-npu.zip ${OGA_TOKEN}'
     nsExec::Exec '"$INSTDIR\gaia_env\python.exe" install_oga.py $INSTDIR'
 
@@ -303,12 +303,6 @@ Section "Install Main Components" SEC01
       FileWrite $0 "- Replacing settings.json with NPU-specific settings$\n"
       Delete "$INSTDIR\src\gaia\interface\settings.json"
       Rename "$INSTDIR\npu_settings.json" "$INSTDIR\src\gaia\interface\settings.json"
-
-      FileWrite $0 "- Setting up Hugging Face$\n"
-      nsExec::ExecToLog 'cmd /c echo set HF_TOKEN=${HF_TOKEN}>> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.bat"'
-
-      ; Append GIT_PYTHON_REFRESH=quiet to the activate script (needed when GIT is not installed)
-      nsExec::ExecToLog 'cmd /c echo set GIT_PYTHON_REFRESH=quiet>> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.bat"'
 
     ${EndIf}
 

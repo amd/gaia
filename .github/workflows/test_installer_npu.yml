@@ -33,7 +33,7 @@ jobs:
       - name: Build the GAIA installer for NPU
         run: |
           cd installer
-          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DMODE=NPU /DOGA_TOKEN="${{ secrets.OGA_TOKEN }}" /DHF_TOKEN="${{ secrets.HF_TOKEN_INSTALLER }}" 'Installer.nsi'
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DMODE=NPU /DOGA_TOKEN="${{ secrets.OGA_TOKEN }}" 'Installer.nsi'
 
           if (Test-Path "GAIA_NPU_Installer.exe") {
             Write-Host "GAIA_NPU_Installer.exe has been created successfully."
