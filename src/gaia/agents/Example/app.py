@@ -1,4 +1,5 @@
 # Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 
 from gaia.agents.agent import Agent
 

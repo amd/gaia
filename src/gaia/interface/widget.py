@@ -1,4 +1,5 @@
 # Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 
 # This Python file uses the following encoding: utf-8
 import sys

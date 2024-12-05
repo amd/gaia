@@ -1,4 +1,6 @@
 Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved. Portions of this file consist of AI-generated content.
+SPDX-License-Identifier: MIT
+
 Below is a list of funny and short dad jokes.
 Why did the clock go to the doctor? It was ticking funny!
 A successful diet is the triumph of mind over platter.

@@ -1,4 +1,5 @@
 # Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 
 import pytest
 from gaia.cli import run_cli, start_servers, stop_servers

@@ -1,4 +1,5 @@
 # Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 
 import sys, re, time
 from PySide6.QtWidgets import QApplication

@@ -1,4 +1,5 @@
 # Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 
 # Function to get netstat output for specified ports
 function Get-NetstatForPorts {

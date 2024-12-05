@@ -1,4 +1,5 @@
 @REM Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+@REM SPDX-License-Identifier: MIT
 
 @echo off
 setlocal enabledelayedexpansion
