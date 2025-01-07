@@ -22,6 +22,8 @@ on:
 jobs:
   gaia-npu-local-tests:
     runs-on: stx
+    env:
+      HYBRID_LLM_ARTIFACTS: hybrid-llm-artifacts_1.3.0
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
       - uses: actions/checkout@v4
@@ -39,10 +41,19 @@ jobs:
           # Check if NSIS is installed
           & 'C:\Program Files (x86)\NSIS\makensis.exe' /VERSION
 
+      - name: Verify secret presence
+        run: |
+          if ("${{ secrets.OGA_PUBLIC_TOKEN }}" -eq "") {
+            Write-Host "::error::OGA_PUBLIC_TOKEN secret is empty or not available"
+            exit 1
+          } else {
+            Write-Host "OGA_PUBLIC_TOKEN secret is present"
+          }
+
       - name: Build the GAIA installer for NPU
         run: |
           cd installer
-          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DCI=ON /DMODE=NPU /DOGA_TOKEN="${{ secrets.OGA_TOKEN }}" 'Installer.nsi'
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DCI=ON /DMODE=NPU /DOGA_TOKEN="${{ secrets.OGA_PUBLIC_TOKEN }}" 'Installer.nsi'
 
           if (Test-Path "GAIA_NPU_Installer.exe") {
             Write-Host "GAIA_NPU_Installer.exe has been created successfully."
@@ -64,6 +75,7 @@ jobs:
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           AMD_OGA: "C:\\Users\\jfowe\\AppData\\Local\\GAIA\\amd_oga"
+          AMD_OGA_HYBRID: "C:\\Users\\jfowe\\AppData\\Local\\GAIA\\${{ env.HYBRID_LLM_ARTIFACTS }}"
         uses: ./.github/actions/ui-testing
         with:
           username: "jfowe"
@@ -80,6 +92,7 @@ jobs:
           $Env:LEMONADE_CACHE_DIR="$cwd\lemon-cache"
           $Env:HF_HOME="$cwd\hf-cache"
           $Env:AMD_OGA="$cwd\amd_oga"
+          $Env:AMD_OGA_HYBRID="$cwd\${{ env.HYBRID_LLM_ARTIFACTS }}"
 
           conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env python tests\test_llama_index.py --backend npu
       

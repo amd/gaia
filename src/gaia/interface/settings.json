@@ -10,7 +10,7 @@
         "Llm"
     ],
     "models": {
-        "llama-3.2 1b (ollama)": {
+        "Llama 3.2 1B Ollama": {
             "backend" : "ollama",
             "checkpoint": "llama3.2:1b",
             "device": {
@@ -19,7 +19,7 @@
                 ]
             }
         },
-        "llama-3.2 3b (ollama)": {
+        "Llama 3.2 3B Ollama": {
             "backend" : "ollama",
             "checkpoint": "llama3.2:3b",
             "device": {
@@ -28,7 +28,7 @@
                 ]
             }
         },
-        "llama-3.1 8b (ollama)": {
+        "Llama 3.1 8B Ollama": {
             "backend" : "ollama",
             "checkpoint": "llama3.1:8b",
             "device": {
@@ -37,34 +37,7 @@
                 ]
             }
         },
-        "Phi 3.5 mini instruct (oga-npu)": {
-            "backend" : "oga",
-            "checkpoint": "amd/Phi-3.5-mini-instruct-awq-g128-int4-asym-fp32-onnx-ryzen-strix",
-            "device": {
-                "npu": [
-                    "int4"
-                ]
-            }
-        },
-        "Phi 3 mini instruct (oga-npu)": {
-            "backend" : "oga",
-            "checkpoint": "amd/Phi-3-mini-4k-instruct-awq-g128-int4-asym-fp32-onnx-ryzen-strix",
-            "device": {
-                "npu": [
-                    "int4"
-                ]
-            }
-        },
-        "Llama 2 7b (oga-npu)": {
-            "backend" : "oga",
-            "checkpoint": "amd/Llama-2-7b-hf-awq-g128-int4-asym-fp32-onnx-ryzen-strix",
-            "device": {
-                "npu": [
-                    "int4"
-                ]
-            }
-        },
-        "Llama 2 7b chat (oga-npu)": {
+        "Llama-2 7B Chat": {
             "backend" : "oga",
             "checkpoint": "amd/Llama2-7b-chat-awq-g128-int4-asym-fp32-onnx-ryzen-strix",
             "device": {
@@ -73,16 +46,25 @@
                 ]
             }
         },
-        "Llama 3.1 8b (oga-npu)": {
+        "Phi-3.5 Mini Instruct": {
             "backend" : "oga",
-            "checkpoint": "amd/Llama-3.1-8B-awq-g128-int4-asym-fp32-onnx-ryzen-strix",
+            "checkpoint": "amd/Phi-3.5-mini-instruct-awq-g128-int4-asym-fp32-onnx-ryzen-strix",
             "device": {
                 "npu": [
                     "int4"
                 ]
             }
         },
-        "Mistral 7b instruct (oga)": {
+        "Phi-3 Mini Instruct": {
+            "backend" : "oga",
+            "checkpoint": "amd/Phi-3-mini-4k-instruct-awq-g128-int4-asym-fp32-onnx-ryzen-strix",
+            "device": {
+                "npu": [
+                    "int4"
+                ]
+            }
+        },
+        "Mistral 7B Instruct": {
             "backend" : "oga",
             "checkpoint": "amd/Mistral-7B-Instruct-v0.3-awq-g128-int4-asym-fp32-onnx-ryzen-strix",
             "device": {
@@ -91,39 +73,12 @@
                 ]
             }
         },
-        "Qwen 1.5 7b chat (oga-npu)": {
+        "Qwen-1.5 7B Chat": {
             "backend" : "oga",
             "checkpoint": "amd/Qwen1.5-7B-Chat-awq-g128-int4-asym-fp32-onnx-ryzen-strix",
             "device": {
                 "npu": [
                     "int4"
-                ]
-            }
-        },
-        "llama-3 8b (hf)": {
-            "backend" : "hf",
-            "checkpoint": "meta-llama/Meta-Llama-3-8B",
-            "device": {
-                "cpu": [
-                    "bfloat16"
-                ]
-            }
-        },
-        "llama-2 7b (hf)": {
-            "backend" : "hf",
-            "checkpoint": "meta-llama/Llama-2-7b-chat-hf",
-            "device": {
-                "cpu": [
-                    "bfloat16"
-                ]
-            }
-        },
-        "llama-3.1 8b (hf)": {
-            "backend" : "hf",
-            "checkpoint": "meta-llama/Meta-Llama-3.1-8B",
-            "device": {
-                "cpu": [
-                    "bfloat16"
                 ]
             }
         }

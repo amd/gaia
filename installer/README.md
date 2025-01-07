@@ -21,6 +21,8 @@ Debugging the installer could be ticky on a workflow since NSIS does not log any
 ### Option 2: Silent mode through terminal
 * From a `Command Prompt` console, run `Gaia_Installer.exe /S`. All logs will be shown on the screen.
 
+NOTE: Optionally install the NSIS extension (v4.4.1) to easily compile and run the installer from within VSCode.
+
 
 ## Other notes
 

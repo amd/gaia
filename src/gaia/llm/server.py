@@ -29,7 +29,9 @@ else:
 def launch_llm_server(
     backend, checkpoint, device, dtype, max_new_tokens, cli_mode=False
 ):
-    if not (device == "cpu" or device == "npu" or device == "igpu"):
+    if not (
+        device == "cpu" or device == "npu" or device == "igpu" or device == "hybrid"
+    ):
         raise ValueError(
             f"ERROR: {device} not supported, please select 'cpu', 'npu' or 'igpu'."
         )

@@ -1,7 +1,7 @@
 # Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-name: GAIA NPU Installer Test
+name: GAIA NPU/GPU Hybrid Installer Test
 
 on:
   push:
@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  gaia-npu-installer-test:
+  gaia-hybrid-installer-test:
     runs-on: windows-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
@@ -40,15 +40,15 @@ jobs:
             Write-Host "OGA_PUBLIC_TOKEN secret is present"
           }
 
-      - name: Build the GAIA installer for NPU
+      - name: Build the GAIA installer for Hybrid
         run: |
           cd installer
-          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DMODE=NPU /DOGA_TOKEN="${{ secrets.OGA_PUBLIC_TOKEN }}" 'Installer.nsi'
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DMODE=HYBRID /DOGA_TOKEN="${{ secrets.OGA_PUBLIC_TOKEN }}" 'Installer.nsi'
 
-          if (Test-Path "GAIA_NPU_Installer.exe") {
-            Write-Host "GAIA_NPU_Installer.exe has been created successfully."
+          if (Test-Path "GAIA_Hybrid_Installer.exe") {
+            Write-Host "GAIA_Hybrid_Installer.exe has been created successfully."
           } else {
-            Write-Host "GAIA_NPU_Installer.exe was not found."
+            Write-Host "GAIA_Hybrid_Installer.exe was not found."
             exit 1
           }
 
@@ -56,6 +56,6 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: GaiaNPUInstaller
+          name: GaiaHybridInstaller
           path: |
-            installer\GAIA_NPU_Installer.exe
+            installer\GAIA_Hybrid_Installer.exe

@@ -26,13 +26,11 @@ setup(
         "gaia.interface",
     ],
     install_requires=[
-        "turnkeyml[llm-oga-dml]==4.0.6",
         "aiohttp",
         "fastapi",
         "pydantic==1.10.12",
         "uvicorn>=0.15.0",
         "transformers",
-        "onnx==1.16.0",
         "accelerate",
         "websockets",
         "websocket-client",
@@ -44,9 +42,21 @@ setup(
         "ollama",
     ],
     extras_require={
+        "dml": [
+            "turnkeyml[llm-oga-dml]==4.0.9",
+        ],
+        "npu": [
+            "turnkeyml[llm-oga-npu]==4.0.9",
+        ],
+        "hybrid": [
+            "turnkeyml[llm-oga-hybrid]==4.0.9",
+        ],
         "llamaindex": [
             "llama_index",
             "llama-index-embeddings-huggingface",
+        ],
+        "joker": [
+            "gaia[llamaindex]",
         ],
         "clip": [
             "youtube_search",

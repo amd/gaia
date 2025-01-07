@@ -7,36 +7,73 @@ Welcome to the GAIA (Generative AI Is Awesome!) project! This repository serves 
 
 Currently, the following are supported:
 
-| Agent Name | Function                     |
-| ---------- | ---------------------------- |
-|   Chaty    | Vanilla LLM chatbot          |
-|   Joker    | Simple joke generator        |
-|   Clip     | YouTube search and Q&A agent |
-|   Maven*   | Online research assistant    |
-|    Neo*    | Chat with public GitHub repo |
-|  Picasso*  | AI art creator               |
+| Use-Case Example   | Function                                 |
+| ------------------ | ---------------------------------------- |
+| No Agent           | Test LLM using completion                |
+|   Chaty            | Vanilla LLM chatbot with message history |
+|   Joker            | Simple RAG joke generator                |
+|   Clip             | YouTube search and Q&A agent             |
 
-\* bot or agent is currently under development.
+LLMs supported:
+
+| LLM                    | Checkpoint                                                            | Device   | Backend            | Data Type | GAIA Installer                              |
+| -----------------------|-----------------------------------------------------------------------|----------|--------------------|-----------|---------------------------------------------|
+| Phi-3.5 Mini Instruct  | amd/Phi-3.5-mini-instruct-awq-g128-int4-asym-fp16-onnx-hybrid         | Hybrid   | oga                | int4      | GAIA_Hybrid_Installer.exe                   |
+| Phi-3 Mini Instruct    | amd/Phi-3-mini-4k-instruct-awq-g128-int4-asym-fp16-onnx-hybrid        | Hybrid   | oga                | int4      | GAIA_Hybrid_Installer.exe                   |
+| Llama-2 7B Chat        | amd/Llama-2-7b-chat-hf-awq-g128-int4-asym-fp16-onnx-hybrid            | Hybrid   | oga                | int4      | GAIA_Hybrid_Installer.exe                   |
+| Llama-3.2 1B Instruct  | amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid         | Hybrid   | oga                | int4      | GAIA_Hybrid_Installer.exe                   |
+| Llama-3.2 3B Instruct  | amd/Llama-3.2-3B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid         | Hybrid   | oga                | int4      | GAIA_Hybrid_Installer.exe                   |
+| Qwen 1.5 7B Chat       | amd/Qwen1.5-7B-Chat-awq-g128-int4-asym-fp16-onnx-hybrid               | Hybrid   | oga                | int4      | GAIA_Hybrid_Installer.exe                   |
+| Mistral 7B Instruct    | amd/Mistral-7B-Instruct-v0.3-awq-g128-int4-asym-fp16-onnx-hybrid      | Hybrid   | oga                | int4      | GAIA_Hybrid_Installer.exe                   |
+| Phi 3.5 Mini instruct  | amd/Phi-3.5-mini-instruct-awq-g128-int4-asym-fp32-onnx-ryzen-strix    | NPU      | oga                | int4      | GAIA_NPU_Installer.exe / GAIA_Installer.exe |
+| Phi-3 Mini Instruct    | amd/Phi-3-mini-4k-instruct-awq-g128-int4-asym-fp32-onnx-ryzen-strix   | NPU      | oga                | int4      | GAIA_NPU_Installer.exe / GAIA_Installer.exe |
+| Llama-2 7B Chat        | amd/Llama2-7b-chat-awq-g128-int4-asym-fp32-onnx-ryzen-strix           | NPU      | oga                | int4      | GAIA_NPU_Installer.exe / GAIA_Installer.exe |
+| Mistral 7B Instruct    | amd/Mistral-7B-Instruct-v0.3-awq-g128-int4-asym-fp32-onnx-ryzen-strix | NPU      | oga                | int4      | GAIA_NPU_Installer.exe / GAIA_Installer.exe |
+| Qwen-1.5 7B Chat       | amd/Qwen1.5-7B-Chat-awq-g128-int4-asym-fp32-onnx-ryzen-strix          | NPU      | oga                | int4      | GAIA_NPU_Installer.exe / GAIA_Installer.exe |
+| Llama 3.2 1B           | llama3.2:1b                                                           | CPU/GPU  | ollama (llama.cpp) | Q8_0      | GAIA_Installer.exe                          |
+| Llama 3.2 3B           | llama3.2:3b                                                           | CPU/GPU  | ollama (llama.cpp) | Q4_K_M    | GAIA_Installer.exe                          |
+| Llama 3.1 8B           | llama3.2:8b                                                           | CPU/GPU  | ollama (llama.cpp) | Q4_0      | GAIA_Installer.exe                          |
+
+* Hybrid - NPU+iGPU
+* NPU - Neural Processing Unit
+* oga - Onnx GenAI runtime
 
 ## Contents:
+1. [Prerequisites](#prerequisites)
 1. [Getting Started](#getting-started)
 1. [Running the GAIA CLI](#running-the-gaia-cli)
 1. [Contributing](#contributing)
 
+# Prerequisites
+GAIA has been tested on the following system, there are no guarantees that it will work on other systems:
+
+- System: Asus ProArt PX13 and P16
+- OS Name: Microsoft Windows 11 Pro
+- Processor: AMD Ryzen AI 9 HX 370 w/ Radeon 890M, 2000 Mhz, 12 Core(s), 24 Logical Processor(s)
+- Physical Memory: 32.0 GB
+- AMD Radeon 890M iGPU driver: 32.0.12010.8007
+- AMD NPU driver: 32.0.203.237 or 32.0.203.240
+
 # Getting Started
 
-For a quick and easy setup on a new machine, install the latest version of the GAIA app from the [releases page](https://github.com/aigdat/gaia/releases). This installer handles all dependencies and creates a binary executable for your system.
+For a quick and easy setup on a new machine, please install the latest version of the GAIA from the [releases page](https://github.com/aigdat/gaia/releases). The included installers install the GAIA app and handle all dependencies for the NPU, GPU, and Hybrid (NPU+iGPU) execution modes. There are three main installers available:
+1. GAIA_NPU_Installer.exe - installs the GAIA app for running LLMs on the RyzenAI NPU.
+1. GAIA_Hybrid_Installer.exe - installs the GAIA app for running LLMs on both RyzenAI NPU and iGPU.
+1. GAIA_Installer.exe - installs the GAIA app for running LLMs on the RyzenAI NPU and a third party backend called ollama.
 
-1. Download the latest GAIA app installer from the "Assets" section of the most recent release:
+To install the GAIA app, please follow these steps:
+1. Download the desired GAIA installer from the "Assets" section of the most recent release:
    ![image](./data/img/gaia-installer.png)
 
 2. Unzip the downloaded file and run the installer by double-clicking the .exe file.
 
-3. Follow the on-screen instructions to complete the installation:
+3. If you get a message "Microsoft Defender SmartScreen prevented an unrecognized app from starting. Running this app might put your PC at risk.", click on "More info" and then "Run anyway".
+
+4. Follow the on-screen instructions to complete the installation:
 
    ![image](./data/img/gaia-setup.png)
 
-4. Once installation is complete, a GAIA desktop icon will be created for easy access.
+5. Once installation is complete, a GAIA desktop icon will be created for easy access.
 
 NOTE: The installation process may take 10-20 minutes, as it sets up all necessary components for a seamless GAIA experience.
 
@@ -47,8 +84,8 @@ NOTE: You may need to install ollama from [here](https://ollama.com/download) if
 
 # Running the GAIA CLI
 To quickly get started, you can try the GAIA CLI (`gaia-cli`) client using the following steps:
-- `pip install -e .`
-- `gaia-cli -h`
+1. Follow the instructions outlined [here](./docs/ort_genai_npu.md) to install the GAIA app and the ORT-GenAI backend.
+1. Open a command prompt and run `gaia-cli -h` to see the available commands.
 
 A simple chat demo using `gaia-cli`:
 

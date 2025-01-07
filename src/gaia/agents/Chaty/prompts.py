@@ -34,12 +34,19 @@ class Prompts:
             "chat_entry": "{content}",  # Content will include [/INST] and </s><s>[INST] formatting
             "assistant_prefix": " [/INST] ",
         },
+        "chatglm": {
+            "system": "<|system|>\n{system_message}\n",
+            "user": "<|user|>\n{content}\n",
+            "assistant": "<|assistant|>\n{content}\n",
+            "observation": "<|observation|>\n{content}\n",  # For external return results
+        },
         # Add other model formats here...
     }
 
     system_messages = {
         "llama3": "You are a helpful AI assistant. You provide clear, accurate, and technically-sound responses while maintaining a friendly demeanor.",
         "phi3": "You are a helpful AI assistant. You provide clear, accurate, and technically-sound responses while maintaining a friendly demeanor.",
+        "chatglm": "You are ChatGLM3, a large language model trained by Zhipu.AI. Follow the user's instructions carefully. Respond using markdown.",
         # Add other system messages here...
     }
 
@@ -136,6 +143,35 @@ class Prompts:
 
             return formatted_prompt
 
+        elif matched_model == "chatglm":
+            # Start with system message
+            formatted_prompt = format_template["system"].format(
+                system_message=system_msg
+            )
+
+            for entry in chat_history:
+                if entry.startswith("user: "):
+                    content = entry[6:]
+                    formatted_prompt += format_template["user"].format(content=content)
+                elif entry.startswith("assistant: "):
+                    content = entry[11:]
+                    formatted_prompt += format_template["assistant"].format(
+                        content=content
+                    )
+                elif entry.startswith(
+                    "observation: "
+                ):  # Add support for observation messages
+                    content = entry[12:]
+                    formatted_prompt += format_template["observation"].format(
+                        content=content
+                    )
+
+            # Add the assistant prefix if the last message was from user
+            if chat_history and chat_history[-1].startswith("user: "):
+                formatted_prompt += "<|assistant|>\n"
+
+            return formatted_prompt
+
         # Standard handling for other models
         for entry in chat_history:
             if entry.startswith("user: "):
@@ -170,6 +206,8 @@ class Prompts:
             return "mistral"
         elif "qwen" in model:
             return "qwen"
+        elif "chatglm" in model:
+            return "chatglm"
         else:
             Prompts.log.error(f"Could not match model {model} to a known format")
             raise ValueError(f"Could not match model {model} to a known format")
@@ -263,9 +301,27 @@ def test_qwen_format():
     print(formatted)
 
 
+def test_chatglm_format():
+    """Specific test for ChatGLM format."""
+    model = "THUDM/chatglm3-6b"
+    chat_history = [
+        "user: What's the weather like?",
+        "assistant: Let me check the weather for you.",
+        "observation: Current temperature is 72°F, sunny with light clouds",
+        "assistant: Based on the current data, it's a pleasant day with 72°F temperature and partly cloudy skies.",
+        "user: Thank you!",
+    ]
+
+    print("\nTesting ChatGLM Format:")
+    print("=" * 60)
+    formatted = Prompts.get_system_prompt(model, chat_history)
+    print(formatted)
+
+
 if __name__ == "__main__":
     # Run all tests
     main()
     test_llama2_format()
     test_llama3_format()
     test_qwen_format()
+    test_chatglm_format()

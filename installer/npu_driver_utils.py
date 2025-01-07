@@ -26,6 +26,9 @@ def update_driver(folder_path):
     # Delete the zip file
     os.remove(zip_file_path)
 
+    # Move one level down
+    driver_path = os.path.join(driver_path, "npu_mcdm_stack_prod")
+
     # Move custom installer to driver folder
     custom_installer = os.path.join(
         folder_path,
@@ -33,10 +36,14 @@ def update_driver(folder_path):
     )
     shutil.copy(custom_installer, driver_path)
 
-    # Launch installer
+    # Launch installer with modified command to wait for key press before closing
     powershell_cmd = (
         "Start-Process powershell -Verb RunAs -ArgumentList '-NoExit', "
-        f"'-Command', 'Set-Location -Path \"{driver_path}\"; .\\amd_install_kipudrv.bat'"
+        f"'-Command', 'Set-Location -Path \"{driver_path}\"; "
+        ".\\amd_install_kipudrv.bat; "
+        'Write-Host "`nPress any key to close..."; '
+        "$null = $Host.UI.RawUI.ReadKey(); "
+        "Exit'"
     )
     subprocess.run(["powershell", "-Command", powershell_cmd], check=True)
 
