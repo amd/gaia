@@ -11,16 +11,43 @@ class GaiaLogger:
         self.log_file = Path(log_file)
         self.loggers = {}
 
+        # Define color codes
+        self.colors = {
+            "DEBUG": "\033[37m",  # White
+            "INFO": "\033[37m",  # White
+            "WARNING": "\033[33m",  # Yellow
+            "ERROR": "\033[31m",  # Red
+            "CRITICAL": "\033[41m",  # Red background
+            "RESET": "\033[0m",  # Reset color
+        }
+
         # Base configuration
         self.default_level = logging.INFO
-        logging.basicConfig(
-            level=self.default_level,
-            format="[%(asctime)s] | %(levelname)s | %(name)s.%(funcName)s | %(filename)s:%(lineno)d | %(message)s",
-            handlers=[
-                logging.StreamHandler(sys.stdout),
-                logging.FileHandler(self.log_file),
-            ],
+
+        # Create colored formatter for console and regular formatter for file
+        console_formatter = logging.Formatter(
+            "%(asctime)s | %(color)s%(levelname)s%(reset)s | %(name)s.%(funcName)s | %(filename)s:%(lineno)d | %(message)s",
+            datefmt="[%Y-%m-%d %H:%M:%S]",
         )
+        file_formatter = logging.Formatter(
+            "[%(asctime)s] | %(levelname)s | %(name)s.%(funcName)s | %(filename)s:%(lineno)d | %(message)s"
+        )
+
+        # Create and configure handlers
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(console_formatter)
+
+        file_handler = logging.FileHandler(self.log_file)
+        file_handler.setFormatter(file_formatter)
+
+        # Configure root logger
+        root_logger = logging.getLogger()
+        root_logger.setLevel(self.default_level)
+        root_logger.addHandler(console_handler)
+        root_logger.addHandler(file_handler)
+
+        # Add color filter to console handler
+        console_handler.addFilter(self.add_color_filter)
 
         # Default levels for different modules
         self.default_levels = {
@@ -40,6 +67,11 @@ class GaiaLogger:
         # Suppress specific httpx log messages
         httpx_logger = logging.getLogger("httpx")
         httpx_logger.addFilter(self.filter_httpx)
+
+    def add_color_filter(self, record):
+        record.color = self.colors.get(record.levelname, "")
+        record.reset = self.colors["RESET"]
+        return True
 
     def filter_aiohttp_access(self, record):
         return not (
