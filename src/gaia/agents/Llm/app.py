@@ -28,6 +28,13 @@ class MyAgent(Agent):
     def chat_restarted(self):
         self.log.info("Client requested chat to restart")
 
+    def welcome_message(self):
+        self.print_ui(
+            "Basic LLM Completion Test\n"
+            "This is a minimal implementation to evaluate raw LLM completions.\n"
+            "Enter any text and the model will generate a direct continuation."
+        )
+
 
 def main():
     parser = argparse.ArgumentParser(description="Run the MyAgent chatbot")

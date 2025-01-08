@@ -5,7 +5,7 @@ import os
 import argparse
 from collections import deque
 from pathlib import Path
-from llama_index.core import Settings, PromptTemplate
+from llama_index.core import Settings
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
 from gaia.agents.agent import Agent
 from gaia.llm.llama_index_local import LocalLLM
@@ -34,53 +34,24 @@ class MyAgent(Agent):
             maxlen=self.n_chat_messages * 2
         )  # Store both user and assistant messages
 
-        # phi3-mini system prompt
-        # Prepare query engine
-        # qa_prompt_tmpl_str = (
-        #     "<|user|>\n"
-        #     "Context information is below.\n"
-        #     "---------------------\n"
-        #     "{context_str}\n"
-        #     "---------------------\n"
-        #     "Given the context information above I want you to think step by step to answer the query in a crisp manner, incase case you don't know the answer say 'I don't know!'.\n"
-        #     "Keep you answers short and concise and end message with </s>.\n"
-        #     "{query_str}</s>\n"
-        #     "<|assistant|>"
-        # )
-        self.qa_prompt_tmpl_str = (
-            "[INST] <<SYS>>\n"
-            "You are Joker, a sarcastic and funny asistant with an attitude that likes to chat with the user.\n"
-            "List of jokes below below to use in your response.\n"
-            "---------------------\n"
-            "{context_str}\n"
-            "---------------------\n"
-            "\n"
-            "Your tasks:\n"
-            "1. Given the context information above I want you to think step by step to answer the query in a crisp manner.\n"
-            "2. Keep you answers funny, sarcastic, short and concise and end message with </s>.\n"
-            "3. Chat about funny and sarcastic things\n"
-            "4. Answer comments and questions from user using the list of jokes above\n"
-            "\n"
-            "Guidelines:\n"
-            "- Answer a question given in a natural human-like manner.\n"
-            "- Think step-by-step when answering questions.\n"
-            "- When introducing yourself, keep it to just a single sentence, for example:\n"
-            '"Assistant: Hi, I can tell funny jokes. Just tell me a hint and I\'ll tell you a joke."\n'
-            "- Keep your answers funny and concise\n"
-            "\n"
-            "<</SYS>>\n\n"
-            "User: {query_str} [/INST]\n"
-            "Assistant: "
-        )
-        qa_prompt_tmpl = PromptTemplate(self.qa_prompt_tmpl_str)
-        self.query_engine = self.vector_index.as_query_engine(
-            verbose=True,
+        # Create chat engine with proper configuration
+        self.chat_engine = self.vector_index.as_chat_engine(
+            verbose=False,
             similarity_top_k=1,
-            response_mode="compact",
+            chat_mode="context",
             streaming=True,
-        )
-        self.query_engine.update_prompts(
-            {"response_synthesizer:text_qa_template": qa_prompt_tmpl}
+            system_prompt=(
+                "[INST] <<SYS>>\n"
+                "You are Joker, a sarcastic and funny assistant with an attitude that likes to chat with the user. "
+                "Use the provided jokes in your responses when relevant. "
+                "Keep your answers funny, sarcastic, short and concise. "
+                "Chat about funny and sarcastic things and answer questions using the available jokes.\n"
+                "Guidelines:\n"
+                "- Answer a question given in a natural human-like manner.\n"
+                "- Think step-by-step when answering questions.\n"
+                "- Keep your answers funny and concise\n"
+                "<</SYS>>\n\n"
+            ),
         )
 
         # Initialize agent server
@@ -91,11 +62,7 @@ class MyAgent(Agent):
 
     def prompt_llm(self, query):
         self.chat_history.append(f"User: {query}")
-        prompt = "\n".join(self.chat_history)
-
-        # Get the streaming response and convert it to string
-        response = str(self.query_engine.query(prompt))
-
+        response = str(self.chat_engine.chat(query))
         self.chat_history.append(f"Assistant: {response}")
         return response
 
@@ -106,6 +73,17 @@ class MyAgent(Agent):
     def chat_restarted(self):
         self.log.info("Client requested chat to restart")
         self.chat_history.clear()
+
+    def welcome_message(self):
+        self.print_ui(
+            "Welcome to Joker! I'm your sarcastic and funny AI assistant with an attitude. "
+            "I'm powered by a knowledge base of jokes and use RAG (Retrieval-Augmented Generation) to:\n"
+            "- Tell relevant jokes from my extensive collection\n"
+            "- Chat about funny and sarcastic things\n"
+            "- Answer your questions with a humorous twist\n"
+            "- Find the perfect joke for any topic or situation\n\n"
+            "Just give me a hint or topic and I'll search my joke database to make you laugh!"
+        )
 
 
 def main():

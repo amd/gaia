@@ -42,8 +42,18 @@ class MyAgent(Agent):
         return response
 
     def chat_restarted(self):
+        """Clear the conversation history"""
         self.log.info("Client requested chat to restart")
         self.chat_history.clear()
+
+    def welcome_message(self):
+        """Return the welcome message for this agent"""
+        return (
+            "Welcome to Chaty! This AI assistant provides clear and technically-sound responses. "
+            f"The system maintains a history of the last {self.n_chat_messages} conversation turns for contextual "
+            "awareness. Feel free to reference previous messages in your questions.\n\n"
+            "What would you like to chat about?"
+        )
 
 
 def main():

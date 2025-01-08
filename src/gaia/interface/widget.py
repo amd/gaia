@@ -172,6 +172,8 @@ class SetupLLM(QObject):
                     self.widget.ui.loadingLabel.setText(
                         f"Ready to run {selected_model} on {self.widget.ui.device.currentText()}!"
                     )
+                    # Request welcome message from the new agent instead of chat_restart
+                    asyncio.run(self.widget.request_welcome_message())
 
             except Exception as e:
                 if not self._is_cancelled:
@@ -188,8 +190,24 @@ class SetupLLM(QObject):
             self.widget.ui.device.setEnabled(True)
             self.widget.ui.agent.setEnabled(True)
 
+            # Add call to chat_restarted via agent server
+            if self.widget.settings["llm_server"]:
+                asyncio.run(self.request_chat_restart())
+
         self.log.debug("SetupLLM do_work finished")
         self.finished.emit()
+
+    async def request_chat_restart(self):
+        """Request Agent Server to restart chat"""
+        try:
+            async with ClientSession() as session:
+                async with session.post(
+                    f"http://127.0.0.1:{self.widget.agent_port}/restart",
+                    json={},
+                ) as response:
+                    await response.read()
+        except Exception as e:
+            self.log.error(f"Failed to request chat restart: {str(e)}")
 
     def initialize_servers(self):
         _, model_settings, _, _, _ = self.get_model_settings()
@@ -545,9 +563,10 @@ class StreamFromAgent(QObject):
         chunk = data["chunk"]
         new_card = data["new_card"]
         final_update = data.get("last")
+        is_llm_response = data.get("is_llm_response", False)
 
         stats = {}
-        if final_update:
+        if final_update and is_llm_response:  # Only get stats for LLM responses
             stats = await self.get_stats()
 
         if new_card:
@@ -965,6 +984,7 @@ class Widget(QWidget):
                 self.log.error(f"Failed to request stop: {str(e)}")
 
     def restart_conversation(self):
+        """Reset the conversation state."""
         # Disable chat
         self.make_chat_visible(False)
 
@@ -1601,6 +1621,18 @@ class Widget(QWidget):
         # Hide agents dropdown if configured to do so
         if self.settings["hide_agents"]:
             self.ui.agent.setVisible(False)
+
+    async def request_welcome_message(self):
+        """Request Agent Server to send its welcome message"""
+        try:
+            async with ClientSession() as session:
+                async with session.post(
+                    f"http://127.0.0.1:{self.agent_port}/welcome",
+                    json={},
+                ) as response:
+                    await response.read()
+        except Exception as e:
+            self.log.error(f"Failed to request welcome message: {str(e)}")
 
 
 class CustomWebPage(QWebEnginePage):

@@ -8,6 +8,7 @@ import time
 import html
 import argparse
 from collections import deque
+from enum import Enum
 from dotenv import load_dotenv
 
 from googleapiclient.discovery import build
@@ -31,6 +32,12 @@ from gaia.logger import get_logger
 from gaia.agents.agent import Agent
 from gaia.llm.llama_index_local import LocalLLM
 from gaia.agents.Clip.prompts import Prompts
+
+
+class LLMState(Enum):
+    NO_INDEX = 0  # No index or search results produced yet
+    SEARCH_RESULTS = 1  # Search results produced but no index created yet
+    INDEX_BUILT = 2  # Index is built and ready for queries
 
 
 class MyAgent(Agent):
@@ -90,28 +97,25 @@ class MyAgent(Agent):
             maxlen=self.n_chat_messages * 2
         )  # Store both user and assistant messages
 
-        self.llm_states = [
-            # state = 0, no index or search results produced yet.
-            (
+        self.llm_states = {
+            LLMState.NO_INDEX: (
                 "Index is currently not built and is empty.\n"
                 "You need to perform YouTube search using the youtube_search tool before creating the index."
             ),
-            # state = 1, search results produced but no index created yet.
-            (
+            LLMState.SEARCH_RESULTS: (
                 "Index is currently not built and is empty.\n"
                 "YouTube search results have been found:\n"
                 f"{self.search_results}\n"
                 "Ask the user which result to build the index for.\n"
             ),
-            # state = 2, search results produced but no index created yet.
-            (
+            LLMState.INDEX_BUILT: (
                 "Index is currently built and is not empty.\n"
                 "You can now use the query engine to fetch information about the video.\n"
                 'To access the index, use the query engine RAG tool by calling: {"query_rag" : "query"}\n'
             ),
-        ]
-        # set llm state 0-2
-        self.llm_state = 0
+        }
+        # set initial llm state
+        self.llm_state = LLMState.NO_INDEX
 
         self.llm_system_prompt = Prompts.get_system_prompt("llama3-clip")
 
@@ -141,7 +145,7 @@ class MyAgent(Agent):
         """
         try:
             msg = f'Running YouTube search with the following: ```"query": "{query}"```'
-            self.print(msg)
+            self.print_ui(msg)
             self.chat_history.append(f"Asssistant: {msg}")
             search_response = (
                 # pylint: disable=no-member
@@ -152,7 +156,7 @@ class MyAgent(Agent):
 
             videos = []
             msg = "Found the following result:"
-            self.print(msg)
+            self.print_ui(msg)
             self.chat_history.append(f"Asssistant: {msg}")
             for i, search_result in enumerate(search_response.get("items", [])):
                 video_id = search_result["id"]["videoId"]
@@ -173,14 +177,14 @@ class MyAgent(Agent):
                     ),  # Decode HTML entities
                 }
                 msg = f'Search Result {video["id"]}:\nTitle: {video["title"]}\n\nDescription: {video["description"]}\n\nPublished: {video["publish_time"]}    Video ID: {video["video_id"]}\n\n'
-                self.print(msg)
+                self.print_ui(msg)
                 self.chat_history.append(f"Asssistant: {msg}")
                 videos.append(video)
 
             return videos
 
         except HttpError as e:
-            self.print(f"An HTTP error {e.resp.status} occurred:\n{e.content}")
+            self.print_ui(f"An HTTP error {e.resp.status} occurred:\n{e.content}")
             return None
 
     def get_video_url(self, video_id: str):
@@ -268,13 +272,22 @@ class MyAgent(Agent):
         self.search_results = None
         self.query_engine_tools = None
         self.react_agent = None
-        self.max_search_results = 1
-        self.llm_state = 0
+        self.llm_state = LLMState.NO_INDEX
 
     def chat_restarted(self):
         self.log.info("Client requested chat to restart")
         self.reset()
-        self.chat_history.clear()
+
+    def welcome_message(self):
+        self.print_ui(
+            "Welcome to Clip! This AI assistant helps you explore and understand YouTube content. "
+            "Key capabilities include:\n"
+            "- Searching YouTube videos based on your queries\n"
+            "- Building searchable indexes from video transcripts\n"
+            "- Answering questions about video content using RAG technology\n"
+            "- Supporting multi-turn conversations about video content\n\n"
+            "Enter a query to search YouTube or simply paste a link to a video."
+        )
 
     def extract_youtube_link(self, message):
         youtube_link_pattern = r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/(?:watch\?v=)?(?:embed/)?(?:v/)?(?:shorts/)?(?:\S+)"
@@ -304,7 +317,7 @@ class MyAgent(Agent):
 
     def build_summary_index(self, doc: Document):
         # from https://docs.llamaindex.ai/en/stable/examples/index_structs/doc_summary/DocSummary/
-        self.print("Building local summary index...")
+        self.print_ui("Building local summary index...")
         start_time = time.perf_counter()
         splitter = SentenceSplitter(chunk_size=1024)
         response_synthesizer = get_response_synthesizer(
@@ -317,21 +330,21 @@ class MyAgent(Agent):
             show_progress=True,
         )
         end_time = time.perf_counter()
-        self.print(f"Done. Took {(end_time - start_time):.1f} seconds.")
+        self.print_ui(f"Done. Took {(end_time - start_time):.1f} seconds.")
 
     def print_summary(self, doc_id):
-        self.print("Summary of the video:")
-        self.print(self.summary_index.get_document_summary(doc_id))
+        self.print_ui("Summary of the video:")
+        self.print_ui(self.summary_index.get_document_summary(doc_id))
 
     def build_vector_index(self, doc: Document) -> VectorStoreIndex:
-        self.print("Building local vector index...")
+        self.print_ui("Building local vector index...")
         start_time = time.perf_counter()
         self.vector_index = VectorStoreIndex.from_documents(doc, show_progress=True)
         end_time = time.perf_counter()
-        self.print(f"Done. Took {(end_time - start_time):.1f} seconds.")
+        self.print_ui(f"Done. Took {(end_time - start_time):.1f} seconds.")
 
     def build_query_engine(self):
-        self.print("Building RAG query engine...")
+        self.print_ui("Building RAG query engine...")
         assert self.vector_index, "Vector index is not built yet."
         self.query_engine = self.vector_index.as_query_engine(
             verbose=True,
@@ -374,6 +387,40 @@ class MyAgent(Agent):
         )
 
     def prompt_received(self, prompt):
+        # First check if the input is a YouTube link
+        youtube_link = self.extract_youtube_link(prompt)
+        if youtube_link:
+            video_id = self.extract_video_id(youtube_link)
+            if video_id:
+                msg = (
+                    "Found YouTube link. Building local index from video transcript..."
+                )
+                self.print_ui(msg)
+                self.chat_history.append(f"Assistant: {msg}")
+
+                video_url = [self.get_video_url(video_id)]
+                doc = self.get_youtube_transcript_doc(video_url)
+                doc[0].doc_id = video_id
+
+                self.build_vector_index(doc)
+                self.build_query_engine()
+
+                msg = "Index and query engine is now ready. You can now ask questions about the video!"
+                self.print_ui(msg)
+                self.chat_history.append(f"Assistant: {msg}")
+                self.llm_state = LLMState.INDEX_BUILT
+                return
+
+        # If index is built, automatically use RAG for all queries
+        if self.llm_state == LLMState.INDEX_BUILT:
+            self.log.debug("Index is built - directing query to RAG engine")
+            response = self.query_engine.query(prompt)
+            print(response)
+            self.chat_history.append(f"User: {prompt}")
+            self.chat_history.append(f"Assistant: {response}")
+            return
+
+        # For other states, use normal LLM flow
         response = self.prompt_llm(prompt)
         key, value = self.extract_json_data(response)
 
@@ -388,12 +435,12 @@ class MyAgent(Agent):
 
             if self.max_search_results > 1:
                 msg = "Finished YouTube search. Which result would you like to build an index for?"
-                self.print(msg)
+                self.print_ui(msg)
                 self.chat_history.append(f"Asssistant: {msg}")
-                self.llm_state = 1
+                self.llm_state = LLMState.SEARCH_RESULTS
             else:
                 msg = "Finished YouTube search, building local index of transcript..."
-                self.print(msg)
+                self.print_ui(msg)
                 self.chat_history.append(f"Asssistant: {msg}")
 
                 video_id = self.search_results[0]["video_id"]
@@ -412,13 +459,13 @@ class MyAgent(Agent):
                     "Running your original query through the index!\n\n"
                     f'```"query": "{self.saved_query}"```'
                 )
-                self.print(msg)
+                self.print_ui(msg)
                 self.chat_history.append(f"Asssistant: {msg}")
                 response = self.query_engine.query(self.saved_query)
                 print(response)
 
                 self.chat_history.append(f"Asssistant: {response}")
-                self.llm_state = 2
+                self.llm_state = LLMState.INDEX_BUILT
 
         elif key == "build_index":
             # value in this case is the video_id
@@ -427,7 +474,7 @@ class MyAgent(Agent):
             assert video, f"Video with video_id {value} not found in search results."
             video_url = video["video_url"]
             msg = f"Fetching transcript from the following video: {video_url}."
-            self.print(msg)
+            self.print_ui(msg)
             self.chat_history.append(f"Asssistant: {msg}")
 
             video_id = video["video_id"]
@@ -441,7 +488,7 @@ class MyAgent(Agent):
             self.build_vector_index(doc)
             self.build_query_engine()
 
-            self.print(
+            self.print_ui(
                 "Index and query engine is now ready to be used on your PC. "
                 "Running your original query through the index!\n\n"
                 f'Query: "{self.saved_query}"'
@@ -450,7 +497,7 @@ class MyAgent(Agent):
             print(response)
 
             self.chat_history.append(f"Asssistant: {response}")
-            self.llm_state = 2
+            self.llm_state = LLMState.INDEX_BUILT
 
         elif key == "query_rag":
             self.log.debug(f"Querying RAG with value: {value}")
@@ -459,13 +506,13 @@ class MyAgent(Agent):
             print(response)
 
             self.chat_history.append(f"Asssistant: {response}")
-            self.llm_state = 2
+            self.llm_state = LLMState.INDEX_BUILT
 
         elif key == "reset":
             msg = (
                 "Index and query engine are now cleared. Ready to search YouTube again!"
             )
-            self.print(msg)
+            self.print_ui(msg)
         else:
             pass
 

@@ -757,7 +757,9 @@ class MyAgent(Agent):
             response = self.prompt_llm(intro)
             self.log.info(f"Response: {response}")
         except ConnectionRefusedError as e:
-            self.print(f"Having trouble connecting to the LLM server, got:\n{str(e)}!")
+            self.print_ui(
+                f"Having trouble connecting to the LLM server, got:\n{str(e)}!"
+            )
             self.log.error(str(e))
         finally:
             self.next_state = "build_index"

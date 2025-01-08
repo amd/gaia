@@ -73,7 +73,7 @@ class MyAgent(Agent):
         owner, repo = self.extract_github_owner_repo(prompt)
 
         if owner and repo:
-            self.print(
+            self.print_ui(
                 f"Thanks for sharing the link. Indexing {owner}/{repo} repo now."
             )
             self.create_repo_engine(owner, repo)
@@ -104,10 +104,12 @@ class MyAgent(Agent):
             print("\n")
 
         except ConnectionRefusedError as e:
-            self.print(f"Having trouble connecting to the LLM server, got:\n{str(e)}!")
+            self.print_ui(
+                f"Having trouble connecting to the LLM server, got:\n{str(e)}!"
+            )
             self.log.error(str(e))
         finally:
-            self.print(
+            self.print_ui(
                 "I can index github projects for you so you can easily query them. Just paste a link and I'll get on it!\n"
                 "For example, 'please index this repo: https://github.com/onnx/turnkeyml'"
             )
@@ -120,10 +122,10 @@ class MyAgent(Agent):
         if match:
             owner = match.group(1)
             repo = match.group(2)
-            self.print(f"Matched {owner} with {repo}!")
+            self.print_ui(f"Matched {owner} with {repo}!")
             return owner, repo
         else:
-            self.print(
+            self.print_ui(
                 f"Did not find {owner} with {repo}, did you get the names wrong?"
             )
             return None, None

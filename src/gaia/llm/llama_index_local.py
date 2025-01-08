@@ -68,8 +68,9 @@ class LocalLLM(CustomLLM):
         for chunk in self.prompt_llm_server(prompt=prompt, stream_to_ui=False):
 
             # Stream chunk to UI
-            self.stream_to_ui(chunk, new_card=new_card)
-            new_card = False
+            if not self.cli_mode:
+                self.stream_to_ui(chunk, new_card=new_card, is_llm_response=True)
+                new_card = False
 
             response += chunk
         return CompletionResponse(text=response)
@@ -83,8 +84,9 @@ class LocalLLM(CustomLLM):
         for chunk in self.prompt_llm_server(prompt=prompt, stream_to_ui=False):
 
             # Stream chunk to UI
-            self.stream_to_ui(chunk, new_card=new_card)
-            new_card = False
+            if not self.cli_mode:
+                self.stream_to_ui(chunk, new_card=new_card, is_llm_response=True)
+                new_card = False
 
             response += chunk
             yield CompletionResponse(text=response, delta=chunk)

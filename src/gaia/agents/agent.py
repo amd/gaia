@@ -3,10 +3,10 @@
 
 import time
 import asyncio
+import requests
 from websocket import create_connection
 from websocket._exceptions import WebSocketTimeoutException
 from aiohttp import web
-import requests
 
 from gaia.logger import get_logger
 from gaia.interface.util import UIMessage
@@ -40,6 +40,7 @@ class Agent:
         app = web.Application()
         app.router.add_post("/prompt", self._on_prompt_received)
         app.router.add_post("/restart", self._on_chat_restarted)
+        app.router.add_post("/welcome", self._on_welcome_message)
         app.router.add_post("/load_llm", self._on_load_llm)
         app.router.add_get("/health", self._on_health_check)
         return app
@@ -81,7 +82,7 @@ class Agent:
         try:
             ws = create_connection(self.llm_server_uri, timeout=None)
         except Exception as e:
-            self.print(f"My brain is not working:```{e}```")
+            self.print_ui(f"My brain is not working:```{e}```")
             return
 
         try:
@@ -113,7 +114,9 @@ class Agent:
                             self.last = True
 
                         if stream_to_ui:
-                            self.stream_to_ui(chunk, new_card=new_card)
+                            self.stream_to_ui(
+                                chunk, new_card=new_card, is_llm_response=True
+                            )
                             new_card = False
 
                         full_response += chunk
@@ -135,9 +138,15 @@ class Agent:
         return f"Function prompt_received() not implemented. prompt: {prompt}"
 
     def chat_restarted(self):
+        """Clear the agent's conversation history"""
         self.log.debug("Client requested chat to restart")
 
-    def print(self, input_str: str):
+    def welcome_message(self):
+        """Send the agent's welcome message"""
+        self.log.debug("Client requested welcome message")
+        return "Welcome! How can I help you today?"
+
+    def print_ui(self, input_str: str):
         self.log.debug(input_str)
         input_lst = input_str.split(" ")
         input_len = len(input_lst)
@@ -145,7 +154,7 @@ class Agent:
             new_card = i == 0
             self.last = i == (input_len - 1)
             self.stream_to_ui(f"{word} ", new_card=new_card)
-            time.sleep(0.1)
+            time.sleep(0.05)
 
     async def _on_prompt_received(self, ui_request):
         data = await ui_request.json()
@@ -155,7 +164,14 @@ class Agent:
         return web.json_response(json_response)
 
     async def _on_chat_restarted(self, _):
+        """Handle chat restart request - just clear history"""
         self.chat_restarted()
+        return web.Response()
+
+    async def _on_welcome_message(self, _):
+        """Handle welcome message request"""
+        response = self.welcome_message()
+        self.print_ui(response)
         return web.Response()
 
     async def _on_load_llm(self, ui_request):
@@ -168,7 +184,7 @@ class Agent:
     async def _on_health_check(self, _):
         return web.json_response({"status": "ok"})
 
-    def stream_to_ui(self, chunk, new_card=True):
+    def stream_to_ui(self, chunk, new_card=True, is_llm_response: bool = False):
         if self.cli_mode:
             return chunk
         else:
@@ -176,6 +192,7 @@ class Agent:
                 "chunk": chunk,
                 "new_card": new_card,
                 "last": self.last,
+                "is_llm_response": is_llm_response,
             }
             url = "http://127.0.0.1:8002/stream_to_ui"
             try:

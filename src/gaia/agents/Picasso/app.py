@@ -223,7 +223,9 @@ class MyAgent(Agent):
             response = self.prompt_llm(intro)
             print(f"Response: {response}")
         except ConnectionRefusedError as e:
-            self.print(f"Having trouble connecting to the LLM server, got:\n{str(e)}!")
+            self.print_ui(
+                f"Having trouble connecting to the LLM server, got:\n{str(e)}!"
+            )
             self.log.error(str(e))
 
     def sdxl_prompt_generate(self, query: str) -> str:

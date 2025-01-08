@@ -49,7 +49,9 @@ class MyAgent(Agent):
                 print(chunk, end="", flush=True)
             print("\n")
         except ConnectionRefusedError as e:
-            self.print(f"Having trouble connecting to the LLM server, got:\n{str(e)}!")
+            self.print_ui(
+                f"Having trouble connecting to the LLM server, got:\n{str(e)}!"
+            )
             self.log.error(str(e))
 
 
