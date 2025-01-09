@@ -92,7 +92,7 @@ setup(
             "torchvision @ https://download.pytorch.org/whl/cu118/torchvision-0.18.1%2Bcu118-cp310-cp310-win_amd64.whl",
             "torchaudio @ https://download.pytorch.org/whl/cu118/torchaudio-2.3.1%2Bcu118-cp310-cp310-win_amd64.whl",
         ],
-        "test": [
+        "dev": [
             "pytest",
             "pytest-benchmark",
             "pytest-mock",
@@ -101,14 +101,12 @@ setup(
             "matplotlib",
             "adjustText",
             "plotly",
+            "black",
+            "pylint",
         ],
         "ui-dev": [
             "PyQt6",
             "pyqt6-tools"
-        ],
-        "dev": [
-            "black",
-            "pylint",
         ]
     },
     classifiers=[],

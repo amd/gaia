@@ -30,6 +30,11 @@ def main():
         default="amd_oga/wheels",
         help="Path to the wheels directory",
     )
+    parser.add_argument(
+        "--keep_zip",
+        action="store_true",
+        help="Keep the zip file after installation (default: delete)",
+    )
 
     # Parse the arguments
     args = parser.parse_args()
@@ -62,8 +67,9 @@ def main():
                 ]
             )
 
-    # Delete the zip file
-    os.remove(zip_file_path)
+    # Delete the zip file unless --keep_zip is specified
+    if not args.keep_zip:
+        os.remove(zip_file_path)
 
 
 if __name__ == "__main__":

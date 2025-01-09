@@ -60,7 +60,8 @@ class GaiaCliClient:
         self.port = port
         self.llm_port = 8000
         self.ollama_port = 11434
-        self.base_url = f"http://{host}:{port}"
+        self.agent_url = f"http://{host}:{port}"
+        self.llm_url = f"http://{host}:{self.llm_port}"
         self.model = model
         self.max_new_tokens = max_new_tokens
         self.backend = backend
@@ -282,7 +283,7 @@ class GaiaCliClient:
         self.log.debug(f"llm_server.pid: {self.llm_server.pid}")
 
     async def send_message(self, message):
-        url = f"{self.base_url}/prompt"
+        url = f"{self.agent_url}/prompt"
         data = {"prompt": message}
         try:
             async with aiohttp.ClientSession(
@@ -305,10 +306,10 @@ class GaiaCliClient:
             yield error_message
 
     def get_stats(self):
-        url = f"{self.base_url}/stats"
+        url = f"{self.llm_url}/stats"
         try:
             response = requests.get(url, timeout=10)
-            self.log.info(f"{url}: {response.json()}")
+            self.log.debug(f"{url}: {response.json()}")
             if response.status_code == 200:
                 stats = response.json()
                 self.log.info(f"Stats received: {stats}")
@@ -323,7 +324,7 @@ class GaiaCliClient:
             return None
 
     def restart_chat(self):
-        url = f"{self.base_url}/restart"
+        url = f"{self.agent_url}/restart"
         response = requests.post(url)
         if response.status_code == 200:
             return "Chat restarted successfully."
@@ -439,6 +440,11 @@ async def async_main(action, message=None, **kwargs):
         # Note: Chat mode doesn't return a response, it's interactive
         await client.chat()
         return "Chat session ended."
+    elif action == "stats":
+        stats = client.get_stats()
+        if stats:
+            return {"stats": stats}
+        return {"stats": {}}
 
 
 def run_cli(action, message=None, **kwargs):
@@ -465,7 +471,9 @@ def main():
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument(
-        "action", choices=["chat", "prompt", "start", "stop"], help="Action to perform"
+        "action",
+        choices=["chat", "prompt", "start", "stop", "stats"],
+        help="Action to perform",
     )
     parser.add_argument(
         "--agent_name",

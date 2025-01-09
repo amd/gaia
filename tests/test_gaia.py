@@ -73,6 +73,82 @@ def test_model_sweep(benchmark, prompt: str, model: str):
     plt.close()
 
 
+def test_stats_command(benchmark):
+    print("\nStarting test_stats_command...")
+
+    @profile(precision=4)
+    def run_stats():
+        return run_cli("stats")
+
+    # Run benchmark in pedantic mode with 1 round and 1 iteration
+    result = benchmark.pedantic(run_stats, rounds=1, iterations=1)
+    print(f"Stats result: {result}")
+
+    # Validate the stats response structure
+    assert isinstance(result, dict), "Stats result should be a dictionary"
+    assert "stats" in result, "Stats result should contain a 'stats' key"
+    assert isinstance(result["stats"], dict), "Stats should be a dictionary"
+
+    # Validate specific stats fields
+    stats = result["stats"]
+    required_fields = [
+        "time_to_first_token",
+        "tokens_per_second",
+        "input_tokens",
+        "output_tokens",
+        "decode_token_times",
+    ]
+
+    for field in required_fields:
+        assert field in stats, f"Stats should contain '{field}'"
+
+    # Type and value checks
+    assert isinstance(
+        stats["time_to_first_token"], (int, float)
+    ), "time_to_first_token should be numeric"
+    assert isinstance(
+        stats["tokens_per_second"], (int, float)
+    ), "tokens_per_second should be numeric"
+    assert isinstance(stats["input_tokens"], int), "input_tokens should be an integer"
+    assert isinstance(stats["output_tokens"], int), "output_tokens should be an integer"
+    assert isinstance(
+        stats["decode_token_times"], list
+    ), "decode_token_times should be a list"
+
+    # Value range checks
+    assert (
+        stats["time_to_first_token"] >= 0
+    ), "time_to_first_token should be non-negative"
+    assert stats["tokens_per_second"] >= 0, "tokens_per_second should be non-negative"
+    assert stats["input_tokens"] >= 0, "input_tokens should be non-negative"
+    assert stats["output_tokens"] >= 0, "output_tokens should be non-negative"
+    assert all(
+        t >= 0 for t in stats["decode_token_times"]
+    ), "all decode times should be non-negative"
+
+    # Get memory usage for stats command
+    mem_usage = memory_usage((run_stats,), interval=0.1, timeout=None, max_iterations=1)
+
+    # Add custom metrics to the benchmark
+    benchmark.extra_info["max_memory"] = max(mem_usage)
+    benchmark.extra_info["min_memory"] = min(mem_usage)
+    benchmark.extra_info["avg_memory"] = sum(mem_usage) / len(mem_usage)
+
+    print("Stats test completed successfully.")
+    print(f"Max memory usage: {max(mem_usage)} MiB")
+    print(f"Min memory usage: {min(mem_usage)} MiB")
+    print(f"Avg memory usage: {sum(mem_usage) / len(mem_usage)} MiB")
+
+    # Generate memory profile
+    plt.figure(figsize=(10, 5))
+    plt.plot(mem_usage)
+    plt.title("Memory Usage for Stats Command")
+    plt.xlabel("Time")
+    plt.ylabel("Memory usage (MiB)")
+    plt.savefig("memory_profile_stats.png")
+    plt.close()
+
+
 if __name__ == "__main__":
     start_servers()
     # Update the pytest.main() call
