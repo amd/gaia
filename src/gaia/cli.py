@@ -474,7 +474,20 @@ def main():
         "action",
         choices=["chat", "prompt", "start", "stop", "stats"],
         help="Action to perform",
+        nargs="?",  # Make action optional
     )
+    # Add download transcript option
+    parser.add_argument(
+        "--download-transcript",
+        metavar="URL",
+        help="Download transcript from a YouTube URL",
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Output file path for transcript (optional, default: transcript_<video_id>.txt)",
+    )
+    # Move the other arguments here, before adding them to the main parser
     parser.add_argument(
         "--agent_name",
         default="Chaty",
@@ -523,6 +536,22 @@ def main():
     parser.add_argument("message", nargs="?", help="Message for prompt action")
 
     args = parser.parse_args()
+
+    # Handle transcript download if requested
+    if args.download_transcript:
+        print(f"Downloading transcript from {args.download_transcript}")
+        from llama_index.readers.youtube_transcript import YoutubeTranscriptReader
+
+        doc = YoutubeTranscriptReader().load_data(ytlinks=[args.download_transcript])
+        output_path = args.output or "transcript.txt"
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(doc[0].text)
+        print(f"Transcript downloaded to: {output_path}")
+        return
+
+    if not args.action:
+        parser.print_help()
+        return
 
     result = run_cli(
         args.action,

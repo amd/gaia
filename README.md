@@ -87,6 +87,7 @@ To quickly get started, you can try the GAIA CLI (`gaia-cli`) client using the f
 1. Follow the instructions outlined [here](./docs/ort_genai_npu.md) to install the GAIA app and the ORT-GenAI backend.
 1. Open a command prompt and run `gaia-cli -h` to see the available commands.
 
+## Basic Chat Demo
 A simple chat demo using `gaia-cli`:
 
 1. Start the servers:
@@ -140,6 +141,19 @@ Note: You can customize the model and backend using different options. For examp
 - To switch to the Lemonade backend: `gaia-cli start --backend lemonade`
 
 For more options and detailed usage, refer to `gaia-cli --help`.
+
+## Utility Functions
+
+### Download YouTube Transcripts
+You can download transcripts from YouTube videos directly using the CLI:
+```bash
+gaia-cli --download-transcript "https://www.youtube.com/watch?v=VIDEO_ID"
+```
+
+By default, this saves the transcript to `transcript.txt`. You can specify a custom output file:
+```bash
+gaia-cli --download-transcript "https://www.youtube.com/watch?v=VIDEO_ID" --output "my_transcript.txt"
+```
 
 # Contributing
 This is a very new project whose codebase is under heavy development.  If you decide to contribute, please:
