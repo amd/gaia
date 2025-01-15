@@ -41,6 +41,18 @@ class MyAgent(Agent):
         response = self.prompt_llm(prompt)
         return response
 
+    def prompt_stream(self, prompt):
+        # Stream response directly instead of concatenating
+        self.chat_history.append(f"user: {prompt}")
+        prompt = Prompts.get_system_prompt(self.model, list(self.chat_history))
+
+        response = ""
+        for chunk in self.prompt_llm_server(prompt=prompt):
+            response += chunk
+            yield chunk  # Yield each chunk for streaming
+
+        self.chat_history.append(f"assistant: {response}")
+
     def chat_restarted(self):
         """Clear the conversation history"""
         self.log.info("Client requested chat to restart")

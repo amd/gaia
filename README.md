@@ -133,6 +133,9 @@ Check your desktop for the GAIA icon and double-click it to launch the GUI. It m
 # Running the GAIA CLI
 To quickly get started with GAIA via the command line, you can use the GAIA CLI (`gaia-cli`) tool. Run `gaia-cli -h` for help details. For more information and examples, please refer to the [gaia-cli documentation](docs/cli.md).
 
+# GAIA-CLI Talk Mode
+For detailed instructions on using GAIA-CLI's voice interaction capabilities, including configuration options and voice commands, please refer to our [Talk Mode Guide](docs/talk.md).
+
 ## Utility Functions
 
 ### Download YouTube Transcripts

@@ -321,6 +321,7 @@ class OllamaClientServer:
         self.log = get_logger(__name__)
         self.app = FastAPI()
         self.ollama_client = None
+        self.is_generating = False
         self.setup_routes()
 
     def get_host_port(self):
@@ -406,6 +407,7 @@ class OllamaClientServer:
                     if message == "done":
                         break
 
+                    self.is_generating = True
                     self.ollama_client.stop_event.clear()
                     stream = self.ollama_client.generate(prompt=message, stream=True)
 
@@ -422,7 +424,10 @@ class OllamaClientServer:
                             await websocket.send_text("</s>")
                     print("\n")
 
+                    self.is_generating = False
+
             except WebSocketDisconnect:
+                self.is_generating = False
                 self.log.info("WebSocket disconnected")
                 websocket_closed = True
                 self.ollama_client.stop_generation()
@@ -464,6 +469,10 @@ class OllamaClientServer:
         async def halt():
             """Stop an in-progress generation."""
             return self.ollama_client.stop_generation()
+
+        @self.app.get("/generating")
+        async def generation_status():
+            return {"is_generating": self.is_generating}
 
     def run(self, model: str):
         self.ollama_client = OllamaClient(model=model, cli_mode=self.cli_mode)

@@ -107,6 +107,48 @@ gaia-cli start --dtype float16
 
 For more options and detailed usage, refer to `gaia-cli --help`.
 
+## Running GAIA CLI Talk Mode
+GAIA CLI's talk mode enables voice-based interaction with LLMs using Whisper for speech recognition. This feature allows for natural conversation with the AI through your microphone.
+
+1. Start the servers:
+   ```bash
+   gaia-cli start
+   ```
+   1. To run in hybrid mode, use the following command:
+   ```bash
+   gaia-cli start --model "amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid" --backend "oga" --device "hybrid" --dtype "int4"
+   ```
+
+2. Launch talk mode:
+   ```bash
+   gaia-cli talk
+   ```
+
+### Configuration Options
+You can customize the voice interaction experience with these parameters:
+
+- `--whisper-model-size`: Choose the Whisper model size for speech recognition
+  ```bash
+  gaia-cli talk --whisper-model-size medium  # Options: tiny, base, small, medium, large
+  ```
+
+- `--audio-device-index`: Specify which microphone to use
+  ```bash
+  gaia-cli talk --audio-device-index 2  # Default: 1
+  ```
+
+### Voice Commands
+During a talk session:
+- Say "exit" or "quit" to end the session
+- Say "restart" to clear the chat history
+- Natural pauses (>2 seconds) trigger the AI's response
+
+### Troubleshooting
+- If you don't hear any response, check your microphone settings and the `--audio-device-index`
+- For better recognition accuracy, try using a larger Whisper model (e.g., "medium" or "large")
+- Ensure you're in a quiet environment for optimal speech recognition
+- Speaking clearly and at a moderate pace will improve transcription quality
+
 ## Development Setup
 
 For manual setup including creation of the virtual environment and installation of dependencies, refer to the instructions outlined [here](./docs/ort_genai_npu.md). This approach is not recommended for most users and is only needed for development purposes.

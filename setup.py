@@ -40,6 +40,9 @@ setup(
         "torchaudio",
         "pyside6",
         "ollama",
+        "pyaudio",
+        "openai-whisper",
+        "numpy",
     ],
     extras_require={
         "dml": [

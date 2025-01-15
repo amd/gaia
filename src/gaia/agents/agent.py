@@ -43,7 +43,48 @@ class Agent:
         app.router.add_post("/welcome", self._on_welcome_message)
         app.router.add_post("/load_llm", self._on_load_llm)
         app.router.add_get("/health", self._on_health_check)
+        app.router.add_get("/ws", self._on_websocket_connect)
         return app
+
+    async def _on_websocket_connect(self, request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+
+        try:
+            async for msg in ws:
+                if msg.type == web.WSMsgType.TEXT:
+                    if msg.data == "done":
+                        break
+
+                    self.log.info(
+                        f"Processing request: {msg.data[:50]}..."
+                    )  # Show first 50 chars
+                    response = self.prompt_stream(msg.data)
+
+                    # Stream each chunk immediately
+                    chunk_count = 0
+                    for chunk in response:
+                        chunk_count += 1
+                        await ws.send_str(chunk)
+                        await ws.drain()  # Ensure the chunk is sent immediately
+                        await asyncio.sleep(0)  # Yield to allow network IO
+
+                    self.log.info(
+                        f"Completed streaming response ({chunk_count} chunks)"
+                    )
+                    await ws.send_str("</s>")
+                    await ws.drain()
+
+                elif msg.type == web.WSMsgType.ERROR:
+                    self.log.error(
+                        f"WebSocket connection closed with exception {ws.exception()}"
+                    )
+
+        except Exception as e:
+            self.log.error(f"Error in websocket connection: {str(e)}")
+        finally:
+            await ws.close()
+        return ws
 
     def __del__(self):
         # Ensure websocket gets closed when agent is deleted
@@ -208,6 +249,18 @@ class Agent:
         asyncio.set_event_loop(loop)
         self.app = loop.run_until_complete(self.create_app())
         web.run_app(self.app, host=self.host, port=self.port)
+
+    def prompt_stream(self, prompt):
+        """Stream responses from the LLM server.
+
+        Args:
+            prompt (str): The input prompt to send to the LLM
+
+        Yields:
+            str: Response chunks from the LLM server
+        """
+        self.log.debug(f"Streaming prompt to LLM server:\n{prompt}")
+        return self.prompt_llm_server(prompt)
 
 
 def launch_agent_server(
