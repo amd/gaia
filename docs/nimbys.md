@@ -1,6 +1,6 @@
 # 🌩️ NIMBYS 🌩️ Documentation
 
-This page documents how to set up and maintain NIMBYS, a geo-distributed cloud of RyzenAI hardware.
+This page documents how to set up and maintain NIMBYS, a geo-distributed cloud of Ryzen AI hardware.
 
 Topics:
  - [What is NIMBYS](#what-is-nimbys)
@@ -21,7 +21,7 @@ You can read about all this here: [GitHub: About self-hosted runners](https://do
 
 ## NPU Runner Setup
 
-This guide will help you set up a RyzenAI laptop as a GitHub self-hosted runner as part of the NIMBYS cloud. This will make the laptop available for on-demand and CI jobs that require NPU resources.
+This guide will help you set up a Ryzen AI laptop as a GitHub self-hosted runner as part of the NIMBYS cloud. This will make the laptop available for on-demand and CI jobs that require NPU resources.
 
 Pre-requisites:
 
@@ -106,18 +106,18 @@ Because NIMBYS uses self-hosted systems, we have to be careful about what we put
 - Corrupting the laptops, causing them to produce inconsistent results or failures.
 - Over-subscribing the capacity of the available laptops (3 at the time of this writing, scaling up to 12 in January 2025).
 
-> Note: we could relieve some of these limitations by implementing container-based actions on our self-hosted runners. Anyone should feel free to try and make that work.
+⚠️ NOTE: we could relieve some of these limitations by implementing container-based actions on our self-hosted runners. Anyone should feel free to try and make that work.
 
 Here are some general guidelines to observe when creating or modifying NIMBYS workflows. If you aren't confident that you are properly following these guidelines, please contact someone to review your code before opening your PR.
 
 - Place a NIMBYS emoji 🌩️ in the name of all of your NIMBYS workflows, so that PR reviewers can see at a glance which workflows are using NIMBYS resources.
     - Example: `name: Test Lemonade with DirectML 🌩️`
 - Avoid triggering your workflow on NIMBYS before anyone has had a chance to review it against these guidelines. To avoid triggers, do not include `on: pull request:` in your workflow until after a reviewer has signed off.
-- Only map a workflow to NIMBYS with `runs on: stx` if it actually requires RyzenAI compute. If a step in your workflow can use generic compute (e.g., running a Hugging Face LLM on CPU), put that step on a generic non-NIMBYS runner like `runs on: windows-latest`. 
+- Only map a workflow to NIMBYS with `runs on: stx` if it actually requires Ryzen AI compute. If a step in your workflow can use generic compute (e.g., running a Hugging Face LLM on CPU), put that step on a generic non-NIMBYS runner like `runs on: windows-latest`.
 - Be very considerate about installing software on to the runners:
     - Installing software into the CWD (e.g., a path of `.\`) is always ok, because that will end up in `C:\actions-runner\_work\REPO`, which is always wiped between tests.
     - Installing software into `AppData`, `Program Files`, etc. is not advisable because that software will persist across tests. See the [setup](#npu-runner-setup) section to see which software is already expected on the system.
-        - Note: GAIA tests do install some software, see [Workflow Examples](#workflow-examples) for an example of why these specific cases are ok.
+        - ⚠️ NOTE: GAIA tests do install some software, see [Workflow Examples](#workflow-examples) for an example of why these specific cases are ok.
 - Always create new conda environments in the CWD, for example `conda create -p .\my-env`.
     - This way, the conda environment is located in `C:\actions-runner\_work\REPO`, which is wiped between tests.
     - Do NOT create conda environments by name, for example `conda create -n dont-you-dare` since that will end up in the conda install location and will persist across tests.

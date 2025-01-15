@@ -3,16 +3,24 @@
 
 # GAIA: The GenAI Sandbox
 
-Welcome to the GAIA (Generative AI Is Awesome!) project! This repository serves as a repository of AI PC demos. Primarily, it consists of local LLM chatbot and agent demos running on the RyzenAI platform. For more information on GAIA, see the [Frequently Asked Questions](docs/faq.md).
+GAIA (Generative AI Is Awesome!) is an open-source platform that enables you to run and experiment with various Large Language Models (LLMs) locally on AMD Ryzen AI-powered devices. Whether you're a developer, researcher, or AI enthusiast, GAIA provides:
 
-Currently, the following are supported:
+- **Local LLM Processing**: Run powerful language models directly on your device without cloud dependencies
+- **Multiple Use Cases**: From basic chat to RAG-enhanced applications and specialized agents
+- **Optimized Performance**: Leveraging AMD's NPU and hybrid acceleration for efficient AI processing
+- **Easy-to-Use Interface**: Both CLI and GUI options for interacting with models
+- **Extensible Architecture**: Build and integrate your own agents and use cases
 
-| Use-Case Example   | Function                                 |
-| ------------------ | ---------------------------------------- |
-| No Agent           | Test LLM using completion                |
-|   Chaty            | Vanilla LLM chatbot with message history |
-|   Joker            | Simple RAG joke generator                |
-|   Clip             | YouTube search and Q&A agent             |
+For detailed information, see the [Frequently Asked Questions](docs/faq.md).
+
+## Featured Capabilities
+
+| Use-Case Example   | Function                                 | Description |
+| ------------------ | ---------------------------------------- | ----------- |
+| No Agent           | Test LLM using basic completion          | Direct model interaction for testing and evaluation |
+| Chaty              | Vanilla LLM chatbot with message history | Interactive conversational interface with context retention |
+| Joker              | Simple RAG joke generator                | Demonstrates retrieval-augmented generation capabilities |
+| Clip               | YouTube search and Q&A agent             | Multi-modal agent for video content interaction |
 
 LLMs supported:
 
@@ -42,7 +50,11 @@ LLMs supported:
 1. [Prerequisites](#prerequisites)
 1. [Getting Started](#getting-started)
 1. [Running the GAIA CLI](#running-the-gaia-cli)
+1. [Installation](#installation)
+1. [Installation Overview](#installation-overview)
+1. [Featured Capabilities](#featured-capabilities)
 1. [Contributing](#contributing)
+1. [FAQ](#faq)
 
 # Prerequisites
 GAIA has been tested on the following system, there are no guarantees that it will work on other systems:
@@ -56,18 +68,51 @@ GAIA has been tested on the following system, there are no guarantees that it wi
 
 # Getting Started
 
-For a quick and easy setup on a new machine, please install the latest version of the GAIA from the [releases page](https://github.com/aigdat/gaia/releases). The included installers install the GAIA app and handle all dependencies for the NPU, GPU, and Hybrid (NPU+iGPU) execution modes. There are three main installers available:
-1. GAIA_NPU_Installer.exe - installs the GAIA app for running LLMs on the RyzenAI NPU.
-1. GAIA_Hybrid_Installer.exe - installs the GAIA app for running LLMs on both RyzenAI NPU and iGPU.
-1. GAIA_Installer.exe - installs the GAIA app for running LLMs on the RyzenAI NPU and a third party backend called ollama.
+For a quick and easy setup on a new machine, please install the latest version of the GAIA app from the [releases page](https://github.com/aigdat/gaia/releases) or [AMD sharepoint](https://amdcloud.sharepoint.com/:f:/r/sites/AIM/Shared%20Documents/Developer%20Acceleration/GAIA/Releases?csf=1&web=1&e=RxgwPa).
+
+The installation process takes about 5-10 minutes and includes everything needed to get up and running with GAIA on Ryzen AI NPU. Read below for more details on the installation process.
+
+## Installation Overview
+
+GAIA installers provide complete setup for NPU, GPU, and Hybrid (NPU+iGPU) execution using the ONNX GenAI backend. Each installer includes both CLI (command-line interface) and GUI (graphical user interface) and comes in three variants:
+
+1. **GAIA_Hybrid_Installer.exe** - The recommended installer that offers the best performance, running LLMs on both NPU and iGPU devices.
+1. **GAIA_NPU_Installer.exe** - installs the GAIA app for running LLMs on the Ryzen AI NPU optimized for power efficiency.
+1. **GAIA_Installer.exe** - installs the GAIA app for running LLMs on the Ryzen AI NPU and a third party backend called Ollama for more generic use  cases.
+
+⚠️ NOTE: When running GAIA using the Hybrid mode, please make sure to disable any discrete third-party GPUs in Device Manager.
+
+The installer performs these key steps:
+1. **Environment Check**
+   - Verifies/installs Miniconda
+   - Checks for existing GAIA installations
+   - Validates hardware compatibility
+
+2. **Driver Management** (NPU/Hybrid modes)
+   - Checks current Ryzen AI driver version
+   - Updates driver if needed
+
+3. **Core Installation**
+   - Creates Python environment
+   - Installs GAIA framework
+   - Sets up mode-specific components
+
+4. **Final Configuration**
+   - Downloads LLM artifacts
+   - Configures settings
+   - Creates shortcuts
+
+For more details, please refer to the [installer documentation](docs/installer.md).
+
+## Installation
 
 To install the GAIA app, please follow these steps:
-1. Download the desired GAIA installer from the "Assets" section of the most recent release:
+1. Download the [latest release](https://github.com/aigdat/gaia/releases) of the GAIA installers from the "Assets" section or use [AMD sharepoint](https://amdcloud.sharepoint.com/:f:/r/sites/AIM/Shared%20Documents/Developer%20Acceleration/GAIA/Releases?csf=1&web=1&e=RxgwPa):
    ![image](./data/img/gaia-installer.png)
 
 2. Unzip the downloaded file and run the installer by double-clicking the .exe file.
 
-3. If you get a message "Microsoft Defender SmartScreen prevented an unrecognized app from starting. Running this app might put your PC at risk.", click on "More info" and then "Run anyway".
+3. If you get a Windows Security warning, you can verify the application by clicking *"More info"* and then *"Run anyway"*. This warning appears because the application is not yet digitally signed.
 
 4. Follow the on-screen instructions to complete the installation:
 
@@ -75,72 +120,18 @@ To install the GAIA app, please follow these steps:
 
 5. Once installation is complete, a GAIA desktop icon will be created for easy access.
 
-NOTE: The installation process may take 10-20 minutes, as it sets up all necessary components for a seamless GAIA experience.
+⚠️ NOTE: The installation process may take 10-20 minutes, as it sets up all necessary components for a seamless GAIA experience.
 
 ## Building from source
-To get started building from source, please follow the latest instructions [here](./docs/ort_genai.md). These instructions will setup the Onnx Runtime GenAI (ORT-GenAI) backend targeting the RyzenAI Neural Processing Unit (NPU). For legacy support, you can also use the Pytorch Eager Mode flow using the AMD transformers library described [here](./docs/ryzenai_npu.md).
+To get started building from source, please follow the latest instructions [here](./docs/ort_genai.md). These instructions will setup the Onnx Runtime GenAI (ORT-GenAI) backend targeting the Ryzen AI Neural Processing Unit (NPU). For legacy support, you can also use the Pytorch Eager Mode flow using the AMD transformers library described [here](./docs/ryzenai_npu.md).
 
-NOTE: You may need to install ollama from [here](https://ollama.com/download) if you plan to run models with the ollama backend.
+⚠️ NOTE: You may need to install Ollama from [here](https://ollama.com/download) if you plan to run models with the Ollama backend.
+
+# Running the GAIA GUI
+Check your desktop for the GAIA icon and double-click it to launch the GUI. It may take a few minutes to start the first time. Subsequent launches are faster. You may also need to download the latest LLM models from Hugging Face, GAIA will do this automatically but may request a Hugging Face token for access. Contact the [GAIA team](mailto:gaia@amd.com) if you are having any issues with model downloads or the GUI application.
 
 # Running the GAIA CLI
-To quickly get started, you can try the GAIA CLI (`gaia-cli`) client using the following steps:
-1. Follow the instructions outlined [here](./docs/ort_genai_npu.md) to install the GAIA app and the ORT-GenAI backend.
-1. Open a command prompt and run `gaia-cli -h` to see the available commands.
-
-## Basic Chat Demo
-A simple chat demo using `gaia-cli`:
-
-1. Start the servers:
-   ```
-   gaia-cli start
-   ```
-   This command initializes the necessary servers with the default model using the default backend.
-
-   ```
-   (gaiaenv) C:\Users\kalin\Work\gaia>gaia-cli start
-   [2024-10-14 18:34:09,556] | INFO | gaia.cli.start | cli.py:55 | Starting servers...
-   ...
-   [2024-10-14 18:34:23,769] | INFO | gaia.cli.wait_for_servers | cli.py:75 | All servers are ready.
-   Servers started successfully.
-   ```
-
-2. Begin a chat session:
-   ```
-   gaia-cli chat
-   ```
-   This opens an interactive chat interface where you can converse with the AI.
-   ```
-   Starting chat with Chaty. Type 'exit' to quit, 'restart' to clear chat history.
-   ```
-
-3. During the chat:
-   - Type your messages and press Enter to send.
-   - Type `exit` to exit the chat session.
-   ```
-   You: who are you in one sentence?
-   {"status": "Success", "response": "Yer lookin' fer me, matey? I be the swashbucklin' AI pirate bot, here to help ye with yer queries and share tales o' the seven seas!"}
-   You: exit
-   Chat session ended.
-   ```
-
-4. Terminate the servers when finished:
-   ```
-   gaia-cli stop
-   ```
-   This ensures all server processes are properly shut down.
-   ```
-   (gaiaenv) C:\Users\kalin\Work\gaia>gaia-cli stop
-   [2024-10-14 18:36:55,218] | INFO | gaia.cli.stop | cli.py:204 | Stopping servers...
-   ...
-   [2024-10-14 18:36:55,341] | INFO | gaia.cli.stop | cli.py:233 | All servers stopped.
-   Servers stopped successfully.
-   ```
-
-Note: You can customize the model and backend using different options. For example:
-- To use a different model: `gaia-cli start --model mistral:7b`
-- To switch to the Lemonade backend: `gaia-cli start --backend lemonade`
-
-For more options and detailed usage, refer to `gaia-cli --help`.
+To quickly get started with GAIA via the command line, you can use the GAIA CLI (`gaia-cli`) tool. Run `gaia-cli -h` for help details. For more information and examples, please refer to the [gaia-cli documentation](docs/cli.md).
 
 ## Utility Functions
 
@@ -156,7 +147,7 @@ gaia-cli --download-transcript "https://www.youtube.com/watch?v=VIDEO_ID" --outp
 ```
 
 # Contributing
-This is a very new project whose codebase is under heavy development.  If you decide to contribute, please:
+This is a very new project with a codebase that is under heavy development.  If you decide to contribute, please:
 - do so via a pull request.
 - write your code in keeping with the same style as the rest of this repo's code.
 
@@ -170,6 +161,9 @@ If you're interested in contributing to GAIA's user interface, we provide a comp
 - Working with assets and resources
 
 For detailed instructions, please refer to our [UI Development Guide](docs/ui.md).
+
+# Contact
+Contact [GAIA Team](mailto:gaia@amd.com) for any questions, feature requests, access or troubleshooting issues.
 
 # License
 This project is licensed under the terms of the MIT license. See LICENSE.md for details.

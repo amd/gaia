@@ -647,7 +647,7 @@ class Widget(QWidget):
             }
         """
         )
-        self.setWindowTitle("RyzenAI GAIA")
+        self.setWindowTitle("Ryzen AI GAIA")
 
         # Set a much wider minimum width for the chat area
         self.ui.scrollAreaWidgetContents.setMinimumWidth(800)

@@ -13,7 +13,7 @@
 1. [Manual Start of GAIA App and NPU Web Server](#manual-start-of-gaia-app-and-npu-web-server)
 1. [Complete Installation of Transformers](#complete-installation-of-transformers)
 
-NOTE: These instructions apply to the [AIG-DAT/gaia_internal](https://gitenterprise.xilinx.com/AIG-DAT/gaia_internal.git) repo, however the same instructions follow for [aig-dat/gaia](https://github.com/aigdat/gaia.git) repo as well, just replace the paths accordingly.
+⚠️ NOTE: These instructions apply to the [AIG-DAT/gaia_internal](https://gitenterprise.xilinx.com/AIG-DAT/gaia_internal.git) repo, however the same instructions follow for [aig-dat/gaia](https://github.com/aigdat/gaia.git) repo as well, just replace the paths accordingly.
 
 To get started, please follow the installation instructions below. If you've already completed the installation and just want to run GAIA, see [Running GAIA](#running-gaia-on-ryzen-ai-npu).
 
@@ -70,7 +70,7 @@ In a new command terminal:
     1. `conda activate gaiaenv`
 1. Install GAIA package and dependencies:
     1. `pip install .`
-    NOTE: If actively developing, use `pip install -e .` to enable editable mode and create links to sources instead.
+    ⚠️ NOTE: If actively developing, use `pip install -e .` to enable editable mode and create links to sources instead.
 1. If you want to use Clip (YouTube Assistant), you'll need a YouTube API Key:
 `set YOUTUBE_API_KEY=AIzaSyDW-S32jBmwBBNnVD5Nrr8ad2AVLDcIJtI`
 1. Run `gaia` and a UI should pop-up initializing the application.
@@ -106,10 +106,10 @@ INFO:     connection open
 ```
 1. Open a new command shell and go to the root of the gaia project (`./gaia_internal/gaia`)
 1. Activate the GAIA virtual environment: `conda activate gaiaenv`
-    1. NOTE: If the environment does not exist, proceed to the manual installation steps [here](#complete-installation-to-setup-gaia-app)
+    1. ⚠️ NOTE: If the environment does not exist, proceed to the manual installation steps [here](#complete-installation-to-setup-gaia-app)
 1. Start the application: `gaia`
 
-NOTE: Always use Anaconda command shell only, NOT powershell. Do not use administrative mode.
+⚠️ NOTE: Always use Anaconda command shell only, NOT powershell. Do not use administrative mode.
 
 
 # Complete Installation of Transformers

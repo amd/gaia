@@ -171,7 +171,7 @@ Section "Install Main Components" SEC01
     FileWrite $0 '  Mode: ${MODE}$\n'
     FileWrite $0 '  CI Mode: ${CI}$\n'
     FileWrite $0 '  OGA URL: ${OGA_URL}$\n'
-    FileWrite $0 '  RyzenAI Folder: ${RYZENAI_FOLDER}$\n'
+    FileWrite $0 '  Ryzen AI Folder: ${RYZENAI_FOLDER}$\n'
     FileWrite $0 '  NPU Driver Version: ${NPU_DRIVER_VERSION}$\n'
     FileWrite $0 '  LLM Artifacts: ${LLM_ARTIFACTS}$\n'
     FileWrite $0 '-------------------------------------------$\n'
@@ -280,9 +280,9 @@ Section "Install Main Components" SEC01
       Quit
 
     install_ryzenai_driver:
-      FileWrite $0 "-------------------------$\n"
-      FileWrite $0 "- RyzenAI Driver Update -$\n"
-      FileWrite $0 "-------------------------$\n"
+      FileWrite $0 "--------------------------$\n"
+      FileWrite $0 "- Ryzen AI Driver Update -$\n"
+      FileWrite $0 "--------------------------$\n"
 
       ${If} ${MODE} == "NPU"
       ${OrIf} ${MODE} == "HYBRID"
@@ -399,9 +399,9 @@ Section "Install Main Components" SEC01
       Quit
 
     install_ryzenai_whl:
-      FileWrite $0 "----------------------------$\n"
-      FileWrite $0 "- RyzenAI WHL Installation -$\n"
-      FileWrite $0 "----------------------------$\n"
+      FileWrite $0 "-----------------------------$\n"
+      FileWrite $0 "- Ryzen AI WHL Installation -$\n"
+      FileWrite $0 "-----------------------------$\n"
 
       ; Install OGA NPU dependencies
       FileWrite $0 "- Setting up environment variables...$\n"
