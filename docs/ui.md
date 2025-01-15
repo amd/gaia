@@ -1,3 +1,6 @@
+#### Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+#### SPDX-License-Identifier: MIT
+
 # UI Development Guide
 
 This guide explains how to modify and enhance the GAIA user interface using Qt Designer. Qt Designer is a visual design tool that allows you to create and edit graphical user interfaces without writing code directly.
@@ -8,7 +11,7 @@ This guide explains how to modify and enhance the GAIA user interface using Qt D
 
 1. A working GAIA installation (see [README](README.md))
 2. Python environment with GAIA dependencies installed
-3. UI development dependencies: `pip install -e .[ui]`
+3. UI development dependencies: `pip install -e PyQt6, pyqt6-tools`
 
 ## Using Qt Designer
 

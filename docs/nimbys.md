@@ -1,3 +1,6 @@
+#### Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+#### SPDX-License-Identifier: MIT
+
 # 🌩️ NIMBYS 🌩️ Documentation
 
 This page documents how to set up and maintain NIMBYS, a geo-distributed cloud of Ryzen AI hardware.

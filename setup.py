@@ -102,11 +102,6 @@ setup(
             "adjustText",
             "plotly",
             "black",
-            "pylint",
-        ],
-        "ui-dev": [
-            "PyQt6",
-            "pyqt6-tools"
         ]
     },
     classifiers=[],
