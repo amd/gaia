@@ -26,10 +26,12 @@ This guide will help you set up a RyzenAI laptop as a GitHub self-hosted runner 
 Pre-requisites:
 
 - The laptop must already have the following software installed:
+    - The latest RyzenAI driver, which is currently [RyzenAI 1.3 GA](https://ryzenai.docs.amd.com/en/latest/inst.html#install-npu-drivers)
     - [git](https://git-scm.com/downloads/win)
     - [miniconda3](https://docs.anaconda.com/miniconda/)
         - After installing, you must run `conda init` or you will hit confusing errors later
     - [ollama](https://ollama.com/download)
+- If your laptop has an Nvidia GPU, you must disable it in device manager
 
 Instructions:
 
