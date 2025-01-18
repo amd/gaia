@@ -22,7 +22,7 @@ from requests.exceptions import RequestException
 from gaia.logger import get_logger
 from gaia.llm.server import launch_llm_server
 from gaia.agents.agent import launch_agent_server
-from gaia.audio.whisper_recorder import WhisperRecorder
+from gaia.audio.whisper_asr import WhisperAsr
 
 
 # Set debug level for the logger
@@ -85,7 +85,7 @@ class GaiaCliClient:
         self.ollama_client_server = None
         self.cli_mode = True  # Set this to True for CLI mode
         self.server_pids = {}
-        self.whisper_recorder = None
+        self.whisper_asr = None
         self.whisper_model_size = whisper_model_size
         self.audio_device_index = audio_device_index
         self.transcription_queue = queue.Queue()
@@ -399,20 +399,20 @@ class GaiaCliClient:
                 f"Starting voice chat with {self.agent_name}. Say 'exit' to quit, or 'restart' to clear chat history."
             )
 
-            # Initialize WhisperRecorder with the transcription queue
-            self.whisper_recorder = WhisperRecorder(
+            # Initialize WhisperAsr with the transcription queue
+            self.whisper_asr = WhisperAsr(
                 model_size=self.whisper_model_size,
                 device_index=self.audio_device_index,
                 transcription_queue=self.transcription_queue,
             )
 
-            device_name = self.whisper_recorder.get_device_name()
+            device_name = self.whisper_asr.get_device_name()
             self.log.info(f"Using audio device: {device_name}")
             print(f"Using device: {device_name}")
 
             # Start recording first
             self.log.info("Starting audio recording...")
-            self.whisper_recorder.start_recording()
+            self.whisper_asr.start_recording()
 
             # Start the processing thread after recording is initialized
             self.log.info("Starting audio processing thread...")
@@ -427,10 +427,7 @@ class GaiaCliClient:
                     if not process_thread.is_alive():
                         self.log.warning("Process thread stopped unexpectedly")
                         break
-                    if (
-                        not self.whisper_recorder
-                        or not self.whisper_recorder.is_recording
-                    ):
+                    if not self.whisper_asr or not self.whisper_asr.is_recording:
                         self.log.warning("Recording stopped unexpectedly")
                         break
                     await asyncio.sleep(0.1)
@@ -442,9 +439,9 @@ class GaiaCliClient:
                 self.log.error(f"Error in main processing loop: {str(e)}")
                 raise
             finally:
-                if self.whisper_recorder:
+                if self.whisper_asr:
                     self.log.info("Stopping recording...")
-                    self.whisper_recorder.stop_recording()
+                    self.whisper_asr.stop_recording()
                     self.log.info("Waiting for process thread to finish...")
                     process_thread.join(timeout=2.0)
 
@@ -452,8 +449,8 @@ class GaiaCliClient:
             self.log.error(f"Failed to initialize voice chat: {str(e)}")
             raise
         finally:
-            if self.whisper_recorder:
-                self.whisper_recorder.stop_recording()
+            if self.whisper_asr:
+                self.whisper_asr.stop_recording()
                 self.log.info("Voice recording stopped")
 
     async def process_voice_input(self, text):
@@ -608,7 +605,7 @@ class GaiaCliClient:
             current_display = ""
             last_transcription_time = time.time()
 
-            while self.whisper_recorder and self.whisper_recorder.is_recording:
+            while self.whisper_asr and self.whisper_asr.is_recording:
                 try:
                     text = self.transcription_queue.get(timeout=0.1)
 
@@ -619,7 +616,7 @@ class GaiaCliClient:
                     # Handle special commands
                     if cleaned_text in ["exit", "quit"]:
                         print("\nExiting voice chat...")
-                        self.whisper_recorder.stop_recording()
+                        self.whisper_asr.stop_recording()
                         break
 
                     # Normal text processing - only if it's not a system message
@@ -660,8 +657,8 @@ class GaiaCliClient:
         except Exception as e:
             self.log.error(f"Error in process_audio_wrapper: {str(e)}")
         finally:
-            if self.whisper_recorder:
-                self.whisper_recorder.stop_recording()
+            if self.whisper_asr:
+                self.whisper_asr.stop_recording()
 
 
 async def async_main(action, message=None, **kwargs):

@@ -269,7 +269,7 @@ Section "Install Main Components" SEC01
       ExecWait '"$R1" create -p "$INSTDIR\gaia_env" python=3.10 -y' $R0
 
       ; Check if the environment creation was successful (exit code should be 0)
-      StrCmp $R0 0 install_ryzenai_driver env_creation_failed
+      StrCmp $R0 0 install_ffmpeg env_creation_failed
 
     env_creation_failed:
       FileWrite $0 "- ERROR: Environment creation failed$\n"
@@ -278,6 +278,20 @@ Section "Install Main Components" SEC01
         MessageBox MB_OK "ERROR: Failed to create the Python environment. Installation will be aborted."
       ${EndIf}
       Quit
+
+    install_ffmpeg:
+      FileWrite $0 "----------$\n"
+      FileWrite $0 "- FFmpeg -$\n"
+      FileWrite $0 "----------$\n"
+
+      FileWrite $0 "- Installing FFmpeg using winget...$\n"
+      nsExec::ExecToStack 'winget install ffmpeg'
+      Pop $R0  ; Return value
+      Pop $R1  ; Command output
+      FileWrite $0 "- FFmpeg installation return code: $R0$\n"
+      FileWrite $0 "- FFmpeg installation output:$\n$R1$\n"
+
+      Goto install_ryzenai_driver
 
     install_ryzenai_driver:
       FileWrite $0 "--------------------------$\n"

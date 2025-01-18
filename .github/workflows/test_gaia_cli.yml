@@ -104,6 +104,9 @@ jobs:
           set PATH=%PATH%;C:\Users\runneradmin\AppData\Local\Programs\Ollama
           ollama --version
 
+      - uses: FedericoCarboni/setup-ffmpeg@v3
+        id: setup-ffmpeg
+
       - name: Test GAIA
         timeout-minutes: 10
         env:
@@ -129,3 +132,4 @@ jobs:
 
           Write-Host "Step 2: Install and run GAIA tests"
           python tests/test_gaia.py
+          python tests/test_asr.py

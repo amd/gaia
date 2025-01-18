@@ -87,4 +87,5 @@ jobs:
           $Env:AMD_OGA_HYBRID="$cwd\${{ env.HYBRID_LLM_ARTIFACTS }}"
 
           conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env python tests\test_llama_index.py --backend npu
-      
+          conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env python tests\test_gaia.py
+          conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env python tests\test_asr.py
