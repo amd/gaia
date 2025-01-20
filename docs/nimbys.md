@@ -1,6 +1,3 @@
-#### Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
-#### SPDX-License-Identifier: MIT
-
 # 🌩️ NIMBYS 🌩️ Documentation
 
 This page documents how to set up and maintain NIMBYS, a geo-distributed cloud of Ryzen AI hardware.
@@ -26,17 +23,27 @@ You can read about all this here: [GitHub: About self-hosted runners](https://do
 
 This guide will help you set up a Ryzen AI laptop as a GitHub self-hosted runner as part of the NIMBYS cloud. This will make the laptop available for on-demand and CI jobs that require NPU resources.
 
-Pre-requisites:
+### New Machine Setup
 
-- The laptop must already have the following software installed:
+- If you are setting up a new computer from scratch, and don't want to attach a Microsoft account, follow these steps:
+    - Press `shift+F10` during windows setup to open a terminal.
+    - Run `oobe\BypassNRO` in the terminal. This will reboot the computer. Proceed with setup.
+    - When you get to the “connect to network” screen, say you don’t have internet.
+    - This will allow you to create an offline account for the computer.
+- Install the following software:
     - The latest RyzenAI driver, which is currently [RyzenAI 1.3 GA](https://ryzenai.docs.amd.com/en/latest/inst.html#install-npu-drivers)
+    - [VS Code](https://code.visualstudio.com/Download)
     - [git](https://git-scm.com/downloads/win)
-    - [miniconda3](https://docs.anaconda.com/miniconda/)
-        - After installing, you must run `conda init` or you will hit confusing errors later
     - [ollama](https://ollama.com/download)
 - If your laptop has an Nvidia GPU, you must disable it in device manager
+- Open a PowerShell script in admin mode, and run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned`
+- Go into Windows settings:
+  - Go to system, power & battery, screen sleep & hibernate timeouts, and make it so the laptop never sleeps while plugged in. If you don't do this it can fall asleep during jobs.
+  - Searrch "Change the date and time", and then click "sync" under "additional settings."
 
-Instructions:
+### Runner Configuration
+
+These steps will place your machine in the `stx-test` pool, which is where we put machines while we are setting them up. In the next section we will finalize setup and then move the runner into the production pool.
 
 1. IMPORTANT: before doing step 2, read this: 
     - Use a powershell administrator mode terminal
@@ -44,13 +51,35 @@ Instructions:
     - When running `./config.cmd` in step 2, make the following choices:
          - Name of the runner group = `stx`
          - For the runner name, call it `NAME-stx-NUMBER`, where NAME is your alias and NUMBER would tell you this is the Nth STX machine you've added (e.g., `jefowers-stx-1` for Jeremy's first STX laptop)
-         - Apply the label `stx`, as well as a label with your name to indicate that you are maintaining the runner (for example, Jeremy puts the label `jefowers` on his runners)
+         - Apply the label `stx-test`, as well as a label with your name to indicate that you are maintaining the runner (for example, Jeremy puts the label `jefowers` on his runners)
          - Accept the default for the work folder
          - You want the runner to function as a service (respond Y)
          - User account to use for the service = `NT AUTHORITY\SYSTEM` (not the default of `NT AUTHORITY\NETWORK SERVICE`)
     
 1. Follow the instructions here for Windows, minding what we said in step 1: https://github.com/organizations/aigdat/settings/actions/runners/new
 1. You should see your runner show up in the `stx` group here: https://github.com/organizations/aigdat/settings/actions/runner-groups/3
+
+### Runner Setup
+
+These steps will use GitHub Actions to run automated setup and validation for your new runner while it is still in the `stx-test` group.
+
+1. Go to the [lemonade NPU test action](https://github.com/aigdat/genai/actions/workflows/test_npu.yml) and click "run workflow".
+    - Select `stx-test` as the nimbys group
+    - Check the box for "Install miniconda"
+    - Click `Run workflow`
+1. The workflow should appear at the top of the queue. Click to open it, then click into "make-npu-oga-lemonade".
+    - Expand the `Set up job` section and make sure `Runner name:` refers to your new runner. Otherwise, the job may have gone to someone else's runner in the test group. You can re-queue the workflow until it lands on your runner.
+    - Wait for the workflow to finish successfully.
+1. In a powershell admin terminal, run `Stop-Service "actions.runner.*"` and then `Start-Service "actions.runner.*"`. If you don't do this, the runner wont be able to find Conda.
+1. Repeat step 1, except do **not** check the box for "Install miniconda". Wait for it to finish successfully. Congrats, your new runner is working!
+1. Go to the [Stx Runner Group](https://github.com/organizations/aigdat/settings/actions/runner-groups/3), click your new runner, and click the gear icon to change labels. Uncheck `stx-test` and check `stx`.
+1. Done!
+
+### Bonus
+
+Make this picture your desktop wallpaper:
+
+![image](https://github.com/user-attachments/assets/ac5c7744-1109-46a6-83e0-23b796ccfa98)
 
 ## Maintenance and Troubleshooting
 
