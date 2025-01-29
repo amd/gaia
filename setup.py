@@ -3,7 +3,7 @@
 
 from setuptools import setup
 
-ipex_version = "2.2.0"
+tkml_version = "5.0.3"
 
 setup(
     name="gaia",
@@ -43,16 +43,17 @@ setup(
         "pyaudio",
         "openai-whisper",
         "numpy",
+        f"turnkeyml[llm]=={tkml_version}",
     ],
     extras_require={
         "dml": [
-            "turnkeyml[llm-oga-dml]==4.0.9",
+            f"turnkeyml[llm-oga-igpu]=={tkml_version}",
         ],
         "npu": [
-            "turnkeyml[llm-oga-npu]==4.0.9",
+            f"turnkeyml[llm-oga-npu]=={tkml_version}",
         ],
         "hybrid": [
-            "turnkeyml[llm-oga-hybrid]==4.0.9",
+            f"turnkeyml[llm-oga-hybrid]=={tkml_version}",
         ],
         "llamaindex": [
             "llama_index",
@@ -105,7 +106,7 @@ setup(
             "adjustText",
             "plotly",
             "black",
-        ]
+        ],
     },
     classifiers=[],
     entry_points={
