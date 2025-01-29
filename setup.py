@@ -3,7 +3,7 @@
 
 from setuptools import setup
 
-tkml_version = "5.0.3"
+tkml_version = "5.0.4"
 
 setup(
     name="gaia",
