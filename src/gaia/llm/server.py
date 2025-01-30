@@ -4,26 +4,14 @@
 import argparse
 import torch
 
+import lemonade.cache as cache
+from lemonade.tools.chat import Serve
+from lemonade.tools.huggingface_load import HuggingfaceLoad
+from lemonade.tools.ort_genai.oga import OgaLoad
+from turnkeyml.state import State
+
 from gaia.interface.util import UIMessage
 from gaia.interface.huggingface import set_huggingface_token
-
-USE_TKML = True
-if USE_TKML:
-    import turnkeyml.llm.cache as cache  # pylint:disable=E0611
-    from turnkeyml.llm.tools.chat import Serve  # pylint:disable=E0611
-    from turnkeyml.llm.tools.huggingface_load import (  # pylint:disable=E0611
-        HuggingfaceLoad,
-    )
-    from turnkeyml.llm.tools.ort_genai.oga import OgaLoad  # pylint:disable=E0611
-    from turnkeyml.state import State  # pylint:disable=E0401
-else:
-    # TODO: temporary solution using internal lemonade package/repo.
-    # https://github.com/aigdat/gaia/issues/109
-    import lemonade.cache as cache  # pylint:disable=E0401
-    from lemonade.tools.chat import Serve  # pylint:disable=E0401
-    from lemonade.tools.huggingface_load import HuggingfaceLoad  # pylint:disable=E0401
-    from lemonade.tools.ort_genai.oga import OgaLoad  # pylint:disable=E0401
-    from turnkeyml.state import State  # pylint:disable=E0401,C0412
 
 
 def launch_llm_server(
