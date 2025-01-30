@@ -9,9 +9,7 @@
 !define /ifndef OGA_URL "https://api.github.com/repos/aigdat/ryzenai-sw-ea/contents/"
 !define /ifndef RYZENAI_FOLDER "ryzen_ai_13_ga"
 !define /ifndef NPU_DRIVER_ZIP "NPU_RAI1.3.zip"
-!define /ifndef NPU_LLM_ARTIFACTS "npu-llm-artifacts_1.3.0"
-!define /ifndef HYBRID_LLM_ARTIFACTS "hybrid-llm-artifacts_1.3.0"
-!define /ifndef NPU_DRIVER_VERSION "32.0.203.237"
+!define /ifndef NPU_DRIVER_VERSION "32.0.203.240"
 
 ; Define main variables
 Name "GAIA"
@@ -32,26 +30,22 @@ Name "GAIA"
   !if ${MODE} == "NPU"
     OutFile "GAIA_NPU_Installer.exe"
     !define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome_npu.bmp"
-    !define /ifndef LLM_ARTIFACTS ${NPU_LLM_ARTIFACTS}
     !define /ifndef OGA_ZIP_FILE_NAME "oga-npu.zip"
     !define /ifndef OGA_WHEELS_PATH "amd_oga\wheels"
   !else if ${MODE} == "HYBRID"
     OutFile "GAIA_Hybrid_Installer.exe"
     !define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome_npu.bmp"
-    !define /ifndef LLM_ARTIFACTS ${HYBRID_LLM_ARTIFACTS}
     !define /ifndef OGA_ZIP_FILE_NAME "oga-hybrid.zip"
     !define /ifndef OGA_WHEELS_PATH "hybrid-llm-artifacts_1.3.0\hybrid-llm-artifacts\onnxruntime_genai\wheel"
   !else
     ; By default, we will set to NPU artifacts
     OutFile "GAIA_Installer.exe"
     !define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome.bmp"
-    !define /ifndef LLM_ARTIFACTS ${NPU_LLM_ARTIFACTS}
   !endif
 !else
   ; By default, we will set to NPU artifacts
   OutFile "GAIA_Installer.exe"
   !define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome.bmp"
-  !define /ifndef LLM_ARTIFACTS ${NPU_LLM_ARTIFACTS}
 !endif
 
 ; Include modern UI elements
@@ -173,12 +167,11 @@ Section "Install Main Components" SEC01
     FileWrite $0 '  OGA URL: ${OGA_URL}$\n'
     FileWrite $0 '  Ryzen AI Folder: ${RYZENAI_FOLDER}$\n'
     FileWrite $0 '  NPU Driver Version: ${NPU_DRIVER_VERSION}$\n'
-    FileWrite $0 '  LLM Artifacts: ${LLM_ARTIFACTS}$\n'
     FileWrite $0 '-------------------------------------------$\n'
 
     # Pack GAIA into the installer
     # Exclude hidden files (like .git, .gitignore) and the installation folder itself
-    File /r /x installer /x .* /x ..\*.pyc ..\*.* install_oga.py npu_settings.json hybrid_settings.json download_lfs_file.py npu_driver_utils.py amd_install_kipudrv.bat
+    File /r /x installer /x .* /x ..\*.pyc ..\*.* npu_settings.json hybrid_settings.json generic_settings.json download_lfs_file.py npu_driver_utils.py amd_install_kipudrv.bat
     FileWrite $0 "- Packaged GAIA repo$\n"
 
     ; Check if conda is available
@@ -300,7 +293,6 @@ Section "Install Main Components" SEC01
 
       ${If} ${MODE} == "NPU"
       ${OrIf} ${MODE} == "HYBRID"
-      ${OrIf} ${MODE} == "GENERIC"
         ; If in silent mode, skip driver update
         ${If} ${Silent}
           Goto install_gaia
@@ -339,7 +331,8 @@ Section "Install Main Components" SEC01
           MessageBox MB_YESNO "Current driver version could not be identified. Would you like to update to ${NPU_DRIVER_VERSION} anyways?" IDYES update_driver IDNO install_gaia
         ${ElseIf} $3 != ${NPU_DRIVER_VERSION}
           FileWrite $0 "- Current driver version ($3) is not the recommended version ${NPU_DRIVER_VERSION}$\n"
-          MessageBox MB_YESNO "Current driver version ($3) is not the recommended version ${NPU_DRIVER_VERSION}. Would you like to update it?" IDYES update_driver IDNO install_gaia
+          ; MessageBox MB_YESNO "Current driver version ($3) is not the recommended version ${NPU_DRIVER_VERSION}. Would you like to update it?" IDYES update_driver IDNO install_gaia
+          MessageBox MB_OK "Warning: Current driver version ($3) is not the recommended version ${NPU_DRIVER_VERSION}. Please install the recommended driver version or reach out to gaia@amd.com for support." IDOK install_gaia
         ${Else}
           FileWrite $0 "- No driver update needed.$\n"
           GoTo install_gaia
@@ -369,6 +362,7 @@ Section "Install Main Components" SEC01
       FileWrite $0 "- Driver update output:$\n$R1$\n"
 
       RMDir /r "$INSTDIR\npu_driver_utils.py"
+      GoTo install_gaia
 
     install_gaia:
       FileWrite $0 "--------------------$\n"
@@ -403,7 +397,13 @@ Section "Install Main Components" SEC01
 
     gaia_install_success:
       FileWrite $0 "- GAIA installation successful$\n"
-      Goto install_ryzenai_whl
+
+      ; Skip Ryzen AI WHL installation for GENERIC mode
+      ${If} ${MODE} == "GENERIC"
+        Goto update_settings
+      ${Else}
+        Goto install_ryzenai_whl
+      ${EndIf}
 
     gaia_install_failed:
       FileWrite $0 "- GAIA installation failed$\n"
@@ -418,72 +418,51 @@ Section "Install Main Components" SEC01
       FileWrite $0 "-----------------------------$\n"
 
       ; Install OGA NPU dependencies
-      FileWrite $0 "- Setting up environment variables...$\n"
-      nsExec::ExecToLog 'cmd /c echo set GIT_PYTHON_REFRESH=quiet> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.bat"'
-      nsExec::ExecToLog 'cmd /c echo $env:GIT_PYTHON_REFRESH="quiet"> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.ps1"'
+      FileWrite $0 "- Installing ${MODE} dependencies...$\n"
       ${If} ${MODE} == "NPU"
-        nsExec::ExecToLog 'cmd /c echo set AMD_OGA=$INSTDIR\amd_oga>> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.bat"'
-        nsExec::ExecToLog 'cmd /c echo $env:AMD_OGA="$INSTDIR\amd_oga">> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.ps1"'
+        nsExec::ExecToStack 'conda run -p "$INSTDIR\gaia_env" lemonade-install --ryzenai npu -y --token ${OGA_TOKEN}' $R0
       ${ElseIf} ${MODE} == "HYBRID"
-        nsExec::ExecToLog 'cmd /c echo set AMD_OGA_HYBRID=$INSTDIR\${LLM_ARTIFACTS}>> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.bat"'
-        nsExec::ExecToLog 'cmd /c echo $env:AMD_OGA_HYBRID="$INSTDIR\${LLM_ARTIFACTS}">> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.ps1"'
-      ${Else}
-        nsExec::ExecToLog 'cmd /c echo set AMD_OGA=$INSTDIR\${LLM_ARTIFACTS}>> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.bat"'
-        nsExec::ExecToLog 'cmd /c echo $env:AMD_OGA="$INSTDIR\${LLM_ARTIFACTS}">> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.ps1"'
+        nsExec::ExecToStack 'conda run -p "$INSTDIR\gaia_env" lemonade-install --ryzenai hybrid -y' $R0
       ${EndIf}
 
-      IfFileExists "$INSTDIR\${LLM_ARTIFACTS}.zip" found_whl download_whl
+      Pop $R0  ; Return value
+      Pop $R1  ; Command output
+      FileWrite $0 "- ${MODE} dependencies install return code: $R0$\n"
+      FileWrite $0 "- ${MODE} dependencies install output:$\n$R1$\n"
+      Goto update_settings
 
-      found_whl:
-        FileWrite $0 "- $INSTDIR\${LLM_ARTIFACTS}.zip already exists, skipping download...$\n"
-        Goto install_whl
-
-      download_whl:
-        FileWrite $0 "- Downloading ${LLM_ARTIFACTS} artifacts...$\n"
-        nsExec::ExecToStack '"$INSTDIR\gaia_env\python.exe" download_lfs_file.py ${RYZENAI_FOLDER}/${LLM_ARTIFACTS}.zip $INSTDIR ${OGA_ZIP_FILE_NAME} ${OGA_TOKEN}'
-        Pop $R0  ; Return value
-        Pop $R1  ; Command output
-        FileWrite $0 "- Download script return code: $R0$\n"
-        FileWrite $0 "- Download script output:$\n$R1$\n"
-        Goto install_whl
-
-      install_whl:
-        FileWrite $0 "- Installing ${LLM_ARTIFACTS} dependencies...$\n"
-        nsExec::ExecToStack '"$INSTDIR\gaia_env\python.exe" install_oga.py --folder_path $INSTDIR --zip_file_name ${OGA_ZIP_FILE_NAME} --wheels_path ${OGA_WHEELS_PATH}'
-        Pop $R0  ; Return value
-        Pop $R1  ; Command output
-        FileWrite $0 "- Install script return code: $R0$\n"
-        FileWrite $0 "- Install script output:$\n$R1$\n"
-
-      RMDir /r "$INSTDIR\install_oga.py"
-      RMDir /r "$INSTDIR\download_lfs_file.py"
-
+    update_settings:
       ${If} ${MODE} == "NPU"
-
         FileWrite $0 "- Replacing settings.json with NPU-specific settings$\n"
         Delete "$INSTDIR\src\gaia\interface\settings.json"
         Rename "$INSTDIR\npu_settings.json" "$INSTDIR\src\gaia\interface\settings.json"
 
       ${ElseIf} ${MODE} == "HYBRID"
-
         FileWrite $0 "- Replacing settings.json with Hybrid-specific settings$\n"
         Delete "$INSTDIR\src\gaia\interface\settings.json"
         Rename "$INSTDIR\hybrid_settings.json" "$INSTDIR\src\gaia\interface\settings.json"
 
+      ${ElseIf} ${MODE} == "GENERIC"
+        FileWrite $0 "- Replacing settings.json with Generic-specific settings$\n"
+        Delete "$INSTDIR\src\gaia\interface\settings.json"
+        Rename "$INSTDIR\generic_settings.json" "$INSTDIR\src\gaia\interface\settings.json"
       ${EndIf}
 
       FileWrite $0 "*** INSTALLATION COMPLETED ***$\n"
       # Create a shortcut inside $INSTDIR
-      CreateShortcut "$INSTDIR\GAIA.lnk" "$SYSDIR\cmd.exe" "/C conda activate $INSTDIR\gaia_env > NUL 2>&1 && gaia" "$INSTDIR\src\gaia\interface\img\gaia.ico"
+      CreateShortcut "$INSTDIR\GAIA-UI.lnk" "$SYSDIR\cmd.exe" "/C conda activate $INSTDIR\gaia_env > NUL 2>&1 && gaia" "$INSTDIR\src\gaia\interface\img\gaia.ico"
+      CreateShortcut "$INSTDIR\GAIA-CLI.lnk" "$SYSDIR\cmd.exe" "/K conda activate $INSTDIR\gaia_env" "$INSTDIR\src\gaia\interface\img\gaia.ico"
 
       # Create a desktop shortcut that points to the newly created shortcut in $INSTDIR
-      CreateShortcut "$DESKTOP\GAIA.lnk" "$INSTDIR\GAIA.lnk"
+      CreateShortcut "$DESKTOP\GAIA-UI.lnk" "$INSTDIR\GAIA-UI.lnk"
+      CreateShortcut "$DESKTOP\GAIA-CLI.lnk" "$INSTDIR\GAIA-CLI.lnk"
+
       Goto end
 
     end:
 SectionEnd
 
 Function RunGAIA
-  ExecShell "open" "$INSTDIR\GAIA.lnk"
+  ExecShell "open" "$INSTDIR\GAIA-UI.lnk"
 FunctionEnd
 
