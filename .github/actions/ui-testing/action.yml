@@ -15,8 +15,6 @@ runs:
       env:
         HUGGINGFACE_ACCESS_TOKEN: "${{ inputs.huggingface_access_token }}"
         HF_TOKEN: "${{ inputs.huggingface_access_token }}"
-        AMD_OGA: "C:\\Users\\${{ inputs.username }}\\AppData\\Local\\GAIA\\amd_oga"
-        AMD_OGA_HYBRID: "C:\\Users\\${{ inputs.username }}\\AppData\\Local\\GAIA\\${{ env.HYBRID_LLM_ARTIFACTS }}"
       run: |
           $cwd = (Get-Item .\).FullName
           $Env:LEMONADE_CACHE_DIR="$cwd\lemon-cache"

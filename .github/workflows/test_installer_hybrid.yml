@@ -31,19 +31,10 @@ jobs:
           # Check if NSIS is installed
           & 'C:\Program Files (x86)\NSIS\makensis.exe' /VERSION
 
-      - name: Verify secret presence
-        run: |
-          if ("${{ secrets.OGA_PUBLIC_TOKEN }}" -eq "") {
-            Write-Host "::error::OGA_PUBLIC_TOKEN secret is empty or not available"
-            exit 1
-          } else {
-            Write-Host "OGA_PUBLIC_TOKEN secret is present"
-          }
-
       - name: Build the GAIA installer for Hybrid
         run: |
           cd installer
-          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DMODE=HYBRID /DOGA_TOKEN="${{ secrets.OGA_PUBLIC_TOKEN }}" 'Installer.nsi'
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DMODE=HYBRID 'Installer.nsi'
 
           if (Test-Path "GAIA_Hybrid_Installer.exe") {
             Write-Host "GAIA_Hybrid_Installer.exe has been created successfully."
