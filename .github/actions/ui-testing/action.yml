@@ -1,3 +1,6 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 name: "Test GAIA UI"
 description: Launch GAIA UI and make sure it launches agents and LLMs
 inputs:
