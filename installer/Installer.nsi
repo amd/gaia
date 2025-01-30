@@ -419,9 +419,12 @@ Section "Install Main Components" SEC01
 
       ; Install OGA NPU dependencies
       FileWrite $0 "- Installing ${MODE} dependencies...$\n"
+      FileWrite $0 "- Installing ${MODE} dependencies...$\n"
       ${If} ${MODE} == "NPU"
         nsExec::ExecToStack 'conda run -p "$INSTDIR\gaia_env" lemonade-install --ryzenai npu -y --token ${OGA_TOKEN}' $R0
+        nsExec::ExecToStack 'conda run -p "$INSTDIR\gaia_env" lemonade-install --ryzenai npu -y --token ${OGA_TOKEN}' $R0
       ${ElseIf} ${MODE} == "HYBRID"
+        nsExec::ExecToStack 'conda run -p "$INSTDIR\gaia_env" lemonade-install --ryzenai hybrid -y' $R0
         nsExec::ExecToStack 'conda run -p "$INSTDIR\gaia_env" lemonade-install --ryzenai hybrid -y' $R0
       ${EndIf}
 

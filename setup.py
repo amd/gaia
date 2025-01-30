@@ -3,11 +3,11 @@
 
 from setuptools import setup
 
-ipex_version = "2.2.0"
+tkml_version = "5.0.4"
 
 setup(
     name="gaia",
-    version="0.4.4",
+    version="0.6.3",
     description="GAIA genAI sandbox",
     author="AMD",
     package_dir={"": "src"},
@@ -46,13 +46,13 @@ setup(
     ],
     extras_require={
         "dml": [
-            "turnkeyml[llm-oga-dml]==4.0.9",
+            f"turnkeyml[llm-oga-igpu]=={tkml_version}",
         ],
         "npu": [
-            "turnkeyml[llm-oga-npu]==4.0.9",
+            f"turnkeyml[llm-oga-npu]=={tkml_version}",
         ],
         "hybrid": [
-            "turnkeyml[llm-oga-hybrid]==4.0.9",
+            f"turnkeyml[llm-oga-hybrid]=={tkml_version}",
         ],
         "llamaindex": [
             "llama_index",
