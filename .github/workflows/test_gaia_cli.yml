@@ -1,0 +1,135 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# This workflow will install Python dependencies, run tests and lint with a single version of Python
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+
+name: GAIA CLI Tests
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gaia-cli-pytest:
+    runs-on: windows-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download and Install Miniconda
+        run: |
+          Invoke-WebRequest -Uri "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe" -OutFile "miniconda.exe"
+          Start-Process -FilePath "miniconda.exe" -ArgumentList "/S", "/D=$env:GITHUB_WORKSPACE\Miniconda3" -Wait
+
+      - name: Initialize Conda
+        run: |
+          Write-Host "Step 1: Add Conda to system PATH"
+          $condaPath = "$env:GITHUB_WORKSPACE\Miniconda3"
+          $env:Path = "$condaPath;$condaPath\Scripts;$env:Path"
+          [System.Environment]::SetEnvironmentVariable("Path", $env:Path, [System.EnvironmentVariableTarget]::Machine)
+
+          Write-Host "Step 2: Initialize conda for both shells"
+          & "$condaPath\Scripts\conda.exe" init powershell
+          & "$condaPath\Scripts\conda.exe" init cmd.exe
+
+          Write-Host "Step 3: Create the environment at system level"
+          & "$condaPath\Scripts\conda.exe" create -n gaiaenv python=3.10 -y
+
+      - name: Install GAIA dependencies
+        run: |
+          Write-Host "Step 1: Activate conda environment"
+          & "$env:GITHUB_WORKSPACE\Miniconda3\shell\condabin\conda-hook.ps1"
+          conda activate gaiaenv
+
+          Write-Host "Step 2: Install dependencies"
+          python -m pip install --upgrade pip
+          pip install -e .[dml,dev,clip]
+
+          Write-Host "Step 3: Verify installation"
+          $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
+          if (-not $gaiaPath) {
+            Write-Host "Error: gaia not installed correctly"
+            Write-Host "Current PATH: $env:Path"
+            exit 1
+          }
+          Write-Host "Found gaia at: $($gaiaPath.Source)"
+          python -m pip check
+
+      - name: Lint with Black
+        uses: psf/black@stable
+        with:
+          options: "--check --verbose --config pyproject.toml"
+          src: "./installer ./plot ./src ./tests"
+
+      - name: PyLint
+        run: |
+          Write-Host "Step 1: Activate conda environment"
+          & "$env:GITHUB_WORKSPACE\Miniconda3\shell\condabin\conda-hook.ps1"
+          conda activate gaiaenv
+
+          Write-Host "Step 2: Install pylint"
+          pip install pylint
+
+          Write-Host "Step 3: Run pylint"
+          & ".\util\lint.ps1" -RunPylint
+
+      - name: Install Ollama
+        shell: cmd
+        run: |
+          curl -L https://ollama.com/download/OllamaSetup.exe -o OllamaSetup.exe --progress-bar
+          echo Ollama download complete. Starting installation.
+          start /wait OllamaSetup.exe /VERYSILENT /SUPPRESSMSGBOXES /SP- /LOG="llama_install.log"
+          echo "Ollama installation log:"
+          type llama_install.log
+          echo "PATH=C:\Users\runneradmin\AppData\Local\Programs\Ollama;%PATH%" >> $GITHUB_ENV
+          del OllamaSetup.exe
+
+      - name: Verify Ollama Installation
+        shell: cmd
+        run: |
+          if exist "C:\Users\runneradmin\AppData\Local\Programs\Ollama\ollama.exe" (
+              echo "Ollama installed successfully."
+          ) else (
+              echo "Ollama installation failed. Executable not found."
+              exit 1
+          )
+          set PATH=%PATH%;C:\Users\runneradmin\AppData\Local\Programs\Ollama
+          ollama --version
+
+      - uses: FedericoCarboni/setup-ffmpeg@v3
+        id: setup-ffmpeg
+
+      - name: Test GAIA
+        timeout-minutes: 10
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        run: |
+          Write-Host "Step 1: Activate and verify Conda environment"
+          $env:Path = "$env:GITHUB_WORKSPACE\Miniconda3;$env:GITHUB_WORKSPACE\Miniconda3\Scripts;$env:Path"
+          & "$env:GITHUB_WORKSPACE\Miniconda3\shell\condabin\conda-hook.ps1"
+          conda activate gaiaenv
+
+          Write-Host "Verify Python environment"
+          python -c "import sys; print(sys.executable)"
+
+          Write-Host "Find gaia executable location"
+          $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
+          if (-not $gaiaPath) {
+            Write-Host "Error: Cannot find gaia executable in PATH"
+            Write-Host "Current PATH: $env:Path"
+            exit 1
+          }
+          Write-Host "Found gaia at: $($gaiaPath.Source)"
+
+          Write-Host "Step 2: Install and run GAIA tests"
+          python tests/test_gaia.py
+          python tests/test_asr.py

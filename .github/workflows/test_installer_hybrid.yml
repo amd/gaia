@@ -1,0 +1,61 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: GAIA NPU/GPU Hybrid Installer Test
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+jobs:
+  gaia-hybrid-installer-test:
+    runs-on: windows-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install NSIS
+        run: |
+          # Download NSIS installer
+          curl -L -o nsis.exe https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10-setup.exe
+          
+          # Install NSIS
+          Start-Process nsis.exe -ArgumentList '/S' -Wait
+
+      - name: Verify NSIS installation
+        run: |
+          # Check if NSIS is installed
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /VERSION
+
+      - name: Verify secret presence
+        run: |
+          if ("${{ secrets.OGA_PUBLIC_TOKEN }}" -eq "") {
+            Write-Host "::error::OGA_PUBLIC_TOKEN secret is empty or not available"
+            exit 1
+          } else {
+            Write-Host "OGA_PUBLIC_TOKEN secret is present"
+          }
+
+      - name: Build the GAIA installer for Hybrid
+        run: |
+          cd installer
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DMODE=HYBRID /DOGA_TOKEN="${{ secrets.OGA_PUBLIC_TOKEN }}" 'Installer.nsi'
+
+          if (Test-Path "GAIA_Hybrid_Installer.exe") {
+            Write-Host "GAIA_Hybrid_Installer.exe has been created successfully."
+          } else {
+            Write-Host "GAIA_Hybrid_Installer.exe was not found."
+            exit 1
+          }
+
+      - name: Upload Installer
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: GaiaHybridInstaller
+          path: |
+            installer\GAIA_Hybrid_Installer.exe
