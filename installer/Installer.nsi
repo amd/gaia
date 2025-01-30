@@ -9,7 +9,7 @@
 !define /ifndef OGA_URL "https://api.github.com/repos/aigdat/ryzenai-sw-ea/contents/"
 !define /ifndef RYZENAI_FOLDER "ryzen_ai_13_ga"
 !define /ifndef NPU_DRIVER_ZIP "NPU_RAI1.3.zip"
-!define /ifndef NPU_DRIVER_VERSION "32.0.203.237"
+!define /ifndef NPU_DRIVER_VERSION "32.0.203.240"
 
 ; Define main variables
 Name "GAIA"
@@ -171,7 +171,7 @@ Section "Install Main Components" SEC01
 
     # Pack GAIA into the installer
     # Exclude hidden files (like .git, .gitignore) and the installation folder itself
-    File /r /x installer /x .* /x ..\*.pyc ..\*.* npu_settings.json hybrid_settings.json download_lfs_file.py npu_driver_utils.py amd_install_kipudrv.bat
+    File /r /x installer /x .* /x ..\*.pyc ..\*.* npu_settings.json hybrid_settings.json generic_settings.json download_lfs_file.py npu_driver_utils.py amd_install_kipudrv.bat
     FileWrite $0 "- Packaged GAIA repo$\n"
 
     ; Check if conda is available
@@ -293,7 +293,6 @@ Section "Install Main Components" SEC01
 
       ${If} ${MODE} == "NPU"
       ${OrIf} ${MODE} == "HYBRID"
-      ${OrIf} ${MODE} == "GENERIC"
         ; If in silent mode, skip driver update
         ${If} ${Silent}
           Goto install_gaia
@@ -332,7 +331,8 @@ Section "Install Main Components" SEC01
           MessageBox MB_YESNO "Current driver version could not be identified. Would you like to update to ${NPU_DRIVER_VERSION} anyways?" IDYES update_driver IDNO install_gaia
         ${ElseIf} $3 != ${NPU_DRIVER_VERSION}
           FileWrite $0 "- Current driver version ($3) is not the recommended version ${NPU_DRIVER_VERSION}$\n"
-          MessageBox MB_YESNO "Current driver version ($3) is not the recommended version ${NPU_DRIVER_VERSION}. Would you like to update it?" IDYES update_driver IDNO install_gaia
+          ; MessageBox MB_YESNO "Current driver version ($3) is not the recommended version ${NPU_DRIVER_VERSION}. Would you like to update it?" IDYES update_driver IDNO install_gaia
+          MessageBox MB_OK "Warning: Current driver version ($3) is not the recommended version ${NPU_DRIVER_VERSION}. Please install the recommended driver version or reach out to gaia@amd.com for support." IDOK install_gaia
         ${Else}
           FileWrite $0 "- No driver update needed.$\n"
           GoTo install_gaia
@@ -362,6 +362,7 @@ Section "Install Main Components" SEC01
       FileWrite $0 "- Driver update output:$\n$R1$\n"
 
       RMDir /r "$INSTDIR\npu_driver_utils.py"
+      GoTo install_gaia
 
     install_gaia:
       FileWrite $0 "--------------------$\n"
@@ -396,7 +397,13 @@ Section "Install Main Components" SEC01
 
     gaia_install_success:
       FileWrite $0 "- GAIA installation successful$\n"
-      Goto install_ryzenai_whl
+
+      ; Skip Ryzen AI WHL installation for GENERIC mode
+      ${If} ${MODE} == "GENERIC"
+        Goto update_settings
+      ${Else}
+        Goto install_ryzenai_whl
+      ${EndIf}
 
     gaia_install_failed:
       FileWrite $0 "- GAIA installation failed$\n"
@@ -422,33 +429,40 @@ Section "Install Main Components" SEC01
       Pop $R1  ; Command output
       FileWrite $0 "- ${MODE} dependencies install return code: $R0$\n"
       FileWrite $0 "- ${MODE} dependencies install output:$\n$R1$\n"
+      Goto update_settings
 
+    update_settings:
       ${If} ${MODE} == "NPU"
-
         FileWrite $0 "- Replacing settings.json with NPU-specific settings$\n"
         Delete "$INSTDIR\src\gaia\interface\settings.json"
         Rename "$INSTDIR\npu_settings.json" "$INSTDIR\src\gaia\interface\settings.json"
 
       ${ElseIf} ${MODE} == "HYBRID"
-
         FileWrite $0 "- Replacing settings.json with Hybrid-specific settings$\n"
         Delete "$INSTDIR\src\gaia\interface\settings.json"
         Rename "$INSTDIR\hybrid_settings.json" "$INSTDIR\src\gaia\interface\settings.json"
 
+      ${ElseIf} ${MODE} == "GENERIC"
+        FileWrite $0 "- Replacing settings.json with Generic-specific settings$\n"
+        Delete "$INSTDIR\src\gaia\interface\settings.json"
+        Rename "$INSTDIR\generic_settings.json" "$INSTDIR\src\gaia\interface\settings.json"
       ${EndIf}
 
       FileWrite $0 "*** INSTALLATION COMPLETED ***$\n"
       # Create a shortcut inside $INSTDIR
-      CreateShortcut "$INSTDIR\GAIA.lnk" "$SYSDIR\cmd.exe" "/C conda activate $INSTDIR\gaia_env > NUL 2>&1 && gaia" "$INSTDIR\src\gaia\interface\img\gaia.ico"
+      CreateShortcut "$INSTDIR\GAIA-UI.lnk" "$SYSDIR\cmd.exe" "/C conda activate $INSTDIR\gaia_env > NUL 2>&1 && gaia" "$INSTDIR\src\gaia\interface\img\gaia.ico"
+      CreateShortcut "$INSTDIR\GAIA-CLI.lnk" "$SYSDIR\cmd.exe" "/K conda activate $INSTDIR\gaia_env" "$INSTDIR\src\gaia\interface\img\gaia.ico"
 
       # Create a desktop shortcut that points to the newly created shortcut in $INSTDIR
-      CreateShortcut "$DESKTOP\GAIA.lnk" "$INSTDIR\GAIA.lnk"
+      CreateShortcut "$DESKTOP\GAIA-UI.lnk" "$INSTDIR\GAIA-UI.lnk"
+      CreateShortcut "$DESKTOP\GAIA-CLI.lnk" "$INSTDIR\GAIA-CLI.lnk"
+
       Goto end
 
     end:
 SectionEnd
 
 Function RunGAIA
-  ExecShell "open" "$INSTDIR\GAIA.lnk"
+  ExecShell "open" "$INSTDIR\GAIA-UI.lnk"
 FunctionEnd
 

@@ -63,16 +63,15 @@ jobs:
           GAIA_NPU_Installer.exe /S
       
       - name: Ensure GAIA can open properly
-        timeout-minutes: 10
+        timeout-minutes: 15
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
-          AMD_OGA: "C:\\Users\\jfowe\\AppData\\Local\\GAIA\\amd_oga"
-          AMD_OGA_HYBRID: "C:\\Users\\jfowe\\AppData\\Local\\GAIA\\${{ env.HYBRID_LLM_ARTIFACTS }}"
         uses: ./.github/actions/ui-testing
         with:
           username: "jfowe"
           huggingface_access_token: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           install_from_source: "false"
+          wait_timeout: 900
 
       - name: Run unit tests
         env:
