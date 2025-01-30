@@ -3,6 +3,7 @@
 
 import time
 import asyncio
+import importlib.util
 import requests
 from websocket import create_connection
 from websocket._exceptions import WebSocketTimeoutException
@@ -267,7 +268,14 @@ def launch_agent_server(
     model, agent_name="Chaty", host="127.0.0.1", port=8001, cli_mode=False
 ):
     try:
-        agent_module = __import__(f"gaia.agents.{agent_name}.app", fromlist=["MyAgent"])
+        # Add assertion to check if agent_name exists
+        agent_path = f"gaia.agents.{agent_name}.app"
+        spec = importlib.util.find_spec(agent_path)
+        assert (
+            spec is not None
+        ), f"Agent '{agent_name}' not found. Please check the agent name and try again."
+
+        agent_module = __import__(agent_path, fromlist=["MyAgent"])
         MyAgent = getattr(agent_module, "MyAgent")
         agent = MyAgent(model=model, host=host, port=port, cli_mode=cli_mode)
         agent.run()

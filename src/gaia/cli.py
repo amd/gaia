@@ -661,30 +661,30 @@ class GaiaCliClient:
                 self.whisper_asr.stop_recording()
 
 
-async def async_main(action, message=None, **kwargs):
-    if action in ["start", "stop"]:
-        if action == "start":
-            client = GaiaCliClient(**kwargs)
-            client.start()
-            return "Servers started successfully."
-        else:  # stop
-            client = await GaiaCliClient.load_existing_client()
-            if client:
-                client.stop()
-                Path(".gaia_servers.json").unlink(missing_ok=True)
-                return "Servers stopped successfully."
-            else:
-                return "No running servers found."
+async def async_main(action, **kwargs):
+    if action == "start":
+        # Remove stats from kwargs before initializing GaiaCliClient
+        client = GaiaCliClient(**kwargs)
+        client.start()
+        return "Servers started successfully."
+    elif action == "stop":
+        client = await GaiaCliClient.load_existing_client()
+        if client:
+            client.stop()
+            Path(".gaia_servers.json").unlink(missing_ok=True)
+            return "Servers stopped successfully."
+        else:
+            return "No running servers found."
 
     client = await GaiaCliClient.load_existing_client()
     if not client:
         return "Error: Servers are not running. Please start the servers first using 'gaia-cli start'"
 
     if action == "prompt":
-        if not message:
+        if not kwargs.get("message"):
             return "Error: Message is required for prompt action."
         response = ""
-        async for chunk in client.prompt(message):
+        async for chunk in client.prompt(kwargs["message"]):
             response += chunk
         if kwargs.get("show_stats", False):
             stats = client.get_stats()
@@ -692,11 +692,9 @@ async def async_main(action, message=None, **kwargs):
                 return {"response": response, "stats": stats}
         return {"response": response}
     elif action == "chat":
-        # Text-only chat mode
         await client.chat()
         return "Chat session ended."
     elif action == "talk":
-        # Voice-only chat mode
         await client.talk()
         return "Voice chat session ended."
     elif action == "stats":
@@ -706,22 +704,8 @@ async def async_main(action, message=None, **kwargs):
         return {"stats": {}}
 
 
-def run_cli(action, message=None, **kwargs):
-    return asyncio.run(async_main(action, message, **kwargs))
-
-
-def start_servers():
-    # Start the servers
-    print("Starting servers...")
-    start_result = run_cli("start")
-    assert start_result == "Servers started successfully."
-
-
-def stop_servers():
-    # Stop the servers
-    print("\nStopping servers...")
-    stop_result = run_cli("stop")
-    assert stop_result == "Servers stopped successfully."
+def run_cli(action, **kwargs):
+    return asyncio.run(async_main(action, **kwargs))
 
 
 def main():
@@ -729,122 +713,156 @@ def main():
         description="Gaia CLI - Interact with Gaia AI agents",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    parser.add_argument(
-        "action",
-        choices=["chat", "talk", "prompt", "start", "stop", "stats"],
-        help="Action to perform",
-        nargs="?",  # Make action optional
-    )
-    # Add download transcript option
-    parser.add_argument(
-        "--download-transcript",
-        metavar="URL",
-        help="Download transcript from a YouTube URL",
-    )
-    parser.add_argument(
-        "--output",
-        default=None,
-        help="Output file path for transcript (optional, default: transcript_<video_id>.txt)",
-    )
-    # Move the other arguments here, before adding them to the main parser
-    parser.add_argument(
-        "--agent_name",
+
+    # Create subparsers for different commands
+    subparsers = parser.add_subparsers(dest="action", help="Action to perform")
+
+    # Start command parser
+    start_parser = subparsers.add_parser("start", help="Start Gaia server")
+    start_parser.add_argument(
+        "--agent-name",
         default="Chaty",
         help="Name of the Gaia agent to use (e.g., Llm, Chaty, Joker, Clip, etc.)",
     )
-    parser.add_argument(
+    start_parser.add_argument(
         "--host",
         default="127.0.0.1",
         help="Host address for the Agent server (default: 127.0.0.1)",
     )
-    parser.add_argument(
+    start_parser.add_argument(
         "--port",
         type=int,
         default=8001,
         help="Port for the Agent server (default: 8001)",
     )
-    parser.add_argument(
+    start_parser.add_argument(
         "--model",
         default="llama3.2:1b",
         help="Model to use for the agent (default: llama3.2:1b)",
     )
-    parser.add_argument(
+    start_parser.add_argument(
         "--max-new-tokens",
         type=int,
         default=512,
         help="Maximum number of new tokens to generate (default: 512)",
     )
-    parser.add_argument(
+    start_parser.add_argument(
         "--backend",
         default="ollama",
         choices=["oga", "hf", "ollama"],
         help="Backend to use for model inference (default: ollama)",
     )
-    parser.add_argument(
+    start_parser.add_argument(
         "--device",
         default="cpu",
         choices=["cpu", "npu", "gpu", "hybrid"],
         help="Device to use for model inference (default: cpu)",
     )
-    parser.add_argument(
+    start_parser.add_argument(
         "--dtype",
         default="int4",
         choices=["float32", "float16", "bfloat16", "int8", "int4"],
         help="Data type to use for model inference (default: int4)",
     )
-    parser.add_argument(
-        "--whisper-model-size",
-        default="base",
-        choices=["tiny", "base", "small", "medium", "large"],
-        help="Whisper model size for voice recognition (default: base)",
-    )
-    parser.add_argument(
-        "--audio-device-index",
-        type=int,
-        default=1,
-        help="Index of the audio input device to use (default: 1)",
-    )
-    parser.add_argument(
+    start_parser.add_argument(
         "--stats",
         action="store_true",
         help="Show performance statistics after generation",
     )
-    parser.add_argument("message", nargs="?", help="Message for prompt action")
+
+    # Stop command parser
+    subparsers.add_parser("stop", help="Stop Gaia server")
+
+    # Prompt command parser
+    prompt_parser = subparsers.add_parser("prompt", help="Send a single prompt to Gaia")
+    prompt_parser.add_argument(
+        "message",
+        help="Message to send to Gaia",
+    )
+
+    # Chat command parser
+    subparsers.add_parser("chat", help="Start text conversation with Gaia")
+
+    # Talk command parser
+    talk_parser = subparsers.add_parser(
+        "talk", help="Start voice conversation with Gaia"
+    )
+    talk_parser.add_argument(
+        "--list-devices",
+        action="store_true",
+        help="List available audio input devices",
+    )
+    talk_parser.add_argument(
+        "--audio-device-index",
+        type=int,
+        help="Index of the audio input device to use",
+    )
+    talk_parser.add_argument(
+        "--whisper-model-size",
+        type=str,
+        default="base",
+        choices=["tiny", "base", "small", "medium", "large"],
+        help="Size of the Whisper model to use (default: base)",
+    )
+
+    # Stats command parser
+    subparsers.add_parser(
+        "stats", help="Show Gaia statistics from the most recent run."
+    )
+
+    # Util command parser
+    util_parser = subparsers.add_parser("util", help="Utility functions")
+    util_parser.add_argument(
+        "--download-youtube-transcript",
+        metavar="URL",
+        help="Download transcript from a YouTube URL",
+    )
+    util_parser.add_argument(
+        "--output-transcript-path",
+        default=None,
+        help="Output file path for transcript (optional, default: transcript_<video_id>.txt)",
+    )
 
     args = parser.parse_args()
 
-    # Handle transcript download if requested
-    if args.download_transcript:
-        print(f"Downloading transcript from {args.download_transcript}")
-        from llama_index.readers.youtube_transcript import YoutubeTranscriptReader
-
-        doc = YoutubeTranscriptReader().load_data(ytlinks=[args.download_transcript])
-        output_path = args.output or "transcript.txt"
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(doc[0].text)
-        print(f"Transcript downloaded to: {output_path}")
-        return
-
+    # Check if action is specified
     if not args.action:
         parser.print_help()
         return
 
-    result = run_cli(
-        args.action,
-        args.message,
-        agent_name=args.agent_name,
-        host=args.host,
-        port=args.port,
-        model=args.model,
-        max_new_tokens=args.max_new_tokens,
-        backend=args.backend,
-        device=args.device,
-        dtype=args.dtype,
-        whisper_model_size=args.whisper_model_size,
-        audio_device_index=args.audio_device_index,
-        show_stats=args.stats,
-    )
+    # Handle utility functions
+    if args.action == "util":
+        if args.download_youtube_transcript:
+            print(f"Downloading transcript from {args.download_youtube_transcript}")
+            from llama_index.readers.youtube_transcript import YoutubeTranscriptReader
 
+            doc = YoutubeTranscriptReader().load_data(
+                ytlinks=[args.download_youtube_transcript]
+            )
+            output_path = args.output_transcript_path or "transcript.txt"
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write(doc[0].text)
+            print(f"Transcript downloaded to: {output_path}")
+            return
+
+    # Handle list-devices option only for talk action
+    if args.action == "talk" and args.list_devices:
+        from gaia.audio.audio_recorder import AudioRecorder
+
+        recorder = AudioRecorder()
+        devices = recorder.list_audio_devices()
+        print("\nAvailable Audio Input Devices:")
+        for device in devices:
+            print(f"Index {device['index']}: {device['name']}")
+            print(f"    Max Input Channels: {device['maxInputChannels']}")
+            print(f"    Default Sample Rate: {device['defaultSampleRate']}")
+            print()
+        return
+
+    # Convert args to dict, removing None values
+    kwargs = {k: v for k, v in vars(args).items() if v is not None and k != "action"}
+
+    result = run_cli(args.action, **kwargs)
     if result:
         print(result)
 

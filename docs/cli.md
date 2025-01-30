@@ -43,7 +43,7 @@ A simple chat demo using `gaia-cli` to verify functionality:
    Servers started successfully.
    ```
 
-1. Open a new terminal window and activate the same GAIA environment as above.
+1. Open a new terminal window and activate the same GAIA environment as above. Make sure you are in the same directory as the previous command was run from.
 
 1. Begin a chat session:
    ```
@@ -107,25 +107,75 @@ gaia-cli start --dtype float16
 
 For more options and detailed usage, refer to `gaia-cli --help`.
 
-## Running GAIA CLI Talk Mode
+## Running GAIA CLI Talk Demo on Hybrid
 GAIA CLI's talk mode enables voice-based interaction with LLMs using Whisper for speech recognition. This feature allows for natural conversation with the AI through your microphone.
 
-1. Start the servers:
-   ```bash
-   gaia-cli start
-   ```
-   1. To run in hybrid mode, use the following command:
+1. Activate the GAIA environment:
+    ```
+    conda activate C:\Users\<username>\AppData\Local\GAIA\gaia_env
+    ```
+    Change `<username>` to your actual username.
+
+1. To run in hybrid mode, use the following command:
    ```bash
    gaia-cli start --model "amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid" --backend "oga" --device "hybrid" --dtype "int4"
    ```
 
-2. Launch talk mode:
+1. Open a new terminal window and activate the same GAIA environment as above. Make sure you are in the same directory as the previous command was run from.
+
+1. Launch `talk` mode:
    ```bash
    gaia-cli talk
    ```
 
+1. You should see a similar output:
+   ```bash
+   [2025-01-17 15:01:37] | INFO | gaia.cli.__init__ | cli.py:95 | Gaia CLI client initialized with the following settings:
+   [2025-01-17 15:01:37] | INFO | gaia.cli.__init__ | cli.py:96 | agent_name: Chaty
+    host: 127.0.0.1
+   port: 8001
+    llm_port: 8000
+   ollama_port: 11434
+    model: amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid
+   max_new_tokens: 512
+    backend: oga
+   device: hybrid
+    dtype: int4
+   Starting voice chat with Chaty. Say 'exit' to quit, or 'restart' to clear chat history.
+   [2025-01-17 15:01:37] | INFO | gaia.cli.start_voice_chat | cli.py:397 | Initializing voice chat...
+   Starting voice chat with Chaty. Say 'exit' to quit, or 'restart' to clear chat history.
+   [2025-01-17 15:01:37] | INFO | gaia.audio.whisper_asr.__init__ | whisper_asr.py:25 | Loading Whisper model: base
+   [2025-01-17 15:01:39] | INFO | gaia.cli.start_voice_chat | cli.py:410 | Using audio device: Remote Audio
+   Using device: Remote Audio
+   [2025-01-17 15:01:39] | INFO | gaia.cli.start_voice_chat | cli.py:414 | Starting audio recording...
+   [2025-01-17 15:01:39] | INFO | gaia.audio.whisper_asr.start_recording | audio_recorder.py:134 | Initializing recording...
+   [2025-01-17 15:01:39] | INFO | gaia.audio.whisper_asr.start_recording | audio_recorder.py:145 | Starting record thread...
+   [2025-01-17 15:01:39] | INFO | gaia.audio.whisper_asr._record_audio | audio_recorder.py:43 | Using audio device: Remote Audio
+   [2025-01-17 15:01:39] | INFO | gaia.audio.whisper_asr._record_audio | audio_recorder.py:54 | Recording started...
+   [2025-01-17 15:01:39] | INFO | gaia.audio.whisper_asr.start_recording | audio_recorder.py:153 | Starting process thread...
+   [2025-01-17 15:01:39] | INFO | gaia.audio.whisper_asr._process_audio | whisper_asr.py:43 | Starting audio processing...
+   [2025-01-17 15:01:39] | INFO | gaia.cli.start_voice_chat | cli.py:418 | Starting audio processing thread...
+   [2025-01-17 15:01:39] | INFO | gaia.cli.start_voice_chat | cli.py:424 | Listening for voice input...
+   ```
+
+1. Speak to the microphone and the LLM will respond. You can interrupt the LLM while it's generating a response by speaking again. For example:
+   ```bash
+   You: Hi, can you hear me?
+   Chaty: I can hear you. How can I help you today?
+   ```
+
+1. When you are done, say `quit` to exit the application.
+
+### Troubleshooting
+- If you don't see your speech printed on screen, it's possible your microphone is on a different device index. Try the following:
+1. List devices available with `gaia-cli talk --list-devices`).
+1. Use talk with the correct device by running `gaia-cli talk --audio-device-index <device_index>`
+- For better recognition accuracy, try using a larger Whisper model (e.g., "medium" or "large") `gaia-cli talk --whisper-model-size medium`
+- Ensure you're in a quiet environment for optimal speech recognition
+- Speaking clearly and at a moderate pace will improve transcription quality
+
 ### Configuration Options
-You can customize the voice interaction experience with these parameters:
+Run `gaia-cli talk --help` to see the available options. You can customize the voice interaction experience with these parameters:
 
 - `--whisper-model-size`: Choose the Whisper model size for speech recognition
   ```bash
