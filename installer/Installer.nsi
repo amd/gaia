@@ -9,8 +9,6 @@
 !define /ifndef OGA_URL "https://api.github.com/repos/aigdat/ryzenai-sw-ea/contents/"
 !define /ifndef RYZENAI_FOLDER "ryzen_ai_13_ga"
 !define /ifndef NPU_DRIVER_ZIP "NPU_RAI1.3.zip"
-!define /ifndef NPU_LLM_ARTIFACTS "npu-llm-artifacts_1.3.0"
-!define /ifndef HYBRID_LLM_ARTIFACTS "hybrid-llm-artifacts_1.3.0"
 !define /ifndef NPU_DRIVER_VERSION "32.0.203.237"
 
 ; Define main variables
@@ -32,26 +30,22 @@ Name "GAIA"
   !if ${MODE} == "NPU"
     OutFile "GAIA_NPU_Installer.exe"
     !define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome_npu.bmp"
-    !define /ifndef LLM_ARTIFACTS ${NPU_LLM_ARTIFACTS}
     !define /ifndef OGA_ZIP_FILE_NAME "oga-npu.zip"
     !define /ifndef OGA_WHEELS_PATH "amd_oga\wheels"
   !else if ${MODE} == "HYBRID"
     OutFile "GAIA_Hybrid_Installer.exe"
     !define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome_npu.bmp"
-    !define /ifndef LLM_ARTIFACTS ${HYBRID_LLM_ARTIFACTS}
     !define /ifndef OGA_ZIP_FILE_NAME "oga-hybrid.zip"
     !define /ifndef OGA_WHEELS_PATH "hybrid-llm-artifacts_1.3.0\hybrid-llm-artifacts\onnxruntime_genai\wheel"
   !else
     ; By default, we will set to NPU artifacts
     OutFile "GAIA_Installer.exe"
     !define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome.bmp"
-    !define /ifndef LLM_ARTIFACTS ${NPU_LLM_ARTIFACTS}
   !endif
 !else
   ; By default, we will set to NPU artifacts
   OutFile "GAIA_Installer.exe"
   !define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome.bmp"
-  !define /ifndef LLM_ARTIFACTS ${NPU_LLM_ARTIFACTS}
 !endif
 
 ; Include modern UI elements
@@ -173,12 +167,11 @@ Section "Install Main Components" SEC01
     FileWrite $0 '  OGA URL: ${OGA_URL}$\n'
     FileWrite $0 '  Ryzen AI Folder: ${RYZENAI_FOLDER}$\n'
     FileWrite $0 '  NPU Driver Version: ${NPU_DRIVER_VERSION}$\n'
-    FileWrite $0 '  LLM Artifacts: ${LLM_ARTIFACTS}$\n'
     FileWrite $0 '-------------------------------------------$\n'
 
     # Pack GAIA into the installer
     # Exclude hidden files (like .git, .gitignore) and the installation folder itself
-    File /r /x installer /x .* /x ..\*.pyc ..\*.* install_oga.py npu_settings.json hybrid_settings.json download_lfs_file.py npu_driver_utils.py amd_install_kipudrv.bat
+    File /r /x installer /x .* /x ..\*.pyc ..\*.* npu_settings.json hybrid_settings.json download_lfs_file.py npu_driver_utils.py amd_install_kipudrv.bat
     FileWrite $0 "- Packaged GAIA repo$\n"
 
     ; Check if conda is available
@@ -418,45 +411,17 @@ Section "Install Main Components" SEC01
       FileWrite $0 "-----------------------------$\n"
 
       ; Install OGA NPU dependencies
-      FileWrite $0 "- Setting up environment variables...$\n"
-      nsExec::ExecToLog 'cmd /c echo set GIT_PYTHON_REFRESH=quiet> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.bat"'
-      nsExec::ExecToLog 'cmd /c echo $env:GIT_PYTHON_REFRESH="quiet"> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.ps1"'
+      FileWrite $0 "- Installing ${MODE} dependencies...$\n"
       ${If} ${MODE} == "NPU"
-        nsExec::ExecToLog 'cmd /c echo set AMD_OGA=$INSTDIR\amd_oga>> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.bat"'
-        nsExec::ExecToLog 'cmd /c echo $env:AMD_OGA="$INSTDIR\amd_oga">> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.ps1"'
+        nsExec::ExecToStack 'conda run -p "$INSTDIR\gaia_env" lemonade-install --ryzenai npu -y --token ${OGA_TOKEN}' $R0
       ${ElseIf} ${MODE} == "HYBRID"
-        nsExec::ExecToLog 'cmd /c echo set AMD_OGA_HYBRID=$INSTDIR\${LLM_ARTIFACTS}>> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.bat"'
-        nsExec::ExecToLog 'cmd /c echo $env:AMD_OGA_HYBRID="$INSTDIR\${LLM_ARTIFACTS}">> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.ps1"'
-      ${Else}
-        nsExec::ExecToLog 'cmd /c echo set AMD_OGA=$INSTDIR\${LLM_ARTIFACTS}>> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.bat"'
-        nsExec::ExecToLog 'cmd /c echo $env:AMD_OGA="$INSTDIR\${LLM_ARTIFACTS}">> "$INSTDIR\gaia_env\etc\conda\activate.d\env_vars.ps1"'
+        nsExec::ExecToStack 'conda run -p "$INSTDIR\gaia_env" lemonade-install --ryzenai hybrid -y' $R0
       ${EndIf}
 
-      IfFileExists "$INSTDIR\${LLM_ARTIFACTS}.zip" found_whl download_whl
-
-      found_whl:
-        FileWrite $0 "- $INSTDIR\${LLM_ARTIFACTS}.zip already exists, skipping download...$\n"
-        Goto install_whl
-
-      download_whl:
-        FileWrite $0 "- Downloading ${LLM_ARTIFACTS} artifacts...$\n"
-        nsExec::ExecToStack '"$INSTDIR\gaia_env\python.exe" download_lfs_file.py ${RYZENAI_FOLDER}/${LLM_ARTIFACTS}.zip $INSTDIR ${OGA_ZIP_FILE_NAME} ${OGA_TOKEN}'
-        Pop $R0  ; Return value
-        Pop $R1  ; Command output
-        FileWrite $0 "- Download script return code: $R0$\n"
-        FileWrite $0 "- Download script output:$\n$R1$\n"
-        Goto install_whl
-
-      install_whl:
-        FileWrite $0 "- Installing ${LLM_ARTIFACTS} dependencies...$\n"
-        nsExec::ExecToStack '"$INSTDIR\gaia_env\python.exe" install_oga.py --folder_path $INSTDIR --zip_file_name ${OGA_ZIP_FILE_NAME} --wheels_path ${OGA_WHEELS_PATH}'
-        Pop $R0  ; Return value
-        Pop $R1  ; Command output
-        FileWrite $0 "- Install script return code: $R0$\n"
-        FileWrite $0 "- Install script output:$\n$R1$\n"
-
-      RMDir /r "$INSTDIR\install_oga.py"
-      RMDir /r "$INSTDIR\download_lfs_file.py"
+      Pop $R0  ; Return value
+      Pop $R1  ; Command output
+      FileWrite $0 "- ${MODE} dependencies install return code: $R0$\n"
+      FileWrite $0 "- ${MODE} dependencies install output:$\n$R1$\n"
 
       ${If} ${MODE} == "NPU"
 
