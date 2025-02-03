@@ -9,7 +9,7 @@
 !define /ifndef OGA_URL "https://api.github.com/repos/aigdat/ryzenai-sw-ea/contents/"
 !define /ifndef RYZENAI_FOLDER "ryzen_ai_13_ga"
 !define /ifndef NPU_DRIVER_ZIP "NPU_RAI1.3.zip"
-!define /ifndef NPU_DRIVER_VERSION "32.0.203.240"
+!define /ifndef NPU_DRIVER_VERSION "32.0.203.237"
 
 ; Define main variables
 Name "GAIA"
@@ -166,7 +166,7 @@ Section "Install Main Components" SEC01
     FileWrite $0 '  CI Mode: ${CI}$\n'
     FileWrite $0 '  OGA URL: ${OGA_URL}$\n'
     FileWrite $0 '  Ryzen AI Folder: ${RYZENAI_FOLDER}$\n'
-    FileWrite $0 '  NPU Driver Version: ${NPU_DRIVER_VERSION}$\n'
+    FileWrite $0 '  Minimum NPU Driver Version: ${NPU_DRIVER_VERSION}$\n'
     FileWrite $0 '-------------------------------------------$\n'
 
     # Pack GAIA into the installer
@@ -328,11 +328,12 @@ Section "Install Main Components" SEC01
         StrCpy $3 $5 ; Set $3 to the last line
 
         ${If} $3 == "Unknown"
-          MessageBox MB_YESNO "Current driver version could not be identified. Would you like to update to ${NPU_DRIVER_VERSION} anyways?" IDYES update_driver IDNO install_gaia
-        ${ElseIf} $3 != ${NPU_DRIVER_VERSION}
+          ; MessageBox MB_YESNO "Current driver version could not be identified. Would you like to update to ${NPU_DRIVER_VERSION} anyways?" IDYES update_driver IDNO install_gaia
+          MessageBox MB_YESNO "WARNING: Current driver could not be identified. Please install the minimum recommended driver version (${NPU_DRIVER_VERSION}) or reach out to gaia@amd.com for support.\n\nContinue installation?" IDYES install_gaia IDNO exit_installer
+        ${elseif} $3 < ${NPU_DRIVER_VERSION}
           FileWrite $0 "- Current driver version ($3) is not the recommended version ${NPU_DRIVER_VERSION}$\n"
           ; MessageBox MB_YESNO "Current driver version ($3) is not the recommended version ${NPU_DRIVER_VERSION}. Would you like to update it?" IDYES update_driver IDNO install_gaia
-          MessageBox MB_OK "Warning: Current driver version ($3) is not the recommended version ${NPU_DRIVER_VERSION}. Please install the recommended driver version or reach out to gaia@amd.com for support." IDOK install_gaia
+          MessageBox MB_YESNO "WARNING: Current driver version ($3) is not the minimum recommended version ${NPU_DRIVER_VERSION}. Please install the driver or reach out to gaia@amd.com for support.\n\nContinue installation?" IDYES install_gaia IDNO exit_installer
         ${Else}
           FileWrite $0 "- No driver update needed.$\n"
           GoTo install_gaia
