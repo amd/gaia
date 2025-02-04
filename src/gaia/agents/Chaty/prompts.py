@@ -40,6 +40,16 @@ class Prompts:
             "assistant": "<|assistant|>\n{content}\n",
             "observation": "<|observation|>\n{content}\n",  # For external return results
         },
+        "deepseek": {
+            "system": "{system_message}\n",
+            "user": "<|User|>{content}\n",
+            "assistant": "<|Assistant|>{content}\n",
+        },
+        "default": {
+            "system": "{system_message}\n",
+            "user": "User: {content}\n",
+            "assistant": "Assistant: {content}\n",
+        },
         # Add other model formats here...
     }
 
@@ -47,6 +57,8 @@ class Prompts:
         "llama3": "You are a helpful AI assistant. You provide clear, accurate, and technically-sound responses while maintaining a friendly demeanor.",
         "phi3": "You are a helpful AI assistant. You provide clear, accurate, and technically-sound responses while maintaining a friendly demeanor.",
         "chatglm": "You are ChatGLM3, a large language model trained by Zhipu.AI. Follow the user's instructions carefully. Respond using markdown.",
+        "deepseek": "You are DeepSeek R1, a large language model trained by DeepSeek. You provide clear, accurate, and technically-sound responses while maintaining a friendly demeanor.",
+        "default": "You are a helpful AI assistant. You provide clear, accurate, and technically-sound responses while maintaining a friendly demeanor.",
         # Add other system messages here...
     }
 
@@ -208,18 +220,34 @@ class Prompts:
             return "qwen"
         elif "chatglm" in model:
             return "chatglm"
+        elif "deepseek" in model:
+            return "deepseek"
         else:
-            Prompts.log.error(f"Could not match model {model} to a known format")
-            raise ValueError(f"Could not match model {model} to a known format")
+            Prompts.log.warning(
+                f"No specific format found for model {model}, using default format"
+            )
+            return "default"
 
-    @staticmethod
-    def get_system_prompt(model: str, chat_history: list = None) -> str:
-        """Get the formatted prompt including chat history if provided."""
-        Prompts.log.debug(f"Getting system prompt for model: {model}")
-        if chat_history is None:
-            chat_history = []
+    @classmethod
+    def get_system_prompt(cls, model: str, chat_history: list[str]) -> str:
+        """Get the formatted system prompt for the given model and chat history."""
+        model_type = cls._match_model_name(model)
+        format_template = cls.prompt_formats[model_type]
+        system_message = cls.system_messages[model_type]
 
-        return Prompts.format_chat_history(model, chat_history)
+        # Format system message
+        prompt = format_template["system"].format(system_message=system_message)
+
+        # Format chat history
+        for message in chat_history:
+            if message.startswith("user: "):
+                content = message[6:]  # Remove "user: " prefix
+                prompt += format_template["user"].format(content=content)
+            elif message.startswith("assistant: "):
+                content = message[11:]  # Remove "assistant: " prefix
+                prompt += format_template["assistant"].format(content=content)
+
+        return prompt
 
 
 def main():
@@ -242,7 +270,7 @@ def main():
     for model in test_models:
         print(f"\n{'='*80}")
         print(f"Testing model: {model}")
-        formatted_prompt = Prompts.get_system_prompt(model)
+        formatted_prompt = Prompts.get_system_prompt(model, chat_history)
         print(f"Matched as: {formatted_prompt}")
         print(f"{'='*80}\n")
 
