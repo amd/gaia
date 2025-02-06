@@ -1,0 +1,123 @@
+# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: GAIA Hybrid Local Tests 🌩️
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+jobs:
+  gaia-hybrid-local-tests:
+    runs-on: stx
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install NSIS
+        run: |
+          # Download NSIS installer
+          Invoke-WebRequest -UserAgent "Wget" -Uri "https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10-setup.exe" -OutFile "nsis.exe"
+          
+          # Install NSIS
+          Start-Process nsis.exe -ArgumentList '/S' -Wait
+
+      - name: Verify NSIS installation
+        run: |
+          # Check if NSIS is installed
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /VERSION
+
+      - name: Build the GAIA installer for Hybrid
+        run: |
+          cd installer
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DCI=ON /DMODE=HYBRID 'Installer.nsi'
+
+          if (Test-Path "GAIA_Hybrid_Installer.exe") {
+            Write-Host "GAIA_Hybrid_Installer.exe has been created successfully."
+          } else {
+            Write-Host "GAIA_Hybrid_Installer.exe was not found."
+            exit 1
+          }
+
+      - name: Attempt to install GAIA using installer
+        shell: cmd
+        run: |
+          echo "Having issues debugging the installer? Check the installer README for tips on how to do that."
+          set PATH=%PATH%;C:\Users\runneradmin\AppData\Local\Programs\Ollama
+          cd installer
+          GAIA_Hybrid_Installer.exe /S
+      
+      - name: Ensure GAIA can open properly
+        timeout-minutes: 15
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        uses: ./.github/actions/ui-testing
+        with:
+          username: "jfowe"
+          huggingface_access_token: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          install_from_source: "false"
+
+      - name: Check for processes using ports 8000 and 8001
+        shell: PowerShell
+        run: |
+          Write-Host "Waiting 10 seconds before checking ports..."
+          Start-Sleep -Seconds 10
+
+          $portsInUse = @()
+          $ports = @(8000, 8001)
+          foreach ($port in $ports) {
+              $process = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
+              if ($process) {
+                  $processId = $process.OwningProcess
+                  $processName = (Get-Process -Id $processId).ProcessName
+                  Write-Host "Port $port is in use by process $processName (ID: $processId)"
+                  $portsInUse += $port
+              } else {
+                  Write-Host "Port $port is free"
+              }
+          }
+
+          if ($portsInUse.Count -gt 0) {
+              $portList = $portsInUse -join ", "
+              throw "Error: Ports $portList are still in use. Please ensure all GAIA processes are properly terminated."
+          }
+
+      - name: Run unit tests
+        timeout-minutes: 15
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        shell: PowerShell
+        run: |
+          $cwd = (Get-Item .\).FullName
+          $Env:LEMONADE_CACHE_DIR="$cwd\lemon-cache"
+          $Env:HF_HOME="$cwd\hf-cache"
+
+          # Install dev dependencies
+          conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env pip install .[dev]
+
+          Write-Host "Running test_gaia.py"
+          conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env python tests\test_gaia.py
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "test_gaia.py failed"
+              exit $LASTEXITCODE
+          }
+
+          # Run tests with proper argument handling
+          Write-Host "Running test_llama_index.py with hybrid backend"
+          conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env python tests\test_llama_index.py --backend hybrid
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "test_llama_index.py failed"
+              exit $LASTEXITCODE
+          }
+
+          Write-Host "Running test_asr.py"
+          conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env python tests\test_asr.py
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "test_asr.py failed"
+              exit $LASTEXITCODE
+          }

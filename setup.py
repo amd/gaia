@@ -14,6 +14,7 @@ setup(
     packages=[
         "gaia",
         "gaia.llm",
+        "gaia.audio",
         "gaia.agents",
         "gaia.agents.Llm",
         "gaia.agents.Chaty",

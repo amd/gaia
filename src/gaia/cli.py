@@ -663,8 +663,9 @@ class GaiaCliClient:
 
 async def async_main(action, **kwargs):
     if action == "start":
-        # Remove stats from kwargs before initializing GaiaCliClient
-        client = GaiaCliClient(**kwargs)
+        # Convert stats flag to show_stats parameter
+        show_stats = kwargs.pop("stats", False)  # Remove stats from kwargs
+        client = GaiaCliClient(show_stats=show_stats, **kwargs)
         client.start()
         return "Servers started successfully."
     elif action == "stop":

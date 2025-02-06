@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: MIT
 
 # This Python file uses the following encoding: utf-8
+
+print("Loading GAIA, please be patient...")  # pylint: disable=wrong-import-position
+
 import sys
 import os
 import re
@@ -132,32 +135,32 @@ class SetupLLM(QObject):
                 if self._is_cancelled:
                     return
 
-                # Check all servers asynchronously
-                workers = []
+                # Clear any existing workers
+                with self._workers_lock:
+                    self.server_check_workers.clear()
 
                 # Check agent server
-                workers.append(
-                    self.check_server_available("127.0.0.1", self.widget.agent_port)
-                )
+                self.check_server_available("127.0.0.1", self.widget.agent_port)
 
                 # Check LLM server
-                workers.append(
-                    self.check_server_available("127.0.0.1", self.widget.llm_port)
-                )
+                self.check_server_available("127.0.0.1", self.widget.llm_port)
 
                 # Check Ollama server if needed
                 selected_model = self.widget.ui.model.currentText()
                 model_settings = self.widget.settings["models"][selected_model]
                 if model_settings["backend"] == "ollama" and OLLAMA_AVAILABLE:
-                    workers.append(
-                        self.check_server_available(
-                            "127.0.0.1",
-                            self.widget.ollama_port,
-                            endpoint="/api/version",
-                        )
+                    self.check_server_available(
+                        "127.0.0.1",
+                        self.widget.ollama_port,
+                        endpoint="/api/version",
                     )
 
                 # Wait for all workers to complete
+                with self._workers_lock:
+                    workers = (
+                        self.server_check_workers.copy()
+                    )  # Create a copy to iterate safely
+
                 for worker in workers:
                     if isinstance(worker, ServerCheckWorker):
                         worker.wait()

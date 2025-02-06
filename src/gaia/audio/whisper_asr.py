@@ -1,11 +1,15 @@
-import whisper
+# Standard library imports
+import os
 import queue
 import time
-import os
 
+# Third-party imports
+import torch
+import whisper
+
+# First-party imports
 from gaia.logger import get_logger
 from gaia.audio.audio_recorder import AudioRecorder
-import torch
 
 
 class WhisperAsr(AudioRecorder):

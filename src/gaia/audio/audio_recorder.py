@@ -1,8 +1,11 @@
-import numpy as np
-import threading
-import pyaudio
+# Standard library imports first
 import queue
+import threading
 import time
+
+# Third-party imports next
+import numpy as np
+import pyaudio
 
 from gaia.logger import get_logger
 
@@ -15,6 +18,10 @@ class AudioRecorder:
         device_index=1,
     ):
         self.log = self.__class__.log  # Use the class-level logger for instances
+
+        # Add thread attributes
+        self.record_thread = None
+        self.process_thread = None
 
         # Audio parameters - optimized for better quality
         self.CHUNK = 1024 * 2  # Reduced for lower latency while maintaining quality
@@ -103,6 +110,21 @@ class AudioRecorder:
             except Exception as e:
                 self.log.error(f"Error closing audio stream: {e}")
             pa.terminate()
+
+    def _process_audio(self):
+        """Process recorded audio chunks from the queue."""
+        while self.is_recording:
+            try:
+                # Process any audio in the queue
+                if not self.audio_queue.empty():
+                    _ = self.audio_queue.get_nowait()
+                else:
+                    time.sleep(0.1)  # Prevent busy-waiting
+            except queue.Empty:
+                continue
+            except Exception as e:
+                self.log.error(f"Error processing audio: {e}")
+                break
 
     def list_audio_devices(self):
         """List all available audio input devices."""

@@ -19,14 +19,25 @@ class TestGaiaCLI:
     @pytest.fixture(scope="class", autouse=True)
     async def setup_and_teardown_class(cls):
         print("\n=== Starting Server ===")
-        cmd = "gaia-cli start"
+        cmd = "gaia-cli start --backend oga --device hybrid --dtype int4 --model amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid"
         print(f"Running command: {cmd}")
+
+        # Add class variable to store the monitoring task
+        cls.monitor_task = None
 
         try:
             # Use asyncio subprocess instead of subprocess.Popen
             cls.process = await asyncio.create_subprocess_exec(
                 "gaia-cli",
                 "start",
+                "--backend",
+                "oga",
+                "--device",
+                "hybrid",
+                "--dtype",
+                "int4",
+                "--model",
+                "amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -58,8 +69,8 @@ class TestGaiaCLI:
                     print(f"Output monitoring error: {e}")
                     cls.process.terminate()
 
-            # Start output monitoring in background
-            asyncio.create_task(print_output())
+            # Store the monitoring task in class variable
+            cls.monitor_task = asyncio.create_task(print_output())
 
             # Wait for both agent and LLM servers
             timeout = 120
@@ -109,7 +120,16 @@ class TestGaiaCLI:
             raise
         finally:
             print("\n=== Cleaning Up ===")
-            await asyncio.create_subprocess_exec("gaia-cli", "stop")
+            # Cancel the monitoring task if it exists
+            if hasattr(cls, "monitor_task") and cls.monitor_task:
+                cls.monitor_task.cancel()
+                try:
+                    await cls.monitor_task
+                except asyncio.CancelledError:
+                    pass
+
+            stop_process = await asyncio.create_subprocess_exec("gaia-cli", "stop")
+            await stop_process.wait()
             if hasattr(cls, "process"):
                 try:
                     cls.process.terminate()

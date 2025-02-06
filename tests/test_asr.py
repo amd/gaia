@@ -36,8 +36,18 @@ class TestWhisperAsr(unittest.TestCase):
 
     def test_file_transcription(self):
         """Test transcription of an existing file."""
-        # Replace with path to a test audio file
-        test_file = "data/audio/test.m4a"
+        test_file = os.path.join(
+            os.environ.get("LOCALAPPDATA"), "GAIA", "data", "audio", "test.m4a"
+        )
+        if not os.path.exists(test_file):
+            self.log.warning(
+                f"Test file {test_file} not found - skipping transcription test"
+            )
+            self.skipTest(
+                f"Test file {test_file} not found - skipping transcription test"
+            )
+
+        self.log.info(f"Found test file: {test_file}")
         result = self.asr.transcribe_file(test_file)
         self.log.info(f"Transcription Result: {result}")
         self.assertTrue(result.strip() == "This is a test.")

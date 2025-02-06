@@ -4,7 +4,7 @@
 param(
     [switch]$RunPylint,
     [switch]$RunBlack,
-    [switch]$All
+    [switch]$All = $true
 )
 
 # Configuration

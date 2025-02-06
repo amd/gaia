@@ -130,7 +130,7 @@ runs:
           Stop-Job -Job $errorLogJob
           Remove-Job -Job $logJob
           Remove-Job -Job $errorLogJob
-          Stop-Process -Id $gaiaProcess.Id
+          taskkill /F /T /PID $gaiaProcess.Id
           Write-Host "GAIA process has been stopped."
 
           # Show final logs
