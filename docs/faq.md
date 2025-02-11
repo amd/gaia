@@ -8,7 +8,7 @@
 Discover the capabilities of Ryzen AI with GAIA, an innovative generative AI application. Our platform seamlessly runs private and local large language models (LLMs) on the Neural Processing Unit (NPU), unlocking powerful potential. Dive into our agent Retrieval-Augmented Generation (RAG) pipeline, where interactive chat, reasoning, planning, and tool use converge. Plus, experience an intuitive and accessible UI that showcases these remarkable features.
 
 ## What is GAIA, and how does it integrate with Ryzen AI?
-GAIA is our generative AI application that runs local, private LLMs on Ryzen AI’s NPU hardware. It’s designed to leverage the power of the NPU for faster, more efficient processing, allowing users to keep their data local without relying on cloud infrastructure. This demo showcases how GAIA interacts with the NPU to run models seamlessly. GAIA uses the [Lemonade tool](https://github.com/onnx/turnkeyml/tree/main/src/turnkeyml/llm) from [TurnkeyML](https://github.com/onnx/turnkeyml/) to load and inference the LLM.
+GAIA is our generative AI application that runs local, private LLMs on Ryzen AI’s NPU hardware. It’s designed to leverage the power of the NPU for faster, more efficient processing, allowing users to keep their data local without relying on cloud infrastructure. This demo showcases how GAIA interacts with the NPU to run models seamlessly. GAIA uses the [Lemonade tool](https://github.com/onnx/turnkeyml/blob/main/docs/lemonade) from [TurnkeyML](https://github.com/onnx/turnkeyml/) to load and inference the LLM.
 
 ## How does the agent RAG pipeline work in this demo?
 

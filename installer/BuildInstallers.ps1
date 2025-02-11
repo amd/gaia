@@ -3,7 +3,7 @@
 
 # This script is used for testing the GAIA installer locally by building all installer variants (NPU-only, GPU-only, and Hybrid)
 
-# The following token is for access to ryzenai-sw-ea repository
+# The following token is for access to ryzenai-sw-ea repository, only necessary for NPU installer
 $OGA_TOKEN = "<add token here>"
 
 # Check if token is properly defined
@@ -12,6 +12,6 @@ if ([string]::IsNullOrEmpty($OGA_TOKEN) -or $OGA_TOKEN -eq "<add token here>") {
     exit 1
 }
 
-& "C:\Program Files (x86)\NSIS\makensis.exe" /DOGA_TOKEN="${OGA_TOKEN}" Installer.nsi
+& "C:\Program Files (x86)\NSIS\makensis.exe" Installer.nsi
+& "C:\Program Files (x86)\NSIS\makensis.exe" /DMODE=HYBRID Installer.nsi
 & "C:\Program Files (x86)\NSIS\makensis.exe" /DMODE=NPU /DOGA_TOKEN="${OGA_TOKEN}" Installer.nsi
-& "C:\Program Files (x86)\NSIS\makensis.exe" /DMODE=HYBRID /DOGA_TOKEN="${OGA_TOKEN}" Installer.nsi

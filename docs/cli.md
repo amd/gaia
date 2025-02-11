@@ -107,6 +107,19 @@ gaia-cli start --dtype float16
 
 For more options and detailed usage, refer to `gaia-cli --help`.
 
+## Utility Functions
+
+### Download YouTube Transcripts
+You can download transcripts from YouTube videos directly using the CLI:
+```bash
+gaia-cli --download-transcript "https://www.youtube.com/watch?v=VIDEO_ID"
+```
+
+By default, this saves the transcript to `transcript.txt`. You can specify a custom output file:
+```bash
+gaia-cli --download-transcript "https://www.youtube.com/watch?v=VIDEO_ID" --output "my_transcript.txt"
+```
+
 ## Running GAIA CLI Talk Demo on Hybrid
 GAIA CLI's talk mode enables voice-based interaction with LLMs using Whisper for speech recognition. This feature allows for natural conversation with the AI through your microphone.
 

@@ -3,7 +3,12 @@
 
 # UI Development Guide
 
-This guide explains how to modify and enhance the GAIA user interface using Qt Designer. Qt Designer is a visual design tool that allows you to create and edit graphical user interfaces without writing code directly.
+This guide explains how to modify and enhance the GAIA user interface using Qt Designer. Qt Designer is a visual design tool that allows you to create and edit graphical user interfaces without writing code directly. This guide covers:
+
+- Setting up the UI development environment
+- Using Qt Designer to modify the interface
+- Compiling and testing UI changes
+- Working with assets and resources
 
 ![Qt Designer](../data/img/qt-designer.png)
 
