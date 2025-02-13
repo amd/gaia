@@ -80,7 +80,9 @@ class HuggingFaceTokenDialog(QWidget, WindowDragMixin):
         )
 
         self.token_input = QLineEdit()
-        self.token_input.setPlaceholderText("Enter your token here")
+        self.token_input.setPlaceholderText(
+            "Please enter your token, needed to access HF gated models"
+        )
         self.token_input.setFont(QFont("Segoe UI", 12))
         self.token_input.setStyleSheet(
             """

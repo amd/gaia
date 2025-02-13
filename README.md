@@ -15,7 +15,9 @@
 
 **GAIA is an open-source solution designed for the quick setup and execution of generative AI applications on local PC hardware.** It enables fast and efficient execution of LLM-based applications using a hybrid hardware approach that combines the AMD Neural Processing Unit (NPU) and Integrated Graphics Processing Unit (iGPU) in the Ryzen-AI PC. GAIA provides the following key features:
 
-- 🏠 **Local LLM Processing**: Easily run powerful language models directly on your device without cloud dependencies
+**Currently supports Windows 11 Home/Pro**
+
+- 🏠 **Local LLM Processing**: Easily run powerful language models directly on your Windows device without cloud dependencies
 - 🎯 **Multiple Use Cases**: From basic chat to RAG-enhanced applications and specialized agents
 - ⚡ **Optimized Performance**: Leverages the AMD NPU and iGPU for hybrid acceleration to get fast and efficient AI processing
 - 🖥️ **Easy-to-Use Interface**: Provides both a command-line interface (CLI) and a graphical user interface (GUI) option for easy interaction with models and agents
@@ -108,6 +110,30 @@ GAIA with Ryzen AI Hybrid NPU/iGPU execution has been tested on the following sy
 - AMD NPU drivers: `32.0.203.237` and `32.0.203.240`
 
 To check the NPU driver version, go to `Device Manager` > `Neural Processors`, right-click `Properties` of `NPU Compute Accelerator Device` and select the `Driver` tab.
+
+## Dependencies
+
+System Requirements:
+- Windows 11 Pro/Home (GAIA is not supported on macOS or Linux)
+- For Hybrid mode: AMD Ryzen AI 9 HX 370 with NPU Driver 32.0.203.237 or higher
+- For Generic mode: Any Windows PC meeting Ollama's system requirements
+
+The GAIA installer will automatically set up most dependencies, including:
+- Python 3.10
+- Miniconda (if not already installed)
+- FFmpeg
+- All required Python packages
+
+Additional requirements:
+
+For Generic installer:
+- Ollama (version 0.1.17 or higher)
+  - Must be installed manually from: https://ollama.com/download
+
+For Hybrid installer:
+- AMD NPU Driver (version 32.0.203.237 or higher)
+  - The installer will check your driver version and prompt for updates if needed
+- AMD Radeon iGPU Driver (version 32.0.12010.8007 or higher)
 
 # FAQ
 

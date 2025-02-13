@@ -19,6 +19,39 @@ The CLI supports several core commands:
 - `stop`: Shutdown all servers
 - `stats`: View model performance statistics
 
+### Server State Management
+
+The GAIA CLI uses a `.gaia_servers.json` file to manage server state and connection information. When you run `gaia-cli start`, it creates or updates this file in the current working directory. The file contains server configurations, for example:
+
+```json
+{
+    "agent_name": "Chaty",
+    "host": "127.0.0.1",
+    "port": 8001,
+    "model": "llama3.2:1b",
+    "max_new_tokens": 512,
+    "backend": "ollama",
+    "device": "cpu",
+    "dtype": "int4",
+    "server_pids": {
+        "agent": 27324,
+        "ollama_model": 25176,
+        "ollama_client": 13988
+    },
+    "logging_level": "DEBUG"
+}
+```
+
+This configuration file tracks:
+- Connection details (host, port)
+- Model configuration (model name, backend, device, precision)
+- Server process IDs for management
+- Agent settings and logging preferences
+
+When running client commands like `gaia-cli chat`, the CLI looks for the `.gaia_servers.json` file in the current directory to establish connections. This means:
+
+- All commands should be run from the same directory where `gaia-cli start` was executed
+
 ### Quick Start Demo
 
 A simple chat demo using `gaia-cli` to verify functionality:
