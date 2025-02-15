@@ -51,7 +51,7 @@ jobs:
 
           Write-Host "Step 2: Install dependencies"
           python -m pip install --upgrade pip
-          pip install -e .[dml,dev,clip]
+          pip install -e .[dml,dev,clip,talk]
 
           Write-Host "Step 3: Verify installation"
           $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
@@ -113,7 +113,7 @@ jobs:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         run: |
-          Write-Host "Step 1: Activate and verify Conda environment"
+          Write-Host "Activate and verify Conda environment"
           $env:Path = "$env:GITHUB_WORKSPACE\Miniconda3;$env:GITHUB_WORKSPACE\Miniconda3\Scripts;$env:Path"
           & "$env:GITHUB_WORKSPACE\Miniconda3\shell\condabin\conda-hook.ps1"
           conda activate gaiaenv
@@ -130,6 +130,23 @@ jobs:
           }
           Write-Host "Found gaia at: $($gaiaPath.Source)"
 
-          Write-Host "Step 2: Install and run GAIA tests"
-          python tests/test_gaia.py
-          python tests/test_asr.py
+          Write-Host "Running test_gaia.py"
+          python tests\test_gaia.py
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "test_gaia.py failed"
+              exit $LASTEXITCODE
+          }
+
+          Write-Host "Running test_asr.py"
+          python tests\test_asr.py
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "test_asr.py failed"
+              exit $LASTEXITCODE
+          }
+
+          Write-Host "Running test_tts.py"
+          python tests\test_tts.py
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "test_tts.py failed"
+              exit $LASTEXITCODE
+          }

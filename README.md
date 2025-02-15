@@ -39,7 +39,7 @@ For more details, see the [Frequently Asked Questions](docs/faq.md).
 1. [Contact](#contact)
 1. [License](#license)
 
-# Getting Started
+# Getting Started Guide
 
 The quickest way to get started with GAIA is by using one of the provided installers. There are two options available:
 

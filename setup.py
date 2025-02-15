@@ -7,7 +7,7 @@ tkml_version = "5.0.4"
 
 setup(
     name="gaia",
-    version="0.4.4",
+    version="0.6.4",
     description="GAIA genAI sandbox",
     author="AMD",
     package_dir={"": "src"},
@@ -16,6 +16,7 @@ setup(
         "gaia.llm",
         "gaia.audio",
         "gaia.agents",
+        "gaia.audio",
         "gaia.agents.Llm",
         "gaia.agents.Chaty",
         "gaia.agents.Clip",
@@ -41,10 +42,6 @@ setup(
         "torchaudio",
         "pyside6",
         "ollama",
-        "pyaudio",
-        "openai-whisper",
-        "numpy",
-        f"turnkeyml[llm]=={tkml_version}",
     ],
     extras_require={
         "dml": [
@@ -108,6 +105,15 @@ setup(
             "plotly",
             "black",
         ],
+        "talk":[
+            "pyaudio",
+            "openai-whisper",
+            "numpy",
+            "kokoro>=0.3.1",
+            "soundfile",
+            "sounddevice",
+            "soundfile",
+        ]
     },
     classifiers=[],
     entry_points={

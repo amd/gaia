@@ -40,6 +40,11 @@ class Prompts:
             "assistant": "<|assistant|>\n{content}\n",
             "observation": "<|observation|>\n{content}\n",  # For external return results
         },
+        "gemma": {
+            "system": "<start_of_turn>system\n{system_message}<end_of_turn>\n",
+            "user": "<start_of_turn>user\n{content}<end_of_turn>\n",
+            "assistant": "<start_of_turn>assistant\n{content}<end_of_turn>\n",
+        },
         "deepseek": {
             "system": "{system_message}\n",
             "user": "<|User|>{content}\n",
@@ -57,6 +62,7 @@ class Prompts:
         "llama3": "You are a helpful AI assistant. You provide clear, accurate, and technically-sound responses while maintaining a friendly demeanor.",
         "phi3": "You are a helpful AI assistant. You provide clear, accurate, and technically-sound responses while maintaining a friendly demeanor.",
         "chatglm": "You are ChatGLM3, a large language model trained by Zhipu.AI. Follow the user's instructions carefully. Respond using markdown.",
+        "gemma": "You are Gemma, a helpful AI assistant. You provide clear, accurate, and technically-sound responses while maintaining a friendly demeanor.",
         "deepseek": "You are DeepSeek R1, a large language model trained by DeepSeek. You provide clear, accurate, and technically-sound responses while maintaining a friendly demeanor.",
         "default": "You are a helpful AI assistant. You provide clear, accurate, and technically-sound responses while maintaining a friendly demeanor.",
         # Add other system messages here...
@@ -80,7 +86,27 @@ class Prompts:
         )
         formatted_prompt = format_template["system"].format(system_message=system_msg)
 
-        if matched_model == "llama3":
+        if matched_model == "gemma":
+            for entry in chat_history:
+                if entry.startswith("user: "):
+                    content = entry[6:]
+                    formatted_prompt += format_template["user"].format(content=content)
+                elif entry.startswith("assistant: "):
+                    content = entry[11:]
+                    formatted_prompt += format_template["assistant"].format(
+                        content=content
+                    )
+                    formatted_prompt += (
+                        "<end_of_turn>\n"  # Add end token after assistant responses
+                    )
+
+            # Add the assistant prefix if the last message was from user
+            if chat_history and chat_history[-1].startswith("user: "):
+                formatted_prompt += format_template["assistant"].format(content="")
+
+            return formatted_prompt
+
+        elif matched_model == "llama3":
             for i, entry in enumerate(chat_history):
                 if entry.startswith("user: "):
                     content = entry[6:]
@@ -210,6 +236,8 @@ class Prompts:
 
         if any(x in model for x in ["phi-3", "phi3"]):
             return "phi3"
+        elif "gemma" in model:
+            return "gemma"
         elif any(x in model for x in ["llama3", "llama-3"]):
             return "llama3"
         elif any(x in model for x in ["llama2", "llama-2"]):

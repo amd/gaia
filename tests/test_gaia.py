@@ -3,12 +3,12 @@
 
 import pytest
 import asyncio
-import json
 import time
 from pathlib import Path
 import requests
 import subprocess
 import shlex
+import os
 
 
 @pytest.mark.asyncio
@@ -38,6 +38,8 @@ class TestGaiaCLI:
                 "int4",
                 "--model",
                 "amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid",
+                "--background",
+                "none",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -203,11 +205,212 @@ class TestGaiaCLI:
             assert result.returncode == 0
             stats = result.stdout
             print(f"Stats: {stats}")
+
             assert "error" not in stats.lower()
             assert len(stats) > 0
 
         except subprocess.TimeoutExpired:
             pytest.fail("Stats command timed out after 30 seconds")
+
+    async def test_tts_preprocessing_cli(self):
+        """Test TTS preprocessing through CLI interface."""
+        print("\n=== Starting TTS preprocessing CLI test ===")
+        test_text = "Hello! This is a test of TTS preprocessing."
+
+        process = await asyncio.create_subprocess_exec(
+            "gaia-cli",
+            "test",
+            "--test-type",
+            "tts-preprocessing",
+            "--test-text",
+            test_text,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout, stderr = await process.communicate()
+        response = stdout.decode()
+
+        assert process.returncode == 0
+        assert test_text in response
+        assert "error" not in response.lower()
+
+    async def test_asr_file_transcription_cli(self):
+        """Test ASR file transcription through CLI interface."""
+        print("\n=== Starting ASR file transcription CLI test ===")
+
+        # Use the same test file path as in test_asr.py
+        test_file = (
+            Path(os.environ.get("LOCALAPPDATA", ""))
+            / "GAIA"
+            / "data"
+            / "audio"
+            / "test.m4a"
+        )
+
+        if not test_file.exists():
+            pytest.skip(
+                f"Test file {test_file} not found - skipping transcription test"
+            )
+
+        process = await asyncio.create_subprocess_exec(
+            "gaia-cli",
+            "test",
+            "--test-type",
+            "asr-file-transcription",
+            "--input-audio-file",
+            str(test_file),
+            "--whisper-model-size",
+            "base",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout, stderr = await process.communicate()
+        response = stdout.decode()
+
+        assert process.returncode == 0
+        assert "This is a test." in response
+        assert "error" not in response.lower()
+
+    async def test_asr_microphone_cli(self):
+        """Test ASR microphone recording through CLI interface."""
+        print("\n=== Starting ASR microphone test ===")
+
+        process = await asyncio.create_subprocess_exec(
+            "gaia-cli",
+            "test",
+            "--test-type",
+            "asr-microphone",
+            "--recording-duration",
+            "3",  # Short duration for test
+            "--whisper-model-size",
+            "base",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout, stderr = await process.communicate()
+        response = stdout.decode()
+        print(f"Response: {response}")
+
+        assert process.returncode == 0
+        assert "recording..." in response.lower()
+        assert "recording stopped" in response.lower()
+        assert "error" not in response.lower()
+
+    async def test_list_audio_devices_cli(self):
+        """Test listing audio devices through CLI interface."""
+        print("\n=== Starting audio device listing test ===")
+
+        process = await asyncio.create_subprocess_exec(
+            "gaia-cli",
+            "test",
+            "--test-type",
+            "asr-list-audio-devices",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout, stderr = await process.communicate()
+        response = stdout.decode()
+
+        assert process.returncode == 0
+        assert "available audio devices:" in response.lower()
+        assert "error" not in response.lower()
+
+    async def test_tts_audio_file_cli(self, tmp_path):
+        """Test TTS audio file generation through CLI interface."""
+        print("\n=== Starting TTS audio file generation test ===")
+
+        output_file = tmp_path / "test_output.wav"
+        test_text = "This is a test of audio file generation."
+
+        process = await asyncio.create_subprocess_exec(
+            "gaia-cli",
+            "test",
+            "--test-type",
+            "tts-audio-file",
+            "--test-text",
+            test_text,
+            "--output-audio-file",
+            str(output_file),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout, stderr = await process.communicate()
+
+        assert process.returncode == 0
+        assert output_file.exists()
+        assert output_file.stat().st_size > 0
+
+    async def test_talk_mode_start(self):
+        """Test that talk mode starts successfully."""
+        print("\n=== Starting talk mode initialization test ===")
+
+        process = await asyncio.create_subprocess_exec(
+            "gaia-cli",
+            "talk",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        try:
+            # Give it a moment to initialize
+            await asyncio.sleep(2)
+
+            # Check if the process is running and initialized
+            if process.returncode is not None:
+                stdout, stderr = await process.communicate()
+                pytest.fail(
+                    f"Talk mode failed to start. Return code: {process.returncode}\nOutput: {stdout.decode()}\nError: {stderr.decode()}"
+                )
+
+            # Verify expected output in stdout
+            stdout_data = await process.stdout.read(1024)
+            output = stdout_data.decode()
+
+            assert "Gaia CLI client initialized" in output
+
+        finally:
+            # Clean up
+            process.terminate()
+            await process.communicate()
+
+    async def test_talk_mode_with_no_tts(self):
+        """Test that talk mode starts successfully."""
+        print("\n=== Starting talk mode initialization test ===")
+
+        process = await asyncio.create_subprocess_exec(
+            "gaia-cli",
+            "talk",
+            "--no-tts",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        try:
+            # Give it a moment to initialize
+            await asyncio.sleep(2)
+
+            # Check if the process is running and initialized
+            if process.returncode is not None:
+                stdout, stderr = await process.communicate()
+                pytest.fail(
+                    f"Talk mode failed to start. Return code: {process.returncode}\nOutput: {stdout.decode()}\nError: {stderr.decode()}"
+                )
+
+            # Verify expected output in stdout
+            stdout_data = await process.stdout.read(1024)
+            output = stdout_data.decode()
+
+            assert "Gaia CLI client initialized" in output
+
+        finally:
+            # Clean up
+            process.terminate()
+            await process.communicate()
 
 
 # Main function to run all tests

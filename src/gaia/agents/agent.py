@@ -98,7 +98,7 @@ class Agent:
 
     def initialize_server(self):
         max_retries = 5
-        for _ in range(max_retries):
+        for attempt in range(max_retries):
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
@@ -107,18 +107,19 @@ class Agent:
                 break
             except OSError as e:
                 if e.errno == 10048:  # Port is in use
+                    if attempt == max_retries - 1:
+                        error_msg = f"Port {self.port} is in use. Please ensure no other services are running on this port before starting GAIA."
+                        UIMessage.error(error_msg, cli_mode=self.cli_mode)
+                        raise RuntimeError(error_msg)
                     self.log.warning(
-                        f"Port {self.port} is in use, make sure a service is not already running on this port."
+                        f"Port {self.port} is in use, attempt {attempt + 1} of {max_retries}"
                     )
                 else:
-                    UIMessage.error(str(e), cli_mode=self.cli_mode)
+                    error_msg = f"Failed to start server: {str(e)}"
+                    UIMessage.error(error_msg, cli_mode=self.cli_mode)
+                    raise RuntimeError(error_msg)
             finally:
                 loop.close()
-        else:
-            UIMessage.error(
-                f"Unable to bind to port ({self.port}) after {max_retries} attempts with ip ({self.host}).\nMake sure to kill any existing services using port {self.port} before running GAIA.",
-                cli_mode=self.cli_mode,
-            )
 
     def prompt_llm_server(self, prompt, stream_to_ui=True):
         try:
@@ -282,4 +283,4 @@ def launch_agent_server(
         return agent
     except Exception as e:
         UIMessage.error(f"An unexpected error occurred:\n\n{str(e)}", cli_mode=cli_mode)
-        return
+        raise

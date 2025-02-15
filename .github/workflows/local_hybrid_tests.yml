@@ -114,10 +114,3 @@ jobs:
               Write-Error "test_llama_index.py failed"
               exit $LASTEXITCODE
           }
-
-          Write-Host "Running test_asr.py"
-          conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env python tests\test_asr.py
-          if ($LASTEXITCODE -ne 0) {
-              Write-Error "test_asr.py failed"
-              exit $LASTEXITCODE
-          }

@@ -372,21 +372,21 @@ Section "Install Main Components" SEC01
 
       ${If} ${MODE} == "NPU"
         FileWrite $0 "- Installing GAIA NPU...$\n"
-        nsExec::ExecToStack '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"[npu,clip,joker] --no-warn-script-location' $R0
+        nsExec::ExecToStack '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"[npu,clip,joker,talk] --no-warn-script-location' $R0
         Pop $R0  ; Return value
         Pop $R1  ; Command output
         FileWrite $0 "- GAIA install return code: $R0$\n"
         FileWrite $0 "- GAIA install output:$\n$R1$\n"
       ${ElseIf} ${MODE} == "HYBRID"
         FileWrite $0 "- Installing GAIA Hybrid...$\n"
-        nsExec::ExecToStack '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"[hybrid,clip,joker] --no-warn-script-location' $R0
+        nsExec::ExecToStack '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"[hybrid,clip,joker,talk] --no-warn-script-location' $R0
         Pop $R0  ; Return value
         Pop $R1  ; Command output
         FileWrite $0 "- GAIA install return code: $R0$\n"
         FileWrite $0 "- GAIA install output:$\n$R1$\n"
       ${Else}
         FileWrite $0 "- Installing GAIA Generic...$\n"
-        nsExec::ExecToStack '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"[dml,clip,joker] --no-warn-script-location' $R0
+        nsExec::ExecToStack '"$INSTDIR\gaia_env\python.exe" -m pip install -e "$INSTDIR"[dml,clip,joker,talk] --no-warn-script-location' $R0
         Pop $R0  ; Return value
         Pop $R1  ; Command output
         FileWrite $0 "- GAIA install return code: $R0$\n"
