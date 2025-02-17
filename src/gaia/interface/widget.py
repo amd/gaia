@@ -308,7 +308,6 @@ class SetupLLM(QObject):
                 )
                 self.widget.llm_server.start()
                 self.check_server_available("127.0.0.1", self.widget.llm_port)
-        asyncio.run(self.request_llm_load())
         self.log.info("Done.")
 
     def initialize_ollama_model_server(self):
@@ -470,29 +469,6 @@ class SetupLLM(QObject):
             return response.status_code == 200
         except (requests.RequestException, ConnectionError):
             return False
-
-    async def request_llm_load(self):
-        """Request Agent Server to update connection to LLM Server"""
-        async with ClientSession() as session:
-            # Get the model settings
-            selected_model = self.widget.ui.model.currentText()
-            model_settings = self.widget.settings["models"][selected_model]
-            checkpoint = model_settings["checkpoint"]
-
-            async with session.post(
-                f"http://127.0.0.1:{self.widget.agent_port}/load_llm",
-                json={
-                    "model": self.widget.ui.model.currentText(),
-                    "checkpoint": checkpoint,
-                },
-            ) as response:
-                # Wait for response from server
-                response_data = await response.json()
-                # Check if LLM has been successfully loaded
-                if response_data.get("status") == "Success":
-                    self.log.debug("LLM has been loaded successfully!")
-                else:
-                    self.log.error("Failed to load LLM.")
 
 
 class StreamToAgent(QObject):

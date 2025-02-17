@@ -14,9 +14,16 @@ from llama_index.core import (
 from gaia.cli import GaiaCliClient
 from gaia.agents.agent import Agent
 from gaia.llm.llama_index_local import LocalLLM
+from gaia.logger import get_logger
+
+# Get logger for this module
+logger = get_logger(__name__)
 
 
 def test_query_engine():
+    logger.info("Starting query engine test")
+    start_time = time.time()
+
     text = """
 From fairest creatures we desire increase,
 That thereby beauty's rose might never die,
@@ -41,11 +48,14 @@ And, tender churl, mak'st waste in niggarding:
     Settings.embed_model = "local:BAAI/bge-small-en-v1.5"
     Settings.chunk_size = 128
     Settings.chunk_overlap = 16
-    similarity_top = 3
+    similarity_top = 2
 
+    logger.info("Creating vector index")
     vector_index = VectorStoreIndex.from_documents(
         [Document(text=text)], show_progress=True
     )
+
+    logger.info("Creating query engine")
     query_engine = vector_index.as_query_engine(
         verbose=True,
         similarity_top_k=similarity_top,
@@ -54,10 +64,15 @@ And, tender churl, mak'st waste in niggarding:
     )
 
     query = "What is the main theme of this sonnet?"
+    logger.info(f"Executing query: {query}")
     response = query_engine.query(query)
+
+    elapsed = time.time() - start_time
+    logger.info(f"Query completed in {elapsed:.2f} seconds")
+    logger.info(f"Response: {response}")
+
     assert response is not None
-    print(f"Response: {response}")
-    return response  # Return the response so we can verify it completed
+    return response
 
 
 def start_llm_server_process():
@@ -72,7 +87,7 @@ def start_llm_server_process():
 
 
 def start_llm_server():
-    print("Starting LLM server...")
+    logger.info("Starting LLM server...")
     process = multiprocessing.Process(target=start_llm_server_process)
     process.start()
 
@@ -80,7 +95,7 @@ def start_llm_server():
     global llm_server_process
     llm_server_process = process
 
-    print("Creating check client...")
+    logger.info("Creating check client...")
     # Create a new client just for checking status
     backend = "oga"
     device = "hybrid"
@@ -93,13 +108,13 @@ def start_llm_server():
     # Wait for server to be ready
     timeout = 360  # 360 second timeout
     start_time = time.time()
-    print("Waiting for LLM server to be ready...")
+    logger.info("Waiting for LLM server to be ready...")
     while not check_client.check_llm_server_ready():
         if time.time() - start_time > timeout:
             raise TimeoutError("LLM server failed to start within timeout period")
-        print("Still waiting for LLM server...")
+        logger.info("Still waiting for LLM server...")
         time.sleep(4)
-    print("LLM server is ready!")
+    logger.info("LLM server is ready!")
 
     return process
 
@@ -147,28 +162,25 @@ def cleanup_servers():
     try:
         client = GaiaCliClient()
         client.stop()
-        print("Servers stopped successfully")
+        logger.info("Servers stopped successfully")
     except Exception as e:
-        print(f"Error during cleanup: {e}")
+        logger.error(f"Error during cleanup: {e}")
 
 
 if __name__ == "__main__":
     server_process = None
     client = None
+
     try:
-        parser = argparse.ArgumentParser(description="A simple example using argparse")
+        parser = argparse.ArgumentParser()
         parser.add_argument(
-            "--backend",
-            type=str,
-            help="Which software/hardware backend to run LLMs on",
-            choices=["ollama", "hybrid"],
-            default="ollama",
+            "--hybrid", action="store_true", default=False, help="Use hybrid backend"
         )
         args = parser.parse_args()
 
-        if args.backend == "hybrid":
+        if args.hybrid:
             server_process = start_llm_server()
-        else:  # "ollama"
+        else:  # non-hybrid (ollama)
             server_process = start_ollama_server()
 
         # Load the server info from the file that was saved by the server process
@@ -179,33 +191,40 @@ if __name__ == "__main__":
         # Wait for server to be ready
         timeout = 360  # 360 second timeout
         start_time = time.time()
-        print("Waiting for LLM server to be ready...")
+        logger.info("Waiting for LLM server to be ready...")
         while not (
             client.check_llm_server_ready()
-            if args.backend == "hybrid"
+            if args.hybrid
             else client.check_ollama_servers_ready()
         ):
             if time.time() - start_time > timeout:
                 raise TimeoutError("LLM server failed to start within timeout period")
-            print("Still waiting for LLM server...")
+            logger.info("Still waiting for LLM server...")
             time.sleep(4)
-        print("LLM server is ready!")
+        logger.info("LLM server is ready!")
 
         # Run the test
+        logger.info("Starting query engine test")
         response = test_query_engine()
-        print("Test completed successfully!")
+        logger.info(
+            f"Test completed successfully in {time.time() - start_time:.2f} seconds"
+        )
+        logger.info(f"Response: {response}")
 
+    except Exception as e:
+        logger.error(f"Test failed: {e}")
+        raise
     finally:
         try:
             # Clean up using the client that has the correct server PIDs
             if client:
-                print("Stopping servers through GaiaCliClient...")
+                logger.info("Stopping servers through GaiaCliClient...")
                 client.stop()
         except Exception as e:
-            print(f"Error during cleanup: {e}")
+            logger.error(f"Error during cleanup: {e}")
             # Fallback to direct process termination if client stop fails
             if server_process and server_process.is_alive():
-                print("Fallback: Terminating server process directly...")
+                logger.info("Fallback: Terminating server process directly...")
                 server_process.terminate()
                 server_process.join(timeout=5)
-                print("Server process terminated")
+                logger.info("Server process terminated")

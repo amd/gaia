@@ -42,7 +42,6 @@ class Agent:
         app.router.add_post("/prompt", self._on_prompt_received)
         app.router.add_post("/restart", self._on_chat_restarted)
         app.router.add_post("/welcome", self._on_welcome_message)
-        app.router.add_post("/load_llm", self._on_load_llm)
         app.router.add_get("/health", self._on_health_check)
         app.router.add_get("/ws", self._on_websocket_connect)
         return app
@@ -216,13 +215,6 @@ class Agent:
         response = self.welcome_message()
         self.print_ui(response)
         return web.Response()
-
-    async def _on_load_llm(self, ui_request):
-        data = await ui_request.json()
-        self.log.debug(f"Client requested to load LLM ({data['model']})")
-
-        response = {"status": "success"}
-        return web.json_response(response)
 
     async def _on_health_check(self, _):
         return web.json_response({"status": "ok"})

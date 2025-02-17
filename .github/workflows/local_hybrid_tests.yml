@@ -93,6 +93,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         shell: PowerShell
         run: |
+          $ErrorActionPreference = "Continue"  # Don't stop on non-fatal errors
           $cwd = (Get-Item .\).FullName
           $Env:LEMONADE_CACHE_DIR="$cwd\lemon-cache"
           $Env:HF_HOME="$cwd\hf-cache"
@@ -101,16 +102,15 @@ jobs:
           conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env pip install .[dev]
 
           Write-Host "Running test_gaia.py"
-          conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env python tests\test_gaia.py
+          $result = conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env python tests\test_gaia.py --hybrid --asyncio-mode=strict 2>&1 | Out-String -Stream
+          Write-Host $output
           if ($LASTEXITCODE -ne 0) {
-              Write-Error "test_gaia.py failed"
-              exit $LASTEXITCODE
+              throw "test_gaia.py failed with exit code $LASTEXITCODE`nOutput: $output"
           }
 
-          # Run tests with proper argument handling
           Write-Host "Running test_llama_index.py with hybrid backend"
-          conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env python tests\test_llama_index.py --backend hybrid
+          $result = conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env python tests\test_llama_index.py --hybrid 2>&1 | Out-String -Stream
+          Write-Host $output
           if ($LASTEXITCODE -ne 0) {
-              Write-Error "test_llama_index.py failed"
-              exit $LASTEXITCODE
+              throw "test_llama_index.py failed with exit code $LASTEXITCODE`nOutput: $output"
           }

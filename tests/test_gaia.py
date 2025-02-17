@@ -9,6 +9,17 @@ import requests
 import subprocess
 import shlex
 import os
+import argparse
+import sys
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--hybrid",
+        action="store_true",
+        default=False,
+        help="Use hybrid backend (pass flag to enable)",
+    )
 
 
 @pytest.mark.asyncio
@@ -17,9 +28,16 @@ class TestGaiaCLI:
     print_server_output = True
 
     @pytest.fixture(scope="class", autouse=True)
-    async def setup_and_teardown_class(cls):
+    async def setup_and_teardown_class(cls, request):
         print("\n=== Starting Server ===")
-        cmd = "gaia-cli start --backend oga --device hybrid --dtype int4 --model amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid"
+
+        # Get hybrid parameter from command line, default to False
+        hybrid = request.config.getoption("--hybrid", default=False)
+
+        if hybrid:
+            cmd = "gaia-cli start --backend oga --device hybrid --dtype int4 --model amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid"
+        else:
+            cmd = "gaia-cli start"
         print(f"Running command: {cmd}")
 
         # Add class variable to store the monitoring task
@@ -27,22 +45,32 @@ class TestGaiaCLI:
 
         try:
             # Use asyncio subprocess instead of subprocess.Popen
-            cls.process = await asyncio.create_subprocess_exec(
-                "gaia-cli",
-                "start",
-                "--backend",
-                "oga",
-                "--device",
-                "hybrid",
-                "--dtype",
-                "int4",
-                "--model",
-                "amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid",
-                "--background",
-                "none",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            if hybrid:
+                cls.process = await asyncio.create_subprocess_exec(
+                    "gaia-cli",
+                    "start",
+                    "--backend",
+                    "oga",
+                    "--device",
+                    "hybrid",
+                    "--dtype",
+                    "int4",
+                    "--model",
+                    "amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid",
+                    "--background",
+                    "none",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            else:
+                cls.process = await asyncio.create_subprocess_exec(
+                    "gaia-cli",
+                    "start",
+                    "--background",
+                    "none",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
 
             async def print_output():
                 try:
@@ -295,6 +323,15 @@ class TestGaiaCLI:
         print(f"Response: {response}")
 
         assert process.returncode == 0
+        if "no default input device available" in response.lower():
+            print(
+                "\nWARNING: Skipping audio recording assertions - no input device available in this environment"
+            )
+            print(
+                "This is expected in CI environments or systems without audio hardware.\n"
+            )
+            return
+
         assert "recording..." in response.lower()
         assert "recording stopped" in response.lower()
         assert "error" not in response.lower()
@@ -316,6 +353,15 @@ class TestGaiaCLI:
         response = stdout.decode()
 
         assert process.returncode == 0
+        if "no default input device available" in response.lower():
+            print(
+                "\nWARNING: Skipping audio device list assertions - no input devices available in this environment"
+            )
+            print(
+                "This is expected in CI environments or systems without audio hardware.\n"
+            )
+            return
+
         assert "available audio devices:" in response.lower()
         assert "error" not in response.lower()
 
@@ -415,13 +461,30 @@ class TestGaiaCLI:
 
 # Main function to run all tests
 if __name__ == "__main__":
-    pytest.main(
-        [
-            __file__,
-            "-vv",
-            "-s",
-            "--asyncio-mode=auto",
-            "--capture=no",
-            "--log-cli-level=INFO",
-        ]
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--hybrid",
+        action="store_true",
+        default=False,
+        help="Use hybrid backend (pass flag to enable)",
     )
+    args, remaining_args = parser.parse_known_args()
+
+    # Create a list of pytest arguments
+    pytest_args = [
+        __file__,
+        "-vv",
+        "-s",
+        "--asyncio-mode=auto",
+        "--capture=no",
+        "--log-cli-level=INFO",
+    ]
+
+    # Only add hybrid flag if explicitly set to True
+    if args.hybrid:
+        pytest_args.append("--hybrid")
+
+    # Run pytest with the constructed arguments and exit with its return code
+    exit_code = pytest.main(pytest_args)
+    print(f"pytest exit code: {exit_code}")
+    sys.exit(exit_code)

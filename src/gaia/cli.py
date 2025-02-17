@@ -436,6 +436,8 @@ class GaiaCliClient:
 
     def stop(self):
         self.log.info("Stopping servers...")
+
+        # First attempt to kill processes by their stored PIDs
         for server_name, pid in self.server_pids.items():
             self.log.info(f"Stopping {server_name} server (PID: {pid})...")
             try:
@@ -454,13 +456,28 @@ class GaiaCliClient:
             except Exception as e:
                 self.log.error(f"Error stopping {server_name} server: {str(e)}")
 
+        # Additional cleanup for any zombie processes on known ports
+        ports_to_check = [8000, 8001, 11434]  # LLM server, Agent server, Ollama ports
+        for port in ports_to_check:
+            try:
+                result = kill_process_by_port(port)
+                if result["success"]:
+                    self.log.info(result["message"])
+                else:
+                    self.log.debug(result["message"])
+            except Exception as e:
+                self.log.error(f"Error cleaning up port {port}: {str(e)}")
+
         # Additional cleanup to ensure all child processes are terminated
         for pid in self.server_pids.values():
             try:
                 parent = psutil.Process(pid)
                 children = parent.children(recursive=True)
                 for child in children:
-                    child.terminate()
+                    try:
+                        child.terminate()
+                    except psutil.NoSuchProcess:
+                        continue
                 psutil.wait_procs(children, timeout=5)
                 for child in children:
                     if child.is_running():
