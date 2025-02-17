@@ -59,16 +59,22 @@ ${StrLoc}
 !include LogicLib.nsh
 Var LogHandle
 
+; Read version from version.py
+!tempfile TMPFILE
+!system 'python -c "with open(\"../src/gaia/version.py\") as f: exec(f.read()); print(version_with_hash)" > "${TMPFILE}"'
+!define /file GAIA_VERSION "${TMPFILE}"
+!delfile "${TMPFILE}"
+
 ; Define the GAIA_STRING variable
 Var GAIA_STRING
 
 Function .onInit
   ${If} ${MODE} == "HYBRID"
-    StrCpy $GAIA_STRING "GAIA NPU/GPU Hybrid Mode"
+    StrCpy $GAIA_STRING "GAIA - Ryzen AI NPU/iGPU Hybrid Mode [${GAIA_VERSION}]"
   ${ElseIf} ${MODE} == "NPU"
-    StrCpy $GAIA_STRING "GAIA NPU Mode"
+    StrCpy $GAIA_STRING "GAIA - Ryzen AI NPU Mode [${GAIA_VERSION}]"
   ${Else}
-    StrCpy $GAIA_STRING "GAIA"
+    StrCpy $GAIA_STRING "GAIA - Generic Mode [${GAIA_VERSION}]"
   ${EndIf}
 FunctionEnd
 
@@ -79,13 +85,18 @@ FunctionEnd
 !define ICON_FILE "..\src\gaia\interface\img\gaia.ico"
 
 ; Finish Page settings
-!define MUI_TEXT_FINISH_INFO_TITLE "$GAIA_STRING installed successfully!"
-!define MUI_TEXT_FINISH_INFO_TEXT "A shortcut has been added to your Desktop. What would you like to do next?"
+!define MUI_TEXT_FINISH_INFO_TITLE "GAIA installed successfully!"
+!define MUI_TEXT_FINISH_INFO_TEXT "$GAIA_STRING has been installed successfully! A shortcut has been added to your Desktop. What would you like to do next?"
 
 !define MUI_FINISHPAGE_RUN
-!define MUI_FINISHPAGE_RUN_FUNCTION RunGAIA
+!define MUI_FINISHPAGE_RUN_FUNCTION RunGAIAUI
+!define MUI_FINISHPAGE_RUN_TEXT "Run GAIA UI"
 !define MUI_FINISHPAGE_RUN_NOTCHECKED
-!define MUI_FINISHPAGE_RUN_TEXT "Run GAIA"
+
+!define MUI_FINISHPAGE_SHOWREADME
+!define MUI_FINISHPAGE_SHOWREADME_FUNCTION RunGAIACLI
+!define MUI_FINISHPAGE_SHOWREADME_TEXT "Run GAIA CLI"
+!define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
 
 ; MUI Settings
 !insertmacro MUI_PAGE_WELCOME
@@ -463,7 +474,11 @@ Section "Install Main Components" SEC01
     end:
 SectionEnd
 
-Function RunGAIA
+Function RunGAIAUI
   ExecShell "open" "$INSTDIR\GAIA-UI.lnk"
+FunctionEnd
+
+Function RunGAIACLI
+  ExecShell "open" "$INSTDIR\GAIA-CLI.lnk"
 FunctionEnd
 

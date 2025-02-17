@@ -23,6 +23,7 @@ from requests.exceptions import RequestException
 from gaia.logger import get_logger
 from gaia.llm.server import launch_llm_server
 from gaia.agents.agent import launch_agent_server
+from gaia.version import version_with_hash
 
 
 # Set debug level for the logger
@@ -112,6 +113,7 @@ class GaiaCliClient:
         )
 
     def start(self):
+        self.log.info(f"Starting GAIA [{version_with_hash}]")
         self.log.info("Checking ports availability...")
         # Check if required ports are available
         ports_to_check = [
@@ -1071,8 +1073,17 @@ def run_cli(action, **kwargs):
 def main():
     # Create the main parser
     parser = argparse.ArgumentParser(
-        description="Gaia CLI - Interact with Gaia AI agents",
+        description=f"Gaia CLI - Interact with Gaia AI agents. \nVersion: {version_with_hash}",
         formatter_class=argparse.RawTextHelpFormatter,
+    )
+
+    # Add version argument
+    parser.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"{version_with_hash}",
+        help="Show program's version number and exit",
     )
 
     # Create a parent parser for common arguments

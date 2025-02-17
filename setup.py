@@ -2,13 +2,21 @@
 # SPDX-License-Identifier: MIT
 
 from setuptools import setup
+import re
+
+with open("src/gaia/version.py", encoding="utf-8") as fp:
+    version_content = fp.read()
+    version_match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', version_content)
+    if not version_match:
+        raise ValueError("Unable to find version string in version.py")
+    gaia_version = version_match.group(1)
 
 tkml_version = "5.0.4"
 
 setup(
     name="gaia",
-    version="0.6.4",
-    description="GAIA genAI sandbox",
+    version=gaia_version,
+    description="GAIA is an AI assistant framework that provides a user-friendly interface for interacting with large language models and AI agents",
     author="AMD",
     package_dir={"": "src"},
     packages=[

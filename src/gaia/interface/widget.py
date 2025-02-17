@@ -46,6 +46,7 @@ import gaia.agents as agents
 from gaia.interface.util import UIMessage
 from gaia.interface.ui_form import Ui_Widget
 from gaia.llm.server import launch_llm_server
+from gaia.version import version_with_hash
 
 # Conditional import for Ollama
 try:
@@ -650,7 +651,7 @@ class Widget(QWidget):
             }
         """
         )
-        self.setWindowTitle("Ryzen AI GAIA")
+        self.setWindowTitle(f"Ryzen AI GAIA [{version_with_hash}]")
 
         # Set a much wider minimum width for the chat area
         self.ui.scrollAreaWidgetContents.setMinimumWidth(800)
@@ -720,6 +721,9 @@ class Widget(QWidget):
         self.ui.loadingGif.setFixedSize(QSize(300, 25))
         self.ui.loadingGif.setMovie(self.movie)
         self.movie.start()
+
+        # Add version to loading label
+        self.ui.loadingLabel.setText(f"GAIA [{version_with_hash}]")
 
         # Create setup thread
         if self.server:
