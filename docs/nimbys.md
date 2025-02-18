@@ -72,7 +72,7 @@ These steps will use GitHub Actions to run automated setup and validation for yo
     - Wait for the workflow to finish successfully.
 1. In a powershell admin terminal, run `Stop-Service "actions.runner.*"` and then `Start-Service "actions.runner.*"`. If you don't do this, the runner wont be able to find Conda.
 1. Repeat step 1, except do **not** check the box for "Install miniconda". Wait for it to finish successfully. Congrats, your new runner is working!
-1. Go to the [Stx Runner Group](https://github.com/organizations/aigdat/settings/actions/runner-groups/3), click your new runner, and click the gear icon to change labels. Uncheck `stx-test` and check `stx`.
+1. Go to the [Stx Runner Group](https://github.com/organizations/aigdat/settings/actions/runner-groups/3), click your new runner, and click the gear icon to change labels. Uncheck `stx-test` and check `stx`. If this machine is also outside the AMD network please also check `@home`.
 1. Done!
 
 ### Bonus
