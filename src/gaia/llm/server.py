@@ -69,10 +69,7 @@ def launch_llm_server(
 
         except FileNotFoundError as e:
             UIMessage.error(
-                f"Error: Unable to find the model files for {checkpoint}.\n\n"
-                "Make sure they are placed in the correct location, e.g. "
-                "C:/Users/<user>/miniconda3/envs/<venv>/Lib/site-packages"
-                f"/lemonade/tools/ort_genai/models/<model_folder>`\n\n{str(e)}",
+                f"Error: Unable to find the model files for {checkpoint}.\n\n{str(e)}",
                 cli_mode=cli_mode,
             )
             return

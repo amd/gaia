@@ -27,12 +27,21 @@ The following is a list of currently supported LLMs on Ryzen AI NPU, more will b
     1. `conda create -n gaiaenv python=3.10`
     1. `conda activate gaiaenv`
 1. Install GAIA package and dependencies:
-    1. For NPU (not available publicly): `pip install -e .[npu,joker,clip,dev]`
+    1. For NPU (not available publicly): `pip install -e .[npu,joker,clip,talk,dev]`
     ⚠️ NOTE: If actively developing, use `-e` switch to enable editable mode and create links to sources instead.
 1. (Optional) Set the `OGA_TOKEN` environment variable if building for NPU-only. You will need a token to download the the NPU artifacts. For Hybrid, no token is needed. Contact the [GAIA team](mailto:gaia@amd.com) for support. NPU-only are currently not available publicly.
     1. `$env:OGA_TOKEN=<your_token>`
-1. Install dependencies and setup environment variables using `.\util\InstallOgaDependencies.ps1` script.
+1. Install NPU dependencies:
     1. For NPU, run: `lemonade-install --ryzenai npu -y --token $env:OGA_TOKEN`
     1. ⚠️ NOTE: Make sure you are in the correct virtual environment when installing dependencies. If not, run `conda activate gaiaenv`.
-1. Run `gaia` to start the GAIA app or `gaia-cli -h` to see the CLI options.
-1. Report any issues to the GAIA team at `gaia@amd.com` or create an issue on the GAIA GitHub repo.
+1. Run `gaia-cli -v` in the terminal to verify the installation. You should see a similar output:
+    ```bash
+    amd/v0.7.1+cda0f5d5
+    ```
+    1. Run `gaia` to start the GAIA-UI or `gaia-cli -h` to see CLI options.
+1. Report any issues to the GAIA team at `gaia@amd.com` or create an [issue](https://github.com/aigdat/gaia/issues) on the [GAIA GitHub repo](https://github.com/aigdat/gaia.git).
+
+## License
+
+Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+SPDX-License-Identifier: MIT

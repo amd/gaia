@@ -132,7 +132,7 @@ GAIA CLI supports voice-based interaction with AI models through talk mode. For 
 
 ## Development Setup
 
-For manual setup including creation of the virtual environment and installation of dependencies, refer to the instructions outlined [here](./ort_genai_npu.md). This approach is not recommended for most users and is only needed for development purposes.
+For manual setup including creation of the virtual environment and installation of dependencies, refer to the instructions outlined [here](./dev.md). This approach is not recommended for most users and is only needed for development purposes.
 
 ## Testing and Utilities
 

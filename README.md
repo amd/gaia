@@ -22,6 +22,9 @@
 - ⚡ **Optimized Performance**: Leverages the AMD NPU and iGPU for hybrid acceleration to get fast and efficient AI processing
 - 🖥️ **Easy-to-Use Interface**: Provides both a command-line interface (CLI) and a graphical user interface (GUI) option for easy interaction with models and agents
 - 🔧 **Extensible Architecture**: Easily build and integrate your own agents and use cases
+- 🔄 **Dual Mode**: GAIA comes in two flavors:
+   - **Hybrid Mode**: Optimized for Ryzen AI PCs, combining AMD Neural Processing Unit (NPU) and Integrated Graphics Processing Unit (iGPU) for maximum performance
+   - **Generic Mode**: Compatible with any Windows PC, using Ollama as the backend
 
 For more details, see the [Frequently Asked Questions](docs/faq.md).
 
@@ -82,7 +85,7 @@ To quickly get started with GAIA via the command line, you can use the GAIA CLI 
 
 ## Building from Source
 
-To get started building from source, please follow the latest instructions [here](./docs/ort_genai_npu.md). These instructions will setup the [Onnx Runtime GenAI](https://github.com/microsoft/onnxruntime-genai) through the [Lemonade Web Server](https://github.com/onnx/turnkeyml/blob/main/docs/lemonade/getting_started.md) tool targeting the Ryzen AI SoC.
+To get started building from source, please follow the latest instructions [here](./docs/dev.md). These instructions will setup the [Onnx Runtime GenAI](https://github.com/microsoft/onnxruntime-genai) through the [Lemonade Web Server](https://github.com/onnx/turnkeyml/blob/main/docs/lemonade/getting_started.md) tool targeting the Ryzen AI SoC.
 
 ⚠️ **NOTE**: You may need to install Ollama from [here](https://ollama.com/download) if you plan to use the GAIA generic installer and run models with the Ollama backend.
 
