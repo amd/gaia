@@ -1,172 +1,151 @@
-#### Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
-#### SPDX-License-Identifier: MIT
+# <img src="src/gaia/interface/img/gaia.ico" alt="GAIA Logo" width="64" height="64" style="vertical-align: middle;"> Introducing GAIA by AMD: Generative AI Is Awesome!
 
-# GAIA: The GenAI Sandbox
+[![GAIA Hybrid Installer Test](https://github.com/amd/gaia/actions/workflows/test_installer_hybrid.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our tests")
+[![GAIA Generic Installer Test](https://github.com/amd/gaia/actions/workflows/test_installer.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our tests")
+[![GAIA CLI Tests](https://github.com/amd/gaia/actions/workflows/test_gaia_cli.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our tests")
+[![GAIA UI Tests](https://github.com/amd/gaia/actions/workflows/test_gaia_ui.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our tests")
+[![Latest Release](https://img.shields.io/github/v/release/amd/gaia?include_prereleases)](https://github.com/amd/gaia/releases/latest "Download the latest release")
+[![OS - Windows](https://img.shields.io/badge/OS-windows-blue)](https://github.com/amd/gaia/blob/main/docs/install.md "Check out our instructions")
+[![Made with Python](https://img.shields.io/badge/Python-3.10-blue?logo=python&logoColor=white)](https://github.com/amd/gaia/blob/main/docs/install.md "Check out our instructions")
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://makeapullrequest.com)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![GitHub issues](https://img.shields.io/github/issues/amd/gaia)](https://github.com/amd/gaia/issues)
 
-GAIA (Generative AI Is Awesome!) is an open-source platform that enables you to run and experiment with various Large Language Models (LLMs) locally on AMD Ryzen AI-powered devices. Whether you're a developer, researcher, or AI enthusiast, GAIA provides:
 
-- **Local LLM Processing**: Run powerful language models directly on your device without cloud dependencies
-- **Multiple Use Cases**: From basic chat to RAG-enhanced applications and specialized agents
-- **Optimized Performance**: Leveraging AMD's NPU and hybrid acceleration for efficient AI processing
-- **Easy-to-Use Interface**: Both CLI and GUI options for interacting with models
-- **Extensible Architecture**: Build and integrate your own agents and use cases
+**GAIA is an open-source solution designed for the quick setup and execution of generative AI applications on local PC hardware.** It enables fast and efficient execution of LLM-based applications using a hybrid hardware approach that combines the AMD Neural Processing Unit (NPU) and Integrated Graphics Processing Unit (iGPU) in the Ryzen-AI PC. GAIA provides the following key features:
 
-For detailed information, see the [Frequently Asked Questions](docs/faq.md).
+**Currently supports Windows 11 Home/Pro**
 
-## Featured Capabilities
+- 🏠 **Local LLM Processing**: Easily run powerful language models directly on your Windows device without cloud dependencies
+- 🎯 **Multiple Use Cases**: From basic chat to RAG-enhanced applications and specialized agents
+- ⚡ **Optimized Performance**: Leverages the AMD NPU and iGPU for hybrid acceleration to get fast and efficient AI processing
+- 🖥️ **Easy-to-Use Interface**: Provides both a command-line interface (CLI) and a graphical user interface (GUI) option for easy interaction with models and agents
+- 🔧 **Extensible Architecture**: Easily build and integrate your own agents and use cases
+- 🔄 **Dual Mode**: GAIA comes in two flavors:
+   - **Hybrid Mode**: Optimized for Ryzen AI PCs, combining AMD Neural Processing Unit (NPU) and Integrated Graphics Processing Unit (iGPU) for maximum performance
+   - **Generic Mode**: Compatible with any Windows PC, using Ollama as the backend
 
-| Use-Case Example   | Function                                 | Description |
-| ------------------ | ---------------------------------------- | ----------- |
-| No Agent           | Test LLM using basic completion          | Direct model interaction for testing and evaluation |
-| Chaty              | Vanilla LLM chatbot with message history | Interactive conversational interface with context retention |
-| Joker              | Simple RAG joke generator                | Demonstrates retrieval-augmented generation capabilities |
-| Clip               | YouTube search and Q&A agent             | Multi-modal agent for video content interaction |
-
-LLMs supported:
-
-| LLM                    | Checkpoint                                                            | Device   | Backend            | Data Type | GAIA Installer                              |
-| -----------------------|-----------------------------------------------------------------------|----------|--------------------|-----------|---------------------------------------------|
-| Phi-3.5 Mini Instruct  | amd/Phi-3.5-mini-instruct-awq-g128-int4-asym-fp16-onnx-hybrid         | Hybrid   | oga                | int4      | GAIA_Hybrid_Installer.exe                   |
-| Phi-3 Mini Instruct    | amd/Phi-3-mini-4k-instruct-awq-g128-int4-asym-fp16-onnx-hybrid        | Hybrid   | oga                | int4      | GAIA_Hybrid_Installer.exe                   |
-| Llama-2 7B Chat        | amd/Llama-2-7b-chat-hf-awq-g128-int4-asym-fp16-onnx-hybrid            | Hybrid   | oga                | int4      | GAIA_Hybrid_Installer.exe                   |
-| Llama-3.2 1B Instruct  | amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid         | Hybrid   | oga                | int4      | GAIA_Hybrid_Installer.exe                   |
-| Llama-3.2 3B Instruct  | amd/Llama-3.2-3B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid         | Hybrid   | oga                | int4      | GAIA_Hybrid_Installer.exe                   |
-| Qwen 1.5 7B Chat       | amd/Qwen1.5-7B-Chat-awq-g128-int4-asym-fp16-onnx-hybrid               | Hybrid   | oga                | int4      | GAIA_Hybrid_Installer.exe                   |
-| Mistral 7B Instruct    | amd/Mistral-7B-Instruct-v0.3-awq-g128-int4-asym-fp16-onnx-hybrid      | Hybrid   | oga                | int4      | GAIA_Hybrid_Installer.exe                   |
-| Phi 3.5 Mini instruct  | amd/Phi-3.5-mini-instruct-awq-g128-int4-asym-fp32-onnx-ryzen-strix    | NPU      | oga                | int4      | GAIA_NPU_Installer.exe / GAIA_Installer.exe |
-| Phi-3 Mini Instruct    | amd/Phi-3-mini-4k-instruct-awq-g128-int4-asym-fp32-onnx-ryzen-strix   | NPU      | oga                | int4      | GAIA_NPU_Installer.exe / GAIA_Installer.exe |
-| Llama-2 7B Chat        | amd/Llama2-7b-chat-awq-g128-int4-asym-fp32-onnx-ryzen-strix           | NPU      | oga                | int4      | GAIA_NPU_Installer.exe / GAIA_Installer.exe |
-| Mistral 7B Instruct    | amd/Mistral-7B-Instruct-v0.3-awq-g128-int4-asym-fp32-onnx-ryzen-strix | NPU      | oga                | int4      | GAIA_NPU_Installer.exe / GAIA_Installer.exe |
-| Qwen-1.5 7B Chat       | amd/Qwen1.5-7B-Chat-awq-g128-int4-asym-fp32-onnx-ryzen-strix          | NPU      | oga                | int4      | GAIA_NPU_Installer.exe / GAIA_Installer.exe |
-| Llama 3.2 1B           | llama3.2:1b                                                           | CPU/GPU  | ollama (llama.cpp) | Q8_0      | GAIA_Installer.exe                          |
-| Llama 3.2 3B           | llama3.2:3b                                                           | CPU/GPU  | ollama (llama.cpp) | Q4_K_M    | GAIA_Installer.exe                          |
-| Llama 3.1 8B           | llama3.2:8b                                                           | CPU/GPU  | ollama (llama.cpp) | Q4_0      | GAIA_Installer.exe                          |
-
-* Hybrid - NPU+iGPU
-* NPU - Neural Processing Unit
-* oga - Onnx GenAI runtime
+For more details, see the [Frequently Asked Questions](docs/faq.md).
 
 ## Contents:
-1. [Prerequisites](#prerequisites)
+
 1. [Getting Started](#getting-started)
-1. [Running the GAIA CLI](#running-the-gaia-cli)
-1. [Installation](#installation)
-1. [Installation Overview](#installation-overview)
-1. [Featured Capabilities](#featured-capabilities)
+   - [Installation Steps](#installation-steps)
+   - [Running the GAIA GUI](#running-the-gaia-gui)
+   - [Running the GAIA CLI](#running-the-gaia-cli)
+   - [Building from Source](#building-from-source)
+1. [Features](#features)
 1. [Contributing](#contributing)
+1. [Prerequisites](#prerequisites)
 1. [FAQ](#faq)
+1. [Contact](#contact)
+1. [License](#license)
 
-# Prerequisites
-GAIA has been tested on the following system, there are no guarantees that it will work on other systems:
+# Getting Started Guide
 
-- System: Asus ProArt PX13 and P16
-- OS Name: Microsoft Windows 11 Pro
-- Processor: AMD Ryzen AI 9 HX 370 w/ Radeon 890M, 2000 Mhz, 12 Core(s), 24 Logical Processor(s)
-- Physical Memory: 32.0 GB
-- AMD Radeon 890M iGPU driver: 32.0.12010.8007
-- AMD NPU driver: 32.0.203.237 or 32.0.203.240
+The quickest way to get started with GAIA is by using one of the provided installers. There are two options available:
 
-# Getting Started
+1. **GAIA_Hybrid_Installer.exe**: For running agents with the Hybrid (NPU+iGPU) execution on Ryzen AI PCs. This is the recommended installer that offers the best performance.
+1. **GAIA_Installer.exe**: For running agents on non-Ryzen AI PCs, this uses Ollama as the backend. 
 
-For a quick and easy setup on a new machine, please install the latest version of the GAIA app from the [releases page](https://github.com/amd/gaia/releases).
-
-The installation process takes about 5-10 minutes and includes everything needed to get up and running with GAIA on Ryzen AI NPU. Read below for more details on the installation process.
-
-## Installation Overview
-
-GAIA installers provide complete setup for NPU, GPU, and Hybrid (NPU+iGPU) execution using the ONNX GenAI backend. Each installer includes both CLI (command-line interface) and GUI (graphical user interface) and comes in three variants:
-
-1. **GAIA_Hybrid_Installer.exe** - The recommended installer that offers the best performance, running LLMs on both NPU and iGPU devices.
-1. **GAIA_NPU_Installer.exe** - installs the GAIA app for running LLMs on the Ryzen AI NPU optimized for power efficiency.
-1. **GAIA_Installer.exe** - installs the GAIA app for running LLMs on the Ryzen AI NPU and a third party backend called Ollama for more generic use  cases.
+Each installer includes both a CLI tool and a GUI. The installation process typically takes about 5-10 minutes, depending on your Wi-Fi connection, and provides everything you need to start working with LLMs.
 
 ⚠️ NOTE: When running GAIA using the Hybrid mode, please make sure to disable any discrete third-party GPUs in Device Manager.
 
-The installer performs these key steps:
-1. **Environment Check**
-   - Verifies/installs Miniconda
-   - Checks for existing GAIA installations
-   - Validates hardware compatibility
+## Installation Steps
 
-2. **Driver Management** (NPU/Hybrid modes)
-   - Checks current Ryzen AI driver version
-   - Updates driver if needed
+![image](./data/img/gaia-setup.png)
 
-3. **Core Installation**
-   - Creates Python environment
-   - Installs GAIA framework
-   - Sets up mode-specific components
-
-4. **Final Configuration**
-   - Downloads LLM artifacts
-   - Configures settings
-   - Creates shortcuts
-
-For more details, please refer to the [installer documentation](docs/installer.md).
-
-## Installation
-
-To install the GAIA app, please follow these steps:
+To install the GAIA application, please follow these steps:
 1. Download the [latest release](https://github.com/amd/gaia/releases) of the GAIA installers from the "Assets" section:
    ![image](./data/img/gaia-installer.png)
+   1. If you have a Ryzen AI PC, choose the Hybrid installer, otherwise choose the generic installer.
 
-2. Unzip the downloaded file and run the installer by double-clicking the .exe file.
+1. Unzip the downloaded file and run the installer by double-clicking the .exe file.
 
-3. If you get a Windows Security warning, you can verify the application by clicking *"More info"* and then *"Run anyway"*. This warning appears because the application is not yet digitally signed.
+   ⚠️ **NOTE**: If you get a Windows Security warning, you can verify the application by clicking *"More info"* and then *"Run anyway"*. This warning appears because the application is not digitally signed.
 
-4. Follow the on-screen instructions to complete the installation:
+   ⚠️ **NOTE**: Note that the installer will attempt to write to the same directory by default and may overwrite a previous installation of GAIA. Change the target directory if you want to avoid this.
 
-   ![image](./data/img/gaia-setup.png)
+1. Follow the on-screen instructions to complete the installation. You may be prompted to delete existing installation of GAIA if a previous version was installed.
+   1. The process will take about 5-10 minutes depending on your Wi-Fi connection and includes everything needed to get up and running with LLMs on Ryzen AI.
 
-5. Once installation is complete, a GAIA desktop icon will be created for easy access.
+1. Once installation is complete, two desktop icons will be created.
+   1. GAIA - Double click this icon to launch the GUI tool.
 
-⚠️ NOTE: The installation process may take 10-20 minutes, as it sets up all necessary components for a seamless GAIA experience.
+## Running the GAIA GUI
 
-## Building from source
-To get started building from source, please follow the latest instructions [here](./docs/ort_genai.md). These instructions will setup the Onnx Runtime GenAI (ORT-GenAI) backend targeting the Ryzen AI Neural Processing Unit (NPU). For legacy support, you can also use the Pytorch Eager Mode flow using the AMD transformers library described [here](./docs/ryzenai_npu.md).
+Check your desktop for the GAIA-GUI icon and double-click it to launch the GUI. The first time you launch GAIA, it may take a few minutes to start. Subsequent launches will be faster. You may also need to download the latest LLM models from Hugging Face. GAIA will handle this automatically but may request a Hugging Face token for access. If you encounter any issues with model downloads or the GUI application, please contact the [AMD GAIA team](mailto:gaia@amd.com).
 
-⚠️ NOTE: You may need to install Ollama from [here](https://ollama.com/download) if you plan to run models with the Ollama backend.
+## Running the GAIA CLI
 
-# Running the GAIA GUI
-Check your desktop for the GAIA icon and double-click it to launch the GUI. It may take a few minutes to start the first time. Subsequent launches are faster. You may also need to download the latest LLM models from Hugging Face, GAIA will do this automatically but may request a Hugging Face token for access. Contact the [GAIA team](mailto:gaia@amd.com) if you are having any issues with model downloads or the GUI application.
+To quickly get started with GAIA via the command line, you can use the GAIA CLI (`gaia-cli`) tool. Double click on the GAIA-CLI icon and run `gaia-cli -h` for help details. For more information and examples, please refer to the [gaia-cli documentation](docs/cli.md).
 
-# Running the GAIA CLI
-To quickly get started with GAIA via the command line, you can use the GAIA CLI (`gaia-cli`) tool. Run `gaia-cli -h` for help details. For more information and examples, please refer to the [gaia-cli documentation](docs/cli.md).
+## Building from Source
 
-# GAIA-CLI Talk Mode
-For detailed instructions on using GAIA-CLI's voice interaction capabilities, including configuration options and voice commands, please refer to our [Talk Mode Guide](docs/talk.md).
+To get started building from source, please follow the latest instructions [here](./docs/dev.md). These instructions will setup the [Onnx Runtime GenAI](https://github.com/microsoft/onnxruntime-genai) through the [Lemonade Web Server](https://github.com/onnx/turnkeyml/blob/main/docs/lemonade/getting_started.md) tool targeting the Ryzen AI SoC.
 
-## Utility Functions
+⚠️ **NOTE**: You may need to install Ollama from [here](https://ollama.com/download) if you plan to use the GAIA generic installer and run models with the Ollama backend.
 
-### Download YouTube Transcripts
-You can download transcripts from YouTube videos directly using the CLI:
-```bash
-gaia-cli --download-transcript "https://www.youtube.com/watch?v=VIDEO_ID"
-```
+# Features
 
-By default, this saves the transcript to `transcript.txt`. You can specify a custom output file:
-```bash
-gaia-cli --download-transcript "https://www.youtube.com/watch?v=VIDEO_ID" --output "my_transcript.txt"
-```
+For a list of features and supported LLMs, please refer to the [Features](docs/features.md) page.
 
 # Contributing
-This is a very new project with a codebase that is under heavy development.  If you decide to contribute, please:
-- do so via a pull request.
-- write your code in keeping with the same style as the rest of this repo's code.
 
-The best way to contribute is to add a new agent that covers a unique use-case. You can use any of the agents/bots under ./agents folder as a starting point.
+This is a new project with a codebase that is actively being developed. If you decide to contribute, please:
+- Submit your contributions via a Pull Request.
+- Ensure your code follows the same style as the rest of the repository.
 
-## UI Development
-If you're interested in contributing to GAIA's user interface, we provide a comprehensive guide for UI development using Qt Designer. This guide covers:
-- Setting up the UI development environment
-- Using Qt Designer to modify the interface
-- Compiling and testing UI changes
-- Working with assets and resources
+The best way to contribute is by adding a new agent that covers a unique use-case. You can use any of the agents/bots under the ./agents folder as a starting point. If you prefer to avoid UI development, you can add a feature to the CLI tool first. For adding features to the GUI, please refer to our [UI Development Guide](docs/ui.md).
 
-For detailed instructions, please refer to our [UI Development Guide](docs/ui.md).
+## System Requirements
+
+GAIA with Ryzen AI Hybrid NPU/iGPU execution has been tested on the following systems. Any system that has the AMD Ryzen AI 9 HX 370 with NPU Driver 32.0.203.237 or higher should work. If you do not have access to a Ryzen AI system below, please use the generic installer instead.
+
+- Systems: Asus ProArt PX13/P16 and HP Omnibook
+- OS Name: Microsoft Windows 11 Pro/Home
+- Processor: AMD Ryzen AI 9 HX 370 w/ Radeon 890M, 2000 Mhz, 12 Core(s), 24 Logical Processor(s)
+- Physical Memory: 32.0 GB
+- AMD Radeon 890M iGPU drivers: `32.0.12010.8007` and `32.0.12033.1030`
+- AMD NPU drivers: `32.0.203.237` and `32.0.203.240`
+
+To check the NPU driver version, go to `Device Manager` > `Neural Processors`, right-click `Properties` of `NPU Compute Accelerator Device` and select the `Driver` tab.
+
+## Dependencies
+
+System Requirements:
+- Windows 11 Pro/Home (GAIA is not supported on macOS or Linux)
+- For Hybrid mode: AMD Ryzen AI 9 HX 370 with NPU Driver 32.0.203.237 or higher
+- For Generic mode: Any Windows PC meeting Ollama's system requirements
+
+The GAIA installer will automatically set up most dependencies, including:
+- Python 3.10
+- Miniconda (if not already installed)
+- FFmpeg
+- All required Python packages
+
+Additional requirements:
+
+For Generic installer:
+- Ollama (version 0.1.17 or higher)
+  - Must be installed manually from: https://ollama.com/download
+
+For Hybrid installer:
+- AMD NPU Driver (version 32.0.203.237 or higher)
+  - The installer will check your driver version and prompt for updates if needed
+- AMD Radeon iGPU Driver (version 32.0.12010.8007 or higher)
+
+# FAQ
+
+For frequently asked questions, please refer to the [FAQ](docs/faq.md).
 
 # Contact
-Contact [GAIA Team](mailto:gaia@amd.com) for any questions, feature requests, access or troubleshooting issues.
+
+Contact [AMD GAIA Team](mailto:gaia@amd.com) for any questions, feature requests, access or troubleshooting issues.
 
 # License
-This project is licensed under the terms of the MIT license. See LICENSE.md for details.
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+SPDX-License-Identifier: MIT
