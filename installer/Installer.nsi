@@ -140,6 +140,8 @@ Section "Install Main Components" SEC01
     ${EndIf}
 
   remove_dir:
+    ; Attempt conda remove of the env, to help speed things up
+    ExecWait 'conda env remove -yp "$INSTDIR\gaia_env"'
     ; Try to remove directory and verify it was successful
     RMDir /r "$INSTDIR"
     FileWrite $0 "- Deleted all contents of install dir$\n"
