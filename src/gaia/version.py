@@ -64,7 +64,7 @@ def get_github_root() -> Optional[str]:
         return None
 
 
-__version__ = "0.7.1"
+__version__ = "0.7.3"
 github_root = get_github_root()
 git_hash = get_git_hash()
 

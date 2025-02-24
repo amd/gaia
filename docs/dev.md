@@ -75,7 +75,7 @@ GAIA supports two modes:
         ```
     1. *(Generic only)* Recommended mode for non-Ryzen AI systems:
         ```bash
-        pip install -e .[dml,clip,joker,talk,dev]
+        pip install -e .[clip,joker,talk,dev]
         ```
     ⚠️ NOTE: If actively developing, use `-e` switch to enable editable mode and create links to sources instead.
 

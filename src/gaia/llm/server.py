@@ -4,11 +4,16 @@
 import argparse
 import torch
 
-import lemonade.cache as cache
-from lemonade.tools.chat import Serve
-from lemonade.tools.huggingface_load import HuggingfaceLoad
-from lemonade.tools.ort_genai.oga import OgaLoad
-from turnkeyml.state import State
+try:
+    import lemonade.cache as cache
+    from lemonade.tools.chat import Serve
+    from lemonade.tools.huggingface_load import HuggingfaceLoad
+    from lemonade.tools.ort_genai.oga import OgaLoad
+    from turnkeyml.state import State
+
+    LEMONADE_AVAILABLE = True
+except ImportError:
+    LEMONADE_AVAILABLE = False
 
 from gaia.interface.util import UIMessage
 from gaia.interface.huggingface import set_huggingface_token
@@ -29,6 +34,14 @@ def launch_llm_server(
         )
 
     if backend == "hf" or backend == "oga":  # use lemonade
+        if not LEMONADE_AVAILABLE:
+            UIMessage.error(
+                "The lemonade package is required for HuggingFace and OGA backends. "
+                "Please install it first.",
+                cli_mode=cli_mode,
+            )
+            return
+
         try:
             runtime = HuggingfaceLoad if backend == "hf" else OgaLoad
             dtype = torch.bfloat16 if dtype == "bfloat16" else dtype
