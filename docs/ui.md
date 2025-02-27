@@ -1,6 +1,3 @@
-#### Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
-#### SPDX-License-Identifier: MIT
-
 # UI Development Guide
 
 This guide explains how to modify and enhance the GAIA user interface using Qt Designer. Qt Designer is a visual design tool that allows you to create and edit graphical user interfaces without writing code directly. This guide covers:
@@ -71,3 +68,10 @@ After making changes, you need to compile the updated files:
 - If Qt Designer doesn't launch, verify your Python environment is activated
 - If resources aren't showing up, ensure you've recompiled both the UI and resource files
 - For import errors, check that the resource path replacement was done correctly
+
+# License
+
+[MIT License](../LICENSE.md)
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+SPDX-License-Identifier: MIT

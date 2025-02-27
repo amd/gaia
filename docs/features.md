@@ -32,3 +32,10 @@ The following is a list of the currently supported LLMs in the generic version o
 
 * oga - [Onnx Runtime GenAI](https://github.com/microsoft/onnxruntime-genai)
 * ollama - [Ollama backend](https://github.com/ollama/ollama)
+
+# License
+
+[MIT License](../LICENSE.md)
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+SPDX-License-Identifier: MIT

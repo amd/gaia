@@ -123,3 +123,10 @@ If you encounter installation issues:
 
 # Contact
 Contact [GAIA team](mailto:gaia@amd.com) for any questions, feature requests, access or troubleshooting issues.
+
+# License
+
+[MIT License](../LICENSE.md)
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+SPDX-License-Identifier: MIT

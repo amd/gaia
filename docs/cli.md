@@ -263,3 +263,8 @@ This configuration file tracks:
 When running client commands like `gaia-cli chat`, the CLI looks for the `.gaia_servers.json` file in the current directory to establish connections. This means:
 
 - All commands should be run from the same directory where `gaia-cli start` was executed
+
+# License
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+SPDX-License-Identifier: MIT

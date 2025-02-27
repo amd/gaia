@@ -117,5 +117,5 @@ Report any issues to the GAIA team at `gaia@amd.com` or create an [issue](https:
 
 [MIT License](../LICENSE.md)
 
-Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT

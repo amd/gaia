@@ -134,3 +134,10 @@ Use the `--output-audio-file` option to specify the output file path.
   - Ensure your system volume is not muted
 - Check your system's audio input settings in Settings > Audio > Input and ensure the correct microphone is selected as the default input device
 - Speaking clearly and at a moderate pace will improve transcription quality
+
+# License
+
+[MIT License](../LICENSE.md)
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+SPDX-License-Identifier: MIT

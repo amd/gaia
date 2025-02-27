@@ -43,5 +43,5 @@ The following is a list of currently supported LLMs on Ryzen AI NPU, more will b
 
 ## License
 
-Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT

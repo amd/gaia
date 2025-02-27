@@ -181,3 +181,10 @@ At the time of this writing, we have published 4 workflows for NIMBYS:
 - [Lemonade OGA NPU tests](https://github.com/aigdat/genai/blob/main/.github/workflows/test_npu.yml)
 - [Lemonade OGA iGPU tests](https://github.com/aigdat/genai/blob/main/.github/workflows/test_dml.yml)
 - [Lemonade on-demand OGA LLM evaluation](https://github.com/aigdat/genai/blob/main/.github/workflows/oga_nimbys_ondemand.yml)
+
+# License
+
+[MIT License](../LICENSE.md)
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+SPDX-License-Identifier: MIT
