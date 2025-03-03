@@ -18,7 +18,7 @@ $EXCLUDE = "src\gaia\agents\Maven\app.py,src\gaia\agents\Neo\app.py,ui_form.py"
 # Function to run Black
 function Invoke-Black {
     Write-Host "Running black..."
-    & $PYTHON_PATH -m black installer plot src tests --config pyproject.toml
+    & $PYTHON_PATH -m black installer src tests --config pyproject.toml
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Black formatting failed." -ForegroundColor Red
         exit $LASTEXITCODE
