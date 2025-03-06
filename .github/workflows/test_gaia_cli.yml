@@ -51,7 +51,7 @@ jobs:
 
           Write-Host "Step 2: Install dependencies"
           python -m pip install --upgrade pip
-          pip install -e .[dml,dev,clip,talk]
+          pip install -e .[clip,joker,rag,talk,dev]
 
           Write-Host "Step 3: Verify installation"
           $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
@@ -152,4 +152,10 @@ jobs:
           python tests\test_tts.py 2>&1 | Out-String -Stream
           if ($LASTEXITCODE -ne 0) {
               throw "test_tts.py failed with exit code $LASTEXITCODE"
+          }
+
+          Write-Host "Running test_rag.py"
+          python tests\test_rag.py 2>&1 | Out-String -Stream
+          if ($LASTEXITCODE -ne 0) {
+              throw "test_rag.py failed with exit code $LASTEXITCODE"
           }

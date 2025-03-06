@@ -21,3 +21,9 @@ try:
 except ImportError:
     logger.warning("Joker agent not available")
     joker = None
+
+try:
+    from gaia.agents.Rag.app import MyAgent as rag
+except ImportError:
+    logger.warning("RAG agent not available")
+    rag = None

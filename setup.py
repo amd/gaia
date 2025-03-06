@@ -33,6 +33,7 @@ setup(
         "gaia.agents.Maven",
         "gaia.agents.Neo",
         "gaia.agents.Picasso",
+        "gaia.agents.Rag",
         "gaia.interface",
     ],
     install_requires=[
@@ -88,6 +89,9 @@ setup(
             "llama-index-readers-github",
             "gaia[llamaindex]",
         ],
+        "rag": [
+            "gaia[llamaindex]",
+        ],
         "notebooks": [
             "jupyter",
             "ipywidgets",
@@ -112,6 +116,9 @@ setup(
             "adjustText",
             "plotly",
             "black",
+        ],
+        "eval" : [
+            "anthropic",
         ],
         "talk":[
             "pyaudio",

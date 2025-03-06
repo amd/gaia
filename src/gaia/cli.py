@@ -67,6 +67,7 @@ class GaiaCliClient:
         show_stats=False,
         enable_tts=True,
         logging_level="INFO",
+        input_file=None,
     ):
         self.log = self.__class__.log  # Use the class-level logger for instances
         # Set the logging level for this instance's logger
@@ -102,6 +103,7 @@ class GaiaCliClient:
         self.show_stats = show_stats
         self.enable_tts = enable_tts
         self.tts = None
+        self.input_file = input_file
 
         self.log.info("Gaia CLI client initialized.")
         self.log.debug(
@@ -186,6 +188,7 @@ class GaiaCliClient:
     def wait_for_servers(
         self, model_download_timeout=3600, server_ready_timeout=120, check_interval=5
     ):
+        """Wait for servers to be ready with extended timeout for RAG index building"""
         self.log.info("Waiting for model downloads and servers to be ready...")
 
         # First, wait for model downloads to complete
@@ -204,11 +207,32 @@ class GaiaCliClient:
 
         # Then, check for server readiness
         start_time = time.time()
+        last_status_time = 0
+        status_interval = 10  # Print status every 10 seconds
+
+        # Use longer timeout for RAG agents
+        if self.agent_name.lower() == "rag":
+            self.log.info(
+                "RAG agent detected - using extended timeout for index building..."
+            )
+            server_ready_timeout = 1800  # 30 minutes for RAG
+
         while time.time() - start_time < server_ready_timeout:
+            current_time = time.time()
+
             if self.check_servers_ready():
                 self.log.info("All servers are ready.")
                 return
-            self.log.info("Servers are not ready yet. Continuing to wait...")
+
+            # Print status update periodically
+            if current_time - last_status_time >= status_interval:
+                elapsed = int(current_time - start_time)
+                remaining = server_ready_timeout - elapsed
+                self.log.info(
+                    f"Waiting for servers... {elapsed}s elapsed, {remaining}s remaining"
+                )
+                last_status_time = current_time
+
             time.sleep(check_interval)
 
         error_message = (
@@ -261,6 +285,7 @@ class GaiaCliClient:
                         f"{server_name} not ready. Status code: {response.status_code}"
                     )
                     return False
+
             except RequestException as e:
                 self.log.warning(f"Failed to connect to {server_name}: {str(e)}")
                 return False
@@ -299,6 +324,7 @@ class GaiaCliClient:
             "device": self.device,
             "dtype": self.dtype,
             "server_pids": self.server_pids,
+            "input_file": self.input_file,  # Save input file info
         }
         with open(".gaia_servers.json", "w", encoding="utf-8") as f:
             json.dump(server_info, f)
@@ -306,15 +332,24 @@ class GaiaCliClient:
     def start_agent_server(self):
         try:
             self.log.info(f"Starting {self.agent_name} server...")
+            kwargs = {
+                "agent_name": self.agent_name,
+                "host": self.host,
+                "port": self.port,
+                "model": self.model,
+                "cli_mode": self.cli_mode,
+            }
+
+            # Add input_file for RAG agent
+            if self.agent_name.lower() == "rag" and self.input_file:
+                kwargs["input_file"] = self.input_file
+                self.log.info(
+                    f"Initializing RAG agent with input file: {self.input_file}"
+                )
+
             self.agent_server = multiprocessing.Process(
                 target=launch_agent_server,
-                kwargs={
-                    "agent_name": self.agent_name,
-                    "host": self.host,
-                    "port": self.port,
-                    "model": self.model,
-                    "cli_mode": self.cli_mode,
-                },
+                kwargs=kwargs,
             )
             self.agent_server.start()
 
@@ -957,6 +992,7 @@ class GaiaCliClient:
 
 
 async def async_main(action, **kwargs):
+    log = get_logger(__name__)
     if action == "start":
         show_stats = kwargs.pop("stats", False)
         launch_in_background = kwargs.pop("background", "silent")
@@ -976,16 +1012,18 @@ async def async_main(action, **kwargs):
 
         base_cmd = "gaia-cli start --background none " + " ".join(cmd_params)
 
-        def wait_for_servers_file_exists():
-            max_wait = 30  # seconds
+        def wait_for_servers_file_exists(timeout=30):
             start_time = time.time()
             while not Path(".gaia_servers.json").exists():
-                if time.time() - start_time > max_wait:
+                if time.time() - start_time > timeout:
                     raise RuntimeError(
                         "Timeout waiting for servers to start. Check "
                         + str(Path.cwd() / "gaia.cli.log for details.")
                     )
                 time.sleep(1)
+
+        # Use longer timeout for RAG agents
+        server_timeout = 1800 if kwargs.get("agent_name", "").lower() == "rag" else 120
 
         if launch_in_background == "terminal":
             print("Starting Gaia servers in background terminal...")
@@ -996,7 +1034,7 @@ async def async_main(action, **kwargs):
             cmd = f'start cmd /k "echo Starting GAIA servers... Feel free to minimize this window. && {base_cmd}"'
             try:
                 subprocess.Popen(cmd, shell=True)
-                wait_for_servers_file_exists()
+                wait_for_servers_file_exists(timeout=server_timeout)
                 print("✓ Servers launched in background terminal")
                 print("\nYou can now:")
                 print(
@@ -1007,6 +1045,7 @@ async def async_main(action, **kwargs):
                 )
                 return
             except Exception as e:
+                log.error(f"Failed to start in background: {e}")
                 raise RuntimeError(f"Failed to start in background: {e}")
 
         elif launch_in_background == "silent":
@@ -1027,7 +1066,7 @@ async def async_main(action, **kwargs):
                     stderr=log_file,
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
-                wait_for_servers_file_exists()
+                wait_for_servers_file_exists(timeout=server_timeout)
             print("✓ Servers launched in background silently")
             print("\nYou can now:")
             print("  1. Use 'gaia-cli chat' or 'gaia-cli talk' to interact")
@@ -1039,8 +1078,10 @@ async def async_main(action, **kwargs):
                 show_stats=show_stats, logging_level=logging_level, **kwargs
             )
             client.start()
-            return "Servers started successfully."
+            log.info("Servers started successfully.")
+            return
         else:
+            log.error(f"Invalid background option: {launch_in_background}")
             raise ValueError(f"Invalid background option: {launch_in_background}")
 
     elif action == "stop":
@@ -1048,18 +1089,26 @@ async def async_main(action, **kwargs):
         if client:
             client.stop()
             Path(".gaia_servers.json").unlink(missing_ok=True)
-            return "Servers stopped successfully."
+            log.info("Servers stopped successfully.")
+            return
         else:
-            return "No running servers found."
+            log.error("No running servers found.")
+            return
 
     # For all other actions, load existing client
     client = await GaiaCliClient.load_existing_client()
     if not client:
-        return "Error: Servers are not running. Please start the servers first using 'gaia-cli start'"
+        log.error(
+            "Servers are not running. Please start the servers first using 'gaia-cli start'"
+        )
+        raise RuntimeError(
+            "Servers are not running. Please start the servers first using 'gaia-cli start'"
+        )
 
     if action == "prompt":
         if not kwargs.get("message"):
-            return "Error: Message is required for prompt action."
+            log.error("Message is required for prompt action.")
+            raise ValueError("Message is required for prompt action.")
         response = ""
         async for chunk in client.prompt(kwargs["message"]):
             response += chunk
@@ -1070,17 +1119,21 @@ async def async_main(action, **kwargs):
         return {"response": response}
     elif action == "chat":
         await client.chat()
-        return "Chat session ended."
+        log.info("Chat session ended.")
+        return
     elif action == "talk":
         await client.talk()
-        return "Voice chat session ended."
+        log.info("Voice chat session ended.")
+        return
     elif action == "stats":
         stats = client.get_stats()
         if stats:
             return {"stats": stats}
-        return {"stats": {}}
+        log.error("No stats available.")
+        raise RuntimeError("No stats available.")
     else:
-        return f"Unknown action: {action}"
+        log.error(f"Unknown action specified: {action}")
+        raise ValueError(f"Unknown action specified: {action}")
 
 
 def run_cli(action, **kwargs):
@@ -1093,6 +1146,9 @@ def main():
         description=f"Gaia CLI - Interact with Gaia AI agents. \nVersion: {version_with_hash}",
         formatter_class=argparse.RawTextHelpFormatter,
     )
+
+    # Get logger instance
+    log = get_logger(__name__)
 
     # Add version argument
     parser.add_argument(
@@ -1122,7 +1178,7 @@ def main():
     start_parser.add_argument(
         "--agent-name",
         default="Chaty",
-        help="Name of the Gaia agent to use (e.g., Llm, Chaty, Joker, Clip, etc.)",
+        help="Name of the Gaia agent to use (e.g., Llm, Chaty, Joker, Clip, Rag, etc.)",
     )
     start_parser.add_argument(
         "--host",
@@ -1175,9 +1231,13 @@ def main():
         default="silent",
         help="Launch servers in a background terminal window or silently",
     )
+    start_parser.add_argument(
+        "--input-file", help="Input file path for RAG index creation"
+    )
 
     subparsers.add_parser("stop", help="Stop Gaia server", parents=[parent_parser])
 
+    # Add prompt-specific options
     prompt_parser = subparsers.add_parser(
         "prompt", help="Send a single prompt to Gaia", parents=[parent_parser]
     )
@@ -1268,6 +1328,7 @@ def main():
         help="Index of audio input device (optional)",
     )
 
+    # Add YouTube-specific options
     yt_parser = subparsers.add_parser(
         "youtube", help="YouTube utilities", parents=[parent_parser]
     )
@@ -1291,16 +1352,24 @@ def main():
 
     args = parser.parse_args()
 
+    # Check if action is specified
+    if not args.action:
+        log.warning("No action specified. Displaying help message.")
+        parser.print_help()
+        return
+
     # Set logging level using the GaiaLogger manager
     from gaia.logger import log_manager
 
     log_manager.set_level("gaia", getattr(logging, args.logging_level))
+    log.info(f"Starting Gaia CLI with action: {args.action}")
 
     # Handle core Gaia CLI commands
     if args.action in ["start", "stop", "prompt", "chat", "talk", "stats"]:
         kwargs = {
             k: v for k, v in vars(args).items() if v is not None and k != "action"
         }
+        log.debug(f"Executing {args.action} with parameters: {kwargs}")
         result = run_cli(args.action, **kwargs)
         if result:
             print(result)
@@ -1308,14 +1377,16 @@ def main():
 
     # Handle utility commands
     if args.action == "test":
+        log.info(f"Running test type: {args.test_type}")
         if args.test_type.startswith("tts"):
             try:
                 from gaia.audio.kokoro_tts import KokoroTTS
 
                 tts = KokoroTTS()
+                log.debug("TTS initialized successfully")
             except Exception as e:
-                print(f"Failed to initialize TTS:\n{e}")
-                return
+                log.error(f"Failed to initialize TTS: {e}")
+                raise RuntimeError(f"Failed to initialize TTS: {e}")
 
             test_text = (
                 args.test_text
@@ -1345,7 +1416,6 @@ Let me know your answer!
                 tts.test_generate_audio_file(test_text, args.output_audio_file)
 
         elif args.test_type.startswith("asr"):
-            # ASR tests
             try:
                 from gaia.audio.whisper_asr import WhisperAsr
 
@@ -1353,14 +1423,15 @@ Let me know your answer!
                     model_size=args.whisper_model_size,
                     device_index=args.audio_device_index,
                 )
+                log.debug("ASR initialized successfully")
             except ImportError:
-                print(
+                log.error(
                     "WhisperAsr not found. Please install voice support with: pip install .[talk]"
                 )
                 raise
             except Exception as e:
-                print(f"Failed to initialize ASR:\n{e}")
-                return
+                log.error(f"Failed to initialize ASR: {e}")
+                raise RuntimeError(f"Failed to initialize ASR: {e}")
 
             if args.test_type == "asr-file-transcription":
                 if not args.input_audio_file:
@@ -1420,7 +1491,7 @@ Let me know your answer!
     # Handle utility functions
     if args.action == "youtube":
         if args.download_youtube_transcript:
-            print(f"Downloading transcript from {args.download_youtube_transcript}")
+            log.info(f"Downloading transcript from {args.download_youtube_transcript}")
             from llama_index.readers.youtube_transcript import YoutubeTranscriptReader
 
             doc = YoutubeTranscriptReader().load_data(
@@ -1434,12 +1505,15 @@ Let me know your answer!
 
     # Handle kill command
     if args.action == "kill":
+        log.info(f"Attempting to kill process on port {args.port}")
         result = kill_process_by_port(args.port)
         print(result)
         return
 
-    if result:
-        print(result)
+    # Log error for unknown action
+    log.error(f"Unknown action specified: {args.action}")
+    parser.print_help()
+    return
 
 
 def kill_process_by_port(port):
