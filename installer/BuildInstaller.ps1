@@ -21,15 +21,18 @@ if ($Mode -eq "NPU") {
     }
 }
 
+# Define the path to makensis.exe
+$nsisPath = "C:\Program Files (x86)\NSIS\makensis.exe"
+
 # Build the appropriate installer based on mode
 switch ($Mode) {
     "Generic" {
-        & "C:\Program Files (x86)\NSIS\makensis.exe" Installer.nsi
+        & $nsisPath "Installer.nsi"
     }
     "Hybrid" {
-        & "C:\Program Files (x86)\NSIS\makensis.exe" /DMODE=HYBRID Installer.nsi
+        & $nsisPath "/DMODE=HYBRID" "Installer.nsi"
     }
     "NPU" {
-        & "C:\Program Files (x86)\NSIS\makensis.exe" /DMODE=NPU /DOGA_TOKEN="${OGA_TOKEN}" Installer.nsi
+        & $nsisPath "/DMODE=NPU" "/DOGA_TOKEN=$OGA_TOKEN" "Installer.nsi"
     }
 }

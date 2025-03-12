@@ -10,6 +10,7 @@
 !define /ifndef RYZENAI_FOLDER "ryzen_ai_13_ga"
 !define /ifndef NPU_DRIVER_ZIP "NPU_RAI1.3.zip"
 !define /ifndef NPU_DRIVER_VERSION "32.0.203.240"
+!define /ifndef LEMONADE_VERSION "v6.0.2"
 
 ; Define main variables
 Name "GAIA"
@@ -181,7 +182,7 @@ Section "Install Main Components" SEC01
 
     ; If conda is not found, show a message and exit
     ; Otherwise, continue with the installation
-    StrCmp $2 "0" check_ollama conda_not_available
+    StrCmp $2 "0" check_mode conda_not_available
 
     conda_not_available:
       DetailPrint "- Conda not installed."
@@ -212,7 +213,7 @@ Section "Install Main Components" SEC01
         ${EndIf}
 
         StrCpy $R1 "$PROFILE\miniconda3\Scripts\conda.exe"
-        GoTo check_ollama
+        GoTo check_mode
 
       ${Else}
         DetailPrint "- Miniconda installation failed"
@@ -221,6 +222,87 @@ Section "Install Main Components" SEC01
         ${EndIf}
         GoTo exit_installer
       ${EndIf}
+
+    check_mode:
+        ${If} ${MODE} == "GENERIC"
+          GoTo check_ollama
+        ${Else}
+          GoTo check_lemonade
+        ${EndIf}
+
+    check_lemonade:
+      DetailPrint "------------"
+      DetailPrint "- Lemonade -"
+      DetailPrint "------------"
+
+      ; Check if lemonade is available by trying to run it
+      nsExec::ExecToStack 'lemonade --version'
+      Pop $2  ; Return value
+      Pop $3  ; Command output
+      DetailPrint "- Checked if lemonade is available (return code: $2)"
+
+      ; If lemonade is not found (return code != 0), show message and proceed with installation
+      ${If} $2 != "0"
+        DetailPrint "- Lemonade not installed or not in PATH"
+        ${IfNot} ${Silent}
+          MessageBox MB_YESNO "Lemonade is required but not installed.$\n$\nWould you like to install Lemonade now?" IDYES install_lemonade IDNO skip_lemonade
+        ${Else}
+          GoTo skip_lemonade
+        ${EndIf}
+      ${Else}
+        DetailPrint "- Lemonade is already installed"
+        GoTo create_env
+      ${EndIf}
+
+    install_lemonade:
+      ; Check if file already exists and delete it first
+      IfFileExists "$TEMP\Lemonade_Server_Installer.exe" 0 download_lemonade
+        Delete "$TEMP\Lemonade_Server_Installer.exe"
+
+      download_lemonade:
+        DetailPrint "- Downloading Lemonade installer..."
+        ; Use nsExec::ExecToStack to capture the output and error code
+        nsExec::ExecToStack 'curl -L -f -v --retry 3 --retry-delay 2 -o "$TEMP\Lemonade_Server_Installer.exe" "https://github.com/onnx/turnkeyml/releases/download/${LEMONADE_VERSION}/Lemonade_Server_Installer.exe"'
+        Pop $0  ; Return value
+        Pop $1  ; Command output
+        DetailPrint "- Curl return code: $0"
+        DetailPrint "- Curl output: $1"
+
+      ; Check if download was successful
+      IfFileExists "$TEMP\Lemonade_Server_Installer.exe" lemonade_download_success lemonade_download_failed
+
+      lemonade_download_failed:
+        DetailPrint "- Failed to download Lemonade installer"
+        ${IfNot} ${Silent}
+          MessageBox MB_OK "Failed to download Lemonade installer. Please install Lemonade manually from https://github.com/onnx/turnkeyml/releases after installation completes."
+        ${EndIf}
+        GoTo skip_lemonade
+
+      lemonade_download_success:
+        DetailPrint "- Download successful ($TEMP\Lemonade_Server_Installer.exe), installing Lemonade..."
+        ExecWait '"$TEMP\Lemonade_Server_Installer.exe" /Extras=hybrid' $2
+
+        ${If} $2 == 0
+          DetailPrint "- Lemonade installation successful"
+          ${IfNot} ${Silent}
+            MessageBox MB_OK "Lemonade has been successfully installed."
+          ${EndIf}
+        ${Else}
+          DetailPrint "- Lemonade installation failed with error code: $2"
+          DetailPrint "- Please install Lemonade manually after GAIA installation"
+          ${IfNot} ${Silent}
+            MessageBox MB_OK "Lemonade installation failed. Please install Lemonade manually from https://github.com/onnx/turnkeyml/releases and try again.$\n$\nError code: $2"
+          ${EndIf}
+          GoTo exit_installer
+        ${EndIf}
+
+        ; Clean up the downloaded installer
+        Delete "$TEMP\Lemonade_Server_Installer.exe"
+        GoTo create_env
+
+    skip_lemonade:
+      DetailPrint "- Continuing installation without Lemonade"
+      GoTo create_env
 
     check_ollama:
       DetailPrint "----------"
