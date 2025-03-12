@@ -22,7 +22,7 @@ jobs:
         run: |
           # Download NSIS installer
           Invoke-WebRequest -UserAgent "Wget" -Uri "https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10-setup.exe" -OutFile "nsis.exe"
-          
+
           # Install NSIS
           Start-Process nsis.exe -ArgumentList '/S' -Wait
 
@@ -30,6 +30,10 @@ jobs:
         run: |
           # Check if NSIS is installed
           & 'C:\Program Files (x86)\NSIS\makensis.exe' /VERSION
+
+      - name: Generate version.txt
+        run: |
+          python .\src\gaia\version.py
 
       - name: Build the GAIA installer for Hybrid
         run: |
@@ -50,7 +54,7 @@ jobs:
           set PATH=%PATH%;C:\Users\runneradmin\AppData\Local\Programs\Ollama
           cd installer
           GAIA_Hybrid_Installer.exe /S
-      
+
       - name: Ensure GAIA can open properly
         timeout-minutes: 15
         env:

@@ -31,6 +31,10 @@ jobs:
           # Check if NSIS is installed
           & 'C:\Program Files (x86)\NSIS\makensis.exe' /VERSION
 
+      - name: Generate version.txt
+        run: |
+          python .\src\gaia\version.py
+
       - name: Build the GAIA installer
         run: |
           cd installer

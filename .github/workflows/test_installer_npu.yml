@@ -40,6 +40,10 @@ jobs:
             Write-Host "OGA_PUBLIC_TOKEN secret is present"
           }
 
+      - name: Generate version.txt
+        run: |
+          python .\src\gaia\version.py
+
       - name: Build the GAIA installer for NPU
         run: |
           cd installer

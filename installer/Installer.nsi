@@ -56,15 +56,14 @@ Name "GAIA"
 !include StrFunc.nsh
 ${StrLoc}
 
-; Read version from version.py
+; Read version from version.txt
 !tempfile TMPFILE
-!system 'python -c "with open(\"../src/gaia/version.py\") as f: exec(f.read()); print(version_with_hash)" > "${TMPFILE}"'
+!system 'if exist ../version.txt (type ../version.txt > "${TMPFILE}") else (echo unknown > "${TMPFILE}")'
 !define /file GAIA_VERSION "${TMPFILE}"
 !delfile "${TMPFILE}"
 
 ; Define the GAIA_STRING variable
 Var GAIA_STRING
-Var GitPath
 
 Function .onInit
   ${If} ${MODE} == "HYBRID"
@@ -80,7 +79,7 @@ FunctionEnd
 !define PRODUCT_NAME "GAIA"
 !define GITHUB_REPO "https://github.com/aigdat/gaia.git"
 !define EMPTY_FILE_NAME "empty_file.txt"
-!define ICON_FILE "..\src\gaia\interface\img\gaia.ico"
+!define ICON_FILE "../src/gaia/interface/img/gaia.ico"
 
 ; Finish Page settings
 !define MUI_TEXT_FINISH_INFO_TITLE "GAIA installed successfully!"

@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT
 
 import subprocess
-import logging
 from typing import Optional
+
+__version__ = "0.7.5"
 
 
 def get_git_hash(hash_length: int = 8) -> str:
@@ -25,10 +26,10 @@ def get_git_hash(hash_length: int = 8) -> str:
             .strip()
         )
     except subprocess.SubprocessError as e:
-        logging.warning(f"Failed to get Git hash: {str(e)}")
+        print(f"Failed to get Git hash: {str(e)}")
         return "unknown"
     except Exception as e:
-        logging.error(f"Unexpected error while getting Git hash: {str(e)}")
+        print(f"Unexpected error while getting Git hash: {str(e)}")
         return "unknown"
 
 
@@ -60,14 +61,13 @@ def get_github_root() -> Optional[str]:
 
             return parts[0]
     except (subprocess.SubprocessError, IndexError) as e:
-        logging.warning(f"Failed to get GitHub root: {str(e)}")
+        print(f"Failed to get GitHub root: {str(e)}")
         return None
     except Exception as e:
-        logging.error(f"Unexpected error while getting GitHub root: {str(e)}")
+        print(f"Unexpected error while getting GitHub root: {str(e)}")
         return None
 
 
-__version__ = "0.7.3"
 github_root = get_github_root()
 git_hash = get_git_hash()
 
@@ -77,4 +77,10 @@ version_with_hash = (
     else f"v{__version__}+{git_hash}"
 )
 
-# print(f"Version with hash: {version_with_hash}")
+# Write version to version.txt file
+try:
+    with open("version.txt", "w", encoding="utf-8") as f:
+        f.write(version_with_hash)
+except Exception as e:
+    print(f"Failed to write version.txt: {str(e)}")
+    raise
