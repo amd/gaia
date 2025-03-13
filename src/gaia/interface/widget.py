@@ -45,7 +45,7 @@ from gaia.logger import get_logger
 import gaia.agents as agents
 from gaia.interface.util import UIMessage
 from gaia.interface.ui_form import Ui_Widget
-from gaia.llm.server import launch_llm_server
+from gaia.llm.lemonade_server import launch_lemonade_server
 from gaia.version import version_with_hash
 
 # Conditional import for Ollama
@@ -289,7 +289,7 @@ class SetupLLM(QObject):
 
         self.log.info(f"Starting LLM server with params: {llm_server_kwargs}...")
         if self.widget.settings["dev_mode"]:
-            server_dot_py = gaia_folder / "llm" / "server.py"
+            server_dot_py = gaia_folder / "llm" / "lemonade_server.py"
             command = [
                 sys.executable,
                 server_dot_py,
@@ -304,7 +304,7 @@ class SetupLLM(QObject):
         else:
             if self.widget.settings["llm_server"]:
                 self.widget.llm_server = multiprocessing.Process(
-                    target=launch_llm_server, kwargs=llm_server_kwargs
+                    target=launch_lemonade_server, kwargs=llm_server_kwargs
                 )
                 self.widget.llm_server.start()
                 self.check_server_available("127.0.0.1", self.widget.llm_port)

@@ -21,7 +21,7 @@ from aiohttp import ClientTimeout
 from requests.exceptions import RequestException
 
 from gaia.logger import get_logger
-from gaia.llm.server import launch_llm_server
+from gaia.llm.lemonade_server import launch_lemonade_server
 from gaia.agents.agent import launch_agent_server
 from gaia.version import version_with_hash
 
@@ -409,7 +409,7 @@ class GaiaCliClient:
             "cli_mode": self.cli_mode,
         }
         self.llm_server = multiprocessing.Process(
-            target=launch_llm_server, kwargs=llm_server_kwargs
+            target=launch_lemonade_server, kwargs=llm_server_kwargs
         )
         self.llm_server.start()
         self.server_pids["llm"] = self.llm_server.pid

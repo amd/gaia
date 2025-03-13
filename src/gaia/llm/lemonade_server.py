@@ -19,7 +19,7 @@ from gaia.interface.util import UIMessage
 from gaia.interface.huggingface import set_huggingface_token
 
 
-def launch_llm_server(
+def launch_lemonade_server(
     backend, checkpoint, device, dtype, max_new_tokens, cli_mode=False
 ):
     if not (
@@ -151,7 +151,7 @@ def get_npu_args():
 if __name__ == "__main__":
     args = get_cpu_args()
     # args = get_npu_args()
-    launch_llm_server(
+    launch_lemonade_server(
         args.backend,
         args.checkpoint,
         args.device,
