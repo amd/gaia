@@ -39,7 +39,7 @@ setup(
     install_requires=[
         "aiohttp",
         "fastapi",
-        "pydantic==1.10.12",
+        "pydantic==2.9.2",
         "uvicorn>=0.15.0",
         "transformers",
         "accelerate",
