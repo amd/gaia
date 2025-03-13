@@ -105,6 +105,18 @@ jobs:
           # Install dev dependencies
           conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env pip install .[dev]
 
+          Write-Host "Running test_lemonade_client.py"
+          $result = conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env python tests\test_lemonade_client.py 2>&1 | Out-String -Stream
+
+          # Format and display the output
+          Write-Host "`n=== Test Output ==="
+          $result | ForEach-Object { Write-Host $_ }
+          Write-Host "`n=== End Test Output ==="
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "test_lemonade_client.py failed with exit code $LASTEXITCODE"
+          }
+
           Write-Host "Running test_gaia.py"
           $result = conda run -p C:\Users\jfowe\AppData\Local\GAIA\gaia_env python tests\test_gaia.py --hybrid --asyncio-mode=strict 2>&1 | Out-String -Stream
 
