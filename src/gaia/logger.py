@@ -1,8 +1,9 @@
-# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import logging
 import sys
+import warnings
 from pathlib import Path
 
 
@@ -10,6 +11,14 @@ class GaiaLogger:
     def __init__(self, log_file="gaia.log"):
         self.log_file = Path(log_file)
         self.loggers = {}
+
+        # Filter warnings
+        warnings.filterwarnings(
+            "ignore", message="dropout option adds dropout after all but last"
+        )
+        warnings.filterwarnings(
+            "ignore", message="torch.nn.utils.weight_norm is deprecated"
+        )
 
         # Define color codes
         self.colors = {
@@ -68,6 +77,10 @@ class GaiaLogger:
         httpx_logger = logging.getLogger("httpx")
         httpx_logger.addFilter(self.filter_httpx)
 
+        # Suppress phonemizer warnings
+        phonemizer_logger = logging.getLogger("phonemizer")
+        phonemizer_logger.addFilter(self.filter_phonemizer)
+
     def add_color_filter(self, record):
         record.color = self.colors.get(record.levelname, "")
         record.reset = self.colors["RESET"]
@@ -88,6 +101,10 @@ class GaiaLogger:
     def filter_httpx(self, record):
         message = record.getMessage()
         return not ("HTTP Request:" in message and "HTTP/1.1 200 OK" in message)
+
+    def filter_phonemizer(self, record):
+        message = record.getMessage()
+        return not "words count mismatch" in message
 
     def get_logger(self, name):
         if name not in self.loggers:

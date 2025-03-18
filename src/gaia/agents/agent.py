@@ -1,8 +1,9 @@
-# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import time
 import asyncio
+import importlib.util
 import requests
 from websocket import create_connection
 from websocket._exceptions import WebSocketTimeoutException
@@ -41,7 +42,6 @@ class Agent:
         app.router.add_post("/prompt", self._on_prompt_received)
         app.router.add_post("/restart", self._on_chat_restarted)
         app.router.add_post("/welcome", self._on_welcome_message)
-        app.router.add_post("/load_llm", self._on_load_llm)
         app.router.add_get("/health", self._on_health_check)
         app.router.add_get("/ws", self._on_websocket_connect)
         return app
@@ -97,7 +97,7 @@ class Agent:
 
     def initialize_server(self):
         max_retries = 5
-        for _ in range(max_retries):
+        for attempt in range(max_retries):
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
@@ -106,18 +106,19 @@ class Agent:
                 break
             except OSError as e:
                 if e.errno == 10048:  # Port is in use
+                    if attempt == max_retries - 1:
+                        error_msg = f"Port {self.port} is in use. Please ensure no other services are running on this port before starting GAIA."
+                        UIMessage.error(error_msg, cli_mode=self.cli_mode)
+                        raise RuntimeError(error_msg)
                     self.log.warning(
-                        f"Port {self.port} is in use, make sure a service is not already running on this port."
+                        f"Port {self.port} is in use, attempt {attempt + 1} of {max_retries}"
                     )
                 else:
-                    UIMessage.error(str(e), cli_mode=self.cli_mode)
+                    error_msg = f"Failed to start server: {str(e)}"
+                    UIMessage.error(error_msg, cli_mode=self.cli_mode)
+                    raise RuntimeError(error_msg)
             finally:
                 loop.close()
-        else:
-            UIMessage.error(
-                f"Unable to bind to port ({self.port}) after {max_retries} attempts with ip ({self.host}).\nMake sure to kill any existing services using port {self.port} before running GAIA.",
-                cli_mode=self.cli_mode,
-            )
 
     def prompt_llm_server(self, prompt, stream_to_ui=True):
         try:
@@ -215,13 +216,6 @@ class Agent:
         self.print_ui(response)
         return web.Response()
 
-    async def _on_load_llm(self, ui_request):
-        data = await ui_request.json()
-        self.log.debug(f"Client requested to load LLM ({data['model']})")
-
-        response = {"status": "success"}
-        return web.json_response(response)
-
     async def _on_health_check(self, _):
         return web.json_response({"status": "ok"})
 
@@ -267,11 +261,18 @@ def launch_agent_server(
     model, agent_name="Chaty", host="127.0.0.1", port=8001, cli_mode=False
 ):
     try:
-        agent_module = __import__(f"gaia.agents.{agent_name}.app", fromlist=["MyAgent"])
+        # Add assertion to check if agent_name exists
+        agent_path = f"gaia.agents.{agent_name}.app"
+        spec = importlib.util.find_spec(agent_path)
+        assert (
+            spec is not None
+        ), f"Agent '{agent_name}' not found. Please check the agent name and try again."
+
+        agent_module = __import__(agent_path, fromlist=["MyAgent"])
         MyAgent = getattr(agent_module, "MyAgent")
         agent = MyAgent(model=model, host=host, port=port, cli_mode=cli_mode)
         agent.run()
         return agent
     except Exception as e:
         UIMessage.error(f"An unexpected error occurred:\n\n{str(e)}", cli_mode=cli_mode)
-        return
+        raise

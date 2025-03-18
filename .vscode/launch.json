@@ -1,4 +1,4 @@
-// Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 {
@@ -21,7 +21,23 @@
             "debugOptions": ["RedirectOutput"]
         },
         {
-            "name": "CLI Debug",
+            "name": "CLI Server Debug",
+            "type": "python",
+            "request": "launch",
+            "module": "gaia.cli",
+            "args": ["start"],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false,
+            "debugOptions": ["RedirectOutput"],
+        },
+        {
+            "name": "CLI Client Debug",
             "type": "python",
             "request": "launch",
             "module": "gaia.cli",

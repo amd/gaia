@@ -1,4 +1,4 @@
-# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import os
@@ -68,6 +68,9 @@ class OllamaClient:
             "time_to_first_token": 0,
             "tokens_per_second": 0,
         }
+        # Wait for ollama server to start up
+        time.sleep(5)
+
         self.ensure_ollama_running()
         self.ensure_model_available()
         self.stop_event = Event()
@@ -79,7 +82,7 @@ class OllamaClient:
             if response.status_code == 200:
                 return
         except requests.RequestException:
-            self.log.error("Ollama server is not responding.")
+            self.log.warning("Ollama server is not responding.")
 
     def ensure_model_available(self):
         try:
@@ -475,14 +478,26 @@ class OllamaClientServer:
             return {"is_generating": self.is_generating}
 
     def run(self, model: str):
-        self.ollama_client = OllamaClient(model=model, cli_mode=self.cli_mode)
-        self.log.info(f"Launching Ollama Server with model: {model}")
+        try:
+            self.ollama_client = OllamaClient(model=model, cli_mode=self.cli_mode)
+            self.log.info(f"Launching Ollama Server with model: {model}")
 
-        # Parse the host to remove any protocol
-        parsed_host = urlparse(self.host)
-        clean_host = parsed_host.netloc or parsed_host.path
+            # Parse the host to remove any protocol
+            parsed_host = urlparse(self.host)
+            clean_host = parsed_host.netloc or parsed_host.path
 
-        uvicorn.run(self.app, host=clean_host, port=self.port)
+            try:
+                uvicorn.run(self.app, host=clean_host, port=self.port)
+            except OSError as e:
+                if e.errno == 10048:  # Port already in use
+                    error_msg = f"Port {self.port} is already in use. Please ensure no other services are running on this port."
+                    UIMessage.error(error_msg, cli_mode=self.cli_mode)
+                    raise RuntimeError(error_msg)
+                raise
+        except Exception as e:
+            error_msg = f"Failed to start Ollama server: {str(e)}"
+            UIMessage.error(error_msg, cli_mode=self.cli_mode)
+            raise RuntimeError(error_msg)
 
 
 class OllamaModelServer:

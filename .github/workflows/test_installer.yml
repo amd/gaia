@@ -1,4 +1,4 @@
-# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 name: GAIA Installer Test
@@ -78,6 +78,11 @@ jobs:
         timeout-minutes: 10
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          QT_QPA_PLATFORM: "offscreen"
+          QTWEBENGINE_DISABLE_SANDBOX: "1"
+          QT_QPA_FONTDIR: "/usr/share/fonts"
+          # Ignore Qt warnings
+          QT_LOGGING_RULES: "qt.qpa.fonts.warning=false;qt.core.qmetaobject.warning=false"
         uses: ./.github/actions/ui-testing
         with:
           username: "runneradmin"

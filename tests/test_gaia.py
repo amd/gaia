@@ -1,165 +1,490 @@
-# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import pytest
-from gaia.cli import run_cli, start_servers, stop_servers
-from memory_profiler import profile, memory_usage
-import matplotlib
+import asyncio
+import time
+from pathlib import Path
+import requests
+import subprocess
+import shlex
+import os
+import argparse
+import sys
 
-matplotlib.use("Agg")  # Use non-interactive backend
-import matplotlib.pyplot as plt
 
-
-@pytest.mark.parametrize(
-    "prompt",
-    [
-        "Who are you in one sentence.",
-        "Tell me a short story.",
-    ],
-)
-@pytest.mark.parametrize(
-    "model",
-    [
-        "llama3.2:1b",
-        "llama3.2:3b",
-        "llama3.1:8b",
-    ],
-)
-def test_model_sweep(benchmark, prompt: str, model: str):
-    print(f"\nStarting test_model_sweep with model: {model}...")
-
-    @profile(precision=4)
-    def run_prompt():
-        return run_cli("prompt", prompt, model=model, agent_name="Chaty")
-
-    # Run benchmark in pedantic mode with 1 round and 1 iteration
-    result = benchmark.pedantic(run_prompt, rounds=1, iterations=1)
-    print(result)
-
-    # Handle both string and dictionary responses
-    response = result.get("response") if isinstance(result, dict) else result
-    stats = result.get("stats") if isinstance(result, dict) else None
-
-    # Get detailed memory usage
-    mem_usage = memory_usage(
-        (run_prompt,), interval=0.1, timeout=None, max_iterations=1
+def pytest_addoption(parser):
+    parser.addoption(
+        "--hybrid",
+        action="store_true",
+        default=False,
+        help="Use hybrid backend (pass flag to enable)",
     )
 
-    # Add custom metrics to the benchmark
-    benchmark.extra_info["max_memory"] = max(mem_usage)
-    benchmark.extra_info["min_memory"] = min(mem_usage)
-    benchmark.extra_info["avg_memory"] = sum(mem_usage) / len(mem_usage)
-    if stats:
-        benchmark.extra_info.update(stats)
 
-    # Add your assertions here
-    assert "Error: 500" not in response, "Server returned 500 Internal Server Error"
-    assert response is not None, "Response should not be None"
-    assert isinstance(response, str), "Response should be a string"
-    assert len(response) > 0, "Response should not be empty"
+@pytest.mark.asyncio
+class TestGaiaCLI:
+    # Add class variable to control output printing
+    print_server_output = True
 
-    print("Test completed successfully.")
-    print(f"Max memory usage: {max(mem_usage)} MiB")
-    print(f"Min memory usage: {min(mem_usage)} MiB")
-    print(f"Avg memory usage: {sum(mem_usage) / len(mem_usage)} MiB")
+    @pytest.fixture(scope="class", autouse=True)
+    async def setup_and_teardown_class(cls, request):
+        print("\n=== Starting Server ===")
 
-    # Generate a detailed memory profile
-    plt.figure(figsize=(10, 5))
-    plt.plot(mem_usage)
-    plt.title(f"Memory Usage for {model}")
-    plt.xlabel("Time")
-    plt.ylabel("Memory usage (MiB)")
-    plt.savefig(f'memory_profile_{model.replace(":", "_")}.png')
-    plt.close()
+        # Get hybrid parameter from command line, default to False
+        hybrid = request.config.getoption("--hybrid", default=False)
+
+        if hybrid:
+            cmd = "gaia-cli start --backend oga --device hybrid --dtype int4 --model amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid"
+        else:
+            cmd = "gaia-cli start"
+        print(f"Running command: {cmd}")
+
+        # Add class variable to store the monitoring task
+        cls.monitor_task = None
+
+        try:
+            # Use asyncio subprocess instead of subprocess.Popen
+            if hybrid:
+                cls.process = await asyncio.create_subprocess_exec(
+                    "gaia-cli",
+                    "start",
+                    "--backend",
+                    "oga",
+                    "--device",
+                    "hybrid",
+                    "--dtype",
+                    "int4",
+                    "--model",
+                    "amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid",
+                    "--background",
+                    "none",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            else:
+                cls.process = await asyncio.create_subprocess_exec(
+                    "gaia-cli",
+                    "start",
+                    "--background",
+                    "none",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+
+            async def print_output():
+                try:
+                    while True:
+                        stdout_line = await cls.process.stdout.readline()
+                        stderr_line = await cls.process.stderr.readline()
+
+                        if (
+                            not stdout_line
+                            and not stderr_line
+                            and cls.process.returncode is not None
+                        ):
+                            break
+
+                        if cls.print_server_output:
+                            if stdout_line:
+                                print(f"[STDOUT] {stdout_line.decode().strip()}")
+                            if stderr_line:
+                                print(
+                                    f"[STDERR] {stderr_line.decode().strip()}",
+                                    flush=True,
+                                )
+
+                        await asyncio.sleep(0.1)
+                except Exception as e:
+                    print(f"Output monitoring error: {e}")
+                    cls.process.terminate()
+
+            # Store the monitoring task in class variable
+            cls.monitor_task = asyncio.create_task(print_output())
+
+            # Wait for both agent and LLM servers
+            timeout = 120
+            start_time = time.time()
+            print(f"Waiting for servers to be ready (timeout: {timeout}s)...")
+
+            while time.time() - start_time < timeout:
+                try:
+                    # Check if process has terminated
+                    if cls.process.returncode is not None:
+                        raise RuntimeError(
+                            f"Server process terminated with code {cls.process.returncode}"
+                        )
+
+                    # Check agent server
+                    agent_health = requests.get("http://127.0.0.1:8001/health")
+                    # Check LLM server
+                    llm_health = requests.get("http://127.0.0.1:8000/health")
+
+                    if (
+                        agent_health.status_code == 200
+                        and llm_health.status_code == 200
+                    ):
+                        print("Both servers are ready!")
+                        await asyncio.sleep(5)
+                        break
+                except requests.exceptions.ConnectionError:
+                    if time.time() - start_time > timeout - 10:
+                        print(
+                            f"Still waiting... ({int(timeout - (time.time() - start_time))}s remaining)"
+                        )
+                    await asyncio.sleep(1)
+                except Exception as e:
+                    print(f"Error during health check: {e}")
+                    raise
+            else:
+                print("Servers failed to start!")
+                cls.process.terminate()
+                raise TimeoutError("Servers failed to start within timeout period")
+
+            print("=== Server Started Successfully ===\n")
+            yield
+
+        except Exception as e:
+            print(f"Setup error: {e}")
+            await asyncio.create_subprocess_exec("gaia-cli", "stop")
+            raise
+        finally:
+            print("\n=== Cleaning Up ===")
+            # Cancel the monitoring task if it exists
+            if hasattr(cls, "monitor_task") and cls.monitor_task:
+                cls.monitor_task.cancel()
+                try:
+                    await cls.monitor_task
+                except asyncio.CancelledError:
+                    pass
+
+            stop_process = await asyncio.create_subprocess_exec("gaia-cli", "stop")
+            await stop_process.wait()
+            if hasattr(cls, "process"):
+                try:
+                    cls.process.terminate()
+                    await cls.process.wait()
+                except:
+                    pass
+            await asyncio.sleep(1)
+            print("=== Cleanup Complete ===")
+
+    async def test_server_health(self):
+        """Test if both agent and LLM servers are responding to health checks."""
+        # Test Agent server health
+        agent_response = requests.get("http://127.0.0.1:8001/health")
+        assert agent_response.status_code == 200
+
+        # Test LLM server health
+        llm_response = requests.get("http://127.0.0.1:8000/health")
+        assert llm_response.status_code == 200
+
+    async def test_prompt(self):
+        """Test basic prompt functionality with a simple question."""
+        print("\n=== Starting prompt test ===")
+        cmd = 'gaia-cli prompt "How many r\'s in strawberry?"'
+        print(f"Running command: {cmd}")
+
+        try:
+            print("Executing prompt command...")
+            process = await asyncio.create_subprocess_exec(
+                "gaia-cli",
+                "prompt",
+                "How many r's in strawberry?",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=60
+                )
+                print("Command completed!")
+
+                response = stdout.decode()
+                print(f"Response: {response}")
+
+                assert process.returncode == 0
+                assert "Gaia CLI client initialized" in response
+                assert "error" not in response.lower()
+                assert len(response) > 0
+
+            except asyncio.TimeoutError:
+                print("Command timed out!")
+                process.terminate()
+                pytest.fail("Command timed out after 60 seconds")
+
+        except Exception as e:
+            print(f"Test failed with error: {e}")
+            raise
+
+    async def test_stats(self):
+        """Test if server statistics are being collected and reported correctly."""
+        # Get stats
+        cmd = "gaia-cli stats"
+        try:
+            result = subprocess.run(
+                shlex.split(cmd),
+                capture_output=True,
+                text=True,
+                timeout=30,  # Add 30 second timeout
+            )
+
+            assert result.returncode == 0
+            stats = result.stdout
+            print(f"Stats: {stats}")
+
+            assert "error" not in stats.lower()
+            assert len(stats) > 0
+
+        except subprocess.TimeoutExpired:
+            pytest.fail("Stats command timed out after 30 seconds")
+
+    async def test_tts_preprocessing_cli(self):
+        """Test TTS preprocessing through CLI interface."""
+        print("\n=== Starting TTS preprocessing CLI test ===")
+        test_text = "Hello! This is a test of TTS preprocessing."
+
+        process = await asyncio.create_subprocess_exec(
+            "gaia-cli",
+            "test",
+            "--test-type",
+            "tts-preprocessing",
+            "--test-text",
+            test_text,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout, stderr = await process.communicate()
+        response = stdout.decode()
+
+        assert process.returncode == 0
+        assert test_text in response
+        assert "error" not in response.lower()
+
+    async def test_asr_file_transcription_cli(self):
+        """Test ASR file transcription through CLI interface."""
+        print("\n=== Starting ASR file transcription CLI test ===")
+
+        # Use the same test file path as in test_asr.py
+        test_file = (
+            Path(os.environ.get("LOCALAPPDATA", ""))
+            / "GAIA"
+            / "data"
+            / "audio"
+            / "test.m4a"
+        )
+
+        if not test_file.exists():
+            pytest.skip(
+                f"Test file {test_file} not found - skipping transcription test"
+            )
+
+        process = await asyncio.create_subprocess_exec(
+            "gaia-cli",
+            "test",
+            "--test-type",
+            "asr-file-transcription",
+            "--input-audio-file",
+            str(test_file),
+            "--whisper-model-size",
+            "base",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout, stderr = await process.communicate()
+        response = stdout.decode()
+
+        assert process.returncode == 0
+        assert "This is a test." in response
+        assert "error" not in response.lower()
+
+    async def test_asr_microphone_cli(self):
+        """Test ASR microphone recording through CLI interface."""
+        print("\n=== Starting ASR microphone test ===")
+
+        process = await asyncio.create_subprocess_exec(
+            "gaia-cli",
+            "test",
+            "--test-type",
+            "asr-microphone",
+            "--recording-duration",
+            "3",  # Short duration for test
+            "--whisper-model-size",
+            "base",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout, stderr = await process.communicate()
+        response = stdout.decode()
+        print(f"Response: {response}")
+
+        assert process.returncode == 0
+        if "no default input device available" in response.lower():
+            print(
+                "\nWARNING: Skipping audio recording assertions - no input device available in this environment"
+            )
+            print(
+                "This is expected in CI environments or systems without audio hardware.\n"
+            )
+            return
+
+        assert "recording..." in response.lower()
+        assert "recording stopped" in response.lower()
+        assert "error" not in response.lower()
+
+    async def test_list_audio_devices_cli(self):
+        """Test listing audio devices through CLI interface."""
+        print("\n=== Starting audio device listing test ===")
+
+        process = await asyncio.create_subprocess_exec(
+            "gaia-cli",
+            "test",
+            "--test-type",
+            "asr-list-audio-devices",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout, stderr = await process.communicate()
+        response = stdout.decode()
+
+        assert process.returncode == 0
+        if "no default input device available" in response.lower():
+            print(
+                "\nWARNING: Skipping audio device list assertions - no input devices available in this environment"
+            )
+            print(
+                "This is expected in CI environments or systems without audio hardware.\n"
+            )
+            return
+
+        assert "available audio devices:" in response.lower()
+        assert "error" not in response.lower()
+
+    async def test_tts_audio_file_cli(self, tmp_path):
+        """Test TTS audio file generation through CLI interface."""
+        print("\n=== Starting TTS audio file generation test ===")
+
+        output_file = tmp_path / "test_output.wav"
+        test_text = "This is a test of audio file generation."
+
+        process = await asyncio.create_subprocess_exec(
+            "gaia-cli",
+            "test",
+            "--test-type",
+            "tts-audio-file",
+            "--test-text",
+            test_text,
+            "--output-audio-file",
+            str(output_file),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout, stderr = await process.communicate()
+
+        assert process.returncode == 0
+        assert output_file.exists()
+        assert output_file.stat().st_size > 0
+
+    async def test_talk_mode_start(self):
+        """Test that talk mode starts successfully."""
+        print("\n=== Starting talk mode initialization test ===")
+
+        process = await asyncio.create_subprocess_exec(
+            "gaia-cli",
+            "talk",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        try:
+            # Give it a moment to initialize
+            await asyncio.sleep(2)
+
+            # Check if the process is running and initialized
+            if process.returncode is not None:
+                stdout, stderr = await process.communicate()
+                pytest.fail(
+                    f"Talk mode failed to start. Return code: {process.returncode}\nOutput: {stdout.decode()}\nError: {stderr.decode()}"
+                )
+
+            # Verify expected output in stdout
+            stdout_data = await process.stdout.read(1024)
+            output = stdout_data.decode()
+
+            assert "Gaia CLI client initialized" in output
+
+        finally:
+            # Clean up
+            process.terminate()
+            await process.communicate()
+
+    async def test_talk_mode_with_no_tts(self):
+        """Test that talk mode starts successfully."""
+        print("\n=== Starting talk mode initialization test ===")
+
+        process = await asyncio.create_subprocess_exec(
+            "gaia-cli",
+            "talk",
+            "--no-tts",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        try:
+            # Give it a moment to initialize
+            await asyncio.sleep(2)
+
+            # Check if the process is running and initialized
+            if process.returncode is not None:
+                stdout, stderr = await process.communicate()
+                pytest.fail(
+                    f"Talk mode failed to start. Return code: {process.returncode}\nOutput: {stdout.decode()}\nError: {stderr.decode()}"
+                )
+
+            # Verify expected output in stdout
+            stdout_data = await process.stdout.read(1024)
+            output = stdout_data.decode()
+
+            assert "Gaia CLI client initialized" in output
+
+        finally:
+            # Clean up
+            process.terminate()
+            await process.communicate()
 
 
-def test_stats_command(benchmark):
-    print("\nStarting test_stats_command...")
+# Main function to run all tests
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--hybrid",
+        action="store_true",
+        default=False,
+        help="Use hybrid backend (pass flag to enable)",
+    )
+    args, remaining_args = parser.parse_known_args()
 
-    @profile(precision=4)
-    def run_stats():
-        return run_cli("stats")
-
-    # Run benchmark in pedantic mode with 1 round and 1 iteration
-    result = benchmark.pedantic(run_stats, rounds=1, iterations=1)
-    print(f"Stats result: {result}")
-
-    # Validate the stats response structure
-    assert isinstance(result, dict), "Stats result should be a dictionary"
-    assert "stats" in result, "Stats result should contain a 'stats' key"
-    assert isinstance(result["stats"], dict), "Stats should be a dictionary"
-
-    # Validate specific stats fields
-    stats = result["stats"]
-    required_fields = [
-        "time_to_first_token",
-        "tokens_per_second",
-        "input_tokens",
-        "output_tokens",
-        "decode_token_times",
+    # Create a list of pytest arguments
+    pytest_args = [
+        __file__,
+        "-vv",
+        "-s",
+        "--asyncio-mode=auto",
+        "--capture=no",
+        "--log-cli-level=INFO",
     ]
 
-    for field in required_fields:
-        assert field in stats, f"Stats should contain '{field}'"
+    # Only add hybrid flag if explicitly set to True
+    if args.hybrid:
+        pytest_args.append("--hybrid")
 
-    # Type and value checks
-    assert isinstance(
-        stats["time_to_first_token"], (int, float)
-    ), "time_to_first_token should be numeric"
-    assert isinstance(
-        stats["tokens_per_second"], (int, float)
-    ), "tokens_per_second should be numeric"
-    assert isinstance(stats["input_tokens"], int), "input_tokens should be an integer"
-    assert isinstance(stats["output_tokens"], int), "output_tokens should be an integer"
-    assert isinstance(
-        stats["decode_token_times"], list
-    ), "decode_token_times should be a list"
-
-    # Value range checks
-    assert (
-        stats["time_to_first_token"] >= 0
-    ), "time_to_first_token should be non-negative"
-    assert stats["tokens_per_second"] >= 0, "tokens_per_second should be non-negative"
-    assert stats["input_tokens"] >= 0, "input_tokens should be non-negative"
-    assert stats["output_tokens"] >= 0, "output_tokens should be non-negative"
-    assert all(
-        t >= 0 for t in stats["decode_token_times"]
-    ), "all decode times should be non-negative"
-
-    # Get memory usage for stats command
-    mem_usage = memory_usage((run_stats,), interval=0.1, timeout=None, max_iterations=1)
-
-    # Add custom metrics to the benchmark
-    benchmark.extra_info["max_memory"] = max(mem_usage)
-    benchmark.extra_info["min_memory"] = min(mem_usage)
-    benchmark.extra_info["avg_memory"] = sum(mem_usage) / len(mem_usage)
-
-    print("Stats test completed successfully.")
-    print(f"Max memory usage: {max(mem_usage)} MiB")
-    print(f"Min memory usage: {min(mem_usage)} MiB")
-    print(f"Avg memory usage: {sum(mem_usage) / len(mem_usage)} MiB")
-
-    # Generate memory profile
-    plt.figure(figsize=(10, 5))
-    plt.plot(mem_usage)
-    plt.title("Memory Usage for Stats Command")
-    plt.xlabel("Time")
-    plt.ylabel("Memory usage (MiB)")
-    plt.savefig("memory_profile_stats.png")
-    plt.close()
-
-
-if __name__ == "__main__":
-    start_servers()
-    # Update the pytest.main() call
-    pytest.main(
-        [
-            __file__,
-            "--benchmark-json=output.json",
-            "-v",  # for verbose output
-            "-s",  # to show print statements
-            "-k",
-            "test_model_sweep[llama3.2:1b-Who",
-        ]
-    )
-    stop_servers()
+    # Run pytest with the constructed arguments and exit with its return code
+    exit_code = pytest.main(pytest_args)
+    print(f"pytest exit code: {exit_code}")
+    sys.exit(exit_code)

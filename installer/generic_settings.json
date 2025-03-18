@@ -36,6 +36,51 @@
                     "Q4_0"
                 ]
             }
+        },
+        "DeepSeek R1 1.5B Ollama": {
+            "backend" : "ollama",
+            "checkpoint": "deepseek-r1:1.5b",
+            "device": {
+                "gpu": [
+                    "Q4_K_M"
+                ]
+            }
+        },
+        "DeepSeek R1 7B Ollama": {
+            "backend" : "ollama",
+            "checkpoint": "deepseek-r1:7b",
+            "device": {
+                "gpu": [
+                    "Q4_K_M"
+                ]
+            }
+        },
+        "DeepSeek R1 8B Ollama": {
+            "backend" : "ollama",
+            "checkpoint": "deepseek-r1:8b",
+            "device": {
+                "gpu": [
+                    "Q4_K_M"
+                ]
+            }
+        },
+        "DeepSeek R1 14B Ollama": {
+            "backend" : "ollama",
+            "checkpoint": "deepseek-r1:14b",
+            "device": {
+                "gpu": [
+                    "Q4_K_M"
+                ]
+            }
+        },
+        "DeepSeek R1 32B Ollama": {
+            "backend" : "ollama",
+            "checkpoint": "deepseek-r1:32b",
+            "device": {
+                "gpu": [
+                    "Q4_K_M"
+                ]
+            }
         }
     },
     "max_new_tokens": 600,

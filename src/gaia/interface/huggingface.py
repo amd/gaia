@@ -1,4 +1,4 @@
-# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import os
@@ -80,7 +80,9 @@ class HuggingFaceTokenDialog(QWidget, WindowDragMixin):
         )
 
         self.token_input = QLineEdit()
-        self.token_input.setPlaceholderText("Enter your token here")
+        self.token_input.setPlaceholderText(
+            "Please enter your token, needed to access HF gated models"
+        )
         self.token_input.setFont(QFont("Segoe UI", 12))
         self.token_input.setStyleSheet(
             """

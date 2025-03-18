@@ -1,6 +1,3 @@
-#### Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
-#### SPDX-License-Identifier: MIT
-
 # GAIA (Generative AI is Awesome) FAQ
 
 ## Demo Introduction
@@ -62,3 +59,10 @@ The demo is split into two main components:
 The query is sent to the Gaia web app, where it’s transformed into an embedding vector. This vector is used to retrieve relevant chunks of the local GitHub repository, which are then passed to the NPU service. You can see the context being embedded into the LLM based on the query. This embedded context is then used to generate an answer, which is streamed back through the Gaia web service. The response is sent from the right side of the system to the Gaia web service on the left, and finally displayed in the UI. Once the process is complete, the user receives the final answer.
 
 And that’s the demo. As you can see, the LLM generates a detailed response based on a large document, incorporating all the relevant information from the context provided.
+
+# License
+
+[MIT License](../LICENSE.md)
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+SPDX-License-Identifier: MIT

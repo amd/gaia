@@ -1,7 +1,10 @@
-# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 # This Python file uses the following encoding: utf-8
+
+print("Loading GAIA, please be patient...")  # pylint: disable=wrong-import-position
+
 import sys
 import os
 import re
@@ -43,6 +46,7 @@ import gaia.agents as agents
 from gaia.interface.util import UIMessage
 from gaia.interface.ui_form import Ui_Widget
 from gaia.llm.server import launch_llm_server
+from gaia.version import version_with_hash
 
 # Conditional import for Ollama
 try:
@@ -132,32 +136,32 @@ class SetupLLM(QObject):
                 if self._is_cancelled:
                     return
 
-                # Check all servers asynchronously
-                workers = []
+                # Clear any existing workers
+                with self._workers_lock:
+                    self.server_check_workers.clear()
 
                 # Check agent server
-                workers.append(
-                    self.check_server_available("127.0.0.1", self.widget.agent_port)
-                )
+                self.check_server_available("127.0.0.1", self.widget.agent_port)
 
                 # Check LLM server
-                workers.append(
-                    self.check_server_available("127.0.0.1", self.widget.llm_port)
-                )
+                self.check_server_available("127.0.0.1", self.widget.llm_port)
 
                 # Check Ollama server if needed
                 selected_model = self.widget.ui.model.currentText()
                 model_settings = self.widget.settings["models"][selected_model]
                 if model_settings["backend"] == "ollama" and OLLAMA_AVAILABLE:
-                    workers.append(
-                        self.check_server_available(
-                            "127.0.0.1",
-                            self.widget.ollama_port,
-                            endpoint="/api/version",
-                        )
+                    self.check_server_available(
+                        "127.0.0.1",
+                        self.widget.ollama_port,
+                        endpoint="/api/version",
                     )
 
                 # Wait for all workers to complete
+                with self._workers_lock:
+                    workers = (
+                        self.server_check_workers.copy()
+                    )  # Create a copy to iterate safely
+
                 for worker in workers:
                     if isinstance(worker, ServerCheckWorker):
                         worker.wait()
@@ -304,7 +308,6 @@ class SetupLLM(QObject):
                 )
                 self.widget.llm_server.start()
                 self.check_server_available("127.0.0.1", self.widget.llm_port)
-        asyncio.run(self.request_llm_load())
         self.log.info("Done.")
 
     def initialize_ollama_model_server(self):
@@ -467,29 +470,6 @@ class SetupLLM(QObject):
         except (requests.RequestException, ConnectionError):
             return False
 
-    async def request_llm_load(self):
-        """Request Agent Server to update connection to LLM Server"""
-        async with ClientSession() as session:
-            # Get the model settings
-            selected_model = self.widget.ui.model.currentText()
-            model_settings = self.widget.settings["models"][selected_model]
-            checkpoint = model_settings["checkpoint"]
-
-            async with session.post(
-                f"http://127.0.0.1:{self.widget.agent_port}/load_llm",
-                json={
-                    "model": self.widget.ui.model.currentText(),
-                    "checkpoint": checkpoint,
-                },
-            ) as response:
-                # Wait for response from server
-                response_data = await response.json()
-                # Check if LLM has been successfully loaded
-                if response_data.get("status") == "Success":
-                    self.log.debug("LLM has been loaded successfully!")
-                else:
-                    self.log.error("Failed to load LLM.")
-
 
 class StreamToAgent(QObject):
     finished = Signal()
@@ -647,7 +627,7 @@ class Widget(QWidget):
             }
         """
         )
-        self.setWindowTitle("Ryzen AI GAIA")
+        self.setWindowTitle(f"Ryzen AI GAIA [{version_with_hash}]")
 
         # Set a much wider minimum width for the chat area
         self.ui.scrollAreaWidgetContents.setMinimumWidth(800)
@@ -717,6 +697,9 @@ class Widget(QWidget):
         self.ui.loadingGif.setFixedSize(QSize(300, 25))
         self.ui.loadingGif.setMovie(self.movie)
         self.movie.start()
+
+        # Add version to loading label
+        self.ui.loadingLabel.setText(f"GAIA [{version_with_hash}]")
 
         # Create setup thread
         if self.server:

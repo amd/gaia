@@ -1,4 +1,4 @@
-# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 # This workflow will install Python dependencies, run tests and lint with a single version of Python
@@ -51,7 +51,7 @@ jobs:
 
           Write-Host "Step 2: Install dependencies"
           python -m pip install --upgrade pip
-          pip install -e .[dml,dev,clip]
+          pip install -e .[dml,dev,clip,talk]
 
           Write-Host "Step 3: Verify installation"
           $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
@@ -108,12 +108,12 @@ jobs:
         id: setup-ffmpeg
 
       - name: Test GAIA
-        timeout-minutes: 10
+        timeout-minutes: 20
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         run: |
-          Write-Host "Step 1: Activate and verify Conda environment"
+          Write-Host "Activate and verify Conda environment"
           $env:Path = "$env:GITHUB_WORKSPACE\Miniconda3;$env:GITHUB_WORKSPACE\Miniconda3\Scripts;$env:Path"
           & "$env:GITHUB_WORKSPACE\Miniconda3\shell\condabin\conda-hook.ps1"
           conda activate gaiaenv
@@ -130,6 +130,26 @@ jobs:
           }
           Write-Host "Found gaia at: $($gaiaPath.Source)"
 
-          Write-Host "Step 2: Install and run GAIA tests"
-          python tests/test_gaia.py
-          python tests/test_asr.py
+          Write-Host "Running test_gaia.py"
+          python tests\test_gaia.py 2>&1 | Out-String -Stream
+          if ($LASTEXITCODE -ne 0) {
+              throw "test_gaia.py failed with exit code $LASTEXITCODE"
+          }
+
+          Write-Host "Running test_llama_index.py"
+          python tests\test_llama_index.py 2>&1 | Out-String -Stream
+          if ($LASTEXITCODE -ne 0) {
+              throw "test_llama_index.py failed with exit code $LASTEXITCODE"
+          }
+
+          Write-Host "Running test_asr.py"
+          python tests\test_asr.py 2>&1 | Out-String -Stream
+          if ($LASTEXITCODE -ne 0) {
+              throw "test_asr.py failed with exit code $LASTEXITCODE"
+          }
+
+          Write-Host "Running test_tts.py"
+          python tests\test_tts.py 2>&1 | Out-String -Stream
+          if ($LASTEXITCODE -ne 0) {
+              throw "test_tts.py failed with exit code $LASTEXITCODE"
+          }

@@ -1,4 +1,4 @@
-# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import os
@@ -115,7 +115,7 @@ def add_spdx_header(files):
 if __name__ == "__main__":
     gaia_root = os.getenv('GAIA_ROOT', '.')
     root_directory = os.path.join(gaia_root)
-    header_to_find = "Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved."
+    header_to_find = "Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved."
 
     files = find_files_with_header(root_directory, header_to_find)
 

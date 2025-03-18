@@ -1,4 +1,4 @@
-# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 name: "Test GAIA UI"
@@ -133,11 +133,27 @@ runs:
           Stop-Job -Job $errorLogJob
           Remove-Job -Job $logJob
           Remove-Job -Job $errorLogJob
-          Stop-Process -Id $gaiaProcess.Id
+          taskkill /F /T /PID $gaiaProcess.Id
           Write-Host "GAIA process has been stopped."
 
           # Show final logs
           Write-Host "=== Final GAIA Logs ==="
-          if(Test-Path $logPath) { Get-Content $logPath }
+          if(Test-Path $logPath) {
+            Get-Content $logPath
+            if (Select-String -Path $logPath -Pattern "ERROR" -CaseSensitive -Quiet) {
+              Write-Error "Found ERROR messages in GAIA logs"
+              $errorLines = Select-String -Path $logPath -Pattern "ERROR" -CaseSensitive
+              Write-Error "Error lines found:`n$($errorLines | ForEach-Object { $_.Line })"
+              exit 1
+            }
+          }
           Write-Host "=== Final GAIA Error Logs ==="
-          if(Test-Path $errorLogPath) { Get-Content $errorLogPath }
+          if(Test-Path $errorLogPath) {
+            Get-Content $errorLogPath
+            if (Select-String -Path $errorLogPath -Pattern "error|Error:|ERROR:|CRITICAL:" -CaseSensitive -Quiet) {
+              Write-Error "Found errors in GAIA error logs"
+              $errorLines = Select-String -Path $errorLogPath -Pattern "Error:|ERROR:|CRITICAL:" -CaseSensitive
+              Write-Error "Error log content:`n$($errorLines | ForEach-Object { $_.Line })"
+              exit 1
+            }
+          }

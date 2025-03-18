@@ -32,6 +32,7 @@ For more details, see the [Frequently Asked Questions](docs/faq.md).
 
 1. [Getting Started](#getting-started)
    - [Installation Steps](#installation-steps)
+   - [Uninstallation Steps](#uninstallation-steps)
    - [Running the GAIA GUI](#running-the-gaia-gui)
    - [Running the GAIA CLI](#running-the-gaia-cli)
    - [Building from Source](#building-from-source)
@@ -58,6 +59,7 @@ Each installer includes both a CLI tool and a GUI. The installation process typi
 ![image](./data/img/gaia-setup.png)
 
 To install the GAIA application, please follow these steps:
+1. Make sure you meet the minimum system requirements [here](#system-requirements)
 1. Download the [latest release](https://github.com/amd/gaia/releases) of the GAIA installers from the "Assets" section:
    ![image](./data/img/gaia-installer.png)
    1. If you have a Ryzen AI PC, choose the Hybrid installer, otherwise choose the generic installer.
@@ -72,7 +74,29 @@ To install the GAIA application, please follow these steps:
    1. The process will take about 5-10 minutes depending on your Wi-Fi connection and includes everything needed to get up and running with LLMs on Ryzen AI.
 
 1. Once installation is complete, two desktop icons will be created.
-   1. GAIA - Double click this icon to launch the GUI tool.
+   1. GAIA-CLI - Double click this icon to launch the CLI tool.
+   1. GAIA-GUI - Double click this icon to launch the GUI tool.
+
+## Uninstallation Steps
+
+⚠️ **NOTE**: There is currently no automatic uninstaller available for GAIA, but one is coming soon. For now, you must manually remove GAIA from your system.
+
+To completely uninstall GAIA from your system, follow these steps:
+
+1. Close all running instances of GAIA (both CLI and GUI).
+
+2. Remove the GAIA folder from AppData:
+   1. Press `Win + R` to open the Run dialog
+   2. Type `%localappdata%` and press Enter
+   3. Find and delete the `GAIA` folder
+
+3. Remove model files from the cache folder:
+   1. Press `Win + R` to open the Run dialog
+   2. Type `%userprofile%\.cache` and press Enter
+   3. Delete any GAIA-related model folders (such as `huggingface` and `lemonade`)
+
+4. Remove desktop shortcuts:
+   1. Delete the GAIA-CLI and GAIA-GUI shortcuts from your desktop
 
 ## Running the GAIA GUI
 
@@ -104,38 +128,26 @@ The best way to contribute is by adding a new agent that covers a unique use-cas
 
 GAIA with Ryzen AI Hybrid NPU/iGPU execution has been tested on the following systems. Any system that has the AMD Ryzen AI 9 HX 370 with NPU Driver 32.0.203.237 or higher should work. If you do not have access to a Ryzen AI system below, please use the generic installer instead.
 
-- Systems: Asus ProArt PX13/P16 and HP Omnibook
-- OS Name: Microsoft Windows 11 Pro/Home
+- Systems: Asus ProArt PX13/P16, HP Omnibook or similar PC system with Ryzen AI 9 HX 370 or higher.
+- OS: Windows 11 Pro/Home (GAIA does not support macOS or Linux at this time, [contact us](mailto:gaia@amd.com) if you need support for a particular platform)
 - Processor: AMD Ryzen AI 9 HX 370 w/ Radeon 890M, 2000 Mhz, 12 Core(s), 24 Logical Processor(s)
-- Physical Memory: 32.0 GB
 - AMD Radeon 890M iGPU drivers: `32.0.12010.8007` and `32.0.12033.1030`
-- AMD NPU drivers: `32.0.203.237` and `32.0.203.240`
+- AMD NPU drivers: `32.0.203.237` or `32.0.203.240`
+- AMD Adrenalin Software: Install the latest version from [AMD's official website](https://www.amd.com/en/products/software/adrenalin.html)
+- Physical Memory: Minimum 16GB, Recommended 32GB
+- For Hybrid mode: AMD Ryzen AI 9 HX 370 with NPU Driver `32.0.203.237` or `32.0.203.240`
+- For Generic mode: Any Windows PC meeting Ollama's system requirements
 
-To check the NPU driver version, go to `Device Manager` > `Neural Processors`, right-click `Properties` of `NPU Compute Accelerator Device` and select the `Driver` tab.
+⚠️ **NOTE**: For Hybrid mode, NPU Driver `32.0.203.242` is not compatible, please revert driver to `32.0.203.240`. You can check your driver version by going to *Device Manager -> Neural Processors -> NPU Compute Accelerator Device -> Right-Click Properties -> Driver Tab -> Driver Version*.
 
 ## Dependencies
-
-System Requirements:
-- Windows 11 Pro/Home (GAIA is not supported on macOS or Linux)
-- For Hybrid mode: AMD Ryzen AI 9 HX 370 with NPU Driver 32.0.203.237 or higher
-- For Generic mode: Any Windows PC meeting Ollama's system requirements
 
 The GAIA installer will automatically set up most dependencies, including:
 - Python 3.10
 - Miniconda (if not already installed)
 - FFmpeg
+- Ollama *(Generic mode only)*
 - All required Python packages
-
-Additional requirements:
-
-For Generic installer:
-- Ollama (version 0.1.17 or higher)
-  - Must be installed manually from: https://ollama.com/download
-
-For Hybrid installer:
-- AMD NPU Driver (version 32.0.203.237 or higher)
-  - The installer will check your driver version and prompt for updates if needed
-- AMD Radeon iGPU Driver (version 32.0.12010.8007 or higher)
 
 # FAQ
 
@@ -146,6 +158,8 @@ For frequently asked questions, please refer to the [FAQ](docs/faq.md).
 Contact [AMD GAIA Team](mailto:gaia@amd.com) for any questions, feature requests, access or troubleshooting issues.
 
 # License
+
+[MIT License](./LICENSE.md)
 
 Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT

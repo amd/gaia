@@ -1,20 +1,30 @@
-# Copyright(C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 from setuptools import setup
+import re
+
+with open("src/gaia/version.py", encoding="utf-8") as fp:
+    version_content = fp.read()
+    version_match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', version_content)
+    if not version_match:
+        raise ValueError("Unable to find version string in version.py")
+    gaia_version = version_match.group(1)
 
 tkml_version = "5.0.4"
 
 setup(
     name="gaia",
-    version="0.6.3",
-    description="GAIA genAI sandbox",
+    version=gaia_version,
+    description="GAIA is an AI assistant framework that provides a user-friendly interface for interacting with large language models and AI agents",
     author="AMD",
     package_dir={"": "src"},
     packages=[
         "gaia",
         "gaia.llm",
+        "gaia.audio",
         "gaia.agents",
+        "gaia.audio",
         "gaia.agents.Llm",
         "gaia.agents.Chaty",
         "gaia.agents.Clip",
@@ -40,9 +50,6 @@ setup(
         "torchaudio",
         "pyside6",
         "ollama",
-        "pyaudio",
-        "openai-whisper",
-        "numpy",
     ],
     extras_require={
         "dml": [
@@ -105,6 +112,15 @@ setup(
             "adjustText",
             "plotly",
             "black",
+        ],
+        "talk":[
+            "pyaudio",
+            "openai-whisper",
+            "numpy",
+            "kokoro>=0.3.1",
+            "soundfile",
+            "sounddevice",
+            "soundfile",
         ]
     },
     classifiers=[],

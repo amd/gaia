@@ -1,8 +1,14 @@
-import numpy as np
-import threading
-import pyaudio
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Standard library imports first
 import queue
+import threading
 import time
+
+# Third-party imports next
+import numpy as np
+import pyaudio
 
 from gaia.logger import get_logger
 
@@ -12,23 +18,47 @@ class AudioRecorder:
 
     def __init__(
         self,
-        device_index=1,
+        device_index=None,
     ):
         self.log = self.__class__.log  # Use the class-level logger for instances
+
+        # Add thread attributes
+        self.record_thread = None
+        self.process_thread = None
 
         # Audio parameters - optimized for better quality
         self.CHUNK = 1024 * 2  # Reduced for lower latency while maintaining quality
         self.FORMAT = pyaudio.paFloat32
         self.CHANNELS = 1
         self.RATE = 16000
-        self.device_index = device_index
+        self.device_index = (
+            self._get_default_input_device() if device_index is None else device_index
+        )
         self.is_recording = False
         self.audio_queue = queue.Queue()
+        self.stream = None  # Add stream as class attribute
 
         # Voice detection parameters
         self.SILENCE_THRESHOLD = 0.003
         self.MIN_AUDIO_LENGTH = self.RATE * 0.25
         self.is_speaking = False
+
+        # New attributes for pause functionality
+        self.is_paused = False
+        self.pause_lock = threading.Lock()
+
+    def _get_default_input_device(self):
+        """Get the default input device index."""
+        pa = pyaudio.PyAudio()
+        try:
+            default_device = pa.get_default_input_device_info()
+            return default_device["index"]
+        except Exception as e:
+            self.log.error(f"Error getting default input device: {e}")
+            # Fall back to device 0 if no default found
+            return 0
+        finally:
+            pa.terminate()
 
     def _is_speech(self, audio_chunk):
         """Detect if audio chunk contains speech based on amplitude."""
@@ -40,9 +70,9 @@ class AudioRecorder:
 
         try:
             device_info = pa.get_device_info_by_index(self.device_index)
-            self.log.info(f"Using audio device: {device_info['name']}")
+            self.log.debug(f"Using audio device: {device_info['name']}")
 
-            stream = pa.open(
+            self.stream = pa.open(  # Store stream as class attribute
                 format=self.FORMAT,
                 channels=self.CHANNELS,
                 rate=self.RATE,
@@ -51,7 +81,7 @@ class AudioRecorder:
                 frames_per_buffer=self.CHUNK,
             )
 
-            self.log.info("Recording started...")
+            self.log.debug("Recording started...")
 
             # For detecting continuous speech
             speech_buffer = np.array([], dtype=np.float32)
@@ -62,8 +92,14 @@ class AudioRecorder:
 
             while self.is_recording:
                 try:
+                    # Skip recording if paused
+                    with self.pause_lock:
+                        if self.is_paused:
+                            time.sleep(0.1)
+                            continue
+
                     data = np.frombuffer(
-                        stream.read(self.CHUNK, exception_on_overflow=False),
+                        self.stream.read(self.CHUNK, exception_on_overflow=False),
                         dtype=np.float32,
                     )
                     data = np.clip(data, -1, 1)
@@ -98,11 +134,28 @@ class AudioRecorder:
             raise
         finally:
             try:
-                stream.stop_stream()
-                stream.close()
+                if self.stream is not None:
+                    self.stream.stop_stream()
+                    self.stream.close()
+                    self.stream = None
             except Exception as e:
                 self.log.error(f"Error closing audio stream: {e}")
             pa.terminate()
+
+    def _process_audio(self):
+        """Process recorded audio chunks from the queue."""
+        while self.is_recording:
+            try:
+                # Process any audio in the queue
+                if not self.audio_queue.empty():
+                    _ = self.audio_queue.get_nowait()
+                else:
+                    time.sleep(0.1)  # Prevent busy-waiting
+            except queue.Empty:
+                continue
+            except Exception as e:
+                self.log.error(f"Error processing audio: {e}")
+                break
 
     def list_audio_devices(self):
         """List all available audio input devices."""
@@ -131,7 +184,7 @@ class AudioRecorder:
 
     def start_recording(self, duration=None):
         """Start recording and transcription."""
-        self.log.info("Initializing recording...")
+        self.log.debug("Initializing recording...")
 
         # Make sure we're not already recording
         if self.is_recording:
@@ -142,7 +195,7 @@ class AudioRecorder:
         self.is_recording = True
 
         # Start record thread
-        self.log.info("Starting record thread...")
+        self.log.debug("Starting record thread...")
         self.record_thread = threading.Thread(target=self._record_audio)
         self.record_thread.start()
 
@@ -150,7 +203,7 @@ class AudioRecorder:
         time.sleep(0.1)
 
         # Start process thread
-        self.log.info("Starting process thread...")
+        self.log.debug("Starting process thread...")
         self.process_thread = threading.Thread(target=self._process_audio)
         self.process_thread.start()
 
@@ -163,15 +216,27 @@ class AudioRecorder:
 
     def stop_recording(self):
         """Stop recording and transcription."""
-        self.log.info("Stopping recording...")
+        self.log.debug("Stopping recording...")
         self.is_recording = False
         if self.record_thread:
-            self.log.info("Waiting for record thread to finish...")
+            self.log.debug("Waiting for record thread to finish...")
             self.record_thread.join()
         if self.process_thread:
-            self.log.info("Waiting for process thread to finish...")
+            self.log.debug("Waiting for process thread to finish...")
             self.process_thread.join()
-        self.log.info("Recording stopped")
+        self.log.debug("Recording stopped")
+
+    def pause_recording(self):
+        """Pause the recording without stopping threads."""
+        with self.pause_lock:
+            self.is_paused = True
+            self.log.debug("Recording paused")
+
+    def resume_recording(self):
+        """Resume the recording."""
+        with self.pause_lock:
+            self.is_paused = False
+            self.log.debug("Recording resumed")
 
 
 if __name__ == "__main__":
