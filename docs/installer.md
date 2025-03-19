@@ -81,7 +81,23 @@ The installation process varies by mode:
   - Installs Ryzen AI wheel packages
 - Configures settings.json based on selected mode
 
-### 5. Final Setup
+### 5. AMD RAUX (Beta)
+
+![AMD RAUX Installation Option](../docs/img/raux_installer_option.png)
+
+During installation, you can choose to install AMD RAUX (beta), AMD's new UI for interacting with AI models:
+- RAUX (an Open-WebUI fork) is AMD's new UI for interacting with AI models
+- Provides a chat interface similar to ChatGPT and other AI assistants
+- Offers a modern, intuitive interface for conversational AI interactions
+- Installed separately from the main GAIA application
+- Creates its own desktop shortcut for easy access
+
+To launch RAUX after installation:
+- Click the RAUX desktop shortcut created during installation
+- The application will open in your default web browser
+- For technical support with RAUX, contact support@amd.com
+
+### 6. Final Setup
 - Creates desktop shortcuts
 - Sets up launch configuration
 - Validates installation

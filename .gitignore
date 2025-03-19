@@ -107,3 +107,7 @@ ENV/
 
 # Custom
 config.ini
+
+# Installer files
+installer/**.exe
+release_info.json

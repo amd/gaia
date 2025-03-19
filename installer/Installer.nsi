@@ -52,6 +52,9 @@ Name "GAIA"
 ; Include modern UI elements
 !include "MUI2.nsh"
 
+; Include nsDialogs for custom pages
+!include "nsDialogs.nsh"
+
 ; Enable StrLoc function
 !include StrFunc.nsh
 ${StrLoc}
@@ -65,6 +68,9 @@ ${StrLoc}
 ; Define the GAIA_STRING variable
 Var GAIA_STRING
 
+; Variable to track whether to install RAUX
+Var InstallRAUX
+
 Function .onInit
   ${If} ${MODE} == "HYBRID"
     StrCpy $GAIA_STRING "GAIA - Ryzen AI Hybrid Mode, ver: ${GAIA_VERSION}"
@@ -73,6 +79,9 @@ Function .onInit
   ${Else}
     StrCpy $GAIA_STRING "GAIA - Generic Mode, ver: ${GAIA_VERSION}"
   ${EndIf}
+  
+  ; Initialize InstallRAUX to 1 (checked)
+  StrCpy $InstallRAUX "1"
 FunctionEnd
 
 ; Define constants
@@ -80,6 +89,28 @@ FunctionEnd
 !define GITHUB_REPO "https://github.com/aigdat/gaia.git"
 !define EMPTY_FILE_NAME "empty_file.txt"
 !define ICON_FILE "../src/gaia/interface/img/gaia.ico"
+
+; Custom page for RAUX installation option
+Function RAUXOptionsPage
+  !insertmacro MUI_HEADER_TEXT "Additional Components" "Choose additional components to install"
+  nsDialogs::Create 1018
+  Pop $0
+  
+  ${NSD_CreateCheckbox} 10 10 100% 12u "Install AMD RAUX [beta]"
+  Pop $1
+  ${NSD_SetState} $1 $InstallRAUX
+  SetCtlColors $1 "" "transparent"
+  
+  ${NSD_CreateLabel} 25 30 100% 40u "RAUX (an Open-WebUI fork) is AMD's new UI for interacting with AI models.$\nIt provides a chat interface similar to ChatGPT and other AI assistants.$\nThis feature is currently in beta."
+  Pop $2
+  SetCtlColors $2 "" "transparent"
+  
+  nsDialogs::Show
+FunctionEnd
+
+Function RAUXOptionsLeave
+  ${NSD_GetState} $1 $InstallRAUX
+FunctionEnd
 
 ; Finish Page settings
 !define MUI_TEXT_FINISH_INFO_TITLE "GAIA installed successfully!"
@@ -99,6 +130,7 @@ FunctionEnd
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
+Page custom RAUXOptionsPage RAUXOptionsLeave
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_LANGUAGE "English"
@@ -368,6 +400,7 @@ Section "Install Main Components" SEC01
       GoTo create_env
 
     create_env:
+
       DetailPrint "---------------------"
       DetailPrint "- Conda Environment -"
       DetailPrint "---------------------"
@@ -578,6 +611,8 @@ Section "Install Main Components" SEC01
         Delete "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\settings.json"
         Rename "$INSTDIR\generic_settings.json" "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\settings.json"
       ${EndIf}
+      
+      GoTo run_raux_installer
 
       DetailPrint "*** INSTALLATION COMPLETED ***"
 
@@ -585,7 +620,79 @@ Section "Install Main Components" SEC01
       CreateShortcut "$DESKTOP\GAIA-UI.lnk" "$SYSDIR\cmd.exe" "/C conda activate $INSTDIR\gaia_env > NUL 2>&1 && gaia" "$INSTDIR\src\gaia\interface\img\gaia.ico"
       CreateShortcut "$DESKTOP\GAIA-CLI.lnk" "$SYSDIR\cmd.exe" "/K conda activate $INSTDIR\gaia_env" "$INSTDIR\src\gaia\interface\img\gaia.ico"
 
-      Return
+
+    run_raux_installer:
+      ; Check if user chose to install RAUX
+      ${If} $InstallRAUX == "1"
+        DetailPrint "---------------------"
+        DetailPrint "- RAUX Installation -"
+        DetailPrint "---------------------"
+
+        DetailPrint "- Creating RAUX installation directory..."
+        CreateDirectory "$LOCALAPPDATA\RAUX"
+        
+        DetailPrint "- Creating temporary directory for RAUX installation..."
+        CreateDirectory "$LOCALAPPDATA\RAUX\raux_temp"
+        SetOutPath "$LOCALAPPDATA\RAUX\raux_temp"
+        
+        DetailPrint "- Preparing for RAUX installation..."
+        
+        ; Copy the Python installer script to the temp directory
+        File "${__FILE__}\..\raux_installer.py"
+
+        DetailPrint "- Using Python script: $LOCALAPPDATA\RAUX\raux_temp\raux_installer.py"
+        DetailPrint "- Installation directory: $LOCALAPPDATA\RAUX"
+        DetailPrint "- Using system Python for the entire installation process"
+        
+        ; Execute the Python script with the required parameters using system Python
+        ; Note: We're not passing the python-exe parameter, so it will use the system Python
+        ExecWait 'python "$LOCALAPPDATA\RAUX\raux_temp\raux_installer.py" --install-dir "$LOCALAPPDATA\RAUX" --debug' $R0
+
+        DetailPrint "RAUX installation exit code: $R0"
+        
+        ; Check if installation was successful
+        ${If} $R0 == 0
+          DetailPrint "*** RAUX INSTALLATION COMPLETED ***"
+          DetailPrint "- RAUX installation completed successfully"
+        ${Else}
+          DetailPrint "*** RAUX INSTALLATION FAILED ***"
+          DetailPrint "- For additional support, please contact support@amd.com and"
+          DetailPrint "include the error details, or create an issue at"
+          DetailPrint "https://github.com/aigdat/open-webui"
+          ${IfNot} ${Silent}
+            MessageBox MB_OK "RAUX installation failed.$\n$\nPlease check the log file at $LOCALAPPDATA\RAUX\raux_Installer.log for detailed error information."
+          ${EndIf}
+        ${EndIf}
+        
+        ; IMPORTANT: Do NOT attempt to clean up the temporary directory
+        ; This is intentional to prevent file-in-use errors
+        ; The directory will be left for the system to clean up later
+        DetailPrint "- Intentionally NOT cleaning up temporary directory to prevent file-in-use errors"
+        SetOutPath "$INSTDIR"
+        
+        ; Create RAUX shortcut - using the GAIA icon but pointing to RAUX installation
+        DetailPrint "- Creating RAUX desktop shortcut"
+        
+        ; Copy the launcher scripts to the RAUX installation directory if they exist
+        DetailPrint "- Copying RAUX launcher scripts"
+        
+        ; Use /nonfatal flag to prevent build failure if files don't exist
+        File /nonfatal "/oname=$LOCALAPPDATA\RAUX\launch_raux.ps1" "${__FILE__}\..\launch_raux.ps1"
+        File /nonfatal "/oname=$LOCALAPPDATA\RAUX\launch_raux.cmd" "${__FILE__}\..\launch_raux.cmd"
+        
+        ; Create shortcut to the batch wrapper script (will appear as a standalone app)
+        CreateShortcut "$DESKTOP\RAUX.lnk" "$LOCALAPPDATA\RAUX\launch_raux.cmd" "" "$INSTDIR\src\gaia\interface\img\raux.ico"
+      ${Else}
+        DetailPrint "- RAUX installation skipped by user choice"
+      ${EndIf}
+      
+      create_shortcuts:
+        DetailPrint "*** INSTALLATION COMPLETED ***"
+
+        # Create shortcuts directly
+        CreateShortcut "$DESKTOP\GAIA-UI.lnk" "$SYSDIR\cmd.exe" "/C conda activate $INSTDIR\gaia_env > NUL 2>&1 && gaia" "$INSTDIR\src\gaia\interface\img\gaia.ico"
+        CreateShortcut "$DESKTOP\GAIA-CLI.lnk" "$SYSDIR\cmd.exe" "/K conda activate $INSTDIR\gaia_env" "$INSTDIR\src\gaia\interface\img\gaia.ico"
+
 SectionEnd
 
 Function RunGAIAUI

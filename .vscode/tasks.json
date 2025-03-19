@@ -1,0 +1,74 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build GAIA Installer: Generic",
+            "type": "shell",
+            "command": "makensis",
+            "args": [
+                "${workspaceFolder}/installer/Installer.nsi"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Build GAIA Installer: Hybrid",
+            "type": "shell",
+            "command": "makensis",
+            "args": [
+                "/DMODE=HYBRID",
+                "${workspaceFolder}/installer/Installer.nsi"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Build GAIA Installer: NPU",
+            "type": "shell",
+            "command": "makensis",
+            "args": [
+                "/DMODE=NPU",
+                "/DOGA_TOKEN=${input:ogaToken}",
+                "${workspaceFolder}/installer/Installer.nsi"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Run Lint",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/util/lint.ps1"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "ogaToken",
+            "type": "promptString",
+            "description": "Enter your GitHub token for NPU mode"
+        }
+    ]
+}
