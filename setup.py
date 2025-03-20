@@ -105,7 +105,7 @@ setup(
         "talk":[
             "pyaudio",
             "openai-whisper",
-            "numpy",
+            "numpy==1.26.4",
             "kokoro>=0.3.1",
             "soundfile",
             "sounddevice",

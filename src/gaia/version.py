@@ -4,7 +4,7 @@
 import subprocess
 from typing import Optional
 
-__version__ = "0.7.5"
+__version__ = "0.8.0"
 
 
 def get_git_hash(hash_length: int = 8) -> str:

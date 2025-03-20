@@ -121,6 +121,9 @@ jobs:
           Write-Host "Verify Python environment"
           python -c "import sys; print(sys.executable)"
 
+          Write-Host "Verify NumPy is available"
+          python -c "import numpy; print(f'NumPy version: {numpy.__version__}'); print(f'NumPy path: {numpy.__file__}')"
+
           Write-Host "Find gaia executable location"
           $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
           if (-not $gaiaPath) {
