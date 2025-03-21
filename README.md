@@ -68,9 +68,9 @@ To install the GAIA application, please follow these steps:
 
    ⚠️ **NOTE**: If you get a Windows Security warning, you can verify the application by clicking *"More info"* and then *"Run anyway"*. This warning appears because the application is not digitally signed.
 
-   ⚠️ **NOTE**: Note that the installer will attempt to write to the same directory by default and may overwrite a previous installation of GAIA. Change the target directory if you want to avoid this.
+   ⚠️ **NOTE**: The installer will attempt to write to the same directory by default and may overwrite a previous installation of GAIA. Change the target directory if you want to avoid this.
 
-1. Follow the on-screen instructions to complete the installation. You may be prompted to delete existing installation of GAIA if a previous version was installed.
+1. Follow the on-screen instructions to complete the installation. You may be prompted to delete the existing installation of GAIA if a previous version was installed.
    1. The process will take about 5-10 minutes depending on your Wi-Fi connection and includes everything needed to get up and running with LLMs on Ryzen AI.
 
 1. Once installation is complete, two desktop icons will be created.
