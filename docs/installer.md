@@ -7,12 +7,12 @@ GAIA supports three installation modes, each optimized for different use cases:
 1. **Hybrid Mode**: Best overall performance
    - Combines NPU and GPU capabilities
    - Recommended for most users with supported hardware
-   - Requires Ryzen AI driver
+   - Requires Ryzen AI 300-series processor
 
 2. **NPU Mode**: Best power efficiency
    - Optimized for AMD NPU hardware acceleration
    - Ideal for laptop users prioritizing battery life
-   - Requires Ryzen AI driver
+   - Requires Ryzen AI 300-series processor
 
 3. **Generic Mode** (Default): Most compatible
    - Standard GPU/CPU implementation
@@ -34,8 +34,8 @@ GAIA supports three installation modes, each optimized for different use cases:
    - Installer checks current version and offers updates
 
 3. **Ollama** (Generic Mode Only)
-   - Must be installed manually before installation
-   - Download from [ollama.com](https://ollama.com)
+   - Will be installed automatically during installation
+   - Can also be downloaded from [ollama.com](https://ollama.com)
 
 ## Installation Process
 
@@ -44,6 +44,7 @@ GAIA supports three installation modes, each optimized for different use cases:
 - Checks for existing GAIA installation
 - Removes previous versions if found
 - Initializes installation logging
+- Detects CPU compatibility for NPU/Hybrid modes
 
 ### 2. Environment Setup
 The installer automatically:
@@ -60,17 +61,17 @@ The installation process varies by mode:
 **Hybrid Mode** (Best Performance)
 - Installs core GAIA components
 - Includes hybrid processing capabilities
-- Adds CLIP and Joker examples
+- Configures for NPU+iGPU acceleration
 
 **NPU Mode** (Power Efficient)
 - Installs core GAIA components
 - Includes NPU-optimized processing
-- Adds CLIP and Joker examples
+- Configures for NPU-only acceleration
 
 **Generic Mode** (Most Compatible)
 - Installs core GAIA components
-- Includes DirectML acceleration support
-- Adds CLIP and Joker examples
+- Includes Ollama integration
+- Works on any hardware
 
 ### 4. Additional Components
 
@@ -104,10 +105,40 @@ To launch RAUX after installation:
 
 ## Running the Installer
 
-To run the installer, simply:
-* Install [NSIS 3.10](https://prdownloads.sourceforge.net/nsis/nsis-3.10-setup.exe?download)
-* Run `"C:\Program Files (x86)\NSIS\makensis.exe" Installer.nsi` to compile the installer with all features
-* Open the exe
+### GUI Installation
+The graphical interface comes bundled with GAIA, use the standard installation steps outlined [here](../README.md#getting-started-guide) and follow the prompts to install it.
+
+### Command-Line Installation
+For silent or automated installations, use command-line parameters:
+
+```
+gaia-setup.exe /S /MODE=HYBRID
+```
+
+Available parameters:
+- `/S` - Silent installation (no UI)
+- `/MODE=X` - Set installation mode (GENERIC, NPU, or HYBRID)
+- `/D=<path>` - Set installation directory (must be last parameter)
+
+### CI/CD Environments
+For continuous integration and deployment scenarios, use:
+
+```
+gaia-setup.exe /S /MODE=GENERIC
+```
+
+## Building the Installer
+
+To build the installer from source:
+1. Install [NSIS 3.10](https://prdownloads.sourceforge.net/nsis/nsis-3.10-setup.exe?download)
+2. Navigate to the installer directory
+3. Run `"C:\Program Files (x86)\NSIS\makensis.exe" Installer.nsi` to compile the installer
+4. The compiled installer will be created as `gaia-setup.exe`
+
+For builds that include NPU functionality, provide the OGA token:
+```
+"C:\Program Files (x86)\NSIS\makensis.exe" /DOGA_TOKEN=<token> Installer.nsi
+```
 
 ## Debugging
 
@@ -118,24 +149,23 @@ Debugging the installer could be tricky on a workflow since NSIS does not log an
 * Compile and run normally
 
 ### Option 2: Silent mode through terminal
-* From a `Command Prompt` console, run `Gaia_Installer.exe /S`. All logs will be shown on the screen.
+* From a `Command Prompt` console, run `gaia-setup.exe /S`. All logs will be shown on the screen.
+* To log detailed output, use `gaia-setup.exe /S /LOG=install_log.txt`
 
  ⚠️ NOTE: Optionally install the NSIS extension (v4.4.1) to easily compile and run the installer from within VSCode.
-
-## Running the NPU Installer
-
-To manually compile the installer for the NPU version, you need to set the `OGA_TOKEN` environment variable to your GitHub token with access to the `oga-npu` repository. This is used to automatically download the NPU dependencies. You also need to set the `HF_TOKEN` environment variable to your Hugging Face token.
-
-This is all done automatically and securely by our workflow and should ideally not be done manually. However, if you need to, here's how:
-
-`"C:\Program Files (x86)\NSIS\makensis.exe" /DOGA_TOKEN=<token> /DHF_TOKEN=<token> /DMODE=NPU Installer.nsi`
 
 ## Troubleshooting
 
 If you encounter installation issues:
-1. Check the installation logs at `$INSTDIR/install_log.txt`
+1. Check the installation logs - you can generate detailed logs by running `gaia-setup.exe /LOG=install_log.txt`
 2. Verify system requirements for your chosen mode
-4. For Generic mode, verify Ollama is installed manually and running. You can download it from [ollama.com](https://ollama.com)
+3. For NPU/Hybrid mode, verify your Ryzen AI processor is properly detected
+4. For Generic mode, verify Ollama installation works correctly
+
+Common issues:
+- **CPU Compatibility**: The installer automatically detects if your CPU supports NPU/Hybrid modes
+- **Driver Incompatibility**: For Hybrid/NPU modes, ensure you have a compatible NPU driver version
+- **Installation Path**: Avoid paths with special characters or very long directory names
 
 # Contact
 Contact [GAIA team](mailto:gaia@amd.com) for any questions, feature requests, access or troubleshooting issues.

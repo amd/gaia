@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 import subprocess
+import os
 from typing import Optional
 
 __version__ = "0.8.0"
@@ -81,6 +82,15 @@ version_with_hash = (
 try:
     with open("version.txt", "w", encoding="utf-8") as f:
         f.write(version_with_hash)
+
+    # Also write version to installer/version.nsh file for NSIS installer
+    installer_dir = os.path.join("installer")
+    os.makedirs(installer_dir, exist_ok=True)
+
+    with open(os.path.join(installer_dir, "version.nsh"), "w", encoding="utf-8") as f:
+        f.write(f'!define GAIA_VERSION "{version_with_hash}"\n')
+
+    print("Version files created successfully: version.txt and installer/version.nsh")
 except Exception as e:
-    print(f"Failed to write version.txt: {str(e)}")
+    print(f"Failed to write version files: {str(e)}")
     raise

@@ -27,16 +27,16 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-:: Install GAIA based on mode
+:: Install GAIA based on mode using editable installation
 if "%MODE%"=="NPU" (
     echo Installing GAIA NPU... >> "%LOG_FILE%"
-    "%PYTHON_EXE%" -m pip install "%INSTALL_DIR%"[npu,clip,joker,rag,talk] >> "%LOG_FILE%" 2>&1
+    "%PYTHON_EXE%" -m pip install -e "%INSTALL_DIR%"[npu,clip,joker,rag,talk] >> "%LOG_FILE%" 2>&1
 ) else if "%MODE%"=="HYBRID" (
     echo Installing GAIA Hybrid... >> "%LOG_FILE%"
-    "%PYTHON_EXE%" -m pip install "%INSTALL_DIR%"[hybrid,clip,joker,rag,talk] >> "%LOG_FILE%" 2>&1
+    "%PYTHON_EXE%" -m pip install -e "%INSTALL_DIR%"[hybrid,clip,joker,rag,talk] >> "%LOG_FILE%" 2>&1
 ) else (
     echo Installing GAIA Generic... >> "%LOG_FILE%"
-    "%PYTHON_EXE%" -m pip install "%INSTALL_DIR%"[clip,joker,rag,talk] >> "%LOG_FILE%" 2>&1
+    "%PYTHON_EXE%" -m pip install -e "%INSTALL_DIR%"[clip,joker,rag,talk] >> "%LOG_FILE%" 2>&1
 )
 
 :: Check final error level

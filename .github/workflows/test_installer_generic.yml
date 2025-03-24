@@ -12,40 +12,21 @@ on:
   workflow_dispatch:
 
 jobs:
+  build-installer:
+    uses: ./.github/workflows/build_installer.yml
+
   gaia-installer-test:
     runs-on: windows-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    needs: build-installer
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install NSIS
-        run: |
-          # Download NSIS installer
-          curl -L -o nsis.exe https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10-setup.exe
-          
-          # Install NSIS
-          Start-Process nsis.exe -ArgumentList '/S' -Wait
-
-      - name: Verify NSIS installation
-        run: |
-          # Check if NSIS is installed
-          & 'C:\Program Files (x86)\NSIS\makensis.exe' /VERSION
-
-      - name: Generate version.txt
-        run: |
-          python .\src\gaia\version.py
-
-      - name: Build the GAIA installer
-        run: |
-          cd installer
-          & 'C:\Program Files (x86)\NSIS\makensis.exe' 'Installer.nsi'
-
-          if (Test-Path "GAIA_Installer.exe") {
-            Write-Host "GAIA_Installer.exe has been created successfully."
-          } else {
-            Write-Host "GAIA_Installer.exe was not found."
-            exit 1
-          }
+      - name: Download GAIA Installer
+        uses: actions/download-artifact@v4
+        with:
+          name: gaia-windows-installer-${{ needs.build-installer.outputs.VERSION || 'latest' }}
+          path: installer
 
       - name: Install Ollama
         shell: cmd
@@ -76,7 +57,7 @@ jobs:
           echo "Having issues debugging the installer? Check the installer README for tips on how to do that."
           set PATH=%PATH%;C:\Users\runneradmin\AppData\Local\Programs\Ollama
           cd installer
-          GAIA_Installer.exe /S
+          gaia-setup.exe /S /MODE=GENERIC
 
       - name: Ensure GAIA can open properly
         timeout-minutes: 10
@@ -92,11 +73,3 @@ jobs:
           username: "runneradmin"
           huggingface_access_token: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           install_from_source: "false"
-          
-      - name: Upload Installer
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: GaiaInstaller
-          path: |
-            installer\GAIA_Installer.exe

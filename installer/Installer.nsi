@@ -12,6 +12,12 @@
 !define /ifndef NPU_DRIVER_VERSION "32.0.203.240"
 !define /ifndef LEMONADE_VERSION "v6.0.2"
 
+; Command line usage:
+;  gaia-setup.exe [/S] [/MODE=GENERIC|NPU|HYBRID] [/D=<installation directory>]
+;    /S - Silent install with no user interface
+;    /MODE=X - Set installation mode (GENERIC, NPU, or HYBRID)
+;    /D=<path> - Set installation directory (must be last parameter)
+
 ; Define main variables
 Name "GAIA"
 
@@ -27,30 +33,14 @@ Name "GAIA"
   InstallDir "$LOCALAPPDATA\GAIA"
 !endif
 
-!ifdef MODE
-  !if ${MODE} == "NPU"
-    OutFile "GAIA_NPU_Installer.exe"
-    !define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome_npu.bmp"
-    !define /ifndef OGA_ZIP_FILE_NAME "oga-npu.zip"
-    !define /ifndef OGA_WHEELS_PATH "amd_oga\wheels"
-  !else if ${MODE} == "HYBRID"
-    OutFile "GAIA_Hybrid_Installer.exe"
-    !define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome_npu.bmp"
-    !define /ifndef OGA_ZIP_FILE_NAME "oga-hybrid.zip"
-    !define /ifndef OGA_WHEELS_PATH "hybrid-llm-artifacts_1.3.0\hybrid-llm-artifacts\onnxruntime_genai\wheel"
-  !else
-    ; By default, we will set to NPU artifacts
-    OutFile "GAIA_Installer.exe"
-    !define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome.bmp"
-  !endif
-!else
-  ; By default, we will set to NPU artifacts
-  OutFile "GAIA_Installer.exe"
-  !define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome.bmp"
-!endif
-
 ; Include modern UI elements
 !include "MUI2.nsh"
+
+; Include LogicLib
+!include LogicLib.nsh
+
+; Include Sections for RadioButton functionality
+!include "Sections.nsh"
 
 ; Include nsDialogs for custom pages
 !include "nsDialogs.nsh"
@@ -59,25 +49,202 @@ Name "GAIA"
 !include StrFunc.nsh
 ${StrLoc}
 
-; Read version from version.txt
-!tempfile TMPFILE
-!system 'if exist ../version.txt (type ../version.txt > "${TMPFILE}") else (echo unknown > "${TMPFILE}")'
-!define /file GAIA_VERSION "${TMPFILE}"
-!delfile "${TMPFILE}"
+; For command-line parameter parsing
+!include FileFunc.nsh
+!insertmacro GetParameters
+!insertmacro GetOptions
+
+; Include version information
+!if /FileExists "version.nsh"
+  !include "version.nsh"
+!else
+  ; Fallback empty string if version.nsh is not available
+  !define GAIA_VERSION ""
+!endif
+
+OutFile "gaia-setup.exe"
+!define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome_npu.bmp"
+
+; Define variables for the welcome page image
 
 ; Define the GAIA_STRING variable
 Var GAIA_STRING
+Var SELECTED_MODE
+
+; Variables for CPU detection
+Var cpuName
+Var isCpuSupported
+Var ryzenAiPos
+Var seriesStartPos
+Var currentChar
+
+; Component section descriptions
+LangString DESC_GenericSec ${LANG_ENGLISH} "Standard GAIA installation with CPU-only execution. Works on all systems."
+LangString DESC_NPUSec ${LANG_ENGLISH} "GAIA with NPU acceleration for optimized on-device AI. Requires Ryzen AI 300-series processors."
+LangString DESC_HybridSec ${LANG_ENGLISH} "GAIA with Hybrid execution mode which uses both NPU and iGPU for improved performance. Requires Ryzen AI 300-series processors."
+
+; Using SectionGroup without /e flag since we're handling radio buttons manually
+SectionGroup /e "Installation Mode" InstallModeGroup
+  Section "Generic Mode" GenericSec
+  SectionEnd
+
+  Section /o "NPU Mode" NPUSec
+  SectionEnd
+
+  Section /o "Hybrid Mode" HybridSec
+  SectionEnd
+SectionGroupEnd
 
 ; Variable to track whether to install RAUX
 Var InstallRAUX
 
 Function .onInit
-  ${If} ${MODE} == "HYBRID"
-    StrCpy $GAIA_STRING "GAIA - Ryzen AI Hybrid Mode, ver: ${GAIA_VERSION}"
-  ${ElseIf} ${MODE} == "NPU"
-    StrCpy $GAIA_STRING "GAIA - Ryzen AI NPU Mode, ver: ${GAIA_VERSION}"
-  ${Else}
+  ; Default to Hybrid mode
+  StrCpy $GAIA_STRING "GAIA - Ryzen AI Hybrid Mode, ver: ${GAIA_VERSION}"
+  StrCpy $SELECTED_MODE "HYBRID"
+
+  ; Check for command-line mode parameter
+  ${GetParameters} $R0
+  ClearErrors
+  ${GetOptions} $R0 "/MODE=" $0
+  ${IfNot} ${Errors}
+    ${If} $0 == "GENERIC"
+    ${OrIf} $0 == "NPU"
+    ${OrIf} $0 == "HYBRID"
+      StrCpy $SELECTED_MODE $0
+      DetailPrint "Installation mode set from command line: $SELECTED_MODE"
+
+      ; Update GAIA_STRING based on mode
+      ${If} $SELECTED_MODE == "HYBRID"
+        StrCpy $GAIA_STRING "GAIA - Ryzen AI Hybrid Mode, ver: ${GAIA_VERSION}"
+      ${ElseIf} $SELECTED_MODE == "NPU"
+        StrCpy $GAIA_STRING "GAIA - Ryzen AI NPU Mode, ver: ${GAIA_VERSION}"
+      ${ElseIf} $SELECTED_MODE == "GENERIC"
+        StrCpy $GAIA_STRING "GAIA - Generic Mode, ver: ${GAIA_VERSION}"
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
+  ; Store the default selection for radio buttons
+  StrCpy $R9 ${HybridSec}
+
+  ; Select mode based on SELECTED_MODE
+  ${If} $SELECTED_MODE == "GENERIC"
+    ; Select Generic section
+    SectionGetFlags ${GenericSec} $0
+    IntOp $0 $0 | ${SF_SELECTED}
+    SectionSetFlags ${GenericSec} $0
+
+    ; Deselect others
+    SectionGetFlags ${NPUSec} $0
+    IntOp $0 $0 & ${SECTION_OFF}
+    SectionSetFlags ${NPUSec} $0
+
+    SectionGetFlags ${HybridSec} $0
+    IntOp $0 $0 & ${SECTION_OFF}
+    SectionSetFlags ${HybridSec} $0
+
+    ; Update radio button variable
+    StrCpy $R9 ${GenericSec}
+  ${ElseIf} $SELECTED_MODE == "NPU"
+    ; Select NPU section
+    SectionGetFlags ${NPUSec} $0
+    IntOp $0 $0 | ${SF_SELECTED}
+    SectionSetFlags ${NPUSec} $0
+
+    ; Deselect others
+    SectionGetFlags ${GenericSec} $0
+    IntOp $0 $0 & ${SECTION_OFF}
+    SectionSetFlags ${GenericSec} $0
+
+    SectionGetFlags ${HybridSec} $0
+    IntOp $0 $0 & ${SECTION_OFF}
+    SectionSetFlags ${HybridSec} $0
+
+    ; Update radio button variable
+    StrCpy $R9 ${NPUSec}
+  ${Else} ; Default to HYBRID
+    ; Select Hybrid mode as default
+    SectionGetFlags ${HybridSec} $0
+    IntOp $0 $0 | ${SF_SELECTED}
+    SectionSetFlags ${HybridSec} $0
+
+    ; Deselect the others
+    SectionGetFlags ${GenericSec} $0
+    IntOp $0 $0 & ${SECTION_OFF}
+    SectionSetFlags ${GenericSec} $0
+
+    SectionGetFlags ${NPUSec} $0
+    IntOp $0 $0 & ${SECTION_OFF}
+    SectionSetFlags ${NPUSec} $0
+
+    ; Update radio button variable
+    StrCpy $R9 ${HybridSec}
+  ${EndIf}
+
+  ; Check CPU name to determine if NPU/Hybrid sections should be enabled
+  DetailPrint "Checking CPU model..."
+
+  ; Use registry query to get CPU name
+  nsExec::ExecToStack 'reg query "HKEY_LOCAL_MACHINE\HARDWARE\DESCRIPTION\System\CentralProcessor\0" /v ProcessorNameString'
+  Pop $0 ; Return value
+  Pop $cpuName ; Output (CPU name)
+  DetailPrint "Detected CPU: $cpuName"
+
+  ; Check if CPU name contains "Ryzen AI" and a 3-digit number starting with 3
+  StrCpy $isCpuSupported "false" ; Initialize CPU allowed flag to false
+
+  ${StrLoc} $ryzenAiPos $cpuName "Ryzen AI" ">"
+  ${If} $ryzenAiPos != ""
+    ; Found "Ryzen AI", now look for 3xx series
+    ${StrLoc} $seriesStartPos $cpuName " 3" ">"
+    ${If} $seriesStartPos != ""
+      ; Check if the character after "3" is a digit (first digit of model number)
+      StrCpy $currentChar $cpuName 1 $seriesStartPos+2
+      ${If} $currentChar >= "0"
+        ${AndIf} $currentChar <= "9"
+        ; Check if the character after that is also a digit (second digit of model number)
+        StrCpy $currentChar $cpuName 1 $seriesStartPos+3
+        ${If} $currentChar >= "0"
+          ${AndIf} $currentChar <= "9"
+          ; Found a complete 3-digit number starting with 3
+          StrCpy $isCpuSupported "true"
+          DetailPrint "Detected Ryzen AI 3xx series processor"
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
+  DetailPrint "CPU is compatible with Ryzen AI NPU/Hybrid software: $isCpuSupported"
+
+  ; If CPU is not compatible, disable NPU and Hybrid sections and force Generic
+  ${If} $isCpuSupported != "true"
+    ; Disable NPU section (make it unselectable)
+    SectionGetFlags ${NPUSec} $0
+    IntOp $0 $0 & ${SECTION_OFF}    ; Turn off selection
+    IntOp $0 $0 | ${SF_RO}          ; Make it read-only
+    SectionSetFlags ${NPUSec} $0
+
+    ; Disable Hybrid section (make it unselectable)
+    SectionGetFlags ${HybridSec} $0
+    IntOp $0 $0 & ${SECTION_OFF}    ; Turn off selection
+    IntOp $0 $0 | ${SF_RO}          ; Make it read-only
+    SectionSetFlags ${HybridSec} $0
+
+    ; Force Generic selection
+    SectionGetFlags ${GenericSec} $0
+    IntOp $0 $0 | ${SF_SELECTED}    ; Turn on selection
+    SectionSetFlags ${GenericSec} $0
+
+    ; Update stored radio button variable for incompatible CPUs
+    StrCpy $R9 ${GenericSec}
+
+    ; Update variables for Generic mode
+    StrCpy $SELECTED_MODE "GENERIC"
     StrCpy $GAIA_STRING "GAIA - Generic Mode, ver: ${GAIA_VERSION}"
+
+    ; Make a note in the detail log
+    DetailPrint "CPU not compatible with Ryzen AI, forcing Generic mode"
   ${EndIf}
   
   ; Initialize InstallRAUX to 1 (checked)
@@ -129,6 +296,7 @@ FunctionEnd
 ; MUI Settings
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "LICENSE"
+!insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 Page custom RAUXOptionsPage RAUXOptionsLeave
 !insertmacro MUI_PAGE_INSTFILES
@@ -151,8 +319,49 @@ LangString MUI_BUTTONTEXT_FINISH "${LANG_ENGLISH}" "Finish"
 LangString MUI_TEXT_LICENSE_TITLE ${LANG_ENGLISH} "License Agreement"
 LangString MUI_TEXT_LICENSE_SUBTITLE ${LANG_ENGLISH} "Please review the license terms before installing GAIA."
 
+; Insert the description macros
+!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+  !insertmacro MUI_DESCRIPTION_TEXT ${GenericSec} $(DESC_GenericSec)
+  !insertmacro MUI_DESCRIPTION_TEXT ${NPUSec} $(DESC_NPUSec)
+  !insertmacro MUI_DESCRIPTION_TEXT ${HybridSec} $(DESC_HybridSec)
+!insertmacro MUI_FUNCTION_DESCRIPTION_END
+
+; Function to update selected mode when selection changes
+Function .onSelChange
+  ; Use RadioButton macros to enforce mutual exclusivity
+  !insertmacro StartRadioButtons $R9
+  !insertmacro RadioButton ${GenericSec}
+  !insertmacro RadioButton ${NPUSec}
+  !insertmacro RadioButton ${HybridSec}
+  !insertmacro EndRadioButtons
+
+  ; Update variables based on selection
+  SectionGetFlags ${GenericSec} $0
+  IntOp $0 $0 & ${SF_SELECTED}
+  ${If} $0 == ${SF_SELECTED}
+    StrCpy $SELECTED_MODE "GENERIC"
+    StrCpy $GAIA_STRING "GAIA - Generic Mode, ver: ${GAIA_VERSION}"
+  ${EndIf}
+
+  SectionGetFlags ${NPUSec} $0
+  IntOp $0 $0 & ${SF_SELECTED}
+  ${If} $0 == ${SF_SELECTED}
+    StrCpy $SELECTED_MODE "NPU"
+    StrCpy $GAIA_STRING "GAIA - Ryzen AI NPU Mode, ver: ${GAIA_VERSION}"
+  ${EndIf}
+
+  SectionGetFlags ${HybridSec} $0
+  IntOp $0 $0 & ${SF_SELECTED}
+  ${If} $0 == ${SF_SELECTED}
+    StrCpy $SELECTED_MODE "HYBRID"
+    StrCpy $GAIA_STRING "GAIA - Ryzen AI Hybrid Mode, ver: ${GAIA_VERSION}"
+  ${EndIf}
+
+  DetailPrint "Selected mode changed to: $SELECTED_MODE"
+FunctionEnd
+
 ; Define a section for the installation
-Section "Install Main Components" SEC01
+Section "-Install Main Components" SEC01
   ; Remove FileOpen/FileWrite for log file, replace with DetailPrint
   DetailPrint "*** INSTALLATION STARTED ***"
   DetailPrint "------------------------"
@@ -195,7 +404,7 @@ Section "Install Main Components" SEC01
     DetailPrint "Starting '$GAIA_STRING' Installation..."
     DetailPrint 'Configuration:'
     DetailPrint '  Install Dir: $INSTDIR'
-    DetailPrint '  Mode: ${MODE}'
+    DetailPrint '  Mode: $SELECTED_MODE'
     DetailPrint '  CI Mode: ${CI}'
     DetailPrint '  OGA URL: ${OGA_URL}'
     DetailPrint '  Ryzen AI Folder: ${RYZENAI_FOLDER}'
@@ -255,7 +464,7 @@ Section "Install Main Components" SEC01
       ${EndIf}
 
     check_mode:
-        ${If} ${MODE} == "GENERIC"
+        ${If} $SELECTED_MODE == "GENERIC"
           GoTo check_ollama
         ${Else}
           GoTo check_lemonade
@@ -341,14 +550,14 @@ Section "Install Main Components" SEC01
       DetailPrint "----------"
 
       ; Check if ollama is available only for GENERIC mode
-      ${If} ${MODE} == "GENERIC"
+      ${If} $SELECTED_MODE == "GENERIC"
         ExecWait 'where ollama' $2
         DetailPrint "- Checked if ollama is available"
 
         ; If ollama is not found, show a message and exit
         StrCmp $2 "0" create_env ollama_not_available
       ${Else}
-        DetailPrint "- Skipping ollama check for ${MODE} mode"
+        DetailPrint "- Skipping ollama check for $SELECTED_MODE mode"
         GoTo create_env
       ${EndIf}
 
@@ -455,8 +664,8 @@ Section "Install Main Components" SEC01
       DetailPrint "- Ryzen AI Driver Update -"
       DetailPrint "--------------------------"
 
-      ${If} ${MODE} == "NPU"
-      ${OrIf} ${MODE} == "HYBRID"
+      ${If} $SELECTED_MODE == "NPU"
+      ${OrIf} $SELECTED_MODE == "HYBRID"
         ; If in silent mode, skip driver update
         ${If} ${Silent}
           GoTo install_gaia
@@ -524,7 +733,7 @@ Section "Install Main Components" SEC01
       DetailPrint "- Starting GAIA installation (this can take 5-10 minutes)..."
       DetailPrint "- See $INSTDIR\gaia_install.log for detailed progress..."
       ; Call the batch file with required parameters
-      ExecWait '"$INSTDIR\install.bat" "$INSTDIR\gaia_env\python.exe" "$INSTDIR" ${MODE}' $R0
+      ExecWait '"$INSTDIR\install.bat" "$INSTDIR\gaia_env\python.exe" "$INSTDIR" $SELECTED_MODE' $R0
 
       ; Check if installation was successful
       ${If} $R0 == 0
@@ -532,7 +741,7 @@ Section "Install Main Components" SEC01
         DetailPrint "- GAIA installation completed successfully"
 
         ; Skip Ryzen AI WHL installation for GENERIC mode
-        ${If} ${MODE} == "GENERIC"
+        ${If} $SELECTED_MODE == "GENERIC"
           GoTo update_settings
         ${Else}
           GoTo install_ryzenai_whl
@@ -555,8 +764,8 @@ Section "Install Main Components" SEC01
       DetailPrint "-----------------------------"
 
       ; Install OGA NPU dependencies
-      DetailPrint "- Installing ${MODE} dependencies..."
-      ${If} ${MODE} == "NPU"
+      DetailPrint "- Installing $SELECTED_MODE dependencies..."
+      ${If} $SELECTED_MODE == "NPU"
         nsExec::ExecToLog 'conda run -p "$INSTDIR\gaia_env" lemonade-install --ryzenai npu -y --token ${OGA_TOKEN}'
         Pop $R0  ; Return value
         ${If} $R0 != 0
@@ -573,7 +782,7 @@ Section "Install Main Components" SEC01
           ${EndIf}
           Abort
         ${EndIf}
-      ${ElseIf} ${MODE} == "HYBRID"
+      ${ElseIf} $SELECTED_MODE == "HYBRID"
         DetailPrint "- Running lemonade-install for hybrid mode..."
         nsExec::ExecToLog 'conda run -p "$INSTDIR\gaia_env" lemonade-install --ryzenai hybrid -y'
         Pop $R0  ; Return value
@@ -596,17 +805,17 @@ Section "Install Main Components" SEC01
       GoTo update_settings
 
     update_settings:
-      ${If} ${MODE} == "NPU"
+      ${If} $SELECTED_MODE == "NPU"
         DetailPrint "- Replacing settings.json with NPU-specific settings"
         Delete "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\settings.json"
         Rename "$INSTDIR\npu_settings.json" "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\settings.json"
 
-      ${ElseIf} ${MODE} == "HYBRID"
+      ${ElseIf} $SELECTED_MODE == "HYBRID"
         DetailPrint "- Replacing settings.json with Hybrid-specific settings"
         Delete "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\settings.json"
         Rename "$INSTDIR\hybrid_settings.json" "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\settings.json"
 
-      ${ElseIf} ${MODE} == "GENERIC"
+      ${ElseIf} $SELECTED_MODE == "GENERIC"
         DetailPrint "- Replacing settings.json with Generic-specific settings"
         Delete "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\settings.json"
         Rename "$INSTDIR\generic_settings.json" "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\settings.json"

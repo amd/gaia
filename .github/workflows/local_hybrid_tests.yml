@@ -12,48 +12,29 @@ on:
   workflow_dispatch:
 
 jobs:
+  build-installer:
+    uses: ./.github/workflows/build_installer.yml
+
   gaia-hybrid-local-tests:
     runs-on: stx
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    needs: build-installer
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install NSIS
-        run: |
-          # Download NSIS installer
-          Invoke-WebRequest -UserAgent "Wget" -Uri "https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10-setup.exe" -OutFile "nsis.exe"
+      - name: Download GAIA Installer
+        uses: actions/download-artifact@v4
+        with:
+          name: gaia-windows-installer-${{ needs.build-installer.outputs.VERSION || 'latest' }}
+          path: installer
 
-          # Install NSIS
-          Start-Process nsis.exe -ArgumentList '/S' -Wait
-
-      - name: Verify NSIS installation
-        run: |
-          # Check if NSIS is installed
-          & 'C:\Program Files (x86)\NSIS\makensis.exe' /VERSION
-
-      - name: Generate version.txt
-        run: |
-          python .\src\gaia\version.py
-
-      - name: Build the GAIA installer for Hybrid
+      - name: Test installer with Hybrid mode
         run: |
           cd installer
-          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DCI=ON /DMODE=HYBRID 'Installer.nsi'
-
-          if (Test-Path "GAIA_Hybrid_Installer.exe") {
-            Write-Host "GAIA_Hybrid_Installer.exe has been created successfully."
-          } else {
-            Write-Host "GAIA_Hybrid_Installer.exe was not found."
-            exit 1
-          }
-
-      - name: Attempt to install GAIA using installer
-        shell: cmd
-        run: |
-          echo "Having issues debugging the installer? Check the installer README for tips on how to do that."
-          set PATH=%PATH%;C:\Users\runneradmin\AppData\Local\Programs\Ollama
-          cd installer
-          GAIA_Hybrid_Installer.exe /S
+          # Create a test directory
+          mkdir -p test_install
+          # Run installer with /MODE=HYBRID parameter
+          .\gaia-setup.exe /S /MODE=HYBRID /D=.\test_install
 
       - name: Ensure GAIA can open properly
         timeout-minutes: 15
