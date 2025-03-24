@@ -82,47 +82,65 @@
                 ]
             }
         },
-        "Llama-2 7B Chat": {
+        "Llama-3.2 1B Instruct Hybrid": {
             "backend" : "oga",
-            "checkpoint": "amd/Llama2-7b-chat-awq-g128-int4-asym-fp32-onnx-ryzen-strix",
+            "checkpoint": "amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid",
             "device": {
-                "npu": [
+                "hybrid": [
                     "int4"
                 ]
             }
         },
-        "Phi-3.5 Mini Instruct": {
+        "Llama-3.2 3B Instruct Hybrid": {
             "backend" : "oga",
-            "checkpoint": "amd/Phi-3.5-mini-instruct-awq-g128-int4-asym-fp32-onnx-ryzen-strix",
+            "checkpoint": "amd/Llama-3.2-3B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid",
             "device": {
-                "npu": [
+                "hybrid": [
                     "int4"
                 ]
             }
         },
-        "Phi-3 Mini Instruct": {
+        "Phi-3.5 Mini Instruct Hybrid": {
             "backend" : "oga",
-            "checkpoint": "amd/Phi-3-mini-4k-instruct-awq-g128-int4-asym-fp32-onnx-ryzen-strix",
+            "checkpoint": "amd/Phi-3.5-mini-instruct-awq-g128-int4-asym-fp16-onnx-hybrid",
             "device": {
-                "npu": [
+                "hybrid": [
                     "int4"
                 ]
             }
         },
-        "Mistral 7B Instruct": {
+        "Phi-3 Mini Instruct Hybrid": {
             "backend" : "oga",
-            "checkpoint": "amd/Mistral-7B-Instruct-v0.3-awq-g128-int4-asym-fp32-onnx-ryzen-strix",
+            "checkpoint": "amd/Phi-3-mini-4k-instruct-awq-g128-int4-asym-fp16-onnx-hybrid",
             "device": {
-                "npu": [
+                "hybrid": [
                     "int4"
                 ]
             }
         },
-        "Qwen-1.5 7B Chat": {
+        "Llama-2 7B Chat Hybrid": {
             "backend" : "oga",
-            "checkpoint": "amd/Qwen1.5-7B-Chat-awq-g128-int4-asym-fp32-onnx-ryzen-strix",
+            "checkpoint": "amd/Llama-2-7b-chat-hf-awq-g128-int4-asym-fp16-onnx-hybrid",
             "device": {
-                "npu": [
+                "hybrid": [
+                    "int4"
+                ]
+            }
+        },
+        "Qwen-1.5 7B Chat Hybrid": {
+            "backend" : "oga",
+            "checkpoint": "amd/Qwen1.5-7B-Chat-awq-g128-int4-asym-fp16-onnx-hybrid",
+            "device": {
+                "hybrid": [
+                    "int4"
+                ]
+            }
+        },
+        "Mistral 7B Instruct Hybrid": {
+            "backend" : "oga",
+            "checkpoint": "amd/Mistral-7B-Instruct-v0.3-awq-g128-int4-asym-fp16-onnx-hybrid",
+            "device": {
+                "hybrid": [
                     "int4"
                 ]
             }
