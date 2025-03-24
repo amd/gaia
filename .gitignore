@@ -115,3 +115,7 @@ installer/version.nsh
 # Installer files
 installer/**.exe
 release_info.json
+
+# version
+version.txt
+
