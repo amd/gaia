@@ -12,7 +12,7 @@
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![GitHub issues](https://img.shields.io/github/issues/amd/gaia)](https://github.com/amd/gaia/issues)
 
-⚠️ **IMPORTANT**: GAIA's Hybrid mode **only supports AMD Ryzen AI HX 300 series or newer processors**. For older AMD processors or non-AMD systems, please use the Generic installer. For more details, see [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
+⚠️ **IMPORTANT**: GAIA's Hybrid mode **only supports AMD Ryzen AI 300 series processors**. For older AMD processors or non-AMD systems, please use the Generic installer. For more details, see [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
 
 **GAIA is an open-source solution designed for the quick setup and execution of generative AI applications on local PC hardware.** It enables fast and efficient execution of LLM-based applications using a hybrid hardware approach that combines the AMD Neural Processing Unit (NPU) and Integrated Graphics Processing Unit (iGPU) in the Ryzen-AI PC. GAIA provides the following key features:
 
