@@ -62,7 +62,7 @@ Each installer includes both a CLI tool and a GUI. The installation process typi
 ![image](./data/img/gaia-setup.png)
 
 To install the GAIA application, please follow these steps:
-1. Make sure you meet the minimum [system requirements](#system-requirements) - **For Hybrid mode, you must have AMD Ryzen AI 9 HX 300 or newer processor**
+1. Make sure you meet the minimum [system requirements](#system-requirements) - **For Hybrid mode, you must have an AMD Ryzen AI 300-series processor**
 1. Download the [latest release](https://github.com/amd/gaia/releases) of the GAIA installers from the "Assets" section:
    ![image](./data/img/gaia-installer.png)
    1. If you have a Ryzen AI PC, choose the Hybrid installer, otherwise choose the generic installer.
