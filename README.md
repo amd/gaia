@@ -50,7 +50,7 @@ For more details, see the [Frequently Asked Questions](docs/faq.md).
 
 The quickest way to get started with GAIA is by using one of the provided installers. There are two options available:
 
-1. **GAIA_Hybrid_Installer.exe**: For running agents with the Hybrid (NPU+iGPU) execution on Ryzen AI PCs. This is the recommended installer that offers the best performance. **Requires AMD Ryzen AI 9 HX 300 series or newer processor**.
+1. **GAIA_Hybrid_Installer.exe**: For running agents with the Hybrid (NPU+iGPU) execution on Ryzen AI PCs. This is the recommended installer that offers the best performance. **Requires an AMD Ryzen AI 300 series processor**.
 1. **GAIA_Installer.exe**: For running agents on non-Ryzen AI PCs, this uses Ollama as the backend.
 
 Each installer includes both a CLI tool and a GUI. The installation process typically takes about 5-10 minutes, depending on your Wi-Fi connection, and provides everything you need to start working with LLMs.
