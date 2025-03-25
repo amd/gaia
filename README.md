@@ -55,7 +55,7 @@ The quickest way to get started with GAIA is by using our unified installer that
 
 **gaia-setup.exe**: A single installer that supports all three installation modes:
 - **Hybrid Mode**: Offers best performance with NPU+iGPU on Ryzen AI processors, recommended option.
-- **NPU Mode**: Optimized for power efficiency on Ryzen AI processors (coming soon)
+- **NPU Mode**: Optimized for power efficiency on Ryzen AI processors *(coming soon)*
 - **Generic Mode**: Works on any Windows PC, using Ollama as the backend
 
 The installer includes both a CLI tool and a GUI. The installation process typically takes about 5-10 minutes, depending on your Wi-Fi connection, and provides everything you need to start working with LLMs.
@@ -73,12 +73,12 @@ To install the GAIA application, please follow these steps:
 
    ⚠️ **NOTE**: If you get a Windows Security warning, you can verify the application by clicking *"More info"* and then *"Run anyway"*. This warning appears because the application is not digitally signed.
 
-   ⚠️ **NOTE**: Note that the installer will attempt to write to the same directory by default and may overwrite a previous installation of GAIA. Change the target directory if you want to avoid this.
+   ⚠️ **NOTE**: The installer will attempt to write to the same directory by default and may overwrite a previous installation of GAIA. Change the target directory if you want to avoid this.
 
 1. Follow the on-screen instructions to complete the installation:
    1. Choose your installation mode based on your hardware:
       - **Hybrid Mode**: Best performance, requires Ryzen AI processor
-      - **NPU Mode**: Power-efficient, requires Ryzen AI processor
+      - **NPU Mode**: Power-efficient, requires Ryzen AI processor *(coming soon)*
       - **Generic Mode**: Compatible with any PC
    1. The installer will automatically detect your CPU and only enable compatible modes
    1. The process takes about 5-10 minutes depending on your Wi-Fi connection
