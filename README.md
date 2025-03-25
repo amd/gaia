@@ -129,7 +129,7 @@ The best way to contribute is by adding a new agent that covers a unique use-cas
 
 # System Requirements
 
-GAIA with Ryzen AI Hybrid NPU/iGPU execution has been tested on the following system below. Any system that has the AMD Ryzen AI 9 300 series processor with NPU Driver 32.0.203.237 on Windows 11 or newer with minimum of 16GB of main memory should work. For more details on what is supported, see [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
+GAIA with Ryzen AI Hybrid NPU/iGPU execution has been tested on the system detailed below. Any system that has an AMD Ryzen AI 300-series processor with NPU Driver 32.0.203.237 on Windows 11 or newer should work. For more details on what is supported, see [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
 
 ⚠️ **NOTE**: GAIA works on Windows 11 Pro/Home and does not support macOS or Linux at this time.
 
