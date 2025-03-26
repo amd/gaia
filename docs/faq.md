@@ -13,7 +13,7 @@ Yes, you can reinstall GAIA and select a different mode. The installer provides 
 ### How do I run GAIA in silent/headless mode?
 You can run the installer from command-line with parameters for CI/CD or silent installations:
 ```
-gaia-setup.exe /S /MODE=HYBRID
+gaia-windows-setup.exe /S /MODE=HYBRID
 ```
 Available parameters:
 - `/S` - Silent installation (no UI)

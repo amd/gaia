@@ -34,4 +34,4 @@ jobs:
           # Create a test directory
           mkdir -p test_install
           # Run installer with /MODE=NPU parameter
-          .\gaia-setup.exe /S /MODE=NPU /D=.\test_install
+          .\gaia-windows-setup.exe /S /MODE=NPU /D=.\test_install

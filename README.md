@@ -53,7 +53,7 @@ For more details, see the [Frequently Asked Questions](docs/faq.md).
 
 The quickest way to get started with GAIA is by using our unified installer that supports all modes:
 
-**gaia-setup.exe**: A single installer that supports all three installation modes:
+**gaia-windows-setup.exe**: A single installer that supports all three installation modes:
 - **Hybrid Mode**: Offers best performance with NPU+iGPU on Ryzen AI processors, recommended option.
 - **NPU Mode**: Optimized for power efficiency on Ryzen AI processors *(coming soon)*
 - **Generic Mode**: Works on any Windows PC, using Ollama as the backend
@@ -92,7 +92,7 @@ To install the GAIA application, please follow these steps:
 If you prefer to use the command-line or for CI/CD environments, you can run the installer with parameters:
 
 ```
-gaia-setup.exe /S /MODE=HYBRID
+gaia-windows-setup.exe /S /MODE=HYBRID
 ```
 
 Available parameters:

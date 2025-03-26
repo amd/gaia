@@ -49,10 +49,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
-          files: installer/gaia-setup.exe
+          files: installer/gaia-windows-setup.exe
           body: |
             ## What's Changed
             ${{ steps.release_notes.outputs.CHANGELOG }}
 
             ## Installation
-            Download and run the GAIA installer (gaia-setup.exe)
+            Download and run the GAIA installer (gaia-windows-setup.exe)

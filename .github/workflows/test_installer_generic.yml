@@ -57,7 +57,7 @@ jobs:
           echo "Having issues debugging the installer? Check the installer README for tips on how to do that."
           set PATH=%PATH%;C:\Users\runneradmin\AppData\Local\Programs\Ollama
           cd installer
-          gaia-setup.exe /S /MODE=GENERIC
+          gaia-windows-setup.exe /S /MODE=GENERIC
 
       - name: Ensure GAIA can open properly
         timeout-minutes: 10

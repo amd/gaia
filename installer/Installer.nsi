@@ -13,7 +13,7 @@
 !define /ifndef LEMONADE_VERSION "v6.0.2"
 
 ; Command line usage:
-;  gaia-setup.exe [/S] [/MODE=GENERIC|NPU|HYBRID] [/D=<installation directory>]
+;  gaia-windows-setup.exe [/S] [/MODE=GENERIC|NPU|HYBRID] [/D=<installation directory>]
 ;    /S - Silent install with no user interface
 ;    /MODE=X - Set installation mode (GENERIC, NPU, or HYBRID)
 ;    /D=<path> - Set installation directory (must be last parameter)
@@ -62,7 +62,7 @@ ${StrLoc}
   !define GAIA_VERSION ""
 !endif
 
-OutFile "gaia-setup.exe"
+OutFile "gaia-windows-setup.exe"
 !define MUI_WELCOMEFINISHPAGE_BITMAP ".\img\welcome_npu.bmp"
 
 ; Define variables for the welcome page image
@@ -77,11 +77,29 @@ Var isCpuSupported
 Var ryzenAiPos
 Var seriesStartPos
 Var currentChar
+Var Dialog
+Var Label
 
 ; Component section descriptions
 LangString DESC_GenericSec ${LANG_ENGLISH} "Standard GAIA installation with CPU-only execution. Works on all systems."
 LangString DESC_NPUSec ${LANG_ENGLISH} "GAIA with NPU acceleration for optimized on-device AI. Requires Ryzen AI 300-series processors."
 LangString DESC_HybridSec ${LANG_ENGLISH} "GAIA with Hybrid execution mode which uses both NPU and iGPU for improved performance. Requires Ryzen AI 300-series processors."
+
+; Warning message for incompatible processors
+Function WarningPage
+  ${If} $isCpuSupported != "true"
+    !insertmacro MUI_HEADER_TEXT "Hardware Compatibility Warning" "Your processor does not support NPU/Hybrid modes"
+    nsDialogs::Create 1018
+    Pop $Dialog
+
+    ; Create warning message with detected processor and contact info
+    ${NSD_CreateLabel} 0 0 100% 140u "Detected Processor:$\n$cpuName$\nGAIA's NPU and Hybrid modes are currently only supported on AMD Ryzen AI 300-series processors.$\n$\nYou can:$\n1. Cancel the installation if you intended to use NPU/Hybrid features$\n2. Continue installation with Generic mode, which works on all systems with Ollama$\n$\n$\nFor more information, contact us at gaia@amd.com"
+    Pop $Label
+    SetCtlColors $Label "" "transparent"
+
+    nsDialogs::Show
+  ${EndIf}
+FunctionEnd
 
 ; Using SectionGroup without /e flag since we're handling radio buttons manually
 SectionGroup /e "Installation Mode" InstallModeGroup
@@ -246,7 +264,7 @@ Function .onInit
     ; Make a note in the detail log
     DetailPrint "CPU not compatible with Ryzen AI, forcing Generic mode"
   ${EndIf}
-  
+
   ; Initialize InstallRAUX to 1 (checked)
   StrCpy $InstallRAUX "1"
 FunctionEnd
@@ -262,16 +280,16 @@ Function RAUXOptionsPage
   !insertmacro MUI_HEADER_TEXT "Additional Components" "Choose additional components to install"
   nsDialogs::Create 1018
   Pop $0
-  
+
   ${NSD_CreateCheckbox} 10 10 100% 12u "Install AMD RAUX [beta]"
   Pop $1
   ${NSD_SetState} $1 $InstallRAUX
   SetCtlColors $1 "" "transparent"
-  
+
   ${NSD_CreateLabel} 25 30 100% 40u "RAUX (an Open-WebUI fork) is AMD's new UI for interacting with AI models.$\nIt provides a chat interface similar to ChatGPT and other AI assistants.$\nThis feature is currently in beta."
   Pop $2
   SetCtlColors $2 "" "transparent"
-  
+
   nsDialogs::Show
 FunctionEnd
 
@@ -296,6 +314,7 @@ FunctionEnd
 ; MUI Settings
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "LICENSE"
+Page custom WarningPage
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 Page custom RAUXOptionsPage RAUXOptionsLeave
@@ -820,7 +839,7 @@ Section "-Install Main Components" SEC01
         Delete "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\settings.json"
         Rename "$INSTDIR\generic_settings.json" "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\settings.json"
       ${EndIf}
-      
+
       GoTo run_raux_installer
 
       DetailPrint "*** INSTALLATION COMPLETED ***"
@@ -839,26 +858,26 @@ Section "-Install Main Components" SEC01
 
         DetailPrint "- Creating RAUX installation directory..."
         CreateDirectory "$LOCALAPPDATA\RAUX"
-        
+
         DetailPrint "- Creating temporary directory for RAUX installation..."
         CreateDirectory "$LOCALAPPDATA\RAUX\raux_temp"
         SetOutPath "$LOCALAPPDATA\RAUX\raux_temp"
-        
+
         DetailPrint "- Preparing for RAUX installation..."
-        
+
         ; Copy the Python installer script to the temp directory
         File "${__FILE__}\..\raux_installer.py"
 
         DetailPrint "- Using Python script: $LOCALAPPDATA\RAUX\raux_temp\raux_installer.py"
         DetailPrint "- Installation directory: $LOCALAPPDATA\RAUX"
         DetailPrint "- Using system Python for the entire installation process"
-        
+
         ; Execute the Python script with the required parameters using system Python
         ; Note: We're not passing the python-exe parameter, so it will use the system Python
         ExecWait 'python "$LOCALAPPDATA\RAUX\raux_temp\raux_installer.py" --install-dir "$LOCALAPPDATA\RAUX" --debug' $R0
 
         DetailPrint "RAUX installation exit code: $R0"
-        
+
         ; Check if installation was successful
         ${If} $R0 == 0
           DetailPrint "*** RAUX INSTALLATION COMPLETED ***"
@@ -872,29 +891,29 @@ Section "-Install Main Components" SEC01
             MessageBox MB_OK "RAUX installation failed.$\n$\nPlease check the log file at $LOCALAPPDATA\RAUX\raux_Installer.log for detailed error information."
           ${EndIf}
         ${EndIf}
-        
+
         ; IMPORTANT: Do NOT attempt to clean up the temporary directory
         ; This is intentional to prevent file-in-use errors
         ; The directory will be left for the system to clean up later
         DetailPrint "- Intentionally NOT cleaning up temporary directory to prevent file-in-use errors"
         SetOutPath "$INSTDIR"
-        
+
         ; Create RAUX shortcut - using the GAIA icon but pointing to RAUX installation
         DetailPrint "- Creating RAUX desktop shortcut"
-        
+
         ; Copy the launcher scripts to the RAUX installation directory if they exist
         DetailPrint "- Copying RAUX launcher scripts"
-        
+
         ; Use /nonfatal flag to prevent build failure if files don't exist
         File /nonfatal "/oname=$LOCALAPPDATA\RAUX\launch_raux.ps1" "${__FILE__}\..\launch_raux.ps1"
         File /nonfatal "/oname=$LOCALAPPDATA\RAUX\launch_raux.cmd" "${__FILE__}\..\launch_raux.cmd"
-        
+
         ; Create shortcut to the batch wrapper script (will appear as a standalone app)
         CreateShortcut "$DESKTOP\RAUX.lnk" "$LOCALAPPDATA\RAUX\launch_raux.cmd" "" "$INSTDIR\src\gaia\interface\img\raux.ico"
       ${Else}
         DetailPrint "- RAUX installation skipped by user choice"
       ${EndIf}
-      
+
       create_shortcuts:
         DetailPrint "*** INSTALLATION COMPLETED ***"
 

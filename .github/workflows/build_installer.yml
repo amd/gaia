@@ -56,16 +56,19 @@ jobs:
           cd installer
           & 'C:\Program Files (x86)\NSIS\makensis.exe' /DOGA_TOKEN="${{ secrets.OGA_PUBLIC_TOKEN }}" 'Installer.nsi'
 
-          if (Test-Path "gaia-setup.exe") {
-            Write-Host "gaia-setup.exe has been created successfully."
+          # Verify installer was created successfully
+          if (Test-Path "gaia-windows-setup.exe") {
+            Write-Host "gaia-windows-setup.exe has been created successfully."
           } else {
-            Write-Host "gaia-setup.exe was not found."
+            Write-Host "gaia-windows-setup.exe was not found."
             exit 1
           }
 
-      - name: Upload Installer
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: gaia-windows-installer-${{ steps.extract_version.outputs.VERSION }}
-          path: installer\gaia-setup.exe
+          path: installer\gaia-windows-setup.exe
+
+          if-no-files-found: error
           retention-days: 7

@@ -34,7 +34,7 @@ jobs:
           # Create a test directory
           mkdir -p test_install
           # Run installer with /MODE=HYBRID parameter
-          .\gaia-setup.exe /S /MODE=HYBRID /D=.\test_install
+          .\gaia-windows-setup.exe /S /MODE=HYBRID /D=.\test_install
 
       - name: Ensure GAIA can open properly
         timeout-minutes: 15

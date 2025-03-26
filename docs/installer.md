@@ -112,7 +112,7 @@ The graphical interface comes bundled with GAIA, use the standard installation s
 For silent or automated installations, use command-line parameters:
 
 ```
-gaia-setup.exe /S /MODE=HYBRID
+gaia-windows-setup.exe /S /MODE=HYBRID
 ```
 
 Available parameters:
@@ -124,7 +124,7 @@ Available parameters:
 For continuous integration and deployment scenarios, use:
 
 ```
-gaia-setup.exe /S /MODE=GENERIC
+gaia-windows-setup.exe /S /MODE=GENERIC
 ```
 
 ## Building the Installer
@@ -133,7 +133,7 @@ To build the installer from source:
 1. Install [NSIS 3.10](https://prdownloads.sourceforge.net/nsis/nsis-3.10-setup.exe?download)
 2. Navigate to the installer directory
 3. Run `"C:\Program Files (x86)\NSIS\makensis.exe" Installer.nsi` to compile the installer
-4. The compiled installer will be created as `gaia-setup.exe`
+4. The compiled installer will be created as `gaia-windows-setup.exe`
 
 For builds that include NPU functionality, provide the OGA token:
 ```
@@ -149,15 +149,15 @@ Debugging the installer could be tricky on a workflow since NSIS does not log an
 * Compile and run normally
 
 ### Option 2: Silent mode through terminal
-* From a `Command Prompt` console, run `gaia-setup.exe /S`. All logs will be shown on the screen.
-* To log detailed output, use `gaia-setup.exe /S /LOG=install_log.txt`
+* From a `Command Prompt` console, run `gaia-windows-setup.exe /S`. All logs will be shown on the screen.
+* To log detailed output, use `gaia-windows-setup.exe /S /LOG=install_log.txt`
 
  ⚠️ NOTE: Optionally install the NSIS extension (v4.4.1) to easily compile and run the installer from within VSCode.
 
 ## Troubleshooting
 
 If you encounter installation issues:
-1. Check the installation logs - you can generate detailed logs by running `gaia-setup.exe /LOG=install_log.txt`
+1. Check the installation logs - you can generate detailed logs by running `gaia-windows-setup.exe /LOG=install_log.txt`
 2. Verify system requirements for your chosen mode
 3. For NPU/Hybrid mode, verify your Ryzen AI processor is properly detected
 4. For Generic mode, verify Ollama installation works correctly
