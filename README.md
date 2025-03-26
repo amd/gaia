@@ -12,6 +12,7 @@
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![GitHub issues](https://img.shields.io/github/issues/amd/gaia)](https://github.com/amd/gaia/issues)
 
+⚠️ **IMPORTANT**: GAIA's Hybrid mode **only supports AMD Ryzen AI 300 series processors**. For older AMD processors or non-AMD systems, please use the Generic installer. For more details, see [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
 
 **GAIA is an open-source solution designed for the quick setup and execution of generative AI applications on local PC hardware.** It enables fast and efficient execution of LLM-based applications using a hybrid hardware approach that combines the AMD Neural Processing Unit (NPU) and Integrated Graphics Processing Unit (iGPU) in the Ryzen-AI PC. GAIA provides the following key features:
 
@@ -30,7 +31,7 @@ For more details, see the [Frequently Asked Questions](docs/faq.md).
 
 ## Contents:
 
-1. [Getting Started](#getting-started)
+1. [Getting Started](#getting-started-guide)
    - [Installation Steps](#installation-steps)
    - [Uninstallation Steps](#uninstallation-steps)
    - [Running the GAIA GUI](#running-the-gaia-gui)
@@ -38,7 +39,9 @@ For more details, see the [Frequently Asked Questions](docs/faq.md).
    - [Building from Source](#building-from-source)
 1. [Features](#features)
 1. [Contributing](#contributing)
-1. [Prerequisites](#prerequisites)
+1. [System Requirements](#system-requirements)
+1. [Dependencies](#dependencies)
+1. [Troubleshooting](#troubleshooting)
 1. [FAQ](#faq)
 1. [Contact](#contact)
 1. [License](#license)
@@ -47,19 +50,19 @@ For more details, see the [Frequently Asked Questions](docs/faq.md).
 
 The quickest way to get started with GAIA is by using one of the provided installers. There are two options available:
 
-1. **GAIA_Hybrid_Installer.exe**: For running agents with the Hybrid (NPU+iGPU) execution on Ryzen AI PCs. This is the recommended installer that offers the best performance.
-1. **GAIA_Installer.exe**: For running agents on non-Ryzen AI PCs, this uses Ollama as the backend. 
+1. **GAIA_Hybrid_Installer.exe**: For running agents with the Hybrid (NPU+iGPU) execution on Ryzen AI PCs. This is the recommended installer that offers the best performance. **Requires an AMD Ryzen AI 300 series processor**.
+1. **GAIA_Installer.exe**: For running agents on non-Ryzen AI 300-series PCs, this uses Ollama as the backend.
 
 Each installer includes both a CLI tool and a GUI. The installation process typically takes about 5-10 minutes, depending on your Wi-Fi connection, and provides everything you need to start working with LLMs.
 
-⚠️ NOTE: When running GAIA using the Hybrid mode, please make sure to disable any discrete third-party GPUs in Device Manager.
+⚠️ **NOTE**: When running GAIA using the Hybrid mode, please make sure to disable any discrete third-party GPUs in Device Manager.
 
 ## Installation Steps
 
 ![image](./data/img/gaia-setup.png)
 
 To install the GAIA application, please follow these steps:
-1. Make sure you meet the minimum system requirements [here](#system-requirements)
+1. Make sure you meet the minimum [system requirements](#system-requirements) - **For Hybrid mode, you must have an AMD Ryzen AI 300-series processor**
 1. Download the [latest release](https://github.com/amd/gaia/releases) of the GAIA installers from the "Assets" section:
    ![image](./data/img/gaia-installer.png)
    1. If you have a Ryzen AI PC, choose the Hybrid installer, otherwise choose the generic installer.
@@ -100,7 +103,7 @@ To completely uninstall GAIA from your system, follow these steps:
 
 ## Running the GAIA GUI
 
-Check your desktop for the GAIA-GUI icon and double-click it to launch the GUI. The first time you launch GAIA, it may take a few minutes to start. Subsequent launches will be faster. You may also need to download the latest LLM models from Hugging Face. GAIA will handle this automatically but may request a Hugging Face token for access. If you encounter any issues with model downloads or the GUI application, please contact the [AMD GAIA team](mailto:gaia@amd.com).
+Check your desktop for the GAIA-GUI icon and double-click it to launch the GUI. The first time you launch GAIA, it may take a few minutes to start. Subsequent launches will be faster. You may also need to download the latest LLM models from Hugging Face. GAIA will handle this automatically but may request a Hugging Face token for access. If you encounter any issues with model downloads or the GUI application, please refer to the [Troubleshooting](#troubleshooting) section or contact the [AMD GAIA team](mailto:gaia@amd.com).
 
 ## Running the GAIA CLI
 
@@ -124,21 +127,27 @@ This is a new project with a codebase that is actively being developed. If you d
 
 The best way to contribute is by adding a new agent that covers a unique use-case. You can use any of the agents/bots under the ./agents folder as a starting point. If you prefer to avoid UI development, you can add a feature to the CLI tool first. For adding features to the GUI, please refer to our [UI Development Guide](docs/ui.md).
 
-## System Requirements
+# System Requirements
 
-GAIA with Ryzen AI Hybrid NPU/iGPU execution has been tested on the following systems. Any system that has the AMD Ryzen AI 9 HX 370 with NPU Driver 32.0.203.237 or higher should work. If you do not have access to a Ryzen AI system below, please use the generic installer instead.
+GAIA with Ryzen AI Hybrid NPU/iGPU execution has been tested on the system detailed below. Any system that has an AMD Ryzen AI 300-series processor with NPU Driver 32.0.203.237 on Windows 11 or newer should work. For more details on what is supported, see [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
 
-- Systems: Asus ProArt PX13/P16, HP Omnibook or similar PC system with Ryzen AI 9 HX 370 or higher.
-- OS: Windows 11 Pro/Home (GAIA does not support macOS or Linux at this time, [contact us](mailto:gaia@amd.com) if you need support for a particular platform)
-- Processor: AMD Ryzen AI 9 HX 370 w/ Radeon 890M, 2000 Mhz, 12 Core(s), 24 Logical Processor(s)
+⚠️ **NOTE**: GAIA works on Windows 11 Pro/Home and does not support macOS or Linux at this time.
+
+GAIA has been tested on the following system:
+
+- Systems: Asus ProArt PX13/P16, HP Omnibook with Ryzen AI 9 HX 370 series processor
+- OS: Windows 11 Pro
+- Processor: AMD Ryzen AI 9 HX 370 w/ Radeon 840M
 - AMD Radeon 890M iGPU drivers: `32.0.12010.8007` and `32.0.12033.1030`
 - AMD NPU drivers: `32.0.203.237` or `32.0.203.240`
 - AMD Adrenalin Software: Install the latest version from [AMD's official website](https://www.amd.com/en/products/software/adrenalin.html)
-- Physical Memory: Minimum 16GB, Recommended 32GB
+- Physical Memory: 32GB
 - For Hybrid mode: AMD Ryzen AI 9 HX 370 with NPU Driver `32.0.203.237` or `32.0.203.240`
 - For Generic mode: Any Windows PC meeting Ollama's system requirements
 
-⚠️ **NOTE**: For Hybrid mode, NPU Driver `32.0.203.242` is not compatible, please revert driver to `32.0.203.240`. You can check your driver version by going to *Device Manager -> Neural Processors -> NPU Compute Accelerator Device -> Right-Click Properties -> Driver Tab -> Driver Version*.
+⚠️ **NOTE**: For Hybrid mode, you may experience issues with NPU Driver `32.0.203.242`, it is recommended to revert to driver `32.0.203.240`. You can check your driver version by going to *Device Manager -> Neural Processors -> NPU Compute Accelerator Device -> Right-Click Properties -> Driver Tab -> Driver Version*.
+
+⚠️ **NOTE**: If you do not have access to a Ryzen AI system, you can still use GAIA by installing the generic option.
 
 ## Dependencies
 
@@ -148,6 +157,30 @@ The GAIA installer will automatically set up most dependencies, including:
 - FFmpeg
 - Ollama *(Generic mode only)*
 - All required Python packages
+
+# Troubleshooting
+
+If you encounter issues with GAIA, please check the following common solutions:
+
+## Driver Issues
+- **NPU Driver Incompatibility**: For Hybrid mode, ensure you have NPU Driver `32.0.203.237` or `32.0.203.240`. Driver `32.0.203.242` may experience issues.
+- **iGPU Driver Issues**: Make sure your AMD Radeon 890M iGPU drivers are `32.0.12010.8007` or `32.0.12033.1030`.
+- **Driver Updates**: Install the latest AMD Adrenalin Software from [AMD's official website](https://www.amd.com/en/products/software/adrenalin.html).
+
+## Installation Problems
+- **Windows Security Warning**: If you get a Windows Security warning, click *"More info"* and then *"Run anyway"*.
+- **Installation Fails**: Make sure you have administrator rights and sufficient disk space.
+- **Previous Installation**: If prompted to delete an existing installation, it's recommended to allow this to avoid conflicts.
+
+## Model Download Issues
+- **Hugging Face Token**: If requested, provide a valid Hugging Face token to download models.
+- **Slow Downloads**: Check your internet connection and be patient during the initial setup.
+
+## Performance Problems
+- **Disable Discrete GPUs**: When using Hybrid mode, disable any discrete third-party GPUs in Device Manager.
+- **Low Memory**: Ensure you have at least 16GB of RAM (32GB recommended).
+
+For additional troubleshooting assistance, please contact the [AMD GAIA team](mailto:gaia@amd.com).
 
 # FAQ
 
