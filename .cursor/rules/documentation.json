@@ -1,0 +1,34 @@
+{
+  "documentation": {
+    "primary_source": "../docs.json",
+    "organization": {
+      "local_docs": {
+        "path": "docs/",
+        "key_files": [
+          "dev.md",
+          "faq.md",
+          "installer.md"
+        ]
+      },
+      "api_docs": {
+        "path": "src/gaia/",
+        "format": "docstrings"
+      },
+      "examples": {
+        "path": "examples/",
+        "format": "Jupyter notebooks"
+      }
+    },
+    "maintenance": {
+      "update_frequency": "With each release",
+      "versioning": "Matches software versions",
+      "review_process": "Required for all documentation changes"
+    },
+    "doc_types": {
+      "primary": ["GAIA"],
+      "platform": ["RyzenAI"],
+      "component": ["Lemonade"],
+      "tool": ["NSIS"]
+    }
+  }
+} 

@@ -1,0 +1,59 @@
+{
+  "code_analysis": {
+    "focus_areas": {
+      "ai_components": {
+        "patterns": ["src/gaia/agents/**/*.py"],
+        "key_aspects": [
+          "Model integration",
+          "RAG implementation",
+          "Agent behavior",
+          "Tool usage"
+        ]
+      },
+      "ui_components": {
+        "patterns": ["src/gaia/interface/**/*"],
+        "key_aspects": [
+          "User interaction flow",
+          "Error handling",
+          "State management",
+          "UI/UX consistency"
+        ]
+      },
+      "evaluation": {
+        "patterns": ["src/gaia/eval/**/*.py"],
+        "key_aspects": [
+          "Performance metrics",
+          "Quality assessment",
+          "Testing methodology"
+        ]
+      }
+    },
+    "critical_paths": {
+      "model_execution": {
+        "description": "LLM execution and integration with OGA/Lemonade",
+        "key_files": [
+          "src/gaia/agents/agent.py",
+          "src/gaia/agents/Rag/*.py"
+        ]
+      },
+      "user_interface": {
+        "description": "Core UI components and interaction handling",
+        "key_files": [
+          "src/gaia/interface/form.ui",
+          "src/gaia/interface/util.py"
+        ]
+      }
+    },
+    "dependencies": {
+      "external": [
+        "ONNX Runtime GenAI",
+        "Lemonade",
+        "PySide6",
+        "TurnkeyML"
+      ],
+      "internal": {
+        "raux": "Optional UI component, separate installation"
+      }
+    }
+  }
+} 

@@ -82,7 +82,7 @@ The installation process varies by mode:
   - Installs Ryzen AI wheel packages
 - Configures settings.json based on selected mode
 
-### 5. AMD RAUX (Beta)
+<!-- ### 5. AMD RAUX (Beta)
 
 ![AMD RAUX Installation Option](../docs/img/raux_installer_option.png)
 
@@ -96,7 +96,7 @@ During installation, you can choose to install AMD RAUX (beta), AMD's new UI for
 To launch RAUX after installation:
 - Click the RAUX desktop shortcut created during installation
 - The application will open in your default web browser
-- For technical support with RAUX, contact support@amd.com
+- For technical support with RAUX, contact support@amd.com -->
 
 ### 6. Final Setup
 - Creates desktop shortcuts

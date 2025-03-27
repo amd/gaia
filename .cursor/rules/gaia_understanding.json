@@ -1,0 +1,82 @@
+{
+  "project_understanding": {
+    "gaia": {
+      "description": "GAIA (Generative AI is Awesome) is an open-source framework for running generative AI applications on AMD hardware",
+      "documentation_source": "../docs.json",
+      "key_components": {
+        "backend": {
+          "description": "Uses ONNX Runtime GenAI (OGA) via Lemonade for LLM execution",
+          "stack": {
+            "lemonade": {
+              "description": "Multi-vendor open-source SDK for LLM deployment",
+              "interfaces": [
+                "High-level Python SDK",
+                "Server Interface (REST API)",
+                "OGA APIs for C++ and Python"
+              ],
+              "features": [
+                "Quick experimentation with hybrid execution mode",
+                "Validation of inference speed and task performance",
+                "High-level API integration for Python apps"
+              ]
+            },
+            "oga": {
+              "description": "Microsoft's multi-vendor generative AI framework",
+              "role": "Provides LLM interface for execution backends like Ryzen AI"
+            }
+          }
+        },
+        "modes": {
+          "hybrid": {
+            "description": "Utilizes both NPU and iGPU on Ryzen AI systems",
+            "features": [
+              "Optimal model partitioning between NPU and iGPU",
+              "Minimized time-to-first-token (TTFT)",
+              "Maximized token generation speed (TPS)"
+            ],
+            "requirements": [
+              "Ryzen AI 300-series processors (Strix Point/Krackan Point)",
+              "Windows 11"
+            ]
+          },
+          "npu": {
+            "description": "NPU-only execution mode (Early Access)",
+            "features": ["Compute-intensive operations offloaded exclusively to NPU"],
+            "platforms": ["STX", "KRK"]
+          },
+          "generic": "Runs on non-Ryzen AI systems using standard GPU acceleration"
+        },
+        "features": [
+          "Local/private LLM execution",
+          "RAG (Retrieval-Augmented Generation) pipeline",
+          "Interactive chat capabilities",
+          "Tool usage and reasoning"
+        ],
+        "optional_components": {
+          "raux": {
+            "description": "AMD's beta UI for AI model interaction",
+            "installation": "Optional component in GAIA installer",
+            "integration": "Installed separately but can be managed through GAIA installer"
+          }
+        }
+      },
+      "file_patterns": {
+        "core": ["src/gaia/**/*.py"],
+        "agents": ["src/gaia/agents/**/*.py"],
+        "interface": ["src/gaia/interface/**/*"],
+        "eval": ["src/gaia/eval/**/*.py"],
+        "tests": ["tests/**/*.py"],
+        "docs": ["docs/**/*.md"]
+      },
+      "installer": {
+        "modes": ["hybrid", "npu", "generic"],
+        "optional_components": ["RAUX"],
+        "dependencies": {
+          "conda": "Automatically installs Miniconda if missing",
+          "python": "Creates Python 3.10 environment named 'gaia_env'",
+          "ollama": "Required for generic mode"
+        }
+      }
+    }
+  }
+} 

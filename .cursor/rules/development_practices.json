@@ -1,0 +1,48 @@
+{
+  "development_practices": {
+    "code_organization": {
+      "structure": {
+        "src/gaia": "Core GAIA implementation",
+        "src/gaia/agents": "AI agent implementations including RAG",
+        "src/gaia/interface": "UI components and user interaction",
+        "src/gaia/eval": "Evaluation tools and metrics",
+        "tests": "Test suites and test data",
+        "docs": "Project documentation"
+      },
+      "naming_conventions": {
+        "files": "snake_case.py",
+        "classes": "PascalCase",
+        "functions": "snake_case",
+        "constants": "UPPER_SNAKE_CASE"
+      }
+    },
+    "code_quality": {
+      "documentation": {
+        "required": [
+          "Copyright notice and MIT license header",
+          "Function/class docstrings",
+          "Complex logic explanations",
+          "Parameter descriptions"
+        ]
+      },
+      "testing": {
+        "unit_tests": "Required for new functionality",
+        "test_location": "tests/ directory matching source structure"
+      },
+      "error_handling": {
+        "practices": [
+          "Use descriptive error messages",
+          "Log errors with appropriate context",
+          "Handle cleanup in error cases"
+        ]
+      }
+    },
+    "integration": {
+      "raux": {
+        "separation": "Maintain clear separation between GAIA and RAUX",
+        "communication": "Use defined interfaces for GAIA-RAUX interaction",
+        "installation": "Support optional RAUX installation"
+      }
+    }
+  }
+} 

@@ -6,7 +6,7 @@
     "configurations": [
         {
             "name": "UI Debug",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "module": "src.gaia.interface.widget",
             "args": [],
@@ -18,11 +18,10 @@
             "justMyCode": false,
             "subProcess": true,
             "stopOnEntry": false,
-            "debugOptions": ["RedirectOutput"]
         },
         {
             "name": "CLI Server Debug",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "module": "gaia.cli",
             "args": ["start"],
@@ -34,11 +33,10 @@
             "justMyCode": false,
             "subProcess": true,
             "stopOnEntry": false,
-            "debugOptions": ["RedirectOutput"],
         },
         {
             "name": "CLI Client Debug",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "module": "gaia.cli",
             "args": ["prompt", "hi"],
@@ -50,11 +48,10 @@
             "justMyCode": false,
             "subProcess": true,
             "stopOnEntry": false,
-            "debugOptions": ["RedirectOutput"],
         },
         {
             "name": "GAIA Pytest Debug",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "module": "pytest",
             "args": [
@@ -73,11 +70,7 @@
             "console": "integratedTerminal",
             "justMyCode": false,
             "subProcess": true,
-            "stopOnEntry": false,
-            "debugOptions": ["RedirectOutput"],
-            "debugPython": {
-                "subProcess": true
-            }
+            "stopOnEntry": false
         }
 
     ]

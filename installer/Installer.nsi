@@ -116,6 +116,11 @@ SectionGroupEnd
 ; Variable to track whether to install RAUX
 Var InstallRAUX
 
+; Custom finish page variables
+Var RunGAIAUICheckbox
+Var RunGAIACLICheckbox
+Var RunRAUXCheckbox
+
 Function .onInit
   ; Default to Hybrid mode
   StrCpy $GAIA_STRING "GAIA - Ryzen AI Hybrid Mode, ver: ${GAIA_VERSION}"
@@ -265,8 +270,13 @@ Function .onInit
     DetailPrint "CPU not compatible with Ryzen AI, forcing Generic mode"
   ${EndIf}
 
-  ; Initialize InstallRAUX to 1 (checked)
-  StrCpy $InstallRAUX "1"
+  ; Initialize InstallRAUX to 0 (unchecked)
+  StrCpy $InstallRAUX "0"
+  
+  ; Hide RAUX option if not installed
+  ${If} $InstallRAUX != "1"
+    !define MUI_FINISHPAGE_SHOWREADME2 ""
+  ${EndIf}
 FunctionEnd
 
 ; Define constants
@@ -276,40 +286,67 @@ FunctionEnd
 !define ICON_FILE "../src/gaia/interface/img/gaia.ico"
 
 ; Custom page for RAUX installation option
-Function RAUXOptionsPage
-  !insertmacro MUI_HEADER_TEXT "Additional Components" "Choose additional components to install"
+; Function RAUXOptionsPage
+;   !insertmacro MUI_HEADER_TEXT "Additional Components" "Choose additional components to install"
+;   nsDialogs::Create 1018
+;   Pop $0
+; 
+;   ${NSD_CreateCheckbox} 10 10 100% 12u "Install AMD RAUX [beta]"
+;   Pop $1
+;   ${NSD_SetState} $1 $InstallRAUX
+;   SetCtlColors $1 "" "transparent"
+; 
+;   ${NSD_CreateLabel} 25 30 100% 40u "RAUX (an Open-WebUI fork) is AMD's new UI for interacting with AI models.$\nIt provides a chat interface similar to ChatGPT and other AI assistants.$\nThis feature is currently in beta."
+;   Pop $2
+;   SetCtlColors $2 "" "transparent"
+; 
+;   nsDialogs::Show
+; FunctionEnd
+; 
+; Function RAUXOptionsLeave
+;   ${NSD_GetState} $1 $InstallRAUX
+; FunctionEnd
+
+; Custom finish page
+Function CustomFinishPage
   nsDialogs::Create 1018
+  Pop $Dialog
+
+  ${NSD_CreateLabel} 0 20 100% 40u "$GAIA_STRING has been installed successfully! A shortcut has been added to your Desktop.$\n$\n$\nWhat would you like to do next?"
   Pop $0
 
-  ${NSD_CreateCheckbox} 10 10 100% 12u "Install AMD RAUX [beta]"
-  Pop $1
-  ${NSD_SetState} $1 $InstallRAUX
-  SetCtlColors $1 "" "transparent"
+  ${NSD_CreateCheckbox} 20 100 100% 12u "Run GAIA UI"
+  Pop $RunGAIAUICheckbox
 
-  ${NSD_CreateLabel} 25 30 100% 40u "RAUX (an Open-WebUI fork) is AMD's new UI for interacting with AI models.$\nIt provides a chat interface similar to ChatGPT and other AI assistants.$\nThis feature is currently in beta."
-  Pop $2
-  SetCtlColors $2 "" "transparent"
+  ${NSD_CreateCheckbox} 20 120 100% 12u "Run GAIA CLI"
+  Pop $RunGAIACLICheckbox
+
+  ${If} $InstallRAUX == "1"
+    ${NSD_CreateCheckbox} 20 140 100% 12u "Run RAUX"
+    Pop $RunRAUXCheckbox
+  ${EndIf}
 
   nsDialogs::Show
 FunctionEnd
 
-Function RAUXOptionsLeave
-  ${NSD_GetState} $1 $InstallRAUX
+Function CustomFinishLeave
+  ${NSD_GetState} $RunGAIAUICheckbox $0
+  ${If} $0 == ${BST_CHECKED}
+    Call RunGAIAUI
+  ${EndIf}
+
+  ${NSD_GetState} $RunGAIACLICheckbox $0
+  ${If} $0 == ${BST_CHECKED}
+    Call RunGAIACLI
+  ${EndIf}
+
+  ${If} $InstallRAUX == "1"
+    ${NSD_GetState} $RunRAUXCheckbox $0
+    ${If} $0 == ${BST_CHECKED}
+      Call RunRAUX
+    ${EndIf}
+  ${EndIf}
 FunctionEnd
-
-; Finish Page settings
-!define MUI_TEXT_FINISH_INFO_TITLE "GAIA installed successfully!"
-!define MUI_TEXT_FINISH_INFO_TEXT "$GAIA_STRING has been installed successfully! A shortcut has been added to your Desktop. What would you like to do next?"
-
-!define MUI_FINISHPAGE_RUN
-!define MUI_FINISHPAGE_RUN_FUNCTION RunGAIAUI
-!define MUI_FINISHPAGE_RUN_TEXT "Run GAIA UI"
-!define MUI_FINISHPAGE_RUN_NOTCHECKED
-
-!define MUI_FINISHPAGE_SHOWREADME
-!define MUI_FINISHPAGE_SHOWREADME_FUNCTION RunGAIACLI
-!define MUI_FINISHPAGE_SHOWREADME_TEXT "Run GAIA CLI"
-!define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
 
 ; MUI Settings
 !insertmacro MUI_PAGE_WELCOME
@@ -317,9 +354,9 @@ FunctionEnd
 Page custom WarningPage
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
-Page custom RAUXOptionsPage RAUXOptionsLeave
+; Page custom RAUXOptionsPage RAUXOptionsLeave
 !insertmacro MUI_PAGE_INSTFILES
-!insertmacro MUI_PAGE_FINISH
+Page custom CustomFinishPage CustomFinishLeave
 !insertmacro MUI_LANGUAGE "English"
 
 ; Set the installer icon
@@ -386,7 +423,6 @@ Section "-Install Main Components" SEC01
   DetailPrint "------------------------"
   DetailPrint "- Installation Section -"
   DetailPrint "------------------------"
-
   ; Check if directory exists before proceeding
   IfFileExists "$INSTDIR\*.*" 0 continue_install
     ${IfNot} ${Silent}
@@ -874,22 +910,38 @@ Section "-Install Main Components" SEC01
 
         ; Execute the Python script with the required parameters using system Python
         ; Note: We're not passing the python-exe parameter, so it will use the system Python
-        ExecWait 'python "$LOCALAPPDATA\RAUX\raux_temp\raux_installer.py" --install-dir "$LOCALAPPDATA\RAUX" --debug' $R0
+        ExecWait 'python "$LOCALAPPDATA\RAUX\raux_temp\raux_installer.py" --install-dir "$LOCALAPPDATA\RAUX"' $R0
 
         DetailPrint "RAUX installation exit code: $R0"
 
         ; Check if installation was successful
         ${If} $R0 == 0
-          DetailPrint "*** RAUX INSTALLATION COMPLETED ***"
-          DetailPrint "- RAUX installation completed successfully"
+            DetailPrint "*** RAUX INSTALLATION COMPLETED ***"
+            DetailPrint "- RAUX installation completed successfully"
+            
+            ; Get version from version.txt, default to "unknown" if not found
+            StrCpy $5 "unknown"  ; Default version
+            IfFileExists "$LOCALAPPDATA\RAUX\raux_temp\extracted_files\version.txt" 0 +4
+                FileOpen $4 "$LOCALAPPDATA\RAUX\raux_temp\extracted_files\version.txt" r
+                FileRead $4 $5
+                FileClose $4
+            DetailPrint "- RAUX Version: $5"
+            
+            ; Copy the launcher scripts to the RAUX installation directory
+            DetailPrint "- Copying RAUX launcher scripts"
+            File /nonfatal "/oname=$LOCALAPPDATA\RAUX\launch_raux.ps1" "${__FILE__}\..\launch_raux.ps1"
+            File /nonfatal "/oname=$LOCALAPPDATA\RAUX\launch_raux.cmd" "${__FILE__}\..\launch_raux.cmd"
+            
+            ; Create shortcut to the batch wrapper script with version parameter
+            CreateShortcut "$DESKTOP\RAUX.lnk" "$LOCALAPPDATA\RAUX\launch_raux.cmd" "--version $5 --mode $SELECTED_MODE" "$INSTDIR\src\gaia\interface\img\raux.ico"
         ${Else}
-          DetailPrint "*** RAUX INSTALLATION FAILED ***"
-          DetailPrint "- For additional support, please contact support@amd.com and"
-          DetailPrint "include the error details, or create an issue at"
-          DetailPrint "https://github.com/aigdat/open-webui"
-          ${IfNot} ${Silent}
-            MessageBox MB_OK "RAUX installation failed.$\n$\nPlease check the log file at $LOCALAPPDATA\RAUX\raux_Installer.log for detailed error information."
-          ${EndIf}
+            DetailPrint "*** RAUX INSTALLATION FAILED ***"
+            DetailPrint "- Please check the log file at $LOCALAPPDATA\GAIA\gaia_install.log"
+            DetailPrint "- For additional support, please contact support@amd.com"
+            ${IfNot} ${Silent}
+                MessageBox MB_OK "RAUX installation failed.$\n$\nPlease check the log file at $LOCALAPPDATA\GAIA\gaia_install.log for detailed error information."
+            ${EndIf}
+            Abort
         ${EndIf}
 
         ; IMPORTANT: Do NOT attempt to clean up the temporary directory
@@ -897,19 +949,6 @@ Section "-Install Main Components" SEC01
         ; The directory will be left for the system to clean up later
         DetailPrint "- Intentionally NOT cleaning up temporary directory to prevent file-in-use errors"
         SetOutPath "$INSTDIR"
-
-        ; Create RAUX shortcut - using the GAIA icon but pointing to RAUX installation
-        DetailPrint "- Creating RAUX desktop shortcut"
-
-        ; Copy the launcher scripts to the RAUX installation directory if they exist
-        DetailPrint "- Copying RAUX launcher scripts"
-
-        ; Use /nonfatal flag to prevent build failure if files don't exist
-        File /nonfatal "/oname=$LOCALAPPDATA\RAUX\launch_raux.ps1" "${__FILE__}\..\launch_raux.ps1"
-        File /nonfatal "/oname=$LOCALAPPDATA\RAUX\launch_raux.cmd" "${__FILE__}\..\launch_raux.cmd"
-
-        ; Create shortcut to the batch wrapper script (will appear as a standalone app)
-        CreateShortcut "$DESKTOP\RAUX.lnk" "$LOCALAPPDATA\RAUX\launch_raux.cmd" "" "$INSTDIR\src\gaia\interface\img\raux.ico"
       ${Else}
         DetailPrint "- RAUX installation skipped by user choice"
       ${EndIf}
@@ -929,5 +968,12 @@ FunctionEnd
 
 Function RunGAIACLI
   ExecShell "open" "$DESKTOP\GAIA-CLI.lnk"
+FunctionEnd
+
+Function RunRAUX
+  ${If} $InstallRAUX == "1"
+    IfFileExists "$DESKTOP\RAUX.lnk" 0 +2ylin
+      ExecShell "open" "$DESKTOP\RAUX.lnk"
+  ${EndIf}
 FunctionEnd
 
