@@ -25,7 +25,7 @@ from requests.exceptions import RequestException
 from gaia.logger import get_logger
 from gaia.llm.lemonade_server import launch_lemonade_server
 from gaia.agents.agent import launch_agent_server
-from gaia.version import version_with_hash
+from gaia.version import version
 
 try:
     from gaia.llm.ollama_server import (
@@ -117,7 +117,7 @@ class GaiaCliClient:
         )
 
     def start(self):
-        self.log.info(f"Starting GAIA [{version_with_hash}]")
+        self.log.info(f"Starting GAIA {version}")
         self.log.info("Checking ports availability...")
         # Check if required ports are available
         ports_to_check = [
@@ -1077,7 +1077,9 @@ async def async_main(action, **kwargs):
             return
         elif launch_in_background == "none":
             client = GaiaCliClient(
-                show_stats=show_stats, logging_level=logging_level, **kwargs
+                show_stats=show_stats,
+                logging_level=logging_level,
+                **kwargs,
             )
             client.start()
             log.info("Servers started successfully.")
@@ -1176,7 +1178,7 @@ def main():
 
     # Create the main parser
     parser = argparse.ArgumentParser(
-        description=f"Gaia CLI - Interact with Gaia AI agents. \nVersion: {version_with_hash}",
+        description=f"Gaia CLI - Interact with Gaia AI agents. \n{version}",
         formatter_class=argparse.RawTextHelpFormatter,
     )
 
@@ -1188,7 +1190,7 @@ def main():
         "-v",
         "--version",
         action="version",
-        version=f"{version_with_hash}",
+        version=f"{version}",
         help="Show program's version number and exit",
     )
 
