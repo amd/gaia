@@ -26,7 +26,7 @@ def launch_lemonade_server(
         device == "cpu" or device == "npu" or device == "igpu" or device == "hybrid"
     ):
         raise ValueError(
-            f"ERROR: {device} not supported, please select 'cpu', 'npu' or 'igpu'."
+            f"ERROR: {device} not supported, please select 'cpu', 'npu', 'igpu' or 'hybrid'."
         )
     if not (backend == "ollama" or backend == "hf" or backend == "oga"):
         raise ValueError(

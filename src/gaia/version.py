@@ -5,7 +5,7 @@ import subprocess
 import os
 from typing import Optional
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"
 
 
 def get_git_hash(hash_length: int = 8) -> str:
@@ -21,6 +21,7 @@ def get_git_hash(hash_length: int = 8) -> str:
     try:
         return (
             subprocess.check_output(
+                # Get the current Git commit hash, short version uses first 8 characters
                 ["git", "rev-parse", f"--short={hash_length}", "HEAD"]
             )
             .decode("ascii")
@@ -90,7 +91,9 @@ try:
     with open(os.path.join(installer_dir, "version.nsh"), "w", encoding="utf-8") as f:
         f.write(f'!define GAIA_VERSION "{version_with_hash}"\n')
 
-    print("Version files created successfully: version.txt and installer/version.nsh")
+    # print(
+    #     f"Version files created: version.txt and installer/version.nsh, version: {version_with_hash}"
+    # )
 except Exception as e:
     print(f"Failed to write version files: {str(e)}")
     raise

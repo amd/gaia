@@ -6,6 +6,19 @@ GAIA (Generative AI Acceleration Infrastructure & Applications) provides a comma
 
 1. Make sure to follow the [Getting Started Guide](../README.md#getting-started-guide) to install the `gaia-cli` tool.
 
+1. Set the required GAIA_MODE environment variable by running one of the following scripts:
+   ```bash
+   # For Ryzen AI systems with NPU + iGPU:
+   set_hybrid_mode.bat
+
+   # For systems using DirectML:
+   set_generic_mode.bat
+
+   # For NPU-only configurations:
+   set_npu_mode.bat
+   ```
+   This environment variable is required for proper configuration of GAIA.
+
 1. Once installed, double click on the desktop icon **GAIA-CLI** to launch the command-line shell with the GAIA environment activated.
 
 1. Start the servers with default settings:
@@ -263,6 +276,35 @@ This configuration file tracks:
 When running client commands like `gaia-cli chat`, the CLI looks for the `.gaia_servers.json` file in the current directory to establish connections. This means:
 
 - All commands should be run from the same directory where `gaia-cli start` was executed
+
+## Troubleshooting
+
+### Environment Variable Issues
+
+If you encounter this error message:
+```
+ERROR: GAIA_MODE environment variable is not set.
+Please run one of the following scripts before using gaia-cli:
+  set_hybrid_mode.bat
+  set_generic_mode.bat
+  set_npu_mode.bat
+```
+
+You need to set the GAIA_MODE environment variable by running one of the provided batch files. This variable configures GAIA for your specific hardware:
+
+- `set_hybrid_mode.bat` - For Ryzen AI systems with NPU + iGPU capabilities
+- `set_generic_mode.bat` - For systems using standard DirectML acceleration
+- `set_npu_mode.bat` - For NPU-only configurations
+
+These scripts set the variable in three ways:
+1. For the current session
+2. Permanently using the Windows registry
+3. In your conda environment's activation script
+
+If the issue persists after running one of these scripts:
+1. Try restarting your command prompt or PowerShell window
+2. Verify the variable is set with `echo %GAIA_MODE%`
+3. Make sure you're using the same conda environment where the script was run
 
 # License
 

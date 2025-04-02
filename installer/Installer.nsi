@@ -4,7 +4,6 @@
 
 ; Define command line parameters
 !define /ifndef MODE "GENERIC"  ; Default to GENERIC mode if not specified
-!define /ifndef CI "OFF"  ; Default to OFF mode if not specified
 !define /ifndef OGA_TOKEN ""  ; Default to empty string if not specified
 !define /ifndef OGA_URL "https://api.github.com/repos/aigdat/ryzenai-sw-ea/contents/"
 !define /ifndef RYZENAI_FOLDER "ryzen_ai_13_ga"
@@ -13,25 +12,15 @@
 !define /ifndef LEMONADE_VERSION "v6.0.2"
 
 ; Command line usage:
-;  gaia-windows-setup.exe [/S] [/MODE=GENERIC|NPU|HYBRID] [/D=<installation directory>]
+;  gaia-windows-setup.exe [/S] [/DMODE=GENERIC|NPU|HYBRID] [/DCI=ON] [/D=<installation directory>]
 ;    /S - Silent install with no user interface
-;    /MODE=X - Set installation mode (GENERIC, NPU, or HYBRID)
+;    /DMODE=X - Set installation mode (GENERIC, NPU, or HYBRID)
 ;    /D=<path> - Set installation directory (must be last parameter)
 
 ; Define main variables
 Name "GAIA"
 
-; This is a compile-time fix to make sure that our selfhost CI runner can successfully install,
-; since LOCALAPPDATA points to C:\Windows for "system users"
-!ifdef CI
-  !if ${CI} == "ON"
-    InstallDir "C:\Users\jfowe\AppData\Local\GAIA"
-  !else
-    InstallDir "$LOCALAPPDATA\GAIA"
-  !endif
-!else
-  InstallDir "$LOCALAPPDATA\GAIA"
-!endif
+InstallDir "$LOCALAPPDATA\GAIA"
 
 ; Include modern UI elements
 !include "MUI2.nsh"
@@ -81,9 +70,9 @@ Var Dialog
 Var Label
 
 ; Component section descriptions
-LangString DESC_GenericSec ${LANG_ENGLISH} "Standard GAIA installation with CPU-only execution. Works on all systems."
-LangString DESC_NPUSec ${LANG_ENGLISH} "GAIA with NPU acceleration for optimized on-device AI. Requires Ryzen AI 300-series processors."
-LangString DESC_HybridSec ${LANG_ENGLISH} "GAIA with Hybrid execution mode which uses both NPU and iGPU for improved performance. Requires Ryzen AI 300-series processors."
+LangString DESC_GenericSec 1033 "Standard GAIA installation with CPU-only execution. Works on all systems."
+LangString DESC_NPUSec 1033 "GAIA with NPU acceleration for optimized on-device AI. Requires Ryzen AI 300-series processors."
+LangString DESC_HybridSec 1033 "GAIA with Hybrid execution mode which uses both NPU and iGPU for improved performance. Requires Ryzen AI 300-series processors."
 
 ; Warning message for incompatible processors
 Function WarningPage
@@ -272,7 +261,7 @@ Function .onInit
 
   ; Initialize InstallRAUX to 0 (unchecked)
   StrCpy $InstallRAUX "0"
-  
+
   ; Hide RAUX option if not installed
   ${If} $InstallRAUX != "1"
     !define MUI_FINISHPAGE_SHOWREADME2 ""
@@ -290,19 +279,19 @@ FunctionEnd
 ;   !insertmacro MUI_HEADER_TEXT "Additional Components" "Choose additional components to install"
 ;   nsDialogs::Create 1018
 ;   Pop $0
-; 
+;
 ;   ${NSD_CreateCheckbox} 10 10 100% 12u "Install AMD RAUX [beta]"
 ;   Pop $1
 ;   ${NSD_SetState} $1 $InstallRAUX
 ;   SetCtlColors $1 "" "transparent"
-; 
+;
 ;   ${NSD_CreateLabel} 25 30 100% 40u "RAUX (an Open-WebUI fork) is AMD's new UI for interacting with AI models.$\nIt provides a chat interface similar to ChatGPT and other AI assistants.$\nThis feature is currently in beta."
 ;   Pop $2
 ;   SetCtlColors $2 "" "transparent"
-; 
+;
 ;   nsDialogs::Show
 ; FunctionEnd
-; 
+;
 ; Function RAUXOptionsLeave
 ;   ${NSD_GetState} $1 $InstallRAUX
 ; FunctionEnd
@@ -363,17 +352,17 @@ Page custom CustomFinishPage CustomFinishLeave
 Icon ${ICON_FILE}
 
 ; Language settings
-LangString MUI_TEXT_WELCOME_INFO_TITLE "${LANG_ENGLISH}" "Welcome to the GAIA Installer"
-LangString MUI_TEXT_WELCOME_INFO_TEXT "${LANG_ENGLISH}" "This wizard will install $GAIA_STRING on your computer."
-LangString MUI_TEXT_DIRECTORY_TITLE "${LANG_ENGLISH}" "Select Installation Directory"
-LangString MUI_TEXT_INSTALLING_TITLE "${LANG_ENGLISH}" "Installing $GAIA_STRING"
-LangString MUI_TEXT_FINISH_TITLE "${LANG_ENGLISH}" "Installation Complete"
-LangString MUI_TEXT_FINISH_SUBTITLE "${LANG_ENGLISH}" "Thank you for installing GAIA!"
-LangString MUI_TEXT_ABORT_TITLE "${LANG_ENGLISH}" "Installation Aborted"
-LangString MUI_TEXT_ABORT_SUBTITLE "${LANG_ENGLISH}" "Installation has been aborted."
-LangString MUI_BUTTONTEXT_FINISH "${LANG_ENGLISH}" "Finish"
-LangString MUI_TEXT_LICENSE_TITLE ${LANG_ENGLISH} "License Agreement"
-LangString MUI_TEXT_LICENSE_SUBTITLE ${LANG_ENGLISH} "Please review the license terms before installing GAIA."
+LangString MUI_TEXT_WELCOME_INFO_TITLE 1033 "Welcome to the GAIA Installer"
+LangString MUI_TEXT_WELCOME_INFO_TEXT 1033 "This wizard will install $GAIA_STRING on your computer."
+LangString MUI_TEXT_DIRECTORY_TITLE 1033 "Select Installation Directory"
+LangString MUI_TEXT_INSTALLING_TITLE 1033 "Installing $GAIA_STRING"
+LangString MUI_TEXT_FINISH_TITLE 1033 "Installation Complete"
+LangString MUI_TEXT_FINISH_SUBTITLE 1033 "Thank you for installing GAIA!"
+LangString MUI_TEXT_ABORT_TITLE 1033 "Installation Aborted"
+LangString MUI_TEXT_ABORT_SUBTITLE 1033 "Installation has been aborted."
+LangString MUI_BUTTONTEXT_FINISH 1033 "Finish"
+LangString MUI_TEXT_LICENSE_TITLE 1033 "License Agreement"
+LangString MUI_TEXT_LICENSE_SUBTITLE 1033 "Please review the license terms before installing GAIA."
 
 ; Insert the description macros
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
@@ -460,15 +449,14 @@ Section "-Install Main Components" SEC01
     DetailPrint 'Configuration:'
     DetailPrint '  Install Dir: $INSTDIR'
     DetailPrint '  Mode: $SELECTED_MODE'
-    DetailPrint '  CI Mode: ${CI}'
     DetailPrint '  OGA URL: ${OGA_URL}'
     DetailPrint '  Ryzen AI Folder: ${RYZENAI_FOLDER}'
-    DetailPrint '  Minimum NPU Driver Version: ${NPU_DRIVER_VERSION}'
+    DetailPrint '  Recommended NPU Driver Version: ${NPU_DRIVER_VERSION}'
     DetailPrint '-------------------------------------------'
 
     ; Pack GAIA into the installer
     ; Exclude hidden files (like .git, .gitignore) and the installation folder itself
-    File /r /x installer /x .* /x ..\*.pyc ..\*.* npu_settings.json hybrid_settings.json generic_settings.json download_lfs_file.py npu_driver_utils.py amd_install_kipudrv.bat install.bat
+    File /r /x installer /x .* /x ..\*.pyc ..\*.* download_lfs_file.py npu_driver_utils.py amd_install_kipudrv.bat install.bat
     DetailPrint "- Packaged GAIA repo"
 
     ; Check if conda is available
@@ -675,10 +663,10 @@ Section "-Install Main Components" SEC01
         StrCpy $R1 "conda"
       ${EndIf}
       ; Initialize conda (needed for systems where conda was previously installed but not initialized)
-      nsExec::ExecToLog '"$R1" init'
+      nsExec::ExecToLog '$R1 init'
 
       DetailPrint "- Creating a Python 3.10 environment named 'gaia_env' in the installation directory: $INSTDIR..."
-      ExecWait '"$R1" create -p "$INSTDIR\gaia_env" python=3.10 -y' $R0
+      ExecWait '$R1 create -p "$INSTDIR\gaia_env" python=3.10 -y' $R0
 
       ; Check if the environment creation was successful (exit code should be 0)
       StrCmp $R0 0 install_ffmpeg env_creation_failed
@@ -756,10 +744,10 @@ Section "-Install Main Components" SEC01
         StrCpy $3 $5 ; Set $3 to the last line
 
         ${If} $3 == "Unknown"
-          MessageBox MB_YESNO "WARNING: Current driver could not be identified. Please install the minimum recommended driver version (${NPU_DRIVER_VERSION}) or reach out to gaia@amd.com for support.$\n$\nContinue installation?" IDYES install_gaia IDNO exit_installer
+          MessageBox MB_YESNO "WARNING: Current driver could not be identified. If you run into issues, please install the recommended driver version (${NPU_DRIVER_VERSION}) or reach out to gaia@amd.com for support.$\n$\nContinue installation?" IDYES install_gaia IDNO exit_installer
         ${elseif} $3 != ${NPU_DRIVER_VERSION}
           DetailPrint "- Current driver version ($3) is not the recommended version ${NPU_DRIVER_VERSION}"
-          MessageBox MB_YESNO "WARNING: Current driver version ($3) is not the recommended version ${NPU_DRIVER_VERSION}. Please install the driver or reach out to gaia@amd.com for support.$\n$\nContinue installation?" IDYES install_gaia IDNO exit_installer
+          MessageBox MB_YESNO "WARNING: Current driver ($3) is not the recommended driver version ${NPU_DRIVER_VERSION}. If you run into issues, please install the recommended driver or reach out to gaia@amd.com for support.$\n$\nContinue installation?" IDYES install_gaia IDNO exit_installer
         ${Else}
           DetailPrint "- No driver update needed."
           GoTo install_gaia
@@ -793,11 +781,11 @@ Section "-Install Main Components" SEC01
       ; Check if installation was successful
       ${If} $R0 == 0
         DetailPrint "*** INSTALLATION COMPLETED ***"
-        DetailPrint "- GAIA installation completed successfully"
+        DetailPrint "- GAIA package installation successful"
 
         ; Skip Ryzen AI WHL installation for GENERIC mode
         ${If} $SELECTED_MODE == "GENERIC"
-          GoTo update_settings
+          GoTo create_shortcuts
         ${Else}
           GoTo install_ryzenai_whl
         ${EndIf}
@@ -861,29 +849,18 @@ Section "-Install Main Components" SEC01
 
     update_settings:
       ${If} $SELECTED_MODE == "NPU"
-        DetailPrint "- Replacing settings.json with NPU-specific settings"
-        Delete "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\settings.json"
-        Rename "$INSTDIR\npu_settings.json" "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\settings.json"
+        DetailPrint "- Copying NPU-specific settings"
+        CopyFiles "$INSTDIR\src\gaia\interface\npu_settings.json" "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\npu_settings.json"
 
       ${ElseIf} $SELECTED_MODE == "HYBRID"
-        DetailPrint "- Replacing settings.json with Hybrid-specific settings"
-        Delete "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\settings.json"
-        Rename "$INSTDIR\hybrid_settings.json" "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\settings.json"
+        DetailPrint "- Copying Hybrid-specific settings"
+        CopyFiles "$INSTDIR\src\gaia\interface\hybrid_settings.json" "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\hybrid_settings.json"
 
       ${ElseIf} $SELECTED_MODE == "GENERIC"
-        DetailPrint "- Replacing settings.json with Generic-specific settings"
-        Delete "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\settings.json"
-        Rename "$INSTDIR\generic_settings.json" "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\settings.json"
+        DetailPrint "- Copying Generic-specific settings"
+        CopyFiles "$INSTDIR\src\gaia\interface\generic_settings.json" "$INSTDIR\gaia_env\lib\site-packages\gaia\interface\generic_settings.json"
       ${EndIf}
-
       GoTo run_raux_installer
-
-      DetailPrint "*** INSTALLATION COMPLETED ***"
-
-      # Create shortcuts directly
-      CreateShortcut "$DESKTOP\GAIA-UI.lnk" "$SYSDIR\cmd.exe" "/C conda activate $INSTDIR\gaia_env > NUL 2>&1 && gaia" "$INSTDIR\src\gaia\interface\img\gaia.ico"
-      CreateShortcut "$DESKTOP\GAIA-CLI.lnk" "$SYSDIR\cmd.exe" "/K conda activate $INSTDIR\gaia_env" "$INSTDIR\src\gaia\interface\img\gaia.ico"
-
 
     run_raux_installer:
       ; Check if user chose to install RAUX
@@ -918,7 +895,7 @@ Section "-Install Main Components" SEC01
         ${If} $R0 == 0
             DetailPrint "*** RAUX INSTALLATION COMPLETED ***"
             DetailPrint "- RAUX installation completed successfully"
-            
+
             ; Get version from version.txt, default to "unknown" if not found
             StrCpy $5 "unknown"  ; Default version
             IfFileExists "$LOCALAPPDATA\RAUX\raux_temp\extracted_files\version.txt" 0 +4
@@ -926,12 +903,12 @@ Section "-Install Main Components" SEC01
                 FileRead $4 $5
                 FileClose $4
             DetailPrint "- RAUX Version: $5"
-            
+
             ; Copy the launcher scripts to the RAUX installation directory
             DetailPrint "- Copying RAUX launcher scripts"
             File /nonfatal "/oname=$LOCALAPPDATA\RAUX\launch_raux.ps1" "${__FILE__}\..\launch_raux.ps1"
             File /nonfatal "/oname=$LOCALAPPDATA\RAUX\launch_raux.cmd" "${__FILE__}\..\launch_raux.cmd"
-            
+
             ; Create shortcut to the batch wrapper script with version parameter
             CreateShortcut "$DESKTOP\RAUX.lnk" "$LOCALAPPDATA\RAUX\launch_raux.cmd" "--version $5 --mode $SELECTED_MODE" "$INSTDIR\src\gaia\interface\img\raux.ico"
         ${Else}
@@ -953,27 +930,38 @@ Section "-Install Main Components" SEC01
         DetailPrint "- RAUX installation skipped by user choice"
       ${EndIf}
 
-      create_shortcuts:
-        DetailPrint "*** INSTALLATION COMPLETED ***"
+      ; Continue to shortcuts creation after RAUX installation (or skip)
+      GoTo create_shortcuts
 
-        # Create shortcuts directly
+    create_shortcuts:
+      DetailPrint "*** INSTALLATION COMPLETED ***"
+
+      # Create shortcuts only in non-silent mode
+      ${IfNot} ${Silent}
         CreateShortcut "$DESKTOP\GAIA-UI.lnk" "$SYSDIR\cmd.exe" "/C conda activate $INSTDIR\gaia_env > NUL 2>&1 && gaia" "$INSTDIR\src\gaia\interface\img\gaia.ico"
         CreateShortcut "$DESKTOP\GAIA-CLI.lnk" "$SYSDIR\cmd.exe" "/K conda activate $INSTDIR\gaia_env" "$INSTDIR\src\gaia\interface\img\gaia.ico"
+      ${EndIf}
 
 SectionEnd
 
 Function RunGAIAUI
-  ExecShell "open" "$DESKTOP\GAIA-UI.lnk"
+  ${IfNot} ${Silent}
+    ExecShell "open" "$DESKTOP\GAIA-UI.lnk"
+  ${EndIf}
 FunctionEnd
 
 Function RunGAIACLI
-  ExecShell "open" "$DESKTOP\GAIA-CLI.lnk"
+  ${IfNot} ${Silent}
+    ExecShell "open" "$DESKTOP\GAIA-CLI.lnk"
+  ${EndIf}
 FunctionEnd
 
 Function RunRAUX
-  ${If} $InstallRAUX == "1"
-    IfFileExists "$DESKTOP\RAUX.lnk" 0 +2ylin
-      ExecShell "open" "$DESKTOP\RAUX.lnk"
+  ${IfNot} ${Silent}
+    ${If} $InstallRAUX == "1"
+      IfFileExists "$DESKTOP\RAUX.lnk" 0 +2
+        ExecShell "open" "$DESKTOP\RAUX.lnk"
+    ${EndIf}
   ${EndIf}
 FunctionEnd
 

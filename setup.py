@@ -32,6 +32,9 @@ setup(
         "gaia.agents.Rag",
         "gaia.interface",
     ],
+    package_data={
+        "gaia.interface": ["*.json", "img/*"],
+    },
     install_requires=[
         "aiohttp",
         "fastapi",

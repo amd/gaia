@@ -42,7 +42,7 @@ jobs:
       - name: Download GAIA Installer
         uses: actions/download-artifact@v4
         with:
-          name: gaia-windows-installer-${{ needs.build-installer.outputs.VERSION || 'latest' }}
+          name: gaia-windows-installer-${{ needs.build-installer.outputs.VERSION }}-${{ needs.build-installer.outputs.COMMIT_HASH }}
           path: installer
 
       - name: Release

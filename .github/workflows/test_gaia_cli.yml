@@ -107,16 +107,23 @@ jobs:
       - uses: FedericoCarboni/setup-ffmpeg@v3
         id: setup-ffmpeg
 
+      - name: Set GAIA Mode
+        shell: cmd
+        run: |
+
       - name: Test GAIA
         timeout-minutes: 20
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          GAIA_MODE: GENERIC
         run: |
           Write-Host "Activate and verify Conda environment"
           $env:Path = "$env:GITHUB_WORKSPACE\Miniconda3;$env:GITHUB_WORKSPACE\Miniconda3\Scripts;$env:Path"
           & "$env:GITHUB_WORKSPACE\Miniconda3\shell\condabin\conda-hook.ps1"
           conda activate gaiaenv
+          cmd /c set_generic_mode.bat
+          echo GAIA_MODE=%GAIA_MODE%
 
           Write-Host "Verify Python environment"
           python -c "import sys; print(sys.executable)"

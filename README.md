@@ -13,6 +13,7 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://makeapullrequest.com)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![GitHub issues](https://img.shields.io/github/issues/aigdat/gaia)](https://github.com/aigdat/gaia/issues)
+[![Star History Chart](https://img.shields.io/badge/Star%20History-View-brightgreen)](https://star-history.com/#aigdat/gaia)
 
 ⚠️ **IMPORTANT**: GAIA's Hybrid mode **only supports AMD Ryzen AI HX 300 series or newer processors**. For older AMD processors or non-AMD systems, please use the Generic installer. For more details, see [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
 

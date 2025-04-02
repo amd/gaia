@@ -1,6 +1,7 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
+import os
 import sys
 import argparse
 import time
@@ -14,6 +15,7 @@ import multiprocessing
 import subprocess
 from pathlib import Path
 from pprint import pprint
+
 import requests
 import psutil
 import aiohttp
@@ -24,15 +26,6 @@ from gaia.logger import get_logger
 from gaia.llm.lemonade_server import launch_lemonade_server
 from gaia.agents.agent import launch_agent_server
 from gaia.version import version_with_hash
-
-
-# Set debug level for the logger
-logging.getLogger("gaia").setLevel(logging.INFO)
-
-# Add the parent directory to sys.path to import gaia modules
-current_dir = Path(__file__).resolve().parent
-parent_dir = current_dir.parent.parent.parent
-sys.path.append(str(parent_dir))
 
 try:
     from gaia.llm.ollama_server import (
@@ -45,6 +38,15 @@ except ImportError:
     OLLAMA_AVAILABLE = False
     launch_ollama_client_server = None
     launch_ollama_model_server = None
+
+
+# Set debug level for the logger
+logging.getLogger("gaia").setLevel(logging.INFO)
+
+# Add the parent directory to sys.path to import gaia modules
+current_dir = Path(__file__).resolve().parent
+parent_dir = current_dir.parent.parent.parent
+sys.path.append(str(parent_dir))
 
 
 class GaiaCliClient:
@@ -1140,7 +1142,38 @@ def run_cli(action, **kwargs):
     return asyncio.run(async_main(action, **kwargs))
 
 
+def check_gaia_mode():
+    """Check if GAIA_MODE environment variable is set and valid.
+
+    Returns:
+        str or None: The value of GAIA_MODE if set and valid, None otherwise
+    """
+    gaia_mode = os.environ.get("GAIA_MODE").strip()
+    if not gaia_mode:
+        return None
+
+    # Validate that it's one of the expected values (case insensitive)
+    valid_modes = ["HYBRID", "GENERIC", "NPU"]
+    if gaia_mode.upper() not in valid_modes:
+        print(
+            f"WARNING: GAIA_MODE value '{gaia_mode}' is not one of the expected values: {', '.join(valid_modes)}"
+        )
+        print("GAIA may not function correctly with this configuration.")
+
+    return gaia_mode
+
+
 def main():
+    # Check if GAIA_MODE is set
+    gaia_mode = check_gaia_mode()
+    if not gaia_mode:
+        print("ERROR: GAIA_MODE environment variable is not set.")
+        print("Please run one of the following scripts before using gaia-cli:")
+        print("  set_hybrid_mode.bat")
+        print("  set_generic_mode.bat")
+        print("  set_npu_mode.bat")
+        sys.exit(1)
+
     # Create the main parser
     parser = argparse.ArgumentParser(
         description=f"Gaia CLI - Interact with Gaia AI agents. \nVersion: {version_with_hash}",
