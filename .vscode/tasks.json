@@ -45,23 +45,6 @@
                 "panel": "new"
             },
             "problemMatcher": []
-        },
-        {
-            "label": "Run Lint",
-            "type": "shell",
-            "command": "powershell",
-            "args": [
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}/util/lint.ps1"
-            ],
-            "group": "build",
-            "presentation": {
-                "reveal": "always",
-                "panel": "new"
-            },
-            "problemMatcher": []
         }
     ],
     "inputs": [

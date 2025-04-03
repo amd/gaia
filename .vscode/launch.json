@@ -1,6 +1,5 @@
 // Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
-
 {
     "version": "0.2.0",
     "configurations": [
@@ -20,11 +19,43 @@
             "stopOnEntry": false,
         },
         {
+            "name": "Chat Debug",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "gaia.cli",
+            "args": ["chat"],
+            "cwd": "${workspaceFolder}/src/gaia",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false,
+        },
+        {
+            "name": "Talk Debug",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "gaia.cli",
+            "args": ["talk"],
+            "cwd": "${workspaceFolder}/src/gaia",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false,
+        },
+        {
             "name": "CLI Server Debug",
             "type": "debugpy",
             "request": "launch",
             "module": "gaia.cli",
-            "args": ["start"],
+            "args": [
+                "start"
+            ],
             "cwd": "${workspaceFolder}",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
@@ -39,7 +70,10 @@
             "type": "debugpy",
             "request": "launch",
             "module": "gaia.cli",
-            "args": ["prompt", "hi"],
+            "args": [
+                "prompt",
+                "hi"
+            ],
             "cwd": "${workspaceFolder}",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
@@ -58,7 +92,8 @@
                 "tests/test_gaia.py",
                 "-v",
                 "-s",
-                "-k", "test_model_sweep[llama3.2:1b-Who"
+                "-k",
+                "test_model_sweep[llama3.2:1b-Who"
             ],
             "cwd": "${workspaceFolder}",
             "env": {
@@ -72,6 +107,5 @@
             "subProcess": true,
             "stopOnEntry": false
         }
-
     ]
 }

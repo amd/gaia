@@ -119,3 +119,6 @@ release_info.json
 # version
 version.txt
 
+**/version.nsh
+**/.gaia_servers.json
+.cursor/mcp.json

@@ -77,6 +77,7 @@ class GaiaCliClient:
 
         # Add is_speaking attribute initialization
         self.is_speaking = False
+        self.tts_thread = None  # Initialize tts_thread as None
 
         self.agent_name = agent_name
         self.enable_agent_server = enable_agent_server
@@ -596,7 +597,14 @@ class GaiaCliClient:
 
     async def process_voice_input(self, text):
         """Process transcribed voice input and get AI response"""
+
         async with aiohttp.ClientSession() as session:
+
+            # Initialize TTS streaming
+            text_queue = None
+            tts_finished = threading.Event()  # Add event to track TTS completion
+            interrupt_event = threading.Event()  # Add event for keyboard interrupts
+
             try:
                 # First check if we're currently generating
                 async with session.get(
@@ -631,12 +639,6 @@ class GaiaCliClient:
 
                 print(f"\n{self.agent_name}: ", end="", flush=True)
                 await ws.send_str(text)
-
-                # Initialize TTS streaming
-                text_queue = None
-                tts_thread = None
-                tts_finished = threading.Event()  # Add event to track TTS completion
-                interrupt_event = threading.Event()  # Add event for keyboard interrupts
 
                 # Keyboard listener thread for both generation and playback
                 def keyboard_listener():
@@ -676,7 +678,7 @@ class GaiaCliClient:
                                 self.whisper_asr.pause_recording()
                         self.log.debug(f"TTS speaking state: {is_speaking}")
 
-                    tts_thread = threading.Thread(
+                    self.tts_thread = threading.Thread(
                         target=self.tts.generate_speech_streaming,
                         args=(text_queue,),
                         kwargs={
@@ -685,7 +687,7 @@ class GaiaCliClient:
                         },
                         daemon=True,
                     )
-                    tts_thread.start()
+                    self.tts_thread.start()
 
                 accumulated_response = ""
                 initial_buffer = ""  # Buffer for the start of response
@@ -771,8 +773,8 @@ class GaiaCliClient:
                 finally:
                     if "ws" in locals():
                         await ws.close()
-                    if tts_thread:
-                        tts_thread.join(timeout=1.0)  # Add timeout to thread join
+                    if self.tts_thread and self.tts_thread.is_alive():
+                        self.tts_thread.join(timeout=1.0)  # Add timeout to thread join
                     keyboard_thread.join(
                         timeout=1.0
                     )  # Add timeout to keyboard thread join
@@ -791,10 +793,10 @@ class GaiaCliClient:
                     text_queue.put("__END__")
                 raise e
             finally:
-                if tts_thread and tts_thread.is_alive():
+                if self.tts_thread and self.tts_thread.is_alive():
                     # Wait for TTS to finish before resuming recording
                     tts_finished.wait(timeout=2.0)  # Add reasonable timeout
-                    tts_thread.join(timeout=1.0)
+                    self.tts_thread.join(timeout=1.0)
 
                 # Only resume recording after TTS is completely finished
                 if self.whisper_asr:
@@ -971,6 +973,8 @@ class GaiaCliClient:
         finally:
             if self.whisper_asr:
                 self.whisper_asr.stop_recording()
+            if self.tts_thread and self.tts_thread.is_alive():
+                self.tts_thread.join(timeout=1.0)  # Add timeout to thread join
 
     def is_port_available(self, port):
         """Check if a port is available for use."""
