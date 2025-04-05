@@ -54,7 +54,9 @@
             "request": "launch",
             "module": "gaia.cli",
             "args": [
-                "start"
+                "start",
+                "--background",
+                "none"
             ],
             "cwd": "${workspaceFolder}",
             "env": {
@@ -71,8 +73,7 @@
             "request": "launch",
             "module": "gaia.cli",
             "args": [
-                "prompt",
-                "hi"
+                "chat"
             ],
             "cwd": "${workspaceFolder}",
             "env": {
