@@ -452,10 +452,8 @@ class SetupLLM(QObject):
             max_new_tokens,
         )
 
-    def check_server_available(
-        self, host, port, endpoint="/health", timeout=3000, check_interval=1
-    ):
-        """Check if server is available with a longer timeout for model downloads."""
+    def check_server_available(self, host, port, endpoint="/health", check_interval=1):
+        """Check if server is available with no timeout for model downloads."""
         self.log.info(f"Checking server availability at {host}:{port}{endpoint}...")
 
         # Parse the host to remove any protocol
@@ -465,13 +463,13 @@ class SetupLLM(QObject):
         start_time = time.time()
         attempts = 0
 
-        while (
-            time.time() - start_time < timeout and not self._is_cancelled
-        ):  # Check cancellation in while condition
+        # Modified to wait indefinitely (or until cancelled) for server to be available
+        while not self._is_cancelled:
             try:
                 if self.is_server_available(clean_host, port, endpoint):
+                    elapsed_time = time.time() - start_time
                     self.log.info(
-                        f"Server available at {host}:{port}{endpoint} after {attempts} attempts"
+                        f"Server available at {host}:{port}{endpoint} after {attempts} attempts (elapsed: {elapsed_time:.1f}s)"
                     )
                     return True
 
@@ -495,13 +493,7 @@ class SetupLLM(QObject):
                 if self._is_cancelled:
                     return False
 
-        if self._is_cancelled:
-            self.log.info("Server check cancelled")
-            return False
-        elif not self._is_cancelled:
-            UIMessage.error(
-                f"Server unavailable at {host}:{port}{endpoint} after {timeout} seconds"
-            )
+        self.log.info("Server check cancelled")
         return False
 
     def is_server_available(self, host, port, endpoint="/health"):
@@ -1869,7 +1861,7 @@ class ModelSwitchWorker(QThread):
 class ServerCheckWorker(QThread):
     server_ready = Signal(bool)
 
-    def __init__(self, host, port, endpoint="/health", timeout=3000):
+    def __init__(self, host, port, endpoint="/health", timeout=None):
         super().__init__()
         self.host = host
         self.port = port
@@ -1894,17 +1886,21 @@ class ServerCheckWorker(QThread):
         start_time = time.time()
         attempts = 0
 
-        while time.time() - start_time < self.timeout and not self._is_cancelled:
+        # Modified to wait indefinitely (or until cancelled) for server to be available
+        while not self._is_cancelled:
             try:
                 if self.is_server_available(clean_host, self.port, self.endpoint):
-                    self.log.info(f"Server available after {attempts} attempts")
+                    elapsed_time = time.time() - start_time
+                    self.log.info(
+                        f"Server available at {self.host}:{self.port}{self.endpoint} after {attempts} attempts (elapsed: {elapsed_time:.1f}s)"
+                    )
                     self.server_ready.emit(True)
                     return
 
                 attempts += 1
                 elapsed_time = time.time() - start_time
                 self.log.info(
-                    f"Waiting for server... (Attempt {attempts}, Elapsed time: {elapsed_time:.1f}s)"
+                    f"Waiting for server at {self.host}:{self.port}{self.endpoint}... (Attempt {attempts}, Elapsed time: {elapsed_time:.1f}s)"
                 )
 
                 # Sleep in small chunks to remain responsive to cancellation
@@ -1921,6 +1917,7 @@ class ServerCheckWorker(QThread):
                     self.server_ready.emit(False)
                     return
 
+        self.log.info("Server check cancelled")
         self.server_ready.emit(False)
 
     def is_server_available(self, host, port, endpoint="/health"):

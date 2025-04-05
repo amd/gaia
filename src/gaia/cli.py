@@ -188,25 +188,23 @@ class GaiaCliClient:
             self.stop()  # Clean up any started processes
             raise RuntimeError(f"Failed to start servers: {str(e)}")
 
-    def wait_for_servers(
-        self, model_download_timeout=3600, server_ready_timeout=120, check_interval=5
-    ):
+    def wait_for_servers(self, server_ready_timeout=120, check_interval=5):
         """Wait for servers to be ready with extended timeout for RAG index building"""
         self.log.info("Waiting for model downloads and servers to be ready...")
 
         # First, wait for model downloads to complete
         start_time = time.time()
         time.sleep(10)
-        while time.time() - start_time < model_download_timeout:
+        # Modified to wait indefinitely for downloads to complete
+        while True:
             if not self.check_models_downloading():
                 self.log.info("Model downloads completed.")
                 break
-            self.log.info("Models are still downloading. Continuing to wait...")
+            elapsed_time = int(time.time() - start_time)
+            self.log.info(
+                f"Models are still downloading (elapsed: {elapsed_time}s). Continuing to wait..."
+            )
             time.sleep(check_interval)
-        else:
-            error_message = f"Model download did not complete within {model_download_timeout} seconds."
-            self.log.error(error_message)
-            raise TimeoutError(error_message)
 
         # Then, check for server readiness
         start_time = time.time()
