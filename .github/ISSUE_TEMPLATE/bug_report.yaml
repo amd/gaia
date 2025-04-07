@@ -160,9 +160,9 @@ body:
       required: false
 
   - type: input
-    id: lemonade-version (if applicable)
+    id: lemonade-version
     attributes:
-      label: Lemonade Version
+      label: Lemonade Version (if applicable)
       description: If you're using Lemonade, which version? You can find this version by following the instructions [here](https://github.com/aigdat/genai/blob/8f034613f8d0acf18cf1846e1ea0090406c76546/docs/lemonade/server_integration.md#identifying-existing-installation).
       placeholder: For example, v0.6.1.3
     validations:
