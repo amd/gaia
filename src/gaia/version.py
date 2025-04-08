@@ -51,12 +51,11 @@ def get_version_with_hash() -> str:
     Returns:
         str: Version string in format 'v{version}+{hash}'
     """
-    package_version = get_package_version()
     git_hash = get_git_hash()
     if git_hash:
-        return f"v{package_version}+{git_hash}"
+        return f"v{__version__}+{git_hash}"
     else:
-        return f"v{package_version}"
+        return f"v{__version__}"
 
 
 def write_version_files() -> None:
