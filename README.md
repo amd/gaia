@@ -5,7 +5,6 @@
 [![GAIA NPU Installer Test](https://github.com/aigdat/gaia/actions/workflows/test_installer_npu.yml/badge.svg)](https://github.com/aigdat/gaia/tree/main/tests "Check out our npu tests")
 [![GAIA Generic Installer Test](https://github.com/aigdat/gaia/actions/workflows/test_installer_generic.yml/badge.svg)](https://github.com/aigdat/gaia/tree/main/tests "Check out our generic tests")
 [![GAIA CLI Tests](https://github.com/aigdat/gaia/actions/workflows/test_gaia_cli.yml/badge.svg)](https://github.com/aigdat/gaia/tree/main/tests "Check out our cli tests")
-[![GAIA UI Tests](https://github.com/aigdat/gaia/actions/workflows/test_gaia_ui.yml/badge.svg)](https://github.com/aigdat/gaia/tree/main/tests "Check out our ui tests")
 [![Latest Release](https://img.shields.io/github/v/release/aigdat/gaia?include_prereleases)](https://github.com/aigdat/gaia/releases/latest "Download the latest release")
 [![OS - Windows](https://img.shields.io/badge/OS-windows-blue)](https://github.com/aigdat/gaia/blob/main/docs/install.md "Check out our instructions")
 [![Made with Python](https://img.shields.io/badge/Python-3.10-blue?logo=python&logoColor=white)](https://github.com/aigdat/gaia/blob/main/docs/install.md "Check out our instructions")
