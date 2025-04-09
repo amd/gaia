@@ -208,8 +208,8 @@ if __name__ == "__main__":
 
     # Commented out individual test runs for reference
     specific_tests = unittest.TestSuite()
-    # specific_tests.addTest(TestRagAgent("test_qa_responses"))
+    specific_tests.addTest(TestRagAgent("test_qa_responses"))
     # specific_tests.addTest(TestRagAgent("test_build_index"))
     # specific_tests.addTest(TestRagAgent("test_save_and_load_index"))
-    specific_tests.addTest(TestRagAgent("test_query_engine"))
+    # specific_tests.addTest(TestRagAgent("test_query_engine"))
     unittest.TextTestRunner().run(specific_tests)

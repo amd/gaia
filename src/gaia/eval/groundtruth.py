@@ -120,18 +120,18 @@ if __name__ == "__main__":
     generator = GroundTruthGenerator()
 
     # Test single file processing
-    file_path = "./data/html/blender/introduction.html"
-    try:
-        print(f"Processing single file: {file_path}")
-        result = generator.generate(
-            file_path, save_text=True, output_dir="./output/groundtruth"
-        )
-        print(f"Successfully generated ground truth data to ./output/groundtruth")
-        print(f"Token count: {result['metadata']['token_count']}")
-        print(f"Number of QA pairs: {len(result['analysis']['qa_pairs'])}")
+    # file_path = "./data/html/blender/introduction.html"
+    # try:
+    #     print(f"Processing single file: {file_path}")
+    #     result = generator.generate(
+    #         file_path, save_text=True, output_dir="./output/groundtruth"
+    #     )
+    #     print(f"Successfully generated ground truth data to ./output/groundtruth")
+    #     print(f"Token count: {result['metadata']['token_count']}")
+    #     print(f"Number of QA pairs: {len(result['analysis']['qa_pairs'])}")
 
-    except Exception as e:
-        print(f"Error processing file: {e}")
+    # except Exception as e:
+    #     print(f"Error processing file: {e}")
 
     # Test batch processing
     input_dir = "./data/html/blender"

@@ -1,6 +1,7 @@
 import argparse
 from pathlib import Path
 from typing import Optional, Union
+from bs4 import BeautifulSoup
 
 from llama_index.core import (
     Settings,
@@ -8,10 +9,65 @@ from llama_index.core import (
     SimpleDirectoryReader,
     StorageContext,
     load_index_from_storage,
+    Document,
 )
 from gaia.agents.agent import Agent
 from gaia.llm.llama_index_local import LocalLLM
 from gaia.logger import get_logger
+
+
+class HTMLProcessor:
+    """Simple HTML processor that extracts meaningful content while preserving structure."""
+
+    def __init__(self):
+        self.log = get_logger(__name__)
+
+    def process_html(self, html_content: str) -> str:
+        """Extract meaningful content from HTML while preserving structure."""
+        soup = BeautifulSoup(html_content, "html.parser")
+
+        # Log initial content size
+        self.log.debug(f"Initial HTML content size: {len(html_content)} bytes")
+
+        # Remove unwanted elements
+        unwanted_elements = [
+            "script",
+            "style",
+            "nav",
+            "footer",
+            "header",
+            "meta",
+            "link",
+            "noscript",
+            "iframe",
+        ]
+        for element in soup.find_all(unwanted_elements):
+            element.decompose()
+
+        # Get main content
+        main = (
+            soup.find("main")
+            or soup.find("article")
+            or soup.find("div", class_="content")
+        )
+        if main:
+            content = main
+            self.log.debug("Found main content area")
+        else:
+            content = soup
+            self.log.debug("Using full document as content")
+
+        # Extract text while preserving structure
+        text = content.get_text(separator="\n", strip=True)
+
+        # Log processed content size
+        self.log.debug(f"Processed text size: {len(text)} bytes")
+
+        # Log sample of processed content
+        sample = text[:200] + "..." if len(text) > 200 else text
+        self.log.debug(f"Processed content sample:\n{sample}")
+
+        return text
 
 
 class MyAgent(Agent):
@@ -31,6 +87,7 @@ class MyAgent(Agent):
 
         self.index = None
         self.query_engine = None
+        self.html_processor = HTMLProcessor()
 
         # Build index if input file is provided
         if input_file:
@@ -61,13 +118,62 @@ class MyAgent(Agent):
 
         # Load documents
         self.log.info(f"Loading documents from {input_path}...")
-        documents = SimpleDirectoryReader(
-            input_files=[str(input_path)] if input_path.is_file() else None,
-            input_dir=str(input_path) if input_path.is_dir() else None,
-        ).load_data()
+        documents = []
+
+        if input_path.is_file():
+            if input_path.suffix.lower() in [".html", ".htm"]:
+                # Process HTML file
+                with open(input_path, "r", encoding="utf-8") as f:
+                    html_content = f.read()
+                self.log.debug(f"Read HTML file: {input_path}")
+                text_content = self.html_processor.process_html(html_content)
+                documents = [
+                    Document(text=text_content, metadata={"source": str(input_path)})
+                ]
+                self.log.debug(
+                    f"Created document from HTML with {len(text_content)} characters"
+                )
+            else:
+                # Use SimpleDirectoryReader for non-HTML files
+                documents = SimpleDirectoryReader(
+                    input_files=[str(input_path)]
+                ).load_data()
+        else:
+            # Process directory
+            for file_path in input_path.rglob("*"):
+                if file_path.suffix.lower() in [".html", ".htm"]:
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            html_content = f.read()
+                        self.log.debug(f"Read HTML file: {file_path}")
+                        text_content = self.html_processor.process_html(html_content)
+                        documents.append(
+                            Document(
+                                text=text_content, metadata={"source": str(file_path)}
+                            )
+                        )
+                        self.log.debug(
+                            f"Created document from HTML with {len(text_content)} characters"
+                        )
+                    except Exception as e:
+                        self.log.warning(
+                            f"Could not process HTML file {file_path}: {e}"
+                        )
+                elif file_path.is_file():
+                    try:
+                        docs = SimpleDirectoryReader(
+                            input_files=[str(file_path)]
+                        ).load_data()
+                        documents.extend(docs)
+                    except Exception as e:
+                        self.log.warning(f"Could not process {file_path}: {e}")
+
+        if not documents:
+            self.log.error("No documents were successfully processed")
+            raise ValueError("No documents were successfully processed")
 
         # Build index
-        self.log.info("Building index...")
+        self.log.info(f"Building index with {len(documents)} documents...")
         self.index = VectorStoreIndex.from_documents(documents)
 
         # Save index if output path specified
