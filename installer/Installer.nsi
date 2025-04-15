@@ -275,26 +275,26 @@ FunctionEnd
 !define ICON_FILE "../src/gaia/interface/img/gaia.ico"
 
 ; Custom page for RAUX installation option
-; Function RAUXOptionsPage
-;   !insertmacro MUI_HEADER_TEXT "Additional Components" "Choose additional components to install"
-;   nsDialogs::Create 1018
-;   Pop $0
-;
-;   ${NSD_CreateCheckbox} 10 10 100% 12u "Install AMD RAUX [beta]"
-;   Pop $1
-;   ${NSD_SetState} $1 $InstallRAUX
-;   SetCtlColors $1 "" "transparent"
-;
-;   ${NSD_CreateLabel} 25 30 100% 40u "RAUX (an Open-WebUI fork) is AMD's new UI for interacting with AI models.$\nIt provides a chat interface similar to ChatGPT and other AI assistants.$\nThis feature is currently in beta."
-;   Pop $2
-;   SetCtlColors $2 "" "transparent"
-;
-;   nsDialogs::Show
-; FunctionEnd
-;
-; Function RAUXOptionsLeave
-;   ${NSD_GetState} $1 $InstallRAUX
-; FunctionEnd
+Function RAUXOptionsPage
+  !insertmacro MUI_HEADER_TEXT "Additional Components" "Choose additional components to install"
+  nsDialogs::Create 1018
+  Pop $0
+
+  ${NSD_CreateCheckbox} 10 10 100% 12u "Install AMD RAUX [beta]"
+  Pop $1
+  ${NSD_SetState} $1 $InstallRAUX
+  SetCtlColors $1 "" "transparent"
+
+  ${NSD_CreateLabel} 25 30 100% 40u "RAUX (an Open-WebUI fork) is AMD's new UI for interacting with AI models.$\nIt provides a chat interface similar to ChatGPT and other AI assistants.$\nThis feature is currently in beta."
+  Pop $2
+  SetCtlColors $2 "" "transparent"
+
+  nsDialogs::Show
+FunctionEnd
+
+Function RAUXOptionsLeave
+  ${NSD_GetState} $1 $InstallRAUX
+FunctionEnd
 
 ; Custom finish page
 Function CustomFinishPage
@@ -343,7 +343,7 @@ FunctionEnd
 Page custom WarningPage
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
-; Page custom RAUXOptionsPage RAUXOptionsLeave
+Page custom RAUXOptionsPage RAUXOptionsLeave
 !insertmacro MUI_PAGE_INSTFILES
 Page custom CustomFinishPage CustomFinishLeave
 !insertmacro MUI_LANGUAGE "English"
