@@ -31,10 +31,9 @@ jobs:
 
       - name: Initialize Conda
         run: |
-          Write-Host "Step 1: Add Conda to system PATH"
+          Write-Host "Step 1: Get conda path"
           $condaPath = "$env:GITHUB_WORKSPACE\Miniconda3"
           $env:Path = "$condaPath;$condaPath\Scripts;$env:Path"
-          [System.Environment]::SetEnvironmentVariable("Path", $env:Path, [System.EnvironmentVariableTarget]::Machine)
 
           Write-Host "Step 2: Initialize conda for both shells"
           & "$condaPath\Scripts\conda.exe" init powershell
