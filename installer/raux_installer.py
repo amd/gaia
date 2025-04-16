@@ -15,13 +15,14 @@ CONDA_ENV_NAME = "raux_env"
 PYTHON_VERSION = "3.11"
 
 
-def install_raux(install_dir, debug=False):
+def install_raux(install_dir, debug=False, version=None):
     """
     Install RAUX (Windows-only).
 
     Args:
         install_dir (str): Directory where RAUX will be installed
         debug (bool): Enable debug logging
+        version (str, optional): Specific version of RAUX to install
 
     Returns:
         int: Exit code (0 for success, non-zero for failure)
@@ -110,7 +111,7 @@ def install_raux(install_dir, debug=False):
 
         # Get the latest release URL
         logging.info("Fetching the latest release URL...")
-        download_url = get_latest_release_url()
+        download_url = get_latest_release_url(version)
         logging.info(f"Using download URL: {download_url}")
 
         # Download the zip file
@@ -369,17 +370,28 @@ def install_raux(install_dir, debug=False):
         raise ValueError(f"Unexpected error during installation: {str(e)}")
 
 
-def get_latest_release_url():
+def get_latest_release_url(version=None):
     """
     Get the URL for the latest release of RAUX.
+
+    Args:
+        version (str, optional): Specific version to download. If None, gets latest release.
 
     Returns:
         str: URL to download the latest release
     """
     try:
-        response = requests.get(
-            "https://api.github.com/repos/aigdat/raux/releases/latest", timeout=30
-        )
+        if version:
+            # If specific version is provided, construct URL for that version
+            response = requests.get(
+                f"https://api.github.com/repos/aigdat/raux/releases/tags/{version}",
+                timeout=30,
+            )
+        else:
+            # Otherwise get latest release
+            response = requests.get(
+                "https://api.github.com/repos/aigdat/raux/releases/latest", timeout=30
+            )
 
         if response.status_code == 200:
             release_info = response.json()
@@ -404,6 +416,8 @@ def get_latest_release_url():
         # If we get here, we didn't find a suitable asset
         logging.warning("No suitable release assets found, using default URL")
 
+        if version:
+            return f"https://github.com/aigdat/raux/archive/refs/tags/{version}.zip"
         return "https://github.com/aigdat/raux/archive/refs/heads/main.zip"
 
     except Exception as e:
@@ -422,8 +436,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="RAUX Installer (Windows-only)")
     parser.add_argument("--install-dir", required=True, help="Installation directory")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument("--version", help="Specific RAUX version to install")
 
     args = parser.parse_args()
 
-    exit_code = install_raux(args.install_dir, args.debug)
+    exit_code = install_raux(args.install_dir, args.debug, args.version)
     sys.exit(exit_code)

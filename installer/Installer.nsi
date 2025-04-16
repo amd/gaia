@@ -8,8 +8,9 @@
 !define /ifndef OGA_URL "https://api.github.com/repos/aigdat/ryzenai-sw-ea/contents/"
 !define /ifndef RYZENAI_FOLDER "ryzen_ai_13_ga"
 !define /ifndef NPU_DRIVER_ZIP "NPU_RAI1.3.zip"
-!define /ifndef NPU_DRIVER_VERSION "32.0.203.240"
-!define /ifndef LEMONADE_VERSION "v6.0.2"
+!define /ifndef NPU_DRIVER_VERSION "32.0.203.251"
+!define /ifndef LEMONADE_VERSION "v6.1.4"
+!define /ifndef RAUX_VERSION "v0.6.5+raux.0.1.0"
 
 ; Command line usage:
 ;  gaia-windows-setup.exe [/S] [/DMODE=GENERIC|NPU|HYBRID] [/DCI=ON] [/D=<installation directory>]
@@ -259,8 +260,8 @@ Function .onInit
     DetailPrint "CPU not compatible with Ryzen AI, forcing Generic mode"
   ${EndIf}
 
-  ; Initialize InstallRAUX to 0 (unchecked)
-  StrCpy $InstallRAUX "0"
+  ; Initialize InstallRAUX to 1 (checked)
+  StrCpy $InstallRAUX "1"
 
   ; Hide RAUX option if not installed
   ${If} $InstallRAUX != "1"
@@ -270,8 +271,6 @@ FunctionEnd
 
 ; Define constants
 !define PRODUCT_NAME "GAIA"
-!define GITHUB_REPO "https://github.com/aigdat/gaia.git"
-!define EMPTY_FILE_NAME "empty_file.txt"
 !define ICON_FILE "../src/gaia/interface/img/gaia.ico"
 
 ; Custom page for RAUX installation option
@@ -280,12 +279,12 @@ Function RAUXOptionsPage
   nsDialogs::Create 1018
   Pop $0
 
-  ${NSD_CreateCheckbox} 10 10 100% 12u "Install AMD RAUX [beta]"
+  ${NSD_CreateCheckbox} 10 10 100% 12u "Install AMD GAIA UI [beta]"
   Pop $1
   ${NSD_SetState} $1 $InstallRAUX
   SetCtlColors $1 "" "transparent"
 
-  ${NSD_CreateLabel} 25 30 100% 40u "RAUX (an Open-WebUI fork) is AMD's new UI for interacting with AI models.$\nIt provides a chat interface similar to ChatGPT and other AI assistants.$\nThis feature is currently in beta."
+  ${NSD_CreateLabel} 25 30 100% 40u "GAIA UI [beta] (an Open-WebUI fork) is AMD's new UI for interacting with AI models.$\nIt provides a chat interface similar to ChatGPT and other AI assistants.$\nThis feature is currently in beta."
   Pop $2
   SetCtlColors $2 "" "transparent"
 
@@ -311,7 +310,7 @@ Function CustomFinishPage
   Pop $RunGAIACLICheckbox
 
   ${If} $InstallRAUX == "1"
-    ${NSD_CreateCheckbox} 20 140 100% 12u "Run RAUX"
+    ${NSD_CreateCheckbox} 20 140 100% 12u "Run GAIA UI [beta]"
     Pop $RunRAUXCheckbox
   ${EndIf}
 
@@ -866,17 +865,17 @@ Section "-Install Main Components" SEC01
       ; Check if user chose to install RAUX
       ${If} $InstallRAUX == "1"
         DetailPrint "---------------------"
-        DetailPrint "- RAUX Installation -"
+        DetailPrint "- GAIA UI [beta] Installation -"
         DetailPrint "---------------------"
 
-        DetailPrint "- Creating RAUX installation directory..."
+        DetailPrint "- Creating GAIA UI [beta] installation directory..."
         CreateDirectory "$LOCALAPPDATA\RAUX"
 
-        DetailPrint "- Creating temporary directory for RAUX installation..."
+        DetailPrint "- Creating temporary directory for GAIA UI [beta] installation..."
         CreateDirectory "$LOCALAPPDATA\RAUX\raux_temp"
         SetOutPath "$LOCALAPPDATA\RAUX\raux_temp"
 
-        DetailPrint "- Preparing for RAUX installation..."
+        DetailPrint "- Preparing for GAIA UI [beta] installation..."
 
         ; Copy the Python installer script to the temp directory
         File "${__FILE__}\..\raux_installer.py"
@@ -887,14 +886,14 @@ Section "-Install Main Components" SEC01
 
         ; Execute the Python script with the required parameters using system Python
         ; Note: We're not passing the python-exe parameter, so it will use the system Python
-        ExecWait 'python "$LOCALAPPDATA\RAUX\raux_temp\raux_installer.py" --install-dir "$LOCALAPPDATA\RAUX"' $R0
+        ExecWait 'python "$LOCALAPPDATA\RAUX\raux_temp\raux_installer.py" --install-dir "$LOCALAPPDATA\RAUX" --version "${RAUX_VERSION}"' $R0
 
-        DetailPrint "RAUX installation exit code: $R0"
+        DetailPrint "GAIA UI [beta] installation exit code: $R0"
 
         ; Check if installation was successful
         ${If} $R0 == 0
-            DetailPrint "*** RAUX INSTALLATION COMPLETED ***"
-            DetailPrint "- RAUX installation completed successfully"
+            DetailPrint "*** GAIA UI [beta] INSTALLATION COMPLETED ***"
+            DetailPrint "- GAIA UI [beta] installation completed successfully"
 
             ; Get version from version.txt, default to "unknown" if not found
             StrCpy $5 "unknown"  ; Default version
@@ -902,21 +901,21 @@ Section "-Install Main Components" SEC01
                 FileOpen $4 "$LOCALAPPDATA\RAUX\raux_temp\extracted_files\version.txt" r
                 FileRead $4 $5
                 FileClose $4
-            DetailPrint "- RAUX Version: $5"
+            DetailPrint "- GAIA UI [beta] Version: $5"
 
             ; Copy the launcher scripts to the RAUX installation directory
-            DetailPrint "- Copying RAUX launcher scripts"
+            DetailPrint "- Copying GAIA UI [beta] launcher scripts"
             File /nonfatal "/oname=$LOCALAPPDATA\RAUX\launch_raux.ps1" "${__FILE__}\..\launch_raux.ps1"
             File /nonfatal "/oname=$LOCALAPPDATA\RAUX\launch_raux.cmd" "${__FILE__}\..\launch_raux.cmd"
 
             ; Create shortcut to the batch wrapper script with version parameter
-            CreateShortcut "$DESKTOP\RAUX.lnk" "$LOCALAPPDATA\RAUX\launch_raux.cmd" "--version $5 --mode $SELECTED_MODE" "$INSTDIR\src\gaia\interface\img\raux.ico"
+            CreateShortcut "$DESKTOP\GAIA-UI-BETA.lnk" "$LOCALAPPDATA\RAUX\launch_raux.cmd" "--version $5 --mode $SELECTED_MODE" "$INSTDIR\src\gaia\interface\img\gaia.ico"
         ${Else}
-            DetailPrint "*** RAUX INSTALLATION FAILED ***"
+            DetailPrint "*** GAIA UI [beta] INSTALLATION FAILED ***"
             DetailPrint "- Please check the log file at $LOCALAPPDATA\GAIA\gaia_install.log"
             DetailPrint "- For additional support, please contact support@amd.com"
             ${IfNot} ${Silent}
-                MessageBox MB_OK "RAUX installation failed.$\n$\nPlease check the log file at $LOCALAPPDATA\GAIA\gaia_install.log for detailed error information."
+                MessageBox MB_OK "GAIA UI [beta] installation failed.$\n$\nPlease check the log file at $LOCALAPPDATA\GAIA\gaia_install.log for detailed error information."
             ${EndIf}
             Abort
         ${EndIf}
@@ -927,7 +926,7 @@ Section "-Install Main Components" SEC01
         DetailPrint "- Intentionally NOT cleaning up temporary directory to prevent file-in-use errors"
         SetOutPath "$INSTDIR"
       ${Else}
-        DetailPrint "- RAUX installation skipped by user choice"
+        DetailPrint "- GAIA UI [beta] installation skipped by user choice"
       ${EndIf}
 
       ; Continue to shortcuts creation after RAUX installation (or skip)
@@ -959,8 +958,8 @@ FunctionEnd
 Function RunRAUX
   ${IfNot} ${Silent}
     ${If} $InstallRAUX == "1"
-      IfFileExists "$DESKTOP\RAUX.lnk" 0 +2
-        ExecShell "open" "$DESKTOP\RAUX.lnk"
+      IfFileExists "$DESKTOP\GAIA-UI-BETA.lnk" 0 +2
+        ExecShell "open" "$DESKTOP\GAIA-UI-BETA.lnk"
     ${EndIf}
   ${EndIf}
 FunctionEnd
