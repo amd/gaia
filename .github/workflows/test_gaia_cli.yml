@@ -24,15 +24,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download and Install Miniconda
+      - name: Download and Install Miniforge
         run: |
-          Invoke-WebRequest -Uri "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe" -OutFile "miniconda.exe"
-          Start-Process -FilePath "miniconda.exe" -ArgumentList "/S", "/D=$env:GITHUB_WORKSPACE\Miniconda3" -Wait
+          Invoke-WebRequest -Uri "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Windows-x86_64.exe" -OutFile "miniforge3.exe"
+          Start-Process -FilePath "miniforge3.exe" -ArgumentList "/S", "/D=$env:GITHUB_WORKSPACE\miniforge3" -Wait
 
       - name: Initialize Conda
         run: |
           Write-Host "Step 1: Get conda path"
-          $condaPath = "$env:GITHUB_WORKSPACE\Miniconda3"
+          $condaPath = "$env:GITHUB_WORKSPACE\miniforge3"
           $env:Path = "$condaPath;$condaPath\Scripts;$env:Path"
 
           Write-Host "Step 2: Initialize conda for both shells"
@@ -45,7 +45,7 @@ jobs:
       - name: Install GAIA dependencies
         run: |
           Write-Host "Step 1: Activate conda environment"
-          & "$env:GITHUB_WORKSPACE\Miniconda3\shell\condabin\conda-hook.ps1"
+          & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
           conda activate gaiaenv
 
           Write-Host "Step 2: Install dependencies"
@@ -71,7 +71,7 @@ jobs:
       - name: PyLint
         run: |
           Write-Host "Step 1: Activate conda environment"
-          & "$env:GITHUB_WORKSPACE\Miniconda3\shell\condabin\conda-hook.ps1"
+          & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
           conda activate gaiaenv
 
           Write-Host "Step 2: Install pylint"
@@ -118,8 +118,8 @@ jobs:
           GAIA_MODE: GENERIC
         run: |
           Write-Host "Activate and verify Conda environment"
-          $env:Path = "$env:GITHUB_WORKSPACE\Miniconda3;$env:GITHUB_WORKSPACE\Miniconda3\Scripts;$env:Path"
-          & "$env:GITHUB_WORKSPACE\Miniconda3\shell\condabin\conda-hook.ps1"
+          $env:Path = "$env:GITHUB_WORKSPACE\miniforge3;$env:GITHUB_WORKSPACE\miniforge3\Scripts;$env:Path"
+          & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
           conda activate gaiaenv
           cmd /c set_generic_mode.bat
           echo GAIA_MODE=%GAIA_MODE%

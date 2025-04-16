@@ -34,11 +34,13 @@ runs:
           if ( $installFromSource ) {
             # Optional Step 0: Get the gaia executable
             Write-Host "Step 1: Activate and verify Conda environment"
-            $env:Path = "$env:USERPROFILE\Miniconda3;$env:USERPROFILE\Miniconda3\Scripts;$env:Path"
-            & "$env:USERPROFILE\Miniconda3\shell\condabin\conda-hook.ps1"
-            conda activate gaiaenv
+            $env:Path = "C:\Users\nimbys\miniforge3;C:\Users\nimbys\miniforge3\Scripts;$env:Path"
+            & "C:\Users\nimbys\miniforge3\shell\condabin\conda-hook.ps1"
+
             Write-Host "Verify Python environment"
+            conda activate gaiaenv
             python -c "import sys; print(sys.executable)"
+
             Write-Host "Find gaia executable location"
             $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
             if (-not $gaiaPath) {
@@ -50,8 +52,8 @@ runs:
           } else {
             # Initialize conda for non-source installation
             Write-Host "Initializing conda..."
-            $env:Path = "$env:USERPROFILE\Miniconda3;$env:USERPROFILE\Miniconda3\Scripts;$env:Path"
-            & "$env:USERPROFILE\Miniconda3\shell\condabin\conda-hook.ps1"
+            $env:Path = "C:\Users\nimbys\miniforge3;C:\Users\nimbys\miniforge3\Scripts;$env:Path"
+            & "C:\Users\nimbys\miniforge3\shell\condabin\conda-hook.ps1"
 
             # Debug logging for install_dir
             Write-Host "`n=== Install Directory Debug Info ==="
