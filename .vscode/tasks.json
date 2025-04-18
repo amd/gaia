@@ -2,40 +2,10 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Build GAIA Installer: Generic",
+            "label": "Build GAIA Installer",
             "type": "shell",
             "command": "makensis",
             "args": [
-                "${workspaceFolder}/installer/Installer.nsi"
-            ],
-            "group": "build",
-            "presentation": {
-                "reveal": "always",
-                "panel": "new"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "Build GAIA Installer: Hybrid",
-            "type": "shell",
-            "command": "makensis",
-            "args": [
-                "/DMODE=HYBRID",
-                "${workspaceFolder}/installer/Installer.nsi"
-            ],
-            "group": "build",
-            "presentation": {
-                "reveal": "always",
-                "panel": "new"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "Build GAIA Installer: NPU",
-            "type": "shell",
-            "command": "makensis",
-            "args": [
-                "/DMODE=NPU",
                 "/DOGA_TOKEN=${input:ogaToken}",
                 "${workspaceFolder}/installer/Installer.nsi"
             ],

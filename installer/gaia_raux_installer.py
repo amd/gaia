@@ -111,7 +111,7 @@ def install_raux(install_dir, debug=False, version=None):
 
         # Get the latest release URL
         logging.info("Fetching the latest release URL...")
-        download_url = get_latest_release_url(version)
+        download_url = get_release_url(version)
         logging.info(f"Using download URL: {download_url}")
 
         # Download the zip file
@@ -370,7 +370,7 @@ def install_raux(install_dir, debug=False, version=None):
         raise ValueError(f"Unexpected error during installation: {str(e)}")
 
 
-def get_latest_release_url(version=None):
+def get_release_url(version=None):
     """
     Get the URL for the latest release of RAUX.
 
