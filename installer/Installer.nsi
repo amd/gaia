@@ -9,7 +9,7 @@
 !define /ifndef RYZENAI_FOLDER "ryzen_ai_13_ga"
 !define /ifndef NPU_DRIVER_ZIP "NPU_RAI1.3.zip"
 !define /ifndef NPU_DRIVER_VERSION "32.0.203.251"
-!define /ifndef LEMONADE_VERSION "v6.1.4"
+!define /ifndef LEMONADE_VERSION "v6.2.0"
 !define /ifndef RAUX_VERSION "v0.6.5+raux.0.1.0"
 !define /ifndef RAUX_PRODUCT_NAME "AMD GAIA UI [beta]"
 !define /ifndef RAUX_PROJECT_NAME "RAUX"
