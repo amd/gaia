@@ -12,6 +12,7 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://makeapullrequest.com)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![GitHub issues](https://img.shields.io/github/issues/aigdat/gaia)](https://github.com/aigdat/gaia/issues)
+[![GitHub downloads](https://img.shields.io/github/downloads/aigdat/gaia/total.svg)](https://tooomm.github.io/github-release-stats/?username=aigdat&repository=gaia)
 [![Star History Chart](https://img.shields.io/badge/Star%20History-View-brightgreen)](https://star-history.com/#aigdat/gaia)
 
 <img src="https://img.youtube.com/vi/_PORHv_-atI/maxresdefault.jpg" style="display: block; margin: auto;" />
