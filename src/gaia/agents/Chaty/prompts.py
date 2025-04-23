@@ -26,7 +26,8 @@ class Prompts:
         },
         "phi3": {
             "system": "<|user|>{system_message}\n",
-            "chat_entry": "<|{role}|>{content}<|end|>",
+            "user": "<|user|>{content}<|end|>",
+            "assistant": "<|assistant|>{content}<|end|>",
             "assistant_prefix": "<|assistant|>",
         },
         "llama2": {
@@ -222,7 +223,8 @@ class Prompts:
             else:
                 continue
 
-            formatted_prompt += format_template[role].format(role=role, content=content)
+            # Use the role-specific format template for all models
+            formatted_prompt += format_template[role].format(content=content)
 
         # Add the assistant prefix for the next response if it exists
         if (

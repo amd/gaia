@@ -190,6 +190,8 @@ class Agent:
 
     def print_ui(self, input_str: str):
         self.log.debug(input_str)
+        if input_str is None:
+            return
         input_lst = input_str.split(" ")
         input_len = len(input_lst)
         for i, word in enumerate(input_lst):
