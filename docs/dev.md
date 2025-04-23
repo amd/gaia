@@ -49,16 +49,19 @@ GAIA supports two modes:
 - Storage: 20GB free space
 
 ### Software
-- [Miniconda 24+](https://docs.anaconda.com/free/miniconda/)
+- [Miniforge](https://conda-forge.org/download/) (conda-forge's recommended installer)
 - [Visual Studio Build Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe)
 
 # Prerequisites
 
-1. Download and install [miniconda](https://docs.anaconda.com/miniconda/)
+1. Download and install Windows installer from [Miniforge](https://conda-forge.org/download/)
+   1. Check _"Add Miniforge3 to my PATH environment variables"_ if you want it accessible in all terminals
 1. Download and install [Visual Studio Build Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe).
     1. During installation, make sure to select "Desktop development with C++" workload.
     1. After installation, you may need to restart your computer.
 1. *(Hybrid only)* Install the Ryzen AI NPU software drivers from [here](https://ryzenai.docs.amd.com/en/latest/inst.html)
+   1. NOTE: In many cases, your NPU drivers may already be installed
+      - Check via _"Device Manager -> Neural Processors -> NPU Compute Accelerator Device -> Properties -> Driver Tab"_
 
 # Setup and Installation
 1. Clone GAIA repo: `git clone https://github.com/aigdat/gaia.git`
@@ -149,6 +152,7 @@ If you encounter issues with NPU driver installation:
 If you encounter pip installation errors:
 1. Ensure you're using the correct Python version (3.10)
 2. Try running: `pip install --upgrade pip`
+3. Try deleting pip cache typically under: _C:\Users\<username>\AppData\Local\pip\cache_
 
 ### Model Loading Issues
 
