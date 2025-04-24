@@ -118,7 +118,6 @@ jobs:
         run: |
           Write-Host "Waiting 10 seconds before checking ports..."
           Start-Sleep -Seconds 10
-
           $portsInUse = @()
           $ports = @(8000, 8001)
           foreach ($port in $ports) {
@@ -132,7 +131,6 @@ jobs:
                   Write-Host "Port $port is free"
               }
           }
-
           if ($portsInUse.Count -gt 0) {
               $portList = $portsInUse -join ", "
               throw "Error: Ports $portList are still in use. Please ensure all GAIA processes are properly terminated."
@@ -156,30 +154,44 @@ jobs:
           Write-Host "`n=== Test Environment Debug Info ==="
           Write-Host "Current working directory: $cwd"
           Write-Host "Install directory: $installDir"
-          Write-Host "Conda environment path: $installDir\gaia_env"
           Write-Host "GAIA_MODE: $env:GAIA_MODE"
           Write-Host "LEMONADE_CACHE_DIR: $Env:LEMONADE_CACHE_DIR"
           Write-Host "HF_HOME: $Env:HF_HOME"
 
-          # Verify conda environment
-          if (Test-Path "$installDir\gaia_env") {
-            Write-Host "`nConda environment exists"
-            Write-Host "Python version:"
-            conda run -p "$installDir\gaia_env" python --version
-            Write-Host "`nInstalled packages:"
-            conda run -p "$installDir\gaia_env" pip list
-          } else {
-            Write-Host "`nERROR: Conda environment not found at $installDir\gaia_env"
+          # Verify embedded Python installation
+          $pythonExe = Join-Path $installDir "Python\python.exe"
+          if (-not (Test-Path $pythonExe)) {
+            throw "ERROR: Embedded Python not found at $pythonExe"
+          }
+          Write-Host "Embedded Python found at $pythonExe"
+
+          # Check Python version
+          Write-Host "`nPython version:"
+          & $pythonExe --version
+
+          # Verify pip installation
+          Write-Host "`nPip version:"
+          & $pythonExe -m pip --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "ERROR: pip is not correctly installed or configured in the embedded Python environment."
           }
 
+          # Update PATH to include GAIA scripts
+          $gaiaScripts = Join-Path $installDir "Python\Scripts"
+          $env:PATH = "$gaiaScripts;$env:PATH"
+          Write-Host "`nUpdated PATH with GAIA scripts directory: $gaiaScripts"
+
           # Install dev dependencies
-          Write-Host "`nInstalling dev dependencies..."
-          conda run -p "$installDir\gaia_env" pip install .[dev]
+          Write-Host "`nInstalling dev dependencies using embedded Python..."
+          & $pythonExe -m pip install .[dev]
+          if ($LASTEXITCODE -ne 0) {
+              throw "Failed to install dev dependencies using embedded pip."
+          }
 
           Write-Host "`n=== Starting Tests ==="
 
           Write-Host "Running test_lemonade_client.py"
-          $result = conda run -p "$installDir\gaia_env" python tests\test_lemonade_client.py 2>&1 | Out-String -Stream
+          $result = & $pythonExe tests\test_lemonade_client.py 2>&1 | Out-String -Stream
 
           # Format and display the output
           Write-Host "`n=== Test Output ==="
@@ -191,7 +203,7 @@ jobs:
           }
 
           Write-Host "Running test_gaia.py"
-          $result = conda run -p "$installDir\gaia_env" python tests\test_gaia.py --hybrid --asyncio-mode=strict 2>&1 | Out-String -Stream
+          $result = & $pythonExe tests\test_gaia.py --hybrid --asyncio-mode=strict 2>&1 | Out-String -Stream
 
           # Format and display the output
           Write-Host "`n=== Test Output ==="
@@ -203,7 +215,7 @@ jobs:
           }
 
           Write-Host "Running test_llama_index.py with hybrid backend"
-          $result = conda run -p "$installDir\gaia_env" python tests\test_llama_index.py --hybrid 2>&1 | Out-String -Stream
+          $result = & $pythonExe tests\test_llama_index.py --hybrid 2>&1 | Out-String -Stream
 
           # Format and display the output
           Write-Host "`n=== Test Output ==="

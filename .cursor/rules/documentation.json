@@ -7,16 +7,18 @@
         "key_files": [
           "dev.md",
           "faq.md",
-          "installer.md"
+          "installer.md",
+          "hybrid_mode.md",
+          "server_management.md"
         ]
       },
       "api_docs": {
-        "path": "src/gaia/",
+        "path": "gaia/",
         "format": "docstrings"
       },
       "examples": {
         "path": "examples/",
-        "format": "Jupyter notebooks"
+        "format": "Jupyter notebooks and Python scripts"
       }
     },
     "maintenance": {
@@ -26,9 +28,9 @@
     },
     "doc_types": {
       "primary": ["GAIA"],
-      "platform": ["RyzenAI"],
-      "component": ["Lemonade"],
-      "tool": ["NSIS"]
+      "platform": ["RyzenAI", "Hybrid Mode"],
+      "component": ["Lemonade", "OGA", "Ollama"],
+      "tool": ["NSIS", "Embedded Python"]
     }
   }
 } 

@@ -122,3 +122,4 @@ version.txt
 **/version.nsh
 **/.gaia_servers.json
 .cursor/mcp.json
+.cursor/plan.md

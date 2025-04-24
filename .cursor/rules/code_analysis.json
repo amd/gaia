@@ -2,45 +2,52 @@
   "code_analysis": {
     "focus_areas": {
       "ai_components": {
-        "patterns": ["src/gaia/agents/**/*.py"],
+        "patterns": ["gaia/agents/**/*.py", "gaia/llm/**/*.py"],
         "key_aspects": [
           "Model integration",
           "RAG implementation",
           "Agent behavior",
-          "Tool usage"
+          "Tool usage",
+          "LLM server management",
+          "Hybrid mode support"
         ]
       },
       "ui_components": {
-        "patterns": ["src/gaia/interface/**/*"],
+        "patterns": ["gaia/interface/**/*"],
         "key_aspects": [
           "User interaction flow",
           "Error handling",
           "State management",
-          "UI/UX consistency"
+          "UI/UX consistency",
+          "Hybrid mode UI"
         ]
       },
-      "evaluation": {
-        "patterns": ["src/gaia/eval/**/*.py"],
+      "testing": {
+        "patterns": ["tests/**/*.py"],
         "key_aspects": [
-          "Performance metrics",
-          "Quality assessment",
-          "Testing methodology"
+          "Unit tests",
+          "Integration tests",
+          "Hybrid mode testing",
+          "Server management testing",
+          "LLM functionality testing"
         ]
       }
     },
     "critical_paths": {
       "model_execution": {
-        "description": "LLM execution and integration with OGA/Lemonade",
+        "description": "LLM execution and integration with OGA/Lemonade/Ollama",
         "key_files": [
-          "src/gaia/agents/agent.py",
-          "src/gaia/agents/Rag/*.py"
+          "gaia/cli.py",
+          "gaia/agents/agent.py",
+          "gaia/llm/llama_index_local.py"
         ]
       },
-      "user_interface": {
-        "description": "Core UI components and interaction handling",
+      "server_management": {
+        "description": "LLM and Ollama server management",
         "key_files": [
-          "src/gaia/interface/form.ui",
-          "src/gaia/interface/util.py"
+          "gaia/cli.py",
+          "tests/test_llama_index.py",
+          "tests/test_gaia.py"
         ]
       }
     },
@@ -48,11 +55,17 @@
       "external": [
         "ONNX Runtime GenAI",
         "Lemonade",
+        "llama_index",
+        "Ollama",
         "PySide6",
         "TurnkeyML"
       ],
       "internal": {
         "raux": "Optional UI component, separate installation"
+      },
+      "models": {
+        "hybrid": "amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid",
+        "ollama": "llama3.2:1b"
       }
     }
   }

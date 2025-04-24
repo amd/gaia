@@ -9,10 +9,12 @@ import zipfile
 import shutil
 from datetime import datetime
 import requests
+from pathlib import Path
 
 # We'll keep these for reference only
 CONDA_ENV_NAME = "raux_env"
 PYTHON_VERSION = "3.11"
+PYTHON_EMBEDDED_VERSION = "3.11.8"  # Latest 3.11.x version
 
 
 def install_raux(install_dir, debug=False, version=None):
@@ -29,7 +31,11 @@ def install_raux(install_dir, debug=False, version=None):
     """
     # Setup logging to both console and file
     # Use the same log file as the GAIA installer (gaia_install.log)
-    log_file = os.path.join(install_dir, "gaia_install.log")
+    gaia_dir = os.path.join(os.path.dirname(install_dir), "GAIA")
+    log_file = os.path.join(gaia_dir, "gaia_install.log")
+
+    # Create GAIA directory if it doesn't exist
+    os.makedirs(gaia_dir, exist_ok=True)
 
     log_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(
@@ -38,7 +44,7 @@ def install_raux(install_dir, debug=False, version=None):
         datefmt="%Y-%m-%d %H:%M:%S",
         # Use filemode='a' to append to the existing log file instead of overwriting it
         handlers=[
-            logging.FileHandler(log_file, mode="a"),
+            logging.FileHandler(log_file, mode="a", encoding="utf-8"),
             logging.StreamHandler(sys.stdout),
         ],
     )
@@ -52,7 +58,6 @@ def install_raux(install_dir, debug=False, version=None):
     # Verify parameters
     logging.info("Verifying parameters...")
     logging.info(f"INSTALL_DIR set to: {install_dir}")
-    logging.info("Using system Python for installation")
 
     if not install_dir:
         logging.error("ERROR: Installation directory parameter is missing")
@@ -79,10 +84,6 @@ def install_raux(install_dir, debug=False, version=None):
         raise ValueError(
             f"Cannot write to installation directory: {install_dir}. Exception: {str(e)}"
         )
-
-    # We'll use the system Python to run install.py
-    logging.info("Using system Python for installation")
-    logging.info("install.py will handle its own conda environment setup")
 
     logging.info("Starting RAUX download and installation...")
     logging.info(f"Installation directory: {install_dir}")
@@ -118,18 +119,6 @@ def install_raux(install_dir, debug=False, version=None):
         logging.info(f"Downloading from {download_url}")
 
         try:
-            # Install requests if not already installed
-            try:
-                subprocess.run(
-                    ["python", "-m", "pip", "install", "requests"],
-                    check=True,
-                    capture_output=True,
-                )
-                logging.info("Installed requests package")
-            except Exception as e:
-                logging.error(f"ERROR: Failed to install requests package: {str(e)}")
-                raise ValueError(f"Failed to install requests package: {str(e)}")
-
             response = requests.get(download_url, stream=True, timeout=60)
             response.raise_for_status()
 
@@ -144,7 +133,6 @@ def install_raux(install_dir, debug=False, version=None):
         # Check if zip file exists
         if not os.path.exists("raux.zip"):
             logging.error("ERROR: Failed to download RAUX zip file")
-
             raise ValueError("Failed to download RAUX zip file")
 
         # Create extracted_files directory
@@ -158,7 +146,6 @@ def install_raux(install_dir, debug=False, version=None):
             with zipfile.ZipFile("raux.zip", "r") as zip_ref:
                 zip_ref.extractall(extract_dir)
         except Exception as e:
-
             logging.error(f"ERROR: Failed to extract RAUX zip file: {str(e)}")
             raise ValueError(f"Failed to extract RAUX zip file: {str(e)}")
 
@@ -186,7 +173,7 @@ def install_raux(install_dir, debug=False, version=None):
             logging.error("ERROR: Could not find install.py in extracted files")
             raise ValueError("Could not find install.py in extracted files")
 
-        # Run installation script using the system Python
+        # Run installation script using the embedded Python
         logging.info(f"Found install script: {install_script}")
 
         # Close log handlers to prevent file locking issues
@@ -206,10 +193,9 @@ def install_raux(install_dir, debug=False, version=None):
             ],
         )
 
-        # Build the command using the system Python
-        # Let install.py handle its own conda environment setup
+        # Build the command using sys.executable (the Python that's running this script)
         cmd = [
-            "python",  # Use the system Python to run install.py
+            sys.executable,  # Use the Python that's running this script
             install_script,
             "--install-dir",
             install_dir,
@@ -350,7 +336,7 @@ def install_raux(install_dir, debug=False, version=None):
 
         logging.info("===== INSTALLATION SUMMARY =====")
         logging.info(f"Installation directory: {install_dir}")
-        logging.info("Using system Python for installation")
+        logging.info("Using embedded Python for installation")
         logging.info(
             f"Launcher scripts copied: PS1={launcher_ps1_found}, CMD={launcher_cmd_found}"
         )

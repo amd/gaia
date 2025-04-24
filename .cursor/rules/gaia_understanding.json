@@ -5,7 +5,7 @@
       "documentation_source": "../docs.json",
       "key_components": {
         "backend": {
-          "description": "Uses ONNX Runtime GenAI (OGA) via Lemonade for LLM execution",
+          "description": "Supports both OGA/Lemonade and Ollama backends for LLM execution",
           "stack": {
             "lemonade": {
               "description": "Multi-vendor open-source SDK for LLM deployment",
@@ -17,12 +17,22 @@
               "features": [
                 "Quick experimentation with hybrid execution mode",
                 "Validation of inference speed and task performance",
-                "High-level API integration for Python apps"
+                "High-level API integration for Python apps",
+                "Server management and monitoring"
               ]
             },
             "oga": {
               "description": "Microsoft's multi-vendor generative AI framework",
               "role": "Provides LLM interface for execution backends like Ryzen AI"
+            },
+            "ollama": {
+              "description": "Open-source LLM execution engine",
+              "role": "Provides alternative backend for non-Ryzen AI systems",
+              "features": [
+                "Model management",
+                "Server-based execution",
+                "Generic CPU/GPU support"
+              ]
             }
           }
         },
@@ -32,7 +42,8 @@
             "features": [
               "Optimal model partitioning between NPU and iGPU",
               "Minimized time-to-first-token (TTFT)",
-              "Maximized token generation speed (TPS)"
+              "Maximized token generation speed (TPS)",
+              "Automatic server management"
             ],
             "requirements": [
               "Ryzen AI 300-series processors (Strix Point/Krackan Point)",
@@ -44,37 +55,48 @@
             "features": ["Compute-intensive operations offloaded exclusively to NPU"],
             "platforms": ["STX", "KRK"]
           },
-          "generic": "Runs on non-Ryzen AI systems using standard GPU acceleration"
+          "generic": {
+            "description": "Runs on non-Ryzen AI systems using standard CPU/GPU",
+            "features": [
+              "Ollama-based execution",
+              "Wide hardware compatibility",
+              "Automatic server management"
+            ]
+          }
         },
         "features": [
           "Local/private LLM execution",
           "RAG (Retrieval-Augmented Generation) pipeline",
           "Interactive chat capabilities",
-          "Tool usage and reasoning"
+          "Tool usage and reasoning",
+          "Automatic server management",
+          "Multiple backend support"
         ],
         "optional_components": {
           "raux": {
             "description": "AMD's beta UI for AI model interaction",
             "installation": "Optional component in GAIA installer",
-            "integration": "Installed separately but can be managed through GAIA installer"
+            "integration": "Installed separately but can be managed through GAIA installer",
+            "server_interaction": "Uses GAIA's server management capabilities"
           }
         }
       },
       "file_patterns": {
-        "core": ["src/gaia/**/*.py"],
-        "agents": ["src/gaia/agents/**/*.py"],
-        "interface": ["src/gaia/interface/**/*"],
-        "eval": ["src/gaia/eval/**/*.py"],
+        "core": ["gaia/**/*.py"],
+        "agents": ["gaia/agents/**/*.py"],
+        "llm": ["gaia/llm/**/*.py"],
+        "interface": ["gaia/interface/**/*"],
         "tests": ["tests/**/*.py"],
-        "docs": ["docs/**/*.md"]
+        "docs": ["docs/**/*.md"],
+        "workflows": [".github/workflows/**/*.yml"]
       },
       "installer": {
         "modes": ["hybrid", "npu", "generic"],
         "optional_components": ["RAUX"],
         "dependencies": {
-          "conda": "Automatically installs Miniconda if missing",
-          "python": "Creates Python 3.10 environment named 'gaia_env'",
-          "ollama": "Required for generic mode"
+          "python": "Includes embedded Python distribution",
+          "ollama": "Required for generic mode",
+          "packages": "Automatically installs required Python packages"
         }
       }
     }
