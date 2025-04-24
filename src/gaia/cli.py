@@ -1002,6 +1002,61 @@ async def async_main(action, **kwargs):
         launch_in_background = kwargs.pop("background", "silent")
         logging_level = kwargs.pop("logging_level", "INFO")  # Pop instead of get
 
+        # Set parameters based on GAIA_MODE environment variable if not explicitly overridden
+        gaia_mode = os.environ.get("GAIA_MODE", "").strip().upper()
+        if gaia_mode and not (
+            kwargs.get("hybrid", False) or kwargs.get("generic", False)
+        ):
+            if gaia_mode == "HYBRID":
+                # Set optimal hybrid mode configuration
+                kwargs["model"] = (
+                    "amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid"
+                )
+                kwargs["backend"] = "oga"
+                kwargs["device"] = "hybrid"
+                kwargs["dtype"] = "int4"
+                print(
+                    f"Using optimal hybrid mode configuration from GAIA_MODE={gaia_mode}."
+                )
+            elif gaia_mode == "GENERIC":
+                # Set optimal generic mode configuration
+                kwargs["model"] = "llama3.2:1b"
+                kwargs["backend"] = "ollama"
+                kwargs["device"] = "cpu"
+                kwargs["dtype"] = "int4"
+                print(
+                    f"Using optimal generic mode configuration from GAIA_MODE={gaia_mode}."
+                )
+            elif gaia_mode == "NPU":
+                # Set optimal NPU mode configuration
+                kwargs["model"] = "Llama-3.2-1B-Instruct-NPU"
+                kwargs["backend"] = "oga"
+                kwargs["device"] = "npu"
+                kwargs["dtype"] = "int4"
+                print(
+                    f"Using optimal NPU mode configuration from GAIA_MODE={gaia_mode}."
+                )
+
+        # Handle hybrid mode shortcut (command-line flag takes precedence over env var)
+        if kwargs.pop("hybrid", False):
+            # Set optimal hybrid mode configuration
+            kwargs["model"] = (
+                "amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid"
+            )
+            kwargs["backend"] = "oga"
+            kwargs["device"] = "hybrid"
+            kwargs["dtype"] = "int4"
+            print("Using optimal hybrid mode configuration.")
+
+        # Handle generic mode shortcut
+        if kwargs.pop("generic", False):
+            # Set optimal generic mode configuration
+            kwargs["model"] = "llama3.2:1b"
+            kwargs["backend"] = "ollama"
+            kwargs["device"] = "cpu"
+            kwargs["dtype"] = "int4"
+            print("Using optimal generic mode configuration.")
+
         # Build command with all parameters
         cmd_params = []
         for key, value in kwargs.items():
@@ -1270,6 +1325,16 @@ def main():
     )
     start_parser.add_argument(
         "--input-file", help="Input file path for RAG index creation"
+    )
+    start_parser.add_argument(
+        "--hybrid",
+        action="store_true",
+        help="Shortcut for optimal hybrid mode configuration (sets --model, --backend, --device, and --dtype)",
+    )
+    start_parser.add_argument(
+        "--generic",
+        action="store_true",
+        help="Shortcut for optimal generic mode configuration (sets --model, --backend, --device, and --dtype)",
     )
 
     subparsers.add_parser("stop", help="Stop Gaia server", parents=[parent_parser])
