@@ -270,8 +270,8 @@ Function .onInit
     DetailPrint "CPU not compatible with Ryzen AI, forcing Generic mode"
   ${EndIf}
 
-  ; Initialize InstallRAUX to 1 (checked)
-  StrCpy $InstallRAUX "1"
+  ; Initialize InstallRAUX to 0 (disabled)
+  StrCpy $InstallRAUX "0"
 
   ; Hide RAUX option if not installed
   ${If} $InstallRAUX != "1"
@@ -319,10 +319,11 @@ Function CustomFinishPage
   ${NSD_CreateCheckbox} 20 120 100% 12u "Run GAIA CLI"
   Pop $RunGAIACheckbox
 
-  ${If} $InstallRAUX == "1"
-    ${NSD_CreateCheckbox} 20 140 100% 12u "Run ${RAUX_PRODUCT_NAME}"
-    Pop $RunRAUXCheckbox
-  ${EndIf}
+  ; RAUX option temporarily disabled
+  ;${If} $InstallRAUX == "1"
+  ;  ${NSD_CreateCheckbox} 20 140 100% 12u "Run ${RAUX_PRODUCT_NAME}"
+  ;  Pop $RunRAUXCheckbox
+  ;${EndIf}
 
   nsDialogs::Show
 FunctionEnd
@@ -338,12 +339,13 @@ Function CustomFinishLeave
     Call RunGAIACLI
   ${EndIf}
 
-  ${If} $InstallRAUX == "1"
-    ${NSD_GetState} $RunRAUXCheckbox $0
-    ${If} $0 == ${BST_CHECKED}
-      Call RunRAUX
-    ${EndIf}
-  ${EndIf}
+  ; RAUX option temporarily disabled
+  ;${If} $InstallRAUX == "1"
+  ;  ${NSD_GetState} $RunRAUXCheckbox $0
+  ;  ${If} $0 == ${BST_CHECKED}
+  ;    Call RunRAUX
+  ;  ${EndIf}
+  ;${EndIf}
 FunctionEnd
 
 ; MUI Settings
@@ -352,7 +354,7 @@ FunctionEnd
 Page custom WarningPage
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
-Page custom RAUXOptionsPage RAUXOptionsLeave
+; Page custom RAUXOptionsPage RAUXOptionsLeave  ; RAUX options page temporarily disabled
 !insertmacro MUI_PAGE_INSTFILES
 Page custom CustomFinishPage CustomFinishLeave
 !insertmacro MUI_LANGUAGE "English"
@@ -1082,7 +1084,7 @@ Section "-Install Main Components" SEC01
 
             ; Create shortcut to the batch wrapper script with version parameter
             DetailPrint "[RAUX-Installer] Creating desktop shortcut..."
-            CreateShortcut "$DESKTOP\GAIA-BETA.lnk" "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\launch_${RAUX_PROJECT_NAME_CONCAT}.cmd" "--version $5 --mode $SELECTED_MODE" "$INSTDIR\src\gaia\interface\img\gaia.ico"
+            CreateShortcut "$DESKTOP\GAIA-UI-BETA.lnk" "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\launch_${RAUX_PROJECT_NAME_CONCAT}.cmd" "--version $5 --mode $SELECTED_MODE" "$INSTDIR\src\gaia\interface\img\gaia.ico"
         ${Else}
             DetailPrint "[RAUX-Installer] *** INSTALLATION FAILED ***"
             DetailPrint "[RAUX-Installer] Please check the log file at $LOCALAPPDATA\GAIA\gaia_install.log"
@@ -1134,7 +1136,7 @@ Section "-Install Main Components" SEC01
       # Create shortcuts only in non-silent mode
       ${IfNot} ${Silent}
         ; Create shortcuts using launch_gaia.bat
-        CreateShortcut "$DESKTOP\GAIA.lnk" "$INSTDIR\bin\launch_gaia.bat" "--ui" "$INSTDIR\src\gaia\interface\img\gaia.ico"
+        CreateShortcut "$DESKTOP\GAIA-UI.lnk" "$INSTDIR\bin\launch_gaia.bat" "--ui" "$INSTDIR\src\gaia\interface\img\gaia.ico"
         CreateShortcut "$DESKTOP\GAIA-CLI.lnk" "$INSTDIR\bin\launch_gaia.bat" "--cli" "$INSTDIR\src\gaia\interface\img\gaia.ico"
       ${EndIf}
 
@@ -1142,7 +1144,7 @@ SectionEnd
 
 Function RunGAIAUI
   ${IfNot} ${Silent}
-    ExecShell "open" "$DESKTOP\GAIA.lnk"
+    ExecShell "open" "$DESKTOP\GAIA-UI.lnk"
   ${EndIf}
 FunctionEnd
 
@@ -1155,8 +1157,8 @@ FunctionEnd
 Function RunRAUX
   ${IfNot} ${Silent}
     ${If} $InstallRAUX == "1"
-      IfFileExists "$DESKTOP\GAIA-BETA.lnk" 0 +2
-        ExecShell "open" "$DESKTOP\GAIA-BETA.lnk"
+      IfFileExists "$DESKTOP\GAIA-UI-BETA.lnk" 0 +2
+        ExecShell "open" "$DESKTOP\GAIA-UI-BETA.lnk"
     ${EndIf}
   ${EndIf}
 FunctionEnd
