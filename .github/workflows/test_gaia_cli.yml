@@ -24,17 +24,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download and Install Miniconda
+      - name: Download and Install Miniforge
         run: |
-          Invoke-WebRequest -Uri "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe" -OutFile "miniconda.exe"
-          Start-Process -FilePath "miniconda.exe" -ArgumentList "/S", "/D=$env:GITHUB_WORKSPACE\Miniconda3" -Wait
+          Invoke-WebRequest -Uri "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Windows-x86_64.exe" -OutFile "miniforge3.exe"
+          Start-Process -FilePath "miniforge3.exe" -ArgumentList "/S", "/D=$env:GITHUB_WORKSPACE\miniforge3" -Wait
 
       - name: Initialize Conda
         run: |
-          Write-Host "Step 1: Add Conda to system PATH"
-          $condaPath = "$env:GITHUB_WORKSPACE\Miniconda3"
+          Write-Host "Step 1: Get conda path"
+          $condaPath = "$env:GITHUB_WORKSPACE\miniforge3"
           $env:Path = "$condaPath;$condaPath\Scripts;$env:Path"
-          [System.Environment]::SetEnvironmentVariable("Path", $env:Path, [System.EnvironmentVariableTarget]::Machine)
 
           Write-Host "Step 2: Initialize conda for both shells"
           & "$condaPath\Scripts\conda.exe" init powershell
@@ -46,12 +45,12 @@ jobs:
       - name: Install GAIA dependencies
         run: |
           Write-Host "Step 1: Activate conda environment"
-          & "$env:GITHUB_WORKSPACE\Miniconda3\shell\condabin\conda-hook.ps1"
+          & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
           conda activate gaiaenv
 
           Write-Host "Step 2: Install dependencies"
           python -m pip install --upgrade pip
-          pip install -e .[dml,dev,clip,talk]
+          pip install -e .[clip,joker,rag,talk,dev]
 
           Write-Host "Step 3: Verify installation"
           $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
@@ -72,7 +71,7 @@ jobs:
       - name: PyLint
         run: |
           Write-Host "Step 1: Activate conda environment"
-          & "$env:GITHUB_WORKSPACE\Miniconda3\shell\condabin\conda-hook.ps1"
+          & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
           conda activate gaiaenv
 
           Write-Host "Step 2: Install pylint"
@@ -107,19 +106,29 @@ jobs:
       - uses: FedericoCarboni/setup-ffmpeg@v3
         id: setup-ffmpeg
 
+      - name: Set GAIA Mode
+        shell: cmd
+        run: |
+
       - name: Test GAIA
         timeout-minutes: 20
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          GAIA_MODE: GENERIC
         run: |
           Write-Host "Activate and verify Conda environment"
-          $env:Path = "$env:GITHUB_WORKSPACE\Miniconda3;$env:GITHUB_WORKSPACE\Miniconda3\Scripts;$env:Path"
-          & "$env:GITHUB_WORKSPACE\Miniconda3\shell\condabin\conda-hook.ps1"
+          $env:Path = "$env:GITHUB_WORKSPACE\miniforge3;$env:GITHUB_WORKSPACE\miniforge3\Scripts;$env:Path"
+          & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
           conda activate gaiaenv
+          cmd /c set_generic_mode.bat
+          echo GAIA_MODE=%GAIA_MODE%
 
           Write-Host "Verify Python environment"
           python -c "import sys; print(sys.executable)"
+
+          Write-Host "Verify NumPy is available"
+          python -c "import numpy; print(f'NumPy version: {numpy.__version__}'); print(f'NumPy path: {numpy.__file__}')"
 
           Write-Host "Find gaia executable location"
           $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
@@ -143,13 +152,19 @@ jobs:
           }
 
           Write-Host "Running test_asr.py"
-          python tests\test_asr.py 2>&1 | Out-String -Stream
+          python tests\unit\test_asr.py 2>&1 | Out-String -Stream
           if ($LASTEXITCODE -ne 0) {
               throw "test_asr.py failed with exit code $LASTEXITCODE"
           }
 
           Write-Host "Running test_tts.py"
-          python tests\test_tts.py 2>&1 | Out-String -Stream
+          python tests\unit\test_tts.py 2>&1 | Out-String -Stream
           if ($LASTEXITCODE -ne 0) {
               throw "test_tts.py failed with exit code $LASTEXITCODE"
+          }
+
+          Write-Host "Running test_rag.py"
+          python tests\test_rag.py 2>&1 | Out-String -Stream
+          if ($LASTEXITCODE -ne 0) {
+              throw "test_rag.py failed with exit code $LASTEXITCODE"
           }

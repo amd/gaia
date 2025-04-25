@@ -104,6 +104,7 @@ ENV/
 
 # IDE settings
 .idea/
+.cursor/mcp.json
 
 # Custom
 config.ini
@@ -118,4 +119,7 @@ release_info.json
 
 # version
 version.txt
-
+**/version.nsh
+**/.gaia_servers.json
+.cursor/mcp.json
+.cursor/plan.md

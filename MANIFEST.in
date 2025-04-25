@@ -1,0 +1,12 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Include all JSON files in the interface directory
+include src/gaia/interface/*.json
+
+# Include all files in the img directory
+include src/gaia/interface/img/*
+
+# Include license and readme
+include LICENSE
+include README.md

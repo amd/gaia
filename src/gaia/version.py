@@ -1,80 +1,96 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-import subprocess
+from importlib.metadata import version as get_package_version_metadata
 import logging
-from typing import Optional
+import subprocess
+import os
+
+__version__ = "0.8.2"
+
+
+def get_package_version() -> str:
+    """Get the installed package version from importlib.metadata.
+
+    Returns:
+        str: The package version string
+    """
+    try:
+        return get_package_version_metadata("gaia")
+    except Exception as e:
+        logging.warning(f"Failed to get package version: {e}")
+        return ""
 
 
 def get_git_hash(hash_length: int = 8) -> str:
-    """Get the current Git commit hash.
+    """Get the current git hash.
+    Only used during build/installer process.
 
     Args:
-        hash_length (int): Number of characters of the hash to return. Defaults to 8.
+        hash_length: Length of the hash to return
 
     Returns:
-        str: The Git hash of the current commit, truncated to specified length.
-            Returns "unknown" if Git command fails.
+        str: The git hash or 'unknown' if git is not available
     """
     try:
-        return (
-            subprocess.check_output(
-                ["git", "rev-parse", f"--short={hash_length}", "HEAD"]
-            )
-            .decode("ascii")
-            .strip()
-        )
-    except subprocess.SubprocessError as e:
-        logging.warning(f"Failed to get Git hash: {str(e)}")
-        return "unknown"
-    except Exception as e:
-        logging.error(f"Unexpected error while getting Git hash: {str(e)}")
-        return "unknown"
+        git_hash = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        return git_hash[:hash_length]
+    except Exception:
+        logging.warning("Failed to get Git hash")
+        return ""
 
 
-def get_github_root() -> Optional[str]:
-    """Get the GitHub repository root (organization/user name).
+def get_version_with_hash() -> str:
+    """Get the full version string including git hash.
+    Only used during build/installer process.
 
     Returns:
-        Optional[str]: The GitHub repository root (e.g., 'amd' from 'github.com/amd/gaia').
-            Returns None if the command fails or the remote URL is not from GitHub.
+        str: Version string in format 'v{version}+{hash}'
     """
+    git_hash = get_git_hash()
+    if git_hash:
+        return f"v{__version__}+{git_hash}"
+    else:
+        return f"v{__version__}"
+
+
+def write_version_files() -> None:
+    """Write version information to version.txt and installer/version.nsh files.
+    Only used during build/installer process."""
     try:
-        remote_url = (
-            subprocess.check_output(["git", "config", "--get", "remote.origin.url"])
-            .decode("ascii")
-            .strip()
+        # Write version with hash to version.txt
+        with open("version.txt", "w", encoding="utf-8") as f:
+            f.write(get_version_with_hash())
+
+        # Write version with hash to installer/version.nsh
+        installer_dir = os.path.join("installer")
+        os.makedirs(installer_dir, exist_ok=True)
+        with open(
+            os.path.join(installer_dir, "version.nsh"), "w", encoding="utf-8"
+        ) as f:
+            f.write(f'!define GAIA_VERSION "{get_version_with_hash()}"\n')
+
+        print(
+            "Version files created successfully: version.txt and installer/version.nsh"
         )
-
-        # Handle different GitHub URL formats
-        if "github.com" in remote_url:
-            # Remove .git suffix if present
-            remote_url = remote_url.replace(".git", "")
-
-            # Handle SSH format (git@github.com:user/repo)
-            if remote_url.startswith("git@"):
-                parts = remote_url.split(":")[1].split("/")
-            # Handle HTTPS format (https://github.com/user/repo)
-            else:
-                parts = remote_url.split("github.com/")[1].split("/")
-
-            return parts[0]
-    except (subprocess.SubprocessError, IndexError) as e:
-        logging.warning(f"Failed to get GitHub root: {str(e)}")
-        return None
     except Exception as e:
-        logging.error(f"Unexpected error while getting GitHub root: {str(e)}")
-        return None
+        print(f"Failed to write version files: {str(e)}")
+        raise
 
 
-__version__ = "0.7.4"
-github_root = get_github_root()
-git_hash = get_git_hash()
+# For regular package usage - just version number
+version = get_package_version()
 
-version_with_hash = (
-    f"{github_root}/v{__version__}+{git_hash}"
-    if github_root
-    else f"v{__version__}+{git_hash}"
-)
 
-# print(f"Version with hash: {version_with_hash}")
+def main():
+    """Generate version files when the script is run directly.
+    Only used during build/installer process."""
+    write_version_files()
+
+
+if __name__ == "__main__":
+    main()

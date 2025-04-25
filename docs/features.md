@@ -11,7 +11,7 @@ Currently, the following capabilities are available, more will be added in the n
 
 ## Supported LLMs
 
-The following is a list of the currently supported LLMs with GAIA using Ryzen AI Hybrid (NPU+iGPU) mode using `GAIA_Hybrid_Installer.exe`. To request support for a new LLM, please contact the [AMD GAIA team](mailto:gaia@amd.com).
+The following is a list of the currently supported LLMs with GAIA using Ryzen AI Hybrid (NPU+iGPU) mode using `gaia-windows-setup.exe`. To request support for a new LLM, please contact the [AMD GAIA team](mailto:gaia@amd.com).
 
 | LLM                    | Checkpoint                                                            | Backend            | Data Type |
 | -----------------------|-----------------------------------------------------------------------|--------------------|-----------|

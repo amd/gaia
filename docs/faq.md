@@ -1,11 +1,37 @@
 # GAIA (Generative AI is Awesome) FAQ
 
+## Installation and Setup
+
+### Which installation mode should I choose?
+- **Hybrid Mode**: Best for performance, combines NPU and iGPU for maximum speed. Requires Ryzen AI 300-series processor.
+- **NPU Mode**: Best for power efficiency, uses only the NPU for AI processing. Good for laptop users concerned about battery life. Requires Ryzen AI 300-series processor.
+- **Generic Mode**: Works on any Windows PC, uses Ollama as the backend. Choose this if you don't have a Ryzen AI processor.
+
+### Can I change the installation mode after installing?
+Yes, you can reinstall GAIA and select a different mode. The installer provides an option to remove your existing installation.
+
+### How do I run GAIA in silent/headless mode?
+You can run the installer from command-line with parameters for CI/CD or silent installations:
+```
+gaia-windows-setup.exe /S /MODE=HYBRID
+```
+Available parameters:
+- `/S` - Silent installation (no UI)
+- `/MODE=X` - Set installation mode (GENERIC, NPU, or HYBRID)
+- `/D=<path>` - Set installation directory (must be last parameter)
+
+### Why are some installation modes disabled?
+The installer automatically detects your CPU and only enables compatible modes. NPU and Hybrid modes require an AMD Ryzen AI 300-series processor. If these options are disabled, your system doesn't meet the hardware requirements.
+
+### Does GAIA support Linux or macOS?
+Currently, GAIA only supports Windows 11. Support for other platforms may be added in future releases.
+
 ## Demo Introduction
 
 Discover the capabilities of Ryzen AI with GAIA, an innovative generative AI application. Our platform seamlessly runs private and local large language models (LLMs) on the Neural Processing Unit (NPU), unlocking powerful potential. Dive into our agent Retrieval-Augmented Generation (RAG) pipeline, where interactive chat, reasoning, planning, and tool use converge. Plus, experience an intuitive and accessible UI that showcases these remarkable features.
 
 ## What is GAIA, and how does it integrate with Ryzen AI?
-GAIA is our generative AI application that runs local, private LLMs on Ryzen AI’s NPU hardware. It’s designed to leverage the power of the NPU for faster, more efficient processing, allowing users to keep their data local without relying on cloud infrastructure. This demo showcases how GAIA interacts with the NPU to run models seamlessly. GAIA uses the [Lemonade tool](https://github.com/onnx/turnkeyml/blob/main/docs/lemonade) from [TurnkeyML](https://github.com/onnx/turnkeyml/) to load and inference the LLM.
+GAIA is our generative AI application that runs local, private LLMs on Ryzen AI's NPU hardware. It's designed to leverage the power of the NPU for faster, more efficient processing, allowing users to keep their data local without relying on cloud infrastructure. This demo showcases how GAIA interacts with the NPU to run models seamlessly. GAIA uses the [Lemonade tool](https://github.com/onnx/turnkeyml/blob/main/docs/lemonade) from [TurnkeyML](https://github.com/onnx/turnkeyml/) to load and inference the LLM.
 
 ## How does the agent RAG pipeline work in this demo?
 
@@ -13,7 +39,7 @@ The RAG pipeline in our demo combines an LLM with a knowledge base. The agent is
 
 ## What kind of LLMs are supported in the demo?
 
-The demo supports a variety of local LLMs, which are optimized to run on Ryzen AI’s NPU hardware. This includes popular models like Llama and Phi derivatives, which can be tailored for different use cases like Q&A, summarization, or even more complex reasoning tasks.
+The demo supports a variety of local LLMs, which are optimized to run on Ryzen AI's NPU hardware. This includes popular models like Llama and Phi derivatives, which can be tailored for different use cases like Q&A, summarization, or even more complex reasoning tasks.
 
 ## How does the NPU enhance the performance of the LLMs?
 
@@ -33,7 +59,7 @@ Running the demo on the NPU provides better performance for AI-specific tasks, a
 
 ## What toolset do I need to replicate this demo?
 
-To replicate the demo, you’ll need the Ryzen AI hardware, TurnkeyML for managing your LLMs, and our agent RAG pipeline, which you can access via Jupyter notebooks in the demo. Additionally, you'll need the necessary software stack, including Ryzen AI Software for the. The GAIA interface (GUI) will be available publicly soon.
+To replicate the demo, you'll need the Ryzen AI hardware, TurnkeyML for managing your LLMs, and our agent RAG pipeline, which you can access via Jupyter notebooks in the demo. Additionally, you'll need the necessary software stack, including Ryzen AI Software for the. The GAIA interface (GUI) will be available publicly soon.
 
 ## How does this demo address data privacy concerns?
 
@@ -56,9 +82,9 @@ The demo is split into two main components:
 
 ## Query Process
 
-The query is sent to the Gaia web app, where it’s transformed into an embedding vector. This vector is used to retrieve relevant chunks of the local GitHub repository, which are then passed to the NPU service. You can see the context being embedded into the LLM based on the query. This embedded context is then used to generate an answer, which is streamed back through the Gaia web service. The response is sent from the right side of the system to the Gaia web service on the left, and finally displayed in the UI. Once the process is complete, the user receives the final answer.
+The query is sent to the Gaia app, where it's transformed into an embedding vector. This vector is used to retrieve relevant chunks of the local GitHub repository, which are then passed to the NPU service. You can see the context being embedded into the LLM based on the query. This embedded context is then used to generate an answer, which is streamed back through the Gaia web service. The response is sent from the right side of the system to the Gaia web service on the left, and finally displayed in the UI. Once the process is complete, the user receives the final answer.
 
-And that’s the demo. As you can see, the LLM generates a detailed response based on a large document, incorporating all the relevant information from the context provided.
+And that's the demo. As you can see, the LLM generates a detailed response based on a large document, incorporating all the relevant information from the context provided.
 
 # License
 

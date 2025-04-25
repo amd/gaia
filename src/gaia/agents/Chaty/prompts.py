@@ -26,7 +26,8 @@ class Prompts:
         },
         "phi3": {
             "system": "<|user|>{system_message}\n",
-            "chat_entry": "<|{role}|>{content}<|end|>",
+            "user": "<|user|>{content}<|end|>",
+            "assistant": "<|assistant|>{content}<|end|>",
             "assistant_prefix": "<|assistant|>",
         },
         "llama2": {
@@ -54,6 +55,8 @@ class Prompts:
             "system": "{system_message}\n",
             "user": "User: {content}\n",
             "assistant": "Assistant: {content}\n",
+            "chat_entry": "{role}: {content}\n",
+            "assistant_prefix": "Assistant: ",
         },
         # Add other model formats here...
     }
@@ -220,12 +223,20 @@ class Prompts:
             else:
                 continue
 
-            formatted_prompt += format_template["chat_entry"].format(
-                role=role, content=content
-            )
+            # Use the role-specific format template for all models
+            formatted_prompt += format_template[role].format(content=content)
 
-        # Add the assistant prefix for the next response
-        formatted_prompt += format_template["assistant_prefix"]
+        # Add the assistant prefix for the next response if it exists
+        if (
+            "assistant_prefix" in format_template
+            and chat_history
+            and chat_history[-1].startswith("user: ")
+        ):
+            formatted_prompt += format_template["assistant_prefix"]
+        # If no assistant_prefix but we need to add assistant marker
+        elif chat_history and chat_history[-1].startswith("user: "):
+            if "assistant" in format_template:
+                formatted_prompt += format_template["assistant"].format(content="")
 
         return formatted_prompt
 

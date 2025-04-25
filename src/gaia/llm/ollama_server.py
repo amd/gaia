@@ -248,7 +248,7 @@ class OllamaClient:
         return self.client.embeddings(model=self.model, prompt=input, **kwargs)
 
     def create_model(self, name: str, modelfile: str, **kwargs) -> Dict[str, Any]:
-        return self.client.create(name, modelfile=modelfile, **kwargs)
+        return self.client.create(name, modelfile, **kwargs)
 
     def list_local_models(self) -> Dict[str, Any]:
         return self.client.list()

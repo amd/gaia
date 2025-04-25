@@ -1,0 +1,58 @@
+name: Publish GAIA Installer
+
+on:
+  push:
+    branches: ["main"]
+    tags:
+      - v*
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  build-installer:
+    uses: ./.github/workflows/build_installer.yml
+
+  publish-installer:
+    runs-on: windows-latest
+    needs: build-installer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for release notes generation
+
+      - name: Generate Release Notes
+        id: release_notes
+        run: |
+          # Get the previous tag
+          $previousTag = $(git describe --tags --abbrev=0 HEAD^) 2>$null
+          if ($?) {
+            # If previous tag exists, generate changelog from previous tag to current
+            $changelog = git log --pretty=format:"* %s (%h)" $previousTag..HEAD
+          } else {
+            # If no previous tag, get all commits
+            $changelog = git log --pretty=format:"* %s (%h)"
+          }
+          # Escape multiline output for GitHub Actions
+          $changelog = $changelog -replace '%', '%25' -replace "`n", '%0A' -replace "`r", '%0D'
+          echo "CHANGELOG<<EOF" >> $env:GITHUB_OUTPUT
+          echo "$changelog" >> $env:GITHUB_OUTPUT
+          echo "EOF" >> $env:GITHUB_OUTPUT
+
+      - name: Download GAIA Installer
+        uses: actions/download-artifact@v4
+        with:
+          name: gaia-windows-installer-${{ needs.build-installer.outputs.VERSION }}-${{ needs.build-installer.outputs.COMMIT_HASH }}
+          path: installer
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: installer/gaia-windows-setup.exe
+          body: |
+            ## What's Changed
+            ${{ steps.release_notes.outputs.CHANGELOG }}
+
+            ## Installation
+            Download and run the GAIA installer (gaia-windows-setup.exe)

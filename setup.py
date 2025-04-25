@@ -28,17 +28,17 @@ setup(
         "gaia.agents.Llm",
         "gaia.agents.Chaty",
         "gaia.agents.Clip",
-        "gaia.agents.Example",
         "gaia.agents.Joker",
-        "gaia.agents.Maven",
-        "gaia.agents.Neo",
-        "gaia.agents.Picasso",
+        "gaia.agents.Rag",
         "gaia.interface",
     ],
+    package_data={
+        "gaia.interface": ["*.json", "img/*"],
+    },
     install_requires=[
         "aiohttp",
         "fastapi",
-        "pydantic==1.10.12",
+        "pydantic==2.9.2",
         "uvicorn>=0.15.0",
         "transformers",
         "accelerate",
@@ -74,18 +74,7 @@ setup(
             "llama-index-readers-youtube-transcript",
             "gaia[llamaindex]",
         ],
-        "maven": [
-            "openai",
-            "llama-index-tools-arxiv",
-            "llama-index-tools-duckduckgo",
-            "llama-index-readers-web",
-            "llama-index-readers-papers",
-            "llama-index-readers-wikipedia",
-            "llama-index-tools-wikipedia",
-            "gaia[llamaindex]",
-        ],
-        "neo": [
-            "llama-index-readers-github",
+        "rag": [
             "gaia[llamaindex]",
         ],
         "notebooks": [
@@ -95,7 +84,7 @@ setup(
             "wordcloud",
             "arize-phoenix[evals,llama-index]",
             "llama-index-callbacks-arize-phoenix",
-            "gaia[clip,maven,neo,llamaindex]",
+            "gaia[clip,llamaindex]",
         ],
         "cuda": [
             "torch @ https://download.pytorch.org/whl/cu118/torch-2.3.1%2Bcu118-cp310-cp310-win_amd64.whl",
@@ -113,10 +102,13 @@ setup(
             "plotly",
             "black",
         ],
+        "eval" : [
+            "anthropic",
+        ],
         "talk":[
             "pyaudio",
             "openai-whisper",
-            "numpy",
+            "numpy==1.26.4",
             "kokoro>=0.3.1",
             "soundfile",
             "sounddevice",
