@@ -2,7 +2,6 @@
 
 [![GAIA Build Installer](https://github.com/amd/gaia/actions/workflows/build_installer.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our build")
 [![GAIA Hybrid Installer Test](https://github.com/amd/gaia/actions/workflows/test_installer_hybrid.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our hybrid tests")
-[![GAIA NPU Installer Test](https://github.com/amd/gaia/actions/workflows/test_installer_npu.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our npu tests")
 [![GAIA Generic Installer Test](https://github.com/amd/gaia/actions/workflows/test_installer_generic.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our generic tests")
 [![GAIA CLI Tests](https://github.com/amd/gaia/actions/workflows/test_gaia_cli.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our cli tests")
 [![Latest Release](https://img.shields.io/github/v/release/amd/gaia?include_prereleases)](https://github.com/amd/gaia/releases/latest "Download the latest release")
