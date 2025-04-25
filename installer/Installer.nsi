@@ -270,8 +270,8 @@ Function .onInit
     DetailPrint "CPU not compatible with Ryzen AI, forcing Generic mode"
   ${EndIf}
 
-  ; Initialize InstallRAUX to 0 (disabled)
-  StrCpy $InstallRAUX "0"
+  ; Initialize InstallRAUX to 1 (checked)
+  StrCpy $InstallRAUX "1"
 
   ; Hide RAUX option if not installed
   ${If} $InstallRAUX != "1"
@@ -319,11 +319,10 @@ Function CustomFinishPage
   ${NSD_CreateCheckbox} 20 120 100% 12u "Run GAIA CLI"
   Pop $RunGAIACheckbox
 
-  ; RAUX option temporarily disabled
-  ;${If} $InstallRAUX == "1"
-  ;  ${NSD_CreateCheckbox} 20 140 100% 12u "Run ${RAUX_PRODUCT_NAME}"
-  ;  Pop $RunRAUXCheckbox
-  ;${EndIf}
+  ${If} $InstallRAUX == "1"
+    ${NSD_CreateCheckbox} 20 140 100% 12u "Run ${RAUX_PRODUCT_NAME}"
+    Pop $RunRAUXCheckbox
+  ${EndIf}
 
   nsDialogs::Show
 FunctionEnd
@@ -339,13 +338,12 @@ Function CustomFinishLeave
     Call RunGAIACLI
   ${EndIf}
 
-  ; RAUX option temporarily disabled
-  ;${If} $InstallRAUX == "1"
-  ;  ${NSD_GetState} $RunRAUXCheckbox $0
-  ;  ${If} $0 == ${BST_CHECKED}
-  ;    Call RunRAUX
-  ;  ${EndIf}
-  ;${EndIf}
+  ${If} $InstallRAUX == "1"
+    ${NSD_GetState} $RunRAUXCheckbox $0
+    ${If} $0 == ${BST_CHECKED}
+      Call RunRAUX
+    ${EndIf}
+  ${EndIf}
 FunctionEnd
 
 ; MUI Settings
@@ -354,7 +352,7 @@ FunctionEnd
 Page custom WarningPage
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
-; Page custom RAUXOptionsPage RAUXOptionsLeave  ; RAUX options page temporarily disabled
+Page custom RAUXOptionsPage RAUXOptionsLeave
 !insertmacro MUI_PAGE_INSTFILES
 Page custom CustomFinishPage CustomFinishLeave
 !insertmacro MUI_LANGUAGE "English"
