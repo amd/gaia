@@ -1,19 +1,18 @@
 # <img src="src/gaia/interface/img/gaia.ico" alt="GAIA Logo" width="64" height="64" style="vertical-align: middle;"> Introducing GAIA by AMD: Generative AI Is Awesome!
 
-[![GAIA Build Installer](https://github.com/aigdat/gaia/actions/workflows/build_installer.yml/badge.svg)](https://github.com/aigdat/gaia/tree/main/tests "Check out our build")
-[![GAIA Hybrid Installer Test](https://github.com/aigdat/gaia/actions/workflows/test_installer_hybrid.yml/badge.svg)](https://github.com/aigdat/gaia/tree/main/tests "Check out our hybrid tests")
-[![GAIA NPU Installer Test](https://github.com/aigdat/gaia/actions/workflows/test_installer_npu.yml/badge.svg)](https://github.com/aigdat/gaia/tree/main/tests "Check out our npu tests")
-[![GAIA Generic Installer Test](https://github.com/aigdat/gaia/actions/workflows/test_installer_generic.yml/badge.svg)](https://github.com/aigdat/gaia/tree/main/tests "Check out our generic tests")
-[![GAIA CLI Tests](https://github.com/aigdat/gaia/actions/workflows/test_gaia_cli.yml/badge.svg)](https://github.com/aigdat/gaia/tree/main/tests "Check out our cli tests")
-[![Latest Release](https://img.shields.io/github/v/release/aigdat/gaia?include_prereleases)](https://github.com/aigdat/gaia/releases/latest "Download the latest release")
-[![OS - Windows](https://img.shields.io/badge/OS-windows-blue)](https://github.com/aigdat/gaia/blob/main/docs/install.md "Check out our instructions")
-[![Made with Python](https://img.shields.io/badge/Python-3.10-blue?logo=python&logoColor=white)](https://github.com/aigdat/gaia/blob/main/docs/install.md "Check out our instructions")
+[![GAIA Build Installer](https://github.com/amd/gaia/actions/workflows/build_installer.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our build")
+[![GAIA Hybrid Installer Test](https://github.com/amd/gaia/actions/workflows/test_installer_hybrid.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our hybrid tests")
+[![GAIA Generic Installer Test](https://github.com/amd/gaia/actions/workflows/test_installer_generic.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our generic tests")
+[![GAIA CLI Tests](https://github.com/amd/gaia/actions/workflows/test_gaia_cli.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our cli tests")
+[![Latest Release](https://img.shields.io/github/v/release/amd/gaia?include_prereleases)](https://github.com/amd/gaia/releases/latest "Download the latest release")
+[![OS - Windows](https://img.shields.io/badge/OS-windows-blue)](https://github.com/amd/gaia/blob/main/docs/install.md "Check out our instructions")
+[![Made with Python](https://img.shields.io/badge/Python-3.10-blue?logo=python&logoColor=white)](https://github.com/amd/gaia/blob/main/docs/install.md "Check out our instructions")
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://makeapullrequest.com)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-[![GitHub issues](https://img.shields.io/github/issues/aigdat/gaia)](https://github.com/aigdat/gaia/issues)
-[![GitHub downloads](https://img.shields.io/github/downloads/aigdat/gaia/total.svg)](https://tooomm.github.io/github-release-stats/?username=aigdat&repository=gaia)
-[![Star History Chart](https://img.shields.io/badge/Star%20History-View-brightgreen)](https://star-history.com/#aigdat/gaia)
+[![GitHub issues](https://img.shields.io/github/issues/amd/gaia)](https://github.com/amd/gaia/issues)
+[![GitHub downloads](https://img.shields.io/github/downloads/amd/gaia/total.svg)](https://tooomm.github.io/github-release-stats/?username=aigdat&repository=gaia)
+[![Star History Chart](https://img.shields.io/badge/Star%20History-View-brightgreen)](https://star-history.com/#amd/gaia)
 
 <img src="https://img.youtube.com/vi/_PORHv_-atI/maxresdefault.jpg" style="display: block; margin: auto;" />
 
@@ -34,7 +33,7 @@
 For more details, see our [GAIA Blog Article](https://www.amd.com/en/developer/resources/technical-articles/gaia-an-open-source-project-from-amd-for-running-local-llms-on-ryzen-ai.html) or [Frequently Asked Questions](docs/faq.md).
 For Ryzen AI LLM app development similar to GAIA, see [this developer guide](https://ryzenai.docs.amd.com/en/latest/llm/overview.html).
 
-⚠️ **IMPORTANT**: GAIA's Hybrid mode **only supports AMD Ryzen AI HX 300 series or newer processors**. For older AMD processors or non-AMD systems, please use the Generic installer. For more details, see [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
+⚠️ **IMPORTANT**: GAIA's Hybrid mode **only supports AMD Ryzen AI HX 300 series or newer processors**. For older AMD processors or non-AMD systems, the installer will install the generic mode with ollama. For more details, see [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
 
 
 ## Contents:
@@ -73,7 +72,7 @@ The installer includes both a CLI tool and a GUI. The installation process typic
 
 To install the GAIA application, please follow these steps:
 1. Make sure you meet the minimum [system requirements](#system-requirements) - **For Hybrid mode, you must have AMD Ryzen AI 9 HX 300 or newer processor**
-1. Download the [latest release](https://github.com/aigdat/gaia/releases) of the GAIA installer from the "Assets" section
+1. Download the [latest release](https://github.com/amd/gaia/releases) of the GAIA installer from the "Assets" section
 1. Unzip the downloaded file and run the installer by double-clicking the .exe file.
 
    ⚠️ **NOTE**: If you get a Windows Security warning, you can verify the application by clicking *"More info"* and then *"Run anyway"*. This warning appears because the application is not digitally signed.
