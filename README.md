@@ -137,7 +137,7 @@ GAIA has been tested on the following system:
 
 - Systems: Asus ProArt PX13/P16, HP Omnibook with Ryzen AI 9 HX 370 series processor
 - OS: Windows 11 Pro
-- Processor: AMD Ryzen AI 9 HX 370 w/ Radeon 840M
+- Processor: AMD Ryzen AI 9 HX 370 w/ Radeon 890M
 - AMD Radeon 890M iGPU drivers: `32.0.12010.8007` and `32.0.12033.1030`
 - AMD NPU drivers: `32.0.203.237` or `32.0.203.240`
 - AMD Adrenalin Software: Install the latest version from [AMD's official website](https://www.amd.com/en/products/software/adrenalin.html)
