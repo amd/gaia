@@ -10,6 +10,11 @@ inputs:
     required: true
   install_from_source:
     required: true
+  gaia_mode:
+    required: true
+  install_dir:
+    required: true
+    description: "Directory where GAIA is installed"
 runs:
   using: "composite"
   steps:
@@ -18,21 +23,24 @@ runs:
       env:
         HUGGINGFACE_ACCESS_TOKEN: "${{ inputs.huggingface_access_token }}"
         HF_TOKEN: "${{ inputs.huggingface_access_token }}"
+        GAIA_MODE: "${{ inputs.gaia_mode }}"
       run: |
           $cwd = (Get-Item .\).FullName
-          $Env:LEMONADE_CACHE_DIR="$cwd\lemon-cache"
-          $Env:HF_HOME="$cwd\hf-cache"
-          
+          $Env:LEMONADE_CACHE_DIR="${{ inputs.install_dir }}\lemon-cache"
+          $Env:HF_HOME="${{ inputs.install_dir }}\hf-cache"
+
           $installFromSource = [System.Convert]::ToBoolean("${{ inputs.install_from_source }}")
 
           if ( $installFromSource ) {
             # Optional Step 0: Get the gaia executable
-            Write-Host "Step 1: Activate and verify Conda environment"
-            $env:Path = "$env:USERPROFILE\Miniconda3;$env:USERPROFILE\Miniconda3\Scripts;$env:Path"
-            & "$env:USERPROFILE\Miniconda3\shell\condabin\conda-hook.ps1"
-            conda activate gaiaenv
+            Write-Host "Step 1: Activate and verify Python environment"
+            $env:Path = "C:\Users\nimbys\miniforge3;C:\Users\nimbys\miniforge3\Scripts;$env:Path"
+            & "C:\Users\nimbys\miniforge3\shell\condabin\conda-hook.ps1"
+
             Write-Host "Verify Python environment"
+            conda activate gaiaenv
             python -c "import sys; print(sys.executable)"
+
             Write-Host "Find gaia executable location"
             $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
             if (-not $gaiaPath) {
@@ -41,9 +49,48 @@ runs:
               exit 1
             }
             Write-Host "Found gaia at: $($gaiaPath.Source)"
+          } else {
+            # Debug logging for install_dir and embedded Python
+            Write-Host "`n=== Installation Directory Verification ==="
+            Write-Host "Raw install_dir input: ${{ inputs.install_dir }}"
+            Write-Host "Install directory exists: $(Test-Path '${{ inputs.install_dir }}')"
+            if (Test-Path '${{ inputs.install_dir }}') {
+              Write-Host "Directory contents:"
+              Get-ChildItem '${{ inputs.install_dir }}' | ForEach-Object { Write-Host "- $($_.Name)" }
+            }
+
+            # Verify embedded Python installation
+            $pythonExe = Join-Path "${{ inputs.install_dir }}" "Python\python.exe"
+            Write-Host "`n=== Embedded Python Verification ==="
+            Write-Host "Python executable path: $pythonExe"
+            if (Test-Path $pythonExe) {
+              Write-Host "Python version:"
+              & $pythonExe --version
+              Write-Host "`nPip version:"
+              & $pythonExe -m pip --version
+              Write-Host "`nInstalled packages:"
+              & $pythonExe -m pip list
+            } else {
+              Write-Host "ERROR: Embedded Python not found at: $pythonExe"
+              exit 1
+            }
+
+            # Verify GAIA launcher
+            $gaiaExePath = Join-Path "${{ inputs.install_dir }}" "bin\launch_gaia.bat"
+            Write-Host "`n=== GAIA Launcher Verification ==="
+            Write-Host "GAIA launcher path: $gaiaExePath"
+            if (Test-Path $gaiaExePath) {
+              Write-Host "GAIA launcher exists"
+              Write-Host "Launcher contents:"
+              Get-Content $gaiaExePath | ForEach-Object { Write-Host "  $_" }
+            } else {
+              Write-Host "ERROR: GAIA launcher not found at: $gaiaExePath"
+              exit 1
+            }
           }
-          
-          # Step 1: Ensure that nothing is running on ports 8000 and 8001
+
+          Write-Host "`n=== Port Availability Check ==="
+          Write-Host "Checking ports..."
           $portCheck = Test-NetConnection -ComputerName 127.0.0.1 -Port 8001
           if ($portCheck.TcpTestSucceeded) {
             Write-Host "Error: Port 8001 (agent) is already in use!"
@@ -59,23 +106,75 @@ runs:
             Write-Host "Port 8000 (llm server) is free."
           }
 
-          # Step 2: Start GAIA in the background with log capture
+          Write-Host "`n=== Environment Setup ==="
           $env:QT_QPA_PLATFORM = "offscreen"
-          Write-Host "Environment variable QT_QPA_PLATFORM set to offscreen"
-          $env:PATH = "$env:PATH;C:\Users\${{ inputs.username }}\AppData\Local\Programs\Ollama"
+          Write-Host "QT_QPA_PLATFORM set to: $env:QT_QPA_PLATFORM"
 
-          # Create log file paths with absolute paths
-          $logPath = Join-Path $PWD "gaia.log"
-          $errorLogPath = Join-Path $PWD "gaia_error.log"
+          # Update PATH to include GAIA executables and Ollama
+          $gaiaScripts = Join-Path "${{ inputs.install_dir }}" "Python\Scripts"
+          $env:PATH = "$gaiaScripts;$env:PATH;C:\Users\${{ inputs.username }}\AppData\Local\Programs\Ollama"
+          Write-Host "Added GAIA Scripts to PATH: $gaiaScripts"
+          Write-Host "Updated PATH with Ollama directory"
 
+          # Ensure environment variables are set for HYBRID mode
+          Write-Host "`n=== Environment Variables Setup ==="
+          Write-Host "Setting up environment variables for mode: $env:GAIA_MODE"
+          # Required for GAIA to run correctly
+          $env:PYTHONPATH = ""
+          $env:PYTHONNOUSERSITE = "1"
+
+          if ($env:GAIA_MODE -eq "HYBRID") {
+            Write-Host "Setting up HYBRID mode environment variables"
+            $env:HUGGINGFACE_ACCESS_TOKEN = "${{ inputs.huggingface_access_token }}"
+            $env:HF_TOKEN = "${{ inputs.huggingface_access_token }}"
+          }
+
+          # Create log file paths in the installation directory
+          $logPath = Join-Path "${{ inputs.install_dir }}" "gaia.log"
+          $errorLogPath = Join-Path "${{ inputs.install_dir }}" "gaia_error.log"
+          Write-Host "Log file path: $logPath"
+          Write-Host "Error log file path: $errorLogPath"
+
+          Write-Host "`n=== Environment Variables ==="
+          Write-Host "Starting GAIA..."
+          Write-Host "GAIA_MODE: $env:GAIA_MODE"
+          Write-Host "LEMONADE_CACHE_DIR: $Env:LEMONADE_CACHE_DIR"
+          Write-Host "HF_HOME: $Env:HF_HOME"
+          Write-Host "PATH: $env:PATH"
+          Write-Host "PYTHONPATH: $env:PYTHONPATH"
+          Write-Host "Current working directory: $cwd"
+          Write-Host "Install from source: $installFromSource"
+
+          Write-Host "`n=== Starting GAIA ==="
           if ( $installFromSource ) {
+            Write-Host "Starting GAIA from source installation..."
             $gaiaProcess = Start-Process -NoNewWindow -FilePath "gaia" -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -PassThru
           } else {
-            $gaiaProcess = Start-Process -FilePath "conda" -ArgumentList "run -p C:\Users\${{ inputs.username }}\AppData\Local\GAIA\gaia_env gaia" -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -PassThru
-          }
-          Write-Host "Started GAIA..."
+            Write-Host "Starting GAIA using embedded installation..."
+            $gaiaExePath = Join-Path "${{ inputs.install_dir }}" "bin\launch_gaia.bat"
+            Write-Host "Using GAIA launcher: $gaiaExePath"
 
-          # Start log monitoring in background jobs
+            # Run GAIA directly with no arguments (as shown in the error message)
+            $gaiaExe = Join-Path "${{ inputs.install_dir }}" "Python\Scripts\gaia.exe"
+            Write-Host "GAIA executable: $gaiaExe"
+
+            # Run without any arguments
+            Write-Host "Running GAIA directly without arguments..."
+            $gaiaProcess = Start-Process -PassThru -NoNewWindow -FilePath $gaiaExe
+          }
+          Write-Host "Started GAIA with PID: $($gaiaProcess.Id)"
+
+          # Immediate verification that process started successfully
+          Start-Sleep -Seconds 3
+          $initialCheck = Get-Process -Id $gaiaProcess.Id -ErrorAction SilentlyContinue
+          if (-not $initialCheck) {
+            Write-Host "Error: GAIA process failed to start or exited immediately!"
+            exit 1
+          }
+          Write-Host "Initial process verification successful."
+
+          # Start log monitoring
+          Write-Host "`n=== Setting up Log Monitoring ==="
           $logJob = Start-Job -ScriptBlock {
             param($logPath)
             Get-Content $logPath -Wait | ForEach-Object {
@@ -89,46 +188,62 @@ runs:
               Write-Host $_ -ForegroundColor Red
             }
           } -ArgumentList $errorLogPath
+          Write-Host "Log monitoring jobs started"
 
-          # Step 3: Check if GAIA servers are running
-          Write-Host "Wait for the Agent and LLM ports to come up"
-          while ($true) {
+          Write-Host "Waiting for the Agent and LLM ports to come up..."
+
+          # Wait a bit longer initially to give services time to start
+          Write-Host "Initial wait for services to start (15 seconds)..."
+          Start-Sleep -Seconds 15
+
+          $maxAttempts = 30  # 5 minutes total (10 seconds * 30)
+          $attempt = 0
+          $success = $false
+
+          while (-not $success -and $attempt -lt $maxAttempts) {
+            $attempt++
+            Write-Host "Attempt $attempt of $maxAttempts..."
+
             $agentPortCheck = Test-NetConnection -ComputerName 127.0.0.1 -Port 8001
-            if (-not $agentPortCheck.TcpTestSucceeded) {
-              Write-Host "Agent server is not yet running on port 8001!"
-            } else {
-              Write-Host "Agent server is running on port 8001."
-            }
-            
             $llmPortCheck = Test-NetConnection -ComputerName 127.0.0.1 -Port 8000
-            if (-not $llmPortCheck.TcpTestSucceeded) {
-              Write-Host "LLM server is not yet running on port 8000!"
-            } else {
-              Write-Host "LLM server is running on port 8000."
-            }
 
             if ($agentPortCheck.TcpTestSucceeded -and $llmPortCheck.TcpTestSucceeded) {
-                Write-Host "Both agentPortCheck and llmPortCheck are true. Breaking out of the loop."
-                break
+              Write-Host "Success! Both servers are running."
+              $success = $true
+            } else {
+              if (-not $agentPortCheck.TcpTestSucceeded) {
+                Write-Host "Agent server is not yet running on port 8001"
+              }
+              if (-not $llmPortCheck.TcpTestSucceeded) {
+                Write-Host "LLM server is not yet running on port 8000"
+              }
             }
 
-            # Receive any pending output from the log jobs
-            Receive-Job -Job $logJob -Keep
-            Receive-Job -Job $errorLogJob -Keep
+            # Check if GAIA process is still running
+            $gaiaRunning = Get-Process -Id $gaiaProcess.Id -ErrorAction SilentlyContinue
+            if (-not $gaiaRunning) {
+              Write-Host "Error: GAIA process exited unexpectedly!"
+              Write-Host "=== Final GAIA Logs ==="
+              if(Test-Path $logPath) { Get-Content $logPath }
+              Write-Host "=== Final GAIA Error Logs ==="
+              if(Test-Path $errorLogPath) { Get-Content $errorLogPath }
+              exit 1
+            }
 
-            Start-Sleep -Seconds 30
+            Start-Sleep -Seconds 10
           }
 
-          # Step 4: Check if GAIA is still running
-          $gaiaRunning = Get-Process -Id $gaiaProcess.Id -ErrorAction SilentlyContinue
-          if (-not $gaiaRunning) {
-            Write-Host "Error: GAIA process exited unexpectedly!"
+          if (-not $success) {
+            Write-Host "Error: Servers failed to start within timeout period"
+            Write-Host "=== Final GAIA Logs ==="
+            if(Test-Path $logPath) { Get-Content $logPath }
+            Write-Host "=== Final GAIA Error Logs ==="
+            if(Test-Path $errorLogPath) { Get-Content $errorLogPath }
             exit 1
-          } else {
-            Write-Host "GAIA process is still alive."
           }
 
-          # Step 5: Stop everything
+          # Step 4: Stop everything
+          Write-Host "Stopping GAIA and cleaning up..."
           Stop-Job -Job $logJob
           Stop-Job -Job $errorLogJob
           Remove-Job -Job $logJob

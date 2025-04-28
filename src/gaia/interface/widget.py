@@ -18,6 +18,8 @@ import textwrap
 import subprocess
 import multiprocessing
 from urllib.parse import urlparse
+import importlib.resources
+
 from aiohttp import web, ClientSession
 import requests
 
@@ -45,8 +47,8 @@ from gaia.logger import get_logger
 import gaia.agents as agents
 from gaia.interface.util import UIMessage
 from gaia.interface.ui_form import Ui_Widget
-from gaia.llm.server import launch_llm_server
-from gaia.version import version_with_hash
+from gaia.llm.lemonade_server import launch_lemonade_server
+from gaia.version import version
 
 # Conditional import for Ollama
 try:
@@ -65,10 +67,37 @@ except ImportError:
 # do not import from the gui package.
 sys.path.insert(0, str(os.path.dirname(os.path.abspath(__file__))))
 
+
+# Check GAIA_MODE environment variable early
+def check_gaia_mode():
+    """Check if GAIA_MODE environment variable is set and return its value."""
+    gaia_mode = os.environ.get("GAIA_MODE", "").strip()
+    if not gaia_mode:
+        error_msg = (
+            "GAIA_MODE environment variable is not set. Please run one of:\n"
+            "  set_hybrid_mode.bat\n"
+            "  set_generic_mode.bat\n"
+            "  set_npu_mode.bat"
+        )
+        print(error_msg)
+        if QApplication.instance():
+            QMessageBox.critical(None, "Environment Error", error_msg)
+        return False
+    return gaia_mode
+
+
+# Determine the path to the gaia folder
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-    gaia_folder = Path(__file__).parent / "gaia"
+    # Path for PyInstaller bundle
+    gaia_folder = Path(__file__).parent
 else:
-    gaia_folder = Path(__file__).parent.parent
+    # Path for regular execution (including editable installs)
+    # Use importlib.resources to find the package path reliably
+    try:
+        gaia_folder = Path(str(importlib.resources.files("gaia")))
+    except Exception:
+        # Fallback for older Python versions or unusual setups
+        gaia_folder = Path(__file__).parent.parent
 
 
 # SetupLLM class performs tasks in a separate thread
@@ -132,6 +161,13 @@ class SetupLLM(QObject):
 
         if self.widget.settings["llm_server"]:
             try:
+                # Get model settings and validate backend
+                selected_model = self.widget.ui.model.currentText()
+                self.log.info(
+                    f"Attempting to load model: {selected_model}, checkpoint: {self.widget.settings['models'][selected_model]['checkpoint']}"
+                )
+                model_settings = self.widget.settings["models"][selected_model]
+
                 self.initialize_servers()
                 if self._is_cancelled:
                     return
@@ -147,8 +183,6 @@ class SetupLLM(QObject):
                 self.check_server_available("127.0.0.1", self.widget.llm_port)
 
                 # Check Ollama server if needed
-                selected_model = self.widget.ui.model.currentText()
-                model_settings = self.widget.settings["models"][selected_model]
                 if model_settings["backend"] == "ollama" and OLLAMA_AVAILABLE:
                     self.check_server_available(
                         "127.0.0.1",
@@ -219,13 +253,24 @@ class SetupLLM(QObject):
         # Initialize Agent server
         self.initialize_agent_server()
 
+        # Get GAIA_MODE environment variable
+        gaia_mode = os.environ.get("GAIA_MODE", "").strip()
+        self.log.debug(f"Current GAIA_MODE: {gaia_mode}")
+        self.log.debug(f"Selected backend: {model_settings['backend']}")
+
         if model_settings["backend"] == "ollama":
-            if OLLAMA_AVAILABLE:
+            if OLLAMA_AVAILABLE and gaia_mode == "GENERIC":
+                # Only initialize Ollama in generic mode
                 # Initialize Ollama servers
                 self.initialize_ollama_model_server()
                 self.initialize_ollama_client_server()
             else:
-                error_message = "Ollama backend selected but Ollama is not available."
+                error_message = (
+                    "Ollama backend selected but cannot be used:"
+                    f"\nOLLAMA_AVAILABLE = {OLLAMA_AVAILABLE}, GAIA_MODE = {gaia_mode}"
+                )
+                if gaia_mode != "GENERIC":
+                    error_message += "\nGAIA_MODE must be set to GENERIC"
                 UIMessage.error(error_message)
         else:
             # Initialize LLM server
@@ -289,7 +334,7 @@ class SetupLLM(QObject):
 
         self.log.info(f"Starting LLM server with params: {llm_server_kwargs}...")
         if self.widget.settings["dev_mode"]:
-            server_dot_py = gaia_folder / "llm" / "server.py"
+            server_dot_py = gaia_folder / "llm" / "lemonade_server.py"
             command = [
                 sys.executable,
                 server_dot_py,
@@ -304,7 +349,7 @@ class SetupLLM(QObject):
         else:
             if self.widget.settings["llm_server"]:
                 self.widget.llm_server = multiprocessing.Process(
-                    target=launch_llm_server, kwargs=llm_server_kwargs
+                    target=launch_lemonade_server, kwargs=llm_server_kwargs
                 )
                 self.widget.llm_server.start()
                 self.check_server_available("127.0.0.1", self.widget.llm_port)
@@ -407,10 +452,8 @@ class SetupLLM(QObject):
             max_new_tokens,
         )
 
-    def check_server_available(
-        self, host, port, endpoint="/health", timeout=3000, check_interval=1
-    ):
-        """Check if server is available with a longer timeout for model downloads."""
+    def check_server_available(self, host, port, endpoint="/health", check_interval=1):
+        """Check if server is available with no timeout for model downloads."""
         self.log.info(f"Checking server availability at {host}:{port}{endpoint}...")
 
         # Parse the host to remove any protocol
@@ -420,13 +463,13 @@ class SetupLLM(QObject):
         start_time = time.time()
         attempts = 0
 
-        while (
-            time.time() - start_time < timeout and not self._is_cancelled
-        ):  # Check cancellation in while condition
+        # Modified to wait indefinitely (or until cancelled) for server to be available
+        while not self._is_cancelled:
             try:
                 if self.is_server_available(clean_host, port, endpoint):
+                    elapsed_time = time.time() - start_time
                     self.log.info(
-                        f"Server available at {host}:{port}{endpoint} after {attempts} attempts"
+                        f"Server available at {host}:{port}{endpoint} after {attempts} attempts (elapsed: {elapsed_time:.1f}s)"
                     )
                     return True
 
@@ -450,13 +493,7 @@ class SetupLLM(QObject):
                 if self._is_cancelled:
                     return False
 
-        if self._is_cancelled:
-            self.log.info("Server check cancelled")
-            return False
-        elif not self._is_cancelled:
-            UIMessage.error(
-                f"Server unavailable at {host}:{port}{endpoint} after {timeout} seconds"
-            )
+        self.log.info("Server check cancelled")
         return False
 
     def is_server_available(self, host, port, endpoint="/health"):
@@ -586,6 +623,9 @@ class StreamFromAgent(QObject):
 
 
 class Widget(QWidget):
+    # Add signal for settings loaded
+    settings_loaded = Signal()
+
     def __init__(self, parent=None, server=True):
         super().__init__(parent)
 
@@ -599,6 +639,23 @@ class Widget(QWidget):
         self.log = get_logger(__name__)
         self.current_backend = None
         self.switch_worker = None
+        self.settings = None  # Initialize settings as None
+
+        # Check GAIA_MODE environment variable
+        gaia_mode = os.environ.get("GAIA_MODE", "").strip()
+        if not gaia_mode:
+            error_msg = "GAIA_MODE environment variable is not set. Application may not function correctly."
+            self.log.error(error_msg)
+            QMessageBox.critical(
+                self,
+                "Environment Error",
+                "GAIA_MODE environment variable is not set.\n\n"
+                "Please run one of:\n"
+                "  set_hybrid_mode.bat\n"
+                "  set_generic_mode.bat\n"
+                "  set_npu_mode.bat",
+            )
+            raise EnvironmentError(error_msg)
 
         # Set size policy for the main widget
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -627,7 +684,7 @@ class Widget(QWidget):
             }
         """
         )
-        self.setWindowTitle(f"Ryzen AI GAIA [{version_with_hash}]")
+        self.setWindowTitle(f"Ryzen AI GAIA {version}")
 
         # Set a much wider minimum width for the chat area
         self.ui.scrollAreaWidgetContents.setMinimumWidth(800)
@@ -642,96 +699,217 @@ class Widget(QWidget):
 
         # Adjust the width based on the content
         self.ui.model.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-        self.ui.model.setMinimumContentsLength(20)  # Adjust this value if needed
+        self.ui.model.setMinimumContentsLength(20)
 
         # Read settings
-        settings_dot_json = gaia_folder / "interface" / "settings.json"
-        with open(settings_dot_json, "r", encoding="utf-8") as file:
-            self.settings = json.load(file)
+        gaia_mode = os.environ.get("GAIA_MODE", "").strip()
+        self.log.info(f"GAIA_MODE: {gaia_mode}")
 
-        # Populate all models and update device list
-        for model in self.settings["models"]:
-            self.ui.model.addItem(model)
-        self.ui.model.setCurrentIndex(0)
-        self.update_device_list()
+        if gaia_mode == "NPU":
+            settings_file = "npu_settings.json"
+        elif gaia_mode == "HYBRID":
+            settings_file = "hybrid_settings.json"
+        elif gaia_mode == "GENERIC":
+            settings_file = "generic_settings.json"
+        else:
+            self.log.error(
+                f'Invalid GAIA_MODE: "{gaia_mode}", expected NPU, HYBRID, or GENERIC'
+            )
+            raise ValueError(
+                f'Invalid GAIA_MODE: "{gaia_mode}", expected NPU, HYBRID, or GENERIC'
+            )
 
-        # Populate available agents
-        self.update_available_agents()
+        self.log.info(f"Using settings file: {settings_file}")
 
-        # Connect buttons
-        self.ui.ask.clicked.connect(self.send_message)
-        self.ui.restart.clicked.connect(self.restart_conversation)
-        self.ui.stop.clicked.connect(self.stop_generation)
-        self.ui.model.currentIndexChanged.connect(self.update_device_list)
-        self.ui.model.currentIndexChanged.connect(self.deployment_changed)
-        self.ui.device.currentIndexChanged.connect(self.deployment_changed)
-        self.ui.agent.currentIndexChanged.connect(self.deployment_changed)
+        # Try to get the settings file from the installed package first
+        try:
+            gaia_folder = Path(str(importlib.resources.files("gaia")))
+            settings_dot_json = gaia_folder / "interface" / settings_file
+            self.log.info(
+                f"Trying to find settings file in installed package: {settings_dot_json}"
+            )
+            if not settings_dot_json.exists():
+                # If not found in installed package, try source directory
+                gaia_folder = Path(__file__).parent.parent
+                settings_dot_json = gaia_folder / "interface" / settings_file
+                self.log.info(
+                    f"Trying to find settings file in source directory: {settings_dot_json}"
+                )
+                if not settings_dot_json.exists():
+                    # If not found in source directory, try installation directory
+                    gaia_folder = (
+                        Path(os.environ.get("GAIA_INSTALL_DIR", "")) / "src" / "gaia"
+                    )
+                    settings_dot_json = gaia_folder / "interface" / settings_file
+                    self.log.info(
+                        f"Trying to find settings file in installation directory: {settings_dot_json}"
+                    )
+        except Exception:
+            # If that fails, try to get it from the source directory
+            gaia_folder = Path(__file__).parent.parent
+            settings_dot_json = gaia_folder / "interface" / settings_file
+            if not settings_dot_json.exists():
+                # If not found in source directory, try installation directory
+                gaia_folder = (
+                    Path(os.environ.get("GAIA_INSTALL_DIR", "")) / "src" / "gaia"
+                )
+                settings_dot_json = gaia_folder / "interface" / settings_file
+                self.log.info(
+                    f"Trying to find settings file in installation directory: {settings_dot_json}"
+                )
 
-        # Ensure that we are scrolling to the bottom every time the range
-        # of the card scroll area changes
-        self.ui.scrollArea.verticalScrollBar().rangeChanged.connect(
-            self.scrollToBottom,
-        )
+        # Error out if the settings file doesn't exist
+        if not settings_dot_json.exists():
+            error_msg = (
+                f"Critical error: {settings_file} not found in {gaia_folder}/interface"
+            )
+            self.log.error(error_msg)
+            QMessageBox.critical(
+                self,
+                "Settings Error",
+                f"Could not find {settings_file}. Please make sure the settings files are properly installed.\n\n"
+                f"GAIA_MODE is set to: {gaia_mode}\n\n"
+                "Try running one of:\n"
+                "  set_hybrid_mode.bat\n"
+                "  set_generic_mode.bat\n"
+                "  set_npu_mode.bat",
+            )
+            raise FileNotFoundError(error_msg)
 
-        # Keep track of spacers indexes to properly remove and add them back
-        self.top_spacer_index = self.ui.mainLayout.indexOf(self.ui.welcomeSpacerTop)
-        self.bottom_spacer_index = self.ui.mainLayout.indexOf(
-            self.ui.welcomeSpacerBottom
-        )
+        self.log.info(f"Loading settings from {settings_dot_json}")
 
-        # Install event filter to prompt text box
-        self.ui.prompt.installEventFilter(self)
+        try:
+            with open(settings_dot_json, "r", encoding="utf-8") as file:
+                self.settings = json.load(file)
 
-        # Hide/disable some of the components initially
-        self.ui.chat.setVisible(False)
-        if self.settings["hide_agents"]:
-            self.ui.agent.setVisible(False)
-        if self.settings["hide_agents"]:
-            self.ui.agent.setVisible(False)
-        if self.settings["hide_agents"]:
-            self.ui.agent.setVisible(False)
+            # Validate settings
+            if not self.validate_settings():
+                raise ValueError("Invalid settings configuration")
 
-        # Loading symbol
-        self.movie = QMovie(r":/img/loading.gif")
-        self.movie.setScaledSize(QSize(300, 300))
-        self.ui.loadingGif.setFixedSize(QSize(300, 25))
-        self.ui.loadingGif.setMovie(self.movie)
-        self.movie.start()
+            # Populate all models and update device list
+            for model in self.settings["models"]:
+                self.ui.model.addItem(model)
+            self.ui.model.setCurrentIndex(0)
+            self.update_device_list()
 
-        # Add version to loading label
-        self.ui.loadingLabel.setText(f"GAIA [{version_with_hash}]")
+            # Populate available agents
+            self.update_available_agents()
 
-        # Create setup thread
-        if self.server:
-            self.setupThread = QThread()
-            self.setupWorker = SetupLLM(self)
-            self.setupWorker.moveToThread(self.setupThread)
-            self.setupThread.started.connect(self.setupWorker.do_work)
-            self.setupWorker.finished.connect(self.setupThread.quit)
-            self.setupThread.start()
+            # Connect buttons
+            self.ui.ask.clicked.connect(self.send_message)
+            self.ui.restart.clicked.connect(self.restart_conversation)
+            self.ui.stop.clicked.connect(self.stop_generation)
+            self.ui.model.currentIndexChanged.connect(self.update_device_list)
+            self.ui.model.currentIndexChanged.connect(self.deployment_changed)
+            self.ui.device.currentIndexChanged.connect(self.deployment_changed)
+            self.ui.agent.currentIndexChanged.connect(self.deployment_changed)
 
-            # Create threads for interfacing with the agent
-            self.agentSendThread = QThread()
-            self.agentSendWorker = StreamToAgent(self)
-            self.agentSendWorker.moveToThread(self.agentSendThread)
-            self.agentSendThread.started.connect(self.agentSendWorker.do_work)
-            self.agentSendWorker.finished.connect(self.agentSendThread.quit)
+            # Ensure that we are scrolling to the bottom every time the range
+            # of the card scroll area changes
+            self.ui.scrollArea.verticalScrollBar().rangeChanged.connect(
+                self.scrollToBottom,
+            )
 
-        self.agentReceiveThread = QThread()
-        self.agentReceiveWorker = StreamFromAgent(self)
-        self.agentReceiveWorker.moveToThread(self.agentReceiveThread)
-        self.agentReceiveThread.started.connect(self.agentReceiveWorker.do_work)
-        self.agentReceiveWorker.add_card.connect(self.add_card)
-        self.agentReceiveWorker.update_card.connect(self.update_card)
-        self.agentReceiveThread.start()
+            # Keep track of spacers indexes to properly remove and add them back
+            self.top_spacer_index = self.ui.mainLayout.indexOf(self.ui.welcomeSpacerTop)
+            self.bottom_spacer_index = self.ui.mainLayout.indexOf(
+                self.ui.welcomeSpacerBottom
+            )
 
-        # Initialize stop button as disabled
-        self.ui.stop.setEnabled(False)
+            # Install event filter to prompt text box
+            self.ui.prompt.installEventFilter(self)
 
-        # Connect cancel button to setupWorker's cancel method
-        self.ui.cancel.clicked.connect(self.cancel_loading)
-        if hasattr(self, "setupWorker"):
-            self.setupWorker.cancelled.connect(self.terminate_servers)
+            # Hide/disable some of the components initially
+            self.ui.chat.setVisible(False)
+            if self.settings["hide_agents"]:
+                self.ui.agent.setVisible(False)
+
+            # Loading symbol
+            self.movie = QMovie(r":/img/loading.gif")
+            self.movie.setScaledSize(QSize(300, 300))
+            self.ui.loadingGif.setFixedSize(QSize(300, 25))
+            self.ui.loadingGif.setMovie(self.movie)
+            self.movie.start()
+
+            # Add version to loading label
+            self.ui.loadingLabel.setText(f"GAIA {version}")
+
+            # Create setup thread only after settings are loaded and validated
+            if self.server:
+                self.setupThread = QThread()
+                self.setupWorker = SetupLLM(self)
+                self.setupWorker.moveToThread(self.setupThread)
+                self.setupThread.started.connect(self.setupWorker.do_work)
+                self.setupWorker.finished.connect(self.setupThread.quit)
+                # Connect settings_loaded signal to start setup thread
+                self.settings_loaded.connect(self.setupThread.start)
+
+                # Create threads for interfacing with the agent
+                self.agentSendThread = QThread()
+                self.agentSendWorker = StreamToAgent(self)
+                self.agentSendWorker.moveToThread(self.agentSendThread)
+                self.agentSendThread.started.connect(self.agentSendWorker.do_work)
+                self.agentSendWorker.finished.connect(self.agentSendThread.quit)
+
+            self.agentReceiveThread = QThread()
+            self.agentReceiveWorker = StreamFromAgent(self)
+            self.agentReceiveWorker.moveToThread(self.agentReceiveThread)
+            self.agentReceiveThread.started.connect(self.agentReceiveWorker.do_work)
+            self.agentReceiveWorker.add_card.connect(self.add_card)
+            self.agentReceiveWorker.update_card.connect(self.update_card)
+            self.agentReceiveThread.start()
+
+            # Initialize stop button as disabled
+            self.ui.stop.setEnabled(False)
+
+            # Connect cancel button to setupWorker's cancel method
+            self.ui.cancel.clicked.connect(self.cancel_loading)
+            if hasattr(self, "setupWorker"):
+                self.setupWorker.cancelled.connect(self.terminate_servers)
+
+            # Only emit settings_loaded signal after everything is initialized
+            self.settings_loaded.emit()
+
+        except Exception as e:
+            self.log.error(f"Failed to initialize GAIA: {str(e)}")
+            raise
+
+    def validate_settings(self):
+        """Validate that settings are properly configured."""
+        if not self.settings:
+            self.log.error("Settings not loaded")
+            return False
+
+        # Check if models exist and have required fields
+        if "models" not in self.settings:
+            self.log.error("No models found in settings")
+            return False
+
+        validation_errors = []
+        for model_name, model_settings in self.settings["models"].items():
+            model_errors = []
+
+            if "backend" not in model_settings:
+                model_errors.append("missing backend configuration")
+            if "checkpoint" not in model_settings:
+                model_errors.append("missing checkpoint configuration")
+            if "device" not in model_settings:
+                model_errors.append("missing device configuration")
+            elif not isinstance(model_settings["device"], dict):
+                model_errors.append("device configuration must be a dictionary")
+
+            if model_errors:
+                validation_errors.append(
+                    f"Model '{model_name}': {', '.join(model_errors)}"
+                )
+
+        if validation_errors:
+            self.log.error(
+                "Settings validation failed:\n" + "\n".join(validation_errors)
+            )
+            return False
+
+        return True
 
     def _format_value(self, val):
         if isinstance(val, float):
@@ -1683,7 +1861,7 @@ class ModelSwitchWorker(QThread):
 class ServerCheckWorker(QThread):
     server_ready = Signal(bool)
 
-    def __init__(self, host, port, endpoint="/health", timeout=3000):
+    def __init__(self, host, port, endpoint="/health", timeout=None):
         super().__init__()
         self.host = host
         self.port = port
@@ -1708,17 +1886,21 @@ class ServerCheckWorker(QThread):
         start_time = time.time()
         attempts = 0
 
-        while time.time() - start_time < self.timeout and not self._is_cancelled:
+        # Modified to wait indefinitely (or until cancelled) for server to be available
+        while not self._is_cancelled:
             try:
                 if self.is_server_available(clean_host, self.port, self.endpoint):
-                    self.log.info(f"Server available after {attempts} attempts")
+                    elapsed_time = time.time() - start_time
+                    self.log.info(
+                        f"Server available at {self.host}:{self.port}{self.endpoint} after {attempts} attempts (elapsed: {elapsed_time:.1f}s)"
+                    )
                     self.server_ready.emit(True)
                     return
 
                 attempts += 1
                 elapsed_time = time.time() - start_time
                 self.log.info(
-                    f"Waiting for server... (Attempt {attempts}, Elapsed time: {elapsed_time:.1f}s)"
+                    f"Waiting for server at {self.host}:{self.port}{self.endpoint}... (Attempt {attempts}, Elapsed time: {elapsed_time:.1f}s)"
                 )
 
                 # Sleep in small chunks to remain responsive to cancellation
@@ -1735,6 +1917,7 @@ class ServerCheckWorker(QThread):
                     self.server_ready.emit(False)
                     return
 
+        self.log.info("Server check cancelled")
         self.server_ready.emit(False)
 
     def is_server_available(self, host, port, endpoint="/health"):
@@ -1762,6 +1945,14 @@ def main():
             "Command line arguments are not supported. Please use the gaia-cli command line tool instead. If you need to change any settings, you can modify settings.json."
         )
 
+    # Check GAIA_MODE before initializing application
+    gaia_mode = check_gaia_mode()
+    if not gaia_mode:
+        sys.exit(1)
+
+    # Log the GAIA_MODE for debugging
+    print(f"Using GAIA_MODE: {gaia_mode}")
+
     multiprocessing.freeze_support()
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(r":/img\gaia.ico"))
@@ -1771,5 +1962,4 @@ def main():
 
 
 if __name__ == "__main__":
-
     main()

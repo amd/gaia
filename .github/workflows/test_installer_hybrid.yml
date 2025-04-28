@@ -1,7 +1,7 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-name: GAIA NPU/GPU Hybrid Installer Test
+name: GAIA Hybrid Installer Test
 
 on:
   push:
@@ -11,42 +11,70 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
+env:
+  GAIA_INSTALL_PATH: "C:\\Users\\runneradmin\\AppData\\Local"
+  GAIA_FULL_PATH: "C:\\Users\\runneradmin\\AppData\\Local\\GAIA"
+
 jobs:
+  build-installer:
+    uses: ./.github/workflows/build_installer.yml
+
   gaia-hybrid-installer-test:
     runs-on: windows-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    needs: build-installer
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install NSIS
+      - name: Log build information
+        shell: powershell
         run: |
-          # Download NSIS installer
-          curl -L -o nsis.exe https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10-setup.exe
-          
-          # Install NSIS
-          Start-Process nsis.exe -ArgumentList '/S' -Wait
+          Write-Host "Using installer version: ${{ needs.build-installer.outputs.VERSION }}"
+          Write-Host "Built from commit: ${{ needs.build-installer.outputs.COMMIT_HASH }}"
+          Write-Host "Expected installer hash: ${{ needs.build-installer.outputs.INSTALLER_HASH }}"
 
-      - name: Verify NSIS installation
+      - name: Download GAIA Installer
+        uses: actions/download-artifact@v4
+        with:
+          name: gaia-windows-installer-${{ needs.build-installer.outputs.VERSION }}-${{ needs.build-installer.outputs.COMMIT_HASH }}
+          path: installer
+
+      - name: Verify installer hash
+        shell: powershell
         run: |
-          # Check if NSIS is installed
-          & 'C:\Program Files (x86)\NSIS\makensis.exe' /VERSION
+          $expectedHash = "${{ needs.build-installer.outputs.INSTALLER_HASH }}"
+          $expectedCommitHash = "${{ needs.build-installer.outputs.COMMIT_HASH }}"
+          $filePath = "installer\gaia-windows-setup.exe"
+          $actualHash = (Get-FileHash -Path $filePath -Algorithm SHA256).Hash
 
-      - name: Build the GAIA installer for Hybrid
-        run: |
-          cd installer
-          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DMODE=HYBRID 'Installer.nsi'
+          Write-Host "Expected hash: $expectedHash"
+          Write-Host "Actual hash: $actualHash"
+          Write-Host "Commit hash: $expectedCommitHash"
 
-          if (Test-Path "GAIA_Hybrid_Installer.exe") {
-            Write-Host "GAIA_Hybrid_Installer.exe has been created successfully."
-          } else {
-            Write-Host "GAIA_Hybrid_Installer.exe was not found."
+          if ($expectedHash -ne $actualHash) {
+            Write-Host "Error: Hash mismatch! The downloaded installer does not match the built installer."
+            Write-Host "This indicates that the wrong installer was downloaded or the installer was modified."
             exit 1
+          } else {
+            Write-Host "Hash verification successful: The downloaded installer matches the built installer."
           }
 
-      - name: Upload Installer
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: GaiaHybridInstaller
-          path: |
-            installer\GAIA_Hybrid_Installer.exe
+      - name: Test installer with Hybrid mode
+        run: |
+          cd installer
+          .\RunInstaller.ps1 -MODE HYBRID -INSTALL_PATH "${{ env.GAIA_INSTALL_PATH }}"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Installer failed with exit code $LASTEXITCODE"
+          }
+
+      # - name: Ensure GAIA can open properly
+      #   timeout-minutes: 15
+      #   env:
+      #     HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+      #   uses: ./.github/actions/ui-testing
+      #   with:
+      #     huggingface_access_token: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+      #     install_from_source: "false"
+      #     gaia_mode: HYBRID
+      #     username: runneradmin
+      #     install_dir: "${{ env.GAIA_FULL_PATH }}"

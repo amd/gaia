@@ -1,12 +1,11 @@
 // Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
-
 {
     "version": "0.2.0",
     "configurations": [
         {
             "name": "UI Debug",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "module": "src.gaia.interface.widget",
             "args": [],
@@ -18,14 +17,47 @@
             "justMyCode": false,
             "subProcess": true,
             "stopOnEntry": false,
-            "debugOptions": ["RedirectOutput"]
+        },
+        {
+            "name": "Chat Debug",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "gaia.cli",
+            "args": ["chat"],
+            "cwd": "${workspaceFolder}/src/gaia",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false,
+        },
+        {
+            "name": "Talk Debug",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "gaia.cli",
+            "args": ["talk"],
+            "cwd": "${workspaceFolder}/src/gaia",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false,
         },
         {
             "name": "CLI Server Debug",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "module": "gaia.cli",
-            "args": ["start"],
+            "args": [
+                "start",
+                "--background",
+                "none"
+            ],
             "cwd": "${workspaceFolder}",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
@@ -34,14 +66,15 @@
             "justMyCode": false,
             "subProcess": true,
             "stopOnEntry": false,
-            "debugOptions": ["RedirectOutput"],
         },
         {
             "name": "CLI Client Debug",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "module": "gaia.cli",
-            "args": ["prompt", "hi"],
+            "args": [
+                "chat"
+            ],
             "cwd": "${workspaceFolder}",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
@@ -50,18 +83,18 @@
             "justMyCode": false,
             "subProcess": true,
             "stopOnEntry": false,
-            "debugOptions": ["RedirectOutput"],
         },
         {
             "name": "GAIA Pytest Debug",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "module": "pytest",
             "args": [
                 "tests/test_gaia.py",
                 "-v",
                 "-s",
-                "-k", "test_model_sweep[llama3.2:1b-Who"
+                "-k",
+                "test_model_sweep[llama3.2:1b-Who"
             ],
             "cwd": "${workspaceFolder}",
             "env": {
@@ -73,12 +106,7 @@
             "console": "integratedTerminal",
             "justMyCode": false,
             "subProcess": true,
-            "stopOnEntry": false,
-            "debugOptions": ["RedirectOutput"],
-            "debugPython": {
-                "subProcess": true
-            }
+            "stopOnEntry": false
         }
-
     ]
 }

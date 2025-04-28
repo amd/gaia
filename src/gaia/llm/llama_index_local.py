@@ -27,6 +27,8 @@ class LocalLLM(CustomLLM):
     model_name: str = "custom"
     cli_mode: bool = False
 
+    model_config = {"protected_namespaces": ()}
+
     async def achat(
         self,  # pylint: disable=W0613
         messages: Any,

@@ -6,14 +6,33 @@ GAIA (Generative AI Acceleration Infrastructure & Applications) provides a comma
 
 1. Make sure to follow the [Getting Started Guide](../README.md#getting-started-guide) to install the `gaia-cli` tool.
 
+1. Set the required GAIA_MODE environment variable by running one of the following scripts:
+   ```bash
+   # For Ryzen AI systems with NPU + iGPU:
+   set_hybrid_mode.bat
+
+   # For systems using DirectML:
+   set_generic_mode.bat
+
+   # For NPU-only configurations:
+   set_npu_mode.bat
+   ```
+   This environment variable is required for proper configuration of GAIA. When set, it automatically configures the optimal settings for your hardware when starting servers.
+
 1. Once installed, double click on the desktop icon **GAIA-CLI** to launch the command-line shell with the GAIA environment activated.
 
 1. Start the servers with default settings:
    ```bash
    gaia-cli start
    ```
-   For optimal performance, use Llama 3.2 1B Instruct model in iGPU/NPU-hybrid mode:
+   The optimal configuration for your hardware will be automatically applied based on your GAIA_MODE setting.
+
+   You can also manually specify parameters or use shortcuts if needed:
    ```bash
+   # Using the hybrid shortcut flag
+   gaia-cli start --hybrid
+
+   # Or explicitly setting all parameters
    gaia-cli start --model "amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid" --backend "oga" --device "hybrid" --dtype "int4"
    ```
 
@@ -88,14 +107,25 @@ Available options:
 - `--dtype`: Set model precision ["float32", "float16", "bfloat16", "int8", "int4"] (default: "int4")
 - `--max-new-tokens`: Maximum response length (default: 512)
 - `--background`: Launch mode ["terminal", "silent", "none"] (default: "silent")
+- `--hybrid`: Shortcut for optimal hybrid mode configuration (sets model, backend, device, and dtype)
+- `--generic`: Shortcut for optimal generic mode configuration (sets model, backend, device, and dtype)
 - `--stats`: Show performance statistics after generation
 - `--host`: Host address for the Agent server (default: "127.0.0.1")
 - `--port`: Port for the Agent server (default: 8001)
 - `--logging-level`: Set logging verbosity ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] (default: "INFO")
 
+Note: When the GAIA_MODE environment variable is set, optimal configuration parameters are automatically applied based on the mode (HYBRID, GENERIC, or NPU). Command-line arguments will override these automatic settings.
+
 Common usage examples:
 ```bash
-# Use Llama 3.2 3B model
+# Start with default settings (uses GAIA_MODE environment variable)
+gaia-cli start
+
+# Use shortcut flags (override GAIA_MODE settings)
+gaia-cli start --hybrid
+gaia-cli start --generic
+
+# Use Llama 3.2 3B model (overrides default model)
 gaia-cli start --model llama3.2:3b
 
 # Launch servers in a separate terminal window
@@ -263,6 +293,35 @@ This configuration file tracks:
 When running client commands like `gaia-cli chat`, the CLI looks for the `.gaia_servers.json` file in the current directory to establish connections. This means:
 
 - All commands should be run from the same directory where `gaia-cli start` was executed
+
+## Troubleshooting
+
+### Environment Variable Issues
+
+If you encounter this error message:
+```
+ERROR: GAIA_MODE environment variable is not set.
+Please run one of the following scripts before using gaia-cli:
+  set_hybrid_mode.bat
+  set_generic_mode.bat
+  set_npu_mode.bat
+```
+
+You need to set the GAIA_MODE environment variable by running one of the provided batch files. This variable configures GAIA for your specific hardware:
+
+- `set_hybrid_mode.bat` - For Ryzen AI systems with NPU + iGPU capabilities
+- `set_generic_mode.bat` - For systems using standard DirectML acceleration
+- `set_npu_mode.bat` - For NPU-only configurations
+
+These scripts set the variable in three ways:
+1. For the current session
+2. Permanently using the Windows registry
+3. In your conda environment's activation script
+
+If the issue persists after running one of these scripts:
+1. Try restarting your command prompt or PowerShell window
+2. Verify the variable is set with `echo %GAIA_MODE%`
+3. Make sure you're using the same conda environment where the script was run
 
 # License
 

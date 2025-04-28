@@ -2,5 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 {
-    "git.ignoreLimitWarning": true
+    "python.testing.pytestEnabled": true,
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestArgs": [
+        "tests/unit"
+    ]
 }

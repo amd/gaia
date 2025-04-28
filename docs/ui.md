@@ -1,6 +1,28 @@
-# UI Development Guide
+# GAIA UI Documentation
 
-This guide explains how to modify and enhance the GAIA user interface using Qt Designer. Qt Designer is a visual design tool that allows you to create and edit graphical user interfaces without writing code directly. This guide covers:
+## Table of Contents
+- [UI Overview](#ui-overview)
+- [Qt Interface](#qt-interface)
+  - [Prerequisites](#prerequisites)
+  - [Using Qt Designer](#using-qt-designer)
+    - [Launching Qt Designer](#launching-qt-designer)
+    - [Editing the UI](#editing-the-ui)
+    - [Working with Assets](#working-with-assets)
+  - [Compiling Changes](#compiling-changes)
+  - [Troubleshooting](#troubleshooting)
+- [RAUX Interface](#raux-interface)
+
+# UI Overview
+
+GAIA provides two user interface experiences:
+1. The Qt-based interface - A robust desktop application interface built with PyQt6
+2. RAUX [beta] - A modern web-based interface built on Open-WebUI
+
+⚠️ **NOTE**: RAUX is currently disabled pending review, will be available in v0.8.4.
+
+# Qt Interface
+
+This guide explains how to modify and enhance the GAIA Qt user interface using Qt Designer. Qt Designer is a visual design tool that allows you to create and edit graphical user interfaces without writing code directly. This guide covers:
 
 - Setting up the UI development environment
 - Using Qt Designer to modify the interface
@@ -68,6 +90,12 @@ After making changes, you need to compile the updated files:
 - If Qt Designer doesn't launch, verify your Python environment is activated
 - If resources aren't showing up, ensure you've recompiled both the UI and resource files
 - For import errors, check that the resource path replacement was done correctly
+
+# RAUX Interface
+
+RAUX is a modern web-based interface for GAIA, built as a fork of Open-WebUI. It provides an extensible, feature-rich, and user-friendly self-hosted AI platform. It is currently in beta and is being actively integrated with new features and improvements rolling out regularly. While it offers a modern web-based experience, please note that it's still under development and some features may be experimental.
+
+For more information about RAUX, including setup instructions and feature documentation, please refer to the [RAUX GitHub repository README](https://github.com/aigdat/raux/blob/main/README.md).
 
 # License
 

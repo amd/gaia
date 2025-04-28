@@ -190,6 +190,8 @@ class Agent:
 
     def print_ui(self, input_str: str):
         self.log.debug(input_str)
+        if input_str is None:
+            return
         input_lst = input_str.split(" ")
         input_len = len(input_lst)
         for i, word in enumerate(input_lst):
@@ -258,7 +260,12 @@ class Agent:
 
 
 def launch_agent_server(
-    model, agent_name="Chaty", host="127.0.0.1", port=8001, cli_mode=False
+    model,
+    agent_name="Chaty",
+    host="127.0.0.1",
+    port=8001,
+    cli_mode=False,
+    input_file=None,
 ):
     try:
         # Add assertion to check if agent_name exists
@@ -270,7 +277,19 @@ def launch_agent_server(
 
         agent_module = __import__(agent_path, fromlist=["MyAgent"])
         MyAgent = getattr(agent_module, "MyAgent")
-        agent = MyAgent(model=model, host=host, port=port, cli_mode=cli_mode)
+
+        # Pass input_file to the agent if it's a RAG agent
+        if agent_name.lower() == "rag":
+            agent = MyAgent(
+                model=model,
+                host=host,
+                port=port,
+                cli_mode=cli_mode,
+                input_file=input_file,
+            )
+        else:
+            agent = MyAgent(model=model, host=host, port=port, cli_mode=cli_mode)
+
         agent.run()
         return agent
     except Exception as e:

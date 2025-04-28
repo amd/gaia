@@ -1,9 +1,9 @@
 # <img src="src/gaia/interface/img/gaia.ico" alt="GAIA Logo" width="64" height="64" style="vertical-align: middle;"> Introducing GAIA by AMD: Generative AI Is Awesome!
 
-[![GAIA Hybrid Installer Test](https://github.com/amd/gaia/actions/workflows/test_installer_hybrid.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our tests")
-[![GAIA Generic Installer Test](https://github.com/amd/gaia/actions/workflows/test_installer.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our tests")
-[![GAIA CLI Tests](https://github.com/amd/gaia/actions/workflows/test_gaia_cli.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our tests")
-[![GAIA UI Tests](https://github.com/amd/gaia/actions/workflows/test_gaia_ui.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our tests")
+[![GAIA Build Installer](https://github.com/amd/gaia/actions/workflows/build_installer.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our build")
+[![GAIA Hybrid Installer Test](https://github.com/amd/gaia/actions/workflows/test_installer_hybrid.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our hybrid tests")
+[![GAIA Generic Installer Test](https://github.com/amd/gaia/actions/workflows/test_installer_generic.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our generic tests")
+[![GAIA CLI Tests](https://github.com/amd/gaia/actions/workflows/test_gaia_cli.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our cli tests")
 [![Latest Release](https://img.shields.io/github/v/release/amd/gaia?include_prereleases)](https://github.com/amd/gaia/releases/latest "Download the latest release")
 [![OS - Windows](https://img.shields.io/badge/OS-windows-blue)](https://github.com/amd/gaia/blob/main/docs/install.md "Check out our instructions")
 [![Made with Python](https://img.shields.io/badge/Python-3.10-blue?logo=python&logoColor=white)](https://github.com/amd/gaia/blob/main/docs/install.md "Check out our instructions")
@@ -11,8 +11,10 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://makeapullrequest.com)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![GitHub issues](https://img.shields.io/github/issues/amd/gaia)](https://github.com/amd/gaia/issues)
+[![GitHub downloads](https://img.shields.io/github/downloads/amd/gaia/total.svg)](https://tooomm.github.io/github-release-stats/?username=aigdat&repository=gaia)
+[![Star History Chart](https://img.shields.io/badge/Star%20History-View-brightgreen)](https://star-history.com/#amd/gaia)
 
-⚠️ **IMPORTANT**: GAIA's Hybrid mode **only supports AMD Ryzen AI 300 series processors**. For older AMD processors or non-AMD systems, please use the Generic installer. For more details, see [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
+<img src="https://img.youtube.com/vi/_PORHv_-atI/maxresdefault.jpg" style="display: block; margin: auto;" />
 
 **GAIA is an open-source solution designed for the quick setup and execution of generative AI applications on local PC hardware.** It enables fast and efficient execution of LLM-based applications using a hybrid hardware approach that combines the AMD Neural Processing Unit (NPU) and Integrated Graphics Processing Unit (iGPU) in the Ryzen-AI PC. GAIA provides the following key features:
 
@@ -23,11 +25,16 @@
 - ⚡ **Optimized Performance**: Leverages the AMD NPU and iGPU for hybrid acceleration to get fast and efficient AI processing
 - 🖥️ **Easy-to-Use Interface**: Provides both a command-line interface (CLI) and a graphical user interface (GUI) option for easy interaction with models and agents
 - 🔧 **Extensible Architecture**: Easily build and integrate your own agents and use cases
-- 🔄 **Dual Mode**: GAIA comes in two flavors:
+- 🔄 **Multiple Installation Modes**: GAIA can be installed in three modes:
    - **Hybrid Mode**: Optimized for Ryzen AI PCs, combining AMD Neural Processing Unit (NPU) and Integrated Graphics Processing Unit (iGPU) for maximum performance
+   - **NPU Mode**: Optimized for power efficiency, using only the NPU (coming soo)
    - **Generic Mode**: Compatible with any Windows PC, using Ollama as the backend
 
-For more details, see the [Frequently Asked Questions](docs/faq.md).
+For more details, see our [GAIA Blog Article](https://www.amd.com/en/developer/resources/technical-articles/gaia-an-open-source-project-from-amd-for-running-local-llms-on-ryzen-ai.html) or [Frequently Asked Questions](docs/faq.md).
+For Ryzen AI LLM app development similar to GAIA, see [this developer guide](https://ryzenai.docs.amd.com/en/latest/llm/overview.html).
+
+⚠️ **IMPORTANT**: GAIA's Hybrid mode **only supports AMD Ryzen AI HX 300 series or newer processors**. For older AMD processors or non-AMD systems, the installer will install the generic mode with ollama. For more details, see [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
+
 
 ## Contents:
 
@@ -48,12 +55,14 @@ For more details, see the [Frequently Asked Questions](docs/faq.md).
 
 # Getting Started Guide
 
-The quickest way to get started with GAIA is by using one of the provided installers. There are two options available:
+The quickest way to get started with GAIA is by using our unified installer that supports all modes:
 
-1. **GAIA_Hybrid_Installer.exe**: For running agents with the Hybrid (NPU+iGPU) execution on Ryzen AI PCs. This is the recommended installer that offers the best performance. **Requires an AMD Ryzen AI 300 series processor**.
-1. **GAIA_Installer.exe**: For running agents on non-Ryzen AI 300-series PCs, this uses Ollama as the backend.
+**gaia-windows-setup.exe**: A single installer that supports all three installation modes:
+- **Hybrid Mode**: Offers best performance with NPU+iGPU on Ryzen AI processors, recommended option.
+- **NPU Mode**: Optimized for power efficiency on Ryzen AI processors *(coming soon)*
+- **Generic Mode**: Works on any Windows PC, using Ollama as the backend
 
-Each installer includes both a CLI tool and a GUI. The installation process typically takes about 5-10 minutes, depending on your Wi-Fi connection, and provides everything you need to start working with LLMs.
+The installer includes both a CLI tool and a GUI. The installation process typically takes about 5-10 minutes, depending on your Wi-Fi connection, and provides everything you need to start working with LLMs.
 
 ⚠️ **NOTE**: When running GAIA using the Hybrid mode, please make sure to disable any discrete third-party GPUs in Device Manager.
 
@@ -62,27 +71,42 @@ Each installer includes both a CLI tool and a GUI. The installation process typi
 ![image](./data/img/gaia-setup.png)
 
 To install the GAIA application, please follow these steps:
-1. Make sure you meet the minimum [system requirements](#system-requirements) - **For Hybrid mode, you must have an AMD Ryzen AI 300-series processor**
-1. Download the [latest release](https://github.com/amd/gaia/releases) of the GAIA installers from the "Assets" section:
-   ![image](./data/img/gaia-installer.png)
-   1. If you have a Ryzen AI PC, choose the Hybrid installer, otherwise choose the generic installer.
-
+1. Make sure you meet the minimum [system requirements](#system-requirements) - **For Hybrid mode, you must have AMD Ryzen AI 9 HX 300 or newer processor**
+1. Download the [latest release](https://github.com/amd/gaia/releases) of the GAIA installer from the "Assets" section
 1. Unzip the downloaded file and run the installer by double-clicking the .exe file.
 
    ⚠️ **NOTE**: If you get a Windows Security warning, you can verify the application by clicking *"More info"* and then *"Run anyway"*. This warning appears because the application is not digitally signed.
 
    ⚠️ **NOTE**: The installer will attempt to write to the same directory by default and may overwrite a previous installation of GAIA. Change the target directory if you want to avoid this.
 
-1. Follow the on-screen instructions to complete the installation. You may be prompted to delete the existing installation of GAIA if a previous version was installed.
-   1. The process will take about 5-10 minutes depending on your Wi-Fi connection and includes everything needed to get up and running with LLMs on Ryzen AI.
+1. Follow the on-screen instructions to complete the installation:
+   1. Choose your installation mode based on your hardware:
+      - **Hybrid Mode**: Best performance, requires Ryzen AI processor
+      - **NPU Mode**: Power-efficient, requires Ryzen AI processor *(coming soon)*
+      - **Generic Mode**: Compatible with any PC
+   1. The installer will automatically detect your CPU and only enable compatible modes
+   1. The process takes about 5-10 minutes depending on your Wi-Fi connection
 
 1. Once installation is complete, two desktop icons will be created.
    1. GAIA-CLI - Double click this icon to launch the CLI tool.
    1. GAIA-GUI - Double click this icon to launch the GUI tool.
 
+### Command-line Installation
+
+If you prefer to use the command-line or for CI/CD environments, you can run the installer with parameters:
+
+```
+gaia-windows-setup.exe /S /MODE=HYBRID
+```
+
+Available parameters:
+- `/S` - Silent installation (no UI)
+- `/MODE=X` - Set installation mode (GENERIC, NPU, or HYBRID)
+- `/D=<path>` - Set installation directory (must be last parameter)
+
 ## Uninstallation Steps
 
-⚠️ **NOTE**: There is currently no automatic uninstaller available for GAIA, but one is coming soon. For now, you must manually remove GAIA from your system.
+⚠️ **NOTE**: There is currently no automatic uninstaller available for GAIA, but one is coming soon. For now, you must manually remove GAIA from your system. Note that newer installations of GAIA will automatically remove older versions.
 
 To completely uninstall GAIA from your system, follow these steps:
 
@@ -113,7 +137,7 @@ To quickly get started with GAIA via the command line, you can use the GAIA CLI 
 
 To get started building from source, please follow the latest instructions [here](./docs/dev.md). These instructions will setup the [Onnx Runtime GenAI](https://github.com/microsoft/onnxruntime-genai) through the [Lemonade Web Server](https://github.com/onnx/turnkeyml/blob/main/docs/lemonade/getting_started.md) tool targeting the Ryzen AI SoC.
 
-⚠️ **NOTE**: You may need to install Ollama from [here](https://ollama.com/download) if you plan to use the GAIA generic installer and run models with the Ollama backend.
+⚠️ **NOTE**: You may need to install Ollama from [here](https://ollama.com/download) if you plan to use GAIA in Generic mode and run models with the Ollama backend.
 
 # Features
 
@@ -129,7 +153,7 @@ The best way to contribute is by adding a new agent that covers a unique use-cas
 
 # System Requirements
 
-GAIA with Ryzen AI Hybrid NPU/iGPU execution has been tested on the system detailed below. Any system that has an AMD Ryzen AI 300-series processor with NPU Driver 32.0.203.237 on Windows 11 or newer should work. For more details on what is supported, see [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
+GAIA with Ryzen AI Hybrid NPU/iGPU execution has been tested on the following system below. Any system that has the AMD Ryzen AI 9 300 series processor with NPU Driver 32.0.203.237 on Windows 11 or newer with minimum of 16GB of main memory should work. For more details on what is supported, see [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
 
 ⚠️ **NOTE**: GAIA works on Windows 11 Pro/Home and does not support macOS or Linux at this time.
 

@@ -1,6 +1,7 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
+import os
 import sys
 import argparse
 import time
@@ -14,6 +15,7 @@ import multiprocessing
 import subprocess
 from pathlib import Path
 from pprint import pprint
+
 import requests
 import psutil
 import aiohttp
@@ -21,18 +23,9 @@ from aiohttp import ClientTimeout
 from requests.exceptions import RequestException
 
 from gaia.logger import get_logger
-from gaia.llm.server import launch_llm_server
+from gaia.llm.lemonade_server import launch_lemonade_server
 from gaia.agents.agent import launch_agent_server
-from gaia.version import version_with_hash
-
-
-# Set debug level for the logger
-logging.getLogger("gaia").setLevel(logging.INFO)
-
-# Add the parent directory to sys.path to import gaia modules
-current_dir = Path(__file__).resolve().parent
-parent_dir = current_dir.parent.parent.parent
-sys.path.append(str(parent_dir))
+from gaia.version import version
 
 try:
     from gaia.llm.ollama_server import (
@@ -45,6 +38,15 @@ except ImportError:
     OLLAMA_AVAILABLE = False
     launch_ollama_client_server = None
     launch_ollama_model_server = None
+
+
+# Set debug level for the logger
+logging.getLogger("gaia").setLevel(logging.INFO)
+
+# Add the parent directory to sys.path to import gaia modules
+current_dir = Path(__file__).resolve().parent
+parent_dir = current_dir.parent.parent.parent
+sys.path.append(str(parent_dir))
 
 
 class GaiaCliClient:
@@ -67,6 +69,7 @@ class GaiaCliClient:
         show_stats=False,
         enable_tts=True,
         logging_level="INFO",
+        input_file=None,
     ):
         self.log = self.__class__.log  # Use the class-level logger for instances
         # Set the logging level for this instance's logger
@@ -74,6 +77,7 @@ class GaiaCliClient:
 
         # Add is_speaking attribute initialization
         self.is_speaking = False
+        self.tts_thread = None  # Initialize tts_thread as None
 
         self.agent_name = agent_name
         self.enable_agent_server = enable_agent_server
@@ -102,6 +106,7 @@ class GaiaCliClient:
         self.show_stats = show_stats
         self.enable_tts = enable_tts
         self.tts = None
+        self.input_file = input_file
 
         self.log.info("Gaia CLI client initialized.")
         self.log.debug(
@@ -113,7 +118,7 @@ class GaiaCliClient:
         )
 
     def start(self):
-        self.log.info(f"Starting GAIA [{version_with_hash}]")
+        self.log.info(f"Starting GAIA {version}")
         self.log.info("Checking ports availability...")
         # Check if required ports are available
         ports_to_check = [
@@ -183,32 +188,52 @@ class GaiaCliClient:
             self.stop()  # Clean up any started processes
             raise RuntimeError(f"Failed to start servers: {str(e)}")
 
-    def wait_for_servers(
-        self, model_download_timeout=3600, server_ready_timeout=120, check_interval=5
-    ):
+    def wait_for_servers(self, server_ready_timeout=120, check_interval=5):
+        """Wait for servers to be ready with extended timeout for RAG index building"""
         self.log.info("Waiting for model downloads and servers to be ready...")
 
         # First, wait for model downloads to complete
         start_time = time.time()
         time.sleep(10)
-        while time.time() - start_time < model_download_timeout:
+        # Modified to wait indefinitely for downloads to complete
+        while True:
             if not self.check_models_downloading():
                 self.log.info("Model downloads completed.")
                 break
-            self.log.info("Models are still downloading. Continuing to wait...")
+            elapsed_time = int(time.time() - start_time)
+            self.log.info(
+                f"Models are still downloading (elapsed: {elapsed_time}s). Continuing to wait..."
+            )
             time.sleep(check_interval)
-        else:
-            error_message = f"Model download did not complete within {model_download_timeout} seconds."
-            self.log.error(error_message)
-            raise TimeoutError(error_message)
 
         # Then, check for server readiness
         start_time = time.time()
+        last_status_time = 0
+        status_interval = 10  # Print status every 10 seconds
+
+        # Use longer timeout for RAG agents
+        if self.agent_name.lower() == "rag":
+            self.log.info(
+                "RAG agent detected - using extended timeout for index building..."
+            )
+            server_ready_timeout = 1800  # 30 minutes for RAG
+
         while time.time() - start_time < server_ready_timeout:
+            current_time = time.time()
+
             if self.check_servers_ready():
                 self.log.info("All servers are ready.")
                 return
-            self.log.info("Servers are not ready yet. Continuing to wait...")
+
+            # Print status update periodically
+            if current_time - last_status_time >= status_interval:
+                elapsed = int(current_time - start_time)
+                remaining = server_ready_timeout - elapsed
+                self.log.info(
+                    f"Waiting for servers... {elapsed}s elapsed, {remaining}s remaining"
+                )
+                last_status_time = current_time
+
             time.sleep(check_interval)
 
         error_message = (
@@ -261,6 +286,7 @@ class GaiaCliClient:
                         f"{server_name} not ready. Status code: {response.status_code}"
                     )
                     return False
+
             except RequestException as e:
                 self.log.warning(f"Failed to connect to {server_name}: {str(e)}")
                 return False
@@ -299,6 +325,7 @@ class GaiaCliClient:
             "device": self.device,
             "dtype": self.dtype,
             "server_pids": self.server_pids,
+            "input_file": self.input_file,  # Save input file info
         }
         with open(".gaia_servers.json", "w", encoding="utf-8") as f:
             json.dump(server_info, f)
@@ -306,15 +333,24 @@ class GaiaCliClient:
     def start_agent_server(self):
         try:
             self.log.info(f"Starting {self.agent_name} server...")
+            kwargs = {
+                "agent_name": self.agent_name,
+                "host": self.host,
+                "port": self.port,
+                "model": self.model,
+                "cli_mode": self.cli_mode,
+            }
+
+            # Add input_file for RAG agent
+            if self.agent_name.lower() == "rag" and self.input_file:
+                kwargs["input_file"] = self.input_file
+                self.log.info(
+                    f"Initializing RAG agent with input file: {self.input_file}"
+                )
+
             self.agent_server = multiprocessing.Process(
                 target=launch_agent_server,
-                kwargs={
-                    "agent_name": self.agent_name,
-                    "host": self.host,
-                    "port": self.port,
-                    "model": self.model,
-                    "cli_mode": self.cli_mode,
-                },
+                kwargs=kwargs,
             )
             self.agent_server.start()
 
@@ -374,7 +410,7 @@ class GaiaCliClient:
             "cli_mode": self.cli_mode,
         }
         self.llm_server = multiprocessing.Process(
-            target=launch_llm_server, kwargs=llm_server_kwargs
+            target=launch_lemonade_server, kwargs=llm_server_kwargs
         )
         self.llm_server.start()
         self.server_pids["llm"] = self.llm_server.pid
@@ -559,7 +595,14 @@ class GaiaCliClient:
 
     async def process_voice_input(self, text):
         """Process transcribed voice input and get AI response"""
+
         async with aiohttp.ClientSession() as session:
+
+            # Initialize TTS streaming
+            text_queue = None
+            tts_finished = threading.Event()  # Add event to track TTS completion
+            interrupt_event = threading.Event()  # Add event for keyboard interrupts
+
             try:
                 # First check if we're currently generating
                 async with session.get(
@@ -594,12 +637,6 @@ class GaiaCliClient:
 
                 print(f"\n{self.agent_name}: ", end="", flush=True)
                 await ws.send_str(text)
-
-                # Initialize TTS streaming
-                text_queue = None
-                tts_thread = None
-                tts_finished = threading.Event()  # Add event to track TTS completion
-                interrupt_event = threading.Event()  # Add event for keyboard interrupts
 
                 # Keyboard listener thread for both generation and playback
                 def keyboard_listener():
@@ -639,7 +676,7 @@ class GaiaCliClient:
                                 self.whisper_asr.pause_recording()
                         self.log.debug(f"TTS speaking state: {is_speaking}")
 
-                    tts_thread = threading.Thread(
+                    self.tts_thread = threading.Thread(
                         target=self.tts.generate_speech_streaming,
                         args=(text_queue,),
                         kwargs={
@@ -648,7 +685,7 @@ class GaiaCliClient:
                         },
                         daemon=True,
                     )
-                    tts_thread.start()
+                    self.tts_thread.start()
 
                 accumulated_response = ""
                 initial_buffer = ""  # Buffer for the start of response
@@ -734,8 +771,8 @@ class GaiaCliClient:
                 finally:
                     if "ws" in locals():
                         await ws.close()
-                    if tts_thread:
-                        tts_thread.join(timeout=1.0)  # Add timeout to thread join
+                    if self.tts_thread and self.tts_thread.is_alive():
+                        self.tts_thread.join(timeout=1.0)  # Add timeout to thread join
                     keyboard_thread.join(
                         timeout=1.0
                     )  # Add timeout to keyboard thread join
@@ -754,10 +791,10 @@ class GaiaCliClient:
                     text_queue.put("__END__")
                 raise e
             finally:
-                if tts_thread and tts_thread.is_alive():
+                if self.tts_thread and self.tts_thread.is_alive():
                     # Wait for TTS to finish before resuming recording
                     tts_finished.wait(timeout=2.0)  # Add reasonable timeout
-                    tts_thread.join(timeout=1.0)
+                    self.tts_thread.join(timeout=1.0)
 
                 # Only resume recording after TTS is completely finished
                 if self.whisper_asr:
@@ -934,6 +971,8 @@ class GaiaCliClient:
         finally:
             if self.whisper_asr:
                 self.whisper_asr.stop_recording()
+            if self.tts_thread and self.tts_thread.is_alive():
+                self.tts_thread.join(timeout=1.0)  # Add timeout to thread join
 
     def is_port_available(self, port):
         """Check if a port is available for use."""
@@ -957,10 +996,66 @@ class GaiaCliClient:
 
 
 async def async_main(action, **kwargs):
+    log = get_logger(__name__)
     if action == "start":
         show_stats = kwargs.pop("stats", False)
         launch_in_background = kwargs.pop("background", "silent")
         logging_level = kwargs.pop("logging_level", "INFO")  # Pop instead of get
+
+        # Set parameters based on GAIA_MODE environment variable if not explicitly overridden
+        gaia_mode = os.environ.get("GAIA_MODE", "").strip().upper()
+        if gaia_mode and not (
+            kwargs.get("hybrid", False) or kwargs.get("generic", False)
+        ):
+            if gaia_mode == "HYBRID":
+                # Set optimal hybrid mode configuration
+                kwargs["model"] = (
+                    "amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid"
+                )
+                kwargs["backend"] = "oga"
+                kwargs["device"] = "hybrid"
+                kwargs["dtype"] = "int4"
+                print(
+                    f"Using optimal hybrid mode configuration from GAIA_MODE={gaia_mode}."
+                )
+            elif gaia_mode == "GENERIC":
+                # Set optimal generic mode configuration
+                kwargs["model"] = "llama3.2:1b"
+                kwargs["backend"] = "ollama"
+                kwargs["device"] = "cpu"
+                kwargs["dtype"] = "int4"
+                print(
+                    f"Using optimal generic mode configuration from GAIA_MODE={gaia_mode}."
+                )
+            elif gaia_mode == "NPU":
+                # Set optimal NPU mode configuration
+                kwargs["model"] = "Llama-3.2-1B-Instruct-NPU"
+                kwargs["backend"] = "oga"
+                kwargs["device"] = "npu"
+                kwargs["dtype"] = "int4"
+                print(
+                    f"Using optimal NPU mode configuration from GAIA_MODE={gaia_mode}."
+                )
+
+        # Handle hybrid mode shortcut (command-line flag takes precedence over env var)
+        if kwargs.pop("hybrid", False):
+            # Set optimal hybrid mode configuration
+            kwargs["model"] = (
+                "amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid"
+            )
+            kwargs["backend"] = "oga"
+            kwargs["device"] = "hybrid"
+            kwargs["dtype"] = "int4"
+            print("Using optimal hybrid mode configuration.")
+
+        # Handle generic mode shortcut
+        if kwargs.pop("generic", False):
+            # Set optimal generic mode configuration
+            kwargs["model"] = "llama3.2:1b"
+            kwargs["backend"] = "ollama"
+            kwargs["device"] = "cpu"
+            kwargs["dtype"] = "int4"
+            print("Using optimal generic mode configuration.")
 
         # Build command with all parameters
         cmd_params = []
@@ -976,16 +1071,18 @@ async def async_main(action, **kwargs):
 
         base_cmd = "gaia-cli start --background none " + " ".join(cmd_params)
 
-        def wait_for_servers_file_exists():
-            max_wait = 30  # seconds
+        def wait_for_servers_file_exists(timeout=30):
             start_time = time.time()
             while not Path(".gaia_servers.json").exists():
-                if time.time() - start_time > max_wait:
+                if time.time() - start_time > timeout:
                     raise RuntimeError(
                         "Timeout waiting for servers to start. Check "
                         + str(Path.cwd() / "gaia.cli.log for details.")
                     )
                 time.sleep(1)
+
+        # Use longer timeout for RAG agents
+        server_timeout = 1800 if kwargs.get("agent_name", "").lower() == "rag" else 120
 
         if launch_in_background == "terminal":
             print("Starting Gaia servers in background terminal...")
@@ -996,7 +1093,7 @@ async def async_main(action, **kwargs):
             cmd = f'start cmd /k "echo Starting GAIA servers... Feel free to minimize this window. && {base_cmd}"'
             try:
                 subprocess.Popen(cmd, shell=True)
-                wait_for_servers_file_exists()
+                wait_for_servers_file_exists(timeout=server_timeout)
                 print("✓ Servers launched in background terminal")
                 print("\nYou can now:")
                 print(
@@ -1007,6 +1104,7 @@ async def async_main(action, **kwargs):
                 )
                 return
             except Exception as e:
+                log.error(f"Failed to start in background: {e}")
                 raise RuntimeError(f"Failed to start in background: {e}")
 
         elif launch_in_background == "silent":
@@ -1027,7 +1125,7 @@ async def async_main(action, **kwargs):
                     stderr=log_file,
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
-                wait_for_servers_file_exists()
+                wait_for_servers_file_exists(timeout=server_timeout)
             print("✓ Servers launched in background silently")
             print("\nYou can now:")
             print("  1. Use 'gaia-cli chat' or 'gaia-cli talk' to interact")
@@ -1036,11 +1134,15 @@ async def async_main(action, **kwargs):
             return
         elif launch_in_background == "none":
             client = GaiaCliClient(
-                show_stats=show_stats, logging_level=logging_level, **kwargs
+                show_stats=show_stats,
+                logging_level=logging_level,
+                **kwargs,
             )
             client.start()
-            return "Servers started successfully."
+            log.info("Servers started successfully.")
+            return
         else:
+            log.error(f"Invalid background option: {launch_in_background}")
             raise ValueError(f"Invalid background option: {launch_in_background}")
 
     elif action == "stop":
@@ -1048,18 +1150,26 @@ async def async_main(action, **kwargs):
         if client:
             client.stop()
             Path(".gaia_servers.json").unlink(missing_ok=True)
-            return "Servers stopped successfully."
+            log.info("Servers stopped successfully.")
+            return
         else:
-            return "No running servers found."
+            log.error("No running servers found.")
+            return
 
     # For all other actions, load existing client
     client = await GaiaCliClient.load_existing_client()
     if not client:
-        return "Error: Servers are not running. Please start the servers first using 'gaia-cli start'"
+        log.error(
+            "Servers are not running. Please start the servers first using 'gaia-cli start'"
+        )
+        raise RuntimeError(
+            "Servers are not running. Please start the servers first using 'gaia-cli start'"
+        )
 
     if action == "prompt":
         if not kwargs.get("message"):
-            return "Error: Message is required for prompt action."
+            log.error("Message is required for prompt action.")
+            raise ValueError("Message is required for prompt action.")
         response = ""
         async for chunk in client.prompt(kwargs["message"]):
             response += chunk
@@ -1070,36 +1180,74 @@ async def async_main(action, **kwargs):
         return {"response": response}
     elif action == "chat":
         await client.chat()
-        return "Chat session ended."
+        log.info("Chat session ended.")
+        return
     elif action == "talk":
         await client.talk()
-        return "Voice chat session ended."
+        log.info("Voice chat session ended.")
+        return
     elif action == "stats":
         stats = client.get_stats()
         if stats:
             return {"stats": stats}
-        return {"stats": {}}
+        log.error("No stats available.")
+        raise RuntimeError("No stats available.")
     else:
-        return f"Unknown action: {action}"
+        log.error(f"Unknown action specified: {action}")
+        raise ValueError(f"Unknown action specified: {action}")
 
 
 def run_cli(action, **kwargs):
     return asyncio.run(async_main(action, **kwargs))
 
 
+def check_gaia_mode():
+    """Check if GAIA_MODE environment variable is set and valid.
+
+    Returns:
+        str or None: The value of GAIA_MODE if set and valid, None otherwise
+    """
+    gaia_mode = os.environ.get("GAIA_MODE").strip()
+    if not gaia_mode:
+        return None
+
+    # Validate that it's one of the expected values (case insensitive)
+    valid_modes = ["HYBRID", "GENERIC", "NPU"]
+    if gaia_mode.upper() not in valid_modes:
+        print(
+            f"WARNING: GAIA_MODE value '{gaia_mode}' is not one of the expected values: {', '.join(valid_modes)}"
+        )
+        print("GAIA may not function correctly with this configuration.")
+
+    return gaia_mode
+
+
 def main():
+    # Check if GAIA_MODE is set
+    gaia_mode = check_gaia_mode()
+    if not gaia_mode:
+        print("ERROR: GAIA_MODE environment variable is not set.")
+        print("Please run one of the following scripts before using gaia-cli:")
+        print("  set_hybrid_mode.bat")
+        print("  set_generic_mode.bat")
+        print("  set_npu_mode.bat")
+        sys.exit(1)
+
     # Create the main parser
     parser = argparse.ArgumentParser(
-        description=f"Gaia CLI - Interact with Gaia AI agents. \nVersion: {version_with_hash}",
+        description=f"Gaia CLI - Interact with Gaia AI agents. \n{version}",
         formatter_class=argparse.RawTextHelpFormatter,
     )
+
+    # Get logger instance
+    log = get_logger(__name__)
 
     # Add version argument
     parser.add_argument(
         "-v",
         "--version",
         action="version",
-        version=f"{version_with_hash}",
+        version=f"{version}",
         help="Show program's version number and exit",
     )
 
@@ -1122,7 +1270,7 @@ def main():
     start_parser.add_argument(
         "--agent-name",
         default="Chaty",
-        help="Name of the Gaia agent to use (e.g., Llm, Chaty, Joker, Clip, etc.)",
+        help="Name of the Gaia agent to use (e.g., Llm, Chaty, Joker, Clip, Rag, etc.)",
     )
     start_parser.add_argument(
         "--host",
@@ -1175,9 +1323,23 @@ def main():
         default="silent",
         help="Launch servers in a background terminal window or silently",
     )
+    start_parser.add_argument(
+        "--input-file", help="Input file path for RAG index creation"
+    )
+    start_parser.add_argument(
+        "--hybrid",
+        action="store_true",
+        help="Shortcut for optimal hybrid mode configuration (sets --model, --backend, --device, and --dtype)",
+    )
+    start_parser.add_argument(
+        "--generic",
+        action="store_true",
+        help="Shortcut for optimal generic mode configuration (sets --model, --backend, --device, and --dtype)",
+    )
 
     subparsers.add_parser("stop", help="Stop Gaia server", parents=[parent_parser])
 
+    # Add prompt-specific options
     prompt_parser = subparsers.add_parser(
         "prompt", help="Send a single prompt to Gaia", parents=[parent_parser]
     )
@@ -1268,6 +1430,7 @@ def main():
         help="Index of audio input device (optional)",
     )
 
+    # Add YouTube-specific options
     yt_parser = subparsers.add_parser(
         "youtube", help="YouTube utilities", parents=[parent_parser]
     )
@@ -1291,16 +1454,24 @@ def main():
 
     args = parser.parse_args()
 
+    # Check if action is specified
+    if not args.action:
+        log.warning("No action specified. Displaying help message.")
+        parser.print_help()
+        return
+
     # Set logging level using the GaiaLogger manager
     from gaia.logger import log_manager
 
     log_manager.set_level("gaia", getattr(logging, args.logging_level))
+    log.info(f"Starting Gaia CLI with action: {args.action}")
 
     # Handle core Gaia CLI commands
     if args.action in ["start", "stop", "prompt", "chat", "talk", "stats"]:
         kwargs = {
             k: v for k, v in vars(args).items() if v is not None and k != "action"
         }
+        log.debug(f"Executing {args.action} with parameters: {kwargs}")
         result = run_cli(args.action, **kwargs)
         if result:
             print(result)
@@ -1308,14 +1479,16 @@ def main():
 
     # Handle utility commands
     if args.action == "test":
+        log.info(f"Running test type: {args.test_type}")
         if args.test_type.startswith("tts"):
             try:
                 from gaia.audio.kokoro_tts import KokoroTTS
 
                 tts = KokoroTTS()
+                log.debug("TTS initialized successfully")
             except Exception as e:
-                print(f"Failed to initialize TTS:\n{e}")
-                return
+                log.error(f"Failed to initialize TTS: {e}")
+                raise RuntimeError(f"Failed to initialize TTS: {e}")
 
             test_text = (
                 args.test_text
@@ -1345,7 +1518,6 @@ Let me know your answer!
                 tts.test_generate_audio_file(test_text, args.output_audio_file)
 
         elif args.test_type.startswith("asr"):
-            # ASR tests
             try:
                 from gaia.audio.whisper_asr import WhisperAsr
 
@@ -1353,14 +1525,15 @@ Let me know your answer!
                     model_size=args.whisper_model_size,
                     device_index=args.audio_device_index,
                 )
+                log.debug("ASR initialized successfully")
             except ImportError:
-                print(
+                log.error(
                     "WhisperAsr not found. Please install voice support with: pip install .[talk]"
                 )
                 raise
             except Exception as e:
-                print(f"Failed to initialize ASR:\n{e}")
-                return
+                log.error(f"Failed to initialize ASR: {e}")
+                raise RuntimeError(f"Failed to initialize ASR: {e}")
 
             if args.test_type == "asr-file-transcription":
                 if not args.input_audio_file:
@@ -1420,7 +1593,7 @@ Let me know your answer!
     # Handle utility functions
     if args.action == "youtube":
         if args.download_youtube_transcript:
-            print(f"Downloading transcript from {args.download_youtube_transcript}")
+            log.info(f"Downloading transcript from {args.download_youtube_transcript}")
             from llama_index.readers.youtube_transcript import YoutubeTranscriptReader
 
             doc = YoutubeTranscriptReader().load_data(
@@ -1434,12 +1607,15 @@ Let me know your answer!
 
     # Handle kill command
     if args.action == "kill":
+        log.info(f"Attempting to kill process on port {args.port}")
         result = kill_process_by_port(args.port)
         print(result)
         return
 
-    if result:
-        print(result)
+    # Log error for unknown action
+    log.error(f"Unknown action specified: {args.action}")
+    parser.print_help()
+    return
 
 
 def kill_process_by_port(port):

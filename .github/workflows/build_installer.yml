@@ -1,0 +1,111 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: Build GAIA Installer
+
+on:
+  workflow_call:
+    outputs:
+      VERSION:
+        description: "The extracted version number"
+        value: ${{ jobs.build-installer.outputs.VERSION }}
+      INSTALLER_HASH:
+        description: "SHA256 hash of the installer"
+        value: ${{ jobs.build-installer.outputs.INSTALLER_HASH }}
+      COMMIT_HASH:
+        description: "Git commit hash used to build the installer"
+        value: ${{ jobs.build-installer.outputs.COMMIT_HASH }}
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    outputs:
+      VERSION: ${{ steps.extract_version.outputs.VERSION }}
+      INSTALLER_HASH: ${{ steps.calculate_hash.outputs.INSTALLER_HASH }}
+      COMMIT_HASH: ${{ steps.get_commit.outputs.COMMIT_HASH }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Print Git History and Version Info
+        run: |
+          Write-Host "`n=== Git History ==="
+          git log -n 4 --pretty=format:"%h - %s (%ad)" --date=short | ForEach-Object { Write-Host $_ }
+          Write-Host "`n=== Current Branch and Status ==="
+          git status | ForEach-Object { Write-Host $_ }
+          Write-Host "`n=== Remote Info ==="
+          git remote -v | ForEach-Object { Write-Host $_ }
+          Write-Host "`n=== Current Commit Details ==="
+          git show -s --format="%H%n%an%n%ad%n%s" | ForEach-Object { Write-Host $_ }
+
+      - name: Get commit hash
+        id: get_commit
+        run: |
+          $fullHash = git rev-parse HEAD
+          $shortHash = git rev-parse --short=8 HEAD
+          echo "COMMIT_HASH=$shortHash" >> $env:GITHUB_OUTPUT
+          Write-Host "Full commit hash: $fullHash"
+          Write-Host "Short commit hash: $shortHash"
+
+      - name: Install NSIS
+        run: |
+          # Download NSIS installer
+          curl -L -o nsis.exe https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10-setup.exe
+
+          # Install NSIS
+          Start-Process nsis.exe -ArgumentList '/S' -Wait
+
+      - name: Verify NSIS installation
+        run: |
+          # Check if NSIS is installed
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /VERSION
+
+      - name: Generate version.txt
+        run: |
+          python .\src\gaia\version.py
+
+      - name: Extract version
+        id: extract_version
+        run: |
+          $versionContent = Get-Content -Path "version.txt" -Raw
+          Write-Host "Version content: $versionContent"
+          $version = $versionContent -split '/' | Select-Object -Last 1
+          $version = $version -split '\+' | Select-Object -First 1
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Extracted version: $version"
+
+      - name: Build the GAIA installer
+        run: |
+          cd installer
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DOGA_TOKEN="${{ secrets.OGA_PUBLIC_TOKEN }}" 'Installer.nsi'
+
+          # Verify installer was created successfully
+          if (Test-Path "gaia-windows-setup.exe") {
+            Write-Host "gaia-windows-setup.exe has been created successfully."
+          } else {
+            Write-Host "gaia-windows-setup.exe was not found."
+            exit 1
+          }
+
+      - name: Calculate SHA256 hash
+        id: calculate_hash
+        run: |
+          $filePath = "installer\gaia-windows-setup.exe"
+          $hash = (Get-FileHash -Path $filePath -Algorithm SHA256).Hash
+          echo "INSTALLER_HASH=$hash" >> $env:GITHUB_OUTPUT
+          Write-Host "Installer SHA256: $hash"
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: gaia-windows-installer-${{ steps.extract_version.outputs.VERSION }}-${{ steps.get_commit.outputs.COMMIT_HASH }}
+          path: installer\gaia-windows-setup.exe
+
+          if-no-files-found: error
+          retention-days: 7

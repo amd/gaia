@@ -13,12 +13,12 @@ $PYLINT_PATH = "pylint"
 $SRC_DIR = "src\gaia"
 $PYLINT_CONFIG = ".pylintrc"
 $DISABLED_CHECKS = "C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718"
-$EXCLUDE = "src\gaia\agents\Maven\app.py,src\gaia\agents\Neo\app.py,ui_form.py"
+$EXCLUDE = "ui_form.py"
 
 # Function to run Black
 function Invoke-Black {
     Write-Host "Running black..."
-    & $PYTHON_PATH -m black installer plot src tests --config pyproject.toml
+    & $PYTHON_PATH -m black installer src tests --config pyproject.toml
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Black formatting failed." -ForegroundColor Red
         exit $LASTEXITCODE

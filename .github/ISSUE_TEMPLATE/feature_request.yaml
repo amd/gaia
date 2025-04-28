@@ -1,0 +1,51 @@
+name: Feature Request
+description: Share your ideas to help make GAIA even better! 💡
+title: 'feat: '
+labels: ['triage', 'enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        # Welcome! 👋 
+
+        Thanks for thinking about ways to improve GAIA! Your ideas help make this project better for everyone.
+        
+        Before sharing your idea, you might want to check our [Issues](https://github.com/amd/gaia/issues) to see if someone else has suggested something similar.
+        
+        We love hearing new ideas and appreciate constructive feedback! 🌟
+
+  - type: checkboxes
+    id: existing-issue
+    attributes:
+      label: Quick Check ✨
+      description: Let us know if you've had a chance to look around
+      options:
+        - label: I've taken a look at existing feature requests
+          required: false
+
+  - type: textarea
+    id: feature-description
+    attributes:
+      label: What's on your mind?
+      description: |
+        Share what challenge you're facing and your proposed solution. For example:
+        - "It would be helpful if... because I often need to..."
+        - "I wish GAIA could... which would work by..."
+        - Feel free to include examples, similar features from other tools, or mockups
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Thank You! 🙌
+        
+        We really appreciate you taking the time to share your ideas with us! Your feedback helps shape the future of GAIA.
+        
+        While we review all suggestions, please understand that we need to prioritize based on various factors and resources.
+        Feel free to:
+        - Add comments if you think of additional details
+        - Share more context or examples
+        - Help others by commenting on their ideas too
+        
+        Together, we can make GAIA even better! ✨
