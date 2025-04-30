@@ -880,7 +880,6 @@ Section "-Install Main Components" SEC01
       ; Install OGA NPU dependencies
       DetailPrint "- Installing $SELECTED_MODE dependencies..."
       ${If} $SELECTED_MODE == "NPU"
-        nsExec::ExecToLog '"$INSTDIR\python\python.exe" -m pip install lemonade'
         nsExec::ExecToLog '"$INSTDIR\python\Scripts\lemonade-install" --ryzenai npu -y --token ${OGA_TOKEN}'
         Pop $R0  ; Return value
         ${If} $R0 != 0
@@ -899,7 +898,6 @@ Section "-Install Main Components" SEC01
         ${EndIf}
       ${ElseIf} $SELECTED_MODE == "HYBRID"
         DetailPrint "- Running lemonade-install for hybrid mode..."
-        nsExec::ExecToLog '"$INSTDIR\python\python.exe" -m pip install lemonade'
         nsExec::ExecToLog '"$INSTDIR\python\Scripts\lemonade-install" --ryzenai hybrid -y'
         Pop $R0  ; Return value
         ${If} $R0 != 0
