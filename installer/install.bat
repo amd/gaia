@@ -14,6 +14,10 @@ set LOG_FILE=%INSTALL_DIR%\gaia_install.log
 setx GAIA_INSTALL_DIR "%INSTALL_DIR%"
 set GAIA_INSTALL_DIR=%INSTALL_DIR%
 
+:: Set GIT_PYTHON_REFRESH environment variable
+setx GIT_PYTHON_REFRESH "quiet"
+set GIT_PYTHON_REFRESH=quiet
+
 :: Create installation directory if it doesn't exist
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 
