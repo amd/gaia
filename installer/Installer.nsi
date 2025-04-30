@@ -106,7 +106,8 @@ SectionGroup /e "Installation Mode" InstallModeGroup
   Section "Generic Mode" GenericSec
   SectionEnd
 
-  Section /o "NPU Mode" NPUSec
+  ;Section /o "NPU Mode" NPUSec
+  Section "-NPU Mode" NPUSec
   SectionEnd
 
   Section /o "Hybrid Mode" HybridSec
