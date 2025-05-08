@@ -423,7 +423,7 @@ Section "-Install Main Components" SEC01
   DetailPrint "------------------------"
   DetailPrint "- Installation Section -"
   DetailPrint "------------------------"
-  
+
   ; Check if directory exists before proceeding
   IfFileExists "$INSTDIR\*.*" 0 continue_install
     ${IfNot} ${Silent}
@@ -438,7 +438,7 @@ Section "-Install Main Components" SEC01
 
   remove_dir:
     ; Remove existing installation directory
-    RMDir /r "$INSTDIR"
+    nsExec::Exec '"cmd.exe" /C rmdir /s /q "$INSTDIR"'
     DetailPrint "- Deleted all contents of install dir"
 
     IfFileExists "$INSTDIR\*.*" 0 continue_install
@@ -480,7 +480,7 @@ Section "-Install Main Components" SEC01
     DetailPrint "- Python Setup -"
     DetailPrint "-------------------"
     DetailPrint "- Downloading embedded Python ${PYTHON_VERSION}..."
-    
+
     ; Download embedded Python
     ExecWait 'curl -s -o "$INSTDIR\python\python.zip" "${PYTHON_EMBED_URL}"' $0
     ${If} $0 != 0
@@ -490,7 +490,7 @@ Section "-Install Main Components" SEC01
       ${EndIf}
       Quit
     ${EndIf}
-    
+
     ; Extract Python zip
     DetailPrint "- Extracting Python..."
     nsExec::ExecToStack 'powershell -Command "Expand-Archive -Path \"$INSTDIR\python\python.zip\" -DestinationPath \"$INSTDIR\python\" -Force"'
@@ -505,7 +505,7 @@ Section "-Install Main Components" SEC01
       Quit
     ${EndIf}
     Delete "$INSTDIR\python\python.zip"
-    
+
     ; Download get-pip.py
     DetailPrint "- Setting up pip..."
     ExecWait 'curl -sSL "${GET_PIP_URL}" -o "$INSTDIR\python\get-pip.py"' $0
@@ -516,7 +516,7 @@ Section "-Install Main Components" SEC01
       ${EndIf}
       Quit
     ${EndIf}
-    
+
     ; Install pip
     ExecWait '"$INSTDIR\python\python.exe" "$INSTDIR\python\get-pip.py" --no-warn-script-location' $0
     ${If} $0 != 0
@@ -527,7 +527,7 @@ Section "-Install Main Components" SEC01
       Quit
     ${EndIf}
     Delete "$INSTDIR\python\get-pip.py"
-    
+
     ; Modify python*._pth file to include site-packages
     DetailPrint "- Configuring Python paths..."
     FileOpen $2 "$INSTDIR\python\python310._pth" a
@@ -718,7 +718,7 @@ Section "-Install Main Components" SEC01
       nsExec::ExecToStack 'curl -L -o "$INSTDIR\python\docopt.py" "https://raw.githubusercontent.com/docopt/docopt/master/docopt.py"'
       Pop $0  ; Return value
       Pop $1  ; Command output
-      
+
       ${If} $0 != 0
         DetailPrint "- ERROR: Failed to download docopt.py"
         DetailPrint "- Error details: $1"
@@ -950,7 +950,7 @@ Section "-Install Main Components" SEC01
 
         DetailPrint "[RAUX-Installer] Setting up Python..."
         CreateDirectory "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python"
-        
+
         ; Download embedded Python
         DetailPrint "[RAUX-Installer] Downloading embedded Python 3.11.8..."
         ExecWait 'curl -s -o "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\python.zip" "https://www.python.org/ftp/python/3.11.8/python-3.11.8-embed-amd64.zip"' $0
@@ -961,7 +961,7 @@ Section "-Install Main Components" SEC01
           ${EndIf}
           Quit
         ${EndIf}
-        
+
         ; Extract Python zip
         DetailPrint "[RAUX-Installer] Extracting Python..."
         nsExec::ExecToStack 'powershell -Command "Expand-Archive -Path \"$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\python.zip\" -DestinationPath \"$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\" -Force"'
@@ -976,7 +976,7 @@ Section "-Install Main Components" SEC01
           Quit
         ${EndIf}
         Delete "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\python.zip"
-        
+
         ; Download get-pip.py
         DetailPrint "[RAUX-Installer] Setting up pip..."
         ExecWait 'curl -sSL "${GET_PIP_URL}" -o "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\get-pip.py"' $0
@@ -987,7 +987,7 @@ Section "-Install Main Components" SEC01
           ${EndIf}
           Quit
         ${EndIf}
-        
+
         ; Install pip
         ExecWait '"$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\python.exe" "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\get-pip.py" --no-warn-script-location' $0
         ${If} $0 != 0
@@ -998,7 +998,7 @@ Section "-Install Main Components" SEC01
           Quit
         ${EndIf}
         Delete "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\get-pip.py"
-        
+
         ; Modify python*._pth file to include site-packages
         DetailPrint "[RAUX-Installer] Configuring Python paths..."
         FileOpen $2 "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\python311._pth" a
@@ -1110,26 +1110,61 @@ Section "-Install Main Components" SEC01
       DetailPrint "*** INSTALLATION COMPLETED ***"
 
       DetailPrint "- Adding directories to user PATH..."
-      
+
       ; Get the current user PATH from registry
       ReadRegStr $0 HKCU "Environment" "PATH"
-      
+
       ; Prepare the new directories to add
       StrCpy $1 "$INSTDIR\bin"
       StrCpy $2 "$INSTDIR\python\Scripts"
-      
+
       ; Check if directories are already in PATH
       ${StrLoc} $3 "$0" "$1" ">"
       ${StrLoc} $4 "$0" "$2" ">"
-      
-      ; If either directory is not in PATH, update it
+
+      ; Only proceed if at least one directory needs to be added
       ${If} $3 == ""
       ${OrIf} $4 == ""
-        ; Add both directories to PATH
-        ExecWait 'setx PATH "$1;$2;$0"'
-        DetailPrint "- Successfully updated user PATH with bin and Scripts directories"
+        ; Add directories to user path - safely appending to PATH
+        ${If} $0 == ""
+          ; If PATH is empty, just set it to our directories
+          WriteRegExpandStr HKCU "Environment" "PATH" "$1;$2"
+          ${If} ${Errors}
+            DetailPrint "- ERROR: Failed to write PATH to registry"
+            ${IfNot} ${Silent}
+              MessageBox MB_OKCANCEL "Failed to update PATH environment variable in the registry. Continue with installation?" IDOK continue_install_empty IDCANCEL abort_path_update_empty
+              abort_path_update_empty:
+                DetailPrint "- Installation aborted by user after PATH update failure"
+                Abort "Installation aborted: Failed to update PATH environment variable."
+              continue_install_empty:
+                DetailPrint "- Continuing installation despite PATH update failure"
+            ${EndIf}
+          ${EndIf}
+        ${Else}
+          ; Otherwise append to the existing PATH with separators
+          WriteRegExpandStr HKCU "Environment" "PATH" "$0;$1;$2"
+          ${If} ${Errors}
+            DetailPrint "- ERROR: Failed to write PATH to registry"
+            ${IfNot} ${Silent}
+              MessageBox MB_OKCANCEL "Failed to update PATH environment variable in the registry. Continue with installation?" IDOK continue_install_appended IDCANCEL abort_path_update_appended
+              abort_path_update_appended:
+                DetailPrint "- Installation aborted by user after PATH update failure"
+                Abort "Installation aborted: Failed to update PATH environment variable."
+              continue_install_appended:
+                DetailPrint "- Continuing installation despite PATH update failure"
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+
+        ; Notify Windows that environment variables have changed
+        SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
+        ${If} ${Errors}
+          DetailPrint "- WARNING: Failed to notify system of PATH change. Environment changes may require system restart."
+        ${Else}
+          DetailPrint "- Successfully updated user PATH with bin and Scripts directories"
+        ${EndIf}
       ${Else}
-        DetailPrint "- Directories already in PATH, skipping update"
+        DetailPrint "- Directories already in PATH, no update needed"
       ${EndIf}
 
       # Create shortcuts only in non-silent mode

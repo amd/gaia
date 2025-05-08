@@ -167,6 +167,37 @@ Common issues:
 - **Driver Incompatibility**: For Hybrid/NPU modes, ensure you have a compatible NPU driver version
 - **Installation Path**: Avoid paths with special characters or very long directory names
 
+## Environment Variable Handling
+
+### PATH Environment Variable
+The installer automatically adds two directories to your system PATH:
+1. `<install_dir>\bin` - Contains GAIA command-line tools and scripts
+2. `<install_dir>\python\Scripts` - Contains Python executable scripts
+
+This process:
+- Uses direct registry manipulation to avoid Windows `setx` command's 1024-character limit
+- Preserves all existing PATH entries
+- Handles scenarios like empty PATH or very long PATH values
+- Avoids duplicate entries if reinstalling
+- Includes error handling with user prompts if registry operations fail
+
+If the installer can't update your PATH:
+- A warning message will be displayed
+- You can choose to continue or abort installation
+- If you continue, you may need to add GAIA directories to PATH manually
+
+### Manual PATH Management
+If you need to manually add GAIA to your system PATH:
+1. Open System Properties > Advanced > Environment Variables
+2. Edit the 'Path' variable in User Variables
+3. Add `<install_dir>\bin` and `<install_dir>\python\Scripts`
+4. Click OK to save changes
+
+### Other Environment Variables
+The installer also sets:
+- `GAIA_INSTALL_DIR` - Points to the main installation directory
+- `GAIA_MODE` - Contains your selected mode (GENERIC, NPU, or HYBRID)
+
 # Contact
 Contact [GAIA team](mailto:gaia@amd.com) for any questions, feature requests, access or troubleshooting issues.
 
