@@ -438,7 +438,7 @@ Section "-Install Main Components" SEC01
 
   remove_dir:
     ; Remove existing installation directory
-    RMDir /r "$INSTDIR"
+    nsExec::Exec '"cmd.exe" /C rmdir /s /q "$INSTDIR"'
     DetailPrint "- Deleted all contents of install dir"
 
     IfFileExists "$INSTDIR\*.*" 0 continue_install
