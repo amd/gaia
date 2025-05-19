@@ -24,7 +24,7 @@ class LLMClient:
         """
         logger.debug(f"Initializing LLMClient with use_local={use_local}, base_url={base_url}")
         if use_local:
-            self.client = OpenAI(base_url=base_url)
+            self.client = OpenAI(base_url=base_url, api_key="None")
             self.endpoint = "completions"
             # self.endpoint = "responses" TODO: Put back once new Lemonade version is released.
             self.default_model = "Llama-3.2-3B-Instruct-Hybrid"
