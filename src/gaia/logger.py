@@ -60,9 +60,9 @@ class GaiaLogger:
 
         # Default levels for different modules
         self.default_levels = {
-            "gaia.agents": logging.DEBUG,
-            "gaia.interface": logging.DEBUG,
-            "gaia.llm": logging.DEBUG,
+            "gaia.agents": logging.INFO,
+            "gaia.interface": logging.INFO,
+            "gaia.llm": logging.INFO,
         }
 
         # Suppress specific aiohttp.access log messages
