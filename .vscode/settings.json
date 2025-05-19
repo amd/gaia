@@ -7,5 +7,6 @@
     "python.testing.pytestArgs": [
         "tests/unit"
     ],
-    "terminal.integrated.defaultProfile.windows": "Command Prompt"
+    "terminal.integrated.defaultProfile.windows": "Command Prompt",
+    "notebook.output.wordWrap": true
 }
