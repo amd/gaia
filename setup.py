@@ -80,6 +80,7 @@ setup(
         ],
         "blender": [
             "openai",
+            "rich",
             "bpy",
         ],
         "notebooks": [
