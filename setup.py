@@ -79,6 +79,7 @@ setup(
             "gaia[llamaindex]",
         ],
         "blender": [
+            "openai",
             "bpy",
         ],
         "notebooks": [
