@@ -30,6 +30,7 @@ setup(
         "gaia.agents.Clip",
         "gaia.agents.Joker",
         "gaia.agents.Rag",
+        "gaia.agents.Blender",
         "gaia.interface",
     ],
     package_data={
@@ -38,7 +39,7 @@ setup(
     install_requires=[
         "aiohttp",
         "fastapi",
-        "pydantic==2.9.2",
+        "pydantic>=2.9.2",
         "uvicorn>=0.15.0",
         "transformers",
         "accelerate",
@@ -76,6 +77,9 @@ setup(
         ],
         "rag": [
             "gaia[llamaindex]",
+        ],
+        "blender": [
+            "bpy",
         ],
         "notebooks": [
             "jupyter",
