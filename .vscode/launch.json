@@ -4,6 +4,21 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Blender Agent Debug",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.gaia.agents.Blender.app",
+            "args": ["--debug-prompts", "--example", "2"],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false,
+        },
+        {
             "name": "UI Debug",
             "type": "debugpy",
             "request": "launch",

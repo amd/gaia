@@ -58,7 +58,7 @@
         "llama_index",
         "Ollama",
         "PySide6",
-        "TurnkeyML"
+        "Lemonade SDK"
       ],
       "internal": {
         "raux": "Optional UI component, separate installation"

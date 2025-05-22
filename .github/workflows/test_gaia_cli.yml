@@ -103,12 +103,54 @@ jobs:
           set PATH=%PATH%;C:\Users\runneradmin\AppData\Local\Programs\Ollama
           ollama --version
 
-      - uses: FedericoCarboni/setup-ffmpeg@v3
-        id: setup-ffmpeg
-
-      - name: Set GAIA Mode
+      - name: Start Ollama Service (Background)
         shell: cmd
         run: |
+          echo Setting PATH for Ollama...
+          set PATH=%PATH%;C:\Users\runneradmin\AppData\Local\Programs\Ollama
+          echo Starting Ollama service in background using PowerShell...
+          powershell -Command "$env:PATH += ';C:\Users\runneradmin\AppData\Local\Programs\Ollama'; Start-Process -FilePath 'ollama' -ArgumentList 'serve' -WindowStyle Hidden -PassThru"
+          echo Ollama serve process started
+
+      - name: Wait and Test Ollama Service
+        shell: cmd
+        timeout-minutes: 10
+        run: |
+          echo Setting PATH for Ollama...
+          set PATH=%PATH%;C:\Users\runneradmin\AppData\Local\Programs\Ollama
+          echo Waiting for Ollama service to start...
+
+          set /a counter=0
+          :loop
+          set /a counter=%counter%+1
+          echo Attempt %counter% - Testing Ollama connection...
+
+          ollama list >nul 2>&1
+          if %errorlevel%==0 (
+            echo Ollama service is running successfully!
+            goto :connected
+          )
+
+          if %counter% geq 30 (
+            echo "Ollama service failed to start after 30 attempts"
+            echo "Checking processes:"
+            tasklist | findstr ollama
+            echo "Checking ports:"
+            netstat -an | findstr :11434
+            exit 1
+          )
+
+          echo Waiting 2 seconds before next attempt...
+          timeout /t 2 /nobreak >nul
+          goto :loop
+
+          :connected
+          echo Pulling required model (this may take several minutes in CI)...
+          ollama pull llama3.2:1b
+          echo Model pull completed
+
+      - uses: FedericoCarboni/setup-ffmpeg@v3
+        id: setup-ffmpeg
 
       - name: Test GAIA
         timeout-minutes: 20
@@ -117,12 +159,17 @@ jobs:
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           GAIA_MODE: GENERIC
         run: |
+          Write-Host "Setting GAIA_MODE explicitly"
+          $env:GAIA_MODE = "GENERIC"
+          Write-Host "GAIA_MODE is set to: $env:GAIA_MODE"
+
+          Write-Host "Adding Ollama to PATH for GAIA to find"
+          $env:Path = "C:\Users\runneradmin\AppData\Local\Programs\Ollama;$env:Path"
+
           Write-Host "Activate and verify Conda environment"
           $env:Path = "$env:GITHUB_WORKSPACE\miniforge3;$env:GITHUB_WORKSPACE\miniforge3\Scripts;$env:Path"
           & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
           conda activate gaiaenv
-          cmd /c set_generic_mode.bat
-          echo GAIA_MODE=%GAIA_MODE%
 
           Write-Host "Verify Python environment"
           python -c "import sys; print(sys.executable)"
@@ -168,3 +215,36 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
               throw "test_rag.py failed with exit code $LASTEXITCODE"
           }
+
+      - name: Debug GAIA Logs on Failure
+        if: failure()
+        shell: cmd
+        run: |
+          echo === Debugging GAIA failure ===
+
+          echo === Check for GAIA log files ===
+          if exist "gaia.cli.log" (
+            echo Found gaia.cli.log:
+            type gaia.cli.log
+          ) else (
+            echo No gaia.cli.log found
+          )
+
+          if exist ".gaia_servers.json" (
+            echo Found .gaia_servers.json:
+            type .gaia_servers.json
+          ) else (
+            echo No .gaia_servers.json found
+          )
+
+          echo === Check running processes ===
+          tasklist | findstr /i "python gaia ollama"
+
+          echo === Check ports in use ===
+          netstat -an | findstr ":8000 :8001 :11434"
+
+          echo === Check Ollama status ===
+          ollama list 2>&1 || echo "Ollama not responding"
+
+          echo === Check GAIA_MODE ===
+          echo GAIA_MODE=%GAIA_MODE%

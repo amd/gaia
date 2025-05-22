@@ -31,7 +31,7 @@ Currently, GAIA only supports Windows 11. Support for other platforms may be add
 Discover the capabilities of Ryzen AI with GAIA, an innovative generative AI application. Our platform seamlessly runs private and local large language models (LLMs) on the Neural Processing Unit (NPU), unlocking powerful potential. Dive into our agent Retrieval-Augmented Generation (RAG) pipeline, where interactive chat, reasoning, planning, and tool use converge. Plus, experience an intuitive and accessible UI that showcases these remarkable features.
 
 ## What is GAIA, and how does it integrate with Ryzen AI?
-GAIA is our generative AI application that runs local, private LLMs on Ryzen AI's NPU hardware. It's designed to leverage the power of the NPU for faster, more efficient processing, allowing users to keep their data local without relying on cloud infrastructure. This demo showcases how GAIA interacts with the NPU to run models seamlessly. GAIA uses the [Lemonade tool](https://github.com/onnx/turnkeyml/blob/main/docs/lemonade) from [TurnkeyML](https://github.com/onnx/turnkeyml/) to load and inference the LLM.
+GAIA is our generative AI application that runs local, private LLMs on Ryzen AI's NPU hardware. It's designed to leverage the power of the NPU for faster, more efficient processing, allowing users to keep their data local without relying on cloud infrastructure. This demo showcases how GAIA interacts with the NPU to run models seamlessly. GAIA uses the [Lemonade Server tool](https://lemonade-server.ai/) to load and inference the LLM.
 
 ## How does the agent RAG pipeline work in this demo?
 
@@ -59,7 +59,7 @@ Running the demo on the NPU provides better performance for AI-specific tasks, a
 
 ## What toolset do I need to replicate this demo?
 
-To replicate the demo, you'll need the Ryzen AI hardware, TurnkeyML for managing your LLMs, and our agent RAG pipeline, which you can access via Jupyter notebooks in the demo. Additionally, you'll need the necessary software stack, including Ryzen AI Software for the. The GAIA interface (GUI) will be available publicly soon.
+To replicate the demo, you'll need the Ryzen AI hardware, [Lemonade Server](https://lemonade-server.ai/) for managing your LLMs, and our agent RAG pipeline, which you can access via Jupyter notebooks in the demo. Additionally, you'll need the necessary software stack, including Ryzen AI Software for the. The GAIA interface (GUI) will be available publicly soon.
 
 ## How does this demo address data privacy concerns?
 
@@ -78,7 +78,7 @@ The demo is split into two main components:
     - The LlamaIndex RAG pipeline, consisting of a local query engine and vector memory, which processes information and runs on a web server.
     - This web server is also connected via WebSocket to the AI Demo Hub UI, where users can interact with the system.
 
-2. **Agent Interface**: This agent works with the TurnkeyML repository. It fetches the repo, vectorizes the content, and stores it in a local vector index. On a typical laptop, indexing around 40,000 lines of code takes about 10 seconds. Once indexed, the agent is ready for queries. For example, you can ask, "How do I install dependencies?"
+2. **Agent Interface**: This agent works with the [Lemonade SDK repository](https://github.com/lemonade-sdk/lemonade). It fetches the repo, vectorizes the content, and stores it in a local vector index. On a typical laptop, indexing around 40,000 lines of code takes about 10 seconds. Once indexed, the agent is ready for queries. For example, you can ask, "How do I install dependencies?"
 
 ## Query Process
 

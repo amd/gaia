@@ -22,6 +22,8 @@ body:
       options:
         - label: I've taken a look at existing feature requests
           required: false
+        - label: This feature request relates to GAIA BETA (Open-WebUI)
+          required: false
 
   - type: textarea
     id: feature-description

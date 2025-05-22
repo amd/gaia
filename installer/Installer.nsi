@@ -9,11 +9,11 @@
 !define /ifndef RYZENAI_FOLDER "ryzen_ai_13_ga"
 !define /ifndef NPU_DRIVER_ZIP "NPU_RAI1.3.zip"
 !define /ifndef NPU_DRIVER_VERSION "32.0.203.251"
-!define /ifndef LEMONADE_VERSION "v6.2.0"
-!define /ifndef RAUX_VERSION "v0.6.5+raux.0.1.0"
-!define /ifndef RAUX_PRODUCT_NAME "AMD GAIA UI [beta]"
-!define /ifndef RAUX_PROJECT_NAME "RAUX"
-!define /ifndef RAUX_PROJECT_NAME_CONCAT "raux"
+!define /ifndef LEMONADE_VERSION "v7.0.2"
+!define /ifndef RAUX_VERSION "v0.6.5+raux.0.2.0"
+!define /ifndef RAUX_PRODUCT_NAME "GAIA BETA"
+!define /ifndef RAUX_PRODUCT_SQUIRREL_NAME "GaiaBeta"
+!define /ifndef RAUX_PRODUCT_SQUIRREL_PATH "$LOCALAPPDATA\GaiaBeta"
 !define /ifndef PYTHON_VERSION "3.10.9"
 !define /ifndef PYTHON_EMBED_URL "https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip"
 !define /ifndef GET_PIP_URL "https://bootstrap.pypa.io/get-pip.py"
@@ -271,8 +271,8 @@ Function .onInit
     DetailPrint "CPU not compatible with Ryzen AI, forcing Generic mode"
   ${EndIf}
 
-  ; Initialize InstallRAUX to 0 (disabled)
-  StrCpy $InstallRAUX "0"
+  ; Initialize InstallRAUX to 1 (checked)
+  StrCpy $InstallRAUX "1"
 
   ; Hide RAUX option if not installed
   ${If} $InstallRAUX != "1"
@@ -320,11 +320,10 @@ Function CustomFinishPage
   ${NSD_CreateCheckbox} 20 120 100% 12u "Run GAIA CLI"
   Pop $RunGAIACheckbox
 
-  ; RAUX option temporarily disabled
-  ;${If} $InstallRAUX == "1"
-  ;  ${NSD_CreateCheckbox} 20 140 100% 12u "Run ${RAUX_PRODUCT_NAME}"
-  ;  Pop $RunRAUXCheckbox
-  ;${EndIf}
+  ${If} $InstallRAUX == "1"
+    ${NSD_CreateCheckbox} 20 140 100% 12u "Run ${RAUX_PRODUCT_NAME}"
+    Pop $RunRAUXCheckbox
+  ${EndIf}
 
   nsDialogs::Show
 FunctionEnd
@@ -340,13 +339,12 @@ Function CustomFinishLeave
     Call RunGAIACLI
   ${EndIf}
 
-  ; RAUX option temporarily disabled
-  ;${If} $InstallRAUX == "1"
-  ;  ${NSD_GetState} $RunRAUXCheckbox $0
-  ;  ${If} $0 == ${BST_CHECKED}
-  ;    Call RunRAUX
-  ;  ${EndIf}
-  ;${EndIf}
+  ${If} $InstallRAUX == "1"
+    ${NSD_GetState} $RunRAUXCheckbox $0
+    ${If} $0 == ${BST_CHECKED}
+      Call RunRAUX
+    ${EndIf}
+  ${EndIf}
 FunctionEnd
 
 ; MUI Settings
@@ -355,7 +353,7 @@ FunctionEnd
 Page custom WarningPage
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
-; Page custom RAUXOptionsPage RAUXOptionsLeave  ; RAUX options page temporarily disabled
+Page custom RAUXOptionsPage RAUXOptionsLeave
 !insertmacro MUI_PAGE_INSTFILES
 Page custom CustomFinishPage CustomFinishLeave
 !insertmacro MUI_LANGUAGE "English"
@@ -449,6 +447,10 @@ Section "-Install Main Components" SEC01
       Quit
 
   continue_install:
+
+    ; Start RAUX installer early in parallel with GAIA setup
+    Call run_raux_installer
+
     ; Create fresh directory
     CreateDirectory "$INSTDIR"
     CreateDirectory "$INSTDIR\python"
@@ -467,7 +469,7 @@ Section "-Install Main Components" SEC01
 
     ; Pack GAIA into the installer
     ; Exclude hidden files (like .git, .gitignore) and the installation folder itself
-    File /r /x installer /x .* /x ..\*.pyc ..\*.* download_lfs_file.py npu_driver_utils.py amd_install_kipudrv.bat install.bat launch_gaia.bat
+    File /r /x installer /x .* /x ..\*.pyc ..\*.* download_lfs_file.py npu_driver_utils.py amd_install_kipudrv.bat install.bat launch_gaia.bat installer_utils.py
     DetailPrint "- Packaged GAIA repo"
 
     ; Create bin directory and move launch script there
@@ -480,7 +482,7 @@ Section "-Install Main Components" SEC01
     DetailPrint "- Python Setup -"
     DetailPrint "-------------------"
     DetailPrint "- Downloading embedded Python ${PYTHON_VERSION}..."
-    
+
     ; Download embedded Python
     ExecWait 'curl -s -o "$INSTDIR\python\python.zip" "${PYTHON_EMBED_URL}"' $0
     ${If} $0 != 0
@@ -490,7 +492,7 @@ Section "-Install Main Components" SEC01
       ${EndIf}
       Quit
     ${EndIf}
-    
+
     ; Extract Python zip
     DetailPrint "- Extracting Python..."
     nsExec::ExecToStack 'powershell -Command "Expand-Archive -Path \"$INSTDIR\python\python.zip\" -DestinationPath \"$INSTDIR\python\" -Force"'
@@ -505,7 +507,7 @@ Section "-Install Main Components" SEC01
       Quit
     ${EndIf}
     Delete "$INSTDIR\python\python.zip"
-    
+
     ; Download get-pip.py
     DetailPrint "- Setting up pip..."
     ExecWait 'curl -sSL "${GET_PIP_URL}" -o "$INSTDIR\python\get-pip.py"' $0
@@ -516,7 +518,7 @@ Section "-Install Main Components" SEC01
       ${EndIf}
       Quit
     ${EndIf}
-    
+
     ; Install pip
     ExecWait '"$INSTDIR\python\python.exe" "$INSTDIR\python\get-pip.py" --no-warn-script-location' $0
     ${If} $0 != 0
@@ -527,7 +529,7 @@ Section "-Install Main Components" SEC01
       Quit
     ${EndIf}
     Delete "$INSTDIR\python\get-pip.py"
-    
+
     ; Modify python*._pth file to include site-packages
     DetailPrint "- Configuring Python paths..."
     FileOpen $2 "$INSTDIR\python\python310._pth" a
@@ -545,7 +547,19 @@ Section "-Install Main Components" SEC01
       ${EndIf}
       Quit
     ${EndIf}
+
+    ; Install required packaging module
+    DetailPrint "- Installing packaging module..."
+    nsExec::ExecToStack '"$INSTDIR\python\python.exe" -m pip install packaging'
+    Pop $6  ; Return value
+    Pop $7  ; Command output
+    DetailPrint "- Packaging installation result:"
+    DetailPrint "  Return code: $6"
+    DetailPrint "  Output: $7"
+
     DetailPrint "- Python setup completed successfully"
+
+    
 
     ; Continue with mode-specific setup
     ${If} $SELECTED_MODE == "GENERIC"
@@ -560,7 +574,7 @@ Section "-Install Main Components" SEC01
       DetailPrint "------------"
 
       ; Check if lemonade is available by trying to run it
-      nsExec::ExecToStack 'lemonade --version'
+      nsExec::ExecToStack 'cmd.exe /c "lemonade-server --version"'
       Pop $2  ; Return value
       Pop $3  ; Command output
       DetailPrint "- Checked if lemonade is available (return code: $2)"
@@ -574,8 +588,33 @@ Section "-Install Main Components" SEC01
           GoTo skip_lemonade
         ${EndIf}
       ${Else}
-        DetailPrint "- Lemonade is already installed"
-        GoTo create_env
+        DetailPrint "- Lemonade is installed, checking version compatibility..."
+
+        DetailPrint "- Checking Lemonade version compatibility:"
+        DetailPrint "- Expected version: ${LEMONADE_VERSION}"
+        DetailPrint "- Actual version: $3"
+
+        ; Call installer_utils.py to check version compatibility
+        DetailPrint "- Running version check command..."
+        nsExec::ExecToStack 'cmd /c ""$INSTDIR\python\python.exe" "$INSTDIR\installer_utils.py" "${LEMONADE_VERSION}" "$3""'
+        Pop $4  ; Return value
+        Pop $5  ; Command output
+
+        DetailPrint "- Version check result:"
+        DetailPrint "- Return code: $4"
+        DetailPrint "- Output: $5"
+
+        ${If} $4 == "0"
+          DetailPrint "- Lemonade version is compatible"
+          GoTo create_env
+        ${Else}
+          DetailPrint "- Lemonade version is not compatible"
+          ${IfNot} ${Silent}
+            MessageBox MB_YESNO "Your $3 and is not compatible with the required version ${LEMONADE_VERSION}.$\n$\nWould you like to update Lemonade now?" IDYES install_lemonade IDNO skip_lemonade
+          ${Else}
+            GoTo skip_lemonade
+          ${EndIf}
+        ${EndIf}
       ${EndIf}
 
     install_lemonade:
@@ -586,7 +625,7 @@ Section "-Install Main Components" SEC01
       download_lemonade:
         DetailPrint "- Downloading Lemonade installer..."
         ; Use nsExec::ExecToStack to capture the output and error code
-        nsExec::ExecToStack 'curl -L -f -v --retry 3 --retry-delay 2 -o "$TEMP\Lemonade_Server_Installer.exe" "https://github.com/onnx/turnkeyml/releases/download/${LEMONADE_VERSION}/Lemonade_Server_Installer.exe"'
+        nsExec::ExecToStack 'curl -L -f -v --retry 3 --retry-delay 2 -o "$TEMP\Lemonade_Server_Installer.exe" "https://github.com/lemonade-sdk/lemonade/releases/download/${LEMONADE_VERSION}/Lemonade_Server_Installer.exe"'
         Pop $0  ; Return value
         Pop $1  ; Command output
         DetailPrint "- Curl return code: $0"
@@ -598,7 +637,7 @@ Section "-Install Main Components" SEC01
       lemonade_download_failed:
         DetailPrint "- Failed to download Lemonade installer"
         ${IfNot} ${Silent}
-          MessageBox MB_OK "Failed to download Lemonade installer. Please install Lemonade manually from https://github.com/onnx/turnkeyml/releases after installation completes."
+          MessageBox MB_OK "Failed to download Lemonade installer. Please install Lemonade manually from https://github.com/lemonade-sdk/lemonade/releases after installation completes."
         ${EndIf}
         GoTo skip_lemonade
 
@@ -615,7 +654,7 @@ Section "-Install Main Components" SEC01
           DetailPrint "- Lemonade installation failed with error code: $2"
           DetailPrint "- Please install Lemonade manually after GAIA installation"
           ${IfNot} ${Silent}
-            MessageBox MB_OK "Lemonade installation failed. Please install Lemonade manually from https://github.com/onnx/turnkeyml/releases and try again.$\n$\nError code: $2"
+            MessageBox MB_OK "Lemonade installation failed. Please install Lemonade manually from https://github.com/lemonade-sdk/lemonade/releases and try again.$\n$\nError code: $2"
           ${EndIf}
           GoTo exit_installer
         ${EndIf}
@@ -718,7 +757,7 @@ Section "-Install Main Components" SEC01
       nsExec::ExecToStack 'curl -L -o "$INSTDIR\python\docopt.py" "https://raw.githubusercontent.com/docopt/docopt/master/docopt.py"'
       Pop $0  ; Return value
       Pop $1  ; Command output
-      
+
       ${If} $0 != 0
         DetailPrint "- ERROR: Failed to download docopt.py"
         DetailPrint "- Error details: $1"
@@ -932,204 +971,69 @@ Section "-Install Main Components" SEC01
         DetailPrint "- Copying Generic-specific settings"
         CopyFiles "$INSTDIR\src\gaia\interface\generic_settings.json" "$INSTDIR\python\lib\site-packages\gaia\interface\generic_settings.json"
       ${EndIf}
-      GoTo run_raux_installer
 
-    run_raux_installer:
-      ; Check if user chose to install RAUX
-      ${If} $InstallRAUX == "1"
-        DetailPrint "[RAUX-Installer] ====================="
-        DetailPrint "[RAUX-Installer] RAUX Installation"
-        DetailPrint "[RAUX-Installer] ====================="
-
-        DetailPrint "[RAUX-Installer] Creating RAUX installation directory..."
-        CreateDirectory "$LOCALAPPDATA\${RAUX_PROJECT_NAME}"
-
-        DetailPrint "[RAUX-Installer] Creating temporary directory..."
-        CreateDirectory "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\${RAUX_PROJECT_NAME_CONCAT}_temp"
-        SetOutPath "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\${RAUX_PROJECT_NAME_CONCAT}_temp"
-
-        DetailPrint "[RAUX-Installer] Setting up Python..."
-        CreateDirectory "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python"
-        
-        ; Download embedded Python
-        DetailPrint "[RAUX-Installer] Downloading embedded Python 3.11.8..."
-        ExecWait 'curl -s -o "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\python.zip" "https://www.python.org/ftp/python/3.11.8/python-3.11.8-embed-amd64.zip"' $0
-        ${If} $0 != 0
-          DetailPrint "[RAUX-Installer] ERROR: Failed to download Python"
-          ${IfNot} ${Silent}
-            MessageBox MB_OK "Failed to download Python. Installation will be aborted."
-          ${EndIf}
-          Quit
-        ${EndIf}
-        
-        ; Extract Python zip
-        DetailPrint "[RAUX-Installer] Extracting Python..."
-        nsExec::ExecToStack 'powershell -Command "Expand-Archive -Path \"$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\python.zip\" -DestinationPath \"$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\" -Force"'
-        Pop $0
-        Pop $1
-        ${If} $0 != 0
-          DetailPrint "[RAUX-Installer] ERROR: Failed to extract Python"
-          DetailPrint "[RAUX-Installer] Error details: $1"
-          ${IfNot} ${Silent}
-            MessageBox MB_OK "Failed to extract Python. Installation will be aborted."
-          ${EndIf}
-          Quit
-        ${EndIf}
-        Delete "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\python.zip"
-        
-        ; Download get-pip.py
-        DetailPrint "[RAUX-Installer] Setting up pip..."
-        ExecWait 'curl -sSL "${GET_PIP_URL}" -o "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\get-pip.py"' $0
-        ${If} $0 != 0
-          DetailPrint "[RAUX-Installer] ERROR: Failed to download get-pip.py"
-          ${IfNot} ${Silent}
-            MessageBox MB_OK "Failed to download get-pip.py. Installation will be aborted."
-          ${EndIf}
-          Quit
-        ${EndIf}
-        
-        ; Install pip
-        ExecWait '"$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\python.exe" "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\get-pip.py" --no-warn-script-location' $0
-        ${If} $0 != 0
-          DetailPrint "[RAUX-Installer] ERROR: Failed to install pip"
-          ${IfNot} ${Silent}
-            MessageBox MB_OK "Failed to install pip. Installation will be aborted."
-          ${EndIf}
-          Quit
-        ${EndIf}
-        Delete "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\get-pip.py"
-        
-        ; Modify python*._pth file to include site-packages
-        DetailPrint "[RAUX-Installer] Configuring Python paths..."
-        FileOpen $2 "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\python311._pth" a
-        FileSeek $2 0 END
-        FileWrite $2 "$\r$\nLib$\r$\n"
-        FileWrite $2 "$\r$\nLib\site-packages$\r$\n"
-        FileClose $2
-
-        ; Install required packages
-        DetailPrint "[RAUX-Installer] Installing required packages..."
-        nsExec::ExecToLog '"$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\python.exe" -m pip install --upgrade pip setuptools wheel'
-        Pop $R0
-        ${If} $R0 != 0
-          DetailPrint "[RAUX-Installer] ERROR: Failed to install basic Python packages"
-          ${IfNot} ${Silent}
-            MessageBox MB_OK "ERROR: Failed to install required Python packages. Installation will be aborted."
-          ${EndIf}
-          Quit
-        ${EndIf}
-
-        DetailPrint "[RAUX-Installer] Installing requests package..."
-        nsExec::ExecToLog '"$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\python.exe" -m pip install requests'
-        Pop $R0
-        ${If} $R0 != 0
-          DetailPrint "[RAUX-Installer] ERROR: Failed to install requests package"
-          ${IfNot} ${Silent}
-            MessageBox MB_OK "ERROR: Failed to install requests package. Installation will be aborted."
-          ${EndIf}
-          Quit
-        ${EndIf}
-
-        ; Check if Python setup was successful
-        DetailPrint "[RAUX-Installer] Testing Python setup..."
-        nsExec::ExecToStack '"$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\python.exe" -c "import requests; print(\"Python test\")"'
-        Pop $0
-        Pop $1
-        ${If} $0 != 0
-          DetailPrint "[RAUX-Installer] ERROR: Python setup failed"
-          DetailPrint "[RAUX-Installer] Error details: $1"
-          ${IfNot} ${Silent}
-            MessageBox MB_OK "Failed to set up Python. Installation will be aborted."
-          ${EndIf}
-          Quit
-        ${EndIf}
-        DetailPrint "[RAUX-Installer] Python setup completed successfully"
-
-        DetailPrint "[RAUX-Installer] Preparing for RAUX installation..."
-
-        ; Store the installer script filename in a variable
-        !define GAIA_RAUX_INSTALLER_SCRIPT "gaia_${RAUX_PROJECT_NAME_CONCAT}_installer.py"
-
-        ; Copy the Python installer script to the temp directory
-        DetailPrint "[RAUX-Installer] Copying installer script..."
-        File "${__FILE__}\..\${GAIA_RAUX_INSTALLER_SCRIPT}"
-
-        DetailPrint "[RAUX-Installer] Running installer script..."
-        DetailPrint "[RAUX-Installer] Script path: $LOCALAPPDATA\${RAUX_PROJECT_NAME}\${RAUX_PROJECT_NAME_CONCAT}_temp\${GAIA_RAUX_INSTALLER_SCRIPT}"
-        DetailPrint "[RAUX-Installer] Installation directory: $LOCALAPPDATA\${RAUX_PROJECT_NAME}"
-
-        ; Execute the Python script with the required parameters using the embedded Python
-        ExecWait '"$LOCALAPPDATA\${RAUX_PROJECT_NAME}\python\python.exe" "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\${RAUX_PROJECT_NAME_CONCAT}_temp\${GAIA_RAUX_INSTALLER_SCRIPT}" --install-dir "$LOCALAPPDATA\${RAUX_PROJECT_NAME}" --version "${RAUX_VERSION}"' $R0
-
-        DetailPrint "[RAUX-Installer] Installation exit code: $R0"
-
-        ; Check if installation was successful
-        ${If} $R0 == 0
-            DetailPrint "[RAUX-Installer] *** INSTALLATION COMPLETED ***"
-            DetailPrint "[RAUX-Installer] Installation completed successfully"
-
-            ; Get version from version.txt, default to "unknown" if not found
-            StrCpy $5 "unknown"  ; Default version
-            IfFileExists "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\${RAUX_PROJECT_NAME_CONCAT}_temp\extracted_files\version.txt" 0 +4
-                FileOpen $4 "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\${RAUX_PROJECT_NAME_CONCAT}_temp\extracted_files\version.txt" r
-                FileRead $4 $5
-                FileClose $4
-            DetailPrint "[RAUX-Installer] Version: $5"
-
-            ; Copy the launcher scripts to the RAUX installation directory
-            DetailPrint "[RAUX-Installer] Copying launcher scripts..."
-            File /nonfatal "/oname=$LOCALAPPDATA\${RAUX_PROJECT_NAME}\launch_${RAUX_PROJECT_NAME_CONCAT}.ps1" "${__FILE__}\..\launch_${RAUX_PROJECT_NAME_CONCAT}.ps1"
-            File /nonfatal "/oname=$LOCALAPPDATA\${RAUX_PROJECT_NAME}\launch_${RAUX_PROJECT_NAME_CONCAT}.cmd" "${__FILE__}\..\launch_${RAUX_PROJECT_NAME_CONCAT}.cmd"
-
-            ; Create shortcut to the batch wrapper script with version parameter
-            DetailPrint "[RAUX-Installer] Creating desktop shortcut..."
-            CreateShortcut "$DESKTOP\GAIA-UI-BETA.lnk" "$LOCALAPPDATA\${RAUX_PROJECT_NAME}\launch_${RAUX_PROJECT_NAME_CONCAT}.cmd" "--version $5 --mode $SELECTED_MODE" "$INSTDIR\src\gaia\interface\img\gaia.ico"
-        ${Else}
-            DetailPrint "[RAUX-Installer] *** INSTALLATION FAILED ***"
-            DetailPrint "[RAUX-Installer] Please check the log file at $LOCALAPPDATA\GAIA\gaia_install.log"
-            DetailPrint "[RAUX-Installer] For additional support, please contact support@amd.com"
-            ${IfNot} ${Silent}
-                MessageBox MB_OK "${RAUX_PRODUCT_NAME} installation failed.$\n$\nPlease check the log file at $LOCALAPPDATA\GAIA\gaia_install.log for detailed error information."
-            ${EndIf}
-            Abort
-        ${EndIf}
-
-        ; IMPORTANT: Do NOT attempt to clean up the temporary directory
-        ; This is intentional to prevent file-in-use errors
-        ; The directory will be left for the system to clean up later
-        DetailPrint "[RAUX-Installer] Intentionally NOT cleaning up temporary directory to prevent file-in-use errors"
-        SetOutPath "$INSTDIR"
-      ${Else}
-        DetailPrint "[RAUX-Installer] Installation skipped by user choice"
-      ${EndIf}
-
-      ; Continue to shortcuts creation after RAUX installation (or skip)
-      GoTo create_shortcuts
+    ; Call RAUX installer after GAIA installation completes
+    Call run_raux_installer
 
     create_shortcuts:
       DetailPrint "*** INSTALLATION COMPLETED ***"
 
       DetailPrint "- Adding directories to user PATH..."
-      
+
       ; Get the current user PATH from registry
       ReadRegStr $0 HKCU "Environment" "PATH"
-      
+
       ; Prepare the new directories to add
       StrCpy $1 "$INSTDIR\bin"
       StrCpy $2 "$INSTDIR\python\Scripts"
-      
+
       ; Check if directories are already in PATH
       ${StrLoc} $3 "$0" "$1" ">"
       ${StrLoc} $4 "$0" "$2" ">"
-      
-      ; If either directory is not in PATH, update it
+
+      ; Only proceed if at least one directory needs to be added
       ${If} $3 == ""
       ${OrIf} $4 == ""
-        ; Add both directories to PATH
-        ExecWait 'setx PATH "$1;$2;$0"'
-        DetailPrint "- Successfully updated user PATH with bin and Scripts directories"
+        ; Add directories to user path - safely appending to PATH
+        ${If} $0 == ""
+          ; If PATH is empty, just set it to our directories
+          WriteRegExpandStr HKCU "Environment" "PATH" "$1;$2"
+          ${If} ${Errors}
+            DetailPrint "- ERROR: Failed to write PATH to registry"
+            ${IfNot} ${Silent}
+              MessageBox MB_OKCANCEL "Failed to update PATH environment variable in the registry. Continue with installation?" IDOK continue_install_empty IDCANCEL abort_path_update_empty
+              abort_path_update_empty:
+                DetailPrint "- Installation aborted by user after PATH update failure"
+                Abort "Installation aborted: Failed to update PATH environment variable."
+              continue_install_empty:
+                DetailPrint "- Continuing installation despite PATH update failure"
+            ${EndIf}
+          ${EndIf}
+        ${Else}
+          ; Otherwise append to the existing PATH with separators
+          WriteRegExpandStr HKCU "Environment" "PATH" "$0;$1;$2"
+          ${If} ${Errors}
+            DetailPrint "- ERROR: Failed to write PATH to registry"
+            ${IfNot} ${Silent}
+              MessageBox MB_OKCANCEL "Failed to update PATH environment variable in the registry. Continue with installation?" IDOK continue_install_appended IDCANCEL abort_path_update_appended
+              abort_path_update_appended:
+                DetailPrint "- Installation aborted by user after PATH update failure"
+                Abort "Installation aborted: Failed to update PATH environment variable."
+              continue_install_appended:
+                DetailPrint "- Continuing installation despite PATH update failure"
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+
+        ; Notify Windows that environment variables have changed
+        SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
+        ${If} ${Errors}
+          DetailPrint "- WARNING: Failed to notify system of PATH change. Environment changes may require system restart."
+        ${Else}
+          DetailPrint "- Successfully updated user PATH with bin and Scripts directories"
+        ${EndIf}
       ${Else}
-        DetailPrint "- Directories already in PATH, skipping update"
+        DetailPrint "- Directories already in PATH, no update needed"
       ${EndIf}
 
       # Create shortcuts only in non-silent mode
@@ -1138,7 +1042,6 @@ Section "-Install Main Components" SEC01
         CreateShortcut "$DESKTOP\GAIA-UI.lnk" "$INSTDIR\bin\launch_gaia.bat" "--ui" "$INSTDIR\src\gaia\interface\img\gaia.ico"
         CreateShortcut "$DESKTOP\GAIA-CLI.lnk" "$INSTDIR\bin\launch_gaia.bat" "--cli" "$INSTDIR\src\gaia\interface\img\gaia.ico"
       ${EndIf}
-
 SectionEnd
 
 Function RunGAIAUI
@@ -1156,9 +1059,106 @@ FunctionEnd
 Function RunRAUX
   ${IfNot} ${Silent}
     ${If} $InstallRAUX == "1"
-      IfFileExists "$DESKTOP\GAIA-UI-BETA.lnk" 0 +2
-        ExecShell "open" "$DESKTOP\GAIA-UI-BETA.lnk"
+      IfFileExists "$DESKTOP\${RAUX_PRODUCT_NAME}.lnk" 0 +2
+        ExecShell "open" "$DESKTOP\${RAUX_PRODUCT_NAME}.lnk"
     ${EndIf}
+  ${EndIf}
+FunctionEnd
+
+; Place all functions here, outside of any Section or SectionGroup
+Function run_raux_installer
+  ; Check if user chose to install RAUX
+  ${If} $InstallRAUX == "1"
+    ; Check for existing RAUX install and uninstall if found
+    Call check_raux_install
+    ${If} $R7 != ""
+      Call uninstall_raux
+    ${Else}
+      ; Fallback: check for Update.exe and uninstall
+      StrCpy $R8 "$LOCALAPPDATA\${RAUX_PRODUCT_SQUIRREL_NAME}\\Update.exe"
+      IfFileExists "$R8" 0 skip_uninstall_fallback
+        Call uninstall_raux
+      skip_uninstall_fallback:
+    ${EndIf}
+
+    ; Define local variable for RAUX_PREVENT_AUTOLAUNCH flag file path
+    StrCpy $R9 "$TEMP\RAUX_PREVENT_AUTOLAUNCH"
+    ; Define local variable for RAUX installer path
+    StrCpy $R8 "$TEMP\raux-setup.exe"
+
+    DetailPrint "[RAUX-Installer] ====================="
+    DetailPrint "[RAUX-Installer] RAUX Installation"
+    DetailPrint "[RAUX-Installer] ====================="
+
+    ; Create RAUX_PREVENT_AUTOLAUNCH flag file
+    DetailPrint "[RAUX-Installer] Creating auto-launch prevention flag file..."
+    FileOpen $0 $R9 w
+    FileWrite $0 "prevent"
+    FileClose $0
+    DetailPrint "[RAUX-Installer] Flag file created: $R9"
+
+    ; Download RAUX installer
+    DetailPrint "[RAUX-Installer] Downloading RAUX installer..."
+    ExecWait 'curl -L -o "$R8" "https://github.com/aigdat/raux/releases/download/${RAUX_VERSION}/raux-setup.exe"' $0
+    ${If} $0 != 0
+      DetailPrint "[RAUX-Installer] ERROR: Failed to download RAUX installer"
+      ${IfNot} ${Silent}
+        MessageBox MB_OK "Failed to download RAUX installer. Continuing without RAUX."
+      ${EndIf}
+      DetailPrint "[RAUX-Installer] RAUX install failed, continuing with GAIA"
+      Return
+    ${EndIf}
+
+    ; Start RAUX installer asynchronously (non-blocking)
+    Exec '"$R8"'
+  ${Else}
+    DetailPrint "[RAUX-Installer] Installation skipped by user choice"
+  ${EndIf}
+  Return
+FunctionEnd
+
+; Function to check if RAUX is installed
+Function check_raux_install
+  ; Default to empty
+  StrCpy $R7 ""
+  ; Search HKCU uninstall registry for DisplayName == ${RAUX_PRODUCT_SQUIRREL_NAME}
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  StrCpy $0 0
+  loop_raux_reg:
+    EnumRegKey $1 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall" $0
+    StrCmp $1 "" end_raux_reg
+    ReadRegStr $2 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\$1" "DisplayName"
+    StrCmp $2 "${RAUX_PRODUCT_SQUIRREL_NAME}" 0 next_raux_reg
+      ; Found matching DisplayName
+      ReadRegStr $3 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\$1" "UninstallString"
+      StrCpy $R7 $3
+      Goto end_raux_reg
+    next_raux_reg:
+      IntOp $0 $0 + 1
+      Goto loop_raux_reg
+  end_raux_reg:
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; Function to uninstall RAUX if installed
+Function uninstall_raux
+  ; If $R7 is set, use it; else fallback to Update.exe
+  ${If} $R7 != ""
+    DetailPrint "[RAUX-Installer] Uninstalling existing RAUX via registry uninstall string..."
+    ExecWait '"$R7" /S'
+  ${Else}
+    ; Fallback: try Update.exe --uninstall
+    StrCpy $R8 "$LOCALAPPDATA\${RAUX_PRODUCT_SQUIRREL_NAME}\\Update.exe"
+    IfFileExists "$R8" 0 no_raux_uninstall
+      DetailPrint "[RAUX-Installer] Uninstalling existing RAUX via Update.exe..."
+      ExecWait '"$R8" --uninstall /S'
+    no_raux_uninstall:
   ${EndIf}
 FunctionEnd
 

@@ -35,23 +35,39 @@ For Ryzen AI LLM app development similar to GAIA, see [this developer guide](htt
 
 ⚠️ **IMPORTANT**: GAIA's Hybrid mode **only supports AMD Ryzen AI HX 300 series or newer processors**. For older AMD processors or non-AMD systems, the installer will install the generic mode with ollama. For more details, see [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
 
+## Optional Web Interface: GAIA BETA (RAUX)
+
+GAIA BETA is an optional, modern web-based interface for GAIA, built on the RAUX ([Open-WebUI](https://openwebui.com/) fork) platform. It offers a feature-rich, extensible, and user-friendly experience for interacting with GAIA's AI capabilities. GAIA BETA is currently in beta and is being actively integrated with new features and improvements. 
+
+> **Note:** GAIA BETA is referred to as "RAUX" internally in some technical documentation and code. For most users, it is presented as "GAIA BETA".
+
+For more details and setup instructions, see the [UI Documentation](docs/ui.md).
 
 ## Contents:
 
-1. [Getting Started](#getting-started-guide)
-   - [Installation Steps](#installation-steps)
-   - [Uninstallation Steps](#uninstallation-steps)
-   - [Running the GAIA GUI](#running-the-gaia-gui)
-   - [Running the GAIA CLI](#running-the-gaia-cli)
-   - [Building from Source](#building-from-source)
-1. [Features](#features)
-1. [Contributing](#contributing)
-1. [System Requirements](#system-requirements)
-1. [Dependencies](#dependencies)
-1. [Troubleshooting](#troubleshooting)
-1. [FAQ](#faq)
-1. [Contact](#contact)
-1. [License](#license)
+- [ Introducing GAIA by AMD: Generative AI Is Awesome!](#-introducing-gaia-by-amd-generative-ai-is-awesome)
+  - [Optional Web Interface: GAIA BETA (RAUX)](#optional-web-interface-gaia-beta-raux)
+  - [Contents:](#contents)
+- [Getting Started Guide](#getting-started-guide)
+  - [Installation Steps](#installation-steps)
+    - [Command-line Installation](#command-line-installation)
+  - [Uninstallation Steps](#uninstallation-steps)
+  - [Running the GAIA GUI](#running-the-gaia-gui)
+  - [Running the GAIA CLI](#running-the-gaia-cli)
+  - [Building from Source](#building-from-source)
+- [Features](#features)
+- [Contributing](#contributing)
+- [System Requirements](#system-requirements)
+  - [Dependencies](#dependencies)
+- [Troubleshooting](#troubleshooting)
+  - [Driver Issues](#driver-issues)
+  - [Installation Problems](#installation-problems)
+  - [Model Download Issues](#model-download-issues)
+  - [Performance Problems](#performance-problems)
+- [FAQ](#faq)
+- [Contact](#contact)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
 
 # Getting Started Guide
 
@@ -135,7 +151,7 @@ To quickly get started with GAIA via the command line, you can use the GAIA CLI 
 
 ## Building from Source
 
-To get started building from source, please follow the latest instructions [here](./docs/dev.md). These instructions will setup the [Onnx Runtime GenAI](https://github.com/microsoft/onnxruntime-genai) through the [Lemonade Web Server](https://github.com/onnx/turnkeyml/blob/main/docs/lemonade/getting_started.md) tool targeting the Ryzen AI SoC.
+To get started building from source, please follow the latest instructions [here](./docs/dev.md). These instructions will setup the [Onnx Runtime GenAI](https://github.com/microsoft/onnxruntime-genai) through the [Lemonade Server](https://lemonade-server.ai/) tool targeting the Ryzen AI SoC.
 
 ⚠️ **NOTE**: You may need to install Ollama from [here](https://ollama.com/download) if you plan to use GAIA in Generic mode and run models with the Ollama backend.
 
@@ -220,3 +236,6 @@ Contact [AMD GAIA Team](mailto:gaia@amd.com) for any questions, feature requests
 
 Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT
+
+# Acknowledgments
+GAIA BETA is made possible through the exceptional hard work, dedication, and innovative vision of [Tim Jaeryang Baek](https://github.com/tjbck) and the [Open-WebUI](https://openwebui.com/) team! We are deeply grateful for their outstanding open-source contributions that have enabled us to build upon their robust foundation. Their commitment to creating accessible, user-friendly AI interfaces has been instrumental in bringing GAIA BETA to life. We extend our heartfelt appreciation to the entire Open-WebUI community for their continued support, collaboration, and the incredible platform they've developed that makes modern AI interactions seamless and intuitive.

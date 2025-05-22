@@ -22,6 +22,8 @@ body:
           required: false
         - label: I've checked the hardware requirements in the docs
           required: false
+        - label: This issue relates to GAIA BETA (Open-WebUI)
+          required: false
 
   - type: input
     id: gaia-version
