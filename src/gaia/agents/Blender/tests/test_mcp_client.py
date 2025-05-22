@@ -4,7 +4,7 @@ import pytest
 import sys
 import logging
 from contextlib import contextmanager
-from gaia.agents.Blender.mcp.mcp_client import MCPClient, MCPError
+from gaia.mcp.blender_mcp_client import MCPClient, MCPError
 
 logging.getLogger('asyncio').setLevel(logging.INFO)
 
@@ -12,7 +12,7 @@ logging.getLogger('asyncio').setLevel(logging.INFO)
 def suppress_client_logs():
     """Temporarily suppress MCPClient logs during tests with expected errors."""
     # Save the original log level
-    client_logger = logging.getLogger("gaia.agents.Blender.mcp.mcp_client")
+    client_logger = logging.getLogger("gaia.mcp.blender_mcp_client")
     original_level = client_logger.level
 
     # Set to a higher level to suppress expected errors
@@ -195,7 +195,7 @@ class TestBlenderMCP:
         with suppress_client_logs():
             try:
                 mcp_client.get_object_info("TestDeleteCube")
-                # assert False, "Expected MCPError was not raised"
+                assert False, "Expected MCPError was not raised"
             except MCPError as e:
                 assert "not found" in str(e)
                 print(f"Verified object was deleted: {str(e)}")
@@ -303,14 +303,13 @@ nonexistent_variable + 1
         with suppress_client_logs():
             try:
                 mcp_client.execute_code(invalid_code)
-                # assert False, "Expected MCPError was not raised"
+                assert False, "Expected MCPError was not raised"
             except MCPError as e:
                 error_message = str(e)
-                # Check for name error (the actual error message from Python)
-                assert "name 'nonexistent_variable' is not defined" in error_message
-                # Also check that it's a code execution error
-                assert "Code execution error" in error_message
-                print(f"Received expected error: {error_message}")
+                # Check for enhanced error message with helpful context
+                assert "nonexistent_variable" in error_message
+                assert "Make sure to declare it before use" in error_message
+                print(f"Received enhanced error: {error_message}")
 
 
 if __name__ == "__main__":

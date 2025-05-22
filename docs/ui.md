@@ -95,6 +95,8 @@ After making changes, you need to compile the updated files:
 
 RAUX is a modern web-based interface for GAIA, built as a fork of Open-WebUI. It provides an extensible, feature-rich, and user-friendly self-hosted AI platform. It is currently in beta and is being actively integrated with new features and improvements rolling out regularly. While it offers a modern web-based experience, please note that it's still under development and some features may be experimental.
 
+> **Note:** RAUX is pre-wired to work with Lemonade as a stepping stone; full GAIA integration will be available in a future release.
+
 For more information about RAUX, including setup instructions and feature documentation, please refer to the [RAUX GitHub repository README](https://github.com/aigdat/raux/blob/main/README.md).
 
 # License

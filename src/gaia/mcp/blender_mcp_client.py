@@ -3,6 +3,7 @@
 import socket
 import json
 import logging
+import re
 from gaia.logger import get_logger
 
 class MCPError(Exception):
@@ -18,6 +19,24 @@ class MCPClient:
         self.port = port
         self.log = self.__class__.log  # Use the class-level logger for instances
         self.log.setLevel(logging.INFO)
+
+    def _enhance_error_message(self, error_message):
+        """Enhance error messages with more helpful information."""
+        # Detect common Python errors and provide better context
+        if "name '" in error_message and "is not defined" in error_message:
+            # Extract variable name from NameError
+            match = re.search(r"name '(\w+)' is not defined", error_message)
+            if match:
+                var_name = match.group(1)
+                return f"Variable '{var_name}' is not defined. Make sure to declare it before use or check for typos."
+
+        # Handle object not found errors
+        if "Object not found:" in error_message:
+            obj_name = error_message.replace("Object not found: ", "")
+            return f"Object '{obj_name}' not found in the scene. It may have been deleted or renamed."
+
+        # Return original message if no enhancement is available
+        return error_message
 
     def send_command(self, cmd_type, params=None):
         if params is None:
@@ -45,8 +64,9 @@ class MCPClient:
 
                 if parsed_response['status'] == 'error':
                     error_message = parsed_response.get('message', 'Unknown error')
+                    enhanced_message = self._enhance_error_message(error_message)
                     self.log.error(f"Error response: {error_message}")
-                    # raise MCPError(error_message)
+                    raise MCPError(enhanced_message)
                 else:
                     self.log.debug(f"Response status: {parsed_response['status']}")
 
@@ -55,6 +75,9 @@ class MCPClient:
             error_msg = "Connection refused. Is the Blender MCP server running?"
             self.log.error(f"Connection error: {error_msg}")
             raise MCPError(error_msg)
+        except MCPError:
+            # Re-raise MCPError without wrapping it
+            raise
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             self.log.error(error_msg)
