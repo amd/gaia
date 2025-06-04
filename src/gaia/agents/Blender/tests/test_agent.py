@@ -13,16 +13,26 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Test data for various response scenarios
+<<<<<<< HEAD
 VALID_JSON_RESPONSE = '''
+=======
+VALID_JSON_RESPONSE = """
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 {
     "thought": "I'll create a red cube",
     "goal": "Create a red cube at the center",
     "tool": "create_object",
     "tool_args": {"type": "CUBE", "name": "test_cube"}
 }
+<<<<<<< HEAD
 '''
 
 VALID_PLAN_JSON = '''
+=======
+"""
+
+VALID_PLAN_JSON = """
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 {
     "thought": "I'll create a simple scene",
     "goal": "Create a scene with a red cube and blue sphere",
@@ -34,9 +44,15 @@ VALID_PLAN_JSON = '''
     "tool": "clear_scene",
     "tool_args": {}
 }
+<<<<<<< HEAD
 '''
 
 INVALID_JSON_RESPONSE = '''
+=======
+"""
+
+INVALID_JSON_RESPONSE = """
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 I'll create a red cube.
 
 ```json
@@ -49,32 +65,51 @@ I'll create a red cube.
 ```
 
 Let me know if you need anything else.
+<<<<<<< HEAD
 '''
 
 MALFORMED_JSON_RESPONSE = '''
+=======
+"""
+
+MALFORMED_JSON_RESPONSE = """
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 {
     'thought': 'I will create a red cube',
     'goal': 'Create a red cube at the center',
     'tool': 'create_object',
     'tool_args': {'type': 'CUBE', 'name': 'test_cube'}
 }
+<<<<<<< HEAD
 '''
 
 NATURAL_LANGUAGE_RESPONSE = '''
 I'll create a red cube at the center of the scene. First, I'll clear the scene to start fresh, then I'll add a cube and set its material color to red.
 '''
+=======
+"""
+
+NATURAL_LANGUAGE_RESPONSE = """
+I'll create a red cube at the center of the scene. First, I'll clear the scene to start fresh, then I'll add a cube and set its material color to red.
+"""
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
 # Example tasks from app.py for integration testing
 EXAMPLE_TASKS = [
     "Clear the scene to start fresh",
     "Create a red cube at the center of the scene and make sure it has a red material",
     "Create a blue sphere at position (3, 0, 0) and set its scale to (2, 2, 2)",
+<<<<<<< HEAD
     "Create a green cube at (0, 0, 0) and a red sphere 3 units above it"
+=======
+    "Create a green cube at (0, 0, 0) and a red sphere 3 units above it",
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 ]
 
 # Mocked LLM responses for integration testing
 MOCKED_RESPONSES = {
     # Valid JSON response
+<<<<<<< HEAD
     "clear_scene": json.dumps({
         "thought": "I'll clear the scene",
         "goal": "Clear the scene to start fresh",
@@ -96,16 +131,53 @@ MOCKED_RESPONSES = {
 
     # JSON with single quotes (needs correction)
     "create_blue_sphere": '''
+=======
+    "clear_scene": json.dumps(
+        {
+            "thought": "I'll clear the scene",
+            "goal": "Clear the scene to start fresh",
+            "tool": "clear_scene",
+            "tool_args": {},
+        }
+    ),
+    # Valid JSON with plan
+    "create_red_cube": json.dumps(
+        {
+            "thought": "I need to create a red cube",
+            "goal": "Create a red cube with proper material",
+            "plan": [
+                {
+                    "tool": "create_object",
+                    "tool_args": {"type": "CUBE", "name": "red_cube"},
+                },
+                {
+                    "tool": "set_material_color",
+                    "tool_args": {"object_name": "red_cube", "color": [1, 0, 0, 1]},
+                },
+            ],
+            "tool": "create_object",
+            "tool_args": {"type": "CUBE", "name": "red_cube"},
+        }
+    ),
+    # JSON with single quotes (needs correction)
+    "create_blue_sphere": """
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     {
         'thought': 'I need to create a blue sphere at the specified position',
         'goal': 'Create a blue sphere at position (3,0,0) with scale (2,2,2)',
         'tool': 'create_object',
         'tool_args': {'type': 'SPHERE', 'name': 'blue_sphere', 'location': [3,0,0], 'scale': [2,2,2]}
     }
+<<<<<<< HEAD
     ''',
 
     # Natural language with JSON embedded in text
     "color_blue_sphere": '''
+=======
+    """,
+    # Natural language with JSON embedded in text
+    "color_blue_sphere": """
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     Now I'll set the color of the sphere to blue.
 
     ```json
@@ -118,6 +190,7 @@ MOCKED_RESPONSES = {
     ```
 
     This will give the sphere a nice blue appearance.
+<<<<<<< HEAD
     ''',
 
     # Completely natural language (no JSON)
@@ -125,10 +198,22 @@ MOCKED_RESPONSES = {
     I'll create a green cube at the origin (0,0,0) and a red sphere 3 units above it.
     First, I'll create the cube, then set its color to green, then create the sphere above it, and finally set the sphere's color to red.
     '''
+=======
+    """,
+    # Completely natural language (no JSON)
+    "create_complex_scene": """
+    I'll create a green cube at the origin (0,0,0) and a red sphere 3 units above it.
+    First, I'll create the cube, then set its color to green, then create the sphere above it, and finally set the sphere's color to red.
+    """,
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 }
 
 # ----- Fixtures -----
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 @pytest.fixture
 def mock_console():
     """Mock the console to prevent rich.errors.LiveError in tests."""
@@ -160,6 +245,10 @@ def mock_console():
 
     return mock
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 @pytest.fixture
 def mock_llm_client():
     """Create a mock LLM client for testing."""
@@ -183,6 +272,7 @@ def mock_llm_client():
         elif "json" in prompt.lower() and "correct" in prompt.lower():
             # This is a JSON correction request
             # Return a fixed valid JSON for simplicity
+<<<<<<< HEAD
             return json.dumps({
                 "thought": "Correcting my JSON response",
                 "goal": "Provide properly formatted JSON",
@@ -196,10 +286,33 @@ def mock_llm_client():
                 "goal": "Complete the task",
                 "answer": "Task completed successfully"
             })
+=======
+            return json.dumps(
+                {
+                    "thought": "Correcting my JSON response",
+                    "goal": "Provide properly formatted JSON",
+                    "tool": "create_object",
+                    "tool_args": {"type": "CUBE", "name": "corrected_cube"},
+                }
+            )
+        else:
+            # Default response for other prompts
+            return json.dumps(
+                {
+                    "thought": "Processing request",
+                    "goal": "Complete the task",
+                    "answer": "Task completed successfully",
+                }
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
     mock.generate.side_effect = side_effect
     return mock
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 @pytest.fixture
 def mock_mcp_client():
     """Create a mock MCP client for testing."""
@@ -207,22 +320,39 @@ def mock_mcp_client():
     # Mock the create_object method to return a success result
     mock.create_object.return_value = {
         "status": "success",
+<<<<<<< HEAD
         "result": {
             "name": "test_cube.001"
         }
+=======
+        "result": {"name": "test_cube.001"},
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     }
     # Mock the clear_scene method
     mock.clear_scene = MagicMock(return_value={"status": "success"})
     # Mock set_material_color method
+<<<<<<< HEAD
     mock.set_material_color = MagicMock(return_value={
         "status": "success",
         "result": {"material_name": "test_material.001"}
     })
+=======
+    mock.set_material_color = MagicMock(
+        return_value={
+            "status": "success",
+            "result": {"material_name": "test_material.001"},
+        }
+    )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     # Mock modify_object method
     mock.modify_object = MagicMock(return_value={"status": "success"})
 
     return mock
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 @pytest.fixture
 def agent(mock_llm_client, mock_mcp_client, mock_console):
     """Create a Blender agent with mock clients for testing."""
@@ -231,7 +361,11 @@ def agent(mock_llm_client, mock_mcp_client, mock_console):
         mcp=mock_mcp_client,
         max_retries=3,
         debug_prompts=False,
+<<<<<<< HEAD
         max_steps=10
+=======
+        max_steps=10,
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     )
     # Replace the LLM client with our mock
     agent.llm = mock_llm_client
@@ -240,8 +374,15 @@ def agent(mock_llm_client, mock_mcp_client, mock_console):
     # Return the configured agent
     return agent
 
+<<<<<<< HEAD
 # ----- JSON Validation Tests -----
 
+=======
+
+# ----- JSON Validation Tests -----
+
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 class TestJSONValidation:
     """Tests for JSON validation and error recovery capabilities."""
 
@@ -292,6 +433,7 @@ class TestJSONValidation:
     def test_natural_language_fallback(self, agent):
         """Test fallback mechanism for natural language responses."""
         # Mock domain pattern detection with a specific return value
+<<<<<<< HEAD
         with patch.object(agent, '_get_domain_patterns', return_value={
             'create_object': {
                 'patterns': [r'create\s+(?:a|an)?\s*(\w+)'],
@@ -305,6 +447,25 @@ class TestJSONValidation:
         }):
             # Also mock _extract_json_from_response to ensure it returns None
             with patch.object(agent, '_extract_json_from_response', return_value=None):
+=======
+        with patch.object(
+            agent,
+            "_get_domain_patterns",
+            return_value={
+                "create_object": {
+                    "patterns": [r"create\s+(?:a|an)?\s*(\w+)"],
+                    "fallback": {
+                        "thought": "Detected intention to create an object",
+                        "goal": "Create a default object",
+                        "tool": "create_object",
+                        "tool_args": {"type": "CUBE", "name": "auto_created_cube"},
+                    },
+                }
+            },
+        ):
+            # Also mock _extract_json_from_response to ensure it returns None
+            with patch.object(agent, "_extract_json_from_response", return_value=None):
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 parsed = agent.process_llm_response(NATURAL_LANGUAGE_RESPONSE)
 
                 # Should detect the create object intent and return appropriate fallback
@@ -318,7 +479,11 @@ class TestJSONValidation:
         agent.llm.generate.return_value = VALID_JSON_RESPONSE
 
         # Also mock _extract_json_from_response to ensure it returns None
+<<<<<<< HEAD
         with patch.object(agent, '_extract_json_from_response', return_value=None):
+=======
+        with patch.object(agent, "_extract_json_from_response", return_value=None):
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             # Process an invalid response, which should trigger a retry
             parsed = agent.process_llm_response(INVALID_JSON_RESPONSE)
 
@@ -336,9 +501,19 @@ class TestJSONValidation:
         agent.llm.generate.return_value = VALID_JSON_RESPONSE
 
         # Spy on the _create_json_correction_prompt method
+<<<<<<< HEAD
         with patch.object(agent, '_create_json_correction_prompt', wraps=agent._create_json_correction_prompt) as mock_create_prompt:
             # Also mock _extract_json_from_response to ensure it returns None
             with patch.object(agent, '_extract_json_from_response', return_value=None):
+=======
+        with patch.object(
+            agent,
+            "_create_json_correction_prompt",
+            wraps=agent._create_json_correction_prompt,
+        ) as mock_create_prompt:
+            # Also mock _extract_json_from_response to ensure it returns None
+            with patch.object(agent, "_extract_json_from_response", return_value=None):
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 # First retry should use regular correction prompt
                 agent.process_llm_response(INVALID_JSON_RESPONSE)
 
@@ -351,7 +526,14 @@ class TestJSONValidation:
         enhanced_prompt = agent._add_format_reminder(test_prompt)
 
         # Verify the enhanced prompt contains the reminder text
+<<<<<<< HEAD
         assert "IMPORTANT: Your response must be a single valid JSON object" in enhanced_prompt
+=======
+        assert (
+            "IMPORTANT: Your response must be a single valid JSON object"
+            in enhanced_prompt
+        )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         assert test_prompt in enhanced_prompt  # Original prompt is preserved
 
     def test_blender_domain_patterns(self, agent):
@@ -360,6 +542,7 @@ class TestJSONValidation:
         patterns = agent._get_domain_patterns()
 
         # Verify Blender-specific patterns are present
+<<<<<<< HEAD
         assert 'create_object' in patterns
         assert 'color_object' in patterns
         assert 'move_object' in patterns
@@ -367,6 +550,15 @@ class TestJSONValidation:
 
         # Test pattern matching for object creation
         create_pattern = patterns['create_object']['patterns'][0]
+=======
+        assert "create_object" in patterns
+        assert "color_object" in patterns
+        assert "move_object" in patterns
+        assert "clear_scene" in patterns
+
+        # Test pattern matching for object creation
+        create_pattern = patterns["create_object"]["patterns"][0]
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         match = re.search(create_pattern, "create a cube at the center", re.IGNORECASE)
         assert match is not None
         assert match.group(1) == "cube"
@@ -374,8 +566,12 @@ class TestJSONValidation:
     def test_fallback_response(self, agent):
         """Test the fallback response mechanism."""
         fallback = agent._create_fallback_response(
+<<<<<<< HEAD
             "I think I should create a red cube for this task.",
             "JSON parsing error"
+=======
+            "I think I should create a red cube for this task.", "JSON parsing error"
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         )
 
         # Verify the fallback response has the required fields
@@ -386,7 +582,11 @@ class TestJSONValidation:
 
     def test_extract_json_from_response(self, agent):
         """Test the JSON extraction helper method."""
+<<<<<<< HEAD
         test_response = '''
+=======
+        test_response = """
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         I'll help you create this scene.
 
         ```json
@@ -397,19 +597,36 @@ class TestJSONValidation:
             "tool_args": {"type": "CUBE", "name": "extracted_cube"}
         }
         ```
+<<<<<<< HEAD
         '''
+=======
+        """
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         extracted = agent._extract_json_from_response(test_response)
         assert extracted is not None
         assert extracted["tool"] == "create_object"
         assert extracted["tool_args"]["name"] == "extracted_cube"
 
+<<<<<<< HEAD
 # ----- Integration Tests -----
 
 class TestAgentIntegration:
     """Integration tests for the BlenderAgent with mock dependencies."""
 
     @pytest.mark.parametrize("example", [EXAMPLE_TASKS[0]])  # Test just the first example for speed
+=======
+
+# ----- Integration Tests -----
+
+
+class TestAgentIntegration:
+    """Integration tests for the BlenderAgent with mock dependencies."""
+
+    @pytest.mark.parametrize(
+        "example", [EXAMPLE_TASKS[0]]
+    )  # Test just the first example for speed
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     def test_example_tasks(self, agent, example):
         """Test processing example tasks with the agent."""
         # Configure a simple success response based on the example
@@ -432,7 +649,13 @@ class TestAgentIntegration:
     def test_json_extraction_from_markdown(self, agent):
         """Test JSON extraction from markdown code blocks."""
         # Use the extracted JSON directly
+<<<<<<< HEAD
         parsed = agent._extract_json_from_response(MOCKED_RESPONSES["color_blue_sphere"])
+=======
+        parsed = agent._extract_json_from_response(
+            MOCKED_RESPONSES["color_blue_sphere"]
+        )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         # Verify essential fields were extracted
         assert parsed is not None
@@ -448,6 +671,7 @@ class TestAgentIntegration:
             "thought": "Detected intent to create objects",
             "goal": "Create a complex scene",
             "tool": "create_object",
+<<<<<<< HEAD
             "tool_args": {"type": "CUBE", "name": "detected_cube"}
         }
 
@@ -459,6 +683,27 @@ class TestAgentIntegration:
                 with patch.object(agent, 'validate_json_response', side_effect=ValueError("Test error")):
                     # Parse the natural language response
                     parsed = agent.process_llm_response(MOCKED_RESPONSES["create_complex_scene"])
+=======
+            "tool_args": {"type": "CUBE", "name": "detected_cube"},
+        }
+
+        # Mock the fallback response directly
+        with patch.object(
+            agent, "_create_fallback_response", return_value=fallback_response
+        ):
+            # Also mock _extract_json_from_response to ensure it returns None
+            with patch.object(agent, "_extract_json_from_response", return_value=None):
+                # Process with validate_json_response always failing
+                with patch.object(
+                    agent,
+                    "validate_json_response",
+                    side_effect=ValueError("Test error"),
+                ):
+                    # Parse the natural language response
+                    parsed = agent.process_llm_response(
+                        MOCKED_RESPONSES["create_complex_scene"]
+                    )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
                     # Verify the result matches our fallback
                     assert parsed["thought"] == "Detected intent to create objects"
@@ -469,20 +714,41 @@ class TestAgentIntegration:
         """Test the complete retry mechanism with JSON correction."""
         # Configure specific responses for the test
         invalid_response = MOCKED_RESPONSES["create_blue_sphere"]
+<<<<<<< HEAD
         valid_response = json.dumps({
             "thought": "Corrected JSON",
             "goal": "Provide valid JSON",
             "tool": "create_object",
             "tool_args": {"type": "SPHERE", "name": "corrected_sphere"}
         })
+=======
+        valid_response = json.dumps(
+            {
+                "thought": "Corrected JSON",
+                "goal": "Provide valid JSON",
+                "tool": "create_object",
+                "tool_args": {"type": "SPHERE", "name": "corrected_sphere"},
+            }
+        )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         # Set up the generate method to return the invalid response first, then the valid one
         agent.llm.generate.side_effect = [invalid_response, valid_response]
 
         # Mock _extract_json_from_response to simulate a failure
+<<<<<<< HEAD
         with patch.object(agent, '_extract_json_from_response', return_value=None):
             # Process the invalid response
             with patch.object(agent, 'validate_json_response', side_effect=[ValueError("Test error"), json.loads(valid_response)]):
+=======
+        with patch.object(agent, "_extract_json_from_response", return_value=None):
+            # Process the invalid response
+            with patch.object(
+                agent,
+                "validate_json_response",
+                side_effect=[ValueError("Test error"), json.loads(valid_response)],
+            ):
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 result = agent.validate_json_response(invalid_response)
 
                 # Validate the result
@@ -495,11 +761,19 @@ class TestAgentIntegration:
         enhanced_prompt = agent._add_format_reminder(test_prompt)
 
         # Verify the reminder was added
+<<<<<<< HEAD
         assert "IMPORTANT: Your response must be a single valid JSON object" in enhanced_prompt
+=======
+        assert (
+            "IMPORTANT: Your response must be a single valid JSON object"
+            in enhanced_prompt
+        )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
     def test_complex_plan_execution(self, agent):
         """Test execution of a complex plan with minimal mocking."""
         # Create a plan response
+<<<<<<< HEAD
         plan_response = json.dumps({
             "thought": "Creating a complex scene with multiple objects",
             "goal": "Create a scene with a cube and sphere",
@@ -512,17 +786,65 @@ class TestAgentIntegration:
             "tool": "clear_scene",
             "tool_args": {}
         })
+=======
+        plan_response = json.dumps(
+            {
+                "thought": "Creating a complex scene with multiple objects",
+                "goal": "Create a scene with a cube and sphere",
+                "plan": [
+                    {"tool": "clear_scene", "tool_args": {}},
+                    {
+                        "tool": "create_object",
+                        "tool_args": {
+                            "type": "CUBE",
+                            "name": "plan_cube",
+                            "location": [0, 0, 0],
+                        },
+                    },
+                    {
+                        "tool": "set_material_color",
+                        "tool_args": {
+                            "object_name": "plan_cube",
+                            "color": [1, 0, 0, 1],
+                        },
+                    },
+                    {
+                        "tool": "create_object",
+                        "tool_args": {
+                            "type": "SPHERE",
+                            "name": "plan_sphere",
+                            "location": [0, 0, 2],
+                        },
+                    },
+                ],
+                "tool": "clear_scene",
+                "tool_args": {},
+            }
+        )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         # Test the extraction and validation of the plan
         parsed_plan = agent._parse_llm_response(plan_response)
 
         # Verify the plan was correctly parsed
+<<<<<<< HEAD
         assert parsed_plan["thought"] == "Creating a complex scene with multiple objects"
+=======
+        assert (
+            parsed_plan["thought"] == "Creating a complex scene with multiple objects"
+        )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         assert len(parsed_plan["plan"]) == 4
         assert parsed_plan["plan"][0]["tool"] == "clear_scene"
         assert parsed_plan["plan"][1]["tool"] == "create_object"
         assert parsed_plan["plan"][2]["tool"] == "set_material_color"
         assert parsed_plan["plan"][3]["tool"] == "create_object"
 
+<<<<<<< HEAD
 if __name__ == "__main__":
     pytest.main(["-xvs", __file__])
+=======
+
+if __name__ == "__main__":
+    pytest.main(["-xvs", __file__])
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))

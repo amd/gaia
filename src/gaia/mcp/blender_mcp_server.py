@@ -19,8 +19,14 @@ bl_info = {
     "category": "Interface",
 }
 
+<<<<<<< HEAD
 class SimpleBlenderMCPServer:
     def __init__(self, host='localhost', port=9876):
+=======
+
+class SimpleBlenderMCPServer:
+    def __init__(self, host="localhost", port=9876):
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         self.host = host
         self.port = port
         self.running = False
@@ -87,8 +93,12 @@ class SimpleBlenderMCPServer:
 
                     # Handle client in a separate thread
                     client_thread = threading.Thread(
+<<<<<<< HEAD
                         target=self._handle_client,
                         args=(client,)
+=======
+                        target=self._handle_client, args=(client,)
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                     )
                     client_thread.daemon = True
                     client_thread.start()
@@ -110,7 +120,11 @@ class SimpleBlenderMCPServer:
         """Handle connected client"""
         print("Client handler started")
         client.settimeout(None)  # No timeout
+<<<<<<< HEAD
         buffer = b''
+=======
+        buffer = b""
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         try:
             while self.running:
@@ -124,8 +138,13 @@ class SimpleBlenderMCPServer:
                     buffer += data
                     try:
                         # Try to parse command
+<<<<<<< HEAD
                         command = json.loads(buffer.decode('utf-8'))
                         buffer = b''
+=======
+                        command = json.loads(buffer.decode("utf-8"))
+                        buffer = b""
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
                         # Execute command in Blender's main thread
                         def execute_wrapper():
@@ -133,18 +152,34 @@ class SimpleBlenderMCPServer:
                                 response = self.execute_command(command)
                                 response_json = json.dumps(response)
                                 try:
+<<<<<<< HEAD
                                     client.sendall(response_json.encode('utf-8'))
                                 except:
                                     print("Failed to send response - client disconnected")
+=======
+                                    client.sendall(response_json.encode("utf-8"))
+                                except:
+                                    print(
+                                        "Failed to send response - client disconnected"
+                                    )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                             except Exception as e:
                                 print(f"Error executing command: {str(e)}")
                                 traceback.print_exc()
                                 try:
                                     error_response = {
                                         "status": "error",
+<<<<<<< HEAD
                                         "message": str(e)
                                     }
                                     client.sendall(json.dumps(error_response).encode('utf-8'))
+=======
+                                        "message": str(e),
+                                    }
+                                    client.sendall(
+                                        json.dumps(error_response).encode("utf-8")
+                                    )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                                 except:
                                     pass
                             return None
@@ -175,7 +210,13 @@ class SimpleBlenderMCPServer:
             # Ensure we're in the right context
             if cmd_type in ["create_object", "modify_object", "delete_object"]:
                 override = bpy.context.copy()
+<<<<<<< HEAD
                 override['area'] = [area for area in bpy.context.screen.areas if area.type == 'VIEW_3D'][0]
+=======
+                override["area"] = [
+                    area for area in bpy.context.screen.areas if area.type == "VIEW_3D"
+                ][0]
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 with bpy.context.temp_override(**override):
                     return self._execute_command_internal(command)
             else:
@@ -235,9 +276,17 @@ class SimpleBlenderMCPServer:
                     "name": obj.name,
                     "type": obj.type,
                     # Only include basic location data
+<<<<<<< HEAD
                     "location": [round(float(obj.location.x), 2),
                                 round(float(obj.location.y), 2),
                                 round(float(obj.location.z), 2)],
+=======
+                    "location": [
+                        round(float(obj.location.x), 2),
+                        round(float(obj.location.y), 2),
+                        round(float(obj.location.z), 2),
+                    ],
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 }
                 scene_info["objects"].append(obj_info)
 
@@ -250,20 +299,32 @@ class SimpleBlenderMCPServer:
 
     @staticmethod
     def _get_aabb(obj):
+<<<<<<< HEAD
         """ Returns the world-space axis-aligned bounding box (AABB) of an object. """
         if obj.type != 'MESH':
+=======
+        """Returns the world-space axis-aligned bounding box (AABB) of an object."""
+        if obj.type != "MESH":
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             raise TypeError("Object must be a mesh")
 
         # Get the bounding box corners in local space
         local_bbox_corners = [mathutils.Vector(corner) for corner in obj.bound_box]
 
         # Convert to world coordinates
+<<<<<<< HEAD
         world_bbox_corners = [obj.matrix_world @ corner for corner in local_bbox_corners]
+=======
+        world_bbox_corners = [
+            obj.matrix_world @ corner for corner in local_bbox_corners
+        ]
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         # Compute axis-aligned min/max coordinates
         min_corner = mathutils.Vector(map(min, zip(*world_bbox_corners)))
         max_corner = mathutils.Vector(map(max, zip(*world_bbox_corners)))
 
+<<<<<<< HEAD
         return [
             [*min_corner], [*max_corner]
         ]
@@ -291,6 +352,54 @@ class SimpleBlenderMCPServer:
                 bpy.ops.object.camera_add(location=location, rotation=rotation)
             elif type == "LIGHT":
                 bpy.ops.object.light_add(type='POINT', location=location, rotation=rotation, scale=scale)
+=======
+        return [[*min_corner], [*max_corner]]
+
+    def create_object(
+        self,
+        type="CUBE",
+        name=None,
+        location=(0, 0, 0),
+        rotation=(0, 0, 0),
+        scale=(1, 1, 1),
+    ):
+        """Create a new object in the scene"""
+        try:
+            # Deselect all objects first
+            bpy.ops.object.select_all(action="DESELECT")
+
+            # Create the object based on type
+            if type == "CUBE":
+                bpy.ops.mesh.primitive_cube_add(
+                    location=location, rotation=rotation, scale=scale
+                )
+            elif type == "SPHERE":
+                bpy.ops.mesh.primitive_uv_sphere_add(
+                    location=location, rotation=rotation, scale=scale
+                )
+            elif type == "CYLINDER":
+                bpy.ops.mesh.primitive_cylinder_add(
+                    location=location, rotation=rotation, scale=scale
+                )
+            elif type == "PLANE":
+                bpy.ops.mesh.primitive_plane_add(
+                    location=location, rotation=rotation, scale=scale
+                )
+            elif type == "CONE":
+                bpy.ops.mesh.primitive_cone_add(
+                    location=location, rotation=rotation, scale=scale
+                )
+            elif type == "EMPTY":
+                bpy.ops.object.empty_add(
+                    location=location, rotation=rotation, scale=scale
+                )
+            elif type == "CAMERA":
+                bpy.ops.object.camera_add(location=location, rotation=rotation)
+            elif type == "LIGHT":
+                bpy.ops.object.light_add(
+                    type="POINT", location=location, rotation=rotation, scale=scale
+                )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             else:
                 raise ValueError(f"Unsupported object type: {type}")
 
@@ -318,7 +427,15 @@ class SimpleBlenderMCPServer:
                 "name": obj.name,
                 "type": obj.type,
                 "location": [obj.location.x, obj.location.y, obj.location.z],
+<<<<<<< HEAD
                 "rotation": [obj.rotation_euler.x, obj.rotation_euler.y, obj.rotation_euler.z],
+=======
+                "rotation": [
+                    obj.rotation_euler.x,
+                    obj.rotation_euler.y,
+                    obj.rotation_euler.z,
+                ],
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 "scale": [obj.scale.x, obj.scale.y, obj.scale.z],
             }
 
@@ -332,7 +449,13 @@ class SimpleBlenderMCPServer:
             traceback.print_exc()
             return {"error": str(e)}
 
+<<<<<<< HEAD
     def modify_object(self, name, location=None, rotation=None, scale=None, visible=None):
+=======
+    def modify_object(
+        self, name, location=None, rotation=None, scale=None, visible=None
+    ):
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         """Modify an existing object in the scene"""
         # Find the object by name
         obj = bpy.data.objects.get(name)
@@ -357,7 +480,15 @@ class SimpleBlenderMCPServer:
             "name": obj.name,
             "type": obj.type,
             "location": [obj.location.x, obj.location.y, obj.location.z],
+<<<<<<< HEAD
             "rotation": [obj.rotation_euler.x, obj.rotation_euler.y, obj.rotation_euler.z],
+=======
+            "rotation": [
+                obj.rotation_euler.x,
+                obj.rotation_euler.y,
+                obj.rotation_euler.z,
+            ],
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             "scale": [obj.scale.x, obj.scale.y, obj.scale.z],
             "visible": obj.visible_get(),
         }
@@ -394,7 +525,15 @@ class SimpleBlenderMCPServer:
             "name": obj.name,
             "type": obj.type,
             "location": [obj.location.x, obj.location.y, obj.location.z],
+<<<<<<< HEAD
             "rotation": [obj.rotation_euler.x, obj.rotation_euler.y, obj.rotation_euler.z],
+=======
+            "rotation": [
+                obj.rotation_euler.x,
+                obj.rotation_euler.y,
+                obj.rotation_euler.z,
+            ],
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             "scale": [obj.scale.x, obj.scale.y, obj.scale.z],
             "visible": obj.visible_get(),
         }
@@ -451,8 +590,13 @@ class SimpleBlenderMCPServer:
             # Execute the code and capture output and return value
             with redirect_stdout(stdout_tee), redirect_stderr(stderr_tee):
                 exec_result = exec(code, namespace)
+<<<<<<< HEAD
                 if 'result' in namespace:
                     result_value = namespace['result']
+=======
+                if "result" in namespace:
+                    result_value = namespace["result"]
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
             # Get the captured output
             stdout_output = stdout_buffer.getvalue()
@@ -470,10 +614,18 @@ class SimpleBlenderMCPServer:
                 "executed": True,
                 "stdout": stdout_output,
                 "stderr": stderr_output,
+<<<<<<< HEAD
                 "result": result_value
             }
         except Exception as e:
             import traceback
+=======
+                "result": result_value,
+            }
+        except Exception as e:
+            import traceback
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             tb_str = traceback.format_exc()
             # Print error to console
             print("----- CODE EXECUTION ERROR -----")
@@ -482,13 +634,23 @@ class SimpleBlenderMCPServer:
             print("--------------------------------")
             raise Exception(f"Code execution error: {str(e)}\n{tb_str}")
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 # Blender UI Panel
 class SIMPLEMCP_PT_Panel(bpy.types.Panel):
     bl_label = "Blender MCP"
     bl_idname = "SIMPLEMCP_PT_Panel"
+<<<<<<< HEAD
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = 'BlenderMCP'
+=======
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "BlenderMCP"
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
     def draw(self, context):
         layout = self.layout
@@ -502,6 +664,10 @@ class SIMPLEMCP_PT_Panel(bpy.types.Panel):
             layout.operator("simplemcp.stop_server", text="Stop MCP Server")
             layout.label(text=f"Running on port {scene.simplemcp_port}")
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 # Operator to start the server
 class SIMPLEMCP_OT_StartServer(bpy.types.Operator):
     bl_idname = "simplemcp.start_server"
@@ -513,13 +679,24 @@ class SIMPLEMCP_OT_StartServer(bpy.types.Operator):
 
         # Create a new server instance
         if not hasattr(bpy.types, "simplemcp_server") or not bpy.types.simplemcp_server:
+<<<<<<< HEAD
             bpy.types.simplemcp_server = SimpleBlenderMCPServer(port=scene.simplemcp_port)
+=======
+            bpy.types.simplemcp_server = SimpleBlenderMCPServer(
+                port=scene.simplemcp_port
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         # Start the server
         bpy.types.simplemcp_server.start()
         scene.simplemcp_server_running = True
 
+<<<<<<< HEAD
         return {'FINISHED'}
+=======
+        return {"FINISHED"}
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
 # Operator to stop the server
 class SIMPLEMCP_OT_StopServer(bpy.types.Operator):
@@ -537,7 +714,12 @@ class SIMPLEMCP_OT_StopServer(bpy.types.Operator):
 
         scene.simplemcp_server_running = False
 
+<<<<<<< HEAD
         return {'FINISHED'}
+=======
+        return {"FINISHED"}
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
 # Registration functions
 def register():
@@ -546,12 +728,20 @@ def register():
         description="Port for the BlenderMCP server",
         default=9876,
         min=1024,
+<<<<<<< HEAD
         max=65535
     )
 
     bpy.types.Scene.simplemcp_server_running = BoolProperty(
         name="Server Running",
         default=False
+=======
+        max=65535,
+    )
+
+    bpy.types.Scene.simplemcp_server_running = BoolProperty(
+        name="Server Running", default=False
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     )
 
     bpy.utils.register_class(SIMPLEMCP_PT_Panel)
@@ -560,6 +750,10 @@ def register():
 
     print("BlenderMCP addon registered")
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 def unregister():
     # Stop the server if it's running
     if hasattr(bpy.types, "simplemcp_server") and bpy.types.simplemcp_server:
@@ -587,5 +781,11 @@ def unregister():
 
     print("BlenderMCP addon unregistered")
 
+<<<<<<< HEAD
 if __name__ == "__main__":
     register()
+=======
+
+if __name__ == "__main__":
+    register()
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))

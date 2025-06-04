@@ -12,10 +12,21 @@ try:
     from rich.live import Live
     from rich.spinner import Spinner
     from rich.table import Table
+<<<<<<< HEAD
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
     print("Rich library not found. Install with 'pip install rich' for syntax highlighting.")
+=======
+
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
+    print(
+        "Rich library not found. Install with 'pip install rich' for syntax highlighting."
+    )
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
 class ProgressIndicator:
     """A simple progress indicator that shows a spinner or dots animation."""
@@ -53,6 +64,7 @@ class ProgressIndicator:
                 try:
                     # Try to print a Unicode character to see if the terminal supports it
                     print(self.spinner_chars[0], end="", flush=True)
+<<<<<<< HEAD
                     print("\b", end="", flush=True)  # Backspace to remove the test character
 
                     # If we got here, Unicode is supported
@@ -60,6 +72,25 @@ class ProgressIndicator:
                 except:
                     # Fallback to simple dots
                     print(f"\r{self.message}{self.dot_chars[self.dot_idx]}", end="", flush=True)
+=======
+                    print(
+                        "\b", end="", flush=True
+                    )  # Backspace to remove the test character
+
+                    # If we got here, Unicode is supported
+                    print(
+                        f"\r{self.message} {self.spinner_chars[self.spinner_idx]}",
+                        end="",
+                        flush=True,
+                    )
+                except (UnicodeError, OSError):
+                    # Fallback to simple dots
+                    print(
+                        f"\r{self.message}{self.dot_chars[self.dot_idx]}",
+                        end="",
+                        flush=True,
+                    )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
                 time.sleep(0.1)
 
@@ -174,7 +205,14 @@ class AgentConsole:
             step_limit: Maximum number of steps
         """
         if self.rich_available:
+<<<<<<< HEAD
             self.console.print(f"\n[bold cyan]📝 Step {step_num}/{step_limit}:[/bold cyan] Thinking...", highlight=False)
+=======
+            self.console.print(
+                f"\n[bold cyan]📝 Step {step_num}/{step_limit}:[/bold cyan] Thinking...",
+                highlight=False,
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         else:
             print(f"\n📝 Step {step_num}/{step_limit}: Thinking...")
 
@@ -224,7 +262,13 @@ class AgentConsole:
 
                 # Highlight the current step being executed
                 if current_step is not None and i == current_step:
+<<<<<<< HEAD
                     self.console.print(f"  [dim]{i+1}.[/dim] [bold green]►[/bold green] [bold yellow]{step_text}[/bold yellow] [bold green]◄[/bold green] [cyan](current step)[/cyan]")
+=======
+                    self.console.print(
+                        f"  [dim]{i+1}.[/dim] [bold green]►[/bold green] [bold yellow]{step_text}[/bold yellow] [bold green]◄[/bold green] [cyan](current step)[/cyan]"
+                    )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 else:
                     self.console.print(f"  [dim]{i+1}.[/dim] {step_text}")
             # Add an extra newline for better readability
@@ -247,6 +291,7 @@ class AgentConsole:
                 else:
                     print(f"  {i+1}. {step_text}")
 
+<<<<<<< HEAD
     def print_plan_progress(self, step: int, total: int) -> None:
         """
         Print progress through the plan.
@@ -259,6 +304,40 @@ class AgentConsole:
             self.console.print(f"\n[bold magenta]📋 Plan progress:[/bold magenta] Step {step}/{total}")
         else:
             print(f"\n📋 Plan progress: Step {step}/{total}")
+=======
+    def print_plan_progress(
+        self, current_step: int, total_steps: int, completed_steps: int = None
+    ):
+        """
+        Print progress in plan execution
+
+        Args:
+            current_step: Current step being executed (1-based)
+            total_steps: Total number of steps in the plan
+            completed_steps: Optional number of already completed steps
+        """
+        if completed_steps is None:
+            completed_steps = current_step - 1
+
+        progress_str = f"[Step {current_step}/{total_steps}]"
+        progress_bar = ""
+
+        # Create a simple progress bar
+        if total_steps > 0:
+            bar_width = 20
+            completed_chars = int((completed_steps / total_steps) * bar_width)
+            current_char = 1 if current_step <= total_steps else 0
+            remaining_chars = bar_width - completed_chars - current_char
+
+            progress_bar = (
+                "█" * completed_chars + "▶" * current_char + "░" * remaining_chars
+            )
+
+        if self.rich_available:
+            self.rprint(f"[cyan]{progress_str}[/cyan] {progress_bar}")
+        else:
+            print(f"{progress_str} {progress_bar}")
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
     def print_tool_usage(self, tool_name: str) -> None:
         """
@@ -291,7 +370,13 @@ class AgentConsole:
             error_message = "Unknown error occurred (received None)"
 
         if self.rich_available:
+<<<<<<< HEAD
             self.console.print(Panel(str(error_message), title="⚠️ Error", border_style="red"))
+=======
+            self.console.print(
+                Panel(str(error_message), title="⚠️ Error", border_style="red")
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         else:
             print(f"\n⚠️ ERROR: {error_message}\n")
 
@@ -312,6 +397,7 @@ class AgentConsole:
         message = "Detected repetitive tool call pattern. Agent execution paused to avoid an infinite loop. Try adjusting your prompt or agent configuration if this persists."
 
         if self.rich_available:
+<<<<<<< HEAD
             self.console.print(Panel(
                 f"[bold yellow]{message}[/bold yellow]",
                 title="⚠️ Warning",
@@ -319,6 +405,17 @@ class AgentConsole:
                 padding=(1, 2),
                 highlight=True
             ))
+=======
+            self.console.print(
+                Panel(
+                    f"[bold yellow]{message}[/bold yellow]",
+                    title="⚠️ Warning",
+                    border_style="yellow",
+                    padding=(1, 2),
+                    highlight=True,
+                )
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         else:
             print(f"\n⚠️ WARNING: {message}\n")
 
@@ -344,7 +441,13 @@ class AgentConsole:
         """
         self.print_separator()
         if self.rich_available:
+<<<<<<< HEAD
             self.console.print(f"[bold blue]✨ Processing complete![/bold blue] Steps taken: {steps_taken}/{steps_limit}")
+=======
+            self.console.print(
+                f"[bold blue]✨ Processing complete![/bold blue] Steps taken: {steps_taken}/{steps_limit}"
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         else:
             print(f"✨ Processing complete! Steps taken: {steps_taken}/{steps_limit}")
 
@@ -358,8 +461,16 @@ class AgentConsole:
         """
         if self.rich_available:
             from rich.syntax import Syntax
+<<<<<<< HEAD
             syntax = Syntax(prompt, "markdown", theme="monokai", line_numbers=False)
             self.console.print(Panel(syntax, title=f"🔍 {title}", border_style="cyan", padding=(1, 2)))
+=======
+
+            syntax = Syntax(prompt, "markdown", theme="monokai", line_numbers=False)
+            self.console.print(
+                Panel(syntax, title=f"🔍 {title}", border_style="cyan", padding=(1, 2))
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         else:
             print(f"\n🔍 {title}:\n{'-' * 80}\n{prompt}\n{'-' * 80}\n")
 
@@ -374,17 +485,30 @@ class AgentConsole:
             return
 
         # Skip if there's no meaningful stats
+<<<<<<< HEAD
         if not stats.get('time_to_first_token') and not stats.get('tokens_per_second'):
+=======
+        if not stats.get("time_to_first_token") and not stats.get("tokens_per_second"):
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             return
 
         # Create a nice display of the stats
         if self.rich_available:
             # Create a table for the stats
+<<<<<<< HEAD
             table = Table(title="🚀 LLM Performance Stats", show_header=True, header_style="bold cyan")
+=======
+            table = Table(
+                title="🚀 LLM Performance Stats",
+                show_header=True,
+                header_style="bold cyan",
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             table.add_column("Metric", style="dim")
             table.add_column("Value", justify="right")
 
             # Add stats to the table
+<<<<<<< HEAD
             if 'time_to_first_token' in stats and stats['time_to_first_token'] is not None:
                 table.add_row("Time to First Token", f"{stats['time_to_first_token']:.2f} sec")
 
@@ -395,6 +519,23 @@ class AgentConsole:
                 table.add_row("Input Tokens", f"{stats['input_tokens']}")
 
             if 'output_tokens' in stats and stats['output_tokens'] is not None:
+=======
+            if (
+                "time_to_first_token" in stats
+                and stats["time_to_first_token"] is not None
+            ):
+                table.add_row(
+                    "Time to First Token", f"{stats['time_to_first_token']:.2f} sec"
+                )
+
+            if "tokens_per_second" in stats and stats["tokens_per_second"] is not None:
+                table.add_row("Tokens per Second", f"{stats['tokens_per_second']:.2f}")
+
+            if "input_tokens" in stats and stats["input_tokens"] is not None:
+                table.add_row("Input Tokens", f"{stats['input_tokens']}")
+
+            if "output_tokens" in stats and stats["output_tokens"] is not None:
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 table.add_row("Output Tokens", f"{stats['output_tokens']}")
 
             # Print the table in a panel
@@ -402,6 +543,7 @@ class AgentConsole:
         else:
             # Plain text fallback
             print("\n--- LLM Performance Stats ---")
+<<<<<<< HEAD
             if 'time_to_first_token' in stats and stats['time_to_first_token'] is not None:
                 print(f"Time to First Token: {stats['time_to_first_token']:.2f} sec")
             if 'tokens_per_second' in stats and stats['tokens_per_second'] is not None:
@@ -409,6 +551,18 @@ class AgentConsole:
             if 'input_tokens' in stats and stats['input_tokens'] is not None:
                 print(f"Input Tokens: {stats['input_tokens']}")
             if 'output_tokens' in stats and stats['output_tokens'] is not None:
+=======
+            if (
+                "time_to_first_token" in stats
+                and stats["time_to_first_token"] is not None
+            ):
+                print(f"Time to First Token: {stats['time_to_first_token']:.2f} sec")
+            if "tokens_per_second" in stats and stats["tokens_per_second"] is not None:
+                print(f"Tokens per Second: {stats['tokens_per_second']:.2f}")
+            if "input_tokens" in stats and stats["input_tokens"] is not None:
+                print(f"Input Tokens: {stats['input_tokens']}")
+            if "output_tokens" in stats and stats["output_tokens"] is not None:
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 print(f"Output Tokens: {stats['output_tokens']}")
             print("-----------------------------")
 
@@ -433,9 +587,19 @@ class AgentConsole:
             state_message: Message describing the current state
         """
         if self.rich_available:
+<<<<<<< HEAD
             self.console.print(self.Panel(f"🔄 [bold cyan]{state_message}[/bold cyan]",
                                      border_style="cyan",
                                      padding=(0, 1)))
+=======
+            self.console.print(
+                self.Panel(
+                    f"🔄 [bold cyan]{state_message}[/bold cyan]",
+                    border_style="cyan",
+                    padding=(0, 1),
+                )
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         else:
             print(f"🔄 STATE: {state_message}")
 
@@ -447,6 +611,7 @@ class AgentConsole:
             warning_message: Warning message to display
         """
         if self.rich_available:
+<<<<<<< HEAD
             self.console.print(self.Panel(f"⚠️ [bold yellow] {warning_message} [/bold yellow]",
                                      border_style="yellow",
                                      padding=(0, 1)))
@@ -487,6 +652,21 @@ class AgentConsole:
             print(f"{progress_str} {progress_bar}")
 
     def print_streaming_text(self, text_chunk: str, end_of_stream: bool = False) -> None:
+=======
+            self.console.print(
+                self.Panel(
+                    f"⚠️ [bold yellow] {warning_message} [/bold yellow]",
+                    border_style="yellow",
+                    padding=(0, 1),
+                )
+            )
+        else:
+            print(f"⚠️ WARNING: {warning_message}")
+
+    def print_streaming_text(
+        self, text_chunk: str, end_of_stream: bool = False
+    ) -> None:
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         """
         Print text content as it streams in, without newlines between chunks.
 
@@ -529,8 +709,16 @@ class AgentConsole:
         """
         if self.rich_available:
             from rich.syntax import Syntax
+<<<<<<< HEAD
             syntax = Syntax(response, "markdown", theme="monokai", line_numbers=False)
             self.console.print(Panel(syntax, title=f"🤖 {title}", border_style="green", padding=(1, 2)))
+=======
+
+            syntax = Syntax(response, "markdown", theme="monokai", line_numbers=False)
+            self.console.print(
+                Panel(syntax, title=f"🤖 {title}", border_style="green", padding=(1, 2))
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         else:
             print(f"\n🤖 {title}:\n{'-' * 80}\n{response}\n{'-' * 80}\n")
 
@@ -544,7 +732,13 @@ class AgentConsole:
             description: Tool description
         """
         if self.rich_available:
+<<<<<<< HEAD
             self.console.print(f"[bold cyan]📌 {name}[/bold cyan]([italic]{params_str}[/italic])")
+=======
+            self.console.print(
+                f"[bold cyan]📌 {name}[/bold cyan]([italic]{params_str}[/italic])"
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             self.console.print(f"   [dim]{description}[/dim]")
         else:
             print(f"\n📌 {name}({params_str})")

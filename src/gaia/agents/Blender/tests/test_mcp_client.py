@@ -6,7 +6,12 @@ import logging
 from contextlib import contextmanager
 from gaia.mcp.blender_mcp_client import MCPClient, MCPError
 
+<<<<<<< HEAD
 logging.getLogger('asyncio').setLevel(logging.INFO)
+=======
+logging.getLogger("asyncio").setLevel(logging.INFO)
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
 @contextmanager
 def suppress_client_logs():
@@ -38,7 +43,13 @@ def mcp_client():
         print("Connection successful! Server is running.")
     except MCPError as e:
         print(f"ERROR: {str(e)}")
+<<<<<<< HEAD
         pytest.skip("Blender MCP server is not running. Please start Blender with the MCP addon first.")
+=======
+        pytest.skip(
+            "Blender MCP server is not running. Please start Blender with the MCP addon first."
+        )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
     return client
 
@@ -87,7 +98,13 @@ class TestBlenderMCP:
         assert "object_count" in response["result"]
         assert "objects" in response["result"]
 
+<<<<<<< HEAD
         print(f"Scene: {response['result']['name']} with {response['result']['object_count']} objects")
+=======
+        print(
+            f"Scene: {response['result']['name']} with {response['result']['object_count']} objects"
+        )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
     async def test_create_object(self, mcp_client, cleanup_test_objects):
         """Test creating objects of different types."""
@@ -95,7 +112,11 @@ class TestBlenderMCP:
         test_objects = [
             {"type": "CUBE", "name": "TestCube", "location": (0, 0, 0)},
             {"type": "SPHERE", "name": "TestSphere", "location": (2, 0, 0)},
+<<<<<<< HEAD
             {"type": "CYLINDER", "name": "TestCylinder", "location": (4, 0, 0)}
+=======
+            {"type": "CYLINDER", "name": "TestCylinder", "location": (4, 0, 0)},
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         ]
 
         for obj_params in test_objects:
@@ -151,9 +172,13 @@ class TestBlenderMCP:
         new_scale = (2, 2, 2)
         print(f"Modifying 'TestModifyCube'")
         response = mcp_client.modify_object(
+<<<<<<< HEAD
             name="TestModifyCube",
             location=new_location,
             scale=new_scale
+=======
+            name="TestModifyCube", location=new_location, scale=new_scale
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         )
 
         assert response["status"] == "success"
@@ -224,7 +249,13 @@ cube.name = "TestScriptCube"
         """Test creating and assigning materials."""
         print("\n=== Test: Material creation ===")
         # Create a test cube
+<<<<<<< HEAD
         mcp_client.create_object(type="CUBE", name="TestMaterialCube", location=(0, 0, 0))
+=======
+        mcp_client.create_object(
+            type="CUBE", name="TestMaterialCube", location=(0, 0, 0)
+        )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         # Create and assign a material with Python code
         print("Creating red material and assigning to cube")
@@ -262,10 +293,37 @@ if mat is None:
         print("\n=== Test: Complex scene creation ===")
         # Create several objects at different positions
         objects = [
+<<<<<<< HEAD
             {"type": "CUBE", "name": "TestComplex_Cube", "location": (0, 0, 0), "scale": (1, 1, 1)},
             {"type": "SPHERE", "name": "TestComplex_Sphere", "location": (3, 0, 0), "scale": (1.5, 1.5, 1.5)},
             {"type": "CYLINDER", "name": "TestComplex_Cylinder", "location": (0, 3, 0), "scale": (0.8, 0.8, 2)},
             {"type": "CONE", "name": "TestComplex_Cone", "location": (3, 3, 0), "scale": (1, 1, 2)},
+=======
+            {
+                "type": "CUBE",
+                "name": "TestComplex_Cube",
+                "location": (0, 0, 0),
+                "scale": (1, 1, 1),
+            },
+            {
+                "type": "SPHERE",
+                "name": "TestComplex_Sphere",
+                "location": (3, 0, 0),
+                "scale": (1.5, 1.5, 1.5),
+            },
+            {
+                "type": "CYLINDER",
+                "name": "TestComplex_Cylinder",
+                "location": (0, 3, 0),
+                "scale": (0.8, 0.8, 2),
+            },
+            {
+                "type": "CONE",
+                "name": "TestComplex_Cone",
+                "location": (3, 3, 0),
+                "scale": (1, 1, 2),
+            },
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         ]
 
         print(f"Creating {len(objects)} objects for complex scene")
@@ -325,4 +383,8 @@ if __name__ == "__main__":
     print("Starting MCP tests...")
     # Run the tests
     exit_code = pytest.main(pytest_args)
+<<<<<<< HEAD
     sys.exit(exit_code)
+=======
+    sys.exit(exit_code)
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))

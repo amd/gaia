@@ -4,7 +4,11 @@
 Tool registry and decorator for agent tools.
 """
 
+<<<<<<< HEAD
 from typing import Dict, Any, Callable
+=======
+from typing import Dict, Callable
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 import inspect
 import logging
 
@@ -15,6 +19,10 @@ logger = logging.getLogger(__name__)
 # Tool registry to store registered tools
 _TOOL_REGISTRY = {}
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 def tool(func: Callable) -> Callable:
     """
     Decorator to register a function as a tool.
@@ -34,7 +42,11 @@ def tool(func: Callable) -> Callable:
     for name, param in sig.parameters.items():
         param_info = {
             "type": "unknown",
+<<<<<<< HEAD
             "required": param.default == inspect.Parameter.empty
+=======
+            "required": param.default == inspect.Parameter.empty,
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         }
 
         # Try to infer type from annotations
@@ -59,8 +71,16 @@ def tool(func: Callable) -> Callable:
         "name": tool_name,
         "description": func.__doc__ or "",
         "parameters": params,
+<<<<<<< HEAD
         "function": func
     }
 
     # Return the function unchanged
     return func
+=======
+        "function": func,
+    }
+
+    # Return the function unchanged
+    return func
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))

@@ -4,10 +4,25 @@
 Generic Agent class for building domain-specific agents.
 """
 
+<<<<<<< HEAD
+=======
+# Standard library imports
+import abc
+import datetime
+import inspect
+import json
+import logging
+import os
+import re
+from typing import Dict, Any, Optional, List
+
+# First-party imports
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 from gaia.llm.llm_client import LLMClient
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.console import AgentConsole
 
+<<<<<<< HEAD
 from typing import Dict, Any, Optional, List, Callable
 import json
 import re
@@ -20,10 +35,16 @@ import os
 import datetime
 import abc
 
+=======
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -36,6 +57,13 @@ class Agent(abc.ABC):
     STATE_ERROR_RECOVERY = "ERROR_RECOVERY"
     STATE_COMPLETION = "COMPLETION"
 
+<<<<<<< HEAD
+=======
+    # Define tools that can execute directly without requiring a plan
+    # Subclasses can override this to specify domain-specific simple tools
+    SIMPLE_TOOLS = []
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     def __init__(
         self,
         use_local_llm: bool = True,
@@ -87,9 +115,13 @@ class Agent(abc.ABC):
         self.system_prompt += f"\n\n==== AVAILABLE TOOLS ====\n{tools_description}\n\n"
 
         self.llm = LLMClient(
+<<<<<<< HEAD
             use_local=use_local_llm,
             base_url=base_url,
             system_prompt=self.system_prompt
+=======
+            use_local=use_local_llm, base_url=base_url, system_prompt=self.system_prompt
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         )
         self.model_id = model_id
 
@@ -97,14 +129,21 @@ class Agent(abc.ABC):
         if self.debug_prompts:
             self.console.print_prompt(self.system_prompt, "Initial System Prompt")
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     @abc.abstractmethod
     def _get_system_prompt(self) -> str:
         """
         Generate the system prompt for the agent.
         Subclasses must implement this to provide domain-specific prompts.
         """
+<<<<<<< HEAD
         pass
+=======
+        raise NotImplementedError("Subclasses must implement _get_system_prompt")
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
     @abc.abstractmethod
     def _create_console(self) -> AgentConsole:
@@ -120,17 +159,30 @@ class Agent(abc.ABC):
         Register all domain-specific tools for the agent.
         Subclasses must implement this method.
         """
+<<<<<<< HEAD
         pass
+=======
+        raise NotImplementedError("Subclasses must implement _register_tools")
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
     def _format_tools_for_prompt(self) -> str:
         """Format the registered tools into a string for the prompt."""
         tool_descriptions = []
 
         for name, tool_info in _TOOL_REGISTRY.items():
+<<<<<<< HEAD
             params_str = ", ".join([
                 f"{param_name}{'' if param_info['required'] else '?'}: {param_info['type']}"
                 for param_name, param_info in tool_info["parameters"].items()
             ])
+=======
+            params_str = ", ".join(
+                [
+                    f"{param_name}{'' if param_info['required'] else '?'}: {param_info['type']}"
+                    for param_name, param_info in tool_info["parameters"].items()
+                ]
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
             description = tool_info["description"].strip()
             tool_descriptions.append(f"- {name}({params_str}): {description}")
@@ -151,9 +203,15 @@ class Agent(abc.ABC):
             # Format parameters
             params = []
             for param_name, param_info in tool_info["parameters"].items():
+<<<<<<< HEAD
                 required = param_info.get('required', False)
                 param_type = param_info.get('type', 'Any')
                 default = param_info.get('default', None)
+=======
+                required = param_info.get("required", False)
+                param_type = param_info.get("type", "Any")
+                default = param_info.get("default", None)
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
                 if required:
                     params.append(f"{param_name}: {param_type}")
@@ -167,7 +225,15 @@ class Agent(abc.ABC):
             if verbose:
                 description = tool_info["description"]
             else:
+<<<<<<< HEAD
                 description = tool_info["description"].split('\n')[0] if tool_info["description"] else "No description"
+=======
+                description = (
+                    tool_info["description"].split("\n")[0]
+                    if tool_info["description"]
+                    else "No description"
+                )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
             # Print tool information
             self.console.print_tool_info(name, params_str, description)
@@ -188,12 +254,21 @@ class Agent(abc.ABC):
         """
         # Strategy 1: Extract JSON from code blocks with various patterns
         json_patterns = [
+<<<<<<< HEAD
             r'```(?:json)?\s*(.*?)\s*```',  # Standard code block
             r'`json\s*(.*?)\s*`',            # Single backtick with json tag
             r'<json>\s*(.*?)\s*</json>',     # XML-style tags
             r'\{\s*"thought".*\}',           # Direct JSON object starting with thought
             r'\{\s*"tool".*\}',              # Direct JSON object starting with tool
             r'\{\s*"answer".*\}'             # Direct JSON object starting with answer
+=======
+            r"```(?:json)?\s*(.*?)\s*```",  # Standard code block
+            r"`json\s*(.*?)\s*`",  # Single backtick with json tag
+            r"<json>\s*(.*?)\s*</json>",  # XML-style tags
+            r'\{\s*"thought".*\}',  # Direct JSON object starting with thought
+            r'\{\s*"tool".*\}',  # Direct JSON object starting with tool
+            r'\{\s*"answer".*\}',  # Direct JSON object starting with answer
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         ]
 
         for pattern in json_patterns:
@@ -214,12 +289,21 @@ class Agent(abc.ABC):
         # Replace single quotes with double quotes
         fixed_response = re.sub(r"'([^']*)':", r'"\1":', fixed_response)
         # Fix trailing commas in objects and arrays
+<<<<<<< HEAD
         fixed_response = re.sub(r',\s*}', '}', fixed_response)
         fixed_response = re.sub(r',\s*]', ']', fixed_response)
 
         try:
             # Try to find JSON object in the fixed text
             match = re.search(r'(\{.*\})', fixed_response, re.DOTALL)
+=======
+        fixed_response = re.sub(r",\s*}", "}", fixed_response)
+        fixed_response = re.sub(r",\s*]", "]", fixed_response)
+
+        try:
+            # Try to find JSON object in the fixed text
+            match = re.search(r"(\{.*\})", fixed_response, re.DOTALL)
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             if match:
                 result = json.loads(match.group(1))
                 logger.debug("Successfully extracted JSON after fixing format issues")
@@ -258,9 +342,19 @@ class Agent(abc.ABC):
                 required_fields = ["thought", "goal", "plan"]
 
             # Verify all required fields are present
+<<<<<<< HEAD
             missing_fields = [field for field in required_fields if field not in json_response]
             if missing_fields:
                 raise ValueError(f"Response is missing required fields: {', '.join(missing_fields)}")
+=======
+            missing_fields = [
+                field for field in required_fields if field not in json_response
+            ]
+            if missing_fields:
+                raise ValueError(
+                    f"Response is missing required fields: {', '.join(missing_fields)}"
+                )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
             return json_response
 
@@ -282,11 +376,23 @@ class Agent(abc.ABC):
         # First try to validate and process the response using our robust JSON validation
         try:
             validated_response = self.validate_json_response(response)
+<<<<<<< HEAD
             logger.debug(f"Successfully validated and processed response: {validated_response}")
             return validated_response
         except Exception as e:
             # If validation fails, fall back to the original parsing logic
             logger.warning(f"JSON validation failed, falling back to original parsing: {str(e)}")
+=======
+            logger.debug(
+                f"Successfully validated and processed response: {validated_response}"
+            )
+            return validated_response
+        except Exception as e:
+            # If validation fails, fall back to the original parsing logic
+            logger.warning(
+                f"JSON validation failed, falling back to original parsing: {str(e)}"
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             # Continue with existing parsing logic
 
         # Clean up the response
@@ -295,7 +401,13 @@ class Agent(abc.ABC):
         # Try more aggressive JSON extraction methods
         extracted_json = self._extract_json_from_response(response)
         if extracted_json:
+<<<<<<< HEAD
             logger.debug(f"Successfully extracted JSON with advanced methods: {extracted_json}")
+=======
+            logger.debug(
+                f"Successfully extracted JSON with advanced methods: {extracted_json}"
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             return extracted_json
 
         # If no code blocks or JSON parsing failed, try to parse the raw response
@@ -326,7 +438,11 @@ class Agent(abc.ABC):
             result = {
                 "thought": thought_match.group(1) if thought_match else "",
                 "goal": "what was achieved",
+<<<<<<< HEAD
                 "answer": answer_match.group(1)
+=======
+                "answer": answer_match.group(1),
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             }
             logger.debug(f"Extracted answer using regex: {result}")
             return result
@@ -347,7 +463,11 @@ class Agent(abc.ABC):
                 "thought": thought_match.group(1) if thought_match else "",
                 "goal": "clear statement of what you're trying to achieve",
                 "tool": tool_match.group(1),
+<<<<<<< HEAD
                 "tool_args": tool_args
+=======
+                "tool_args": tool_args,
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             }
 
             # Add plan if found
@@ -364,16 +484,30 @@ class Agent(abc.ABC):
             return result
 
         # Try to match simple key-value patterns for object names (like ': "my_cube"')
+<<<<<<< HEAD
         obj_name_match = re.search(r'["\':]?\s*["\'"]?([a-zA-Z0-9_\.]+)["\'"]?', response)
         if obj_name_match:
             object_name = obj_name_match.group(1)
             # If it looks like an object name and not just a random word
             if '.' in object_name or '_' in object_name:
+=======
+        obj_name_match = re.search(
+            r'["\':]?\s*["\'"]?([a-zA-Z0-9_\.]+)["\'"]?', response
+        )
+        if obj_name_match:
+            object_name = obj_name_match.group(1)
+            # If it looks like an object name and not just a random word
+            if "." in object_name or "_" in object_name:
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 logger.debug(f"Found potential object name: {object_name}")
                 return {
                     "thought": "Extracted object name",
                     "goal": "Use the object name",
+<<<<<<< HEAD
                     "answer": object_name
+=======
+                    "answer": object_name,
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 }
 
         # If all else fails, treat the entire response as the answer
@@ -381,11 +515,15 @@ class Agent(abc.ABC):
         logger.error(error_msg)
         self.error_history.append(error_msg)
 
+<<<<<<< HEAD
         return {
             "thought": "",
             "goal": "what was achieved",
             "answer": response
         }
+=======
+        return {"thought": "", "goal": "what was achieved", "answer": response}
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
@@ -409,14 +547,26 @@ class Agent(abc.ABC):
 
         # Get required parameters (those without defaults)
         required_args = {
+<<<<<<< HEAD
             name: param for name, param in sig.parameters.items()
             if param.default == inspect.Parameter.empty and name != 'return'
+=======
+            name: param
+            for name, param in sig.parameters.items()
+            if param.default == inspect.Parameter.empty and name != "return"
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         }
 
         # Check for missing required arguments
         missing_args = [arg for arg in required_args if arg not in tool_args]
         if missing_args:
+<<<<<<< HEAD
             error_msg = f"Missing required arguments for {tool_name}: {', '.join(missing_args)}"
+=======
+            error_msg = (
+                f"Missing required arguments for {tool_name}: {', '.join(missing_args)}"
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             logger.error(error_msg)
             return {"status": "error", "error": error_msg}
 
@@ -449,18 +599,28 @@ class Agent(abc.ABC):
             filename = f"agent_output_{timestamp}.json"
 
         # Ensure filename has .json extension
+<<<<<<< HEAD
         if not filename.endswith('.json'):
             filename += '.json'
+=======
+        if not filename.endswith(".json"):
+            filename += ".json"
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         # Create absolute path
         file_path = os.path.join(self.output_dir, filename)
 
         # Write JSON data to file
+<<<<<<< HEAD
         with open(file_path, 'w') as f:
+=======
+        with open(file_path, "w", encoding="utf-8") as f:
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             json.dump(data, f, indent=2)
 
         return os.path.abspath(file_path)
 
+<<<<<<< HEAD
     def _add_format_reminder(self, prompt: str) -> str:
         """
         Add JSON format reminders to the beginning of prompts to reinforce proper response structure.
@@ -470,6 +630,14 @@ class Agent(abc.ABC):
 
         Returns:
             The prompt with format reminders prepended
+=======
+    def _add_format_reminder(self) -> str:
+        """
+        Add JSON format reminders to reinforce proper response structure.
+
+        Returns:
+            Format reminder string for prompts
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         """
         # Short reminder for standard prompts
         reminder = """
@@ -486,7 +654,11 @@ NEVER wrap your response in code blocks or backticks.
         user_input: str,
         max_steps: int = None,
         output_to_file: bool = True,
+<<<<<<< HEAD
         filename: str = None
+=======
+        filename: str = None,
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     ) -> Dict[str, Any]:
         """
         Process a user query and execute the necessary tools.
@@ -541,7 +713,11 @@ NEVER wrap your response in code blocks or backticks.
             )
 
         # Apply format reminders to the prompt
+<<<<<<< HEAD
         prompt += self._add_format_reminder(prompt)
+=======
+        prompt += self._add_format_reminder()
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         logger.debug(f"Input prompt: {prompt[:200]}...")
 
@@ -554,16 +730,41 @@ NEVER wrap your response in code blocks or backticks.
             self.console.print_step_header(steps_taken, steps_limit)
 
             # If we've completed a plan with a single step, finalize
+<<<<<<< HEAD
             if self.execution_state == self.STATE_COMPLETION and self.total_plan_steps == 1 and self.current_step >= 1:
                 logger.debug("Single-step plan completed in previous iteration, finalizing")
                 final_answer = f"Task completed successfully."
+=======
+            if (
+                self.execution_state == self.STATE_COMPLETION
+                and self.total_plan_steps == 1
+                and self.current_step >= 1
+            ):
+                logger.debug(
+                    "Single-step plan completed in previous iteration, finalizing"
+                )
+                final_answer = "Task completed successfully."
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 self.console.print_final_answer(final_answer)
                 break
 
             # If we're executing a plan, we might not need to query the LLM again
+<<<<<<< HEAD
             if self.execution_state == self.STATE_EXECUTING_PLAN and self.current_step < self.total_plan_steps:
                 logger.debug(f"Executing plan step {self.current_step + 1}/{self.total_plan_steps}")
                 self.console.print_state_info(f"EXECUTING PLAN: Step {self.current_step + 1}/{self.total_plan_steps}")
+=======
+            if (
+                self.execution_state == self.STATE_EXECUTING_PLAN
+                and self.current_step < self.total_plan_steps
+            ):
+                logger.debug(
+                    f"Executing plan step {self.current_step + 1}/{self.total_plan_steps}"
+                )
+                self.console.print_state_info(
+                    f"EXECUTING PLAN: Step {self.current_step + 1}/{self.total_plan_steps}"
+                )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
                 # Display the current plan with the current step highlighted
                 if self.current_plan:
@@ -572,7 +773,15 @@ NEVER wrap your response in code blocks or backticks.
                 # Extract next step from plan
                 next_step = self.current_plan[self.current_step]
 
+<<<<<<< HEAD
                 if isinstance(next_step, dict) and "tool" in next_step and "tool_args" in next_step:
+=======
+                if (
+                    isinstance(next_step, dict)
+                    and "tool" in next_step
+                    and "tool_args" in next_step
+                ):
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                     # We have a properly formatted step with tool and args
                     tool_name = next_step["tool"]
                     tool_args = next_step["tool_args"]
@@ -582,15 +791,26 @@ NEVER wrap your response in code blocks or backticks.
                         "thought": f"Executing step {self.current_step + 1} of the plan",
                         "goal": f"Following the plan to {user_input}",
                         "tool": tool_name,
+<<<<<<< HEAD
                         "tool_args": tool_args
+=======
+                        "tool_args": tool_args,
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                     }
 
                     # Add to conversation
                     conversation.append({"role": "assistant", "content": parsed})
 
                     # Display the agent's reasoning for the step
+<<<<<<< HEAD
                     self.console.print_thought(parsed.get('thought', 'Executing plan step'))
                     self.console.print_goal(parsed.get('goal', 'Following the plan'))
+=======
+                    self.console.print_thought(
+                        parsed.get("thought", "Executing plan step")
+                    )
+                    self.console.print_goal(parsed.get("goal", "Following the plan"))
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
                     # Display the tool call in real-time
                     self.console.print_tool_usage(tool_name)
@@ -616,6 +836,7 @@ NEVER wrap your response in code blocks or backticks.
                     self.console.pretty_print_json(tool_result, "Tool Result")
 
                     # Store the output for future context
+<<<<<<< HEAD
                     previous_outputs.append({
                         "tool": tool_name,
                         "args": tool_args,
@@ -627,11 +848,36 @@ NEVER wrap your response in code blocks or backticks.
                         error_count += 1
                         last_error = tool_result.get('error')
                         logger.warning(f"Tool execution error in plan (count: {error_count}): {last_error}")
+=======
+                    previous_outputs.append(
+                        {"tool": tool_name, "args": tool_args, "result": tool_result}
+                    )
+
+                    # Check for error
+                    if (
+                        isinstance(tool_result, dict)
+                        and tool_result.get("status") == "error"
+                    ):
+                        error_count += 1
+                        last_error = tool_result.get("error")
+                        logger.warning(
+                            f"Tool execution error in plan (count: {error_count}): {last_error}"
+                        )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                         self.console.print_error(last_error)
 
                         # Switch to error recovery state
                         self.execution_state = self.STATE_ERROR_RECOVERY
+<<<<<<< HEAD
                         self.console.print_state_info("ERROR RECOVERY: Handling tool execution failure")
+=======
+                        self.console.print_state_info(
+                            "ERROR RECOVERY: Handling tool execution failure"
+                        )
+
+                        # Break out of plan execution to trigger error recovery prompt
+                        continue
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                     else:
                         # Success - move to next step in plan
                         self.current_step += 1
@@ -640,7 +886,13 @@ NEVER wrap your response in code blocks or backticks.
                         if self.current_step >= self.total_plan_steps:
                             logger.debug("Plan execution completed")
                             self.execution_state = self.STATE_COMPLETION
+<<<<<<< HEAD
                             self.console.print_state_info("COMPLETION: Plan fully executed")
+=======
+                            self.console.print_state_info(
+                                "COMPLETION: Plan fully executed"
+                            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
                             # Prepare prompt for final answer
                             prompt = (
@@ -650,7 +902,11 @@ NEVER wrap your response in code blocks or backticks.
                             )
 
                             # Apply format reminders to the prompt
+<<<<<<< HEAD
                             prompt = self._add_format_reminder(prompt)
+=======
+                            prompt = self._add_format_reminder()
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
                             # We are done with executing the plan, break the loop
                             break
@@ -659,8 +915,17 @@ NEVER wrap your response in code blocks or backticks.
                             continue
                 else:
                     # Plan step doesn't have proper format, fall back to LLM
+<<<<<<< HEAD
                     logger.warning(f"Plan step {self.current_step + 1} doesn't have proper format: {next_step}")
                     self.console.print_warning(f"Plan step {self.current_step + 1} format incorrect, asking LLM for guidance")
+=======
+                    logger.warning(
+                        f"Plan step {self.current_step + 1} doesn't have proper format: {next_step}"
+                    )
+                    self.console.print_warning(
+                        f"Plan step {self.current_step + 1} format incorrect, asking LLM for guidance"
+                    )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                     prompt = (
                         f"You are following a plan but step {self.current_step + 1} doesn't have proper format: {next_step}\n"
                         f"Please interpret this step and decide what tool to use next.\n\n"
@@ -668,7 +933,11 @@ NEVER wrap your response in code blocks or backticks.
                     )
 
                     # Apply format reminders to the prompt
+<<<<<<< HEAD
                     prompt = self._add_format_reminder(prompt)
+=======
+                    prompt = self._add_format_reminder()
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             else:
                 # Normal execution flow - query the LLM
                 if self.execution_state == self.STATE_DIRECT_EXECUTION:
@@ -676,47 +945,106 @@ NEVER wrap your response in code blocks or backticks.
                 elif self.execution_state == self.STATE_PLANNING:
                     self.console.print_state_info("PLANNING: Creating or refining plan")
                 elif self.execution_state == self.STATE_ERROR_RECOVERY:
+<<<<<<< HEAD
                     self.console.print_state_info("ERROR RECOVERY: Handling previous error")
+=======
+                    self.console.print_state_info(
+                        "ERROR RECOVERY: Handling previous error"
+                    )
+
+                    # Create a specific error recovery prompt
+                    prompt = (
+                        f"TOOL EXECUTION FAILED!\n\n"
+                        f"You were trying to execute: {last_tool_call[0] if last_tool_call else 'unknown tool'}\n"
+                        f"Error: {last_error}\n\n"
+                        f"Original task: {user_input}\n\n"
+                        f"Current plan step {self.current_step + 1}/{self.total_plan_steps} failed.\n"
+                        f"Current plan: {json.dumps(self.current_plan, indent=2)}\n\n"
+                        f"Previous successful outputs: {json.dumps(previous_outputs, indent=2)}\n\n"
+                        f"INSTRUCTIONS:\n"
+                        f"1. Analyze the error and understand what went wrong\n"
+                        f"2. Create a NEW corrected plan that fixes the error\n"
+                        f"3. Make sure to use correct tool parameters (check the available tools)\n"
+                        f"4. Start executing the corrected plan\n\n"
+                        f"Respond with your analysis, a corrected plan, and the first tool to execute."
+                    )
+
+                    # Reset state to planning after creating recovery prompt
+                    self.execution_state = self.STATE_PLANNING
+                    self.current_plan = None
+                    self.current_step = 0
+                    self.total_plan_steps = 0
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 elif self.execution_state == self.STATE_COMPLETION:
                     self.console.print_state_info("COMPLETION: Finalizing response")
 
             # Print the prompt if debug_prompt is enabled
+<<<<<<< HEAD
             if hasattr(self, 'debug_prompts') and self.debug_prompts:
+=======
+            if hasattr(self, "debug_prompts") and self.debug_prompts:
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 self.console.print_prompt(prompt, "Prompt sent to LLM")
 
             # Handle streaming or non-streaming LLM response
             if self.streaming:
                 # Print LLM thinking header for streaming mode
+<<<<<<< HEAD
                 if hasattr(self.console, 'console'):
                     self.console.console.print("\n[bold blue]🧠 LLM Response:[/bold blue]")
+=======
+                if hasattr(self.console, "console"):
+                    self.console.console.print(
+                        "\n[bold blue]🧠 LLM Response:[/bold blue]"
+                    )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 else:
                     print("\n🧠 LLM Response:")
 
                 # Add prompt to conversation if debug is enabled
                 if self.debug_prompts:
+<<<<<<< HEAD
                     conversation.append({"role": "system", "content": {"prompt": prompt}})
+=======
+                    conversation.append(
+                        {"role": "system", "content": {"prompt": prompt}}
+                    )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                     # Print the prompt for debugging
                     self.console.print_prompt(prompt, f"Prompt (Step {steps_taken})")
 
                 # Get streaming response from LLM
                 response_stream = self.llm.generate(
+<<<<<<< HEAD
                     prompt=prompt,
                     model=self.model_id,
                     stream=True  # Enable streaming
+=======
+                    prompt=prompt, model=self.model_id, stream=True  # Enable streaming
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 )
 
                 # Process the streaming response chunks as they arrive
                 full_response = ""
                 for chunk in response_stream:
                     # Display each chunk as it arrives
+<<<<<<< HEAD
                     if hasattr(self.console, 'print_streaming_text'):
+=======
+                    if hasattr(self.console, "print_streaming_text"):
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                         self.console.print_streaming_text(chunk)
                     else:
                         print(chunk, end="", flush=True)
                     full_response += chunk
 
                 # Signal end of stream
+<<<<<<< HEAD
                 if hasattr(self.console, 'print_streaming_text'):
+=======
+                if hasattr(self.console, "print_streaming_text"):
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                     self.console.print_streaming_text("", end_of_stream=True)
                 else:
                     print("", flush=True)
@@ -731,7 +1059,11 @@ NEVER wrap your response in code blocks or backticks.
                 response = self.llm.generate(
                     prompt=prompt,
                     model=self.model_id,
+<<<<<<< HEAD
                     stream=False  # Disable streaming
+=======
+                    stream=False,  # Disable streaming
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 )
 
                 # Stop the progress indicator
@@ -739,7 +1071,11 @@ NEVER wrap your response in code blocks or backticks.
 
             # Print the LLM response to the console
             logger.debug(f"LLM response: {response[:200]}...")
+<<<<<<< HEAD
             if hasattr(self, 'debug_prompts') and self.debug_prompts:
+=======
+            if hasattr(self, "debug_prompts") and self.debug_prompts:
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 self.console.print_response(response, "LLM Response")
 
             # Parse the response
@@ -769,6 +1105,7 @@ NEVER wrap your response in code blocks or backticks.
                     )
 
                 plan_prompt += (
+<<<<<<< HEAD
                     f"Create a detailed plan with all necessary steps in JSON format, including exact tool names and arguments.\n"
                     f"Respond with your reasoning, plan, and the first tool to use."
                 )
@@ -779,6 +1116,20 @@ NEVER wrap your response in code blocks or backticks.
                 # Store the plan prompt in conversation if debug is enabled
                 if self.debug_prompts:
                     conversation.append({"role": "system", "content": {"prompt": plan_prompt}})
+=======
+                    "Create a detailed plan with all necessary steps in JSON format, including exact tool names and arguments.\n"
+                    "Respond with your reasoning, plan, and the first tool to use."
+                )
+
+                # Apply format reminders to the prompt
+                plan_prompt = self._add_format_reminder()
+
+                # Store the plan prompt in conversation if debug is enabled
+                if self.debug_prompts:
+                    conversation.append(
+                        {"role": "system", "content": {"prompt": plan_prompt}}
+                    )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                     self.console.print_prompt(plan_prompt, "Plan Request Prompt")
 
                 # Notify the user we're asking for a plan
@@ -788,24 +1139,44 @@ NEVER wrap your response in code blocks or backticks.
                 if self.streaming:
                     # Add prompt to conversation if debug is enabled
                     if self.debug_prompts:
+<<<<<<< HEAD
                         conversation.append({"role": "system", "content": {"prompt": plan_prompt}})
                         # Print the prompt for debugging
                         self.console.print_prompt(plan_prompt, f"Prompt (Step {steps_taken})")
+=======
+                        conversation.append(
+                            {"role": "system", "content": {"prompt": plan_prompt}}
+                        )
+                        # Print the prompt for debugging
+                        self.console.print_prompt(
+                            plan_prompt, f"Prompt (Step {steps_taken})"
+                        )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
                     # Handle streaming as before
                     full_response = ""
                     for chunk in self.llm.generate(
+<<<<<<< HEAD
                         prompt=plan_prompt,
                         model=self.model_id,
                         stream=True
                     ):
                         if hasattr(self.console, 'print_streaming_text'):
+=======
+                        prompt=plan_prompt, model=self.model_id, stream=True
+                    ):
+                        if hasattr(self.console, "print_streaming_text"):
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                             self.console.print_streaming_text(chunk)
                         else:
                             print(chunk, end="", flush=True)
                         full_response += chunk
 
+<<<<<<< HEAD
                     if hasattr(self.console, 'print_streaming_text'):
+=======
+                    if hasattr(self.console, "print_streaming_text"):
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                         self.console.print_streaming_text("", end_of_stream=True)
                     else:
                         print("", flush=True)
@@ -817,6 +1188,7 @@ NEVER wrap your response in code blocks or backticks.
 
                     # Store the plan prompt in conversation if debug is enabled
                     if self.debug_prompts:
+<<<<<<< HEAD
                         conversation.append({"role": "system", "content": {"prompt": plan_prompt}})
                         self.console.print_prompt(plan_prompt, "Plan Request Prompt")
 
@@ -824,6 +1196,15 @@ NEVER wrap your response in code blocks or backticks.
                         prompt=plan_prompt,
                         model=self.model_id,
                         stream=False
+=======
+                        conversation.append(
+                            {"role": "system", "content": {"prompt": plan_prompt}}
+                        )
+                        self.console.print_prompt(plan_prompt, "Plan Request Prompt")
+
+                    plan_response = self.llm.generate(
+                        prompt=plan_prompt, model=self.model_id, stream=False
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                     )
                     self.console.stop_progress()
 
@@ -833,15 +1214,27 @@ NEVER wrap your response in code blocks or backticks.
                 conversation.append({"role": "assistant", "content": parsed_plan})
 
                 # Display the agent's reasoning for the plan
+<<<<<<< HEAD
                 self.console.print_thought(parsed_plan.get('thought', 'Creating plan'))
                 self.console.print_goal(parsed_plan.get('goal', 'Planning for task'))
+=======
+                self.console.print_thought(parsed_plan.get("thought", "Creating plan"))
+                self.console.print_goal(parsed_plan.get("goal", "Planning for task"))
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
                 # Set the parsed response to the new plan for further processing
                 parsed = parsed_plan
 
             # Display the agent's reasoning in real-time
+<<<<<<< HEAD
             self.console.print_thought(parsed.get('thought', 'No explicit reasoning provided'))
             self.console.print_goal(parsed.get('goal', 'No explicit goal provided'))
+=======
+            self.console.print_thought(
+                parsed.get("thought", "No explicit reasoning provided")
+            )
+            self.console.print_goal(parsed.get("goal", "No explicit goal provided"))
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
             # Process plan if available
             if "plan" in parsed:
@@ -849,7 +1242,13 @@ NEVER wrap your response in code blocks or backticks.
                 self.current_step = 0
                 self.total_plan_steps = len(self.current_plan)
                 self.execution_state = self.STATE_EXECUTING_PLAN
+<<<<<<< HEAD
                 logger.debug(f"New plan created with {self.total_plan_steps} steps: {self.current_plan}")
+=======
+                logger.debug(
+                    f"New plan created with {self.total_plan_steps} steps: {self.current_plan}"
+                )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
             # If the response contains a tool call, execute it
             if "tool" in parsed and "tool_args" in parsed:
@@ -858,6 +1257,7 @@ NEVER wrap your response in code blocks or backticks.
                 if self.current_plan:
                     self.console.print_plan(self.current_plan, self.current_step)
 
+<<<<<<< HEAD
                 # For direct tool calls in a plan context, skip the first step to avoid duplication
                 if "plan" in parsed and self.current_plan and self.total_plan_steps > 0:
                     self.current_step = 1
@@ -865,6 +1265,24 @@ NEVER wrap your response in code blocks or backticks.
                     if self.total_plan_steps == 1:
                         logger.debug("Single-step plan will be marked completed after tool execution")
                         self.execution_state = self.STATE_COMPLETION
+=======
+                # When both plan and tool are present, prioritize the plan execution
+                # If we have a plan, we should execute from the plan, not the standalone tool call
+                if "plan" in parsed and self.current_plan and self.total_plan_steps > 0:
+                    # Skip the standalone tool execution and let the plan execution handle it
+                    # The plan execution logic will handle this in the next iteration
+                    logger.debug(
+                        "Plan and tool both present - deferring to plan execution logic"
+                    )
+                    continue  # Skip tool execution, let plan execution handle it
+
+                # If this was a single-step plan, mark as completed after tool execution
+                if self.total_plan_steps == 1:
+                    logger.debug(
+                        "Single-step plan will be marked completed after tool execution"
+                    )
+                    self.execution_state = self.STATE_COMPLETION
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
                 tool_name = parsed["tool"]
                 tool_args = parsed["tool_args"]
@@ -886,7 +1304,13 @@ NEVER wrap your response in code blocks or backticks.
 
                     logger.warning(f"Detected repeated tool call: {tool_name}")
                     # Force a final answer if the same tool is called repeatedly
+<<<<<<< HEAD
                     final_answer = f"Task completed with {tool_name}. No further action needed."
+=======
+                    final_answer = (
+                        f"Task completed with {tool_name}. No further action needed."
+                    )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
                     self.console.print_repeated_tool_warning()
                     break
@@ -908,39 +1332,77 @@ NEVER wrap your response in code blocks or backticks.
                 self.console.pretty_print_json(tool_result, "Result")
 
                 # Store the output for future context
+<<<<<<< HEAD
                 previous_outputs.append({
                     "tool": tool_name,
                     "args": tool_args,
                     "result": tool_result
                 })
+=======
+                previous_outputs.append(
+                    {"tool": tool_name, "args": tool_args, "result": tool_result}
+                )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
                 # Update last tool call
                 last_tool_call = (tool_name, str(tool_args))
 
                 # For single-step plans, set final answer and break the loop after execution
+<<<<<<< HEAD
                 if self.execution_state == self.STATE_COMPLETION and self.total_plan_steps == 1:
+=======
+                if (
+                    self.execution_state == self.STATE_COMPLETION
+                    and self.total_plan_steps == 1
+                ):
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                     logger.debug("Single-step plan execution completed, finalizing")
                     final_answer = f"Task completed with {tool_name}. {tool_result.get('result', {}).get('message', '')}"
                     self.console.print_final_answer(final_answer)
                     break
 
                 # Check if tool execution resulted in an error
+<<<<<<< HEAD
                 if isinstance(tool_result, dict) and tool_result.get('status') == 'error':
                     error_count += 1
                     last_error = tool_result.get('error')
                     logger.warning(f"Tool execution error in plan (count: {error_count}): {last_error}")
+=======
+                if (
+                    isinstance(tool_result, dict)
+                    and tool_result.get("status") == "error"
+                ):
+                    error_count += 1
+                    last_error = tool_result.get("error")
+                    logger.warning(
+                        f"Tool execution error in plan (count: {error_count}): {last_error}"
+                    )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                     self.console.print_error(last_error)
 
                     # Switch to error recovery state
                     self.execution_state = self.STATE_ERROR_RECOVERY
+<<<<<<< HEAD
                     self.console.print_state_info("ERROR RECOVERY: Handling tool execution failure")
+=======
+                    self.console.print_state_info(
+                        "ERROR RECOVERY: Handling tool execution failure"
+                    )
+
+                    # Break out of tool execution to trigger error recovery prompt
+                    continue
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
             # If the response contains a final answer, we're done
             elif "answer" in parsed:
                 logger.debug(f"Final answer received: {parsed['answer']}")
                 final_answer = parsed["answer"]
                 self.execution_state = self.STATE_COMPLETION
+<<<<<<< HEAD
                 self.console.print_final_answer(parsed['answer'])
+=======
+                self.console.print_final_answer(parsed["answer"])
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 break  # Break the loop when we get a final answer
 
             # Display performance stats at the end of each step if enabled
@@ -948,12 +1410,18 @@ NEVER wrap your response in code blocks or backticks.
                 perf_stats = self.llm.get_performance_stats()
 
                 # Remove decode_token_times from the stats before displaying and adding to conversation
+<<<<<<< HEAD
                 if perf_stats and 'decode_token_times' in perf_stats:
                     del perf_stats['decode_token_times']
+=======
+                if perf_stats and "decode_token_times" in perf_stats:
+                    del perf_stats["decode_token_times"]
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
                 self.console.display_stats(perf_stats)
 
                 # Add performance stats to the conversation history for this step
+<<<<<<< HEAD
                 conversation.append({
                     "role": "system",
                     "content": {
@@ -962,6 +1430,18 @@ NEVER wrap your response in code blocks or backticks.
                         "performance_stats": perf_stats
                     }
                 })
+=======
+                conversation.append(
+                    {
+                        "role": "system",
+                        "content": {
+                            "type": "stats",
+                            "step": steps_taken,
+                            "performance_stats": perf_stats,
+                        },
+                    }
+                )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
             # Validate plan required
             self._validate_plan_required(parsed, steps_taken)
@@ -972,12 +1452,24 @@ NEVER wrap your response in code blocks or backticks.
         # Return the result
         result = {
             "status": "success" if final_answer else "incomplete",
+<<<<<<< HEAD
             "result": final_answer if final_answer else "Maximum steps reached without final answer",
+=======
+            "result": (
+                final_answer
+                if final_answer
+                else "Maximum steps reached without final answer"
+            ),
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             "system_prompt": self.system_prompt,  # Include system prompt in the result
             "conversation": conversation,
             "steps_taken": steps_taken,
             "error_count": len(self.error_history),
+<<<<<<< HEAD
             "error_history": self.error_history  # Include the full error history
+=======
+            "error_history": self.error_history,  # Include the full error history
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         }
 
         # Write result to file if requested
@@ -992,12 +1484,19 @@ NEVER wrap your response in code blocks or backticks.
 
         return result
 
+<<<<<<< HEAD
     def _post_process_tool_result(self, tool_name: str, tool_args: Dict[str, Any], tool_result: Dict[str, Any]) -> None:
+=======
+    def _post_process_tool_result(
+        self, _tool_name: str, _tool_args: Dict[str, Any], _tool_result: Dict[str, Any]
+    ) -> None:
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         """
         Post-process the tool result for domain-specific handling.
         Override this in subclasses to provide domain-specific behavior.
 
         Args:
+<<<<<<< HEAD
             tool_name: Name of the tool that was executed
             tool_args: Arguments that were passed to the tool
             tool_result: Result returned by the tool
@@ -1005,6 +1504,20 @@ NEVER wrap your response in code blocks or backticks.
         pass
 
     def display_result(self, title: str = "Result", result: Dict[str, Any] = None, print_result: bool = False) -> None:
+=======
+            _tool_name: Name of the tool that was executed
+            _tool_args: Arguments that were passed to the tool
+            _tool_result: Result returned by the tool
+        """
+        ...
+
+    def display_result(
+        self,
+        title: str = "Result",
+        result: Dict[str, Any] = None,
+        print_result: bool = False,
+    ) -> None:
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         """
         Display the result and output file path information.
 
@@ -1026,7 +1539,13 @@ NEVER wrap your response in code blocks or backticks.
 
         # If there's an output file, display its path after the result
         if "output_file" in display_result:
+<<<<<<< HEAD
             self.console.print_info(f"Output written to: {display_result['output_file']}")
+=======
+            self.console.print_info(
+                f"Output written to: {display_result['output_file']}"
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
     def get_error_history(self) -> List[str]:
         """
@@ -1049,6 +1568,18 @@ NEVER wrap your response in code blocks or backticks.
         if self.execution_state != self.STATE_PLANNING or self.current_plan is not None:
             return
 
+<<<<<<< HEAD
+=======
+        # Allow simple single-tool operations without requiring a plan
+        if "tool" in parsed and step == 1:
+            tool_name = parsed.get("tool", "")
+            # List of tools that can execute directly without a plan
+            simple_tools = self.SIMPLE_TOOLS
+            if tool_name in simple_tools:
+                logger.debug(f"Allowing direct execution of simple tool: {tool_name}")
+                return
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         # Check if plan is missing on the first step
         if "plan" not in parsed and step == 1:
             warning_msg = f"No plan found in step {step} response. The agent should create a plan for all tasks."
@@ -1068,4 +1599,8 @@ NEVER wrap your response in code blocks or backticks.
                     del parsed["tool_args"]
 
             # Set state to indicate we need planning
+<<<<<<< HEAD
             self.execution_state = self.STATE_PLANNING
+=======
+            self.execution_state = self.STATE_PLANNING
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))

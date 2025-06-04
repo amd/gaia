@@ -2,6 +2,10 @@ from gaia.llm.llm_client import LLMClient
 from gaia.mcp.blender_mcp_client import MCPClient
 from typing import Dict, Any, Optional, Tuple
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 class BlenderAgentSimple:
     """Agent wrapper for the Blender Object Creator that handles LLM-driven object creation.
 
@@ -35,7 +39,11 @@ Example: "Make a tall cylinder" → CYLINDER,0,0,0,1,1,3
         llm: Optional[LLMClient] = None,
         mcp: Optional[MCPClient] = None,
         use_local: bool = True,
+<<<<<<< HEAD
         base_url: Optional[str] = "http://localhost:8000/api/v0"
+=======
+        base_url: Optional[str] = "http://localhost:8000/api/v0",
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     ):
         """
         Initialize the BlenderAgentSimple with LLM and MCP clients.
@@ -47,10 +55,19 @@ Example: "Make a tall cylinder" → CYLINDER,0,0,0,1,1,3
             base_url: Base URL for the local LLM API if using local LLM. If None and use_local=True,
                       defaults to "http://localhost:8000/api/v0"
         """
+<<<<<<< HEAD
         self.llm = llm if llm else LLMClient(
             use_local=use_local,
             system_prompt=self.SYSTEM_PROMPT,
             base_url=base_url
+=======
+        self.llm = (
+            llm
+            if llm
+            else LLMClient(
+                use_local=use_local, system_prompt=self.SYSTEM_PROMPT, base_url=base_url
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         )
         self.mcp = mcp if mcp else MCPClient()
 
@@ -76,7 +93,11 @@ Example: "Make a tall cylinder" → CYLINDER,0,0,0,1,1,3
                 type=obj_type,
                 name=f"llm_generated_{obj_type.lower()}",
                 location=location,
+<<<<<<< HEAD
                 scale=scale
+=======
+                scale=scale,
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             )
 
             return {
@@ -85,17 +106,30 @@ Example: "Make a tall cylinder" → CYLINDER,0,0,0,1,1,3
                 "object_type": obj_type,
                 "location": location,
                 "scale": scale,
+<<<<<<< HEAD
                 "blender_result": result
+=======
+                "blender_result": result,
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             }
 
         except Exception as e:
             return {
                 "status": "error",
                 "error": str(e),
+<<<<<<< HEAD
                 "llm_response": llm_response if 'llm_response' in locals() else None
             }
 
     def _parse_llm_response(self, llm_response: str) -> Tuple[str, Tuple[float, float, float], Tuple[float, float, float]]:
+=======
+                "llm_response": llm_response if "llm_response" in locals() else None,
+            }
+
+    def _parse_llm_response(
+        self, llm_response: str
+    ) -> Tuple[str, Tuple[float, float, float], Tuple[float, float, float]]:
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         """
         Parse the LLM response into object parameters.
 
@@ -110,7 +144,11 @@ Example: "Make a tall cylinder" → CYLINDER,0,0,0,1,1,3
         """
         try:
             # Simple parsing, assuming format: TYPE,x,y,z,sx,sy,sz
+<<<<<<< HEAD
             parts = llm_response.split(',')
+=======
+            parts = llm_response.split(",")
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             if len(parts) != 7:
                 raise ValueError(f"Expected 7 parts in response, got {len(parts)}")
 
@@ -121,4 +159,10 @@ Example: "Make a tall cylinder" → CYLINDER,0,0,0,1,1,3
             return obj_type, location, scale
 
         except Exception as e:
+<<<<<<< HEAD
             raise ValueError(f"Failed to parse LLM response: {e}. Raw response: {llm_response}")
+=======
+            raise ValueError(
+                f"Failed to parse LLM response: {e}. Raw response: {llm_response}"
+            )
+>>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
