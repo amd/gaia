@@ -1,10 +1,6 @@
 from typing import Dict, Optional
 from gaia.mcp.blender_mcp_client import MCPClient
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 class SceneManager:
     """Manages Blender scene operations."""
 
@@ -13,10 +9,6 @@ class SceneManager:
 
     def reset_scene(self) -> Dict:
         """Reset Blender to a clean state, removing all objects and unused data."""
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         def generate_reset_code():
             return """
 import bpy
@@ -73,10 +65,6 @@ result = {
 
 print("Blender scene has been reset with default cube")
 """
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         response = self.mcp.execute_code(generate_reset_code())
         # Extract the returned result from the MCP if available
         if response.get("result") and isinstance(response["result"], dict):
@@ -89,10 +77,6 @@ print("Blender scene has been reset with default cube")
 
     def clear_scene(self) -> Dict:
         """Remove all objects from the current Blender scene."""
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         def generate_clear_code():
             return """
 import bpy
@@ -111,10 +95,6 @@ result = {
 
 print("Scene cleared successfully")
 """
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         response = self.mcp.execute_code(generate_clear_code())
         # Extract the returned result from the MCP if available
         if response.get("result") and isinstance(response["result"], dict):
@@ -127,10 +107,6 @@ print("Scene cleared successfully")
 
     def set_world_background_black(self) -> Dict:
         """Set the world background to black."""
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         def generate_code():
             return """
 import bpy
@@ -153,10 +129,6 @@ result = {
 
 print("World background set to black")
 """
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         response = self.mcp.execute_code(generate_code())
         # Extract the returned result from the MCP if available
         if response.get("result") and isinstance(response["result"], dict):
@@ -167,10 +139,6 @@ print("World background set to black")
         # Fallback
         return {"status": "success"}
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 def generate_scene_diagnosis_code() -> str:
     """
     Generates Python code that provides comprehensive diagnostics about the current Blender scene.
@@ -237,8 +205,4 @@ for obj in result["objects"]:
 result["status"] = "success"
 result
 """
-<<<<<<< HEAD
     return code
-=======
-    return code
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))

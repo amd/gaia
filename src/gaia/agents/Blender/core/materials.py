@@ -1,26 +1,17 @@
 from typing import Dict
 from gaia.mcp.blender_mcp_client import MCPClient
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 class MaterialManager:
     """Manages Blender material operations."""
 
     def __init__(self, mcp: MCPClient):
         self.mcp = mcp
 
-<<<<<<< HEAD
-    def create_ground_material(self, ground_texture_name: str, maps_texture_name: str) -> Dict:
-        """Create the ground material with separate land and water shaders, using displacement."""
-=======
     def create_ground_material(
         self, ground_texture_name: str, maps_texture_name: str
     ) -> Dict:
         """Create the ground material with separate land and water shaders, using displacement."""
 
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         def generate_code():
             return f"""
 import bpy
@@ -115,18 +106,10 @@ ground_mat.displacement_method = 'DISPLACEMENT'
 
 print("Ground material created exactly as shown in screenshot")
 """
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         return self.mcp.execute_code(generate_code())
 
     def create_atmosphere_material(self) -> Dict:
         """Create the atmosphere material with volume scatter."""
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         def generate_code():
             return """
 import bpy
@@ -219,18 +202,10 @@ atm_mat.displacement_method = 'DISPLACEMENT'
 
 print("Atmosphere material created exactly as in tutorial")
 """
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         return self.mcp.execute_code(generate_code())
 
     def create_clouds_material(self, clouds_texture_name: str) -> Dict:
         """Create the clouds material with subsurface scattering."""
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         def generate_code():
             return f"""
 import bpy
@@ -321,10 +296,6 @@ clouds_mat.displacement_method = 'BUMP'  # Tutorial setting
 
 print("Clouds material created exactly as in tutorial")
 """
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         return self.mcp.execute_code(generate_code())
 
     def set_material_color(self, object_name: str, color: tuple = (1, 0, 0, 1)) -> Dict:
@@ -338,10 +309,6 @@ print("Clouds material created exactly as in tutorial")
         Returns:
             Dictionary with the operation result
         """
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         def generate_code():
             return f"""
 import bpy
@@ -426,11 +393,6 @@ else:
 
 result
 """
-<<<<<<< HEAD
-        return self.mcp.execute_code(generate_code())
-
-def generate_material_assignment_code(object_name: str, material_name: str = None, color: tuple = (0.8, 0.8, 0.8, 1.0)) -> str:
-=======
 
         return self.mcp.execute_code(generate_code())
 
@@ -438,7 +400,6 @@ def generate_material_assignment_code(object_name: str, material_name: str = Non
 def generate_material_assignment_code(
     object_name: str, material_name: str = None, color: tuple = (0.8, 0.8, 0.8, 1.0)
 ) -> str:
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     """
     Generates Python code to create a material and assign it to an object with proper error handling.
 
@@ -489,10 +450,6 @@ result
 """
     return code
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 def generate_materials_for_all_objects_code() -> str:
     """
     Generates Python code that creates default materials for all objects in the scene
@@ -534,8 +491,4 @@ result["status"] = "success"
 result["message"] = f"Created materials for {result['created']} objects"
 result
 """
-<<<<<<< HEAD
     return code
-=======
-    return code
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))

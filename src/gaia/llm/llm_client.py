@@ -1,21 +1,9 @@
-<<<<<<< HEAD
 import os
 from dotenv import load_dotenv
 from openai import OpenAI
 from typing import Optional, Dict, Any, Literal, Union, Iterator
 import logging
 import requests
-=======
-# Standard library imports
-import logging
-import os
-from typing import Optional, Dict, Any, Literal, Union, Iterator
-
-# Third-party imports
-import requests
-from dotenv import load_dotenv
-from openai import OpenAI
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -25,10 +13,6 @@ logger.setLevel(logging.INFO)  # Explicitly set module logger level
 # Load environment variables from .env file
 load_dotenv()
 
-<<<<<<< HEAD
-class LLMClient:
-    def __init__(self, use_local: bool = False, system_prompt: Optional[str] = None, base_url: Optional[str] = "http://localhost:8000/api/v0"):
-=======
 
 class LLMClient:
     def __init__(
@@ -37,7 +21,6 @@ class LLMClient:
         system_prompt: Optional[str] = None,
         base_url: Optional[str] = "http://localhost:8000/api/v0",
     ):
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         """
         Initialize the LLM client.
 
@@ -45,13 +28,9 @@ class LLMClient:
             use_local: If True, uses the local LLM server. Otherwise uses OpenAI API.
             system_prompt: Default system prompt to use for all generation requests.
         """
-<<<<<<< HEAD
-        logger.debug(f"Initializing LLMClient with use_local={use_local}, base_url={base_url}")
-=======
         logger.debug(
             f"Initializing LLMClient with use_local={use_local}, base_url={base_url}"
         )
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         if use_local:
             self.client = OpenAI(base_url=base_url, api_key="None")
             self.endpoint = "completions"
@@ -61,13 +40,9 @@ class LLMClient:
         else:
             api_key = os.getenv("OPENAI_API_KEY")
             if not api_key:
-<<<<<<< HEAD
-                raise ValueError("OPENAI_API_KEY not found in environment variables. Please add it to your .env file.")
-=======
                 raise ValueError(
                     "OPENAI_API_KEY not found in environment variables. Please add it to your .env file."
                 )
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             self.client = OpenAI(api_key=api_key)
             self.endpoint = "responses"
             self.default_model = "gpt-4.1"
@@ -78,15 +53,6 @@ class LLMClient:
         if system_prompt:
             logger.debug(f"System prompt set: {system_prompt[:100]}...")
 
-<<<<<<< HEAD
-    def generate(self,
-                prompt: str,
-                model: Optional[str] = None,
-                endpoint: Optional[Literal["completions", "responses"]] = None,
-                system_prompt: Optional[str] = None,
-                stream: bool = False,
-                **kwargs: Any) -> Union[str, Iterator[str]]:
-=======
     def generate(
         self,
         prompt: str,
@@ -96,7 +62,6 @@ class LLMClient:
         stream: bool = False,
         **kwargs: Any,
     ) -> Union[str, Iterator[str]]:
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         """
         Generate a response from the LLM.
 
@@ -114,13 +79,6 @@ class LLMClient:
         """
         model = model or self.default_model
         endpoint_to_use = endpoint or self.endpoint
-<<<<<<< HEAD
-        logger.debug(f"Generating response with model={model}, endpoint={endpoint_to_use}, stream={stream}")
-
-        # Use provided system_prompt, fall back to instance default if not provided
-        effective_system_prompt = system_prompt if system_prompt is not None else self.system_prompt
-        logger.debug(f"Using system prompt: {effective_system_prompt[:100] if effective_system_prompt else 'None'}...")
-=======
         logger.debug(
             f"Generating response with model={model}, endpoint={endpoint_to_use}, stream={stream}"
         )
@@ -132,7 +90,6 @@ class LLMClient:
         logger.debug(
             f"Using system prompt: {effective_system_prompt[:100] if effective_system_prompt else 'None'}..."
         )
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         if endpoint_to_use == "completions":
             # For local LLM, combine system prompt and user prompt if system prompt exists
@@ -145,25 +102,15 @@ class LLMClient:
                     f"<|eot_id|><|start_header_id|>user<|end_header_id|>\n"
                     f"{prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n"
                 )
-<<<<<<< HEAD
-                logger.debug(f"Formatted prompt for local LLM: {effective_prompt[:200]}...")
-=======
                 logger.debug(
                     f"Formatted prompt for local LLM: {effective_prompt[:200]}..."
                 )
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
             try:
                 # Set stream parameter in the API call
                 response = self.client.completions.create(
                     model=model,
                     prompt=effective_prompt,
-<<<<<<< HEAD
-                    stop=["<|eot_id|>", "<|start_header_id|>"],  # Stop at end of turn or next header
-                    temperature=0.1,  # Lower temperature for more consistent JSON output
-                    stream=stream,
-                    **kwargs
-=======
                     stop=[
                         "<|eot_id|>",
                         "<|start_header_id|>",
@@ -171,24 +118,18 @@ class LLMClient:
                     temperature=0.1,  # Lower temperature for more consistent JSON output
                     stream=stream,
                     **kwargs,
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 )
 
                 if stream:
                     # Return a generator that yields chunks
                     def stream_generator():
                         for chunk in response:
-<<<<<<< HEAD
-                            if hasattr(chunk.choices[0], 'text') and chunk.choices[0].text:
-                                yield chunk.choices[0].text
-=======
                             if (
                                 hasattr(chunk.choices[0], "text")
                                 and chunk.choices[0].text
                             ):
                                 yield chunk.choices[0].text
 
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                     return stream_generator()
                 else:
                     # Return the complete response as before
@@ -209,31 +150,19 @@ class LLMClient:
             try:
                 # Set stream parameter in the API call
                 response = self.client.chat.completions.create(
-<<<<<<< HEAD
-                    model=model,
-                    messages=messages,
-                    stream=stream,
-                    **kwargs
-=======
                     model=model, messages=messages, stream=stream, **kwargs
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 )
 
                 if stream:
                     # Return a generator that yields chunks
                     def stream_generator():
                         for chunk in response:
-<<<<<<< HEAD
-                            if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
-                                yield chunk.choices[0].delta.content
-=======
                             if (
                                 hasattr(chunk.choices[0].delta, "content")
                                 and chunk.choices[0].delta.content
                             ):
                                 yield chunk.choices[0].delta.content
 
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                     return stream_generator()
                 else:
                     # Return the complete response as before
@@ -263,11 +192,7 @@ class LLMClient:
                 "tokens_per_second": None,
                 "input_tokens": None,
                 "output_tokens": None,
-<<<<<<< HEAD
-                "decode_token_times": []
-=======
                 "decode_token_times": [],
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             }
 
         try:
@@ -277,22 +202,14 @@ class LLMClient:
             if response.status_code == 200:
                 return response.json()
             else:
-<<<<<<< HEAD
-                logger.warning(f"Failed to get stats: {response.status_code} - {response.text}")
-=======
                 logger.warning(
                     f"Failed to get stats: {response.status_code} - {response.text}"
                 )
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 return {}
         except Exception as e:
             logger.warning(f"Error fetching performance stats: {str(e)}")
             return {}
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 def main():
     # Example usage with local LLM
     system_prompt = "You are a creative assistant who specializes in short stories."
@@ -306,15 +223,10 @@ def main():
 
     # Streaming example
     print("\nLocal LLM streaming response:")
-<<<<<<< HEAD
-    for chunk in local_llm.generate("Write a one-sentence bedtime story about a dragon.", stream=True):
-        print(chunk, end='', flush=True)
-=======
     for chunk in local_llm.generate(
         "Write a one-sentence bedtime story about a dragon.", stream=True
     ):
         print(chunk, end="", flush=True)
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     print("\n")
 
     # Example usage with OpenAI API
@@ -326,14 +238,6 @@ def main():
 
     # Streaming example
     print("\nOpenAI API streaming response:")
-<<<<<<< HEAD
-    for chunk in openai_llm.generate("Write a one-sentence bedtime story about a dragon.", stream=True):
-        print(chunk, end='', flush=True)
-    print("\n")
-
-if __name__ == "__main__":
-    main()
-=======
     for chunk in openai_llm.generate(
         "Write a one-sentence bedtime story about a dragon.", stream=True
     ):
@@ -343,4 +247,3 @@ if __name__ == "__main__":
 
 if __name__ == "__main__":
     main()
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))

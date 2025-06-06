@@ -8,18 +8,10 @@ import argparse
 import os
 from gaia.agents.Blender.agent import BlenderAgent
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 def wait_for_user():
     """Wait for user to press Enter before continuing."""
     input("Press Enter to continue to the next example...")
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 def run_examples(agent, selected_example=None, print_result=True):
     """
     Run the example demonstrations.
@@ -35,52 +27,26 @@ def run_examples(agent, selected_example=None, print_result=True):
         1: {
             "name": "Clearing the scene",
             "description": "This example demonstrates how to clear all objects from a scene.",
-<<<<<<< HEAD
-            "query": "Clear the scene to start fresh"
-=======
             "query": "Clear the scene to start fresh",
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         },
         2: {
             "name": "Creating a basic cube",
             "description": "This example creates a red cube at the center of the scene.",
-<<<<<<< HEAD
-            "query": "Create a red cube at the center of the scene and make sure it has a red material"
-=======
             "query": "Create a red cube at the center of the scene and make sure it has a red material",
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         },
         3: {
             "name": "Creating a sphere with specific properties",
             "description": "This example creates a blue sphere with specific parameters.",
-<<<<<<< HEAD
-            "query": "Create a blue sphere at position (3, 0, 0) and set its scale to (2, 2, 2)"
-=======
             "query": "Create a blue sphere at position (3, 0, 0) and set its scale to (2, 2, 2)",
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         },
         4: {
             "name": "Creating multiple objects",
             "description": "This example creates multiple objects with specific arrangements.",
-<<<<<<< HEAD
-            "query": "Create a green cube at (0, 0, 0) and a red sphere 3 units above it"
-=======
             "query": "Create a green cube at (0, 0, 0) and a red sphere 3 units above it",
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         },
         5: {
             "name": "Creating and modifying objects",
             "description": "This example creates objects and then modifies them.",
-<<<<<<< HEAD
-            "query": "Create a blue cylinder, then make it taller and move it up 2 units"
-        },
-        6: {
-            "name": "Creating a more complex scene",
-            "description": "This example creates a more complex scene with multiple objects and relationships.",
-            "query": "Create a simple desk with a computer, lamp, and coffee mug on it.",
-            "use_interactive_scene": True
-        }
-=======
             "query": "Create a blue cylinder, then make it taller and move it up 2 units",
         },
         # FIXME: Currently not working.
@@ -90,28 +56,18 @@ def run_examples(agent, selected_example=None, print_result=True):
         #     "query": "Create a simple desk with a computer, lamp, and coffee mug on it.",
         #     "use_interactive_scene": True,
         # },
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     }
 
     # If a specific example is requested, run only that one
     if selected_example and selected_example in examples:
         example = examples[selected_example]
         console.print_header(f"=== Example {selected_example}: {example['name']} ===")
-<<<<<<< HEAD
-        console.print_header(example['description'])
-
-        if example.get('use_interactive_scene', False):
-            agent.create_interactive_scene(example['query'])
-        else:
-            agent.process_query(example['query'])
-=======
         console.print_header(example["description"])
 
         if example.get("use_interactive_scene", False):
             agent.create_interactive_scene(example["query"])
         else:
             agent.process_query(example["query"])
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         agent.display_result(print_result=print_result)
         return
@@ -119,21 +75,12 @@ def run_examples(agent, selected_example=None, print_result=True):
     # Run all examples in sequence
     for idx, example in examples.items():
         console.print_header(f"=== Example {idx}: {example['name']} ===")
-<<<<<<< HEAD
-        console.print_header(example['description'])
-
-        if example.get('use_interactive_scene', False):
-            agent.create_interactive_scene(example['query'])
-        else:
-            agent.process_query(example['query'], output_to_file=True)
-=======
         console.print_header(example["description"])
 
         if example.get("use_interactive_scene", False):
             agent.create_interactive_scene(example["query"])
         else:
             agent.process_query(example["query"], output_to_file=True)
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         agent.display_result(print_result=print_result)
 
@@ -141,10 +88,6 @@ def run_examples(agent, selected_example=None, print_result=True):
         if idx < len(examples):
             wait_for_user()
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 def run_interactive_mode(agent, print_result=True):
     """
     Run the Blender Agent in interactive mode where the user can continuously input queries.
@@ -160,11 +103,7 @@ def run_interactive_mode(agent, print_result=True):
     while True:
         try:
             query = input("\nEnter query: ")
-<<<<<<< HEAD
-            if query.lower() in ['exit', 'quit', 'q']:
-=======
             if query.lower() in ["exit", "quit", "q"]:
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 console.print_header("Exiting interactive mode.")
                 break
 
@@ -178,33 +117,6 @@ def run_interactive_mode(agent, print_result=True):
         except Exception as e:
             console.print_error(f"Error processing query: {e}")
 
-<<<<<<< HEAD
-def main():
-    """Main entry point for the Blender Agent application."""
-    parser = argparse.ArgumentParser(description="Run the BlenderAgent")
-    parser.add_argument("--model", default="Llama-3.2-3B-Instruct-Hybrid",
-                      help="Model ID to use (default: Llama-3.2-3B-Instruct-Hybrid)")
-    parser.add_argument("--example", type=int, choices=range(1, 7),
-                      help="Run a specific example (1-6), if not specified run all examples")
-    parser.add_argument("--steps", type=int, default=5,
-                      help="Maximum number of steps per query")
-    parser.add_argument("--output-dir", type=str, default="output",
-                      help="Directory to save output files")
-    parser.add_argument("--use-local-llm", action="store_true", default=True,
-                      help="Use local LLM resources instead of remote ones")
-    parser.add_argument("--stream", action="store_true",
-                      help="Enable streaming mode for LLM responses")
-    parser.add_argument("--stats", action="store_true", default=True,
-                      help="Display performance statistics")
-    parser.add_argument("--query", type=str,
-                      help="Custom query to run instead of examples")
-    parser.add_argument("--interactive", action="store_true",
-                      help="Enable interactive mode to continuously input queries")
-    parser.add_argument("--debug-prompts", action="store_true", default=False,
-                      help="Enable debug prompts")
-    parser.add_argument("--print-result", action="store_true", default=False,
-                      help="Print results to console")
-=======
 
 def main():
     """Main entry point for the Blender Agent application."""
@@ -264,7 +176,6 @@ def main():
         default=False,
         help="Print results to console",
     )
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     args = parser.parse_args()
 
     # Create output directory if specified
@@ -285,11 +196,7 @@ def main():
         output_dir=output_dir,
         streaming=args.stream,
         show_stats=args.stats,
-<<<<<<< HEAD
-        debug_prompts=args.debug_prompts
-=======
         debug_prompts=args.debug_prompts,
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     )
 
     # Run in interactive mode if specified
@@ -302,14 +209,10 @@ def main():
         agent.display_result(print_result=args.print_result)
     else:
         # Run specific example if provided, otherwise run all examples
-<<<<<<< HEAD
-        run_examples(agent, selected_example=args.example, print_result=args.print_result)
-=======
         run_examples(
             agent, selected_example=args.example, print_result=args.print_result
         )
 
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
 if __name__ == "__main__":
     main()

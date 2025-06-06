@@ -1,33 +1,21 @@
 from typing import Dict
 from gaia.mcp.blender_mcp_client import MCPClient
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 class ViewManager:
     """Manages Blender viewport and display settings."""
 
     def __init__(self, mcp: MCPClient):
         self.mcp = mcp
 
-<<<<<<< HEAD
-    def adjust_for_large_scale(self, clip_end: float = 100000, orbit_selection: bool = True) -> Dict:
-=======
     def adjust_for_large_scale(
         self, clip_end: float = 100000, orbit_selection: bool = True
     ) -> Dict:
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         """Adjust viewport settings to properly view large-scale objects like Earth.
 
         Args:
             clip_end: The maximum view distance to set for the 3D viewport (default: 100000)
             orbit_selection: Whether to enable orbit around selection (default: True, but may not work in all Blender versions)
         """
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         def generate_code():
             return f"""
 import bpy
@@ -71,10 +59,6 @@ result = {{
 
 print("View settings adjusted for large-scale objects")
 """
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         response = self.mcp.execute_code(generate_code())
         # Extract the returned result from the MCP if available
         if response.get("result") and isinstance(response["result"], dict):
@@ -87,10 +71,6 @@ print("View settings adjusted for large-scale objects")
 
     def set_shading_tab(self) -> Dict:
         """Switch to the Shading tab/workspace in Blender."""
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         def generate_code():
             return """
 import bpy
@@ -146,10 +126,6 @@ result = {
 
 print("Attempted to switch to Shading tab")
 """
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         response = self.mcp.execute_code(generate_code())
         # Extract the returned result from the MCP if available
         if response.get("result") and isinstance(response["result"], dict):
@@ -158,8 +134,4 @@ print("Attempted to switch to Shading tab")
         if "stdout" in response:
             return {"status": "success", "message": response.get("stdout", "")}
         # Fallback
-<<<<<<< HEAD
         return {"status": "success"}
-=======
-        return {"status": "success"}
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))

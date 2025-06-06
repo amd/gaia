@@ -1,9 +1,5 @@
 from gaia.agents.Blender.agent_simple import BlenderAgentSimple
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 def main():
     # Initialize the agent
     agent = BlenderAgentSimple()
@@ -13,13 +9,6 @@ def main():
 
     while True:
         # Get user input interactively
-<<<<<<< HEAD
-        print("\nDescribe the 3D object you want to create (e.g., 'Create a large cube at the origin'): ")
-        user_input = input("> ")
-
-        # Check if user wants to quit
-        if user_input.lower() == 'q':
-=======
         print(
             "\nDescribe the 3D object you want to create (e.g., 'Create a large cube at the origin'): "
         )
@@ -27,7 +16,6 @@ def main():
 
         # Check if user wants to quit
         if user_input.lower() == "q":
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             print("Exiting Blender Object Creator. Goodbye!")
             break
 
@@ -36,14 +24,6 @@ def main():
 
         if result["status"] == "success":
             print(f"\n\nLLM response:\n{result['llm_response']}")
-<<<<<<< HEAD
-            print(f"Successfully created object: {result['blender_result'].get('data', {}).get('name')}")
-        else:
-            print(f"Error: {result['error']}")
-            if result['llm_response']:
-                print(f"Raw LLM response: {result['llm_response']}")
-
-=======
             print(
                 f"Successfully created object: {result['blender_result'].get('data', {}).get('name')}"
             )
@@ -53,6 +33,5 @@ def main():
                 print(f"Raw LLM response: {result['llm_response']}")
 
 
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 if __name__ == "__main__":
     main()

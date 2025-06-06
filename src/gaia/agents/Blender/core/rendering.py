@@ -1,10 +1,6 @@
 from typing import Dict
 from gaia.mcp.blender_mcp_client import MCPClient
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 class RenderManager:
     """Manages Blender rendering operations."""
 
@@ -13,10 +9,6 @@ class RenderManager:
 
     def setup_volume_rendering(self) -> Dict:
         """Configure render settings for optimal volume rendering."""
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         def generate_code():
             return """
 import bpy
@@ -37,17 +29,6 @@ result = {
 
 print("Volume rendering settings configured exactly as in tutorial")
 """
-<<<<<<< HEAD
-        response = self.mcp.execute_code(generate_code())
-
-        # Extract the returned result from the MCP if available
-        if response.get("status") == "success" and isinstance(response.get("result", {}), dict):
-            return {"status": "success", **response.get("result", {})}
-
-        # Add stdout to the response for debugging
-        if response.get("status") == "success" and "stdout" in response.get("result", {}):
-            return {"status": "success", "message": response["result"].get("stdout", "")}
-=======
 
         response = self.mcp.execute_code(generate_code())
 
@@ -65,7 +46,6 @@ print("Volume rendering settings configured exactly as in tutorial")
                 "status": "success",
                 "message": response["result"].get("stdout", ""),
             }
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         # Fallback for error
         if response.get("status") == "error":
@@ -76,10 +56,6 @@ print("Volume rendering settings configured exactly as in tutorial")
 
     def setup_color_grading(self) -> Dict:
         """Apply color grading settings as described in the tutorial."""
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         def generate_code():
             return """
 import bpy
@@ -105,21 +81,6 @@ result = {
 
 print("Color grading applied as in tutorial")
 """
-<<<<<<< HEAD
-        response = self.mcp.execute_code(generate_code())
-
-        # Extract the returned result from the MCP if available
-        if response.get("status") == "success" and isinstance(response.get("result", {}), dict):
-            return {"status": "success", **response.get("result", {})}
-
-        # Add stdout to the response for debugging
-        if response.get("status") == "success" and "stdout" in response.get("result", {}):
-            return {"status": "success", "message": response["result"].get("stdout", "")}
-
-        # Fallback for error
-        if response.get("status") == "error":
-            return {"status": "success", "look": "Medium High Contrast"}  # Return fallback value
-=======
 
         response = self.mcp.execute_code(generate_code())
 
@@ -144,17 +105,12 @@ print("Color grading applied as in tutorial")
                 "status": "success",
                 "look": "Medium High Contrast",
             }  # Return fallback value
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         # General fallback
         return {"status": "success"}
 
     def setup_camera(self, distance: float = 25000) -> Dict:
         """Add and configure a camera for a good view of the planet."""
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         def generate_code():
             return f"""
 import bpy
@@ -179,17 +135,6 @@ result = {{
 
 print("Camera set up exactly as in tutorial")
 """
-<<<<<<< HEAD
-        response = self.mcp.execute_code(generate_code())
-
-        # Extract the returned result from the MCP if available
-        if response.get("status") == "success" and isinstance(response.get("result", {}), dict):
-            return {"status": "success", **response.get("result", {})}
-
-        # Add stdout to the response for debugging
-        if response.get("status") == "success" and "stdout" in response.get("result", {}):
-            return {"status": "success", "message": response["result"].get("stdout", "")}
-=======
 
         response = self.mcp.execute_code(generate_code())
 
@@ -207,7 +152,6 @@ print("Camera set up exactly as in tutorial")
                 "status": "success",
                 "message": response["result"].get("stdout", ""),
             }
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         # Fallback for error
         if response.get("status") == "error":
@@ -216,13 +160,6 @@ print("Camera set up exactly as in tutorial")
         # General fallback
         return {"status": "success"}
 
-<<<<<<< HEAD
-    def setup_render_settings(self,
-                             resolution_x: int = 1920,
-                             resolution_y: int = 1080,
-                             output_path: str = "//planet_earth_render.png") -> Dict:
-        """Configure final render settings."""
-=======
     def setup_render_settings(
         self,
         resolution_x: int = 1920,
@@ -231,7 +168,6 @@ print("Camera set up exactly as in tutorial")
     ) -> Dict:
         """Configure final render settings."""
 
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         def generate_code():
             return f"""
 import bpy
@@ -251,24 +187,6 @@ result = {{
 
 print("Render settings configured exactly as in tutorial")
 """
-<<<<<<< HEAD
-        response = self.mcp.execute_code(generate_code())
-
-        # Extract the returned result from the MCP if available
-        if response.get("status") == "success" and isinstance(response.get("result", {}), dict):
-            return {"status": "success", **response.get("result", {})}
-
-        # Add stdout to the response for debugging
-        if response.get("status") == "success" and "stdout" in response.get("result", {}):
-            return {"status": "success", "message": response["result"].get("stdout", "")}
-
-        # Fallback for error
-        if response.get("status") == "error":
-            return {"status": "success", "resolution_x": resolution_x, "resolution_y": resolution_y}
-
-        # General fallback
-        return {"status": "success"}
-=======
 
         response = self.mcp.execute_code(generate_code())
 
@@ -297,4 +215,3 @@ print("Render settings configured exactly as in tutorial")
 
         # General fallback
         return {"status": "success"}
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))

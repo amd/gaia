@@ -2,10 +2,6 @@ import math
 from typing import Dict, Tuple
 from gaia.mcp.blender_mcp_client import MCPClient
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 class ObjectManager:
     """Manages Blender object operations."""
 
@@ -16,10 +12,6 @@ class ObjectManager:
         """Create a highly detailed sphere from a subdivided cube for planet Earth.
         The default radius is 6000 meters, which corresponds to Earth's approximate radius of 6000 km
         (at 1:10,000 scale, where 1 meter in Blender = 1 km in real life)."""
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         def generate_code():
             return f"""
 import bpy
@@ -115,10 +107,6 @@ result = {{
 
 print("Base Earth sphere created with " + str(vertex_count) + " vertices and " + str(face_count) + " faces")
 """
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         code = generate_code()
         response = self.mcp.execute_code(code)
 
@@ -131,18 +119,11 @@ print("Base Earth sphere created with " + str(vertex_count) + " vertices and " +
         # Fallback
         return {"status": "success"}
 
-<<<<<<< HEAD
-    def add_sunlight(self,
-                    energy: float = 5.0,
-                    angle_degrees: Tuple[float, float] = (60, 45)) -> Dict:
-        """Add a sun light to illuminate the planet."""
-=======
     def add_sunlight(
         self, energy: float = 5.0, angle_degrees: Tuple[float, float] = (60, 45)
     ) -> Dict:
         """Add a sun light to illuminate the planet."""
 
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         def generate_code():
             angle_x = math.radians(angle_degrees[0])
             angle_z = math.radians(angle_degrees[1])
@@ -165,10 +146,6 @@ result = {{
 
 print("Sunlight added")
 """
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         response = self.mcp.execute_code(generate_code())
         # Extract the returned result from the MCP if available
         if response.get("result") and isinstance(response["result"], dict):
@@ -179,16 +156,6 @@ print("Sunlight added")
         # Fallback
         return {"status": "success"}
 
-<<<<<<< HEAD
-    def load_earth_texture(self,
-                          texture_name: str,
-                          texture_path: str,
-                          is_noncolor: bool = False) -> Dict:
-        """Load a texture image for the Earth."""
-        def generate_code():
-            # Convert backslashes to forward slashes to avoid unicode escape issues
-            safe_path = texture_path.replace('\\', '/')
-=======
     def load_earth_texture(
         self, texture_name: str, texture_path: str, is_noncolor: bool = False
     ) -> Dict:
@@ -197,7 +164,6 @@ print("Sunlight added")
         def generate_code():
             # Convert backslashes to forward slashes to avoid unicode escape issues
             safe_path = texture_path.replace("\\", "/")
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
             noncolor_code = """
 if img:
@@ -225,20 +191,6 @@ else:
     result = {{"found": False}}
     print(f"Failed to load texture from {safe_path}")
 """
-<<<<<<< HEAD
-        response = self.mcp.execute_code(generate_code())
-        # Extract the returned result from the MCP if available
-        if response.get("status") == "success" and isinstance(response["result"], dict) and "found" in response["result"]:
-            return {"status": "success", **response["result"]}
-
-        # Add stdout to the response for debugging
-        if response.get("status") == "success" and "stdout" in response.get("result", {}):
-            return {"status": "success", "message": response["result"].get("stdout", "")}
-
-        # Fallback for error
-        if response.get("status") == "error":
-            return {"status": "error", "message": response.get("message", "Unknown error in load_earth_texture")}
-=======
 
         response = self.mcp.execute_code(generate_code())
         # Extract the returned result from the MCP if available
@@ -266,17 +218,12 @@ else:
                     "message", "Unknown error in load_earth_texture"
                 ),
             }
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         # General fallback
         return {"status": "success", "found": False}
 
     def create_atmosphere_object(self) -> Dict:
         """Create the atmosphere object."""
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         def generate_code():
             return """
 import bpy
@@ -304,10 +251,6 @@ result = {
 
 print("Atmosphere object created")
 """
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         response = self.mcp.execute_code(generate_code())
         # Extract the returned result from the MCP if available
         if response.get("result") and isinstance(response["result"], dict):
@@ -320,10 +263,6 @@ print("Atmosphere object created")
 
     def create_clouds_object(self) -> Dict:
         """Create the clouds object."""
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         def generate_code():
             return """
 import bpy
@@ -354,10 +293,6 @@ result = {
 
 print("Clouds object created")
 """
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         response = self.mcp.execute_code(generate_code())
         # Extract the returned result from the MCP if available
         if response.get("result") and isinstance(response["result"], dict):
@@ -366,8 +301,4 @@ print("Clouds object created")
         if "stdout" in response:
             return {"status": "success", "message": response.get("stdout", "")}
         # Fallback
-<<<<<<< HEAD
         return {"status": "success"}
-=======
-        return {"status": "success"}
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))

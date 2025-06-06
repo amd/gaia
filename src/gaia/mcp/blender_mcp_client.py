@@ -6,12 +6,6 @@ import logging
 import re
 from gaia.logger import get_logger
 
-<<<<<<< HEAD
-class MCPError(Exception):
-    """Exception raised for MCP client errors."""
-    pass
-
-=======
 
 class MCPError(Exception):
     """Exception raised for MCP client errors."""
@@ -19,16 +13,11 @@ class MCPError(Exception):
     pass
 
 
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 # MCP client class for tests
 class MCPClient:
     log = get_logger(__name__)
 
-<<<<<<< HEAD
-    def __init__(self, host='localhost', port=9876):
-=======
     def __init__(self, host="localhost", port=9876):
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         self.host = host
         self.port = port
         self.log = self.__class__.log  # Use the class-level logger for instances
@@ -57,14 +46,7 @@ class MCPClient:
             params = {}
 
         # Create command
-<<<<<<< HEAD
-        command = {
-            "type": cmd_type,
-            "params": params
-        }
-=======
         command = {"type": cmd_type, "params": params}
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
         self.log.debug(f"Sending command: {cmd_type} with params: {params}")
 
@@ -72,28 +54,16 @@ class MCPClient:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                 sock.connect((self.host, self.port))
-<<<<<<< HEAD
-                sock.sendall(json.dumps(command).encode('utf-8'))
-
-                # Receive the response
-                response = sock.recv(65536).decode('utf-8')
-=======
                 sock.sendall(json.dumps(command).encode("utf-8"))
 
                 # Receive the response
                 response = sock.recv(65536).decode("utf-8")
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
                 # Parse the JSON response
                 parsed_response = json.loads(response)
 
-<<<<<<< HEAD
-                if parsed_response['status'] == 'error':
-                    error_message = parsed_response.get('message', 'Unknown error')
-=======
                 if parsed_response["status"] == "error":
                     error_message = parsed_response.get("message", "Unknown error")
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                     enhanced_message = self._enhance_error_message(error_message)
                     self.log.error(f"Error response: {error_message}")
                     raise MCPError(enhanced_message)
@@ -121,9 +91,6 @@ class MCPClient:
         self.log.debug(f"Getting scene info")
         return self.send_command("get_scene_info")
 
-<<<<<<< HEAD
-    def create_object(self, type="CUBE", name=None, location=(0,0,0), rotation=(0,0,0), scale=(1,1,1)):
-=======
     def create_object(
         self,
         type="CUBE",
@@ -132,29 +99,20 @@ class MCPClient:
         rotation=(0, 0, 0),
         scale=(1, 1, 1),
     ):
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         params = {
             "type": type,
             "location": location,
             "rotation": rotation,
-<<<<<<< HEAD
-            "scale": scale
-=======
             "scale": scale,
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         }
         if name:
             params["name"] = name
         self.log.debug(f"Creating {type} object{' named ' + name if name else ''}")
         return self.send_command("create_object", params)
 
-<<<<<<< HEAD
-    def modify_object(self, name, location=None, rotation=None, scale=None, visible=None):
-=======
     def modify_object(
         self, name, location=None, rotation=None, scale=None, visible=None
     ):
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         params = {"name": name}
         if location is not None:
             params["location"] = location
@@ -173,8 +131,4 @@ class MCPClient:
 
     def get_object_info(self, name):
         self.log.debug(f"Getting info for object '{name}'")
-<<<<<<< HEAD
         return self.send_command("get_object_info", {"name": name})
-=======
-        return self.send_command("get_object_info", {"name": name})
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))

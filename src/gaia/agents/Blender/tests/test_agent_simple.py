@@ -9,10 +9,6 @@ from gaia.agents.Blender.mcp.mcp_client import MCPClient
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 @pytest.fixture
 def llm_client():
     logger.debug("Creating LLMClient for tests")
@@ -34,30 +30,18 @@ For testing purposes:
     # Using local LLM for faster testing
     return LLMClient(use_local=True, system_prompt=system_prompt)
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 @pytest.fixture
 def mcp_client():
     logger.debug("Creating MCPClient for tests")
     # Initialize with localhost for testing
-<<<<<<< HEAD
-    return MCPClient(host='localhost', port=9876)
-=======
     return MCPClient(host="localhost", port=9876)
 
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
 @pytest.fixture
 def blender_agent(llm_client, mcp_client):
     logger.debug("Creating BlenderAgentSimple for tests")
     return BlenderAgentSimple(llm=llm_client, mcp=mcp_client)
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 @pytest.fixture(autouse=True)
 def clean_blender_scene(mcp_client):
     """Clear all objects from Blender scene before each test."""
@@ -86,49 +70,26 @@ print(f"Scene cleared. {len(bpy.data.objects)} objects remain.")
     # We could also clean up after each test if needed
     # But generally before-test cleanup is sufficient
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 def test_parse_llm_response(blender_agent):
     logger.debug("Running test_parse_llm_response")
     # Test valid response
     test_response = "CUBE,1,2,3,0.5,1,1.5"
     obj_type, location, scale = blender_agent._parse_llm_response(test_response)
-<<<<<<< HEAD
-    
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     logger.debug(f"Parsed: type={obj_type}, location={location}, scale={scale}")
 
     assert obj_type == "CUBE"
     assert location == (1.0, 2.0, 3.0)
     assert scale == (0.5, 1.0, 1.5)
-<<<<<<< HEAD
-    
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     # Test invalid response
     logger.debug("Testing invalid LLM response")
     with pytest.raises(ValueError):
         blender_agent._parse_llm_response("INVALID_FORMAT")
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 @pytest.mark.integration
 def test_process_cube_query(blender_agent):
     logger.debug("Running test_process_cube_query")
     # Test processing a query for a cube
     result = blender_agent.process_query("Create a cube")
-<<<<<<< HEAD
-    
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     # Debug print the actual result structure
     logger.debug(f"LLM response: {result.get('llm_response', 'N/A')}")
     logger.debug(f"Result structure: {json.dumps(result, indent=2, default=str)}")
@@ -154,20 +115,11 @@ def test_process_cube_query(blender_agent):
     # Blender may add suffixes like .001, .002 to make names unique
     assert result["blender_result"]["result"]["name"].startswith("llm_generated_cube")
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 @pytest.mark.integration
 def test_process_sphere_query(blender_agent):
     logger.debug("Running test_process_sphere_query")
     # Test processing a query for a sphere
     result = blender_agent.process_query("Create a sphere at the origin")
-<<<<<<< HEAD
-    
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     # Debug print the actual result structure
     logger.debug(f"LLM response: {result.get('llm_response', 'N/A')}")
     logger.debug(f"Result structure: {json.dumps(result, indent=2, default=str)}")
@@ -187,10 +139,6 @@ def test_process_sphere_query(blender_agent):
     # Blender may add suffixes like .001, .002 to make names unique
     assert result["blender_result"]["result"]["name"].startswith("llm_generated_sphere")
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 @pytest.mark.integration
 def test_agent_initialization():
     logger.debug("Running test_agent_initialization")
@@ -205,10 +153,6 @@ def test_agent_initialization():
     logger.debug(f"System prompt: {agent.llm.system_prompt}")
     assert agent.llm.system_prompt == agent.SYSTEM_PROMPT
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 if __name__ == "__main__":
     """
     Main function to run tests directly from this file.

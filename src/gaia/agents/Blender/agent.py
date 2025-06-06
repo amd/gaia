@@ -18,22 +18,15 @@ import re
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 class BlenderAgent(Agent):
     """
     Blender-specific agent focused on 3D scene creation and modification.
     Inherits core functionality from the base Agent class.
     """
 
-<<<<<<< HEAD
-=======
     # Define Blender-specific tools that can execute directly without requiring a plan
     SIMPLE_TOOLS = ["clear_scene", "get_scene_info"]
 
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     def __init__(
         self,
         use_local_llm: bool = True,
@@ -121,23 +114,13 @@ For final answers:
 }}
 
 ==== CRITICAL RULES ====
-<<<<<<< HEAD
-1. ALWAYS create a plan before executing any tools
-=======
 1. Create a plan for multi-step tasks, but simple single operations (like clear_scene) can execute directly
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 2. Each plan step must be atomic (one tool call per step)
 3. For colored objects, ALWAYS include both create_object AND set_material_color steps
 4. When clearing a scene, ONLY use clear_scene without creating new objects unless requested
 5. Always use the actual returned object names for subsequent operations
 6. Never repeat the same tool call with identical arguments
 
-<<<<<<< HEAD
-==== COMMON WORKFLOWS ====
-1. Clearing a scene: Use clear_scene() with no arguments
-2. Creating a colored object: First create_object, then set_material_color
-3. Modifying objects: Use modify_object with the parameters you want to change
-=======
 ==== COLORED OBJECT DETECTION ====
 🔍 SCAN the user request for color words:
 - "red", "green", "blue", "yellow", "purple", "cyan", "white", "black"
@@ -183,7 +166,6 @@ Examples of colored requests:
    - Step 3: create_object(type="SPHERE", name="sphere1", location=[3,0,0])
    - Step 4: set_material_color(object_name="sphere1", color=[1,0,0,1])
 4. Modifying objects: Use modify_object with the parameters you want to change
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 """
 
     def _register_tools(self):
@@ -209,21 +191,12 @@ Examples of colored requests:
             """
             try:
                 from gaia.agents.Blender.core.scene import SceneManager
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 scene_manager = SceneManager(self.mcp)
                 return scene_manager.clear_scene()
             except Exception as e:
                 self.error_history.append(str(e))
                 return {"status": "error", "error": str(e)}
 
-<<<<<<< HEAD
-
-        @tool
-        def create_object(type: str = "CUBE", name: str = None, location: tuple = (0,0,0), rotation: tuple = (0,0,0), scale: tuple = (1,1,1)) -> Dict[str, Any]:
-=======
         @tool
         def create_object(
             type: str = "CUBE",
@@ -232,7 +205,6 @@ Examples of colored requests:
             rotation: tuple = (0, 0, 0),
             scale: tuple = (1, 1, 1),
         ) -> Dict[str, Any]:
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             """
             Create a 3D object in Blender.
 
@@ -268,11 +240,7 @@ Examples of colored requests:
                     name=name or f"generated_{type.lower()}",
                     location=location,
                     rotation=rotation,
-<<<<<<< HEAD
-                    scale=scale
-=======
                     scale=scale,
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 )
                 return result
             except Exception as e:
@@ -280,13 +248,9 @@ Examples of colored requests:
                 return {"status": "error", "error": str(e)}
 
         @tool
-<<<<<<< HEAD
-        def set_material_color(object_name: str, color: tuple = (1, 0, 0, 1)) -> Dict[str, Any]:
-=======
         def set_material_color(
             object_name: str, color: tuple = (1, 0, 0, 1)
         ) -> Dict[str, Any]:
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             """
             Set the material color for an object. Creates a new material if one doesn't exist.
 
@@ -312,10 +276,6 @@ Examples of colored requests:
             """
             try:
                 from gaia.agents.Blender.core.materials import MaterialManager
-<<<<<<< HEAD
-=======
-
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 material_manager = MaterialManager(self.mcp)
                 return material_manager.set_material_color(object_name, color)
             except Exception as e:
@@ -352,16 +312,12 @@ Examples of colored requests:
                 return {"status": "error", "error": str(e)}
 
         @tool
-<<<<<<< HEAD
-        def modify_object(name: str, location: tuple = None, scale: tuple = None, rotation: tuple = None) -> Dict[str, Any]:
-=======
         def modify_object(
             name: str,
             location: tuple = None,
             scale: tuple = None,
             rotation: tuple = None,
         ) -> Dict[str, Any]:
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
             """
             Modify an existing object in Blender.
 
@@ -391,14 +347,7 @@ Examples of colored requests:
             """
             try:
                 return self.mcp.modify_object(
-<<<<<<< HEAD
-                    name=name,
-                    location=location,
-                    scale=scale,
-                    rotation=rotation
-=======
                     name=name, location=location, scale=scale, rotation=rotation
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                 )
             except Exception as e:
                 self.error_history.append(str(e))
@@ -513,13 +462,9 @@ Examples of colored requests:
                 self.error_history.append(str(e))
                 return {"status": "error", "error": str(e)}
 
-<<<<<<< HEAD
-    def _post_process_tool_result(self, tool_name: str, tool_args: Dict[str, Any], tool_result: Dict[str, Any]) -> None:
-=======
     def _post_process_tool_result(
         self, tool_name: str, tool_args: Dict[str, Any], tool_result: Dict[str, Any]
     ) -> None:
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         """
         Post-process the tool result for Blender-specific handling.
 
@@ -533,31 +478,17 @@ Examples of colored requests:
             actual_name = self._track_object_name(tool_result)
             if actual_name:
                 logger.debug(f"Actual object name created: {actual_name}")
-<<<<<<< HEAD
-                self.console.print_info(f"Note: Blender assigned name '{actual_name}' to the created object")
-
-                # Update subsequent steps in the plan that might use this object
-                if (self.current_plan and self.current_step < len(self.current_plan) - 1):
-=======
                 self.console.print_info(
                     f"Note: Blender assigned name '{actual_name}' to the created object"
                 )
 
                 # Update subsequent steps in the plan that might use this object
                 if self.current_plan and self.current_step < len(self.current_plan) - 1:
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                     for i in range(self.current_step + 1, len(self.current_plan)):
                         future_step = self.current_plan[i]
                         if isinstance(future_step, dict) and "tool_args" in future_step:
                             args = future_step["tool_args"]
                             # Look for object_name or name parameters
-<<<<<<< HEAD
-                            if "object_name" in args and args["object_name"] == tool_args.get("name"):
-                                logger.debug(f"Updating object_name in future step {i+1} from {args['object_name']} to {actual_name}")
-                                self.current_plan[i]["tool_args"]["object_name"] = actual_name
-                            if "name" in args and args["name"] == tool_args.get("name"):
-                                logger.debug(f"Updating name in future step {i+1} from {args['name']} to {actual_name}")
-=======
                             if "object_name" in args and args[
                                 "object_name"
                             ] == tool_args.get("name"):
@@ -571,7 +502,6 @@ Examples of colored requests:
                                 logger.debug(
                                     f"Updating name in future step {i+1} from {args['name']} to {actual_name}"
                                 )
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                                 self.current_plan[i]["tool_args"]["name"] = actual_name
 
     def _track_object_name(self, result):
@@ -586,19 +516,11 @@ Examples of colored requests:
         """
         try:
             if isinstance(result, dict):
-<<<<<<< HEAD
-                if result.get('status') == 'success':
-                    if 'result' in result and isinstance(result['result'], dict):
-                        # Extract name from create_object result
-                        if 'name' in result['result']:
-                            actual_name = result['result']['name']
-=======
                 if result.get("status") == "success":
                     if "result" in result and isinstance(result["result"], dict):
                         # Extract name from create_object result
                         if "name" in result["result"]:
                             actual_name = result["result"]["name"]
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
                             logger.debug(f"Extracted object name: {actual_name}")
                             return actual_name
             return None
@@ -611,11 +533,7 @@ Examples of colored requests:
         scene_description: str,
         max_steps: int = None,
         output_to_file: bool = True,
-<<<<<<< HEAD
-        filename: str = None
-=======
         filename: str = None,
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
     ) -> Dict[str, Any]:
         """
         Create a more complex scene with multiple objects and relationships.
@@ -634,9 +552,5 @@ Examples of colored requests:
             f"Create a complete 3D scene with the following description: {scene_description}",
             max_steps=max_steps if max_steps is not None else self.max_steps * 2,
             output_to_file=output_to_file,
-<<<<<<< HEAD
-            filename=filename
-=======
             filename=filename,
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
         )

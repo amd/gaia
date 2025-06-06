@@ -18,11 +18,7 @@ GAIA provides two user interface experiences:
 1. The Qt-based interface - A robust desktop application interface built with PyQt6
 2. RAUX [beta] - A modern web-based interface built on Open-WebUI
 
-<<<<<<< HEAD
 ⚠️ **NOTE**: RAUX is currently disabled pending review, will be available in v0.8.4.
-=======
-?? **NOTE**: RAUX is currently disabled pending review, will be available in v0.8.4.
->>>>>>> c22cf8c (Blender Agent, Agent Framework and Notebook Example (#582))
 
 # Qt Interface
 
