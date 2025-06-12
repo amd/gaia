@@ -9,7 +9,7 @@
 !define /ifndef RYZENAI_FOLDER "ryzen_ai_13_ga"
 !define /ifndef NPU_DRIVER_ZIP "NPU_RAI1.3.zip"
 !define /ifndef NPU_DRIVER_VERSION "32.0.203.251"
-!define /ifndef LEMONADE_VERSION "v7.0.2"
+!define /ifndef LEMONADE_VERSION "v7.0.4"
 !define /ifndef RAUX_VERSION "v0.6.5+raux.0.2.0"
 !define /ifndef RAUX_PRODUCT_NAME "GAIA BETA"
 !define /ifndef RAUX_PRODUCT_SQUIRREL_NAME "GaiaBeta"
@@ -1161,3 +1161,4 @@ Function uninstall_raux
     no_raux_uninstall:
   ${EndIf}
 FunctionEnd
+

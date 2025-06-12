@@ -6,7 +6,7 @@ import logging
 import subprocess
 import os
 
-__version__ = "0.8.4"
+__version__ = "0.8.5"
 
 
 def get_package_version() -> str:
