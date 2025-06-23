@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import sys
+import re
 from packaging import version
 
 
@@ -7,58 +8,50 @@ def check_version_compatibility(expected_version, actual_version):
     """
     Compare two version strings, checking if they are compatible.
     Compatible means they have the same major and minor version numbers.
-    Patch version differences are ignored.
 
     Args:
-        expected_version (str): The expected version string (e.g. "v6.2.0")
-        actual_version (str): The actual version string to check (e.g. "Lemonade Server version is 6.2.0")
+        expected_version (str): Expected version (e.g. "8.0.1", "v8.0.1")
+        actual_version (str): Actual version output (may contain extra text)
 
     Returns:
         bool: True if versions are compatible, False otherwise
     """
     try:
-        # Remove 'v' prefix from expected version if present
+        # Clean expected version (remove 'v' prefix)
         expected = expected_version.lstrip("v")
-        print(f"- Cleaned expected version: {expected}")
 
-        # Find first digit in actual_version
-        for i, char in enumerate(actual_version):
-            if char.isdigit():
-                actual = actual_version[i:]
-                break
-        else:
-            print(f"- ERROR: No version number found in: {actual_version}")
+        # Extract version number from actual output using regex
+        # Look for pattern like "8.0.1" in the string
+        version_match = re.search(r"\d+\.\d+(?:\.\d+)?", actual_version)
+        if not version_match:
+            print(f"ERROR: No version number found in: {actual_version}")
             return False
 
-        print(f"- Cleaned actual version: {actual}")
+        actual = version_match.group()
 
-        # Parse versions
+        # Parse and compare major.minor versions
         expected_ver = version.parse(expected)
         actual_ver = version.parse(actual)
 
-        print(f"- Parsed expected version: {expected_ver}")
-        print(f"- Parsed actual version: {actual_ver}")
-
-        # Compare major and minor versions
         is_compatible = (
             expected_ver.major == actual_ver.major
             and expected_ver.minor == actual_ver.minor
         )
 
-        print(f"- Version compatibility check result: {is_compatible}")
+        print(
+            f"Expected: {expected} (major.minor: {expected_ver.major}.{expected_ver.minor})"
+        )
+        print(f"Actual: {actual} (major.minor: {actual_ver.major}.{actual_ver.minor})")
+        print(f"Compatible: {is_compatible}")
+
         return is_compatible
 
     except Exception as e:
-        print(f"- ERROR: Error comparing versions: {str(e)}")
+        print(f"ERROR: {e}")
         return False
 
 
 def main():
-    """
-    Main function to handle command line arguments.
-    Takes two arguments: expected_version and actual_version.
-    Returns 0 if versions are compatible, 1 otherwise.
-    """
     if len(sys.argv) != 3:
         print("Usage: python installer_utils.py <expected_version> <actual_version>")
         sys.exit(1)
@@ -66,12 +59,7 @@ def main():
     expected = sys.argv[1]
     actual = sys.argv[2]
 
-    print(f"- Starting version compatibility check")
-    print(f"- Expected version: {expected}")
-    print(f"- Actual version: {actual}")
-
     is_compatible = check_version_compatibility(expected, actual)
-    # Return 0 for success (compatible), 1 for failure (incompatible)
     sys.exit(0 if is_compatible else 1)
 
 

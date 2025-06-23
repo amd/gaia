@@ -9,7 +9,7 @@
 !define /ifndef RYZENAI_FOLDER "ryzen_ai_13_ga"
 !define /ifndef NPU_DRIVER_ZIP "NPU_RAI1.3.zip"
 !define /ifndef NPU_DRIVER_VERSION "32.0.203.251"
-!define /ifndef LEMONADE_VERSION "v7.0.4"
+!define /ifndef LEMONADE_VERSION "8.0.1"
 !define /ifndef RAUX_VERSION "v0.6.5+raux.0.2.1"
 !define /ifndef RAUX_PRODUCT_NAME "GAIA BETA"
 !define /ifndef RAUX_PRODUCT_SQUIRREL_NAME "GaiaBeta"
@@ -596,6 +596,7 @@ Section "-Install Main Components" SEC01
 
         ; Call installer_utils.py to check version compatibility
         DetailPrint "- Running version check command..."
+        DetailPrint "- Command: python installer_utils.py ${LEMONADE_VERSION} '$3'"
         nsExec::ExecToStack 'cmd /c ""$INSTDIR\python\python.exe" "$INSTDIR\installer_utils.py" "${LEMONADE_VERSION}" "$3""'
         Pop $4  ; Return value
         Pop $5  ; Command output
@@ -610,7 +611,7 @@ Section "-Install Main Components" SEC01
         ${Else}
           DetailPrint "- Lemonade version is not compatible"
           ${IfNot} ${Silent}
-            MessageBox MB_YESNO "Your $3 and is not compatible with the required version ${LEMONADE_VERSION}.$\n$\nWould you like to update Lemonade now?" IDYES install_lemonade IDNO skip_lemonade
+            MessageBox MB_YESNO "Your 'Running: lemonade-server --version' $3 is not compatible with the required version ${LEMONADE_VERSION}.$\n$\nWould you like to update Lemonade now?" IDYES install_lemonade IDNO skip_lemonade
           ${Else}
             GoTo skip_lemonade
           ${EndIf}
@@ -625,7 +626,7 @@ Section "-Install Main Components" SEC01
       download_lemonade:
         DetailPrint "- Downloading Lemonade installer..."
         ; Use nsExec::ExecToStack to capture the output and error code
-        nsExec::ExecToStack 'curl -L -f -v --retry 3 --retry-delay 2 -o "$TEMP\Lemonade_Server_Installer.exe" "https://github.com/lemonade-sdk/lemonade/releases/download/${LEMONADE_VERSION}/Lemonade_Server_Installer.exe"'
+        nsExec::ExecToStack 'curl -L -f -v --retry 3 --retry-delay 2 -o "$TEMP\Lemonade_Server_Installer.exe" "https://github.com/lemonade-sdk/lemonade/releases/download/v${LEMONADE_VERSION}/Lemonade_Server_Installer.exe"'
         Pop $0  ; Return value
         Pop $1  ; Command output
         DetailPrint "- Curl return code: $0"
