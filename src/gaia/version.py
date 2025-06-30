@@ -6,7 +6,10 @@ import logging
 import subprocess
 import os
 
-__version__ = "0.8.8"
+__version__ = "0.9.0"
+
+# Lemonade version used across CI and installer
+LEMONADE_VERSION = "8.0.3"
 
 
 def get_package_version() -> str:
@@ -73,6 +76,7 @@ def write_version_files() -> None:
             os.path.join(installer_dir, "version.nsh"), "w", encoding="utf-8"
         ) as f:
             f.write(f'!define GAIA_VERSION "{get_version_with_hash()}"\n')
+            f.write(f'!define LEMONADE_VERSION "{LEMONADE_VERSION}"\n')
 
         print(
             "Version files created successfully: version.txt and installer/version.nsh"

@@ -13,7 +13,5 @@ exclude = '''
     | _build
     | buck-out
   )/
-  | src/gaia/interface/rc_resource\.py
-  | src/gaia/interface/ui_form\.py
 )
 '''

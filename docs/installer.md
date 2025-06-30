@@ -2,7 +2,7 @@
 
 ## Installation Modes
 
-GAIA supports three installation modes, each optimized for different use cases:
+GAIA supports three modes, each optimized for different use cases via the Lemonade Server tool:
 
 1. **Hybrid Mode**: Best overall performance
    - Combines NPU and GPU capabilities
@@ -14,10 +14,9 @@ GAIA supports three installation modes, each optimized for different use cases:
    - Ideal for laptop users prioritizing battery life
    - Requires Ryzen AI 300-series processor
 
-3. **Generic Mode** (Default): Most compatible
-   - Standard GPU/CPU implementation
-   - Works on any system
-   - Uses Ollama for LLM support
+3. **CPU/GPU Mode** (Default): Most compatible
+   - Standard GPU/CPU implementation via llama.cpp/Vulkan
+   - Works on any Ryzen System
    - No special hardware requirements
 
 ## Prerequisites
@@ -32,10 +31,6 @@ GAIA supports three installation modes, each optimized for different use cases:
    - Required version: ${NPU_DRIVER_VERSION}
    - Will be automatically downloaded and installed if needed
    - Installer checks current version and offers updates
-
-3. **Ollama** (Generic Mode Only)
-   - Will be installed automatically during installation
-   - Can also be downloaded from [ollama.com](https://ollama.com)
 
 ## Installation Process
 
@@ -54,26 +49,7 @@ The installer automatically:
 - Sets required environment variables
 - Creates activation scripts
 
-### 3. GAIA Installation
-
-The installation process varies by mode:
-
-**Hybrid Mode** (Best Performance)
-- Installs core GAIA components
-- Includes hybrid processing capabilities
-- Configures for NPU+iGPU acceleration
-
-**NPU Mode** (Power Efficient)
-- Installs core GAIA components
-- Includes NPU-optimized processing
-- Configures for NPU-only acceleration
-
-**Generic Mode** (Most Compatible)
-- Installs core GAIA components
-- Includes Ollama integration
-- Works on any hardware
-
-### 4. Additional Components
+### 3. Additional Components
 
 - Downloads mode-specific LLM artifacts
 - For NPU/Hybrid modes:
@@ -98,7 +74,7 @@ To launch RAUX after installation:
 - The application will open in your default web browser
 - For technical support with RAUX, contact support@amd.com -->
 
-### 6. Final Setup
+### 4. Final Setup
 - Creates desktop shortcuts
 - Sets up launch configuration
 - Validates installation
@@ -112,12 +88,11 @@ The graphical interface comes bundled with GAIA, use the standard installation s
 For silent or automated installations, use command-line parameters:
 
 ```
-gaia-windows-setup.exe /S /MODE=HYBRID
+gaia-windows-setup.exe /S
 ```
 
 Available parameters:
 - `/S` - Silent installation (no UI)
-- `/MODE=X` - Set installation mode (GENERIC, NPU, or HYBRID)
 - `/D=<path>` - Set installation directory (must be last parameter)
 
 ### CI/CD Environments
@@ -160,7 +135,6 @@ If you encounter installation issues:
 1. Check the installation logs - you can generate detailed logs by running `gaia-windows-setup.exe /LOG=install_log.txt`
 2. Verify system requirements for your chosen mode
 3. For NPU/Hybrid mode, verify your Ryzen AI processor is properly detected
-4. For Generic mode, verify Ollama installation works correctly
 
 Common issues:
 - **CPU Compatibility**: The installer automatically detects if your CPU supports NPU/Hybrid modes

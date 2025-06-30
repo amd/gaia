@@ -27,8 +27,7 @@ RAUX serves as the frontend application layer while GAIA provides the core AI fr
 pip install -e .[hybrid,joker,clip,talk,dev]
 
 # Set environment mode (required before running)
-source set_hybrid_mode.bat    # For Ryzen AI with NPU
-source set_generic_mode.bat   # For standard GPU/CPU
+# GAIA automatically configures optimal settings
 ```
 
 ### Testing
@@ -71,27 +70,17 @@ python -m gaia.interface.widget
 
 2. **LLM Backend Layer** (`src/gaia/llm/`): Multiple backend support
    - `lemonade_server.py`: AMD-optimized ONNX Runtime GenAI backend
-   - `ollama_server.py`: Ollama integration for generic mode
    - `llama_index_local.py`: RAG capabilities via LlamaIndex
 
 3. **Interface Layer**: Dual interface support
-   - CLI via `cli.py` 
-   - Qt-based GUI in `interface/widget.py`
-   - Mode-specific settings files (generic/hybrid/npu_settings.json)
+   - CLI tool
+   - OpenWebUI (forked) GUI
 
 4. **Audio Pipeline** (`src/gaia/audio/`): Complete audio processing
    - Whisper ASR, Kokoro TTS, audio recording
 
 ### Key Environment Variables
-
-- `GAIA_MODE`: Must be set to HYBRID, NPU, or GENERIC
-- Mode determines which backend and settings are used
-
-### Installation Modes
-
-- **Hybrid Mode**: NPU + iGPU (Ryzen AI 9 HX 370+, requires specific NPU drivers)
-- **NPU Mode**: NPU only (coming soon)  
-- **Generic Mode**: Standard GPU/CPU via Ollama
+- Configuration is automatically optimized for Ryzen AI hardware when available
 
 ### Testing Architecture
 

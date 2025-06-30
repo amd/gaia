@@ -1,0 +1,55 @@
+name: 'Install Lemonade Server'
+description: 'Downloads and installs Lemonade Server with hybrid extras'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Get Lemonade Version
+      shell: powershell
+      run: |
+        $lemonadeVersion = python -c "import sys; sys.path.append('src'); from gaia.version import LEMONADE_VERSION; print(LEMONADE_VERSION)"
+        echo "LEMONADE_VERSION=$lemonadeVersion" >> $env:GITHUB_ENV
+        Write-Host "Using Lemonade version: $lemonadeVersion"
+
+    - name: Install Lemonade Server
+      shell: powershell
+      run: |
+        Write-Host "=== Installing Lemonade Server ==="
+
+        # Add exclusions for the installer and install directory
+        Add-MpPreference -ExclusionPath "C:\temp\Lemonade_Server_Installer.exe"
+        Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\lemonade_server"
+        Add-MpPreference -ExclusionProcess "Lemonade_Server_Installer.exe"
+
+        # Download and run installer
+        Invoke-WebRequest -Uri "https://github.com/lemonade-sdk/lemonade/releases/download/v$env:LEMONADE_VERSION/Lemonade_Server_Installer.exe" -OutFile "C:\temp\Lemonade_Server_Installer.exe"
+
+        $installPath = "C:\Users\nimbys\AppData\Local\lemonade_server"
+        Write-Host "Installing to: $installPath"
+
+        $process = Start-Process -FilePath "C:\temp\Lemonade_Server_Installer.exe" -ArgumentList "/S", "/Extras=hybrid", "/Models=Qwen2.5-0.5B-Instruct-CPU", "/D=$installPath" -Wait -PassThru
+
+        if ($process.ExitCode -ne 0) {
+          Write-Host "Lemonade installer failed with exit code: $($process.ExitCode)"
+          exit 1
+        }
+
+        # Remove exclusions after installation
+        Remove-MpPreference -ExclusionPath "C:\temp\Lemonade_Server_Installer.exe"
+        Remove-MpPreference -ExclusionProcess "Lemonade_Server_Installer.exe"
+
+        # Basic verification
+        if (-not (Test-Path $installPath)) {
+            Write-Host "Installation directory not found"
+            exit 1
+        }
+
+        # Test lemonade-server command
+        $lemonadeExe = "$installPath\python\Scripts\lemonade-server-dev.exe"
+        if (Test-Path $lemonadeExe) {
+            & $lemonadeExe --version
+            Write-Host "Lemonade Server installed successfully"
+        } else {
+            Write-Host "Lemonade server executable not found"
+            exit 1
+        }

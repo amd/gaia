@@ -2,11 +2,6 @@
 
 ## Installation and Setup
 
-### Which installation mode should I choose?
-- **Hybrid Mode**: Best for performance, combines NPU and iGPU for maximum speed. Requires Ryzen AI 300-series processor.
-- **NPU Mode**: Best for power efficiency, uses only the NPU for AI processing. Good for laptop users concerned about battery life. Requires Ryzen AI 300-series processor.
-- **Generic Mode**: Works on any Windows PC, uses Ollama as the backend. Choose this if you don't have a Ryzen AI processor.
-
 ### Can I change the installation mode after installing?
 Yes, you can reinstall GAIA and select a different mode. The installer provides an option to remove your existing installation.
 

@@ -1,9 +1,14 @@
-from gaia.agents.Llm.app import MyAgent as llm
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
 # Optional imports for other agents
+try:
+    from gaia.agents.Llm.app import MyAgent as llm
+except ImportError:
+    logger.warning("Llm agent not available")
+    llm = None
+
 try:
     from gaia.agents.Chaty.app import MyAgent as chaty
 except ImportError:
