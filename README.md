@@ -1,8 +1,7 @@
-# <img src="src/gaia/interface/img/gaia.ico" alt="GAIA Logo" width="64" height="64" style="vertical-align: middle;"> Introducing GAIA by AMD: Generative AI Is Awesome!
+# <img src="src/gaia/img/gaia.ico" alt="GAIA Logo" width="64" height="64" style="vertical-align: middle;"> Introducing GAIA by AMD: Generative AI Is Awesome!
 
 [![GAIA Build Installer](https://github.com/amd/gaia/actions/workflows/build_installer.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our build")
-[![GAIA Hybrid Installer Test](https://github.com/amd/gaia/actions/workflows/test_installer_hybrid.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our hybrid tests")
-[![GAIA Generic Installer Test](https://github.com/amd/gaia/actions/workflows/test_installer_generic.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our generic tests")
+[![GAIA Installer Test](https://github.com/amd/gaia/actions/workflows/test_installer.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our installer tests")
 [![GAIA CLI Tests](https://github.com/amd/gaia/actions/workflows/test_gaia_cli.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our cli tests")
 [![Latest Release](https://img.shields.io/github/v/release/amd/gaia?include_prereleases)](https://github.com/amd/gaia/releases/latest "Download the latest release")
 [![OS - Windows](https://img.shields.io/badge/OS-windows-blue)](https://github.com/amd/gaia/blob/main/docs/install.md "Check out our instructions")
@@ -35,18 +34,18 @@ For Ryzen AI LLM app development similar to GAIA, see [this developer guide](htt
 
 ⚠️ **IMPORTANT**: GAIA's Hybrid mode **only supports AMD Ryzen AI HX 300 series or newer processors**. For older AMD processors or non-AMD systems, the installer will install the generic mode with ollama. For more details, see [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
 
-## Optional Web Interface: GAIA BETA (RAUX)
+## Optional Web Interface: GAIA UI (RAUX)
 
-GAIA BETA is an optional, modern web-based interface for GAIA, built on the RAUX ([Open-WebUI](https://openwebui.com/) fork) platform. It offers a feature-rich, extensible, and user-friendly experience for interacting with GAIA's AI capabilities. GAIA BETA is currently in beta and is being actively integrated with new features and improvements. 
+GAIA UI is an optional, modern web-based interface for GAIA, built on the RAUX ([Open-WebUI](https://openwebui.com/) fork) platform. It offers a feature-rich, extensible, and user-friendly experience for interacting with GAIA's AI capabilities. GAIA UI is currently in beta and is being actively integrated with new features and improvements. 
 
-> **Note:** GAIA BETA is referred to as "RAUX" internally in some technical documentation and code. For most users, it is presented as "GAIA BETA".
+> **Note:** GAIA UI is referred to as "RAUX" internally in some technical documentation and code. For most users, it is presented as "GAIA UI".
 
 For more details and setup instructions, see the [UI Documentation](docs/ui.md).
 
 ## Contents:
 
 - [ Introducing GAIA by AMD: Generative AI Is Awesome!](#-introducing-gaia-by-amd-generative-ai-is-awesome)
-  - [Optional Web Interface: GAIA BETA (RAUX)](#optional-web-interface-gaia-beta-raux)
+  - [Optional Web Interface: GAIA UI (RAUX)](#optional-web-interface-gaia-beta-raux)
   - [Contents:](#contents)
 - [Getting Started Guide](#getting-started-guide)
   - [Installation Steps](#installation-steps)
@@ -238,4 +237,4 @@ Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT
 
 # Acknowledgments
-GAIA BETA is made possible through the exceptional hard work, dedication, and innovative vision of [Tim Jaeryang Baek](https://github.com/tjbck) and the [Open-WebUI](https://openwebui.com/) team! We are deeply grateful for their outstanding open-source contributions that have enabled us to build upon their robust foundation. Their commitment to creating accessible, user-friendly AI interfaces has been instrumental in bringing GAIA BETA to life. We extend our heartfelt appreciation to the entire Open-WebUI community for their continued support, collaboration, and the incredible platform they've developed that makes modern AI interactions seamless and intuitive.
+GAIA UI (RAUX) is made possible through the exceptional hard work, dedication, and innovative vision of [Tim Jaeryang Baek](https://github.com/tjbck) and the [Open-WebUI](https://openwebui.com/) team! We are deeply grateful for their outstanding open-source contributions that have enabled us to build upon their robust foundation. Their commitment to creating accessible, user-friendly AI interfaces has been instrumental in bringing GAIA UI to life. We extend our heartfelt appreciation to the entire Open-WebUI community for their continued support, collaboration, and the incredible platform they've developed that makes modern AI interactions seamless and intuitive.

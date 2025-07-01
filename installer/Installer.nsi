@@ -3,25 +3,20 @@
 ; GAIA Installer Script
 
 ; Define command line parameters
-!define /ifndef MODE "GENERIC"  ; Default to GENERIC mode if not specified
-!define /ifndef OGA_TOKEN ""  ; Default to empty string if not specified
-!define /ifndef OGA_URL "https://api.github.com/repos/aigdat/ryzenai-sw-ea/contents/"
-!define /ifndef RYZENAI_FOLDER "ryzen_ai_13_ga"
-!define /ifndef NPU_DRIVER_ZIP "NPU_RAI1.3.zip"
-!define /ifndef NPU_DRIVER_VERSION "32.0.203.251"
-!define /ifndef LEMONADE_VERSION "8.0.1"
-!define /ifndef RAUX_VERSION "v0.6.5+raux.0.2.1"
-!define /ifndef RAUX_PRODUCT_NAME "GAIA BETA"
-!define /ifndef RAUX_PRODUCT_SQUIRREL_NAME "GaiaBeta"
-!define /ifndef RAUX_PRODUCT_SQUIRREL_PATH "$LOCALAPPDATA\GaiaBeta"
+!define /ifndef RAUX_VERSION "v0.6.5+raux.0.2.2"
+!define /ifndef RAUX_PRODUCT_NAME "GAIA UI"
+!define /ifndef RAUX_PRODUCT_SQUIRREL_NAME "GaiaUi"
+!define /ifndef RAUX_PRODUCT_SQUIRREL_PATH "$LOCALAPPDATA\GaiaUi"
 !define /ifndef PYTHON_VERSION "3.10.9"
 !define /ifndef PYTHON_EMBED_URL "https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip"
 !define /ifndef GET_PIP_URL "https://bootstrap.pypa.io/get-pip.py"
 
+; Request user rights only (no admin)
+RequestExecutionLevel user
+
 ; Command line usage:
-;  gaia-windows-setup.exe [/S] [/DMODE=GENERIC|NPU|HYBRID] [/DCI=ON] [/D=<installation directory>]
+;  gaia-windows-setup.exe [/S] [/D=<installation directory>]
 ;    /S - Silent install with no user interface
-;    /DMODE=X - Set installation mode (GENERIC, NPU, or HYBRID)
 ;    /D=<path> - Set installation directory (must be last parameter)
 
 ; Define main variables
@@ -35,8 +30,7 @@ InstallDir "$LOCALAPPDATA\GAIA"
 ; Include LogicLib
 !include LogicLib.nsh
 
-; Include Sections for RadioButton functionality
-!include "Sections.nsh"
+
 
 ; Include nsDialogs for custom pages
 !include "nsDialogs.nsh"
@@ -69,50 +63,6 @@ OutFile "gaia-windows-setup.exe"
 
 ; Define the GAIA_STRING variable
 Var GAIA_STRING
-Var SELECTED_MODE
-
-; Variables for CPU detection
-Var cpuName
-Var isCpuSupported
-Var ryzenAiPos
-Var seriesStartPos
-Var currentChar
-Var Dialog
-Var Label
-
-; Component section descriptions
-LangString DESC_GenericSec 1033 "Standard GAIA installation with CPU-only execution. Works on all systems."
-LangString DESC_NPUSec 1033 "GAIA with NPU acceleration for optimized on-device AI. Requires Ryzen AI 300-series processors."
-LangString DESC_HybridSec 1033 "GAIA with Hybrid execution mode which uses both NPU and iGPU for improved performance. Requires Ryzen AI 300-series processors."
-
-; Warning message for incompatible processors
-Function WarningPage
-  ${If} $isCpuSupported != "true"
-    !insertmacro MUI_HEADER_TEXT "Hardware Compatibility Warning" "Your processor does not support NPU/Hybrid modes"
-    nsDialogs::Create 1018
-    Pop $Dialog
-
-    ; Create warning message with detected processor and contact info
-    ${NSD_CreateLabel} 0 0 100% 140u "Detected Processor:$\n$cpuName$\nGAIA's NPU and Hybrid modes are currently only supported on AMD Ryzen AI 300-series processors.$\n$\nYou can:$\n1. Cancel the installation if you intended to use NPU/Hybrid features$\n2. Continue installation with Generic mode, which works on all systems with Ollama$\n$\n$\nFor more information, contact us at gaia@amd.com"
-    Pop $Label
-    SetCtlColors $Label "" "transparent"
-
-    nsDialogs::Show
-  ${EndIf}
-FunctionEnd
-
-; Using SectionGroup without /e flag since we're handling radio buttons manually
-SectionGroup /e "Installation Mode" InstallModeGroup
-  Section "Generic Mode" GenericSec
-  SectionEnd
-
-  ;Section /o "NPU Mode" NPUSec
-  Section "-NPU Mode" NPUSec
-  SectionEnd
-
-  Section /o "Hybrid Mode" HybridSec
-  SectionEnd
-SectionGroupEnd
 
 ; Variable to track whether to install RAUX
 Var InstallRAUX
@@ -123,153 +73,8 @@ Var RunGAIACheckbox
 Var RunRAUXCheckbox
 
 Function .onInit
-  ; Default to Hybrid mode
-  StrCpy $GAIA_STRING "GAIA - Ryzen AI Hybrid Mode, ver: ${GAIA_VERSION}"
-  StrCpy $SELECTED_MODE "HYBRID"
-
-  ; Check for command-line mode parameter
-  ${GetParameters} $R0
-  ClearErrors
-  ${GetOptions} $R0 "/MODE=" $0
-  ${IfNot} ${Errors}
-    ${If} $0 == "GENERIC"
-    ${OrIf} $0 == "NPU"
-    ${OrIf} $0 == "HYBRID"
-      StrCpy $SELECTED_MODE $0
-      DetailPrint "Installation mode set from command line: $SELECTED_MODE"
-
-      ; Update GAIA_STRING based on mode
-      ${If} $SELECTED_MODE == "HYBRID"
-        StrCpy $GAIA_STRING "GAIA - Ryzen AI Hybrid Mode, ver: ${GAIA_VERSION}"
-      ${ElseIf} $SELECTED_MODE == "NPU"
-        StrCpy $GAIA_STRING "GAIA - Ryzen AI NPU Mode, ver: ${GAIA_VERSION}"
-      ${ElseIf} $SELECTED_MODE == "GENERIC"
-        StrCpy $GAIA_STRING "GAIA - Generic Mode, ver: ${GAIA_VERSION}"
-      ${EndIf}
-    ${EndIf}
-  ${EndIf}
-
-  ; Store the default selection for radio buttons
-  StrCpy $R9 ${HybridSec}
-
-  ; Select mode based on SELECTED_MODE
-  ${If} $SELECTED_MODE == "GENERIC"
-    ; Select Generic section
-    SectionGetFlags ${GenericSec} $0
-    IntOp $0 $0 | ${SF_SELECTED}
-    SectionSetFlags ${GenericSec} $0
-
-    ; Deselect others
-    SectionGetFlags ${NPUSec} $0
-    IntOp $0 $0 & ${SECTION_OFF}
-    SectionSetFlags ${NPUSec} $0
-
-    SectionGetFlags ${HybridSec} $0
-    IntOp $0 $0 & ${SECTION_OFF}
-    SectionSetFlags ${HybridSec} $0
-
-    ; Update radio button variable
-    StrCpy $R9 ${GenericSec}
-  ${ElseIf} $SELECTED_MODE == "NPU"
-    ; Select NPU section
-    SectionGetFlags ${NPUSec} $0
-    IntOp $0 $0 | ${SF_SELECTED}
-    SectionSetFlags ${NPUSec} $0
-
-    ; Deselect others
-    SectionGetFlags ${GenericSec} $0
-    IntOp $0 $0 & ${SECTION_OFF}
-    SectionSetFlags ${GenericSec} $0
-
-    SectionGetFlags ${HybridSec} $0
-    IntOp $0 $0 & ${SECTION_OFF}
-    SectionSetFlags ${HybridSec} $0
-
-    ; Update radio button variable
-    StrCpy $R9 ${NPUSec}
-  ${Else} ; Default to HYBRID
-    ; Select Hybrid mode as default
-    SectionGetFlags ${HybridSec} $0
-    IntOp $0 $0 | ${SF_SELECTED}
-    SectionSetFlags ${HybridSec} $0
-
-    ; Deselect the others
-    SectionGetFlags ${GenericSec} $0
-    IntOp $0 $0 & ${SECTION_OFF}
-    SectionSetFlags ${GenericSec} $0
-
-    SectionGetFlags ${NPUSec} $0
-    IntOp $0 $0 & ${SECTION_OFF}
-    SectionSetFlags ${NPUSec} $0
-
-    ; Update radio button variable
-    StrCpy $R9 ${HybridSec}
-  ${EndIf}
-
-  ; Check CPU name to determine if NPU/Hybrid sections should be enabled
-  DetailPrint "Checking CPU model..."
-
-  ; Use registry query to get CPU name
-  nsExec::ExecToStack 'reg query "HKEY_LOCAL_MACHINE\HARDWARE\DESCRIPTION\System\CentralProcessor\0" /v ProcessorNameString'
-  Pop $0 ; Return value
-  Pop $cpuName ; Output (CPU name)
-  DetailPrint "Detected CPU: $cpuName"
-
-  ; Check if CPU name contains "Ryzen AI" and a 3-digit number starting with 3
-  StrCpy $isCpuSupported "false" ; Initialize CPU allowed flag to false
-
-  ${StrLoc} $ryzenAiPos $cpuName "Ryzen AI" ">"
-  ${If} $ryzenAiPos != ""
-    ; Found "Ryzen AI", now look for 3xx series
-    ${StrLoc} $seriesStartPos $cpuName " 3" ">"
-    ${If} $seriesStartPos != ""
-      ; Check if the character after "3" is a digit (first digit of model number)
-      StrCpy $currentChar $cpuName 1 $seriesStartPos+2
-      ${If} $currentChar >= "0"
-        ${AndIf} $currentChar <= "9"
-        ; Check if the character after that is also a digit (second digit of model number)
-        StrCpy $currentChar $cpuName 1 $seriesStartPos+3
-        ${If} $currentChar >= "0"
-          ${AndIf} $currentChar <= "9"
-          ; Found a complete 3-digit number starting with 3
-          StrCpy $isCpuSupported "true"
-          DetailPrint "Detected Ryzen AI 3xx series processor"
-        ${EndIf}
-      ${EndIf}
-    ${EndIf}
-  ${EndIf}
-
-  DetailPrint "CPU is compatible with Ryzen AI NPU/Hybrid software: $isCpuSupported"
-
-  ; If CPU is not compatible, disable NPU and Hybrid sections and force Generic
-  ${If} $isCpuSupported != "true"
-    ; Disable NPU section (make it unselectable)
-    SectionGetFlags ${NPUSec} $0
-    IntOp $0 $0 & ${SECTION_OFF}    ; Turn off selection
-    IntOp $0 $0 | ${SF_RO}          ; Make it read-only
-    SectionSetFlags ${NPUSec} $0
-
-    ; Disable Hybrid section (make it unselectable)
-    SectionGetFlags ${HybridSec} $0
-    IntOp $0 $0 & ${SECTION_OFF}    ; Turn off selection
-    IntOp $0 $0 | ${SF_RO}          ; Make it read-only
-    SectionSetFlags ${HybridSec} $0
-
-    ; Force Generic selection
-    SectionGetFlags ${GenericSec} $0
-    IntOp $0 $0 | ${SF_SELECTED}    ; Turn on selection
-    SectionSetFlags ${GenericSec} $0
-
-    ; Update stored radio button variable for incompatible CPUs
-    StrCpy $R9 ${GenericSec}
-
-    ; Update variables for Generic mode
-    StrCpy $SELECTED_MODE "GENERIC"
-    StrCpy $GAIA_STRING "GAIA - Generic Mode, ver: ${GAIA_VERSION}"
-
-    ; Make a note in the detail log
-    DetailPrint "CPU not compatible with Ryzen AI, forcing Generic mode"
-  ${EndIf}
+  ; Set GAIA string
+  StrCpy $GAIA_STRING "GAIA ${GAIA_VERSION}"
 
   ; Initialize InstallRAUX to 1 (checked)
   StrCpy $InstallRAUX "1"
@@ -282,7 +87,7 @@ FunctionEnd
 
 ; Define constants
 !define PRODUCT_NAME "GAIA"
-!define ICON_FILE "../src/gaia/interface/img/gaia.ico"
+!define ICON_FILE "../src/gaia/img/gaia.ico"
 
 ; Custom page for RAUX installation option
 Function RAUXOptionsPage
@@ -295,7 +100,7 @@ Function RAUXOptionsPage
   ${NSD_SetState} $1 $InstallRAUX
   SetCtlColors $1 "" "transparent"
 
-  ${NSD_CreateLabel} 25 30 100% 40u "${RAUX_PRODUCT_NAME} (an Open-WebUI fork) is AMD's new UI for interacting with AI models.$\nIt provides a chat interface similar to ChatGPT and other AI assistants.$\nThis feature is currently in beta."
+  ${NSD_CreateLabel} 25 30 100% 40u "${RAUX_PRODUCT_NAME} (an Open-WebUI fork) is AMD's new UI for interacting with AI models.$\nIt provides a chat interface similar to ChatGPT and other AI assistants."
   Pop $2
   SetCtlColors $2 "" "transparent"
 
@@ -309,13 +114,10 @@ FunctionEnd
 ; Custom finish page
 Function CustomFinishPage
   nsDialogs::Create 1018
-  Pop $Dialog
+  Pop $R0
 
   ${NSD_CreateLabel} 0 20 100% 40u "$GAIA_STRING has been installed successfully! A shortcut has been added to your Desktop.$\n$\n$\nWhat would you like to do next?"
   Pop $0
-
-  ${NSD_CreateCheckbox} 20 100 100% 12u "Run GAIA UI"
-  Pop $RunGAIAUICheckbox
 
   ${NSD_CreateCheckbox} 20 120 100% 12u "Run GAIA CLI"
   Pop $RunGAIACheckbox
@@ -329,11 +131,6 @@ Function CustomFinishPage
 FunctionEnd
 
 Function CustomFinishLeave
-  ${NSD_GetState} $RunGAIAUICheckbox $0
-  ${If} $0 == ${BST_CHECKED}
-    Call RunGAIAUI
-  ${EndIf}
-
   ${NSD_GetState} $RunGAIACheckbox $0
   ${If} $0 == ${BST_CHECKED}
     Call RunGAIACLI
@@ -350,8 +147,6 @@ FunctionEnd
 ; MUI Settings
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "LICENSE"
-Page custom WarningPage
-!insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 Page custom RAUXOptionsPage RAUXOptionsLeave
 !insertmacro MUI_PAGE_INSTFILES
@@ -374,46 +169,6 @@ LangString MUI_BUTTONTEXT_FINISH 1033 "Finish"
 LangString MUI_TEXT_LICENSE_TITLE 1033 "License Agreement"
 LangString MUI_TEXT_LICENSE_SUBTITLE 1033 "Please review the license terms before installing GAIA."
 
-; Insert the description macros
-!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${GenericSec} $(DESC_GenericSec)
-  !insertmacro MUI_DESCRIPTION_TEXT ${NPUSec} $(DESC_NPUSec)
-  !insertmacro MUI_DESCRIPTION_TEXT ${HybridSec} $(DESC_HybridSec)
-!insertmacro MUI_FUNCTION_DESCRIPTION_END
-
-; Function to update selected mode when selection changes
-Function .onSelChange
-  ; Use RadioButton macros to enforce mutual exclusivity
-  !insertmacro StartRadioButtons $R9
-  !insertmacro RadioButton ${GenericSec}
-  !insertmacro RadioButton ${NPUSec}
-  !insertmacro RadioButton ${HybridSec}
-  !insertmacro EndRadioButtons
-
-  ; Update variables based on selection
-  SectionGetFlags ${GenericSec} $0
-  IntOp $0 $0 & ${SF_SELECTED}
-  ${If} $0 == ${SF_SELECTED}
-    StrCpy $SELECTED_MODE "GENERIC"
-    StrCpy $GAIA_STRING "GAIA - Generic Mode, ver: ${GAIA_VERSION}"
-  ${EndIf}
-
-  SectionGetFlags ${NPUSec} $0
-  IntOp $0 $0 & ${SF_SELECTED}
-  ${If} $0 == ${SF_SELECTED}
-    StrCpy $SELECTED_MODE "NPU"
-    StrCpy $GAIA_STRING "GAIA - Ryzen AI NPU Mode, ver: ${GAIA_VERSION}"
-  ${EndIf}
-
-  SectionGetFlags ${HybridSec} $0
-  IntOp $0 $0 & ${SF_SELECTED}
-  ${If} $0 == ${SF_SELECTED}
-    StrCpy $SELECTED_MODE "HYBRID"
-    StrCpy $GAIA_STRING "GAIA - Ryzen AI Hybrid Mode, ver: ${GAIA_VERSION}"
-  ${EndIf}
-
-  DetailPrint "Selected mode changed to: $SELECTED_MODE"
-FunctionEnd
 
 ; Define a section for the installation
 Section "-Install Main Components" SEC01
@@ -421,7 +176,7 @@ Section "-Install Main Components" SEC01
   DetailPrint "------------------------"
   DetailPrint "- Installation Section -"
   DetailPrint "------------------------"
-  
+
   ; Check if directory exists before proceeding
   IfFileExists "$INSTDIR\*.*" 0 continue_install
     ${IfNot} ${Silent}
@@ -461,15 +216,11 @@ Section "-Install Main Components" SEC01
     DetailPrint "Starting '$GAIA_STRING' Installation..."
     DetailPrint 'Configuration:'
     DetailPrint '  Install Dir: $INSTDIR'
-    DetailPrint '  Mode: $SELECTED_MODE'
-    DetailPrint '  OGA URL: ${OGA_URL}'
-    DetailPrint '  Ryzen AI Folder: ${RYZENAI_FOLDER}'
-    DetailPrint '  Recommended NPU Driver Version: ${NPU_DRIVER_VERSION}'
     DetailPrint '-------------------------------------------'
 
     ; Pack GAIA into the installer
     ; Exclude hidden files (like .git, .gitignore) and the installation folder itself
-    File /r /x installer /x .* /x ..\*.pyc ..\*.* download_lfs_file.py npu_driver_utils.py amd_install_kipudrv.bat install.bat launch_gaia.bat installer_utils.py
+    File /r /x installer /x .* /x ..\*.pyc ..\*.* download_lfs_file.py install.bat launch_gaia.bat installer_utils.py
     DetailPrint "- Packaged GAIA repo"
 
     ; Create bin directory and move launch script there
@@ -559,22 +310,16 @@ Section "-Install Main Components" SEC01
 
     DetailPrint "- Python setup completed successfully"
 
-    
-
     ; Continue with mode-specific setup
-    ${If} $SELECTED_MODE == "GENERIC"
-      GoTo check_ollama
-    ${Else}
-      GoTo check_lemonade
-    ${EndIf}
+    GoTo check_lemonade
 
     check_lemonade:
       DetailPrint "------------"
       DetailPrint "- Lemonade -"
       DetailPrint "------------"
 
-      ; Check if lemonade is available by trying to run it
-      nsExec::ExecToStack 'cmd.exe /c "lemonade-server --version"'
+      ; First check if lemonade is available by trying to run it
+      nsExec::ExecToStack 'cmd /c "lemonade-server --version 2>&1"'
       Pop $2  ; Return value
       Pop $3  ; Command output
       DetailPrint "- Checked if lemonade is available (return code: $2)"
@@ -588,30 +333,49 @@ Section "-Install Main Components" SEC01
           GoTo skip_lemonade
         ${EndIf}
       ${Else}
+        ; Lemonade is installed, now check version compatibility using Python script
         DetailPrint "- Lemonade is installed, checking version compatibility..."
-
-        DetailPrint "- Checking Lemonade version compatibility:"
         DetailPrint "- Expected version: ${LEMONADE_VERSION}"
-        DetailPrint "- Actual version: $3"
 
         ; Call installer_utils.py to check version compatibility
+        ; Python script returns exit code 0 if is_compatible=True, 1 if is_compatible=False
         DetailPrint "- Running version check command..."
-        DetailPrint "- Command: python installer_utils.py ${LEMONADE_VERSION} '$3'"
-        nsExec::ExecToStack 'cmd /c ""$INSTDIR\python\python.exe" "$INSTDIR\installer_utils.py" "${LEMONADE_VERSION}" "$3""'
-        Pop $4  ; Return value
+        nsExec::ExecToStack 'cmd /c ""$INSTDIR\python\python.exe" "$INSTDIR\installer_utils.py" "${LEMONADE_VERSION}""'
+        Pop $4  ; Return value (0 if compatible, 1 if not compatible)
         Pop $5  ; Command output
 
         DetailPrint "- Version check result:"
         DetailPrint "- Return code: $4"
         DetailPrint "- Output: $5"
 
+        ; Use the is_compatible boolean value returned via exit code
         ${If} $4 == "0"
-          DetailPrint "- Lemonade version is compatible"
+          DetailPrint "- Lemonade version is compatible (is_compatible=True)"
           GoTo create_env
         ${Else}
-          DetailPrint "- Lemonade version is not compatible"
+          DetailPrint "- Lemonade version is not compatible (is_compatible=False)"
+
+          ; Extract the detected version from the Python script output
+          ${StrLoc} $6 "$5" "VERSION:" ">"
+          ${If} $6 != ""
+            ; Calculate the position after "VERSION:" (8 characters)
+            IntOp $6 $6 + 8
+            StrCpy $7 "$5" "" $6  ; Extract everything after "VERSION:"
+
+            ; Find the end of the line to get only the version part
+            ${StrLoc} $8 "$7" "$\r" ">"
+            ${If} $8 == ""
+              ${StrLoc} $8 "$7" "$\n" ">"
+            ${EndIf}
+            ${If} $8 != ""
+              StrCpy $7 "$7" $8 0  ; Get only the version part before newline
+            ${EndIf}
+          ${Else}
+            StrCpy $7 "unknown"  ; Fallback if we can't parse the version
+          ${EndIf}
+
           ${IfNot} ${Silent}
-            MessageBox MB_YESNO "Your 'Running: lemonade-server --version' $3 is not compatible with the required version ${LEMONADE_VERSION}.$\n$\nWould you like to update Lemonade now?" IDYES install_lemonade IDNO skip_lemonade
+            MessageBox MB_YESNO "Your Lemonade version $7 is not compatible with the required version ${LEMONADE_VERSION}.$\n$\nWould you like to update Lemonade now?" IDYES install_lemonade IDNO skip_lemonade
           ${Else}
             GoTo skip_lemonade
           ${EndIf}
@@ -644,19 +408,23 @@ Section "-Install Main Components" SEC01
 
       lemonade_download_success:
         DetailPrint "- Download successful ($TEMP\Lemonade_Server_Installer.exe), installing Lemonade..."
-        ExecWait '"$TEMP\Lemonade_Server_Installer.exe" /Extras=hybrid' $2
 
-        ${If} $2 == 0
-          DetailPrint "- Lemonade installation successful"
+        ExecWait '"$TEMP\Lemonade_Server_Installer.exe" /Extras=hybrid' $2
+        DetailPrint "- Lemonade installer finished with exit code: $2"
+
+        ; Check if Lemonade installer succeeded based on exit code
+        ${If} $2 == "0"
+          DetailPrint "- Lemonade installation successful (exit code: $2)"
           ${IfNot} ${Silent}
             MessageBox MB_OK "Lemonade has been successfully installed."
           ${EndIf}
         ${Else}
-          DetailPrint "- Lemonade installation failed with error code: $2"
-          DetailPrint "- Please install Lemonade manually after GAIA installation"
+          DetailPrint "- Lemonade installation failed (exit code: $2)"
           ${IfNot} ${Silent}
-            MessageBox MB_OK "Lemonade installation failed. Please install Lemonade manually from https://github.com/lemonade-sdk/lemonade/releases and try again.$\n$\nError code: $2"
+            MessageBox MB_OK "Lemonade installation failed with exit code $2. The installer may have been blocked by security software. Please install Lemonade manually from https://lemonade-server.ai and ensure it's not quarantined."
+            Abort
           ${EndIf}
+          ; Exit installation if Lemonade installer failed
           GoTo exit_installer
         ${EndIf}
 
@@ -668,69 +436,7 @@ Section "-Install Main Components" SEC01
       DetailPrint "- Continuing installation without Lemonade"
       GoTo create_env
 
-    check_ollama:
-      DetailPrint "----------"
-      DetailPrint "- Ollama -"
-      DetailPrint "----------"
 
-      ; Check if ollama is available only for GENERIC mode
-      ${If} $SELECTED_MODE == "GENERIC"
-        ExecWait 'where ollama' $2
-        DetailPrint "- Checked if ollama is available"
-
-        ; If ollama is not found, show a message and exit
-        StrCmp $2 "0" create_env ollama_not_available
-      ${Else}
-        DetailPrint "- Skipping ollama check for $SELECTED_MODE mode"
-        GoTo create_env
-      ${EndIf}
-
-    ollama_not_available:
-      DetailPrint "- Ollama not installed."
-      ${IfNot} ${Silent}
-        MessageBox MB_YESNO "Ollama is required but not installed. Would you like to install Ollama now? You can install it later from ollama.com/download" IDYES install_ollama IDNO skip_ollama
-      ${EndIf}
-      GoTo skip_ollama
-
-    install_ollama:
-      DetailPrint "- Downloading Ollama installer..."
-      ExecWait 'curl -L -o "$TEMP\OllamaSetup.exe" "https://ollama.com/download/OllamaSetup.exe"'
-
-      ; Check if download was successful
-      IfFileExists "$TEMP\OllamaSetup.exe" download_success download_failed
-
-      download_failed:
-        DetailPrint "- Failed to download Ollama installer"
-        ${IfNot} ${Silent}
-          MessageBox MB_OK "Failed to download Ollama installer. Please install Ollama manually from ollama.com/download after installation completes."
-        ${EndIf}
-        GoTo skip_ollama
-
-      download_success:
-        DetailPrint "- Download successful ($TEMP\OllamaSetup.exe), installing Ollama..."
-        ; Run with elevated privileges and wait for completion
-        ExecWait '"$TEMP\OllamaSetup.exe" /SILENT' $2
-
-        ${If} $2 == 0
-          DetailPrint "- Ollama installation successful"
-          ${IfNot} ${Silent}
-            MessageBox MB_OK "Ollama has been successfully installed."
-          ${EndIf}
-        ${Else}
-          DetailPrint "- Ollama installation failed with error code: $2"
-          DetailPrint "- Please install Ollama manually after GAIA installation"
-          ${IfNot} ${Silent}
-            MessageBox MB_OK "Ollama installation failed. Please install Ollama manually from ollama.com/download after installation completes.$\n$\nError code: $2"
-          ${EndIf}
-        ${EndIf}
-
-        ; Clean up the downloaded installer
-        Delete "$TEMP\OllamaSetup.exe"
-        GoTo skip_ollama
-
-    skip_ollama:
-      DetailPrint "- Continuing installation without Ollama"
-      GoTo create_env
 
     exit_installer:
       DetailPrint "- Installation cancelled. Exiting installer..."
@@ -803,81 +509,6 @@ Section "-Install Main Components" SEC01
         DetailPrint "- FFmpeg installation output:"
         DetailPrint "$R1"
       ${EndIf}
-      GoTo install_ryzenai_driver
-
-    install_ryzenai_driver:
-      DetailPrint "--------------------------"
-      DetailPrint "- Ryzen AI Driver Update -"
-      DetailPrint "--------------------------"
-
-      ${If} $SELECTED_MODE == "NPU"
-      ${OrIf} $SELECTED_MODE == "HYBRID"
-        ; If in silent mode, skip driver update
-        ${If} ${Silent}
-          GoTo install_gaia
-        ${EndIf}
-
-        DetailPrint "- Checking NPU driver version..."
-        nsExec::ExecToStack '"$INSTDIR\python\python.exe" npu_driver_utils.py --get-version'
-        Pop $2 ; Exit code
-        Pop $3 ; Command output (driver version)
-        DetailPrint "- Driver version: $3"
-
-        ; Check if the command was successful and a driver version was found
-        ${If} $2 != "0"
-        ${OrIf} $3 == ""
-          DetailPrint "- Failed to retrieve current NPU driver version"
-          StrCpy $3 "Unknown"
-        ${EndIf}
-
-        ; Get only the last line of $3 if it contains multiple lines
-        StrCpy $4 $3 ; Copy $3 to $4 to preserve original value
-        StrCpy $5 "" ; Initialize $5 as an empty string
-        ${Do}
-          ${StrLoc} $6 $4 "$\n" ">" ; Find the next newline character
-          ${If} $6 == "" ; If no newline found, we're at the last line
-            StrCpy $5 $4 ; Copy the remaining text to $5
-            ${Break} ; Exit the loop
-          ${Else}
-            StrCpy $5 $4 "" $6 ; Copy the text after the newline to $5
-            IntOp $6 $6 + 1 ; Move past the newline character
-            StrCpy $4 $4 "" $6 ; Remove the processed part from $4
-          ${EndIf}
-        ${Loop}
-        StrCpy $3 $5 ; Set $3 to the last line
-
-        ${If} $3 == "Unknown"
-          MessageBox MB_YESNO "WARNING: Current driver could not be identified. If you run into issues, please install the recommended driver version (${NPU_DRIVER_VERSION}) or reach out to gaia@amd.com for support.$\n$\nContinue installation?" IDYES install_gaia IDNO exit_installer
-        ${Else}
-          ; Compare versions
-          ${VersionCompare} "$3" "${NPU_DRIVER_VERSION}" $R1
-
-          ; $R1=0 versions are equal
-          ; $R1=1 version is newer than NPU_DRIVER_VERSION
-          ; $R1=2 version is older than NPU_DRIVER_VERSION
-
-          ${If} $R1 == "2"
-            DetailPrint "- Current driver version ($3) is older than the recommended version ${NPU_DRIVER_VERSION}"
-            MessageBox MB_YESNO "WARNING: Current driver ($3) is older than the recommended driver version ${NPU_DRIVER_VERSION}. If you run into issues, please install the recommended driver or reach out to gaia@amd.com for support.$\n$\nContinue installation?" IDYES install_gaia IDNO exit_installer
-          ${Else}
-            DetailPrint "- Current driver version ($3) is equal to or newer than the recommended version ${NPU_DRIVER_VERSION}. No update needed."
-            GoTo install_gaia
-          ${EndIf}
-        ${EndIf}
-      ${EndIf}
-      GoTo install_gaia
-
-    update_driver:
-      DetailPrint "- Installing Python requests library..."
-      nsExec::ExecToLog '"$INSTDIR\python\python.exe" -m pip install requests'
-
-      DetailPrint "- Downloading driver..."
-      nsExec::ExecToLog '"$INSTDIR\python\python.exe" download_lfs_file.py ${RYZENAI_FOLDER}/${NPU_DRIVER_ZIP} $INSTDIR driver.zip ${OGA_TOKEN}'
-
-      DetailPrint "- Updating driver..."
-      nsExec::ExecToLog '"$INSTDIR\python\python.exe" npu_driver_utils.py --update-driver --folder_path $INSTDIR'
-
-      RMDir /r "$INSTDIR\npu_driver_utils.py"
       GoTo install_gaia
 
     install_gaia:
@@ -888,19 +519,16 @@ Section "-Install Main Components" SEC01
       DetailPrint "- Starting GAIA installation (this can take 5-10 minutes)..."
       DetailPrint "- See $INSTDIR\gaia_install.log for detailed progress..."
       ; Call the batch file with required parameters
-      ExecWait '"$INSTDIR\install.bat" "$INSTDIR\python\python.exe" "$INSTDIR" $SELECTED_MODE' $R0
+      ExecWait '"$INSTDIR\install.bat" "$INSTDIR\python\python.exe" "$INSTDIR"' $R0
 
       ; Check if installation was successful
       ${If} $R0 == 0
         DetailPrint "*** INSTALLATION COMPLETED ***"
         DetailPrint "- GAIA package installation successful"
 
-        ; Skip Ryzen AI WHL installation for GENERIC mode
-        ${If} $SELECTED_MODE == "GENERIC"
-          GoTo create_shortcuts
-        ${Else}
-          GoTo install_ryzenai_whl
-        ${EndIf}
+        ; Call RAUX installer after GAIA installation completes
+        Call run_raux_installer
+
       ${Else}
         DetailPrint "*** INSTALLATION FAILED ***"
         DetailPrint "- Please check $INSTDIR\gaia_install.log for detailed error information"
@@ -912,69 +540,6 @@ Section "-Install Main Components" SEC01
         ${EndIf}
         Abort
       ${EndIf}
-
-    install_ryzenai_whl:
-      DetailPrint "-----------------------------"
-      DetailPrint "- Ryzen AI WHL Installation -"
-      DetailPrint "-----------------------------"
-
-      ; Install OGA NPU dependencies
-      DetailPrint "- Installing $SELECTED_MODE dependencies..."
-      ${If} $SELECTED_MODE == "NPU"
-        nsExec::ExecToLog '"$INSTDIR\python\Scripts\lemonade-install" --ryzenai npu -y --token ${OGA_TOKEN}'
-        Pop $R0  ; Return value
-        ${If} $R0 != 0
-          DetailPrint "*** ERROR: NPU dependencies installation failed ***"
-          DetailPrint "- Please review the output above to diagnose the issue."
-          DetailPrint "- You can save this window's content by right-clicking and"
-          DetailPrint "selecting 'Copy Details To Clipboard'"
-          DetailPrint "- For additional support, please contact gaia@amd.com and"
-          DetailPrint "include the log file, or create an issue at"
-          DetailPrint "https://github.com/amd/gaia"
-          DetailPrint "- When ready, please close the window to exit the installer."
-          ${IfNot} ${Silent}
-            MessageBox MB_OK "Failed to install NPU dependencies. Please review the installer output window for details by clicking on 'Show details'."
-          ${EndIf}
-          Abort
-        ${EndIf}
-      ${ElseIf} $SELECTED_MODE == "HYBRID"
-        DetailPrint "- Running lemonade-install for hybrid mode..."
-        nsExec::ExecToLog '"$INSTDIR\python\Scripts\lemonade-install" --ryzenai hybrid -y'
-        Pop $R0  ; Return value
-        ${If} $R0 != 0
-          DetailPrint "*** ERROR: Hybrid dependencies installation failed ***"
-          DetailPrint "- Please review the output above to diagnose the issue."
-          DetailPrint "- You can save this window's content by right-clicking and"
-          DetailPrint "selecting 'Copy Details To Clipboard'"
-          DetailPrint "- For additional support, please contact gaia@amd.com and"
-          DetailPrint "include the log output details."
-          DetailPrint "- When ready, please close the window to exit the installer."
-          ${IfNot} ${Silent}
-            MessageBox MB_OK "Failed to install Hybrid dependencies. Please review the installer output window for details by clicking on 'Show details'."
-          ${EndIf}
-          Abort
-        ${EndIf}
-      ${EndIf}
-
-      DetailPrint "- Dependencies installation completed successfully"
-      GoTo update_settings
-
-    update_settings:
-      ${If} $SELECTED_MODE == "NPU"
-        DetailPrint "- Copying NPU-specific settings"
-        CopyFiles "$INSTDIR\src\gaia\interface\npu_settings.json" "$INSTDIR\python\lib\site-packages\gaia\interface\npu_settings.json"
-
-      ${ElseIf} $SELECTED_MODE == "HYBRID"
-        DetailPrint "- Copying Hybrid-specific settings"
-        CopyFiles "$INSTDIR\src\gaia\interface\hybrid_settings.json" "$INSTDIR\python\lib\site-packages\gaia\interface\hybrid_settings.json"
-
-      ${ElseIf} $SELECTED_MODE == "GENERIC"
-        DetailPrint "- Copying Generic-specific settings"
-        CopyFiles "$INSTDIR\src\gaia\interface\generic_settings.json" "$INSTDIR\python\lib\site-packages\gaia\interface\generic_settings.json"
-      ${EndIf}
-
-    ; Call RAUX installer after GAIA installation completes
-    Call run_raux_installer
 
     create_shortcuts:
       DetailPrint "*** INSTALLATION COMPLETED ***"
@@ -1040,20 +605,13 @@ Section "-Install Main Components" SEC01
       # Create shortcuts only in non-silent mode
       ${IfNot} ${Silent}
         ; Create shortcuts using launch_gaia.bat
-        CreateShortcut "$DESKTOP\GAIA-UI.lnk" "$INSTDIR\bin\launch_gaia.bat" "--ui" "$INSTDIR\src\gaia\interface\img\gaia.ico"
-        CreateShortcut "$DESKTOP\GAIA-CLI.lnk" "$INSTDIR\bin\launch_gaia.bat" "--cli" "$INSTDIR\src\gaia\interface\img\gaia.ico"
+        CreateShortcut "$DESKTOP\GAIA CLI.lnk" "$INSTDIR\bin\launch_gaia.bat" "--cli" "$INSTDIR\src\gaia\img\gaia.ico"
       ${EndIf}
 SectionEnd
 
-Function RunGAIAUI
-  ${IfNot} ${Silent}
-    ExecShell "open" "$DESKTOP\GAIA-UI.lnk"
-  ${EndIf}
-FunctionEnd
-
 Function RunGAIACLI
   ${IfNot} ${Silent}
-    ExecShell "open" "$DESKTOP\GAIA-CLI.lnk"
+    ExecShell "open" "$DESKTOP\GAIA CLI.lnk"
   ${EndIf}
 FunctionEnd
 
@@ -1111,7 +669,11 @@ Function run_raux_installer
     ${EndIf}
 
     ; Start RAUX installer asynchronously (non-blocking)
-    Exec '"$R8"'
+    ${If} ${Silent}
+      Exec '"$R8" /S'
+    ${Else}
+      Exec '"$R8"'
+    ${EndIf}
   ${Else}
     DetailPrint "[RAUX-Installer] Installation skipped by user choice"
   ${EndIf}
@@ -1162,4 +724,3 @@ Function uninstall_raux
     no_raux_uninstall:
   ${EndIf}
 FunctionEnd
-

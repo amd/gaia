@@ -12,6 +12,7 @@ on:
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -42,6 +43,9 @@ jobs:
           Write-Host "Step 3: Create the environment at system level"
           & "$condaPath\Scripts\conda.exe" create -n gaiaenv python=3.10 -y
 
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
       - name: Install GAIA dependencies
         run: |
           Write-Host "Step 1: Activate conda environment"
@@ -50,7 +54,7 @@ jobs:
 
           Write-Host "Step 2: Install dependencies"
           python -m pip install --upgrade pip
-          pip install -e .[clip,joker,rag,talk,dev]
+          pip install -e .[dev,talk]
 
           Write-Host "Step 3: Verify installation"
           $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
@@ -66,7 +70,7 @@ jobs:
         uses: psf/black@stable
         with:
           options: "--check --verbose --config pyproject.toml"
-          src: "./installer ./plot ./src ./tests"
+          src: "./installer ./src ./tests"
 
       - name: PyLint
         run: |
@@ -80,75 +84,6 @@ jobs:
           Write-Host "Step 3: Run pylint"
           & ".\util\lint.ps1" -RunPylint
 
-      - name: Install Ollama
-        shell: cmd
-        run: |
-          curl -L https://ollama.com/download/OllamaSetup.exe -o OllamaSetup.exe --progress-bar
-          echo Ollama download complete. Starting installation.
-          start /wait OllamaSetup.exe /VERYSILENT /SUPPRESSMSGBOXES /SP- /LOG="llama_install.log"
-          echo "Ollama installation log:"
-          type llama_install.log
-          echo "PATH=C:\Users\runneradmin\AppData\Local\Programs\Ollama;%PATH%" >> $GITHUB_ENV
-          del OllamaSetup.exe
-
-      - name: Verify Ollama Installation
-        shell: cmd
-        run: |
-          if exist "C:\Users\runneradmin\AppData\Local\Programs\Ollama\ollama.exe" (
-              echo "Ollama installed successfully."
-          ) else (
-              echo "Ollama installation failed. Executable not found."
-              exit 1
-          )
-          set PATH=%PATH%;C:\Users\runneradmin\AppData\Local\Programs\Ollama
-          ollama --version
-
-      - name: Start Ollama Service (Background)
-        shell: cmd
-        run: |
-          echo Setting PATH for Ollama...
-          set PATH=%PATH%;C:\Users\runneradmin\AppData\Local\Programs\Ollama
-          echo Starting Ollama service in background using PowerShell...
-          powershell -Command "$env:PATH += ';C:\Users\runneradmin\AppData\Local\Programs\Ollama'; Start-Process -FilePath 'ollama' -ArgumentList 'serve' -WindowStyle Hidden -PassThru"
-          echo Ollama serve process started
-
-      - name: Wait and Test Ollama Service
-        shell: cmd
-        timeout-minutes: 10
-        run: |
-          echo Setting PATH for Ollama...
-          set PATH=%PATH%;C:\Users\runneradmin\AppData\Local\Programs\Ollama
-          echo Waiting for Ollama service to start...
-
-          set /a counter=0
-          :loop
-          set /a counter=%counter%+1
-          echo Attempt %counter% - Testing Ollama connection...
-
-          ollama list >nul 2>&1
-          if %errorlevel%==0 (
-            echo Ollama service is running successfully!
-            goto :connected
-          )
-
-          if %counter% geq 30 (
-            echo "Ollama service failed to start after 30 attempts"
-            echo "Checking processes:"
-            tasklist | findstr ollama
-            echo "Checking ports:"
-            netstat -an | findstr :11434
-            exit 1
-          )
-
-          echo Waiting 2 seconds before next attempt...
-          timeout /t 2 /nobreak >nul
-          goto :loop
-
-          :connected
-          echo Pulling required model (this may take several minutes in CI)...
-          ollama pull llama3.2:1b
-          echo Model pull completed
-
       - uses: FedericoCarboni/setup-ffmpeg@v3
         id: setup-ffmpeg
 
@@ -157,15 +92,7 @@ jobs:
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
-          GAIA_MODE: GENERIC
         run: |
-          Write-Host "Setting GAIA_MODE explicitly"
-          $env:GAIA_MODE = "GENERIC"
-          Write-Host "GAIA_MODE is set to: $env:GAIA_MODE"
-
-          Write-Host "Adding Ollama to PATH for GAIA to find"
-          $env:Path = "C:\Users\runneradmin\AppData\Local\Programs\Ollama;$env:Path"
-
           Write-Host "Activate and verify Conda environment"
           $env:Path = "$env:GITHUB_WORKSPACE\miniforge3;$env:GITHUB_WORKSPACE\miniforge3\Scripts;$env:Path"
           & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
@@ -186,18 +113,6 @@ jobs:
           }
           Write-Host "Found gaia at: $($gaiaPath.Source)"
 
-          Write-Host "Running test_gaia.py"
-          python tests\test_gaia.py 2>&1 | Out-String -Stream
-          if ($LASTEXITCODE -ne 0) {
-              throw "test_gaia.py failed with exit code $LASTEXITCODE"
-          }
-
-          Write-Host "Running test_llama_index.py"
-          python tests\test_llama_index.py 2>&1 | Out-String -Stream
-          if ($LASTEXITCODE -ne 0) {
-              throw "test_llama_index.py failed with exit code $LASTEXITCODE"
-          }
-
           Write-Host "Running test_asr.py"
           python tests\unit\test_asr.py 2>&1 | Out-String -Stream
           if ($LASTEXITCODE -ne 0) {
@@ -208,12 +123,6 @@ jobs:
           python tests\unit\test_tts.py 2>&1 | Out-String -Stream
           if ($LASTEXITCODE -ne 0) {
               throw "test_tts.py failed with exit code $LASTEXITCODE"
-          }
-
-          Write-Host "Running test_rag.py"
-          python tests\test_rag.py 2>&1 | Out-String -Stream
-          if ($LASTEXITCODE -ne 0) {
-              throw "test_rag.py failed with exit code $LASTEXITCODE"
           }
 
       - name: Debug GAIA Logs on Failure
@@ -230,21 +139,8 @@ jobs:
             echo No gaia.cli.log found
           )
 
-          if exist ".gaia_servers.json" (
-            echo Found .gaia_servers.json:
-            type .gaia_servers.json
-          ) else (
-            echo No .gaia_servers.json found
-          )
-
           echo === Check running processes ===
-          tasklist | findstr /i "python gaia ollama"
+          tasklist | findstr /i "python gaia lemonade-server"
 
           echo === Check ports in use ===
-          netstat -an | findstr ":8000 :8001 :11434"
-
-          echo === Check Ollama status ===
-          ollama list 2>&1 || echo "Ollama not responding"
-
-          echo === Check GAIA_MODE ===
-          echo GAIA_MODE=%GAIA_MODE%
+          netstat -an | findstr ":8000 :8001"

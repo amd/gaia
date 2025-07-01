@@ -26,12 +26,8 @@ The following is a list of the currently supported LLMs with GAIA using Ryzen AI
 The following is a list of the currently supported LLMs in the generic version of GAIA (GAIA_Installer.exe). To request support for a new LLM, please contact the [AMD GAIA team](mailto:gaia@amd.com).
 | LLM                    | Checkpoint                                                            | Device   | Backend            | Data Type |
 | -----------------------|-----------------------------------------------------------------------|----------|--------------------|-----------|
-| Llama 3.2 1B           | llama3.2:1b                                                           | CPU/GPU  | ollama             | Q8_0      |
-| Llama 3.2 3B           | llama3.2:3b                                                           | CPU/GPU  | ollama             | Q4_K_M    |
-| Llama 3.1 8B           | llama3.2:8b                                                           | CPU/GPU  | ollama             | Q4_0      |
 
 * oga - [Onnx Runtime GenAI](https://github.com/microsoft/onnxruntime-genai)
-* ollama - [Ollama backend](https://github.com/ollama/ollama)
 
 # License
 

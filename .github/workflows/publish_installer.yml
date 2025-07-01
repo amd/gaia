@@ -7,7 +7,11 @@ on:
       - v*
   pull_request:
     branches: ["main"]
+  merge_group:
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-installer:

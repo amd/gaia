@@ -4,7 +4,7 @@
 param(
     [switch]$RunPylint,
     [switch]$RunBlack,
-    [switch]$All = $true
+    [switch]$All
 )
 
 # Configuration
@@ -38,9 +38,9 @@ function Invoke-Pylint {
 }
 
 # Run based on arguments
+# If no specific options are provided, run all by default
 if (-not ($RunPylint -or $RunBlack -or $All)) {
-    Write-Host "Please specify at least one option: -RunPylint, -RunBlack, or -All" -ForegroundColor Yellow
-    exit 1
+    $All = $true
 }
 
 if ($RunBlack -or $All) {

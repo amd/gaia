@@ -61,7 +61,6 @@ class GaiaLogger:
         # Default levels for different modules
         self.default_levels = {
             "gaia.agents": logging.INFO,
-            "gaia.interface": logging.INFO,
             "gaia.llm": logging.INFO,
         }
 

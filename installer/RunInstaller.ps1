@@ -1,5 +1,4 @@
 param(
-    [string]$MODE = "HYBRID",
     [string]$INSTALL_PATH = "$env:LOCALAPPDATA"
 )
 
@@ -8,7 +7,7 @@ $installPath = Join-Path $INSTALL_PATH "GAIA"
 $logFile = Join-Path $installPath "gaia_install.log"
 
 # Start the installer process with error redirection
-$process = Start-Process -FilePath ".\gaia-windows-setup.exe" -ArgumentList "/S /DMODE=$MODE /D=$installPath" -NoNewWindow -PassThru -RedirectStandardError "installer_error.log"
+$process = Start-Process -FilePath ".\gaia-windows-setup.exe" -ArgumentList "/S /D=$installPath" -NoNewWindow -PassThru -RedirectStandardError "installer_error.log"
 $processId = $process.Id
 Write-Host "Installer process started with PID: $processId"
 Write-Host "Installation path: $installPath"

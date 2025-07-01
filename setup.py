@@ -16,7 +16,7 @@ tkml_version = "5.0.4"
 setup(
     name="gaia",
     version=gaia_version,
-    description="GAIA is an AI assistant framework that provides a user-friendly interface for interacting with large language models and AI agents",
+    description="GAIA is a lightweight agent framework designed for the edge and AI PCs.",
     author="AMD",
     package_dir={"": "src"},
     packages=[
@@ -24,79 +24,30 @@ setup(
         "gaia.llm",
         "gaia.audio",
         "gaia.agents",
-        "gaia.audio",
-        "gaia.agents.Llm",
-        "gaia.agents.Chaty",
-        "gaia.agents.Clip",
-        "gaia.agents.Joker",
-        "gaia.agents.Rag",
         "gaia.agents.Blender",
-        "gaia.interface",
     ],
-    package_data={
-        "gaia.interface": ["*.json", "img/*"],
-    },
+    package_data={},
     install_requires=[
-        "aiohttp",
-        "fastapi",
+        "openai",
         "pydantic>=2.9.2",
-        "uvicorn>=0.15.0",
         "transformers",
         "accelerate",
-        "websockets",
-        "websocket-client",
         "python-dotenv",
-        "torch>=2.0.0,<2.4",
-        "torchvision<0.19.0",
-        "torchaudio",
-        "pyside6",
-        "ollama",
-        "onnxconverter-common",
+        "aiohttp",
     ],
     extras_require={
-        "dml": [
-            f"turnkeyml[llm-oga-igpu]=={tkml_version}",
-        ],
-        "npu": [
-            f"turnkeyml[llm-oga-npu]=={tkml_version}",
-        ],
-        "hybrid": [
-            f"turnkeyml[llm-oga-hybrid]=={tkml_version}",
-        ],
-        "llamaindex": [
-            "llama_index",
-            "llama-index-embeddings-huggingface",
-        ],
-        "joker": [
-            "gaia[llamaindex]",
-        ],
-        "clip": [
-            "youtube_search",
-            "google-api-python-client",
-            "llama-index-readers-youtube-transcript",
-            "gaia[llamaindex]",
-        ],
-        "rag": [
-            "gaia[llamaindex]",
+        "audio": [
+            "torch>=2.0.0,<2.4",
+            "torchvision<0.19.0",
+            "torchaudio",
         ],
         "blender": [
-            "openai",
             "rich",
             "bpy",
         ],
         "notebooks": [
             "jupyter",
             "ipywidgets",
-            "openai",
-            "wordcloud",
-            "arize-phoenix[evals,llama-index]",
-            "llama-index-callbacks-arize-phoenix",
-            "gaia[clip,llamaindex]",
-        ],
-        "cuda": [
-            "torch @ https://download.pytorch.org/whl/cu118/torch-2.3.1%2Bcu118-cp310-cp310-win_amd64.whl",
-            "torchvision @ https://download.pytorch.org/whl/cu118/torchvision-0.18.1%2Bcu118-cp310-cp310-win_amd64.whl",
-            "torchaudio @ https://download.pytorch.org/whl/cu118/torchaudio-2.3.1%2Bcu118-cp310-cp310-win_amd64.whl",
         ],
         "dev": [
             "pytest",
@@ -108,6 +59,8 @@ setup(
             "adjustText",
             "plotly",
             "black",
+            "responses",
+            "requests",
         ],
         "eval" : [
             "anthropic",
@@ -119,13 +72,12 @@ setup(
             "kokoro>=0.3.1",
             "soundfile",
             "sounddevice",
-            "soundfile",
         ]
     },
     classifiers=[],
     entry_points={
         "console_scripts": [
-            "gaia = gaia.interface.widget:main",
+            "gaia = gaia.cli:main",
             "gaia-cli = gaia.cli:main",
         ]
     },

@@ -24,29 +24,18 @@
 
 GAIA is an open-source framework that runs generative AI applications on AMD hardware. GAIA uses the [ONNX Runtime GenAI (aka OGA)](https://github.com/microsoft/onnxruntime-genai/tree/main?tab=readme-ov-file) backend via [Lemonade Server](https://lemonade-server.ai/) tool for running Large Language Models (LLMs).
 
-GAIA supports two modes:
-- **Hybrid Mode**: Utilizes both NPU and iGPU on Ryzen AI systems for optimal performance
-- **Generic Mode**: Runs on non-Ryzen AI systems using standard GPU acceleration
-
-⚠️ NOTE: To install generic mode, skip the steps with the *(Hybrid only)* label.
+GAIA utilizes both NPU and iGPU on Ryzen AI systems for optimal performance on 300 series processors or above.
 
 # Before you start
 
 ## System Requirements
 
-### Hybrid Mode (Ryzen AI Systems)
 - OS: Windows 11 Pro, 24H2
-- RAM: Minimum 32GB
-- CPU: Ryzen AI 9 HX 370 (STX) or compatible
+- RAM: Minimum 16GB
+- CPU: Ryzen AI 300-series processor (e.g., Ryzen AI 9 HX 370)
 - NPU Driver Versions: `32.0.203.237` or `32.0.203.240`
 - Storage: 20GB free space
 - Tested Configuration: ASUS ProArt (HN7306W) Laptop
-
-### Generic Mode
-- OS: Windows 11 Pro
-- RAM: Minimum 16GB
-- GPU: Any DirectML compatible GPU
-- Storage: 20GB free space
 
 ### Software
 - [Miniforge](https://conda-forge.org/download/) (conda-forge's recommended installer)
@@ -59,7 +48,7 @@ GAIA supports two modes:
 1. Download and install [Visual Studio Build Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe).
     1. During installation, make sure to select "Desktop development with C++" workload.
     1. After installation, you may need to restart your computer.
-1. *(Hybrid only)* Install the Ryzen AI NPU software drivers from [here](https://ryzenai.docs.amd.com/en/latest/inst.html)
+1. Install the Ryzen AI NPU software drivers from [here](https://ryzenai.docs.amd.com/en/latest/inst.html)
    1. NOTE: In many cases, your NPU drivers may already be installed
       - Check via _"Device Manager -> Neural Processors -> NPU Compute Accelerator Device -> Properties -> Driver Tab"_
 
@@ -70,61 +59,13 @@ GAIA supports two modes:
     1. `conda create -n gaiaenv python=3.10 -y`
     1. `conda activate gaiaenv`
 1. Install GAIA dependencies:
-    1. *(Hybrid only)* Recommended mode for Ryzen AI systems:
-        ```bash
-        pip install -e .[hybrid,joker,clip,talk,dev]
-        ```
-    1. *(Hybrid only)* Install Ryzen AI dependencies:
-        ```bash
-        lemonade-install --ryzenai hybrid -y
-        ```
-    1. *(Generic only)* Recommended mode for non-Ryzen AI systems:
-        ```bash
-        pip install -e .[clip,joker,talk,dev]
-        ```
+    ```bash
+    pip install -e .
+    ```
     ⚠️ NOTE: If actively developing, use `-e` switch to enable editable mode and create links to sources instead.
 
     ⚠️ NOTE: Make sure you are in the correct virtual environment when installing dependencies. If not, run `conda activate gaiaenv`.
 
-# Environment Configuration
-
-GAIA requires setting the `GAIA_MODE` environment variable based on your hardware and installation type. This determines which mode the application will use.
-
-1. *(Hybrid only)* For Ryzen AI systems with NPU + iGPU:
-   ```bash
-   set_hybrid_mode.bat
-   ```
-
-2. *(Generic only)* For systems using DirectML:
-   ```bash
-   set_generic_mode.bat
-   ```
-
-3. *(NPU only)* For NPU-only configurations:
-   ```bash
-   set_npu_mode.bat
-   ```
-
-Each script above performs the following actions:
-- Sets the environment variable for the current session
-- Makes the setting persistent using `setx`
-- Creates a conda environment activation script so the variable is set whenever your conda environment is activated
-
-If you need to manually configure these settings, you can:
-
-1. Add it to your system environment variables through Windows settings:
-   - Search for "Edit environment variables" in Windows
-   - Click "Environment Variables"
-   - Add GAIA_MODE as a user or system variable with your desired value (HYBRID, GENERIC, or NPU)
-
-2. Or manually create the conda activation script:
-   ```bash
-   mkdir -p %CONDA_PREFIX%\etc\conda\activate.d
-   echo @echo off > "%CONDA_PREFIX%\etc\conda\activate.d\env_vars.bat"
-   echo set "GAIA_MODE=HYBRID" >> "%CONDA_PREFIX%\etc\conda\activate.d\env_vars.bat"
-   ```
-
-   ⚠️ **NOTE**: Use exact quote formatting as shown when creating environment variables. Incorrect quotes or extra spaces can break variables and cause application errors.
 
 # Running GAIA
 
@@ -162,36 +103,15 @@ If you encounter pip installation errors:
 
 ### Environment Variable Issues
 
-If the GAIA application is not detecting the correct mode:
+If GAIA is not working correctly:
 
-1. Verify the environment variable is set:
-   ```bash
-   echo %GAIA_MODE%
-   ```
-
-2. If not set, run the appropriate script:
-   ```bash
-   set_hybrid_mode.bat
-   # or
-   set_generic_mode.bat
-   # or
-   set_npu_mode.bat
-   ```
-
-3. Check that the conda environment activation script was created properly:
-   ```bash
-   type %CONDA_PREFIX%\etc\conda\activate.d\env_vars.bat
-   ```
-
-4. Ensure you're using the conda environment where the activation script was created:
+1. Verify the installation completed successfully by checking the log files
+2. Ensure all dependencies are installed correctly
+3. Check that you're using the correct conda environment:
    ```bash
    conda activate gaiaenv
    ```
-
-5. If the above steps don't resolve the issue, manually set the environment variable:
-   ```bash
-   set GAIA_MODE=HYBRID
-   ```
+4. Try restarting your terminal or command prompt
 
 # Support
 

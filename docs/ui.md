@@ -12,17 +12,17 @@
     - [Working with Assets](#working-with-assets)
   - [Compiling Changes](#compiling-changes)
   - [Troubleshooting](#troubleshooting)
-- [RAUX Interface](#raux-interface)
-  - [New in GAIA BETA (RAUX)](#new-in-gaia-beta-raux)
+- [GAIA UI Interface](#raux-interface)
+  - [New in GAIA UI (RAUX)](#new-in-gaia-beta-raux)
 - [License](#license)
 
 # UI Overview
 
 GAIA provides two user interface experiences:
 1. The Qt-based interface - A robust desktop application interface built with PyQt6
-2. RAUX [beta] - A modern web-based interface built on Open-WebUI
+2. GAIA UI - A modern web-based interface built on Open-WebUI
 
-?? **NOTE**: RAUX is currently disabled pending review, will be available in v0.8.4.
+?? **NOTE**: GAIA UI is currently disabled pending review, will be available in v0.8.4.
 
 # Qt Interface
 
@@ -95,14 +95,13 @@ After making changes, you need to compile the updated files:
 - If resources aren't showing up, ensure you've recompiled both the UI and resource files
 - For import errors, check that the resource path replacement was done correctly
 
-# RAUX Interface
+# GAIA UI Interface
 
-- **GAIA BETA (also referred to as RAUX for RyzenAI User Experience)** is a modern web-based interface for GAIA, built as a fork from [Open-WebUI](https://github.com/open-webui/open-webui). It provides an extensible, feature-rich, and user-friendly self-hosted AI platform. GAIA BETA is currently in beta and is being actively integrated with new features and improvements rolling out regularly. While it offers a modern web-based experience, please note that it's still under development and some features may be experimental.
+- **GAIA UI (also referred to as RAUX for RyzenAI User Experience)** is a modern web-based interface for GAIA, built as a fork from [Open-WebUI](https://github.com/open-webui/open-webui). It provides an extensible, feature-rich, and user-friendly self-hosted AI platform. GAIA UI is currently in beta and is being actively integrated with new features and improvements rolling out regularly. While it offers a modern web-based experience, please note that it's still under development and some features may be experimental.
 
-## New in GAIA BETA (RAUX)
+## New in GAIA UI (RAUX)
 - Improved error handling and progress reporting via inter-process communication (IPC) between the main and renderer processes.
-- Unified GAIA BETA branding and updated messaging throughout the installer and UI.
-- For technical details on the integration, IPC, and installer, see [CLAUDE.md](../CLAUDE.md).
+- Unified GAIA UI branding and updated messaging throughout the installer and UI.
 
 ### 🙏 **Acknowledgments: RAUX & OpenWebUI**
 
@@ -120,13 +119,13 @@ We extend our heartfelt gratitude to:
 
 #### **Open Source Heritage**
 
-RAUX builds upon OpenWebUI's solid architectural foundation while adding AMD-specific optimizations and integrations tailored for the GAIA ecosystem. This collaboration exemplifies the power of open-source software in advancing AI accessibility and user experience. The OpenWebUI project's commitment to creating intuitive, powerful, and extensible AI interfaces has made GAIA BETA possible. 
+GAIA UI builds upon OpenWebUI's solid architectural foundation while adding AMD-specific optimizations and integrations tailored for the GAIA ecosystem. This collaboration exemplifies the power of open-source software in advancing AI accessibility and user experience. The OpenWebUI project's commitment to creating intuitive, powerful, and extensible AI interfaces has made GAIA UI possible. 
 
 **Learn more about OpenWebUI**: [https://github.com/open-webui/open-webui](https://github.com/open-webui/open-webui)
 
 ---
 
-For more information about GAIA BETA (RAUX), including setup instructions and feature documentation, please refer to the [RAUX GitHub repository README](https://github.com/aigdat/raux/blob/main/README.md).
+For more information about GAIA UI (RAUX), including setup instructions and feature documentation, please refer to the [RAUX GitHub repository README](https://github.com/aigdat/raux/blob/main/README.md).
 
 # License
 

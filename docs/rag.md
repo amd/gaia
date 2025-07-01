@@ -16,9 +16,6 @@ gaia-cli start --agent-name Rag --input-file ./data/html/blender/introduction.ht
 
 Additional options you can use:
 - `--model`: Specify the model to use (default: "llama3.2:1b")
-- `--backend`: Choose the inference backend ["oga", "hf", "ollama"] (default: "ollama")
-- `--device`: Select compute device ["cpu", "npu", "gpu", "hybrid"] (default: "cpu")
-- `--dtype`: Set model precision ["float32", "float16", "bfloat16", "int8", "int4"] (default: "int4")
 - `--max-new-tokens`: Maximum response length (default: 512)
 - `--background`: Launch mode ["terminal", "silent", "none"] (default: "silent")
 - `--stats`: Show performance statistics after generation
@@ -29,9 +26,6 @@ Example with additional options:
 gaia-cli start --agent-name Rag \
     --input-file ./data/html/blender/introduction.html \
     --model llama3.2:1b \
-    --backend ollama \
-    --device cpu \
-    --dtype int4 \
     --max-new-tokens 512 \
     --background silent \
     --stats \

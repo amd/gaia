@@ -22,7 +22,7 @@ body:
       options:
         - label: I've taken a look at existing feature requests
           required: false
-        - label: This feature request relates to GAIA BETA (Open-WebUI)
+        - label: This feature request relates to GAIA UI (Open-WebUI)
           required: false
 
   - type: textarea
