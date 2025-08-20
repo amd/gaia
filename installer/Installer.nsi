@@ -528,6 +528,9 @@ Section "-Install Main Components" SEC01
 
         ; Call RAUX installer after GAIA installation completes
         Call run_raux_installer
+        
+        ; Continue to create shortcuts
+        GoTo create_shortcuts
 
       ${Else}
         DetailPrint "*** INSTALLATION FAILED ***"
@@ -611,7 +614,7 @@ SectionEnd
 
 Function RunGAIACLI
   ${IfNot} ${Silent}
-    ExecShell "open" "$DESKTOP\GAIA CLI.lnk"
+    Exec '"$INSTDIR\bin\launch_gaia.bat" --cli'
   ${EndIf}
 FunctionEnd
 
