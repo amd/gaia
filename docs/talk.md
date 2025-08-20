@@ -7,26 +7,23 @@ GAIA CLI's talk mode enables voice-based interaction with LLMs using Whisper for
 
 ### GAIA-CLI Talk Demo
 
-1. Make sure to follow the [Getting Started Guide](../README.md#getting-started-guide) to install the `gaia-cli` tool.
+1. Make sure to follow the [Getting Started Guide](../README.md#getting-started-guide) to install the `gaia` tool.
 
 1. Once installed, double click on the desktop icon **GAIA-CLI** to launch the command-line shell with the GAIA environment activated.
 
-1. Start the servers with default settings:
+1. Start the Lemonade server:
    ```bash
-   gaia-cli start
+   lemonade-server serve
    ```
-   For optimal performance, use Llama 3.2 1B Instruct model in iGPU/NPU-hybrid mode:
-   ```bash
-   gaia-cli start --model "amd/Llama-3.2-1B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid" --backend "oga" --device "hybrid" --dtype "int4"
-   ```
+   Or double-click the desktop shortcut to start the server.
 
 1. Launch talk mode:
    ```bash
-   gaia-cli talk
+   gaia talk
    ```
    Optionally, launch talk mode using ASR only:
    ```bash
-   gaia-cli talk --no-tts
+   gaia talk --no-tts
    ```
 
 1. Once you see the following in the console, you can start talking:
@@ -50,19 +47,19 @@ During a talk session:
 Customize the voice interaction experience:
 ```bash
 # Choose Whisper model size for speech recognition
-gaia-cli talk --whisper-model-size medium  # Options: tiny, base, small, medium, large
+gaia talk --whisper-model-size medium  # Options: tiny, base, small, medium, large
 
 # Specify which microphone to use
-gaia-cli talk --audio-device-index 2  # Default: 1
+gaia talk --audio-device-index 2  # Default: 1
 ```
 
 ## Automatic Speech Recognition (ASR) Tests
-You can test the ASR system using the `gaia-cli test` command with various test types:
+You can test the ASR system using the `gaia test` command with various test types:
 
 ### Audio File Transcription Test
 Test transcription of an existing audio file:
 ```bash
-gaia-cli test --test-type asr-file-transcription --input-audio-file path/to/audio.wav
+gaia test --test-type asr-file-transcription --input-audio-file path/to/audio.wav
 ```
 Supported audio formats include WAV, MP3, M4A, and other common formats.
 
@@ -73,13 +70,13 @@ Options:
 ### List Audio Devices Test
 List available audio input devices:
 ```bash
-gaia-cli test --test-type asr-list-audio-devices
+gaia test --test-type asr-list-audio-devices
 ```
 
 ### Microphone Recording Test
 Test real-time transcription from your microphone:
 ```bash
-gaia-cli test --test-type asr-microphone --recording-duration 15
+gaia test --test-type asr-microphone --recording-duration 15
 ```
 Options:
 - `--recording-duration`: Recording duration in seconds (default: 10)
@@ -87,27 +84,27 @@ Options:
 - `--audio-device-index`: Select which microphone to use (default: 1)
 
 ## Testing TTS Components
-You can test different aspects of the TTS system using the `gaia-cli test` command with various test types:
+You can test different aspects of the TTS system using the `gaia test` command with various test types:
 
 ### Text Preprocessing Test
 Test how the TTS system processes and formats text before speech generation:
 
 ```bash
-gaia-cli test --test-type tts-preprocessing
+gaia test --test-type tts-preprocessing
 ```
 Optionally provide custom test text:
 ```bash
-gaia-cli test --test-type tts-preprocessing --test-text "Your test text here"
+gaia test --test-type tts-preprocessing --test-text "Your test text here"
 ```
 
 ### Streaming Playback Test
 Test real-time audio generation and playback with progress visualization:
 ```bash
-gaia-cli test --test-type tts-streaming
+gaia test --test-type tts-streaming
 ```
 Optionally provide custom test text:
 ```bash
-gaia-cli test --test-type tts-streaming --test-text "Your test text here"
+gaia test --test-type tts-streaming --test-text "Your test text here"
 ```
 This test shows:
 - Processing progress
@@ -118,7 +115,7 @@ This test shows:
 ### Audio File Generation Test
 Test audio generation and save to a WAV file:
 ```bash
-gaia-cli test --test-type tts-audio-file --test-text "Your test text here" --output-audio-file ./test_output.wav
+gaia test --test-type tts-audio-file --test-text "Your test text here" --output-audio-file ./test_output.wav
 ```
 Use the `--output-audio-file` option to specify the output file path.
 

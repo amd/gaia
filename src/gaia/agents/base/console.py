@@ -314,9 +314,9 @@ class AgentConsole:
     def print_tool_complete(self) -> None:
         """Print that tool execution is complete."""
         if self.rich_available:
-            self.console.print("[green]Tool execution complete ✓[/green]")
+            self.console.print("[green]✅ Tool execution complete[/green]")
         else:
-            print("Tool execution complete ✓")
+            print("✅ Tool execution complete")
 
     def print_error(self, error_message: str) -> None:
         """

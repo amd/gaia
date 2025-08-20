@@ -6,9 +6,15 @@ name: GAIA Installer Test
 on:
   push:
     branches: ["main"]
+    paths:
+      - "installer/**"
+      - "src/**"
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "installer/**"
+      - "src/**"
   merge_group:
   workflow_dispatch:
 
@@ -22,8 +28,8 @@ jobs:
 
   gaia-installer-test:
     runs-on: windows-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     needs: build-installer
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
       - uses: actions/checkout@v4
 

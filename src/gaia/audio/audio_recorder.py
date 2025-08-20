@@ -90,6 +90,9 @@ class AudioRecorder:
                 10  # Number of silent chunks before considering speech ended
             )
 
+            chunk_count = 0
+            self.log.debug(f"Silence threshold: {self.SILENCE_THRESHOLD}")
+
             while self.is_recording:
                 try:
                     # Skip recording if paused
@@ -103,6 +106,15 @@ class AudioRecorder:
                         dtype=np.float32,
                     )
                     data = np.clip(data, -1, 1)
+
+                    chunk_count += 1
+                    energy = np.abs(data).mean()
+
+                    # Log every 10th chunk to avoid spam
+                    if chunk_count % 10 == 0:
+                        self.log.debug(
+                            f"Chunk {chunk_count}: energy={energy:.6f}, is_speech={self._is_speech(data)}, buffer_size={len(speech_buffer)}"
+                        )
 
                     if self._is_speech(data):
                         silence_counter = 0
@@ -120,7 +132,14 @@ class AudioRecorder:
                         # If we've had enough silence and were speaking
                         if silence_counter >= SILENCE_LIMIT and self.is_speaking:
                             if len(speech_buffer) > self.MIN_AUDIO_LENGTH:
+                                self.log.debug(
+                                    f"Adding speech to queue: {len(speech_buffer)} samples ({len(speech_buffer)/self.RATE:.2f}s)"
+                                )
                                 self.audio_queue.put(speech_buffer)
+                            else:
+                                self.log.debug(
+                                    f"Speech too short: {len(speech_buffer)} samples < {self.MIN_AUDIO_LENGTH}"
+                                )
                             speech_buffer = np.array([], dtype=np.float32)
                             self.is_speaking = False
                             silence_counter = 0

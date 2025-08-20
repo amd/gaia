@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(where python)",
+      "Bash(py --version)",
+    ],
+    "deny": []
+  }
+}

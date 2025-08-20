@@ -2,24 +2,23 @@
 
 ## Installation and Setup
 
-### Can I change the installation mode after installing?
-Yes, you can reinstall GAIA and select a different mode. The installer provides an option to remove your existing installation.
+### Can I reinstall GAIA?
+Yes, you can reinstall GAIA. The installer provides an option to remove your existing installation.
 
 ### How do I run GAIA in silent/headless mode?
 You can run the installer from command-line with parameters for CI/CD or silent installations:
 ```
-gaia-windows-setup.exe /S /MODE=HYBRID
+gaia-windows-setup.exe /S
 ```
 Available parameters:
 - `/S` - Silent installation (no UI)
-- `/MODE=X` - Set installation mode (GENERIC, NPU, or HYBRID)
 - `/D=<path>` - Set installation directory (must be last parameter)
 
-### Why are some installation modes disabled?
-The installer automatically detects your CPU and only enables compatible modes. NPU and Hybrid modes require an AMD Ryzen AI 300-series processor. If these options are disabled, your system doesn't meet the hardware requirements.
+### What are the system requirements?
+GAIA is designed for AMD Ryzen AI systems. For optimal performance, you need an AMD Ryzen AI 300-series processor with NPU support.
 
 ### Does GAIA support Linux or macOS?
-Currently, GAIA only supports Windows 11. Support for other platforms may be added in future releases.
+GAIA fully supports both Windows 11 and Linux (Ubuntu/Debian) with complete UI and CLI functionality. macOS is not currently supported.
 
 ## Demo Introduction
 
@@ -54,7 +53,7 @@ Running the demo on the NPU provides better performance for AI-specific tasks, a
 
 ## What toolset do I need to replicate this demo?
 
-To replicate the demo, you'll need the Ryzen AI hardware, [Lemonade Server](https://lemonade-server.ai/) for managing your LLMs, and our agent RAG pipeline, which you can access via Jupyter notebooks in the demo. Additionally, you'll need the necessary software stack, including Ryzen AI Software for the. The GAIA interface (GUI) will be available publicly soon.
+To replicate the demo, you'll need the Ryzen AI hardware, [Lemonade Server](https://lemonade-server.ai/) for managing your LLMs, and GAIA's agent system. GAIA provides both a command-line interface (CLI) and a graphical user interface (GUI) that are available on both Windows and Linux platforms.
 
 ## How does this demo address data privacy concerns?
 
@@ -68,16 +67,17 @@ This setup could benefit industries that require high performance and privacy, s
 
 The demo is split into two main components:
 
-1. **Web Service**: Powered by the Ryzen AI platform, which handles both the NPU and CPU. It's running a quantized version of Llama 2 with 7 billion parameters. This service communicates via a WebSocket stream to the Gaia app, which has three core elements:
-    - An LLM connector that links the NPU service's Web API to the LlamaIndex RAG (Retrieval-Augmented Generation) pipeline.
-    - The LlamaIndex RAG pipeline, consisting of a local query engine and vector memory, which processes information and runs on a web server.
-    - This web server is also connected via WebSocket to the AI Demo Hub UI, where users can interact with the system.
+1. **GAIA Backend**: Powered by the Ryzen AI platform through Lemonade Server, which leverages NPU and iGPU capabilities. GAIA supports multiple LLM models including Llama-3.2-3B-Instruct-Hybrid. The system includes:
+    - LLM client that connects to Lemonade Server for model execution
+    - Agent system for specialized tasks and workflows  
+    - WebSocket communication for real-time streaming responses
+    - Both CLI and GUI interfaces for user interaction
 
 2. **Agent Interface**: This agent works with the [Lemonade SDK repository](https://github.com/lemonade-sdk/lemonade). It fetches the repo, vectorizes the content, and stores it in a local vector index. On a typical laptop, indexing around 40,000 lines of code takes about 10 seconds. Once indexed, the agent is ready for queries. For example, you can ask, "How do I install dependencies?"
 
 ## Query Process
 
-The query is sent to the Gaia app, where it's transformed into an embedding vector. This vector is used to retrieve relevant chunks of the local GitHub repository, which are then passed to the NPU service. You can see the context being embedded into the LLM based on the query. This embedded context is then used to generate an answer, which is streamed back through the Gaia web service. The response is sent from the right side of the system to the Gaia web service on the left, and finally displayed in the UI. Once the process is complete, the user receives the final answer.
+Queries are sent to GAIA, which processes them through the agent system. For RAG-based queries, the input is transformed into embeddings to retrieve relevant content from local repositories or documents. This context is then passed to the LLM via Lemonade Server for processing. The generated response is streamed back through GAIA's interfaces (CLI or GUI) in real-time, providing immediate feedback to the user.
 
 And that's the demo. As you can see, the LLM generates a detailed response based on a large document, incorporating all the relevant information from the context provided.
 

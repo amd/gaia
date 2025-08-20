@@ -53,3 +53,20 @@ pytest -xvs src/gaia/agents/Blender/tests/test_agent_v1.py --skip-integration
 Integration tests are marked with the `@pytest.mark.integration` decorator and require a running MCP server. The tests use a real LLMClient with a special system prompt that provides predictable responses for testing purposes.
 
 For example, when asked to create a cube, the LLM will always respond with `CUBE,1,2,3,0.5,1,1.5`, which allows us to make assertions about the expected result.
+
+## CLI Integration Testing
+
+The Blender agent is now integrated into the main CLI. To test the CLI integration:
+
+```bash
+# Test Blender CLI command help
+gaia blender --help
+
+# Test a simple Blender example (requires MCP server running)
+gaia blender --example 1
+
+# Test interactive mode (requires MCP server running)
+gaia blender --interactive
+```
+
+Note: CLI integration tests require both the Lemonade server and the Blender MCP server to be running. The CLI will automatically check for both servers and provide setup instructions if either is missing.

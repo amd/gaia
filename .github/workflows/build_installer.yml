@@ -1,7 +1,11 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-name: Build GAIA Installer
+# This workflow builds the Windows installer for GAIA using NSIS
+# Creates a Windows-specific installer package with all dependencies
+# Platform: Windows (NSIS-based installer creation)
+
+name: Build GAIA Installer (Windows)
 
 on:
   workflow_call:
@@ -17,14 +21,21 @@ on:
         value: ${{ jobs.build-installer.outputs.COMMIT_HASH }}
   push:
     branches: ["main"]
+    paths:
+      - "installer/**"
+      - "src/**"
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "installer/**"
+      - "src/**"
   merge_group:
   workflow_dispatch:
 
 jobs:
   build-installer:
+    name: Build Windows Installer Package
     runs-on: windows-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     outputs:
@@ -81,12 +92,12 @@ jobs:
           echo "VERSION=$version" >> $env:GITHUB_OUTPUT
           Write-Host "Extracted version: $version"
 
-      - name: Build the GAIA installer
+      - name: Build the Windows installer using NSIS
         run: |
           cd installer
           & 'C:\Program Files (x86)\NSIS\makensis.exe' /DOGA_TOKEN="${{ secrets.OGA_PUBLIC_TOKEN }}" 'Installer.nsi'
 
-          # Verify installer was created successfully
+          # Verify Windows installer was created successfully
           if (Test-Path "gaia-windows-setup.exe") {
             Write-Host "gaia-windows-setup.exe has been created successfully."
           } else {
@@ -102,11 +113,10 @@ jobs:
           echo "INSTALLER_HASH=$hash" >> $env:GITHUB_OUTPUT
           Write-Host "Installer SHA256: $hash"
 
-      - name: Upload installer
+      - name: Upload Windows installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: gaia-windows-installer-${{ steps.extract_version.outputs.VERSION }}-${{ steps.get_commit.outputs.COMMIT_HASH }}
           path: installer\gaia-windows-setup.exe
-
           if-no-files-found: error
           retention-days: 7

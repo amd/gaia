@@ -7,6 +7,7 @@ Main application entry point for the Blender Agent.
 import argparse
 import os
 from gaia.agents.Blender.agent import BlenderAgent
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
 
 def wait_for_user():
@@ -126,8 +127,8 @@ def main():
     parser = argparse.ArgumentParser(description="Run the BlenderAgent")
     parser.add_argument(
         "--model",
-        default="Llama-3.2-3B-Instruct-Hybrid",
-        help="Model ID to use (default: Llama-3.2-3B-Instruct-Hybrid)",
+        default=DEFAULT_MODEL_NAME,
+        help=f"Model ID to use (default: {DEFAULT_MODEL_NAME})",
     )
     parser.add_argument(
         "--example",

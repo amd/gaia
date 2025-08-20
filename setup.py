@@ -34,6 +34,7 @@ setup(
         "accelerate",
         "python-dotenv",
         "aiohttp",
+        "rich",
     ],
     extras_require={
         "audio": [
@@ -42,12 +43,7 @@ setup(
             "torchaudio",
         ],
         "blender": [
-            "rich",
             "bpy",
-        ],
-        "notebooks": [
-            "jupyter",
-            "ipywidgets",
         ],
         "dev": [
             "pytest",
@@ -64,6 +60,9 @@ setup(
         ],
         "eval" : [
             "anthropic",
+            "bs4",
+            "scikit-learn",
+            "numpy",
         ],
         "talk":[
             "pyaudio",
@@ -72,6 +71,9 @@ setup(
             "kokoro>=0.3.1",
             "soundfile",
             "sounddevice",
+        ],
+        "youtube": [
+            "llama-index-readers-youtube-transcript",
         ]
     },
     classifiers=[],
@@ -81,7 +83,7 @@ setup(
             "gaia-cli = gaia.cli:main",
         ]
     },
-    python_requires=">=3.8, <3.12",
+    python_requires=">=3.8, <3.13",
     long_description=open("README.md", "r", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     include_package_data=True,

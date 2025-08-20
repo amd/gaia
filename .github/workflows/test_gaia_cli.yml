@@ -1,17 +1,29 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# This workflow will install Python dependencies, run tests and lint with a single version of Python
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+# Main GAIA CLI testing workflow that coordinates platform-specific tests
+# This workflow calls both Windows (full integration) and Linux (Lemonade-independent) tests
+# Platform Coverage: Windows (full) + Linux (partial) + cross-platform validation
 
-name: GAIA CLI Tests
+name: GAIA CLI Tests (All Platforms)
 
 on:
+  workflow_call:
   push:
     branches: ["main"]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "setup.py"
+      - "pyproject.toml"
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "setup.py"
+      - "pyproject.toml"
   merge_group:
   workflow_dispatch:
 
@@ -19,128 +31,78 @@ permissions:
   contents: read
 
 jobs:
-  gaia-cli-pytest:
-    runs-on: windows-latest
+  # Run linting first (fast feedback)
+  lint:
+    name: Code Quality (Linting)
+    uses: ./.github/workflows/lint.yml
+
+  # Test Windows CLI with full Lemonade integration
+  test-windows:
+    name: Windows CLI Tests (Full Integration)
+    needs: lint
+    uses: ./.github/workflows/test_gaia_cli_windows.yml
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+  # Test Linux CLI with full Lemonade integration
+  test-linux:
+    name: Linux CLI Tests (Full Integration)
+    needs: lint
+    uses: ./.github/workflows/test_gaia_cli_linux.yml
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+  # Summary job that reports overall status
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [lint, test-windows, test-linux]
+    if: always()
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Download and Install Miniforge
+      - name: Check test results
         run: |
-          Invoke-WebRequest -Uri "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Windows-x86_64.exe" -OutFile "miniforge3.exe"
-          Start-Process -FilePath "miniforge3.exe" -ArgumentList "/S", "/D=$env:GITHUB_WORKSPACE\miniforge3" -Wait
-
-      - name: Initialize Conda
-        run: |
-          Write-Host "Step 1: Get conda path"
-          $condaPath = "$env:GITHUB_WORKSPACE\miniforge3"
-          $env:Path = "$condaPath;$condaPath\Scripts;$env:Path"
-
-          Write-Host "Step 2: Initialize conda for both shells"
-          & "$condaPath\Scripts\conda.exe" init powershell
-          & "$condaPath\Scripts\conda.exe" init cmd.exe
-
-          Write-Host "Step 3: Create the environment at system level"
-          & "$condaPath\Scripts\conda.exe" create -n gaiaenv python=3.10 -y
-
-      - name: Install Lemonade Server
-        uses: ./.github/actions/install-lemonade
-
-      - name: Install GAIA dependencies
-        run: |
-          Write-Host "Step 1: Activate conda environment"
-          & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
-          conda activate gaiaenv
-
-          Write-Host "Step 2: Install dependencies"
-          python -m pip install --upgrade pip
-          pip install -e .[dev,talk]
-
-          Write-Host "Step 3: Verify installation"
-          $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
-          if (-not $gaiaPath) {
-            Write-Host "Error: gaia not installed correctly"
-            Write-Host "Current PATH: $env:Path"
+          echo "=== GAIA CLI Test Summary ==="
+          echo "Lint Status: ${{ needs.lint.result }}"
+          echo "Windows Tests Status: ${{ needs.test-windows.result }}"
+          echo "Linux Tests Status: ${{ needs.test-linux.result }}"
+          echo ""
+          
+          # Determine overall status
+          if [[ "${{ needs.lint.result }}" == "success" && "${{ needs.test-windows.result }}" == "success" && "${{ needs.test-linux.result }}" == "success" ]]; then
+            echo "✅ All tests passed!"
+            echo "- Windows: Full CLI functionality with Lemonade integration"
+            echo "- Linux: Full CLI functionality with Lemonade integration"
+            echo "- Cross-platform: Code quality and compatibility"
+          else
+            echo "❌ Some tests failed:"
+            [[ "${{ needs.lint.result }}" != "success" ]] && echo "  - Linting failed"
+            [[ "${{ needs.test-windows.result }}" != "success" ]] && echo "  - Windows tests failed"
+            [[ "${{ needs.test-linux.result }}" != "success" ]] && echo "  - Linux tests failed"
             exit 1
-          }
-          Write-Host "Found gaia at: $($gaiaPath.Source)"
-          python -m pip check
+          fi
 
-      - name: Lint with Black
-        uses: psf/black@stable
-        with:
-          options: "--check --verbose --config pyproject.toml"
-          src: "./installer ./src ./tests"
-
-      - name: PyLint
+      - name: Report test coverage
         run: |
-          Write-Host "Step 1: Activate conda environment"
-          & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
-          conda activate gaiaenv
-
-          Write-Host "Step 2: Install pylint"
-          pip install pylint
-
-          Write-Host "Step 3: Run pylint"
-          & ".\util\lint.ps1" -RunPylint
-
-      - uses: FedericoCarboni/setup-ffmpeg@v3
-        id: setup-ffmpeg
-
-      - name: Test GAIA
-        timeout-minutes: 20
-        env:
-          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
-          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
-        run: |
-          Write-Host "Activate and verify Conda environment"
-          $env:Path = "$env:GITHUB_WORKSPACE\miniforge3;$env:GITHUB_WORKSPACE\miniforge3\Scripts;$env:Path"
-          & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
-          conda activate gaiaenv
-
-          Write-Host "Verify Python environment"
-          python -c "import sys; print(sys.executable)"
-
-          Write-Host "Verify NumPy is available"
-          python -c "import numpy; print(f'NumPy version: {numpy.__version__}'); print(f'NumPy path: {numpy.__file__}')"
-
-          Write-Host "Find gaia executable location"
-          $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
-          if (-not $gaiaPath) {
-            Write-Host "Error: Cannot find gaia executable in PATH"
-            Write-Host "Current PATH: $env:Path"
-            exit 1
-          }
-          Write-Host "Found gaia at: $($gaiaPath.Source)"
-
-          Write-Host "Running test_asr.py"
-          python tests\unit\test_asr.py 2>&1 | Out-String -Stream
-          if ($LASTEXITCODE -ne 0) {
-              throw "test_asr.py failed with exit code $LASTEXITCODE"
-          }
-
-          Write-Host "Running test_tts.py"
-          python tests\unit\test_tts.py 2>&1 | Out-String -Stream
-          if ($LASTEXITCODE -ne 0) {
-              throw "test_tts.py failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Debug GAIA Logs on Failure
-        if: failure()
-        shell: cmd
-        run: |
-          echo === Debugging GAIA failure ===
-
-          echo === Check for GAIA log files ===
-          if exist "gaia.cli.log" (
-            echo Found gaia.cli.log:
-            type gaia.cli.log
-          ) else (
-            echo No gaia.cli.log found
-          )
-
-          echo === Check running processes ===
-          tasklist | findstr /i "python gaia lemonade-server"
-
-          echo === Check ports in use ===
-          netstat -an | findstr ":8000 :8001"
+          echo ""
+          echo "=== Test Coverage by Platform ==="
+          echo "🪟 Windows (Full Integration):"
+          echo "  ✅ CLI installation and setup"
+          echo "  ✅ Lemonade server integration"
+          echo "  ✅ Core commands (chat, prompt, llm)"
+          echo "  ✅ Audio features (talk command)"
+          echo "  ✅ Evaluation tools"
+          echo "  ✅ Summarizer CLI integration"
+          echo "  ✅ Process management"
+          echo ""
+          echo "🐧 Linux (Full Integration):"
+          echo "  ✅ CLI installation and setup"
+          echo "  ✅ Lemonade server with Gemma model"
+          echo "  ✅ Core commands (chat, prompt, llm)"
+          echo "  ✅ Evaluation tools (eval, groundtruth, report)"
+          echo "  ✅ Summarizer CLI integration"
+          echo "  ✅ Cross-platform process management"
+          echo "  ✅ Python import compatibility"
+          echo ""
+          echo "🎉 Linux Full Support Achieved!"
+          echo "  🔧 Future enhancements:"
+          echo "  🚧 Audio/TTS functionality testing"
+          echo "  🚧 NPU driver support (if available)"
+          echo "  🚧 Performance optimization"

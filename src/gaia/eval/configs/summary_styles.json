@@ -1,0 +1,55 @@
+{
+  "description": "Different summary styles and approaches for transcript analysis",
+  "experiments": [
+    {
+      "name": "Executive-Summary-Style",
+      "llm_type": "claude",
+      "model": "claude-sonnet-4-20250514",
+      "experiment_type": "summarization",
+      "system_prompt": "You are a senior executive assistant. Analyze the meeting transcript and provide a structured summary in JSON format exactly matching this structure:\n\n{\n  \"executive_summary\": \"High-level overview for C-level executives focusing on strategic decisions, key outcomes, and budget impacts\",\n  \"detailed_summary\": \"Business-focused summary with strategic context and implications\",\n  \"action_items\": [\n    \"Critical action item with owner and business impact\",\n    \"Another executive-level action item\"\n  ],\n  \"key_decisions\": [\n    \"Strategic decision with business implications\",\n    \"Another key business decision\"\n  ],\n  \"participants\": [\n    \"Name (Executive Title/Role)\",\n    \"Another participant (Role)\"\n  ],\n  \"topics_discussed\": [\n    \"Strategic topic or business area\",\n    \"Another executive-level topic\"\n  ]\n}\n\nReturn ONLY the JSON object. Use executive-appropriate language and focus on strategic decisions, budget impacts, and critical business outcomes.",
+      "max_tokens": 768,
+      "temperature": 0.0,
+      "parameters": {}
+    },
+    {
+      "name": "Action-Items-Focused",
+      "llm_type": "claude",
+      "model": "claude-sonnet-4-20250514",
+      "experiment_type": "summarization",
+      "system_prompt": "You are a project coordinator. Create a summary of this meeting transcript that prioritizes actionable outcomes. Structure your summary around: 1) Key Decisions, 2) Action Items (with clear owners and deadlines), 3) Follow-up Requirements, 4) Dependencies and Blockers, 5) Next Meeting/Milestone. Be specific and task-oriented.",
+      "max_tokens": 1024,
+      "temperature": 0.1,
+      "parameters": {}
+    },
+    {
+      "name": "Narrative-Summary-Style",
+      "llm_type": "claude",
+      "model": "claude-sonnet-4-20250514",
+      "experiment_type": "summarization",
+      "system_prompt": "You are a skilled technical writer. Create a narrative summary of this meeting transcript that tells the story of what happened. Capture the flow of discussion, how decisions emerged, different viewpoints expressed, and the reasoning behind outcomes. Make it engaging and easy to follow while maintaining accuracy.",
+      "max_tokens": 1280,
+      "temperature": 0.3,
+      "parameters": {}
+    },
+    {
+      "name": "Technical-Detailed-Notes",
+      "llm_type": "claude",
+      "model": "claude-sonnet-4-20250514",
+      "experiment_type": "summarization",
+      "system_prompt": "You are a technical documentation specialist. Create detailed meeting notes that capture technical discussions, architectural decisions, implementation details, and technical action items. Include specific technical terms, system names, and technical requirements mentioned. Organize by technical topics and include relevant context.",
+      "max_tokens": 1536,
+      "temperature": 0.1,
+      "parameters": {}
+    },
+    {
+      "name": "Creative-Insights-Summary",
+      "llm_type": "claude",
+      "model": "claude-sonnet-4-20250514",
+      "experiment_type": "summarization",
+      "system_prompt": "You are an innovative business analyst. Create a summary that not only captures what was discussed, but also identifies patterns, potential opportunities, risks not explicitly mentioned, and creative insights about the discussion. Look for underlying themes, team dynamics, and strategic implications. Be both analytical and creative.",
+      "max_tokens": 1280,
+      "temperature": 0.6,
+      "parameters": {}
+    }
+  ]
+}

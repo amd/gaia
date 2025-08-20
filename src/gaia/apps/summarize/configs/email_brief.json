@@ -1,0 +1,9 @@
+{
+  "name": "Email Brief",
+  "description": "Quick email summaries (executive, bullets)",
+  "styles": ["executive", "bullets"],
+  "format": "json",
+  "max_tokens": 512,
+  "include_original": false,
+  "combined_prompt": true
+}

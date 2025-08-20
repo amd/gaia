@@ -2,25 +2,32 @@
 # SPDX-License-Identifier: MIT
 
 import sys
-import argparse
 import time
-import json
-import socket
 import asyncio
-import queue
 import logging
 import subprocess
 from pathlib import Path
-
-import requests
-import aiohttp
-from aiohttp import ClientTimeout
-from requests.exceptions import RequestException
+import os
 
 from gaia.logger import get_logger
-from gaia.audio.audio_client import AudioClient
-
 from gaia.version import version
+
+# Optional imports
+try:
+    from gaia.agents.Blender.agent import BlenderAgent
+    from gaia.mcp.blender_mcp_client import MCPClient
+
+    BLENDER_AVAILABLE = True
+except ImportError:
+    BlenderAgent = None
+    MCPClient = None
+    BLENDER_AVAILABLE = False
+from gaia.llm.lemonade_client import (
+    LemonadeClient,
+    LemonadeClientError,
+    DEFAULT_MODEL_NAME,
+)
+from gaia.llm.llm_client import LLMClient
 
 # Set debug level for the logger
 logging.getLogger("gaia").setLevel(logging.INFO)
@@ -31,480 +38,245 @@ parent_dir = current_dir.parent.parent.parent
 sys.path.append(str(parent_dir))
 
 
+def check_lemonade_health(host="127.0.0.1", port=8000):
+    """Check if Lemonade server is running and healthy using LemonadeClient."""
+    log = get_logger(__name__)
+
+    try:
+        # Create a LemonadeClient instance for health checking
+        client = LemonadeClient(host=host, port=port, verbose=False, keep_alive=True)
+
+        # Perform health check
+        health_result = client.health_check()
+
+        # Check if the response indicates the server is healthy
+        if health_result.get("status") == "ok":
+            log.debug(f"Lemonade server is healthy at {host}:{port}")
+            return True
+        else:
+            log.debug(f"Lemonade server health check returned: {health_result}")
+            return False
+
+    except LemonadeClientError as e:
+        log.debug(f"Lemonade health check failed: {str(e)}")
+        return False
+    except Exception as e:
+        log.debug(f"Unexpected error during Lemonade health check: {str(e)}")
+        return False
+
+
+def print_lemonade_error():
+    """Print informative error message when Lemonade is not running."""
+    print(
+        "❌ Error: Lemonade server is not running or not accessible.", file=sys.stderr
+    )
+    print("", file=sys.stderr)
+    print("Please start the Lemonade server first by:", file=sys.stderr)
+    print("  • Double-clicking the desktop shortcut, or", file=sys.stderr)
+    print("  • Running: lemonade-server serve", file=sys.stderr)
+    print("", file=sys.stderr)
+    print(
+        "The server should be accessible at http://127.0.0.1:8000/api/v1/health",
+        file=sys.stderr,
+    )
+    print("Then try your command again.", file=sys.stderr)
+
+
+def check_mcp_health(host="127.0.0.1", port=9876):
+    """Check if Blender MCP server is running and accessible."""
+    log = get_logger(__name__)
+
+    try:
+        import socket
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(3)
+        result = sock.connect_ex((host, port))
+        sock.close()
+
+        if result == 0:
+            log.debug("Blender MCP server is accessible")
+            return True
+        else:
+            log.debug(f"Failed to connect to Blender MCP server on {host}:{port}")
+            return False
+    except Exception as e:
+        log.debug(f"Error checking MCP server: {str(e)}")
+        return False
+
+
+def print_mcp_error():
+    """Print informative error message when Blender MCP server is not running."""
+    print(
+        "❌ Error: Blender MCP server is not running or not accessible.",
+        file=sys.stderr,
+    )
+    print("", file=sys.stderr)
+    print("To set up the Blender MCP server:", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("1. Open Blender (version 4.3 or newer recommended)", file=sys.stderr)
+    print("2. Go to Edit > Preferences > Add-ons", file=sys.stderr)
+    print("3. Click the down arrow button, then 'Install...'", file=sys.stderr)
+    print(
+        "4. Navigate to: <GAIA_REPO>/src/gaia/mcp/blender_mcp_server.py",
+        file=sys.stderr,
+    )
+    print("5. Install and enable the 'Simple Blender MCP' add-on", file=sys.stderr)
+    print(
+        "6. Open the 3D viewport sidebar (press 'N' key if not visible)",
+        file=sys.stderr,
+    )
+    print("7. Find the 'Blender MCP' panel in the sidebar", file=sys.stderr)
+    print("8. Set port to 9876 and click 'Start Server'", file=sys.stderr)
+    print("", file=sys.stderr)
+    print(
+        "For detailed setup instructions, see: workshop/blender.ipynb", file=sys.stderr
+    )
+    print("", file=sys.stderr)
+    print("Then try your Blender command again.", file=sys.stderr)
+
+
 class GaiaCliClient:
     log = get_logger(__name__)
 
     def __init__(
         self,
-        agent_name="Chaty",
-        host="127.0.0.1",
-        port=8001,
-        model="llama3.2:1b",
-        max_new_tokens=512,
-        enable_agent_server=True,
-        whisper_model_size="base",
-        audio_device_index=1,
-        silence_threshold=0.5,
+        model=DEFAULT_MODEL_NAME,
+        max_tokens=512,
         show_stats=False,
-        enable_tts=True,
         logging_level="INFO",
-        input_file=None,
     ):
         self.log = self.__class__.log  # Use the class-level logger for instances
         # Set the logging level for this instance's logger
         self.log.setLevel(getattr(logging, logging_level))
 
-        self.agent_name = agent_name
-        self.enable_agent_server = enable_agent_server
-        self.host = host
-        self.port = port
-        self.llm_port = 8000
-        self.agent_url = f"http://{host}:{port}"
-        self.llm_url = f"http://{host}:{self.llm_port}"
         self.model = model
-        self.max_new_tokens = max_new_tokens
-        self.agent_server = None
+        self.max_tokens = max_tokens
         self.cli_mode = True  # Set this to True for CLI mode
-        self.server_pids = {}
         self.show_stats = show_stats
-        self.input_file = input_file
 
-        # Initialize audio client for voice functionality
-        self.audio_client = AudioClient(
-            whisper_model_size=whisper_model_size,
-            audio_device_index=audio_device_index,
-            silence_threshold=silence_threshold,
-            enable_tts=enable_tts,
-            host=host,
-            port=port,
-            llm_port=self.llm_port,
-            agent_name=agent_name,
-            logging_level=logging_level,
-        )
+        # Initialize LLM client for local inference
+        self.llm_client = LLMClient(use_local=True)
 
-        self.log.info("Gaia CLI client initialized.")
-        self.log.debug(
-            f"agent_name: {self.agent_name}\n host: {self.host}\n"
-            f"port: {self.port}\n llm_port: {self.llm_port}\n"
-            f"model: {self.model}\n max_new_tokens: {self.max_new_tokens}"
-        )
-
-    def start(self):
-        self.log.info(f"Starting GAIA {version}")
-        self.log.info("Checking ports availability...")
-        # Check if required ports are available
-        ports_to_check = [
-            (self.port, "Agent server"),
-            (self.llm_port, "LLM server"),
-        ]
-
-        # Check ports before starting any processes
-        for port, service_name in ports_to_check:
-            if not self.is_port_available(port):
-                self.log.error(
-                    f"Port {port} required for {service_name} is already in use. "
-                )
-                # Attempt to kill process using the port before raising error
-                kill_result = kill_process_by_port(port)
-                if kill_result["success"]:
-                    self.log.info(f"{kill_result['message']}. Retrying port check...")
-                    # Verify port is now available
-                    if not self.is_port_available(port):
-                        self.log.error(
-                            f"Port {port} is still in use after kill attempt"
-                        )
-                        raise RuntimeError(
-                            f"Port {port} required for {service_name} is already in use. "
-                            "Please ensure all required ports are available before starting servers."
-                        )
-                    else:
-                        self.log.info(f"Port {port} for {service_name} is available.")
-                        return {
-                            "success": True,
-                            "message": f"Port {port} for {service_name} is available.",
-                        }
-            else:
-                self.log.info(f"Port {port} for {service_name} is available.")
-
-        try:
-            self.log.info("Starting servers...")
-            # Start servers and wait briefly to catch any immediate startup errors
-            if self.enable_agent_server:
-                # TODO: Implement agent server startup logic
-                self.log.info("Agent server startup logic not implemented")
-                time.sleep(2)  # Wait to catch potential port binding errors
-
-            self.log.info("Waiting for servers to start...")
-            self.wait_for_servers()
-
-            # Save server information
-            self.save_server_info()
-        except Exception as e:
-            raise RuntimeError(f"Failed to start servers: {str(e)}")
-
-    def wait_for_servers(self, server_ready_timeout=120, check_interval=5):
-        """Wait for servers to be ready with extended timeout for RAG index building"""
-        self.log.info("Waiting for model downloads and servers to be ready...")
-
-        # First, wait for model downloads to complete
-        start_time = time.time()
-        time.sleep(10)
-        # Modified to wait indefinitely for downloads to complete
-        while True:
-            if not self.check_models_downloading():
-                self.log.info("Model downloads completed.")
-                break
-            elapsed_time = int(time.time() - start_time)
-            self.log.info(
-                f"Models are still downloading (elapsed: {elapsed_time}s). Continuing to wait..."
-            )
-            time.sleep(check_interval)
-
-        # Then, check for server readiness
-        start_time = time.time()
-        last_status_time = 0
-        status_interval = 10  # Print status every 10 seconds
-
-        # Use longer timeout for RAG agents
-        if self.agent_name.lower() == "rag":
-            self.log.info(
-                "RAG agent detected - using extended timeout for index building..."
-            )
-            server_ready_timeout = 1800  # 30 minutes for RAG
-
-        while time.time() - start_time < server_ready_timeout:
-            current_time = time.time()
-
-            if self.check_servers_ready():
-                self.log.info("All servers are ready.")
-                return
-
-            # Print status update periodically
-            if current_time - last_status_time >= status_interval:
-                elapsed = int(current_time - start_time)
-                remaining = server_ready_timeout - elapsed
-                self.log.info(
-                    f"Waiting for servers... {elapsed}s elapsed, {remaining}s remaining"
-                )
-                last_status_time = current_time
-
-            time.sleep(check_interval)
-
-        error_message = (
-            f"Servers failed to start within {server_ready_timeout} seconds."
-        )
-        self.log.error(error_message)
-        raise TimeoutError(error_message)
-
-    def check_models_downloading(self):
-        # Check if LLM server is still downloading models
-        try:
-            response = requests.get(
-                f"http://localhost:{self.llm_port}/health", timeout=5
-            )
-            self.log.info(response.json())
-            if response.status_code == 200:
-                data = response.json()
-                return data.get("status") == "downloading"
-        except requests.RequestException:
-            self.log.warning("Failed to check model download status.")
-            return True  # Assume model is still downloading
-        return False
-
-    def check_servers_ready(self):
-        servers_to_check = [
-            (f"http://{self.host}:{self.port}/health", "Agent server"),
-            (f"http://localhost:{self.llm_port}/health", "LLM server"),
-        ]
-
-        for url, server_name in servers_to_check:
-            try:
-                response = requests.get(url, timeout=5)
-                if response.status_code != 200:
-                    self.log.warning(
-                        f"{server_name} not ready. Status code: {response.status_code}"
-                    )
-                    return False
-
-            except RequestException as e:
-                self.log.warning(f"Failed to connect to {server_name}: {str(e)}")
-                return False
-
-        self.log.info("All servers are ready.")
-        return True
-
-    def is_server_available(self, host, port):
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(3)
-            s.connect((host, port))
-            s.close()
-            return True
-        except (ConnectionRefusedError, TimeoutError):
-            return False
-
-    def save_server_info(self):
-        server_info = {
-            "agent_name": self.agent_name,
-            "host": self.host,
-            "port": self.port,
-            "model": self.model,
-            "max_new_tokens": self.max_new_tokens,
-            "server_pids": self.server_pids,
-            "input_file": self.input_file,  # Save input file info
-        }
-        with open(".gaia_servers.json", "w", encoding="utf-8") as f:
-            json.dump(server_info, f)
+        self.log.debug("Gaia CLI client initialized.")
+        self.log.debug(f"model: {self.model}\n max_tokens: {self.max_tokens}")
 
     async def send_message(self, message):
-        url = f"{self.agent_url}/prompt"
-        data = {"prompt": message}
         try:
-            async with aiohttp.ClientSession(
-                timeout=ClientTimeout(total=3600)
-            ) as session:
-                async with session.post(url, json=data) as response:
-                    if response.status == 200:
-                        async for chunk in response.content.iter_any():
-                            chunk = chunk.decode("utf-8")
-                            print(chunk, end="", flush=True)
-                            yield chunk
-                    else:
-                        error_text = await response.text()
-                        error_message = f"Error: {response.status} - {error_text}"
-                        print(error_message)
-                        yield error_message
-        except aiohttp.ClientError as e:
-            error_message = f"Error: {str(e)}"
+            # Use LLMClient.generate with streaming
+            response_generator = self.llm_client.generate(
+                prompt=message,
+                model=self.model,
+                stream=True,
+                max_tokens=self.max_tokens,
+            )
+
+            for chunk in response_generator:
+                print(chunk, end="", flush=True)
+                yield chunk
+
+        except Exception as e:
+            error_message = f"❌ Error: {str(e)}"
             self.log.error(error_message)
+            print(error_message)
             yield error_message
 
     def get_stats(self):
-        url = f"{self.llm_url}/stats"
         try:
-            response = requests.get(url, timeout=10)
-            self.log.debug(f"{url}: {response.json()}")
-            if response.status_code == 200:
-                try:
-                    stats = response.json()
-                    self.log.debug(f"Stats received: {stats}")
-                    return stats
-                except json.JSONDecodeError as je:
-                    self.log.error(f"Failed to parse JSON response: {response.text}")
-                    self.log.error(f"JSON decode error: {str(je)}")
-                    return None
-            else:
-                self.log.error(
-                    f"Failed to get stats. Status code: {response.status_code}"
-                )
-                return None
-        except requests.RequestException as e:
+            stats = self.llm_client.get_performance_stats()
+            self.log.debug(f"Stats received: {stats}")
+            return stats
+        except Exception as e:
             self.log.error(f"Error while fetching stats: {str(e)}")
             return None
-
-    async def start_voice_chat(self):
-        """Start a voice-based chat session."""
-        await self.audio_client.start_voice_chat(self.process_voice_input)
-
-    async def process_voice_input(self, text):
-        """Process transcribed voice input and get AI response"""
-        # Create callback for stats if needed
-        get_stats_callback = None
-        if hasattr(self, "show_stats") and self.show_stats:
-            get_stats_callback = self.get_stats
-
-        await self.audio_client.process_voice_input(text, get_stats_callback)
-
-    async def halt_generation(self):
-        """Send a request to halt the current generation."""
-        await self.audio_client.halt_generation()
-
-    async def chat(self):
-        """Text-based chat interface"""
-        print(
-            f"Starting text chat with {self.agent_name}.\n"
-            "Type 'stop' to quit or 'restart' to clear chat history."
-        )
-        while True:
-            user_input = input("You: ").strip()
-            if user_input.lower().rstrip(".") == "stop":
-                break
-            elif user_input.lower().rstrip(".") == "restart":
-                print("Chat restart functionality not implemented")
-            else:
-                print(f"{self.agent_name}:", end=" ", flush=True)
-                async for _ in self.send_message(user_input):
-                    pass
-                print()
-
-    async def talk(self):
-        """Voice-based chat interface"""
-        self.audio_client.initialize_tts()
-        await self.start_voice_chat()
 
     async def prompt(self, message):
         async for chunk in self.send_message(message):
             yield chunk
 
-    @classmethod
-    async def load_existing_client(cls):
-        json_path = Path(".gaia_servers.json")
+    def chat(
+        self,
+        message=None,
+        model=None,
+        max_tokens=512,
+        system_prompt=None,
+        assistant_name=None,
+        stats=False,
+    ):
+        """Chat interface using the new ChatApp - interactive if no message, single message if message provided"""
         try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                server_info = json.load(f)
-            if server_info:
-                client = cls(
-                    **{k: v for k, v in server_info.items() if k != "server_pids"}
-                )
-                client.server_pids = server_info.get("server_pids", {})
-                return client
-            return None
-        except FileNotFoundError:
-            cls.log.error(f"Server information file ({json_path}) not found.")
-            return None
-        except json.JSONDecodeError:
-            cls.log.error(f"Server information file ({json_path}) is corrupted.")
-            return None
+            from gaia.chat.sdk import ChatSDK, ChatConfig
 
-    def is_port_available(self, port):
-        """Check if a port is available for use."""
-        sock = None
-        try:
-            # Create a TCP socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            # Enable reuse of the address/port
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            # Try to bind to the port on localhost
-            sock.bind(("127.0.0.1", port))
-            # Try to listen on the port
-            sock.listen(1)
-            return True
-        except (socket.error, OSError):
-            self.log.warning(f"Port {port} is already in use")
-            return False
-        finally:
-            if sock:
-                sock.close()
+            # Interactive mode if no message provided, single message mode if message provided
+            use_interactive = message is None
+
+            if use_interactive:
+                # Interactive mode using ChatSDK
+                config = ChatConfig(
+                    model=model or DEFAULT_MODEL_NAME,
+                    max_tokens=max_tokens,
+                    system_prompt=system_prompt,
+                    assistant_name=assistant_name or "assistant",
+                    show_stats=stats,
+                )
+                chat = ChatSDK(config)
+                asyncio.run(chat.start_interactive_session())
+            else:
+                # Single message mode with streaming
+                config = ChatConfig(
+                    model=model or DEFAULT_MODEL_NAME,
+                    max_tokens=max_tokens,
+                    system_prompt=system_prompt,
+                    assistant_name=assistant_name or "assistant",
+                    show_stats=stats,
+                )
+                chat = ChatSDK(config)
+                full_response = ""
+                for chunk in chat.send_stream(message):
+                    if not chunk.is_complete:
+                        print(chunk.text, end="", flush=True)
+                        full_response += chunk.text
+                    else:
+                        # Show stats if configured and available
+                        if stats and chunk.stats:
+                            print()  # Add newline before stats
+                            chat.display_stats(chunk.stats)
+                print()  # Add final newline
+                return full_response
+
+        except Exception as e:
+            # Check if it's a connection error and provide helpful message
+            self.log.error(f"Error in chat: {str(e)}")
+            print(f"❌ Error: {str(e)}")
+            sys.exit(1)
 
 
 async def async_main(action, **kwargs):
     log = get_logger(__name__)
-    if action == "start":
-        show_stats = kwargs.pop("stats", False)
-        launch_in_background = kwargs.pop("background", "silent")
-        logging_level = kwargs.pop("logging_level", "INFO")  # Pop instead of get
 
-        # Handle hybrid shortcut flag
-        if kwargs.pop("hybrid", False):
-            model = "Llama-3.2-3B-Instruct-Hybrid"
-            kwargs["model"] = model
-            print(f"Using optimal GAIA configuration with model: {model}")
-        elif not kwargs.get("model"):
-            # Set default optimal configuration if no model specified
-            model = "Qwen3-4B-GGUF"
-            kwargs["model"] = model
-            print(f"Using GAIA configuration with model: {model}")
+    # Check Lemonade health for all actions that require it
+    if action in ["prompt", "chat", "talk", "stats"]:
+        if not check_lemonade_health():
+            print_lemonade_error()
+            sys.exit(1)
 
-        # Build command with all parameters
-        cmd_params = []
-        for key, value in kwargs.items():
-            if value is not None:
-                # Convert underscores to hyphens in parameter names
-                param_name = key.replace("_", "-")
-                if isinstance(value, bool):
-                    if value:
-                        cmd_params.append(f"--{param_name}")
-                else:
-                    cmd_params.append(f"--{param_name} {value}")
-
-        base_cmd = "gaia-cli start --background none " + " ".join(cmd_params)
-
-        # Use longer timeout for RAG agents (timeout handling not currently implemented)
-        # server_timeout = 1800 if kwargs.get("agent_name", "").lower() == "rag" else 120
-
-        if launch_in_background == "terminal":
-            print("Starting Gaia servers in background terminal...")
-            print(
-                "Note: A new terminal window will open to handle the server processes."
-            )
-
-            cmd = f'start cmd /k "echo Starting GAIA servers... Feel free to minimize this window. && {base_cmd}"'
-            try:
-                subprocess.Popen(cmd, shell=True)
-                print("✓ Servers launched in background terminal")
-                print("\nYou can now:")
-                print(
-                    "  1. Use 'gaia-cli chat' or 'gaia-cli talk' in this terminal to interact"
-                )
-                print(
-                    "  2. Use 'gaia-cli stop' when you're done to shut down the servers"
-                )
-                return
-            except Exception as e:
-                log.error(f"Failed to start in background: {e}")
-                raise RuntimeError(f"Failed to start in background: {e}")
-
-        elif launch_in_background == "silent":
-            print("Starting Gaia servers in background...")
-            print(
-                "Note: Server output will be redirected to "
-                + str(Path.cwd() / "gaia.cli.log.")
-            )
-
-            with open("gaia.cli.log", "w", encoding="utf-8") as log_file:
-                # Split the command into a list for Popen
-                cmd_list = ["gaia-cli", "start", "--background", "none"] + [
-                    param for param in " ".join(cmd_params).split()
-                ]
-                subprocess.Popen(
-                    cmd_list,
-                    stdout=log_file,
-                    stderr=log_file,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
-            print("✓ Servers launched in background silently")
-            print("\nYou can now:")
-            print("  1. Use 'gaia-cli chat' or 'gaia-cli talk' to interact")
-            print("  2. Use 'gaia-cli stop' when you're done to shut down the servers")
-            print("  3. Check gaia.cli.log for server output")
-            return
-        elif launch_in_background == "none":
-            client = GaiaCliClient(
-                show_stats=show_stats,
-                logging_level=logging_level,
-                **kwargs,
-            )
-            client.start()
-            log.info("Servers started successfully.")
-            return
-        else:
-            log.error(f"Invalid background option: {launch_in_background}")
-            raise ValueError(f"Invalid background option: {launch_in_background}")
-
-    elif action == "stop":
-        client = await GaiaCliClient.load_existing_client()
-        if client:
-            # TODO: Implement server stop functionality
-            log.info("Server stop functionality not implemented")
-            return
-        else:
-            log.error("No running servers found.")
-            return
-
-    # For all other actions, load existing client
-    client = await GaiaCliClient.load_existing_client()
-    if not client:
-        log.error(
-            "Servers are not running. Please start the servers first using 'gaia-cli start'"
-        )
-        raise RuntimeError(
-            "Servers are not running. Please start the servers first using 'gaia-cli start'"
-        )
+    # Create client for all actions - exclude parameters that aren't constructor arguments
+    # Filter out audio-related parameters that are no longer part of GaiaCliClient
+    audio_params = {
+        "whisper_model_size",
+        "audio_device_index",
+        "silence_threshold",
+        "no_tts",
+    }
+    excluded_params = {"message", "stats", "assistant_name"} | audio_params
+    client_params = {k: v for k, v in kwargs.items() if k not in excluded_params}
+    client = GaiaCliClient(**client_params)
 
     if action == "prompt":
         if not kwargs.get("message"):
             log.error("Message is required for prompt action.")
-            raise ValueError("Message is required for prompt action.")
+            print("❌ Error: Message is required for prompt action.")
+            sys.exit(1)
         response = ""
         async for chunk in client.prompt(kwargs["message"]):
             response += chunk
@@ -514,11 +286,66 @@ async def async_main(action, **kwargs):
                 return {"response": response, "stats": stats}
         return {"response": response}
     elif action == "chat":
-        await client.chat()
-        log.info("Chat session ended.")
+        # Use ChatSDK for chat functionality
+        from gaia.chat.sdk import ChatSDK, ChatConfig
+
+        # Create SDK configuration
+        config = ChatConfig(
+            model=kwargs.get("model", DEFAULT_MODEL_NAME),
+            max_tokens=kwargs.get("max_tokens", 512),
+            system_prompt=kwargs.get("system_prompt"),
+            assistant_name=kwargs.get("assistant_name", "assistant"),
+            show_stats=kwargs.get("stats", False),
+            logging_level=kwargs.get("logging_level", "INFO"),
+        )
+
+        chat_sdk = ChatSDK(config)
+
+        message = kwargs.get("message")
+        if message:
+            # Single message mode with streaming
+            for chunk in chat_sdk.send_stream(message):
+                if not chunk.is_complete:
+                    print(chunk.text, end="", flush=True)
+                else:
+                    # Show stats if requested
+                    if kwargs.get("stats", False) and chunk.stats:
+                        print()  # Add newline before stats
+                        chat_sdk.display_stats(chunk.stats)
+            print()  # Add final newline
+        else:
+            # Interactive mode using ChatSDK
+            await chat_sdk.start_interactive_session()
+
         return
     elif action == "talk":
-        await client.talk()
+        # Use TalkSDK for voice functionality
+        from gaia.talk.sdk import TalkSDK, TalkConfig
+
+        # Create SDK configuration from CLI arguments
+        config = TalkConfig(
+            whisper_model_size=kwargs.get("whisper_model_size", "base"),
+            audio_device_index=kwargs.get(
+                "audio_device_index", None
+            ),  # Use default device if not specified
+            silence_threshold=kwargs.get("silence_threshold", 0.5),
+            enable_tts=not kwargs.get("no_tts", False),
+            use_local_llm=True,  # Always use local LLM for CLI talk
+            system_prompt=None,  # Could add this as a parameter later
+            show_stats=kwargs.get("stats", False),
+            logging_level=kwargs.get(
+                "logging_level", "INFO"
+            ),  # Back to INFO now that issues are fixed
+        )
+
+        # Create SDK instance
+        talk_sdk = TalkSDK(config)
+
+        # Start voice chat session
+        print("Starting voice chat...")
+        print("Say 'stop' to quit or press Ctrl+C")
+
+        await talk_sdk.start_voice_session()
         log.info("Voice chat session ended.")
         return
     elif action == "stats":
@@ -526,10 +353,12 @@ async def async_main(action, **kwargs):
         if stats:
             return {"stats": stats}
         log.error("No stats available.")
-        raise RuntimeError("No stats available.")
+        print("❌ Error: No stats available.")
+        sys.exit(1)
     else:
         log.error(f"Unknown action specified: {action}")
-        raise ValueError(f"Unknown action specified: {action}")
+        print(f"❌ Error: Unknown action specified: {action}")
+        sys.exit(1)
 
 
 def run_cli(action, **kwargs):
@@ -537,6 +366,7 @@ def run_cli(action, **kwargs):
 
 
 def main():
+    import argparse
 
     # Create the main parser
     parser = argparse.ArgumentParser(
@@ -569,57 +399,7 @@ def main():
     subparsers = parser.add_subparsers(dest="action", help="Action to perform")
 
     # Core Gaia CLI commands - add parent_parser to each subcommand
-    start_parser = subparsers.add_parser(
-        "start", help="Start Gaia server", parents=[parent_parser]
-    )
-    start_parser.add_argument(
-        "--agent-name",
-        default="Chaty",
-        help="Name of the Gaia agent to use (e.g., Llm, Chaty, Joker, Clip, Rag, etc.)",
-    )
-    start_parser.add_argument(
-        "--host",
-        default="127.0.0.1",
-        help="Host address for the Agent server (default: 127.0.0.1)",
-    )
-    start_parser.add_argument(
-        "--port",
-        type=int,
-        default=8001,
-        help="Port for the Agent server (default: 8001)",
-    )
-    start_parser.add_argument(
-        "--model",
-        default="llama3.2:1b",
-        help="Model to use for the agent (default: llama3.2:1b)",
-    )
-    start_parser.add_argument(
-        "--max-new-tokens",
-        type=int,
-        default=512,
-        help="Maximum number of new tokens to generate (default: 512)",
-    )
-    start_parser.add_argument(
-        "--stats",
-        action="store_true",
-        help="Show performance statistics after generation",
-    )
-    start_parser.add_argument(
-        "--background",
-        choices=["terminal", "silent", "none"],
-        default="silent",
-        help="Launch servers in a background terminal window or silently",
-    )
-    start_parser.add_argument(
-        "--input-file", help="Input file path for RAG index creation"
-    )
-    start_parser.add_argument(
-        "--hybrid",
-        action="store_true",
-        help="Shortcut for optimal configuration (sets model to hybrid variant)",
-    )
-
-    subparsers.add_parser("stop", help="Stop Gaia server", parents=[parent_parser])
+    # Note: start and stop commands removed since CLI assumes Lemonade is running
 
     # Add prompt-specific options
     prompt_parser = subparsers.add_parser(
@@ -630,12 +410,68 @@ def main():
         help="Message to send to Gaia",
     )
 
-    subparsers.add_parser(
-        "chat", help="Start text conversation with Gaia", parents=[parent_parser]
+    prompt_parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL_NAME,
+        help=f"Model to use for the agent (default: {DEFAULT_MODEL_NAME})",
+    )
+    prompt_parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=512,
+        help="Maximum number of tokens to generate (default: 512)",
+    )
+    prompt_parser.add_argument(
+        "--stats",
+        action="store_true",
+        help="Show performance statistics after generation",
+    )
+
+    chat_parser = subparsers.add_parser(
+        "chat",
+        help="Start interactive chat session with conversation history",
+        parents=[parent_parser],
+    )
+    chat_parser.add_argument(
+        "message",
+        nargs="?",
+        help="Message to send to the chatbot (defaults to interactive mode if not provided)",
+    )
+    chat_parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL_NAME,
+        help=f"Model name to use (default: {DEFAULT_MODEL_NAME})",
+    )
+    chat_parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=512,
+        help="Maximum tokens to generate (default: 512)",
+    )
+    chat_parser.add_argument("--system-prompt", help="Custom system prompt to use")
+    chat_parser.add_argument(
+        "--assistant-name",
+        default="gaia",
+        help="Name to use for the assistant (default: gaia)",
+    )
+    chat_parser.add_argument(
+        "--stats", action="store_true", help="Show performance statistics"
     )
 
     talk_parser = subparsers.add_parser(
         "talk", help="Start voice conversation with Gaia", parents=[parent_parser]
+    )
+
+    talk_parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL_NAME,
+        help=f"Model to use for the agent (default: {DEFAULT_MODEL_NAME})",
+    )
+    talk_parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=512,
+        help="Maximum number of tokens to generate (default: 512)",
     )
     talk_parser.add_argument(
         "--no-tts",
@@ -645,8 +481,8 @@ def main():
     talk_parser.add_argument(
         "--audio-device-index",
         type=int,
-        default=1,
-        help="Index of the audio input device to use",
+        default=None,
+        help="Index of the audio input device to use (default: auto-detect)",
     )
     talk_parser.add_argument(
         "--whisper-model-size",
@@ -654,6 +490,170 @@ def main():
         default="base",
         choices=["tiny", "base", "small", "medium", "large"],
         help="Size of the Whisper model to use (default: base)",
+    )
+    talk_parser.add_argument(
+        "--silence-threshold",
+        type=float,
+        default=0.5,
+        help="Silence threshold in seconds (default: 0.5)",
+    )
+    talk_parser.add_argument(
+        "--stats",
+        action="store_true",
+        help="Show performance statistics during voice chat",
+    )
+
+    # Add summarize command
+    summarize_parser = subparsers.add_parser(
+        "summarize",
+        help="Summarize meeting transcripts and emails",
+        parents=[parent_parser],
+    )
+    summarize_parser.add_argument(
+        "-i",
+        "--input",
+        help="Input file or directory path (required unless using --list-configs)",
+    )
+    summarize_parser.add_argument(
+        "-o",
+        "--output",
+        help="Output file/directory path (auto-adjusted based on format)",
+    )
+    summarize_parser.add_argument(
+        "-t",
+        "--type",
+        choices=["transcript", "email", "auto"],
+        default="auto",
+        help="Input type (default: auto-detect)",
+    )
+    summarize_parser.add_argument(
+        "-f",
+        "--format",
+        choices=["json", "pdf", "email", "both"],
+        default="json",
+        help="Output format (default: json). 'both' generates json and pdf",
+    )
+    summarize_parser.add_argument(
+        "-m",
+        "--model",
+        default=DEFAULT_MODEL_NAME,
+        help=f"LLM model to use (default: {DEFAULT_MODEL_NAME}). Use gpt-4 for OpenAI",
+    )
+    summarize_parser.add_argument(
+        "--styles",
+        nargs="+",
+        choices=[
+            "brief",
+            "detailed",
+            "bullets",
+            "executive",
+            "participants",
+            "action_items",
+            "all",
+        ],
+        default=["executive", "participants", "action_items"],
+        help="Summary style(s) to generate (default: executive participants action_items)",
+    )
+    summarize_parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=1024,
+        help="Maximum tokens for summary (default: 1024)",
+    )
+    summarize_parser.add_argument(
+        "--email-to", help="Email recipients (comma-separated) for email output format"
+    )
+    summarize_parser.add_argument(
+        "--email-subject", help="Email subject line (default: auto-generated)"
+    )
+    summarize_parser.add_argument("--email-cc", help="CC recipients (comma-separated)")
+    summarize_parser.add_argument(
+        "--config", help="Use predefined configuration file from configs/ directory"
+    )
+    summarize_parser.add_argument(
+        "--list-configs",
+        action="store_true",
+        help="List all available configuration templates",
+    )
+    summarize_parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Minimal output, suppress progress indicators",
+    )
+    summarize_parser.add_argument(
+        "--verbose", action="store_true", help="Detailed output with debug information"
+    )
+    summarize_parser.add_argument(
+        "--combined-prompt",
+        action="store_true",
+        help="Combine multiple styles into single LLM call (experimental - may reduce quality)",
+    )
+    summarize_parser.add_argument(
+        "--no-viewer",
+        action="store_true",
+        help="Don't automatically open HTML viewer for JSON output",
+    )
+
+    # Add Blender agent command
+    blender_parser = subparsers.add_parser(
+        "blender",
+        help="Blender 3D scene creation and modification",
+        parents=[parent_parser],
+    )
+    blender_parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL_NAME,
+        help=f"Model ID to use (default: {DEFAULT_MODEL_NAME})",
+    )
+    blender_parser.add_argument(
+        "--example",
+        type=int,
+        choices=range(1, 7),
+        help="Run a specific example (1-6), if not specified run interactive mode",
+    )
+    blender_parser.add_argument(
+        "--steps", type=int, default=5, help="Maximum number of steps per query"
+    )
+    blender_parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="output",
+        help="Directory to save output files",
+    )
+    blender_parser.add_argument(
+        "--stream", action="store_true", help="Enable streaming mode for LLM responses"
+    )
+    blender_parser.add_argument(
+        "--stats",
+        action="store_true",
+        default=True,
+        help="Display performance statistics",
+    )
+    blender_parser.add_argument(
+        "--query", type=str, help="Custom query to run instead of examples"
+    )
+    blender_parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Enable interactive mode to continuously input queries",
+    )
+    blender_parser.add_argument(
+        "--debug-prompts",
+        action="store_true",
+        default=False,
+        help="Enable debug prompts",
+    )
+    blender_parser.add_argument(
+        "--print-result",
+        action="store_true",
+        default=False,
+        help="Print results to console",
+    )
+    blender_parser.add_argument(
+        "--mcp-port",
+        type=int,
+        default=9876,
+        help="Port for the Blender MCP server (default: 9876)",
     )
 
     subparsers.add_parser(
@@ -734,6 +734,542 @@ def main():
         "--port", type=int, required=True, help="Port number to kill process on"
     )
 
+    # Add LLM app command
+    llm_parser = subparsers.add_parser(
+        "llm",
+        help="Run simple LLM queries using LLMClient wrapper",
+        parents=[parent_parser],
+    )
+    llm_parser.add_argument("query", help="The query/prompt to send to the LLM")
+    llm_parser.add_argument(
+        "--model", help="Model name to use (optional, uses client default)"
+    )
+    llm_parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=512,
+        help="Maximum tokens to generate (default: 512)",
+    )
+    llm_parser.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="Disable streaming the response (streaming is enabled by default)",
+    )
+
+    # Add groundtruth generation subparser
+    gt_parser = subparsers.add_parser(
+        "groundtruth",
+        help="Generate ground truth data for various evaluation use cases",
+        parents=[parent_parser],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Process a single file for RAG evaluation (default)
+  gaia groundtruth -f ./data/html/blender/introduction.html
+
+  # Process a transcript for summary generation
+  gaia groundtruth -f ./data/transcripts/meeting.txt --use-case summarization
+
+  # Process a transcript for Q&A generation
+  gaia groundtruth -f ./data/transcripts/meeting.txt --use-case qa
+
+  # Process an email for business email analysis
+  gaia groundtruth -f ./data/emails/project_update.txt --use-case email
+
+  # Process all HTML files in a directory for RAG
+  gaia groundtruth -d ./data/html/blender
+
+  # Process transcript files for summarization
+  gaia groundtruth -d ./data/transcripts -p "*.txt" --use-case summarization
+
+  # Process transcript files for Q&A generation
+  gaia groundtruth -d ./data/transcripts -p "*.txt" --use-case qa
+
+  # Process email files for email processing evaluation
+  gaia groundtruth -d ./data/emails -p "*.txt" --use-case email
+
+  # Process with custom output directory
+  gaia groundtruth -f ./data/html/intro.html -o ./output/gt
+
+  # Use custom Claude model
+  gaia groundtruth -f ./data/doc.html -m claude-3-opus-20240229
+
+  # Generate 10 Q&A pairs per document (RAG only)
+  gaia groundtruth -d ./data/html/blender --num-samples 10
+        """,
+    )
+
+    # Input source (mutually exclusive)
+    gt_input_group = gt_parser.add_mutually_exclusive_group(required=True)
+    gt_input_group.add_argument(
+        "-f", "--file", type=str, help="Path to a single document file to process"
+    )
+    gt_input_group.add_argument(
+        "-d",
+        "--directory",
+        type=str,
+        help="Directory containing documents to process (results will be consolidated into a single JSON file)",
+    )
+
+    # Optional arguments for groundtruth
+    gt_parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=str,
+        default="./output/groundtruth",
+        help="Output directory for generated ground truth files (default: ./output/groundtruth)",
+    )
+    gt_parser.add_argument(
+        "-p",
+        "--pattern",
+        type=str,
+        default="*",
+        help="File pattern to match when processing directory (default: *)",
+    )
+    gt_parser.add_argument(
+        "-u",
+        "--use-case",
+        type=str,
+        choices=["rag", "summarization", "qa", "email"],
+        default="rag",
+        help="Use case for ground truth generation: 'rag' for document Q&A pairs, 'summarization' for transcript summaries, 'qa' for transcript Q&A pairs, 'email' for email processing analysis (default: rag)",
+    )
+    gt_parser.add_argument(
+        "-m",
+        "--model",
+        type=str,
+        default="claude-sonnet-4-20250514",
+        help="Claude model to use (default: claude-sonnet-4-20250514)",
+    )
+    gt_parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=4096,
+        help="Maximum tokens for Claude responses (default: 4096)",
+    )
+    gt_parser.add_argument(
+        "--no-save-text",
+        action="store_true",
+        help="Don't save extracted text for HTML files",
+    )
+    gt_parser.add_argument(
+        "--custom-prompt",
+        type=str,
+        help="Path to a file containing a custom prompt for Claude",
+    )
+    gt_parser.add_argument(
+        "--num-samples",
+        type=int,
+        default=5,
+        help="Number of Q&A pairs to generate per document (RAG use case only, default: 5)",
+    )
+
+    # Add new subparser for creating evaluation templates
+    template_parser = subparsers.add_parser(
+        "create-template",
+        help="Create a template results file from ground truth data for manual RAG evaluation",
+        parents=[parent_parser],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Create template from ground truth file
+  gaia create-template -f ./output/groundtruth/introduction.groundtruth.json
+
+  # Create template with custom output path
+  gaia create-template -f ./output/groundtruth/doc.groundtruth.json -o ./templates/
+
+  # Create template with custom similarity threshold
+  gaia create-template -f ./output/groundtruth/doc.groundtruth.json --threshold 0.8
+        """,
+    )
+
+    template_parser.add_argument(
+        "-f",
+        "--groundtruth-file",
+        type=str,
+        required=True,
+        help="Path to the ground truth JSON file",
+    )
+    template_parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=str,
+        default="./output/templates",
+        help="Output directory for template file (default: ./output/templates)",
+    )
+    template_parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.7,
+        help="Similarity threshold for evaluation (default: 0.7)",
+    )
+
+    # Add new subparser for RAG evaluation
+    eval_parser = subparsers.add_parser(
+        "eval",
+        help="Evaluate RAG system performance using results data",
+        parents=[parent_parser],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Evaluate single experiment file
+  gaia eval -f ./experiments/emails/customer_support_email.Claude-Sonnet-Basic-Summary.experiment.json
+
+  # Evaluate all experiment files in a directory (hierarchical structure supported)
+  gaia eval -d ./experiments -o ./evaluation
+
+  # Evaluate with custom output directory
+  gaia eval -f ./experiments/my_experiment.experiment.json -o ./evaluation
+
+  # Evaluate summarization results with separate groundtruth file
+  gaia eval -f ./experiments/meetings/design_review_meeting.Claude-Sonnet-Basic-Summary.experiment.json -g ./groundtruth/meetings/design_review_meeting.summarization.groundtruth.json
+
+  # Evaluate directory with specific Claude model
+  gaia eval -d ./experiments -m claude-3-opus-20240229
+
+  # Evaluate and display summary only (no detailed report file)
+  gaia eval -d ./experiments --summary-only
+        """,
+    )
+
+    # Create mutually exclusive group for file vs directory input
+    file_group = eval_parser.add_mutually_exclusive_group(required=True)
+    file_group.add_argument(
+        "-f",
+        "--results-file",
+        type=str,
+        help="Path to the RAG results JSON file (template or results)",
+    )
+    file_group.add_argument(
+        "-d",
+        "--directory",
+        type=str,
+        help="Path to directory containing JSON experiment files to process",
+    )
+    eval_parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=str,
+        default="./evaluation",
+        help="Output directory for evaluation report (default: ./evaluation)",
+    )
+    eval_parser.add_argument(
+        "-m",
+        "--model",
+        type=str,
+        default="claude-sonnet-4-20250514",
+        help="Claude model to use for evaluation (default: claude-sonnet-4-20250514)",
+    )
+    eval_parser.add_argument(
+        "-g",
+        "--groundtruth",
+        type=str,
+        help="Path to ground truth file for comparison (especially useful for summarization evaluation)",
+    )
+    eval_parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Only display summary, don't save detailed evaluation report",
+    )
+    eval_parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help="Generate consolidated report from existing evaluation data without re-running evaluations",
+    )
+    eval_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force regeneration of all evaluations, even if they already exist (default: skip existing)",
+    )
+    eval_parser.add_argument(
+        "--regenerate-report",
+        action="store_true",
+        help="Force full regeneration of consolidated report",
+    )
+    eval_parser.add_argument(
+        "--incremental-update",
+        action="store_true",
+        help="Update consolidated report incrementally with new evaluations only",
+    )
+
+    # Add new subparser for generating summary reports from evaluation directories
+    report_parser = subparsers.add_parser(
+        "report",
+        help="Generate summary report from evaluation results directory",
+        parents=[parent_parser],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Generate report from evaluation directory
+  gaia report -d ./output/eval
+
+  # Generate report with custom output filename
+  gaia report -d ./output/eval -o Model_Comparison_Report.md
+
+  # Generate report and display summary only
+  gaia report -d ./output/eval --summary-only
+        """,
+    )
+
+    report_parser.add_argument(
+        "-d",
+        "--eval-dir",
+        type=str,
+        required=True,
+        help="Directory containing .eval.json files to analyze",
+    )
+    report_parser.add_argument(
+        "-o",
+        "--output-file",
+        type=str,
+        default="LLM_RAG_Evaluation_Report.md",
+        help="Output filename for the markdown report (default: LLM_RAG_Evaluation_Report.md)",
+    )
+    report_parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Only display summary to console, don't save report file",
+    )
+
+    # Add new subparser for launching the evaluation results visualizer
+    visualize_parser = subparsers.add_parser(
+        "visualize",
+        help="Launch web-based evaluation results visualizer",
+        parents=[parent_parser],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Launch visualizer with default settings
+  gaia visualize
+
+  # Launch with custom data directories
+  gaia visualize --experiments-dir ./my_experiments --evaluations-dir ./my_evaluations
+
+  # Launch on custom port without opening browser
+  gaia visualize --port 8080 --no-browser
+
+  # Launch with specific workspace directory
+  gaia visualize --workspace ./evaluation_workspace
+        """,
+    )
+
+    visualize_parser.add_argument(
+        "--port",
+        type=int,
+        default=3000,
+        help="Port to run the visualizer server on (default: 3000)",
+    )
+    visualize_parser.add_argument(
+        "--experiments-dir",
+        type=str,
+        help="Directory containing experiment JSON files (default: ./experiments)",
+    )
+    visualize_parser.add_argument(
+        "--evaluations-dir",
+        type=str,
+        help="Directory containing evaluation JSON files (default: ./evaluation)",
+    )
+    visualize_parser.add_argument(
+        "--workspace",
+        type=str,
+        help="Base workspace directory (default: current directory)",
+    )
+    visualize_parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Don't automatically open browser after starting server",
+    )
+    visualize_parser.add_argument(
+        "--host",
+        type=str,
+        default="localhost",
+        help="Host address for the visualizer server (default: localhost)",
+    )
+    visualize_parser.add_argument(
+        "--test-data-dir",
+        type=str,
+        help="Directory containing test data files (default: ./output/test_data)",
+    )
+    visualize_parser.add_argument(
+        "--groundtruth-dir",
+        type=str,
+        help="Directory containing groundtruth files (default: ./output/groundtruth)",
+    )
+
+    # Add new subparser for generating synthetic test data
+    generate_parser = subparsers.add_parser(
+        "generate",
+        help="Generate synthetic test data for evaluation (meeting transcripts or business emails)",
+        parents=[parent_parser],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Generate meeting transcripts
+  gaia generate --meeting-transcript -o ./output/meetings
+  gaia generate --meeting-transcript -o ./output/meetings --target-tokens 3000 --count-per-type 3
+  gaia generate --meeting-transcript -o ./output/meetings --meeting-types standup planning
+
+  # Generate business emails
+  gaia generate --email -o ./output/emails
+  gaia generate --email -o ./output/emails --target-tokens 1500 --count-per-type 3
+  gaia generate --email -o ./output/emails --email-types project_update sales_outreach
+        """,
+    )
+
+    # Add new subparser for batch experiment runner
+    batch_exp_parser = subparsers.add_parser(
+        "batch-experiment",
+        help="Run batch experiments with different LLM configurations on transcript data",
+        parents=[parent_parser],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Create sample configuration file
+  gaia batch-experiment --create-sample-config experiment_config.json
+
+  # Create configuration from groundtruth metadata
+  gaia batch-experiment --create-config-from-groundtruth ./output/groundtruth/meeting.qa.groundtruth.json
+
+  # Run batch experiments on transcript directory
+  gaia batch-experiment -c experiment_config.json -i ./transcripts -o ./experiments
+
+  # Run batch experiments on transcript directory with custom queries from groundtruth
+  gaia batch-experiment -c experiment_config.json -i ./transcripts -q ./groundtruth/meeting.qa.groundtruth.json -o ./experiments
+
+  # Run batch experiments on single transcript file
+  gaia batch-experiment -c experiment_config.json -i ./meeting_transcript.txt -o ./experiments
+
+  # Run batch experiments on groundtruth file
+  gaia batch-experiment -c experiment_config.json -i ./groundtruth/transcript.qa.groundtruth.json -o ./experiments
+
+  # Run batch experiments on consolidated groundtruth file
+  gaia batch-experiment -c experiment_config.json -i ./groundtruth/consolidated_summarization_groundtruth.json -o ./experiments
+
+  # Run with custom delay between requests to avoid rate limiting
+  gaia batch-experiment -c experiment_config.json -i ./transcripts -o ./experiments --delay 2.0
+
+  # Process multiple experiment results
+  gaia eval -f ./experiments/Claude-Sonnet-Standard.experiment.json
+  gaia report -d ./experiments
+        """,
+    )
+
+    # Add mutually exclusive group for generation type
+    generate_type_group = generate_parser.add_mutually_exclusive_group(required=True)
+    generate_type_group.add_argument(
+        "--meeting-transcript",
+        action="store_true",
+        help="Generate meeting transcripts for testing transcript summarization",
+    )
+    generate_type_group.add_argument(
+        "--email",
+        action="store_true",
+        help="Generate business emails for testing email processing and summarization",
+    )
+
+    # Add common arguments for generate command
+    generate_parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=str,
+        required=True,
+        help="Output directory for generated files",
+    )
+    generate_parser.add_argument(
+        "--target-tokens",
+        type=int,
+        help="Target token count per generated item (default: 1000 for transcripts, 800 for emails)",
+    )
+    generate_parser.add_argument(
+        "--count-per-type",
+        type=int,
+        default=1,
+        help="Number items to generate per type (default: 1)",
+    )
+    generate_parser.add_argument(
+        "--claude-model",
+        type=str,
+        default="claude-sonnet-4-20250514",
+        help="Claude model to use for generation (default: claude-sonnet-4-20250514)",
+    )
+
+    # Add type-specific arguments
+    generate_parser.add_argument(
+        "--meeting-types",
+        nargs="+",
+        choices=[
+            "standup",
+            "planning",
+            "client_call",
+            "design_review",
+            "performance_review",
+            "all_hands",
+            "budget_planning",
+            "product_roadmap",
+        ],
+        help="Specific meeting types to generate (only used with --meeting-transcript, default: all types)",
+    )
+    generate_parser.add_argument(
+        "--email-types",
+        nargs="+",
+        choices=[
+            "project_update",
+            "meeting_request",
+            "customer_support",
+            "sales_outreach",
+            "internal_announcement",
+            "technical_discussion",
+            "vendor_communication",
+            "performance_feedback",
+        ],
+        help="Specific email types to generate (only used with --email, default: all types)",
+    )
+
+    # Add arguments for batch experiment command
+    batch_exp_parser.add_argument(
+        "-c", "--config", type=str, help="Path to experiment configuration JSON file"
+    )
+    batch_exp_parser.add_argument(
+        "-i",
+        "--input",
+        type=str,
+        help="Path to input data: transcript file, directory of transcripts, or groundtruth JSON file",
+    )
+    batch_exp_parser.add_argument(
+        "-q",
+        "--queries-source",
+        type=str,
+        help="Path to groundtruth JSON file to extract queries from (for QA experiments on raw transcripts)",
+    )
+    batch_exp_parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=str,
+        default="./output/experiments",
+        help="Output directory for experiment results (default: ./output/experiments)",
+    )
+    batch_exp_parser.add_argument(
+        "--delay",
+        type=float,
+        default=1.0,
+        help="Delay in seconds between requests to avoid rate limiting (default: 1.0)",
+    )
+    batch_exp_parser.add_argument(
+        "--create-sample-config",
+        type=str,
+        help="Create a sample configuration file at the specified path",
+    )
+    batch_exp_parser.add_argument(
+        "--create-config-from-groundtruth",
+        type=str,
+        help="Create configuration from groundtruth file metadata (provide groundtruth file path)",
+    )
+    batch_exp_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force regeneration of all experiments, even if they already exist (default: skip existing)",
+    )
+
     args = parser.parse_args()
 
     # Check if action is specified
@@ -746,17 +1282,531 @@ def main():
     from gaia.logger import log_manager
 
     log_manager.set_level("gaia", getattr(logging, args.logging_level))
-    log.info(f"Starting Gaia CLI with action: {args.action}")
 
     # Handle core Gaia CLI commands
-    if args.action in ["start", "stop", "prompt", "chat", "talk", "stats"]:
+    if args.action in ["prompt", "chat", "talk", "stats"]:
         kwargs = {
             k: v for k, v in vars(args).items() if v is not None and k != "action"
         }
         log.debug(f"Executing {args.action} with parameters: {kwargs}")
-        result = run_cli(args.action, **kwargs)
-        if result:
-            print(result)
+        try:
+            result = run_cli(args.action, **kwargs)
+            if result:
+                print(result)
+        except Exception as e:
+            log.error(f"Error executing {args.action}: {e}")
+            print(f"❌ Error: {e}")
+            sys.exit(1)
+        return
+
+    # Handle report generation command
+    if args.action == "report":
+        log.info("Generating summary report from evaluation directory")
+        try:
+            from gaia.eval.eval import RagEvaluator
+        except ImportError as e:
+            log.error(f"Failed to import RagEvaluator: {e}")
+            print("❌ Error: Failed to import eval module.")
+            print("The evaluation dependencies are not installed.")
+            print("")
+            print("To fix this, install the evaluation dependencies:")
+            print("  pip install .[eval]")
+            print("")
+            print("This will install required packages including:")
+            print("  - anthropic (for Claude AI)")
+            print("  - beautifulsoup4 (for HTML processing)")
+            print("  - python-dotenv (for environment variables)")
+            return
+
+        try:
+            evaluator = RagEvaluator()
+
+            # If summary_only is True, don't save the report file
+            output_path = None if args.summary_only else args.output_file
+
+            # Create output directory if it doesn't exist
+            if output_path and output_path != "temp_report.md":
+                output_dir = os.path.dirname(output_path)
+                if output_dir:
+                    os.makedirs(output_dir, exist_ok=True)
+
+            result = evaluator.generate_summary_report(
+                eval_dir=args.eval_dir, output_path=output_path or "temp_report.md"
+            )
+
+            print(
+                f"✅ Successfully analyzed {result['models_analyzed']} evaluation files"
+            )
+
+            if not args.summary_only:
+                print(f"  Report saved to: {result['report_path']}")
+
+            # Display key metrics summary
+            models_data = result["summary_data"]
+            evaluation_type = result.get("evaluation_type", "unknown")
+
+            if models_data:
+                best_model = models_data[0]
+
+                if evaluation_type == "summarization":
+                    # Show quality score for summarization evaluations
+                    print(
+                        f"  Best performing model: {best_model['name']} ({best_model['quality_score']:.1f}% quality score)"
+                    )
+                    print(
+                        f"  Overall quality range: {models_data[-1]['quality_score']:.1f}% - {best_model['quality_score']:.1f}%"
+                    )
+
+                    # Check if any model meets production standards for summarization
+                    production_ready = any(
+                        m["quality_score"] >= 70.0 for m in models_data
+                    )
+                    if production_ready:
+                        print("  Status: Some models approaching production readiness")
+                    else:
+                        print(
+                            "  Status: No models meet production standards (70%+ quality score)"
+                        )
+                else:
+                    # Show pass rate for RAG evaluations
+                    print(
+                        f"  Best performing model: {best_model['name']} ({best_model['pass_rate']:.0%} pass rate)"
+                    )
+                    print(
+                        f"  Overall performance range: {models_data[-1]['pass_rate']:.0%} - {best_model['pass_rate']:.0%}"
+                    )
+
+                    # Check if any model meets production standards for RAG
+                    production_ready = any(
+                        m["pass_rate"] >= 0.7 and m["mean_similarity"] >= 0.7
+                        for m in models_data
+                    )
+                    if production_ready:
+                        print("  Status: Some models approaching production readiness")
+                    else:
+                        print(
+                            "  Status: No models meet production standards (70% pass rate + 0.7 similarity)"
+                        )
+
+            # Clean up temp file if using summary_only
+            if args.summary_only and output_path is None:
+                try:
+                    os.remove("temp_report.md")
+                except OSError:
+                    pass
+
+        except Exception as e:
+            log.error(f"Error generating report: {e}")
+            print(f"Error generating report: {e}")
+            return
+
+        return
+
+    # Handle summarize command
+    if args.action == "summarize":
+        import json
+        from gaia.apps.summarize.app import SummarizerApp, SummaryConfig
+        from gaia.apps.summarize.html_viewer import HTMLViewer
+
+        # Handle list-configs option
+        if args.list_configs:
+            from gaia.apps.summarize.app import SummarizerApp
+            import gaia.apps.summarize.app
+
+            config_dir = Path(gaia.apps.summarize.app.__file__).parent / "configs"
+            if config_dir.exists():
+                print("\nAvailable summarization configurations:\n")
+                for config_file in sorted(config_dir.glob("*.json")):
+                    try:
+                        with open(config_file, encoding="utf-8") as f:
+                            config_data = json.load(f)
+                        name = config_file.stem
+                        desc = config_data.get("description", "No description")
+                        print(f"{name:<20} - {desc}")
+                    except (json.JSONDecodeError, OSError) as e:
+                        log.debug(f"Failed to read config file {config_file}: {e}")
+                print("\nUse: gaia summarize --config <config_name>")
+            else:
+                print("No configuration templates found.")
+            return
+
+        # Validate required arguments (input not required for --list-configs)
+        if not args.list_configs and not args.input:
+            # Show help instead of just an error
+            print("\nUsage: gaia summarize -i INPUT [options]\n")
+            print("Summarize meeting transcripts and emails\n")
+            print("Required arguments:")
+            print("  -i, --input INPUT    Input file or directory path\n")
+            print("Common options:")
+            print(
+                "  -o, --output OUTPUT  Output file/directory path (auto-adjusted based on format)"
+            )
+            print(
+                "  -f, --format FORMAT  Output format: json, pdf, email, both (default: json)"
+            )
+            print(
+                "  --styles STYLES      Summary style(s): brief, detailed, bullets, executive,"
+            )
+            print("                       participants, action_items, all")
+            print(
+                "                       (default: executive participants action_items)"
+            )
+            print(
+                "  --config CONFIG      Use predefined configuration from configs/ directory"
+            )
+            print("  --list-configs       List all available configuration templates\n")
+            print("Examples:")
+            print("  gaia summarize -i meeting.txt -o summary.json")
+            print("  gaia summarize -i meeting.txt --styles executive action_items")
+            print("  gaia summarize -i ./transcripts/ -o ./summaries/")
+            print("  gaia summarize --list-configs\n")
+            print("For full help: gaia summarize --help")
+            sys.exit(1)
+
+        # Handle "all" style
+        if "all" in args.styles:
+            args.styles = [
+                "brief",
+                "detailed",
+                "bullets",
+                "executive",
+                "participants",
+                "action_items",
+            ]
+
+        # Validate email format requirements
+        if args.format == "email":
+            if Path(args.input).is_dir():
+                print(
+                    "❌ Error: Email format only supports single file input, not directories"
+                )
+                sys.exit(1)
+            if not args.email_to:
+                print("❌ Error: --email-to is required for email output format")
+                sys.exit(1)
+
+            # Validate email addresses
+            from gaia.apps.summarize.app import validate_email_list
+
+            try:
+                validate_email_list(args.email_to)
+                if args.email_cc:
+                    validate_email_list(args.email_cc)
+            except ValueError as e:
+                print(f"❌ Error: {e}")
+                sys.exit(1)
+
+        # Load configuration if specified
+        if args.config:
+            import gaia.apps.summarize
+
+            config_path = (
+                Path(gaia.apps.summarize.__file__).parent
+                / "configs"
+                / f"{args.config}.json"
+            )
+            if config_path.exists():
+                with open(config_path, encoding="utf-8") as f:
+                    config_data = json.load(f)
+                # Apply config values
+                if "styles" in config_data:
+                    args.styles = config_data["styles"]
+                if "format" in config_data:
+                    args.format = config_data["format"]
+                if "max_tokens" in config_data:
+                    args.max_tokens = config_data["max_tokens"]
+                if "combined_prompt" in config_data:
+                    args.combined_prompt = config_data["combined_prompt"]
+                log.info(f"Loaded configuration from {args.config}")
+            else:
+                print(f"❌ Error: Configuration file '{args.config}' not found")
+                sys.exit(1)
+
+        # Set logging level
+        if args.verbose:
+            log_manager.set_level("gaia.apps.summarize", logging.DEBUG)
+        elif args.quiet:
+            log_manager.set_level("gaia.apps.summarize", logging.WARNING)
+
+        # Create summarizer config
+        config = SummaryConfig(
+            model=args.model,
+            max_tokens=args.max_tokens,
+            input_type=args.type,
+            styles=args.styles,
+            combined_prompt=args.combined_prompt,
+        )
+
+        # Create summarizer app
+        app = SummarizerApp(config)
+
+        try:
+            input_path = Path(args.input)
+
+            if input_path.is_file():
+                # Single file processing
+                if not args.quiet:
+                    print(f"Summarizing file: {input_path}")
+
+                result = app.summarize_file(input_path)
+
+                # Handle output
+                if args.format == "json":
+                    output_path = args.output or input_path.with_suffix(".summary.json")
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        json.dump(result, f, indent=2)
+                    print(f"✅ Summary saved to: {output_path}")
+
+                    # Create and open HTML viewer unless disabled
+                    if not args.no_viewer:
+                        html_path = HTMLViewer.create_and_open(
+                            result, output_path, auto_open=True
+                        )
+                        print(f"🌐 HTML viewer created: {html_path}")
+                        print(
+                            "   (Use --no-viewer to disable automatic HTML generation)"
+                        )
+
+                elif args.format == "email":
+                    # Email output - show preview and open email client
+                    print("\n📧 Email Preview:")
+                    print(f"To: {args.email_to}")
+                    if args.email_cc:
+                        print(f"CC: {args.email_cc}")
+                    subject = args.email_subject or f"Summary - {input_path.stem}"
+                    print(f"Subject: {subject}")
+
+                    # Build email body
+                    email_body = f"Summary of: {input_path.name}\n"
+                    email_body += "=" * 50 + "\n\n"
+
+                    # Add summaries based on result structure
+                    if "summary" in result:
+                        # Single style output
+                        email_body += result["summary"]["text"] + "\n\n"
+                        if "items" in result["summary"]:
+                            email_body += "Action Items:\n"
+                            for item in result["summary"]["items"]:
+                                email_body += f"  • {item}\n"
+                            email_body += "\n"
+                    else:
+                        # Multiple styles output
+                        for style, summary_data in result["summaries"].items():
+                            email_body += f"{style.upper().replace('_', ' ')}:\n"
+                            email_body += "-" * 30 + "\n"
+                            if "text" in summary_data:
+                                email_body += summary_data["text"] + "\n"
+                            if "items" in summary_data:
+                                for item in summary_data["items"]:
+                                    email_body += f"  • {item}\n"
+                            if "participants" in summary_data:
+                                for participant in summary_data["participants"]:
+                                    email_body += f"  • {participant}\n"
+                            email_body += "\n"
+
+                    # Show preview of email body
+                    print("\nEmail Body Preview (first 500 chars):")
+                    print("-" * 50)
+                    print(email_body[:500] + ("..." if len(email_body) > 500 else ""))
+                    print("-" * 50)
+
+                    print("\nPress Enter to open email client, or Ctrl+C to cancel...")
+                    try:
+                        input()
+
+                        # Create mailto URL
+                        import urllib.parse
+                        import platform
+
+                        mailto_params = {
+                            "subject": subject,
+                            "body": email_body[
+                                :2000
+                            ],  # Limit body to avoid URL length issues
+                        }
+                        if args.email_cc:
+                            mailto_params["cc"] = args.email_cc
+
+                        # Build mailto URL
+                        params_str = urllib.parse.urlencode(
+                            mailto_params, quote_via=urllib.parse.quote
+                        )
+                        mailto_url = f"mailto:{args.email_to}?{params_str}"
+
+                        # Open email client
+                        system = platform.system()
+                        try:
+                            if system == "Windows":
+                                subprocess.run(
+                                    ["start", "", mailto_url], shell=True, check=True
+                                )
+                            elif system == "Darwin":  # macOS
+                                subprocess.run(["open", mailto_url], check=True)
+                            else:  # Linux/Unix
+                                subprocess.run(["xdg-open", mailto_url], check=True)
+                            print("✅ Email client opened successfully")
+                        except subprocess.CalledProcessError:
+                            print(
+                                "❌ Failed to open email client. Please check your default email client settings."
+                            )
+                        except Exception as e:
+                            print(f"❌ Error opening email client: {e}")
+
+                    except KeyboardInterrupt:
+                        print("\nCancelled.")
+
+                elif args.format in ["pdf", "both"]:
+                    # Generate PDF output
+                    try:
+                        from gaia.apps.summarize.pdf_formatter import (
+                            PDFFormatter,
+                            HAS_REPORTLAB,
+                        )
+
+                        if not HAS_REPORTLAB:
+                            print(
+                                "❌ Error: PDF output requires reportlab. Install with: pip install reportlab"
+                            )
+                            if args.format == "both":
+                                print(
+                                    "ℹ️  JSON output was still generated successfully."
+                                )
+                            sys.exit(1)
+
+                        formatter = PDFFormatter()
+                        pdf_path = Path(
+                            args.output or input_path.with_suffix(".summary.pdf")
+                        )
+
+                        # Generate PDF
+                        formatter.format_summary_as_pdf(result, pdf_path)
+                        print(f"✅ PDF summary saved to: {pdf_path}")
+
+                        # Also save JSON if format is "both"
+                        if args.format == "both":
+                            json_path = pdf_path.with_suffix(".json")
+                            with open(json_path, "w", encoding="utf-8") as f:
+                                json.dump(result, f, indent=2)
+                            print(f"✅ JSON summary saved to: {json_path}")
+
+                            # Create HTML viewer for JSON
+                            if not args.no_viewer:
+                                html_path = HTMLViewer.create_and_open(
+                                    result, json_path, auto_open=True
+                                )
+                                print(f"🌐 HTML viewer created: {html_path}")
+
+                    except ImportError as e:
+                        print(f"❌ Error: {e}")
+                        if args.format == "both":
+                            # Fall back to JSON only
+                            json_path = Path(
+                                args.output or input_path.with_suffix(".summary.json")
+                            )
+                            with open(json_path, "w", encoding="utf-8") as f:
+                                json.dump(result, f, indent=2)
+                            print(f"✅ JSON summary saved to: {json_path}")
+                            print(
+                                "ℹ️  PDF generation skipped due to missing dependencies."
+                            )
+                        else:
+                            sys.exit(1)
+                    except Exception as e:
+                        print(f"❌ Error generating PDF: {e}")
+                        sys.exit(1)
+
+            elif input_path.is_dir():
+                # Directory batch processing
+                if not args.quiet:
+                    print(f"Summarizing directory: {input_path}")
+
+                results = app.summarize_directory(input_path)
+
+                if not results:
+                    print("❌ No files found to summarize")
+                    sys.exit(1)
+
+                # Save results
+                output_dir = Path(args.output or "./summaries")
+                output_dir.mkdir(exist_ok=True)
+
+                # Check if we need PDF formatter
+                pdf_formatter = None
+                if args.format in ["pdf", "both"]:
+                    try:
+                        from gaia.apps.summarize.pdf_formatter import (
+                            PDFFormatter,
+                            HAS_REPORTLAB,
+                        )
+
+                        if HAS_REPORTLAB:
+                            pdf_formatter = PDFFormatter()
+                        else:
+                            print(
+                                "⚠️  Warning: PDF output requires reportlab. Install with: pip install reportlab"
+                            )
+                            if args.format == "pdf":
+                                print("❌ Cannot generate PDF files without reportlab.")
+                                sys.exit(1)
+                    except ImportError:
+                        print("⚠️  Warning: PDF formatter not available")
+                        if args.format == "pdf":
+                            sys.exit(1)
+
+                for i, result in enumerate(results):
+                    input_file = result["metadata"]["input_file"]
+                    base_name = Path(input_file).stem
+
+                    files_created = []
+
+                    # Save JSON if needed
+                    if args.format in ["json", "both"]:
+                        json_path = output_dir / f"{base_name}.summary.json"
+                        with open(json_path, "w", encoding="utf-8") as f:
+                            json.dump(result, f, indent=2)
+                        files_created.append(json_path.name)
+
+                        # Create HTML viewer for JSON (don't auto-open for batch)
+                        if not args.no_viewer:
+                            html_path = HTMLViewer.create_and_open(
+                                result,
+                                json_path,
+                                auto_open=False,  # Don't open browser for each file in batch
+                            )
+                            files_created.append(html_path.name)
+
+                    # Save PDF if needed
+                    if args.format in ["pdf", "both"] and pdf_formatter:
+                        pdf_path = output_dir / f"{base_name}.summary.pdf"
+                        try:
+                            pdf_formatter.format_summary_as_pdf(result, pdf_path)
+                            files_created.append(pdf_path.name)
+                        except Exception as e:
+                            print(
+                                f"⚠️  Warning: Failed to generate PDF for {base_name}: {e}"
+                            )
+
+                    if not args.quiet and files_created:
+                        print(
+                            f"✅ [{i+1}/{len(results)}] {Path(input_file).name} → {', '.join(files_created)}"
+                        )
+
+                print(
+                    f"\n✅ Processed {len(results)} files. Summaries saved to: {output_dir}"
+                )
+                if not args.no_viewer and args.format in ["json", "both"]:
+                    print("   📂 HTML viewers created for each JSON file")
+                    print("   💡 Open any .html file to view the formatted summary")
+
+            else:
+                print(f"❌ Error: Input path does not exist: {input_path}")
+                sys.exit(1)
+
+        except Exception as e:
+            log.error(f"Error during summarization: {e}")
+            print(f"❌ Error: {e}")
+            sys.exit(1)
+
         return
 
     # Handle utility commands
@@ -770,7 +1820,8 @@ def main():
                 log.debug("TTS initialized successfully")
             except Exception as e:
                 log.error(f"Failed to initialize TTS: {e}")
-                raise RuntimeError(f"Failed to initialize TTS: {e}")
+                print(f"❌ Error: Failed to initialize TTS: {e}")
+                return
 
             test_text = (
                 args.test_text
@@ -815,12 +1866,13 @@ Let me know your answer!
                 raise
             except Exception as e:
                 log.error(f"Failed to initialize ASR: {e}")
-                raise RuntimeError(f"Failed to initialize ASR: {e}")
+                print(f"❌ Error: Failed to initialize ASR: {e}")
+                return
 
             if args.test_type == "asr-file-transcription":
                 if not args.input_audio_file:
                     print(
-                        "Error: --input-audio-file is required for asr-file-transcription test"
+                        "❌ Error: --input-audio-file is required for asr-file-transcription test"
                     )
                     return
                 try:
@@ -830,13 +1882,15 @@ Let me know your answer!
                     print(text)
                     print("-" * 40)
                 except Exception as e:
-                    print(f"Error transcribing file: {e}")
+                    print(f"❌ Error transcribing file: {e}")
 
             elif args.test_type == "asr-microphone":
                 print(f"\nRecording for {args.recording_duration} seconds...")
                 print("Speak into your microphone...")
 
                 # Setup transcription queue and start recording
+                import queue
+
                 transcription_queue = queue.Queue()
                 asr.transcription_queue = transcription_queue
                 asr.start_recording()
@@ -874,24 +1928,893 @@ Let me know your answer!
 
     # Handle utility functions
     if args.action == "youtube":
-        if args.download_youtube_transcript:
-            log.info(f"Downloading transcript from {args.download_youtube_transcript}")
-            from llama_index.readers.youtube_transcript import YoutubeTranscriptReader
+        if args.download_transcript:
+            log.info(f"Downloading transcript from {args.download_transcript}")
+            try:
+                from llama_index.readers.youtube_transcript import (
+                    YoutubeTranscriptReader,
+                )
 
-            doc = YoutubeTranscriptReader().load_data(
-                ytlinks=[args.download_youtube_transcript]
-            )
-            output_path = args.output_transcript_path or "transcript.txt"
-            with open(output_path, "w", encoding="utf-8") as f:
-                f.write(doc[0].text)
-            print(f"Transcript downloaded to: {output_path}")
+                doc = YoutubeTranscriptReader().load_data(
+                    ytlinks=[args.download_transcript]
+                )
+                output_path = args.output_path or "transcript.txt"
+                with open(output_path, "w", encoding="utf-8") as f:
+                    f.write(doc[0].text)
+                print(f"✅ Transcript downloaded to: {output_path}")
+            except ImportError as e:
+                print(
+                    "❌ Error: YouTube transcript functionality requires additional dependencies."
+                )
+                print(
+                    "Please install: pip install llama-index-readers-youtube-transcript"
+                )
+                print(f"Import error: {e}")
+                sys.exit(1)
             return
 
     # Handle kill command
     if args.action == "kill":
         log.info(f"Attempting to kill process on port {args.port}")
         result = kill_process_by_port(args.port)
-        print(result)
+        if result["success"]:
+            print(f"✅ {result['message']}")
+        else:
+            print(f"❌ {result['message']}")
+        return
+
+    # Handle LLM command
+    if args.action == "llm":
+        try:
+            # Fast import and execution - health check happens in LLMClient
+            from gaia.apps.llm.app import main as llm
+
+            response = llm(
+                query=args.query,
+                model=args.model,
+                max_tokens=args.max_tokens,
+                stream=not getattr(args, "no_stream", False),
+            )
+
+            # Only print if streaming is disabled (response wasn't already printed during streaming)
+            if getattr(args, "no_stream", False):
+                print("\n" + "=" * 50)
+                print("LLM Response:")
+                print("=" * 50)
+                print(response)
+                print("=" * 50)
+            return
+        except Exception as e:
+            # Check if it's a connection error and provide helpful message
+            error_msg = str(e).lower()
+            if (
+                "connection" in error_msg
+                or "refused" in error_msg
+                or "timeout" in error_msg
+            ):
+                print_lemonade_error()
+            else:
+                print(f"❌ Error: {str(e)}")
+            return
+
+    # Handle groundtruth generation
+    if args.action == "groundtruth":
+        log.info("Starting ground truth generation")
+        try:
+            from gaia.eval.groundtruth import GroundTruthGenerator, UseCase
+        except ImportError as e:
+            log.error(f"Failed to import GroundTruthGenerator: {e}")
+            print("❌ Error: Failed to import groundtruth module.")
+            print("The evaluation dependencies are not installed.")
+            print("")
+            print("To fix this, install the evaluation dependencies:")
+            print("  pip install .[eval]")
+            print("")
+            print("This will install required packages including:")
+            print("  - anthropic (for Claude AI)")
+            print("  - beautifulsoup4 (for HTML processing)")
+            print("  - python-dotenv (for environment variables)")
+            return
+
+        # Initialize generator
+        try:
+            generator = GroundTruthGenerator(
+                model=args.model, max_tokens=args.max_tokens
+            )
+        except Exception as e:
+            log.error(f"Error initializing generator: {e}")
+            print(f"Error initializing generator: {e}")
+            return
+
+        # Load custom prompt if provided
+        custom_prompt = None
+        if args.custom_prompt:
+            try:
+                with open(args.custom_prompt, "r", encoding="utf-8") as f:
+                    custom_prompt = f.read().strip()
+                print(f"Using custom prompt from: {args.custom_prompt}")
+            except Exception as e:
+                log.error(f"Error loading custom prompt: {e}")
+                print(f"Error loading custom prompt: {e}")
+                return
+
+        save_text = not args.no_save_text
+
+        # Convert use case string to enum
+        use_case = UseCase(args.use_case)
+
+        try:
+            if args.file:
+                # Process single file
+                print(
+                    f"Processing single file: {args.file} (use case: {use_case.value})"
+                )
+                result = generator.generate(
+                    file_path=args.file,
+                    use_case=use_case,
+                    prompt=custom_prompt,
+                    save_text=save_text,
+                    output_dir=args.output_dir,
+                    num_samples=args.num_samples,
+                )
+                print("✅ Successfully generated ground truth data")
+                print(f"  Output: {args.output_dir}")
+                usage = result["metadata"]["usage"]
+                cost = result["metadata"]["cost"]
+                print(
+                    f"  Token usage: {usage['input_tokens']:,} input + {usage['output_tokens']:,} output = {usage['total_tokens']:,} total"
+                )
+                print(
+                    f"  Cost: ${cost['input_cost']:.4f} input + ${cost['output_cost']:.4f} output = ${cost['total_cost']:.4f} total"
+                )
+
+                # Different output based on use case
+                if use_case == UseCase.RAG:
+                    qa_pairs_count = len(result["analysis"]["qa_pairs"])
+                    print(
+                        f"  Q&A pairs: {qa_pairs_count} (${cost['total_cost']/qa_pairs_count:.4f} per pair)"
+                    )
+                elif use_case == UseCase.SUMMARIZATION:
+                    summary_count = len(result["analysis"]["summaries"])
+                    print(
+                        f"  Summary types generated: {summary_count} different formats"
+                    )
+                    print(
+                        f"  Evaluation criteria: {len(result['analysis']['evaluation_criteria'])} categories"
+                    )
+                elif use_case == UseCase.QA:
+                    qa_count = len(result["analysis"]["qa_pairs"])
+                    print(f"  Q&A pairs generated: {qa_count} questions")
+                    print(
+                        f"  Evaluation criteria: {len(result['analysis']['evaluation_criteria'])} categories"
+                    )
+
+            elif args.directory:
+                # Process directory
+                print(
+                    f"Processing directory: {args.directory} (use case: {use_case.value})"
+                )
+                print(f"File pattern: {args.pattern}")
+                consolidated_data = generator.generate_batch(
+                    input_dir=args.directory,
+                    file_pattern=args.pattern,
+                    use_case=use_case,
+                    prompt=custom_prompt,
+                    save_text=save_text,
+                    output_dir=args.output_dir,
+                    num_samples=args.num_samples,
+                )
+
+                if consolidated_data:
+                    # Extract totals from consolidated metadata
+                    total_usage = consolidated_data["metadata"]["total_usage"]
+                    total_cost = consolidated_data["metadata"]["total_cost"]
+                    files_processed = consolidated_data["metadata"]["consolidated_from"]
+
+                    print(f"✅ Successfully processed {files_processed} files")
+                    print(
+                        f"  Output: {args.output_dir}/consolidated_{use_case.value}_groundtruth.json"
+                    )
+                    print(
+                        f"  Total token usage: {total_usage['input_tokens']:,} input + {total_usage['output_tokens']:,} output = {total_usage['total_tokens']:,} total"
+                    )
+                    print(
+                        f"  Total cost: ${total_cost['input_cost']:.4f} input + ${total_cost['output_cost']:.4f} output = ${total_cost['total_cost']:.4f} total"
+                    )
+                    print(
+                        f"  Average cost per file: ${total_cost['total_cost']/files_processed:.4f}"
+                    )
+
+                    # Different summary stats based on use case
+                    analysis = consolidated_data["analysis"]
+                    if use_case == UseCase.RAG:
+                        # For RAG, count total Q&A pairs across all documents
+                        total_pairs = 0
+                        if "qa_pairs" in analysis:
+                            total_pairs = len(analysis["qa_pairs"])
+                        print(f"  Total Q&A pairs: {total_pairs}")
+                        if total_pairs > 0:
+                            print(
+                                f"  Average cost per Q&A pair: ${total_cost['total_cost']/total_pairs:.4f}"
+                            )
+                    elif use_case == UseCase.SUMMARIZATION:
+                        summaries_count = len(analysis.get("summaries", {}))
+                        print(
+                            f"  Generated {files_processed} comprehensive transcript summaries"
+                        )
+                        print(
+                            f"  Consolidated into single file with {summaries_count} transcript summaries"
+                        )
+                    elif use_case == UseCase.QA:
+                        # For QA, count total Q&A pairs across all transcripts
+                        total_qa_pairs = 0
+                        if "qa_pairs" in analysis:
+                            total_qa_pairs = len(analysis["qa_pairs"])
+                        print(
+                            f"  Generated {files_processed} transcript Q&A evaluations"
+                        )
+                        print(f"  Total Q&A pairs: {total_qa_pairs}")
+                        if total_qa_pairs > 0:
+                            print(
+                                f"  Average cost per Q&A pair: ${total_cost['total_cost']/total_qa_pairs:.4f}"
+                            )
+                else:
+                    print("No files were processed successfully")
+                    return
+
+        except Exception as e:
+            log.error(f"Error during groundtruth processing: {e}")
+            print(f"❌ Error during processing: {e}")
+            return
+
+        return
+
+    # Handle template creation
+    if args.action == "create-template":
+        log.info("Creating template results file")
+        try:
+            from gaia.eval.eval import RagEvaluator
+        except ImportError as e:
+            log.error(f"Failed to import RagEvaluator: {e}")
+            print("❌ Error: Failed to import eval module.")
+            print("The evaluation dependencies are not installed.")
+            print("")
+            print("To fix this, install the evaluation dependencies:")
+            print("  pip install .[eval]")
+            print("")
+            print("This will install required packages including:")
+            print("  - anthropic (for Claude AI)")
+            print("  - beautifulsoup4 (for HTML processing)")
+            print("  - python-dotenv (for environment variables)")
+            return
+
+        try:
+            evaluator = RagEvaluator()
+            template_path = evaluator.create_template(
+                groundtruth_file=args.groundtruth_file,
+                output_dir=args.output_dir,
+                similarity_threshold=args.threshold,
+            )
+            print("✅ Successfully created template file")
+            print(f"  Template: {template_path}")
+            print(
+                "  Instructions: Fill in the 'response' fields with your RAG system outputs"
+            )
+            print("  Then run: gaia eval <template_file> to evaluate performance")
+
+        except Exception as e:
+            log.error(f"Error creating template: {e}")
+            print(f"❌ Error creating template: {e}")
+            return
+
+        return
+
+    # Handle RAG evaluation
+    if args.action == "eval":
+        log.info("Evaluating RAG system performance")
+        try:
+            from gaia.eval.eval import RagEvaluator
+        except ImportError as e:
+            log.error(f"Failed to import RagEvaluator: {e}")
+            print("❌ Error: Failed to import eval module.")
+            print("The evaluation dependencies are not installed.")
+            print("")
+            print("To fix this, install the evaluation dependencies:")
+            print("  pip install .[eval]")
+            print("")
+            print("This will install required packages including:")
+            print("  - anthropic (for Claude AI)")
+            print("  - beautifulsoup4 (for HTML processing)")
+            print("  - python-dotenv (for environment variables)")
+            return
+
+        try:
+            evaluator = RagEvaluator(model=args.model)
+
+            # If summary_only is True, don't save to output_dir (None)
+            output_dir = None if args.summary_only else args.output_dir
+
+            # Handle directory processing
+            if args.directory:
+                # Find all experiment JSON files in the directory (recursively)
+                experiment_dir = Path(args.directory)
+
+                # If report-only mode, look for existing evaluation files
+                if args.report_only:
+                    eval_dir = Path(args.output_dir)
+                    if not eval_dir.exists():
+                        print(f"❌ Evaluation directory not found: {args.output_dir}")
+                        print(
+                            "Please run evaluation first or specify correct output directory."
+                        )
+                        return
+
+                    # Find all evaluation files
+                    eval_files = list(eval_dir.rglob("*.eval.json"))
+                    if not eval_files:
+                        print(
+                            f"❌ No .eval.json files found in directory: {args.output_dir}"
+                        )
+                        return
+
+                    print(f"Found {len(eval_files)} evaluation files")
+
+                    # Generate consolidated report
+                    evaluation_files = [f.name for f in eval_files]
+                    consolidated_report_path = (
+                        evaluator.create_consolidated_evaluation_report(
+                            evaluation_files, args.output_dir, str(experiment_dir)
+                        )
+                    )
+                    print(f"✅ Consolidated Report: {consolidated_report_path}")
+                    return
+
+                json_files = list(experiment_dir.rglob("*.experiment.json"))
+
+                if not json_files:
+                    print(
+                        f"❌ No .experiment.json files found in directory: {args.directory}"
+                    )
+                    return
+
+                # Convert to strings for compatibility
+                json_files = [str(f) for f in json_files]
+
+                print(f"Found {len(json_files)} JSON files to process")
+
+                # Filter out existing evaluations if skip-existing is enabled
+                files_to_process = []
+                skipped_count = 0
+
+                for json_file in json_files:
+                    # By default skip existing evaluations, unless --force is specified
+                    if not args.force and evaluator.check_evaluation_exists(
+                        json_file, args.output_dir
+                    ):
+                        skipped_count += 1
+                        continue
+                    files_to_process.append(json_file)
+
+                if skipped_count > 0:
+                    print(f"Skipping {skipped_count} existing evaluations")
+                    print(f"Processing {len(files_to_process)} new evaluations")
+
+                if not files_to_process:
+                    print(
+                        "✅ All evaluations already exist. Use --regenerate-report to update consolidated report."
+                    )
+                    if args.regenerate_report or args.incremental_update:
+                        # Generate report from existing evaluations
+                        eval_dir = Path(args.output_dir)
+                        if eval_dir.exists():
+                            evaluation_files = [
+                                f.name for f in eval_dir.rglob("*.eval.json")
+                            ]
+                            if evaluation_files:
+                                consolidated_report_path = (
+                                    evaluator.create_consolidated_evaluation_report(
+                                        evaluation_files,
+                                        args.output_dir,
+                                        str(experiment_dir),
+                                    )
+                                )
+                                print(
+                                    f"✅ Updated Consolidated Report: {consolidated_report_path}"
+                                )
+                    return
+
+                total_files_processed = 0
+                total_usage = {"total_tokens": 0}
+                total_cost = {"total_cost": 0.0}
+                evaluation_files = []  # Track evaluation files for consolidated report
+
+                for json_file in sorted(files_to_process):
+                    print(f"\n📄 Processing: {os.path.basename(json_file)}")
+
+                    try:
+                        evaluation_data = evaluator.generate_enhanced_report(
+                            results_path=json_file,
+                            output_dir=output_dir,
+                            groundtruth_path=getattr(args, "groundtruth", None),
+                            base_experiment_dir=str(experiment_dir),
+                        )
+
+                        if output_dir and evaluation_data:
+                            # Track evaluation files for consolidated report
+                            eval_file_path = Path(json_file).stem + ".eval.json"
+                            evaluation_files.append(eval_file_path)
+
+                        total_files_processed += 1
+
+                        # Display summary for this file
+                        overall_rating = evaluation_data.get("overall_rating", {})
+                        print(
+                            f"  Overall Rating: {overall_rating.get('rating', 'N/A')}"
+                        )
+
+                        metrics = overall_rating.get("metrics", {})
+                        if metrics:
+                            # Display metrics based on evaluation type
+                            if "num_questions" in metrics:
+                                # Q&A evaluation metrics
+                                print(
+                                    f"  Questions: {metrics.get('num_questions', 'N/A')}"
+                                )
+
+                                pass_rate = metrics.get("pass_rate", "N/A")
+                                if isinstance(pass_rate, (int, float)):
+                                    print(f"  Pass Rate: {pass_rate:.1%}")
+                                else:
+                                    print(f"  Pass Rate: {pass_rate}")
+
+                                mean_similarity = metrics.get("mean_similarity", "N/A")
+                                if isinstance(mean_similarity, (int, float)):
+                                    print(f"  Mean Similarity: {mean_similarity:.3f}")
+                                else:
+                                    print(f"  Mean Similarity: {mean_similarity}")
+                            elif "total_summaries" in metrics:
+                                # Summarization evaluation metrics
+                                print(
+                                    f"  Summaries: {metrics.get('total_summaries', 'N/A')}"
+                                )
+
+                                quality_score = metrics.get("quality_score", "N/A")
+                                if isinstance(quality_score, (int, float)):
+                                    print(f"  Quality Score: {quality_score:.1f}")
+                                else:
+                                    print(f"  Quality Score: {quality_score}")
+
+                                print(
+                                    f"  Excellent: {metrics.get('excellent_count', 0)}, Good: {metrics.get('good_count', 0)}, Fair: {metrics.get('fair_count', 0)}, Poor: {metrics.get('poor_count', 0)}"
+                                )
+
+                        # Accumulate usage and cost
+                        if evaluation_data.get("total_usage"):
+                            file_usage = evaluation_data["total_usage"]
+                            total_usage["total_tokens"] += file_usage.get(
+                                "total_tokens", 0
+                            )
+
+                        if evaluation_data.get("total_cost"):
+                            file_cost = evaluation_data["total_cost"]
+                            total_cost["total_cost"] += file_cost.get("total_cost", 0.0)
+
+                    except Exception as e:
+                        log.error(f"Error processing {json_file}: {e}")
+                        print(f"  ❌ Error: {e}")
+                        continue
+
+                print(
+                    f"\n✅ Successfully processed {total_files_processed}/{len(json_files)} files"
+                )
+
+                if not args.summary_only and total_files_processed > 0:
+                    print(f"  Detailed Reports: {args.output_dir}")
+
+                    # Create or update consolidated evaluation report
+                    if len(evaluation_files) > 0:
+                        if args.regenerate_report:
+                            consolidated_report_path = (
+                                evaluator.create_consolidated_evaluation_report(
+                                    evaluation_files,
+                                    args.output_dir,
+                                    str(experiment_dir),
+                                )
+                            )
+                            print(
+                                f"  Regenerated Consolidated Report: {consolidated_report_path}"
+                            )
+                        elif args.incremental_update and len(evaluation_files) > 0:
+                            consolidated_report_path = (
+                                evaluator.update_consolidated_evaluation_report(
+                                    output_dir=args.output_dir,
+                                    new_eval_files=None,  # Auto-detect
+                                    regenerate=False,
+                                    base_experiment_dir=str(experiment_dir),
+                                )
+                            )
+                            print(
+                                f"  Updated Consolidated Report: {consolidated_report_path}"
+                            )
+                        elif (
+                            len(evaluation_files) > 1
+                            or not Path(args.output_dir)
+                            .joinpath("consolidated_evaluations_report.json")
+                            .exists()
+                        ):
+                            # Create new consolidated report for multiple files or if it doesn't exist
+                            consolidated_report_path = (
+                                evaluator.create_consolidated_evaluation_report(
+                                    evaluation_files,
+                                    args.output_dir,
+                                    str(experiment_dir),
+                                )
+                            )
+                            print(f"  Consolidated Report: {consolidated_report_path}")
+                        else:
+                            # Single new file - use incremental update
+                            consolidated_report_path = (
+                                evaluator.update_consolidated_evaluation_report(
+                                    output_dir=args.output_dir,
+                                    new_eval_files=None,  # Auto-detect
+                                    regenerate=False,
+                                    base_experiment_dir=str(experiment_dir),
+                                )
+                            )
+                            print(
+                                f"  Updated Consolidated Report: {consolidated_report_path}"
+                            )
+
+                # Print total cost information
+                if total_usage["total_tokens"] > 0:
+                    print(f"  Total Token Usage: {total_usage['total_tokens']:,}")
+                if total_cost["total_cost"] > 0:
+                    print(f"  Total Cost: ${total_cost['total_cost']:.4f}")
+
+            else:
+                # Handle single file processing (existing logic)
+                if args.report_only:
+                    print(
+                        "❌ Error: --report-only flag can only be used with directory input (-d)"
+                    )
+                    print("For single file evaluation, run without --report-only flag.")
+                    return
+
+                evaluation_data = evaluator.generate_enhanced_report(
+                    results_path=args.results_file,
+                    output_dir=output_dir,
+                    groundtruth_path=getattr(args, "groundtruth", None),
+                )
+
+                print("✅ Successfully evaluated RAG system")
+
+                # Display summary information
+                overall_rating = evaluation_data.get("overall_rating", {})
+                print(f"  Overall Rating: {overall_rating.get('rating', 'N/A')}")
+
+                metrics = overall_rating.get("metrics", {})
+                if metrics:
+                    # Display metrics based on evaluation type
+                    if "num_questions" in metrics:
+                        # Q&A evaluation metrics
+                        print(f"  Questions: {metrics.get('num_questions', 'N/A')}")
+
+                        pass_rate = metrics.get("pass_rate", "N/A")
+                        if isinstance(pass_rate, (int, float)):
+                            print(f"  Pass Rate: {pass_rate:.1%}")
+                        else:
+                            print(f"  Pass Rate: {pass_rate}")
+
+                        mean_similarity = metrics.get("mean_similarity", "N/A")
+                        if isinstance(mean_similarity, (int, float)):
+                            print(f"  Mean Similarity: {mean_similarity:.3f}")
+                        else:
+                            print(f"  Mean Similarity: {mean_similarity}")
+                    elif "total_summaries" in metrics:
+                        # Summarization evaluation metrics
+                        print(f"  Summaries: {metrics.get('total_summaries', 'N/A')}")
+
+                        quality_score = metrics.get("quality_score", "N/A")
+                        if isinstance(quality_score, (int, float)):
+                            print(f"  Quality Score: {quality_score:.1f}")
+                        else:
+                            print(f"  Quality Score: {quality_score}")
+
+                        print(
+                            f"  Excellent: {metrics.get('excellent_count', 0)}, Good: {metrics.get('good_count', 0)}, Fair: {metrics.get('fair_count', 0)}, Poor: {metrics.get('poor_count', 0)}"
+                        )
+
+                if not args.summary_only:
+                    print(f"  Detailed Report: {args.output_dir}")
+
+                    # Auto-update consolidated report after single file evaluation
+                    try:
+                        consolidated_report_path = (
+                            evaluator.update_consolidated_evaluation_report(
+                                output_dir=output_dir,
+                                new_eval_files=None,  # Auto-detect
+                                regenerate=False,
+                            )
+                        )
+                        print(
+                            f"  Updated Consolidated Report: {consolidated_report_path}"
+                        )
+                    except Exception as e:
+                        print(f"  ⚠️  Could not update consolidated report: {e}")
+
+                # Print cost information if available
+                if evaluation_data.get("total_usage") and evaluation_data.get(
+                    "total_cost"
+                ):
+                    total_usage = evaluation_data["total_usage"]
+                    total_cost = evaluation_data["total_cost"]
+                    print(f"  Token Usage: {total_usage['total_tokens']:,} total")
+                    print(f"  Cost: ${total_cost['total_cost']:.4f}")
+
+        except Exception as e:
+            log.error(f"Error evaluating RAG system: {e}")
+            print(f"❌ Error evaluating RAG system: {e}")
+            return
+
+        return
+
+    # Handle generate command
+    if args.action == "generate":
+        if args.meeting_transcript:
+            log.info("Generating example meeting transcripts")
+            try:
+                from gaia.eval.transcript_generator import TranscriptGenerator
+            except ImportError as e:
+                log.error(f"Failed to import TranscriptGenerator: {e}")
+                print("❌ Error: Failed to import transcript generator module.")
+                print("The evaluation dependencies are not installed.")
+                print("")
+                print("To fix this, install the evaluation dependencies:")
+                print("  pip install .[eval]")
+                print("")
+                print("This will install required packages including:")
+                print("  - anthropic (for Claude AI)")
+                print("  - beautifulsoup4 (for HTML processing)")
+                print("  - python-dotenv (for environment variables)")
+                return
+
+            try:
+                generator = TranscriptGenerator(claude_model=args.claude_model)
+
+                # Filter meeting types if specified
+                if args.meeting_types:
+                    # Temporarily filter the templates
+                    original_templates = generator.meeting_templates.copy()
+                    generator.meeting_templates = {
+                        k: v
+                        for k, v in generator.meeting_templates.items()
+                        if k in args.meeting_types
+                    }
+
+                # Set default target tokens for transcripts if not specified
+                target_tokens = args.target_tokens if args.target_tokens else 1000
+
+                result = generator.generate_transcript_set(
+                    output_dir=args.output_dir,
+                    target_tokens=target_tokens,
+                    count_per_type=args.count_per_type,
+                )
+
+                print("✅ Successfully generated meeting transcripts")
+                print(f"  Output directory: {result['output_directory']}")
+                print(f"  Generated files: {len(result['generated_files'])}")
+                print(f"  Metadata file: {result['metadata_file']}")
+
+                # Show summary stats
+                summary = result["summary"]
+                generation_info = summary["generation_info"]
+                total_tokens = generation_info["total_claude_usage"]["total_tokens"]
+                total_cost = generation_info["total_claude_cost"]["total_cost"]
+                avg_tokens = (
+                    total_tokens / len(summary["transcripts"])
+                    if summary["transcripts"]
+                    else 0
+                )
+
+                print(f"  Total tokens used: {total_tokens:,}")
+                print(f"  Total cost: ${total_cost:.4f}")
+                print(f"  Average tokens per file: {avg_tokens:.0f}")
+                print(
+                    f"  Average cost per file: ${total_cost/len(summary['transcripts']):.4f}"
+                )
+                print(f"  Meeting types: {', '.join(generation_info['meeting_types'])}")
+                print(f"  Claude model: {generation_info['claude_model']}")
+
+                # Restore original templates if they were filtered
+                if args.meeting_types:
+                    generator.meeting_templates = original_templates
+
+            except Exception as e:
+                log.error(f"Error generating transcripts: {e}")
+                print(f"❌ Error generating transcripts: {e}")
+                return
+
+        elif args.email:
+            log.info("Generating example business emails")
+            try:
+                from gaia.eval.email_generator import EmailGenerator
+            except ImportError as e:
+                log.error(f"Failed to import EmailGenerator: {e}")
+                print("❌ Error: Failed to import email generator module.")
+                print("The evaluation dependencies are not installed.")
+                print("")
+                print("To fix this, install the evaluation dependencies:")
+                print("  pip install .[eval]")
+                print("")
+                print("This will install required packages including:")
+                print("  - anthropic (for Claude AI)")
+                print("  - beautifulsoup4 (for HTML processing)")
+                print("  - python-dotenv (for environment variables)")
+                return
+
+            try:
+                generator = EmailGenerator(claude_model=args.claude_model)
+
+                # Filter email types if specified
+                if args.email_types:
+                    # Temporarily filter the templates
+                    original_templates = generator.email_templates.copy()
+                    generator.email_templates = {
+                        k: v
+                        for k, v in generator.email_templates.items()
+                        if k in args.email_types
+                    }
+
+                # Set default target tokens for emails if not specified
+                target_tokens = args.target_tokens if args.target_tokens else 800
+
+                result = generator.generate_email_set(
+                    output_dir=args.output_dir,
+                    target_tokens=target_tokens,
+                    count_per_type=args.count_per_type,
+                )
+
+                print("✅ Successfully generated business emails")
+                print(f"  Output directory: {result['output_directory']}")
+                print(f"  Generated files: {len(result['generated_files'])}")
+                print(f"  Metadata file: {result['metadata_file']}")
+
+                # Show summary stats
+                summary = result["summary"]
+                generation_info = summary["generation_info"]
+                total_tokens = generation_info["total_claude_usage"]["total_tokens"]
+                total_cost = generation_info["total_claude_cost"]["total_cost"]
+                avg_tokens = (
+                    total_tokens / len(summary["emails"]) if summary["emails"] else 0
+                )
+
+                print(f"  Total tokens used: {total_tokens:,}")
+                print(f"  Total cost: ${total_cost:.4f}")
+                print(f"  Average tokens per file: {avg_tokens:.0f}")
+                print(
+                    f"  Average cost per file: ${total_cost/len(summary['emails']):.4f}"
+                )
+                print(f"  Email types: {', '.join(generation_info['email_types'])}")
+                print(f"  Claude model: {generation_info['claude_model']}")
+
+                # Restore original templates if they were filtered
+                if args.email_types:
+                    generator.email_templates = original_templates
+
+            except Exception as e:
+                log.error(f"Error generating emails: {e}")
+                print(f"❌ Error generating emails: {e}")
+                return
+
+        return
+
+    # Handle batch-experiment command
+    if args.action == "batch-experiment":
+        log.info("Running batch experiments")
+        try:
+            from gaia.eval.batch_experiment import BatchExperimentRunner
+        except ImportError as e:
+            log.error(f"Failed to import BatchExperimentRunner: {e}")
+            print("❌ Error: Failed to import batch experiment module.")
+            print("The evaluation dependencies are not installed.")
+            print("")
+            print("To fix this, install the evaluation dependencies:")
+            print("  pip install .[eval]")
+            print("")
+            print("This will install required packages including:")
+            print("  - anthropic (for Claude AI)")
+            print("  - beautifulsoup4 (for HTML processing)")
+            print("  - python-dotenv (for environment variables)")
+            return
+
+        # Create sample config if requested
+        if args.create_sample_config:
+            runner = BatchExperimentRunner.__new__(BatchExperimentRunner)
+            runner.log = get_logger(__name__)
+            runner.create_sample_config(args.create_sample_config)
+            print(f"✅ Sample configuration created: {args.create_sample_config}")
+            print("Edit this file to define your experiments, then run:")
+            print(
+                f"  gaia batch-experiment -c {args.create_sample_config} -i <input_path> -o <output_dir>"
+            )
+            return
+
+        # Create config from groundtruth if requested
+        if args.create_config_from_groundtruth:
+            # Determine output filename if not provided in the argument
+            groundtruth_path = Path(args.create_config_from_groundtruth)
+            default_output = f"{groundtruth_path.stem}.config.json"
+
+            runner = BatchExperimentRunner.__new__(BatchExperimentRunner)
+            runner.log = get_logger(__name__)
+            try:
+                config_path = runner.create_config_from_groundtruth(
+                    args.create_config_from_groundtruth, default_output
+                )
+                print(
+                    f"✅ Configuration created from groundtruth metadata: {config_path}"
+                )
+                print("Review and edit the configuration, then run:")
+                print(
+                    f"  gaia batch-experiment -c {config_path} -i <input_path> -o <output_dir>"
+                )
+            except Exception as e:
+                print(f"❌ Error creating config from groundtruth: {e}")
+                return
+            return
+
+        # Validate required arguments
+        if not args.config or not args.input:
+            print(
+                "❌ Error: Both --config and --input are required (unless using --create-sample-config or --create-config-from-groundtruth)"
+            )
+            return
+
+        try:
+            # Run batch experiments
+            runner = BatchExperimentRunner(args.config)
+            # By default skip existing experiments, unless --force is specified
+            result_files, skipped_count = runner.run_all_experiments(
+                input_path=args.input,
+                output_dir=args.output_dir,
+                delay_seconds=args.delay,
+                queries_source=args.queries_source,
+                skip_existing=not args.force,
+            )
+
+            # Report results with skip information
+            if skipped_count > 0:
+                new_count = len(result_files) - skipped_count
+                print(
+                    f"✅ Completed {len(result_files)} experiments ({new_count} new, {skipped_count} skipped)"
+                )
+            else:
+                print(f"✅ Completed {len(result_files)} experiments")
+
+            print(f"  Results saved to: {args.output_dir}")
+            print("  Generated files:")
+            for result_file in result_files:
+                print(f"    - {Path(result_file).name}")
+
+            print("\nNext steps:")
+            print("  1. Evaluate results using: gaia eval -f <result_file>")
+            print(f"  2. Generate comparative report: gaia report -d {args.output_dir}")
+
+        except Exception as e:
+            log.error(f"Error running batch experiments: {e}")
+            print(f"❌ Error running batch experiments: {e}")
+            return
+
+        return
+
+    # Handle Blender command
+    if args.action == "blender":
+        handle_blender_command(args)
+        return
+
+    # Handle visualize command
+    if args.action == "visualize":
+        handle_visualize_command(args)
         return
 
     # Log error for unknown action
@@ -903,8 +2826,8 @@ Let me know your answer!
 def kill_process_by_port(port):
     """Find and kill a process running on a specific port."""
     try:
-        # For Windows
         if sys.platform.startswith("win"):
+            # Windows implementation
             cmd = f"netstat -ano | findstr :{port}"
             output = subprocess.check_output(cmd, shell=True).decode()
             if output:
@@ -917,7 +2840,6 @@ def kill_process_by_port(port):
                         try:
                             pid = int(parts[-1])
                             if pid > 0:  # Ensure we don't try to kill PID 0
-                                # Add check=True to subprocess.run
                                 subprocess.run(
                                     f"taskkill /PID {pid} /F", shell=True, check=True
                                 )
@@ -931,6 +2853,72 @@ def kill_process_by_port(port):
                     "success": False,
                     "message": f"Could not find valid PID for port {port}",
                 }
+        else:
+            # Linux/Unix implementation
+            try:
+                # Use lsof to find process using the port
+                cmd = f"lsof -ti:{port}"
+                output = subprocess.check_output(cmd, shell=True).decode().strip()
+                if output:
+                    pids = output.split("\n")
+                    killed_pids = []
+                    for pid_str in pids:
+                        try:
+                            pid = int(pid_str.strip())
+                            if pid > 0:
+                                subprocess.run(f"kill -9 {pid}", shell=True, check=True)
+                                killed_pids.append(str(pid))
+                        except (ValueError, subprocess.CalledProcessError):
+                            continue
+                    if killed_pids:
+                        return {
+                            "success": True,
+                            "message": f"Killed process(es) {', '.join(killed_pids)} running on port {port}",
+                        }
+                return {
+                    "success": False,
+                    "message": f"Could not find valid PID for port {port}",
+                }
+            except subprocess.CalledProcessError:
+                # If lsof is not available, try netstat + ps approach
+                try:
+                    # Use netstat to find the port, then extract PID
+                    cmd = f"netstat -tulpn | grep :{port}"
+                    output = subprocess.check_output(cmd, shell=True).decode()
+                    if output:
+                        for line in output.strip().split("\n"):
+                            if f":{port}" in line:
+                                parts = line.strip().split()
+                                # Look for PID/process_name pattern in the last column
+                                for part in parts:
+                                    if "/" in part:
+                                        try:
+                                            pid = int(part.split("/")[0])
+                                            if pid > 0:
+                                                subprocess.run(
+                                                    f"kill -9 {pid}",
+                                                    shell=True,
+                                                    check=True,
+                                                )
+                                                return {
+                                                    "success": True,
+                                                    "message": f"Killed process {pid} running on port {port}",
+                                                }
+                                        except (
+                                            ValueError,
+                                            subprocess.CalledProcessError,
+                                        ):
+                                            continue
+                    return {
+                        "success": False,
+                        "message": f"Could not find valid PID for port {port}",
+                    }
+                except subprocess.CalledProcessError:
+                    return {
+                        "success": False,
+                        "message": f"No process found running on port {port} (lsof and netstat methods failed)",
+                    }
+
         return {"success": False, "message": f"No process found running on port {port}"}
     except subprocess.CalledProcessError:
         return {"success": False, "message": f"No process found running on port {port}"}
@@ -939,6 +2927,342 @@ def kill_process_by_port(port):
             "success": False,
             "message": f"Error killing process on port {port}: {str(e)}",
         }
+
+
+def wait_for_user():
+    """Wait for user to press Enter before continuing."""
+    input("Press Enter to continue to the next example...")
+
+
+def run_blender_examples(agent, selected_example=None, print_result=True):
+    """
+    Run the Blender agent example demonstrations.
+
+    Args:
+        agent: The BlenderAgent instance
+        selected_example: Optional example number to run specifically
+        print_result: Whether to print the result
+    """
+    console = agent.console
+
+    examples = {
+        1: {
+            "name": "Clearing the scene",
+            "description": "This example demonstrates how to clear all objects from a scene.",
+            "query": "Clear the scene to start fresh",
+        },
+        2: {
+            "name": "Creating a basic cube",
+            "description": "This example creates a red cube at the center of the scene.",
+            "query": "Create a red cube at the center of the scene and make sure it has a red material",
+        },
+        3: {
+            "name": "Creating a sphere with specific properties",
+            "description": "This example creates a blue sphere with specific parameters.",
+            "query": "Create a blue sphere at position (3, 0, 0) and set its scale to (2, 2, 2)",
+        },
+        4: {
+            "name": "Creating multiple objects",
+            "description": "This example creates multiple objects with specific arrangements.",
+            "query": "Create a green cube at (0, 0, 0) and a red sphere 3 units above it",
+        },
+        5: {
+            "name": "Creating and modifying objects",
+            "description": "This example creates objects and then modifies them.",
+            "query": "Create a blue cylinder, then make it taller and move it up 2 units",
+        },
+    }
+
+    # If a specific example is requested, run only that one
+    if selected_example and selected_example in examples:
+        example = examples[selected_example]
+        console.print_header(f"=== Example {selected_example}: {example['name']} ===")
+        console.print_header(example["description"])
+        agent.process_query(example["query"])
+        agent.display_result(print_result=print_result)
+        return
+
+    # Run all examples in sequence
+    for idx, example in examples.items():
+        console.print_header(f"=== Example {idx}: {example['name']} ===")
+        console.print_header(example["description"])
+        agent.process_query(example["query"], output_to_file=True)
+        agent.display_result(print_result=print_result)
+
+        # Wait for user input between examples, except the last one
+        if idx < len(examples):
+            wait_for_user()
+
+
+def run_blender_interactive_mode(agent, print_result=True):
+    """
+    Run the Blender Agent in interactive mode where the user can continuously input queries.
+
+    Args:
+        agent: The BlenderAgent instance
+        print_result: Whether to print the result
+    """
+    console = agent.console
+    console.print_header("=== Blender Interactive Mode ===")
+    console.print_header(
+        "Enter your 3D scene queries. Type 'exit', 'quit', or 'q' to exit."
+    )
+
+    while True:
+        try:
+            query = input("\nEnter Blender query: ")
+            if query.lower() in ["exit", "quit", "q"]:
+                console.print_header("Exiting Blender interactive mode.")
+                break
+
+            if query.strip():  # Process only non-empty queries
+                agent.process_query(query)
+                agent.display_result(print_result=print_result)
+
+        except KeyboardInterrupt:
+            console.print_header("\nBlender interactive mode interrupted. Exiting.")
+            break
+        except Exception as e:
+            console.print_error(f"Error processing Blender query: {e}")
+
+
+def handle_visualize_command(args):
+    """
+    Handle the evaluation results visualizer command.
+
+    Args:
+        args: Parsed command line arguments for the visualize command
+    """
+    log = get_logger(__name__)
+
+    try:
+        import webbrowser
+        import socket
+    except ImportError as e:
+        log.error(f"Failed to import required modules: {e}")
+        print("❌ Error: Failed to import required modules for visualizer")
+        return
+
+    # Determine workspace and data directories
+    workspace_dir = Path(args.workspace) if args.workspace else Path.cwd()
+    experiments_dir = (
+        Path(args.experiments_dir)
+        if args.experiments_dir
+        else workspace_dir / "experiments"
+    )
+    evaluations_dir = (
+        Path(args.evaluations_dir)
+        if args.evaluations_dir
+        else workspace_dir / "evaluation"
+    )
+    test_data_dir = (
+        Path(args.test_data_dir)
+        if args.test_data_dir
+        else workspace_dir / "output" / "test_data"
+    )
+    groundtruth_dir = (
+        Path(args.groundtruth_dir)
+        if args.groundtruth_dir
+        else workspace_dir / "output" / "groundtruth"
+    )
+
+    # Get the webapp directory
+    webapp_dir = Path(__file__).parent / "eval" / "webapp"
+
+    if not webapp_dir.exists():
+        print("❌ Error: Evaluation webapp not found")
+        print(f"Expected location: {webapp_dir}")
+        return
+
+    # Check if Node.js is available
+    try:
+        subprocess.run(["node", "--version"], check=True, capture_output=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("❌ Error: Node.js is not installed or not in PATH")
+        print("The evaluation visualizer requires Node.js to run.")
+        print("Please install Node.js from https://nodejs.org/")
+        return
+
+    # Check if dependencies are installed
+    node_modules_dir = webapp_dir / "node_modules"
+    if not node_modules_dir.exists():
+        print("📦 Installing webapp dependencies...")
+        try:
+            subprocess.run(
+                ["npm", "install"],
+                cwd=webapp_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            print("✅ Dependencies installed successfully")
+        except subprocess.CalledProcessError as e:
+            print("❌ Error: Failed to install webapp dependencies")
+            print(f"Error: {e.stderr}")
+            return
+
+    # Check if port is available
+    def is_port_available(host, port):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(1)
+            result = sock.connect_ex((host, port))
+            return result != 0
+
+    if not is_port_available(args.host, args.port):
+        print(f"❌ Error: Port {args.port} is already in use")
+        print("Try using a different port with --port <port_number>")
+        return
+
+    # Set up environment variables for the webapp
+    env = os.environ.copy()
+    env["PORT"] = str(args.port)
+    env["EXPERIMENTS_PATH"] = str(experiments_dir.absolute())
+    env["EVALUATIONS_PATH"] = str(evaluations_dir.absolute())
+    env["TEST_DATA_PATH"] = str(test_data_dir.absolute())
+    env["GROUNDTRUTH_PATH"] = str(groundtruth_dir.absolute())
+
+    print("🚀 Starting evaluation results visualizer...")
+    print(f"   Workspace: {workspace_dir.absolute()}")
+    print(f"   Experiments: {experiments_dir.absolute()}")
+    print(f"   Evaluations: {evaluations_dir.absolute()}")
+    print(f"   Test Data: {test_data_dir.absolute()}")
+    print(f"   Groundtruth: {groundtruth_dir.absolute()}")
+    print(f"   Server: http://{args.host}:{args.port}")
+
+    # Start the Node.js server
+    try:
+        server_process = subprocess.Popen(
+            ["node", "server.js"],
+            cwd=webapp_dir,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True,
+        )
+
+        # Wait a moment for server to start
+        time.sleep(2)
+
+        # Check if server started successfully
+        if server_process.poll() is not None:
+            output, _ = server_process.communicate()
+            print("❌ Error: Failed to start webapp server")
+            print(f"Server output: {output}")
+            return
+
+        # Open browser if requested
+        if not args.no_browser:
+            url = f"http://{args.host}:{args.port}"
+            try:
+                webbrowser.open(url)
+                print(f"🌐 Opened browser at {url}")
+            except Exception as e:
+                print(f"⚠️  Could not open browser automatically: {e}")
+                print(f"   Please open {url} manually")
+
+        print("\n📊 Evaluation Results Visualizer is running!")
+        print(f"   Access at: http://{args.host}:{args.port}")
+        print("   Press Ctrl+C to stop the server")
+
+        # Stream server output
+        try:
+            for line in iter(server_process.stdout.readline, ""):
+                if line.strip():
+                    print(f"[SERVER] {line.rstrip()}")
+        except KeyboardInterrupt:
+            pass
+
+    except KeyboardInterrupt:
+        print("\n⏹️  Stopping evaluation visualizer...")
+    except Exception as e:
+        log.error(f"Error running visualizer: {e}")
+        print(f"❌ Error: {e}")
+    finally:
+        # Clean up server process
+        try:
+            if "server_process" in locals():
+                server_process.terminate()
+                server_process.wait(timeout=5)
+                print("✅ Server stopped successfully")
+        except subprocess.TimeoutExpired:
+            server_process.kill()
+            print("⚠️  Server force-killed")
+        except Exception as e:
+            print(f"⚠️  Error stopping server: {e}")
+
+
+def handle_blender_command(args):
+    """
+    Handle the Blender agent command.
+
+    Args:
+        args: Parsed command line arguments for the blender command
+    """
+    log = get_logger(__name__)
+
+    # Check if Blender components are available
+    if not BLENDER_AVAILABLE:
+        print("❌ Error: Blender agent components are not available")
+        print("Install blender dependencies with: pip install .[blender]")
+        sys.exit(1)
+
+    # Check if Lemonade server is running
+    log.info("Checking Lemonade server connectivity...")
+    if not check_lemonade_health():
+        print_lemonade_error()
+        sys.exit(1)
+    log.info("✅ Lemonade server is accessible")
+
+    # Check if Blender MCP server is running
+    mcp_port = getattr(args, "mcp_port", 9876)
+    log.info(f"Checking Blender MCP server connectivity on port {mcp_port}...")
+    if not check_mcp_health(port=mcp_port):
+        print_mcp_error()
+        print(f"Note: Checking for MCP server on port {mcp_port}", file=sys.stderr)
+        sys.exit(1)
+    log.info("✅ Blender MCP server is accessible")
+
+    # Create output directory if specified
+    output_dir = args.output_dir
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    try:
+        # Create MCP client with custom port if specified
+        mcp_client = MCPClient(host="localhost", port=mcp_port)
+
+        # Create the BlenderAgent
+        agent = BlenderAgent(
+            use_local_llm=True,
+            mcp=mcp_client,
+            model_id=args.model,
+            max_steps=args.steps,
+            output_dir=output_dir,
+            streaming=args.stream,
+            show_stats=args.stats,
+            debug_prompts=args.debug_prompts,
+        )
+
+        # Run in interactive mode if specified
+        if args.interactive:
+            run_blender_interactive_mode(agent, print_result=args.print_result)
+        # Process a custom query if provided
+        elif args.query:
+            agent.console.print_header(f"Processing Blender query: '{args.query}'")
+            agent.process_query(args.query)
+            agent.display_result(print_result=args.print_result)
+        # Run specific example if provided, otherwise run all examples
+        else:
+            run_blender_examples(
+                agent, selected_example=args.example, print_result=args.print_result
+            )
+
+    except Exception as e:
+        log.error(f"Error running Blender agent: {e}")
+        print(f"❌ Error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

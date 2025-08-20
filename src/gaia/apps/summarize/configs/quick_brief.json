@@ -1,0 +1,9 @@
+{
+  "name": "Quick Brief",
+  "description": "Concise summary with just the key points (brief only)",
+  "styles": ["brief"],
+  "format": "json",
+  "max_tokens": 256,
+  "include_original": false,
+  "combined_prompt": false
+}

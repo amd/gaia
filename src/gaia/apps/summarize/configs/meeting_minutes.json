@@ -1,0 +1,9 @@
+{
+  "name": "Meeting Minutes",
+  "description": "Formal meeting documentation (detailed, participants, action_items)",
+  "styles": ["detailed", "participants", "action_items"],
+  "format": "pdf",
+  "max_tokens": 1500,
+  "include_original": true,
+  "combined_prompt": false
+}

@@ -3,7 +3,7 @@
 ; GAIA Installer Script
 
 ; Define command line parameters
-!define /ifndef RAUX_VERSION "v0.6.5+raux.0.2.2"
+!define /ifndef RAUX_VERSION "v0.6.5+raux.0.2.3"
 !define /ifndef RAUX_PRODUCT_NAME "GAIA UI"
 !define /ifndef RAUX_PRODUCT_SQUIRREL_NAME "GaiaUi"
 !define /ifndef RAUX_PRODUCT_SQUIRREL_PATH "$LOCALAPPDATA\GaiaUi"

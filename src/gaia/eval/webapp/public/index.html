@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gaia Evaluator</title>
+    <link rel="stylesheet" href="styles.css">
+    <!-- Libraries for export functionality -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-content">
+                <h1>Gaia Evaluator</h1>
+                <p class="subtitle">Advanced AI Model Quality Analysis & Comparison</p>
+                <div class="features">
+                    <span class="feature" data-tooltip="Generate synthetic test data, meeting transcripts, emails, and groundtruth summaries using Claude AI">🔬 Data Generation</span>
+                    <span class="feature" data-tooltip="Monitor API costs and token usage across all evaluations with detailed breakdowns per model and experiment">💰 Cost Tracking</span>
+                    <span class="feature" data-tooltip="Get percentage-based quality scores with color-coded ratings (Excellent, Good, Fair, Poor) for easy assessment">📊 Quality Scoring</span>
+                    <span class="feature" data-tooltip="Double-click any file in the interface to instantly load evaluation reports without manual selection">⚡ One-Click Loading</span>
+                    <span class="feature" data-tooltip="Explore comprehensive analysis with quality explanations, strengths, weaknesses, and actionable recommendations">🔍 Detailed Analysis</span>
+                    <span class="feature" data-tooltip="Compare multiple AI models side-by-side with performance rankings and detailed metric comparisons">📈 Model Comparison</span>
+                </div>
+            </div>
+        </header>
+
+        <div class="controls">
+            <div class="file-selector">
+                <h3>Available Reports</h3>
+                <div class="file-lists">
+                    <div class="test-data-list">
+                        <h4>Test Data</h4>
+                        <select id="testDataSelect" multiple size="6">
+                            <option disabled>Loading test data...</option>
+                        </select>
+                    </div>
+                    <div class="groundtruth-list">
+                        <h4>Groundtruth</h4>
+                        <select id="groundtruthSelect" multiple size="6">
+                            <option disabled>Loading groundtruth...</option>
+                        </select>
+                    </div>
+                    <div class="experiments-list">
+                        <h4>Experiments</h4>
+                        <select id="experimentSelect" multiple size="6">
+                            <option disabled>Loading experiments...</option>
+                        </select>
+                    </div>
+                    <div class="evaluations-list">
+                        <h4>Evaluations</h4>
+                        <select id="evaluationSelect" multiple size="6">
+                            <option disabled>Loading evaluations...</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="action-buttons">
+                    <button id="addReportBtn" class="btn-primary">Add Report</button>
+                    <button id="compareBtn" class="btn-secondary">Compare Selected</button>
+                    <button id="clearBtn" class="btn-secondary">Clear All</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="reports-container">
+            <div id="reportsGrid" class="reports-grid">
+                <div class="empty-state">
+                    <h3>No reports loaded</h3>
+                    <p>Select experiment and/or evaluation files to visualize results</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html> 

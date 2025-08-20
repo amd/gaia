@@ -8,6 +8,9 @@ import requests
 from dotenv import load_dotenv
 from openai import OpenAI
 
+# Local imports
+from .lemonade_client import DEFAULT_MODEL_NAME
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,7 +41,7 @@ class LLMClient:
             self.client = OpenAI(base_url=base_url, api_key="None")
             self.endpoint = "completions"
             # self.endpoint = "responses" TODO: Put back once new Lemonade version is released.
-            self.default_model = "Llama-3.2-3B-Instruct-Hybrid"
+            self.default_model = DEFAULT_MODEL_NAME
             logger.debug(f"Using local LLM with model={self.default_model}")
         else:
             api_key = os.getenv("OPENAI_API_KEY")
@@ -186,7 +189,6 @@ class LLMClient:
             - tokens_per_second: Rate of token generation
             - input_tokens: Number of tokens in the input
             - output_tokens: Number of tokens in the output
-            - decode_token_times: List of times taken to decode each token
         """
         if not self.base_url:
             # Return empty stats if not using local LLM
@@ -195,7 +197,6 @@ class LLMClient:
                 "tokens_per_second": None,
                 "input_tokens": None,
                 "output_tokens": None,
-                "decode_token_times": [],
             }
 
         try:
@@ -203,7 +204,11 @@ class LLMClient:
             stats_url = f"{self.base_url}/stats"
             response = requests.get(stats_url)
             if response.status_code == 200:
-                return response.json()
+                stats = response.json()
+                # Remove decode_token_times as it's too verbose
+                if "decode_token_times" in stats:
+                    del stats["decode_token_times"]
+                return stats
             else:
                 logger.warning(
                     f"Failed to get stats: {response.status_code} - {response.text}"
@@ -212,6 +217,70 @@ class LLMClient:
         except Exception as e:
             logger.warning(f"Error fetching performance stats: {str(e)}")
             return {}
+
+    def is_generating(self) -> bool:
+        """
+        Check if the local LLM is currently generating.
+
+        Returns:
+            bool: True if generating, False otherwise
+
+        Note:
+            Only available when using local LLM (use_local=True).
+            Returns False for OpenAI API usage.
+        """
+        if not self.base_url:
+            logger.debug("is_generating(): Not using local LLM, returning False")
+            return False
+
+        try:
+            # Check the generating endpoint
+            generating_url = f"{self.base_url.replace('/api/v0', '')}/generating"
+            response = requests.get(generating_url)
+            if response.status_code == 200:
+                response_data = response.json()
+                is_gen = response_data.get("is_generating", False)
+                logger.debug(f"Generation status check: {is_gen}")
+                return is_gen
+            else:
+                logger.warning(
+                    f"Failed to check generation status: {response.status_code} - {response.text}"
+                )
+                return False
+        except Exception as e:
+            logger.warning(f"Error checking generation status: {str(e)}")
+            return False
+
+    def halt_generation(self) -> bool:
+        """
+        Halt current generation on the local LLM server.
+
+        Returns:
+            bool: True if halt was successful, False otherwise
+
+        Note:
+            Only available when using local LLM (use_local=True).
+            Does nothing for OpenAI API usage.
+        """
+        if not self.base_url:
+            logger.debug("halt_generation(): Not using local LLM, nothing to halt")
+            return False
+
+        try:
+            # Send halt request
+            halt_url = f"{self.base_url.replace('/api/v0', '')}/halt"
+            response = requests.get(halt_url)
+            if response.status_code == 200:
+                logger.debug("Successfully halted current generation")
+                return True
+            else:
+                logger.warning(
+                    f"Failed to halt generation: {response.status_code} - {response.text}"
+                )
+                return False
+        except Exception as e:
+            logger.warning(f"Error halting generation: {str(e)}")
+            return False
 
 
 def main():
@@ -224,6 +293,9 @@ def main():
     result = local_llm.generate("Write a one-sentence bedtime story about a unicorn.")
     print(f"Local LLM response:\n{result}")
     print(f"Local LLM stats:\n{local_llm.get_performance_stats()}")
+
+    # Halt functionality demo (only for local LLM)
+    print(f"\nHalt functionality available: {local_llm.is_generating()}")
 
     # Streaming example
     print("\nLocal LLM streaming response:")

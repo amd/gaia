@@ -1,0 +1,9 @@
+{
+  "name": "OpenAI Premium",
+  "description": "High-quality summaries using GPT-4 for complex documents",
+  "model": "gpt-4",
+  "styles": ["executive", "detailed", "participants", "action_items"],
+  "format": "json",
+  "max_tokens": 2048,
+  "combined_prompt": true
+}

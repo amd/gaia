@@ -17,10 +17,10 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     create_lemonade_client,
+    DEFAULT_MODEL_NAME,
 )
 
 # Test constants
-# TEST_MODEL = "Qwen2.5-0.5B-Instruct-CPU"
 TEST_MODEL = "Llama-3.2-3B-Instruct-Hybrid"
 HOST = "localhost"
 PORT = 8000

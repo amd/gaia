@@ -5,9 +5,9 @@ import asyncio
 import queue
 import threading
 import time
-import aiohttp
 
 from gaia.logger import get_logger
+from gaia.llm.llm_client import LLMClient
 
 
 class AudioClient:
@@ -16,14 +16,12 @@ class AudioClient:
     def __init__(
         self,
         whisper_model_size="base",
-        audio_device_index=1,
+        audio_device_index=None,  # Use default input device
         silence_threshold=0.5,
         enable_tts=True,
-        host="127.0.0.1",
-        port=8001,
-        llm_port=8000,
-        agent_name="Chaty",
         logging_level="INFO",
+        use_local_llm=True,
+        system_prompt=None,
     ):
         self.log = get_logger(__name__)
         self.log.setLevel(getattr(__import__("logging"), logging_level))
@@ -34,18 +32,17 @@ class AudioClient:
         self.silence_threshold = silence_threshold
         self.enable_tts = enable_tts
 
-        # Server configuration
-        self.host = host
-        self.port = port
-        self.llm_port = llm_port
-        self.agent_name = agent_name
-
         # Audio state
         self.is_speaking = False
         self.tts_thread = None
         self.whisper_asr = None
         self.transcription_queue = queue.Queue()
         self.tts = None
+
+        # Initialize LLM client (base_url handled automatically)
+        self.llm_client = LLMClient(
+            use_local=use_local_llm, system_prompt=system_prompt
+        )
 
         self.log.info("Audio client initialized.")
 
@@ -54,24 +51,37 @@ class AudioClient:
         try:
             self.log.debug("Initializing voice chat...")
             print(
-                f"Starting voice chat with {self.agent_name}.\n"
+                "Starting voice chat.\n"
                 "Say 'stop' to quit application "
                 "or 'restart' to clear the chat history.\n"
                 "Press Enter key to stop during audio playback."
             )
 
+            # Initialize TTS before starting voice chat
+            self.initialize_tts()
+
             from gaia.audio.whisper_asr import WhisperAsr
 
+            # Create WhisperAsr with custom thresholds
+            # Your audio shows energy levels of 0.02-0.03 when speaking
             self.whisper_asr = WhisperAsr(
                 model_size=self.whisper_model_size,
                 device_index=self.audio_device_index,
                 transcription_queue=self.transcription_queue,
+                silence_threshold=0.01,  # Set higher to ensure detection (your levels are 0.01-0.2+)
+                min_audio_length=16000 * 1.0,  # 1 second minimum at 16kHz
+            )
+
+            # Log the thresholds being used (reduce verbosity)
+            self.log.debug(
+                f"Audio settings: SILENCE_THRESHOLD={self.whisper_asr.SILENCE_THRESHOLD}, "
+                f"MIN_LENGTH={self.whisper_asr.MIN_AUDIO_LENGTH/self.whisper_asr.RATE:.1f}s"
             )
 
             device_name = self.whisper_asr.get_device_name()
             self.log.debug(f"Using audio device: {device_name}")
 
-            # Start recording first
+            # Start recording
             self.log.debug("Starting audio recording...")
             self.whisper_asr.start_recording()
 
@@ -88,7 +98,7 @@ class AudioClient:
             try:
                 while True:
                     if not process_thread.is_alive():
-                        self.log.warning("Process thread stopped unexpectedly")
+                        self.log.debug("Process thread stopped unexpectedly")
                         break
                     if not self.whisper_asr or not self.whisper_asr.is_recording:
                         self.log.warning("Recording stopped unexpectedly")
@@ -103,9 +113,9 @@ class AudioClient:
                 raise
             finally:
                 if self.whisper_asr:
-                    self.log.info("Stopping recording...")
+                    self.log.debug("Stopping recording...")
                     self.whisper_asr.stop_recording()
-                    self.log.info("Waiting for process thread to finish...")
+                    self.log.debug("Waiting for process thread to finish...")
                     process_thread.join(timeout=2.0)
 
         except ImportError:
@@ -124,197 +134,123 @@ class AudioClient:
     async def process_voice_input(self, text, get_stats_callback=None):
         """Process transcribed voice input and get AI response"""
 
-        async with aiohttp.ClientSession() as session:
-            # Initialize TTS streaming
-            text_queue = None
-            tts_finished = threading.Event()  # Add event to track TTS completion
-            interrupt_event = threading.Event()  # Add event for keyboard interrupts
+        # Initialize TTS streaming
+        text_queue = None
+        tts_finished = threading.Event()  # Add event to track TTS completion
+        interrupt_event = threading.Event()  # Add event for keyboard interrupts
+
+        try:
+            # Check if we're currently generating and halt if needed
+            if self.llm_client.is_generating():
+                self.log.debug("Generation in progress, halting...")
+                if self.llm_client.halt_generation():
+                    print("\nGeneration interrupted.")
+                    await asyncio.sleep(0.5)
+
+            # Pause audio recording before sending query
+            if self.whisper_asr:
+                self.whisper_asr.pause_recording()
+                self.log.debug("Recording paused before generation")
+
+            self.log.debug(f"Sending message to LLM: {text[:50]}...")
+            print("\nGaia: ", end="", flush=True)
+
+            # Keyboard listener thread for both generation and playback
+            def keyboard_listener():
+                input()  # Wait for any input
+
+                # Use LLMClient to halt generation
+                if self.llm_client.halt_generation():
+                    print("\nGeneration interrupted.")
+                else:
+                    print("\nInterrupt requested.")
+
+                interrupt_event.set()
+                if text_queue:
+                    text_queue.put("__HALT__")  # Signal TTS to stop immediately
+
+            # Start keyboard listener thread
+            keyboard_thread = threading.Thread(target=keyboard_listener)
+            keyboard_thread.daemon = True
+            keyboard_thread.start()
+
+            if self.enable_tts:
+                text_queue = queue.Queue(maxsize=100)
+
+                # Define status callback to update speaking state
+                def tts_status_callback(is_speaking):
+                    self.is_speaking = is_speaking
+                    if not is_speaking:  # When TTS finishes speaking
+                        tts_finished.set()
+                        if self.whisper_asr:
+                            self.whisper_asr.resume_recording()
+                    else:  # When TTS starts speaking
+                        if self.whisper_asr:
+                            self.whisper_asr.pause_recording()
+                    self.log.debug(f"TTS speaking state: {is_speaking}")
+
+                self.tts_thread = threading.Thread(
+                    target=self.tts.generate_speech_streaming,
+                    args=(text_queue,),
+                    kwargs={
+                        "status_callback": tts_status_callback,
+                        "interrupt_event": interrupt_event,
+                    },
+                    daemon=True,
+                )
+                self.tts_thread.start()
+
+            # Use LLMClient streaming instead of WebSocket
+            accumulated_response = ""
+            initial_buffer = ""  # Buffer for the start of response
+            initial_buffer_sent = False
 
             try:
-                # First check if we're currently generating
-                async with session.get(
-                    f"http://{self.host}:{self.llm_port}/generating"
-                ) as response:
-                    response_data = await response.json()
-                    is_generating = response_data.get("is_generating", False)
-                    self.log.debug(f"Generation status check: {is_generating}")
+                # Start LLM generation with streaming
+                response_stream = self.llm_client.generate(text, stream=True)
 
-                    if is_generating:
-                        # Send halt request
-                        async with session.get(
-                            f"http://{self.host}:{self.llm_port}/halt"
-                        ) as halt_response:
-                            if halt_response.status == 200:
-                                self.log.debug("Successfully halted current generation")
-                                print("\nGeneration interrupted.")
-                                await asyncio.sleep(0.5)
+                # Process streaming response
+                for chunk in response_stream:
+                    if interrupt_event.is_set():
+                        self.log.debug("Keyboard interrupt detected, stopping...")
+                        if text_queue:
+                            text_queue.put("__END__")
+                        break
+
+                    if self.transcription_queue.qsize() > 0:
+                        self.log.debug(
+                            "New input detected during generation, stopping..."
+                        )
+                        if text_queue:
+                            text_queue.put("__END__")
+                        # Use LLMClient to halt generation
+                        if self.llm_client.halt_generation():
+                            self.log.debug("Generation interrupted for new input.")
+                        return
+
+                    if chunk:
+                        print(chunk, end="", flush=True)
+                        if text_queue:
+                            if not initial_buffer_sent:
+                                initial_buffer += chunk
+                                # Send if we've reached 20 chars or if we get a clear end marker
+                                if len(initial_buffer) >= 20 or chunk.endswith(
+                                    ("\n", ". ", "! ", "? ")
+                                ):
+                                    text_queue.put(initial_buffer)
+                                    initial_buffer_sent = True
                             else:
-                                self.log.warning(
-                                    f"Failed to halt generation: {halt_response.status}"
-                                )
+                                text_queue.put(chunk)
+                        accumulated_response += chunk
 
-                # Pause audio recording before sending query
-                if self.whisper_asr:
-                    self.whisper_asr.pause_recording()
-                    self.log.debug("Recording paused before generation")
-
-                # Connect to websocket for new message
-                ws = await session.ws_connect(f"ws://{self.host}:{self.port}/ws")
-                self.log.debug(f"Sending message: {text[:50]}...")
-
-                print(f"\n{self.agent_name}: ", end="", flush=True)
-                await ws.send_str(text)
-
-                # Keyboard listener thread for both generation and playback
-                def keyboard_listener():
-                    input()  # Wait for any input
-
-                    # Send halt request when keyboard interrupt detected
-                    async def halt():
-                        async with aiohttp.ClientSession() as session:
-                            async with session.get(
-                                f"http://{self.host}:{self.llm_port}/halt"
-                            ) as response:
-                                if response.status == 200:
-                                    print("\nGeneration interrupted.")
-
-                    asyncio.run(halt())
-                    interrupt_event.set()
-                    if text_queue:
-                        text_queue.put("__HALT__")  # Signal TTS to stop immediately
-
-                # Start keyboard listener thread
-                keyboard_thread = threading.Thread(target=keyboard_listener)
-                keyboard_thread.daemon = True
-                keyboard_thread.start()
-
-                if self.enable_tts:
-                    text_queue = queue.Queue(maxsize=100)
-
-                    # Define status callback to update speaking state
-                    def tts_status_callback(is_speaking):
-                        self.is_speaking = is_speaking
-                        if not is_speaking:  # When TTS finishes speaking
-                            tts_finished.set()
-                            if self.whisper_asr:
-                                self.whisper_asr.resume_recording()
-                        else:  # When TTS starts speaking
-                            if self.whisper_asr:
-                                self.whisper_asr.pause_recording()
-                        self.log.debug(f"TTS speaking state: {is_speaking}")
-
-                    self.tts_thread = threading.Thread(
-                        target=self.tts.generate_speech_streaming,
-                        args=(text_queue,),
-                        kwargs={
-                            "status_callback": tts_status_callback,
-                            "interrupt_event": interrupt_event,
-                        },
-                        daemon=True,
-                    )
-                    self.tts_thread.start()
-
-                accumulated_response = ""
-                initial_buffer = ""  # Buffer for the start of response
-                initial_buffer_sent = False
-                try:
-                    while True:
-                        # Create a task for receiving the next message
-                        receive_task = asyncio.create_task(ws.receive())
-                        done, pending = await asyncio.wait([receive_task], timeout=0.1)
-
-                        for task in pending:
-                            task.cancel()
-
-                        if interrupt_event.is_set():
-                            self.log.debug(
-                                "Keyboard interrupt detected, halting generation..."
-                            )
-                            if text_queue:
-                                text_queue.put("__END__")
-                            break
-
-                        if self.transcription_queue.qsize() > 0:
-                            self.log.debug(
-                                "New input detected during generation, halting..."
-                            )
-                            if text_queue:
-                                text_queue.put("__END__")
-                            async with session.get(
-                                f"http://{self.host}:{self.llm_port}/halt"
-                            ) as halt_response:
-                                if halt_response.status == 200:
-                                    self.log.debug(
-                                        "\nGeneration interrupted for new input."
-                                    )
-                                    return
-
-                        if receive_task in done:
-                            msg = await receive_task
-                            if msg.type == aiohttp.WSMsgType.TEXT:
-                                if msg.data == "":
-                                    if text_queue:
-                                        # Send any buffered content at the end
-                                        if not initial_buffer_sent and initial_buffer:
-                                            # Small delay for very short responses
-                                            if len(initial_buffer) <= 20:
-                                                await asyncio.sleep(0.1)
-                                            text_queue.put(initial_buffer)
-                                        text_queue.put("__END__")
-                                    break
-
-                                print(msg.data, end="", flush=True)
-                                if text_queue and msg.data:
-                                    if not initial_buffer_sent:
-                                        initial_buffer += msg.data
-                                        # Send if we've reached 20 chars or if we get a clear end marker
-                                        if len(
-                                            initial_buffer
-                                        ) >= 20 or msg.data.endswith(
-                                            ("\n", ". ", "! ", "? ")
-                                        ):
-                                            text_queue.put(initial_buffer)
-                                            initial_buffer_sent = True
-                                    else:
-                                        text_queue.put(msg.data)
-                                accumulated_response += msg.data
-                            elif msg.type in (
-                                aiohttp.WSMsgType.CLOSED,
-                                aiohttp.WSMsgType.ERROR,
-                            ):
-                                if text_queue:
-                                    if not initial_buffer_sent and initial_buffer:
-                                        # Small delay for very short responses
-                                        if len(initial_buffer) <= 20:
-                                            await asyncio.sleep(0.1)
-                                        text_queue.put(initial_buffer)
-                                    text_queue.put("__END__")
-                                break
-
-                except Exception as e:
-                    if text_queue:
-                        text_queue.put("__END__")
-                    raise e
-                finally:
-                    if "ws" in locals():
-                        await ws.close()
-                    if self.tts_thread and self.tts_thread.is_alive():
-                        self.tts_thread.join(timeout=1.0)  # Add timeout to thread join
-                    keyboard_thread.join(
-                        timeout=1.0
-                    )  # Add timeout to keyboard thread join
-
-                print("\n")
-                if get_stats_callback:
-                    stats = get_stats_callback()
-                    if stats:
-                        from pprint import pprint
-
-                        formatted_stats = {
-                            k: round(v, 1) if isinstance(v, float) else v
-                            for k, v in stats.items()
-                        }
-                        pprint(formatted_stats)
+                # Send any remaining buffered content
+                if text_queue:
+                    if not initial_buffer_sent and initial_buffer:
+                        # Small delay for very short responses
+                        if len(initial_buffer) <= 20:
+                            await asyncio.sleep(0.1)
+                        text_queue.put(initial_buffer)
+                    text_queue.put("__END__")
 
             except Exception as e:
                 if text_queue:
@@ -322,16 +258,40 @@ class AudioClient:
                 raise e
             finally:
                 if self.tts_thread and self.tts_thread.is_alive():
-                    # Wait for TTS to finish before resuming recording
-                    tts_finished.wait(timeout=2.0)  # Add reasonable timeout
-                    self.tts_thread.join(timeout=1.0)
+                    self.tts_thread.join(timeout=1.0)  # Add timeout to thread join
+                keyboard_thread.join(timeout=1.0)  # Add timeout to keyboard thread join
 
-                # Only resume recording after TTS is completely finished
-                if self.whisper_asr:
-                    self.whisper_asr.resume_recording()
+            print("\n")
+            # Get performance stats from LLMClient
+            if get_stats_callback:
+                # First try the provided callback for backward compatibility
+                stats = get_stats_callback()
+            else:
+                # Use LLMClient stats
+                stats = self.llm_client.get_performance_stats()
 
-                if "ws" in locals():
-                    await ws.close()
+            if stats:
+                from pprint import pprint
+
+                formatted_stats = {
+                    k: round(v, 1) if isinstance(v, float) else v
+                    for k, v in stats.items()
+                }
+                pprint(formatted_stats)
+
+        except Exception as e:
+            if text_queue:
+                text_queue.put("__END__")
+            raise e
+        finally:
+            if self.tts_thread and self.tts_thread.is_alive():
+                # Wait for TTS to finish before resuming recording
+                tts_finished.wait(timeout=2.0)  # Add reasonable timeout
+                self.tts_thread.join(timeout=1.0)
+
+            # Only resume recording after TTS is completely finished
+            if self.whisper_asr:
+                self.whisper_asr.resume_recording()
 
     def initialize_tts(self):
         """Initialize TTS if enabled."""
@@ -343,8 +303,30 @@ class AudioClient:
                 self.log.debug("TTS initialized successfully")
             except Exception as e:
                 raise RuntimeError(
-                    f"Failed to initialize TTS:\n{e}\nYou can also use --no-tts option to disable TTS"
+                    f"Failed to initialize TTS:\n{e}\nInstall talk dependencies with: pip install .[talk]\nYou can also use --no-tts option to disable TTS"
                 )
+
+    async def speak_text(self, text: str) -> None:
+        """Speak text using initialized TTS, if available."""
+        if not self.enable_tts:
+            return
+        if not getattr(self, "tts", None):
+            self.log.debug("TTS is not initialized; skipping speak_text")
+            return
+        # Reuse the streaming path used in process_voice_input
+        text_queue = queue.Queue(maxsize=100)
+        interrupt_event = threading.Event()
+        tts_thread = threading.Thread(
+            target=self.tts.generate_speech_streaming,
+            args=(text_queue,),
+            kwargs={"interrupt_event": interrupt_event},
+            daemon=True,
+        )
+        tts_thread.start()
+        # Send the whole text and end
+        text_queue.put(text)
+        text_queue.put("__END__")
+        tts_thread.join(timeout=5.0)
 
     def _process_audio_wrapper(self, message_processor_callback):
         """Wrapper method to process audio and handle transcriptions"""
@@ -446,17 +428,9 @@ class AudioClient:
 
     async def halt_generation(self):
         """Send a request to halt the current generation."""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"http://{self.host}:{self.llm_port}/halt"
-                ) as response:
-                    if response.status == 200:
-                        self.log.debug("Successfully halted generation")
-                        print("\nGeneration interrupted.")
-                    else:
-                        self.log.warning(
-                            f"Failed to halt generation: {response.status}"
-                        )
-        except Exception as e:
-            self.log.error(f"Error halting generation: {e}")
+        if self.llm_client.halt_generation():
+            self.log.debug("Successfully halted generation via LLMClient")
+            print("\nGeneration interrupted.")
+        else:
+            self.log.debug("Halt requested - generation will stop on next iteration")
+            print("\nInterrupt requested.")
