@@ -11,7 +11,6 @@ __version__ = "0.10.0"
 # Lemonade version used across CI and installer
 LEMONADE_VERSION = "8.1.2"
 
-
 def get_package_version() -> str:
     """Get the installed package version from importlib.metadata.
 
