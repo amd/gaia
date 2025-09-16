@@ -96,6 +96,7 @@ lemonade-server serve
 # 1. Run complete meeting summarization experiment
 gaia generate --meeting-transcript -o ./test_data --meeting-types standup --count-per-type 1
 gaia groundtruth -d ./test_data --use-case summarization -o ./groundtruth
+# Note: Edit ./src/gaia/eval/configs/basic_summarization.json to customize models or create your own config
 gaia batch-experiment -c ./src/gaia/eval/configs/basic_summarization.json -i ./groundtruth/consolidated_summarization_groundtruth.json -o ./experiments
 gaia eval -d ./experiments -o ./evaluation
 gaia report -d ./evaluation -o ./reports/evaluation_report.md
@@ -136,6 +137,7 @@ gaia generate --meeting-transcript -o ./test_data/meetings --meeting-types stand
 gaia groundtruth -d ./test_data/meetings --use-case summarization -o ./groundtruth
 
 # Step 3: Run experiments with multiple models
+# Note: Edit ./src/gaia/eval/configs/basic_summarization.json to customize models or create your own config
 gaia batch-experiment -c ./src/gaia/eval/configs/basic_summarization.json -i ./groundtruth/consolidated_summarization_groundtruth.json -o ./experiments
 
 # Optional: If interrupted, resume (automatically skips completed experiments)
@@ -171,6 +173,7 @@ gaia generate --email -o ./test_data/emails --email-types customer_support proje
 gaia groundtruth -d ./test_data/emails --use-case email -o ./groundtruth
 
 # Step 3: Run experiments
+# Note: Edit ./src/gaia/eval/configs/basic_summarization.json to customize models or create your own config
 gaia batch-experiment -c ./src/gaia/eval/configs/basic_summarization.json -i ./groundtruth/consolidated_email_groundtruth.json -o ./experiments
 
 # Step 4: Evaluate and report
@@ -186,22 +189,21 @@ gaia visualize --experiments-dir ./experiments --evaluations-dir ./evaluation
 **Complete example: Test question-answering capabilities on documents**
 
 ```bash
-# Step 1: Prepare document data (using existing PDF)
-mkdir -p ./test_data/documents
-cp ./data/pdf/Oil-and-Gas-Activity-Operations-Manual-1-10.pdf ./test_data/documents/
+# Step 1: Create Q&A evaluation standards directly from existing PDF directory
+# Important: Use --num-samples 3 to match the qa_config.num_qa_pairs: 3 in basic_qa.json
+gaia groundtruth -d ./data/pdf --use-case qa --num-samples 3 -o ./groundtruth
 
-# Step 2: Create Q&A evaluation standards
-gaia groundtruth -d ./test_data/documents --use-case qa -o ./groundtruth
+# Step 2: Run experiments (use basic_qa.json for Q&A experiments)
+# Note: Edit ./src/gaia/eval/configs/basic_qa.json to customize models or create your own config
+gaia batch-experiment -c ./src/gaia/eval/configs/basic_qa.json -i ./groundtruth/consolidated_qa_groundtruth.json -o ./experiments
 
-# Step 3: Run experiments
-gaia batch-experiment -c ./src/gaia/eval/configs/basic_summarization.json -i ./groundtruth/consolidated_qa_groundtruth.json -o ./experiments
-
-# Step 4: Evaluate and report
+# Step 3: Evaluate and report
 gaia eval -d ./experiments -o ./evaluation
 gaia report -d ./evaluation -o ./reports/document_qa_report.md
 
-# Step 5: Analyze results
-gaia visualize --experiments-dir ./experiments --evaluations-dir ./evaluation
+# Step 4: Analyze results
+# Note: Include test-data-dir and groundtruth-dir to view source PDFs and Q&A pairs
+gaia visualize --experiments-dir ./experiments --evaluations-dir ./evaluation --test-data-dir ./data/pdf --groundtruth-dir ./groundtruth
 ```
 
 ### Workflow 4: Third-Party Model Testing

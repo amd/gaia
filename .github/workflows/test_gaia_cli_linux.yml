@@ -167,6 +167,10 @@ jobs:
             exit 1
           fi
           
+          # Pull the model now that server is running
+          echo "=== Pulling Qwen3-0.6B-GGUF model ==="
+          lemonade-server-dev pull Qwen3-0.6B-GGUF
+          
           # List available models for debugging
           echo "=== Listing Available Models ==="
           curl -s http://localhost:8000/api/v1/models | jq '.' || echo "Could not list models"

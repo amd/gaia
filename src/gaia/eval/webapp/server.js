@@ -151,8 +151,8 @@ app.get('/api/test-data', (req, res) => {
                 const dirPath = path.join(TEST_DATA_PATH, entry.name);
                 const dirFiles = fs.readdirSync(dirPath, { withFileTypes: true });
                 
-                const txtFiles = dirFiles
-                    .filter(file => file.isFile() && file.name.endsWith('.txt'))
+                const dataFiles = dirFiles
+                    .filter(file => file.isFile() && (file.name.endsWith('.txt') || file.name.endsWith('.pdf')))
                     .map(file => file.name);
                 
                 const hasMetadata = dirFiles.some(file => 
@@ -162,7 +162,7 @@ app.get('/api/test-data', (req, res) => {
                 testData.directories.push({
                     name: entry.name,
                     path: dirPath,
-                    files: txtFiles,
+                    files: dataFiles,
                     hasMetadata: hasMetadata
                 });
             }
@@ -185,12 +185,26 @@ app.get('/api/test-data/:type/:filename', (req, res) => {
             return res.status(404).json({ error: 'Test data file not found' });
         }
 
-        const content = fs.readFileSync(filePath, 'utf8');
-        res.json({ 
-            filename: filename,
-            type: type,
-            content: content 
-        });
+        // Check if file is PDF
+        if (filename.endsWith('.pdf')) {
+            // For PDFs, send file info and indicate it's a binary file
+            const stats = fs.statSync(filePath);
+            res.json({ 
+                filename: filename,
+                type: type,
+                isPdf: true,
+                size: stats.size,
+                message: 'PDF file - preview not available. Please open the file directly to view contents.'
+            });
+        } else {
+            // For text files, send the content
+            const content = fs.readFileSync(filePath, 'utf8');
+            res.json({ 
+                filename: filename,
+                type: type,
+                content: content 
+            });
+        }
     } catch (error) {
         res.status(500).json({ error: 'Failed to load test data file', details: error.message });
     }
