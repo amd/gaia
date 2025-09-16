@@ -1,9 +1,9 @@
 import pytest
 import json
 import logging
-from gaia.agents.Blender.agent_simple import BlenderAgentSimple
+from gaia.agents.blender.agent_simple import BlenderAgentSimple
 from gaia.llm.llm_client import LLMClient
-from gaia.agents.Blender.mcp.mcp_client import MCPClient
+from gaia.agents.blender.mcp.mcp_client import MCPClient
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
@@ -29,7 +29,7 @@ For testing purposes:
 - For any other request, respond with: CYLINDER,0,2,0,0.5,0.5,3
 """
     # Using local LLM for faster testing
-    return LLMClient(use_local=True, system_prompt=system_prompt)
+    return LLMClient(system_prompt=system_prompt)
 
 
 @pytest.fixture

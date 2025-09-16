@@ -66,7 +66,8 @@ class SummaryConfig:
     input_type: Literal["transcript", "email", "auto"] = "auto"
     styles: List[str] = None
     combined_prompt: bool = False
-    use_local_llm: bool = True
+    use_claude: bool = False
+    use_chatgpt: bool = False
 
     def __post_init__(self):
         if self.styles is None:
@@ -79,9 +80,9 @@ class SummaryConfig:
                 f"Invalid style(s): {', '.join(invalid_styles)}. Valid styles: {', '.join(valid_styles)}"
             )
 
-        # Auto-detect OpenAI models (gpt-*) to use cloud LLM
+        # Auto-detect OpenAI models (gpt-*) to use ChatGPT
         if self.model.lower().startswith("gpt"):
-            self.use_local_llm = False
+            self.use_chatgpt = True
 
 
 class SummarizerApp:
@@ -96,7 +97,8 @@ class SummarizerApp:
         chat_config = ChatConfig(
             model=self.config.model,
             max_tokens=self.config.max_tokens,
-            use_local_llm=self.config.use_local_llm,
+            use_claude=self.config.use_claude,
+            use_chatgpt=self.config.use_chatgpt,
             show_stats=True,
         )
         self.chat_sdk = ChatSDK(chat_config)
@@ -540,7 +542,11 @@ Content:
                     "total_processing_time_ms": total_processing_time,
                     "model_info": {
                         "model": self.config.model,
-                        "local_llm": self.config.use_local_llm,
+                        "use_local": not (
+                            self.config.use_claude or self.config.use_chatgpt
+                        ),
+                        "use_claude": self.config.use_claude,
+                        "use_chatgpt": self.config.use_chatgpt,
                     },
                 },
                 "original_content": content,

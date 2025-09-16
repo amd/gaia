@@ -9,6 +9,12 @@ from gaia.logger import get_logger
 from gaia.eval.claude import ClaudeClient
 from gaia.llm.lemonade_client import LemonadeClient
 
+# Import PDF reader
+try:
+    from pypdf import PdfReader
+except ImportError:
+    PdfReader = None
+
 
 @dataclass
 class ExperimentConfig:
@@ -45,6 +51,38 @@ class BatchExperimentRunner:
         self.config_file = config_file
         self.experiments = []
         self.load_config()
+
+    def _extract_text_from_pdf(self, pdf_path: str) -> str:
+        """Extract text from PDF file using local PDF library."""
+        if PdfReader is None:
+            raise ImportError(
+                "PDF reading library not found. Please install pypdf:\n"
+                "  pip install pypdf"
+            )
+
+        try:
+            reader = PdfReader(pdf_path)
+            total_pages = len(reader.pages)
+            self.log.info(
+                f"📄 Extracting text from {total_pages} pages of {pdf_path}..."
+            )
+
+            text = ""
+            for i, page in enumerate(reader.pages, 1):
+                # Show progress for large PDFs
+                if i % 10 == 0 or i == total_pages:
+                    self.log.debug(f"  Processing page {i}/{total_pages}...")
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n"
+
+            extracted_text = text.strip()
+            self.log.info(f"📝 Extracted {len(extracted_text):,} characters from PDF")
+            return extracted_text
+
+        except Exception as e:
+            self.log.error(f"Error reading PDF {pdf_path}: {e}")
+            raise
 
     def load_config(self):
         """Load experiment configuration from JSON file."""
@@ -94,11 +132,19 @@ class BatchExperimentRunner:
             raise ValueError(f"Unsupported LLM type: {experiment.llm_type}")
 
     def process_question_claude(
-        self, client: ClaudeClient, question: str, system_prompt: str
+        self,
+        client: ClaudeClient,
+        question: str,
+        system_prompt: str,
+        document_content: str = "",
     ) -> Dict:
         """Process a question using Claude client."""
         try:
-            prompt = f"{system_prompt}\n\nQuestion: {question}\n\nAnswer:"
+            if document_content:
+                # Include document content in the prompt
+                prompt = f"{system_prompt}\n\nDocument Content:\n{document_content}\n\nQuestion: {question}\n\nAnswer:"
+            else:
+                prompt = f"{system_prompt}\n\nQuestion: {question}\n\nAnswer:"
             response_data = client.get_completion_with_usage(prompt)
 
             # Extract response text
@@ -136,11 +182,15 @@ class BatchExperimentRunner:
         system_prompt: str,
         max_tokens: int,
         temperature: float,
+        document_content: str = "",
     ) -> Dict:
         """Process a question using Lemonade client."""
         try:
-            # Format the prompt with system message and question
-            formatted_prompt = f"{system_prompt}\n\nQuestion: {question}\n\nAnswer:"
+            # Format the prompt with system message, document content (if available), and question
+            if document_content:
+                formatted_prompt = f"{system_prompt}\n\nDocument Content:\n{document_content}\n\nQuestion: {question}\n\nAnswer:"
+            else:
+                formatted_prompt = f"{system_prompt}\n\nQuestion: {question}\n\nAnswer:"
 
             # Use completions method with the client's loaded model
             response_data = client.completions(
@@ -732,19 +782,96 @@ class BatchExperimentRunner:
             # For consolidated QA files, extract QA pairs from all items
             data = []
 
-            # Check if analysis contains direct qa_pairs
+            # Get source file information from metadata for document loading
+            source_files_map = {}
+            if "source_files" in metadata:
+                for source_info in metadata["source_files"]:
+                    doc_id = source_info.get("transcript_id", "")
+                    source_file = source_info.get("source_file", "")
+                    if doc_id and source_file:
+                        source_files_map[doc_id] = source_file
+
+            # Cache for document content to avoid loading same document multiple times
+            document_content_cache = {}
+
+            # Check if analysis contains direct qa_pairs (can be dict or list)
             if "qa_pairs" in analysis:
                 qa_pairs = analysis["qa_pairs"]
-                for qa_pair in qa_pairs:
-                    data.append(
-                        {
-                            "type": "qa",
-                            "query": qa_pair.get("query", qa_pair.get("question", "")),
-                            "ground_truth": qa_pair.get(
-                                "response", qa_pair.get("answer", "")
-                            ),
-                        }
-                    )
+
+                # Handle dict format (consolidated files key by document ID)
+                if isinstance(qa_pairs, dict):
+                    for doc_id, doc_qa_pairs in qa_pairs.items():
+                        # Try to load the source document content
+                        document_content = ""
+                        source_file = source_files_map.get(doc_id, "")
+
+                        # Check cache first
+                        if source_file in document_content_cache:
+                            document_content = document_content_cache[source_file]
+                        elif source_file:
+                            source_path = Path(source_file)
+                            if source_path.exists():
+                                try:
+                                    # Handle PDF files
+                                    if source_path.suffix.lower() == ".pdf":
+                                        self.log.info(
+                                            f"PDF file detected: {source_path}"
+                                        )
+                                        # Use local PDF extraction
+                                        document_content = self._extract_text_from_pdf(
+                                            str(source_path)
+                                        )
+                                    # Handle text files
+                                    else:
+                                        with open(
+                                            source_path, "r", encoding="utf-8"
+                                        ) as f:
+                                            document_content = f.read()
+
+                                    # Cache the content
+                                    document_content_cache[source_file] = (
+                                        document_content
+                                    )
+
+                                except Exception as e:
+                                    self.log.warning(
+                                        f"Failed to load document {source_path}: {e}"
+                                    )
+                                    document_content = ""
+                            else:
+                                self.log.warning(
+                                    f"Source document not found: {source_path}"
+                                )
+
+                        for qa_pair in doc_qa_pairs:
+                            data.append(
+                                {
+                                    "type": "qa",
+                                    "query": qa_pair.get(
+                                        "query", qa_pair.get("question", "")
+                                    ),
+                                    "ground_truth": qa_pair.get(
+                                        "response", qa_pair.get("answer", "")
+                                    ),
+                                    "source_item": doc_id,
+                                    "document_content": document_content,
+                                    "source_file": source_file,
+                                }
+                            )
+                # Handle list format (non-consolidated files)
+                elif isinstance(qa_pairs, list):
+                    for qa_pair in qa_pairs:
+                        data.append(
+                            {
+                                "type": "qa",
+                                "query": qa_pair.get(
+                                    "query", qa_pair.get("question", "")
+                                ),
+                                "ground_truth": qa_pair.get(
+                                    "response", qa_pair.get("answer", "")
+                                ),
+                            }
+                        )
 
             # Also check for nested structure (qa_pairs within individual summaries)
             summaries = analysis.get("summaries", {})
@@ -972,18 +1099,40 @@ class BatchExperimentRunner:
             # Process based on experiment and data type
             if data_type == "qa":
                 # Process Q&A pair with ground truth
+                # Check if document content is available
+                document_content = data_item.get("document_content", "")
+
                 if experiment.llm_type.lower() == "claude":
-                    result = self.process_question_claude(
-                        client, data_item["query"], experiment.system_prompt
-                    )
+                    if document_content:
+                        # Include document context with the question
+                        result = self.process_question_claude(
+                            client,
+                            data_item["query"],
+                            experiment.system_prompt,
+                            document_content,
+                        )
+                    else:
+                        result = self.process_question_claude(
+                            client, data_item["query"], experiment.system_prompt
+                        )
                 elif experiment.llm_type.lower() == "lemonade":
-                    result = self.process_question_lemonade(
-                        client,
-                        data_item["query"],
-                        experiment.system_prompt,
-                        experiment.max_tokens,
-                        experiment.temperature,
-                    )
+                    if document_content:
+                        result = self.process_question_lemonade(
+                            client,
+                            data_item["query"],
+                            experiment.system_prompt,
+                            experiment.max_tokens,
+                            experiment.temperature,
+                            document_content,
+                        )
+                    else:
+                        result = self.process_question_lemonade(
+                            client,
+                            data_item["query"],
+                            experiment.system_prompt,
+                            experiment.max_tokens,
+                            experiment.temperature,
+                        )
 
                 # Create QA result entry
                 result_entry = {
@@ -1589,6 +1738,21 @@ class BatchExperimentRunner:
                         "consolidated_from", 0
                     ),
                 }
+
+                # Include analysis results based on experiment type
+                if "analysis" in experiment_data:
+                    analysis = experiment_data["analysis"]
+                    if experiment_data["metadata"]["experiment_type"] == "qa":
+                        # Include Q&A results
+                        if "qa_results" in analysis:
+                            experiment_info["qa_results"] = analysis["qa_results"]
+                    elif (
+                        experiment_data["metadata"]["experiment_type"]
+                        == "summarization"
+                    ):
+                        # Include summarization results
+                        if "summaries" in analysis:
+                            experiment_info["summaries"] = analysis["summaries"]
 
                 all_experiments.append(experiment_info)
 

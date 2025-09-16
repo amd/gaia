@@ -1,0 +1,143 @@
+{
+  "name": "GAIA MCP Integration Example",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-node",
+      "name": "When clicking \"Test workflow\"",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8765/jira",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "show my assigned issues"
+            },
+            {
+              "name": "operation",
+              "value": "query"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "jira-query-node",
+      "name": "Query Jira Issues",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [450, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8765/llm",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "Summarize the following Jira issues: {{ $json.result }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "llm-summarize-node",
+      "name": "Summarize with LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:8765/health",
+        "options": {}
+      },
+      "id": "health-check-node",
+      "name": "Check MCP Health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [450, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8765/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"n8n-{{ $workflow.id }}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"gaia.jira\",\n    \"arguments\": {\n      \"query\": \"create issue: Test from n8n\",\n      \"operation\": \"create\"\n    }\n  }\n}"
+      },
+      "id": "jsonrpc-create-issue",
+      "name": "Create Issue via JSON-RPC",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 400]
+    }
+  ],
+  "connections": {
+    "trigger-node": {
+      "main": [
+        [
+          {
+            "node": "jira-query-node",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "health-check-node",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "jira-query-node": {
+      "main": [
+        [
+          {
+            "node": "llm-summarize-node",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "health-check-node": {
+      "main": [
+        [
+          {
+            "node": "jsonrpc-create-issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "meta": {
+    "instanceId": "gaia-mcp-example"
+  },
+  "tags": []
+}

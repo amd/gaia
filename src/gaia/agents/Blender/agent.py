@@ -8,7 +8,7 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import tool
 from gaia.agents.base.console import AgentConsole
 from gaia.mcp.blender_mcp_client import MCPClient
-from gaia.agents.Blender.core.scene import generate_scene_diagnosis_code
+from gaia.agents.blender.core.scene import generate_scene_diagnosis_code
 
 from typing import Dict, Any, Optional
 import logging
@@ -30,7 +30,6 @@ class BlenderAgent(Agent):
 
     def __init__(
         self,
-        use_local_llm: bool = True,
         mcp: Optional[MCPClient] = None,
         model_id: str = None,
         base_url: str = "http://localhost:8000/api/v0",
@@ -58,7 +57,6 @@ class BlenderAgent(Agent):
 
         # Call the parent class constructor
         super().__init__(
-            use_local_llm=use_local_llm,
             model_id=model_id,
             base_url=base_url,
             max_steps=max_steps,
@@ -191,7 +189,7 @@ Examples of colored requests:
             ```
             """
             try:
-                from gaia.agents.Blender.core.scene import SceneManager
+                from gaia.agents.blender.core.scene import SceneManager
 
                 scene_manager = SceneManager(self.mcp)
                 return scene_manager.clear_scene()
@@ -277,7 +275,7 @@ Examples of colored requests:
             ```
             """
             try:
-                from gaia.agents.Blender.core.materials import MaterialManager
+                from gaia.agents.blender.core.materials import MaterialManager
 
                 material_manager = MaterialManager(self.mcp)
                 return material_manager.set_material_color(object_name, color)

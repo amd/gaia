@@ -32,10 +32,20 @@ setup(
         "gaia.mcp",
         "gaia.agents",
         "gaia.agents.base",
-        "gaia.agents.Blender",
-        "gaia.agents.Blender.core",
+        "gaia.agents.blender",
+        "gaia.agents.blender.core",
+        "gaia.agents.jira",
     ],
-    package_data={},
+    package_data={
+        "gaia.eval": [
+            "webapp/*.json",
+            "webapp/*.js", 
+            "webapp/*.md",
+            "webapp/public/*.html",
+            "webapp/public/*.css",
+            "webapp/public/*.js",
+        ],
+    },
     install_requires=[
         "openai",
         "pydantic>=2.9.2",
@@ -72,6 +82,7 @@ setup(
             "bs4",
             "scikit-learn",
             "numpy",
+            "pypdf",
         ],
         "talk":[
             "pyaudio",
@@ -90,6 +101,8 @@ setup(
         "console_scripts": [
             "gaia = gaia.cli:main",
             "gaia-cli = gaia.cli:main",
+            "gaia-mcp = gaia.mcp.mcp_bridge:main",
+            "gaia-mcp-atlassian = gaia.mcp.atlassian_mcp:main",
         ]
     },
     python_requires=">=3.8, <3.13",

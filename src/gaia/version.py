@@ -6,10 +6,10 @@ import logging
 import subprocess
 import os
 
-__version__ = "0.10.0"
+__version__ = "0.10.1"
 
 # Lemonade version used across CI and installer
-LEMONADE_VERSION = "8.1.2"
+LEMONADE_VERSION = "8.1.5"
 
 
 def get_package_version() -> str:

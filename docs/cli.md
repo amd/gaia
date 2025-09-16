@@ -131,6 +131,7 @@ gaia --help
 - **`chat`**: Start an interactive text chat session with message history
 - **`talk`**: Start a voice-based conversation session
 - **`blender`**: Create and modify 3D scenes using the Blender agent (see [Blender Guide](./blender.md))
+- **`mcp`**: Start and manage MCP (Model Context Protocol) bridge servers for integration with external clients and services (see [MCP Bridge Guide](./mcp.md))
 - **`stats`**: View model performance statistics from the most recent run
 - **`test`**: Run various audio/speech tests for development and troubleshooting
 - **`youtube`**: YouTube utilities for transcript downloading
@@ -299,6 +300,47 @@ View performance statistics from the most recent model run:
 ```bash
 gaia stats [OPTIONS]
 ```
+
+## MCP Command
+
+The MCP (Model Context Protocol) command provides integration with MCP-compatible clients and external services like Atlassian's Jira, Confluence, and Compass. MCP enables GAIA to connect with Claude Desktop, VS Code, Cursor, and custom applications through a standardized WebSocket-based protocol.
+
+**For complete documentation including setup, SDK usage, and integration examples, see the [MCP Bridge Guide](./mcp.md).**
+
+### Quick Start
+
+```bash
+# Install MCP support
+pip install -e .[mcp]
+
+# Start the MCP bridge
+gaia mcp start
+
+# Test basic functionality  
+gaia mcp test --query "Hello from GAIA MCP!"
+
+# Test Hugging Face integration
+export HF_TOKEN=hf_your_token_here
+gaia mcp test --query "What are the most popular LLMs on Hugging Face?"
+```
+
+### Available Subcommands
+
+- **`start`** - Start the main MCP bridge server
+- **`status`** - Check if the MCP server is running
+- **`test`** - Test MCP functionality with a sample query
+- **`atlassian`** - Start Atlassian integration for Jira/Confluence/Compass
+
+### Common Options
+
+Most MCP commands support:
+- `--host` - Server host (default: localhost)
+- `--port` - Server port (default: 8765)
+- `--query` - Custom test query for testing commands
+- `--verbose` - Enable verbose logging for all HTTP requests (for `start` command)
+- `--background` - Run server in background mode (for `start` command)
+
+For detailed usage, configuration options, SDK integration, and examples, see the [MCP Bridge Guide](./mcp.md).
 
 ## Evaluation Commands
 

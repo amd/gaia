@@ -1,0 +1,30 @@
+{
+  "description": "Basic Q&A configuration for document question answering",
+  "qa_config": {
+    "comment": "Number of Q&A pairs to generate for each document (default: 5 if not specified)",
+    "note": "Currently the full document is placed into context. This is temporary until RAG functionality is implemented."
+  },
+  "experiments": [
+    {
+      "name": "Claude-Sonnet-QA",
+      "llm_type": "claude",
+      "model": "claude-sonnet-4-20250514",
+      "experiment_type": "qa",
+      "system_prompt": "You are an expert document analyst. Answer questions accurately based on the provided document content. Be specific and cite relevant information from the document.",
+      "max_tokens": 1024,
+      "temperature": 0.1,
+      "parameters": {}
+    },
+    {
+      "name": "Qwen3-0.6B-GGUF-QA",
+      "llm_type": "lemonade",
+      "model": "Qwen3-0.6B-GGUF",
+      "experiment_type": "qa",
+      "system_prompt": "You are an expert document analyst. Answer questions accurately based on the provided document content. Be specific and cite relevant information from the document.",
+      "max_tokens": 1024,
+      "temperature": 0.1,
+      "minions": 0,
+      "parameters": {}
+    }
+  ]
+}

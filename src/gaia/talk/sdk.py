@@ -45,7 +45,8 @@ class TalkConfig:
     assistant_name: str = "gaia"
 
     # General settings
-    use_local_llm: bool = True
+    use_claude: bool = False  # Use Claude API
+    use_chatgpt: bool = False  # Use ChatGPT/OpenAI API
     show_stats: bool = False
     logging_level: str = "INFO"
 
@@ -110,7 +111,8 @@ class TalkSDK:
             assistant_name=self.config.assistant_name,
             show_stats=self.config.show_stats,
             logging_level=self.config.logging_level,
-            use_local_llm=self.config.use_local_llm,
+            use_claude=self.config.use_claude,
+            use_chatgpt=self.config.use_chatgpt,
         )
         self.chat_sdk = ChatSDK(chat_config)
 
@@ -121,7 +123,8 @@ class TalkSDK:
             silence_threshold=self.config.silence_threshold,
             enable_tts=self.config.enable_tts,
             logging_level=self.config.logging_level,
-            use_local_llm=self.config.use_local_llm,
+            use_claude=self.config.use_claude,
+            use_chatgpt=self.config.use_chatgpt,
             system_prompt=self.config.system_prompt,
         )
 

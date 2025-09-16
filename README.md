@@ -13,6 +13,7 @@
 [![GitHub issues](https://img.shields.io/github/issues/amd/gaia)](https://github.com/amd/gaia/issues)
 [![GitHub downloads](https://img.shields.io/github/downloads/amd/gaia/total.svg)](https://tooomm.github.io/github-release-stats/?username=aigdat&repository=gaia)
 [![Star History Chart](https://img.shields.io/badge/Star%20History-View-brightgreen)](https://star-history.com/#amd/gaia)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Community-7289DA?logo=discord&logoColor=white)](https://discord.com/channels/1392562559122407535/1402013282495102997 "Join our Discord community")
 
 <img src="https://img.youtube.com/vi/_PORHv_-atI/maxresdefault.jpg" style="display: block; margin: auto;" />
 

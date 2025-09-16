@@ -9,7 +9,7 @@ This directory contains tests for the Blender Agent, including both unit tests a
 To run unit tests only:
 
 ```bash
-pytest -xvs src/gaia/agents/Blender/tests/test_agent_v1.py -k "not integration"
+pytest -xvs src/gaia/agents/blender/tests/test_agent_v1.py -k "not integration"
 ```
 
 ### Integration Tests
@@ -22,7 +22,7 @@ Integration tests require a running MCP server (Blender with the MCP add-on). Be
 Then run:
 
 ```bash
-pytest -xvs src/gaia/agents/Blender/tests/test_agent_v1.py -k "integration"
+pytest -xvs src/gaia/agents/blender/tests/test_agent_v1.py -k "integration"
 ```
 
 Integration tests will automatically be skipped if the MCP server is not running.
@@ -32,13 +32,13 @@ Integration tests will automatically be skipped if the MCP server is not running
 To run all tests:
 
 ```bash
-pytest -xvs src/gaia/agents/Blender/tests/test_agent_v1.py
+pytest -xvs src/gaia/agents/blender/tests/test_agent_v1.py
 ```
 
 To skip integration tests regardless of whether MCP server is running:
 
 ```bash
-pytest -xvs src/gaia/agents/Blender/tests/test_agent_v1.py --skip-integration
+pytest -xvs src/gaia/agents/blender/tests/test_agent_v1.py --skip-integration
 ```
 
 ## Test Structure

@@ -20,7 +20,8 @@ class AudioClient:
         silence_threshold=0.5,
         enable_tts=True,
         logging_level="INFO",
-        use_local_llm=True,
+        use_claude=False,
+        use_chatgpt=False,
         system_prompt=None,
     ):
         self.log = get_logger(__name__)
@@ -41,7 +42,9 @@ class AudioClient:
 
         # Initialize LLM client (base_url handled automatically)
         self.llm_client = LLMClient(
-            use_local=use_local_llm, system_prompt=system_prompt
+            use_claude=use_claude,
+            use_openai=use_chatgpt,  # LLMClient uses use_openai, not use_chatgpt
+            system_prompt=system_prompt,
         )
 
         self.log.info("Audio client initialized.")

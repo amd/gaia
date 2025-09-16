@@ -167,6 +167,23 @@ class AgentConsole:
         else:
             print(f"\n{text}")
 
+    def print_processing_start(self, query: str, max_steps: int) -> None:
+        """
+        Print the initial processing message with max steps info.
+
+        Args:
+            query: The user query being processed
+            max_steps: Maximum number of steps allowed
+        """
+        if self.rich_available:
+            self.console.print(f"\n[bold blue]🤖 Processing:[/bold blue] '{query}'")
+            self.console.print("=" * 50)
+            self.console.print(f"[dim]Max steps: {max_steps}[/dim]\n")
+        else:
+            print(f"\n🤖 Processing: '{query}'")
+            print("=" * 50)
+            print(f"Max steps: {max_steps}\n")
+
     def print_separator(self, length: int = 50) -> None:
         """
         Print a separator line.
@@ -185,15 +202,16 @@ class AgentConsole:
 
         Args:
             step_num: Current step number
-            step_limit: Maximum number of steps
+            step_limit: Maximum number of steps (unused, kept for compatibility)
         """
+        _ = step_limit  # Mark as intentionally unused
         if self.rich_available:
             self.console.print(
-                f"\n[bold cyan]📝 Step {step_num}/{step_limit}:[/bold cyan] Thinking...",
+                f"\n[bold cyan]📝 Step {step_num}:[/bold cyan] Thinking...",
                 highlight=False,
             )
         else:
-            print(f"\n📝 Step {step_num}/{step_limit}: Thinking...")
+            print(f"\n📝 Step {step_num}: Thinking...")
 
     def print_thought(self, thought: str) -> None:
         """
@@ -404,9 +422,20 @@ class AgentConsole:
         if self.rich_available:
             from rich.syntax import Syntax
 
-            syntax = Syntax(prompt, "markdown", theme="monokai", line_numbers=False)
+            # Use plain text instead of markdown to avoid any parsing issues
+            # and ensure the full content is displayed
+            syntax = Syntax(prompt, "text", theme="monokai", line_numbers=False)
+
+            # Use expand=False to prevent Rich from trying to fit to terminal width
+            # This ensures the full prompt is shown even if it's very long
             self.console.print(
-                Panel(syntax, title=f"🔍 {title}", border_style="cyan", padding=(1, 2))
+                Panel(
+                    syntax,
+                    title=f"🔍 {title}",
+                    border_style="cyan",
+                    padding=(1, 2),
+                    expand=False,
+                )
             )
         else:
             print(f"\n🔍 {title}:\n{'-' * 80}\n{prompt}\n{'-' * 80}\n")
@@ -591,3 +620,118 @@ class AgentConsole:
         else:
             print(f"\n📌 {name}({params_str})")
             print(f"   {description}")
+
+
+class SilentConsole:
+    """
+    A silent console that suppresses all output for JSON-only mode.
+    Provides the same interface as AgentConsole but with no-op methods.
+    """
+
+    def __init__(self):
+        """Initialize the silent console."""
+        self.streaming_buffer = ""  # Maintain compatibility
+
+    def pretty_print_json(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def print_header(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def print_processing_start(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def print_separator(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def print_step_header(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def print_thought(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def print_goal(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def print_plan(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def print_plan_progress(self, *_args, **_kwargs):
+        """Silent no-op method."""
+        ...
+
+    def print_tool_usage(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def print_tool_complete(self) -> None:
+        """Silent no-op method."""
+        ...
+
+    def print_error(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def print_info(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def print_repeated_tool_warning(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def print_final_answer(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def print_completion(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def print_prompt(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def display_stats(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def start_progress(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def stop_progress(self) -> None:
+        """Silent no-op method."""
+        ...
+
+    def print_state_info(self, *_args, **_kwargs):
+        """Silent no-op method."""
+        ...
+
+    def print_warning(self, *_args, **_kwargs):
+        """Silent no-op method."""
+        ...
+
+    def print_streaming_text(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def get_streaming_buffer(self) -> str:
+        """Silent no-op method - returns empty string."""
+        return ""
+
+    def print_response(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...
+
+    def print_tool_info(self, *_args, **_kwargs) -> None:
+        """Silent no-op method."""
+        ...

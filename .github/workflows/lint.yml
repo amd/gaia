@@ -17,6 +17,7 @@ on:
       - "installer/**"
       - "groundtruth/**"
       - "test_data/**"
+      - "setup.py"
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -26,6 +27,7 @@ on:
       - "installer/**"
       - "groundtruth/**"
       - "test_data/**"
+      - "setup.py"
   merge_group:
   workflow_dispatch:
 

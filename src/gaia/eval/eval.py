@@ -2210,8 +2210,13 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
         ):
             return "summarization"
 
-        # RAG evaluations have similarity scores and different structure
+        # RAG/QA evaluations have similarity scores and different structure
+        # Both Q&A and RAG evaluations are treated the same way
         if "similarity_score" in first_question or "passed_threshold" in first_question:
+            return "rag"
+
+        # Additional check for Q&A evaluations that have qa_inputs
+        if "qa_inputs" in first_question:
             return "rag"
 
         # If we can't detect the evaluation type, log the issue for debugging

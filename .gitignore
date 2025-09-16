@@ -55,6 +55,7 @@ coverage.xml
 
 # Django stuff
 *.log
+*.pid
 local_settings.py
 
 # Flask stuff
@@ -157,6 +158,14 @@ coverage/
 
 # Custom
 config.ini
+
+# MCP Configuration and runtime files
+.env
+.env.*
+!.env.example
+mcp_server.log
+atlassian_config.json
+*.mcp.json
 
 # version files
 version.txt
