@@ -35,7 +35,16 @@ setup(
         "gaia.agents.Blender",
         "gaia.agents.Blender.core",
     ],
-    package_data={},
+    package_data={
+        "gaia.eval": [
+            "webapp/*.json",
+            "webapp/*.js", 
+            "webapp/*.md",
+            "webapp/public/*.html",
+            "webapp/public/*.css",
+            "webapp/public/*.js",
+        ],
+    },
     install_requires=[
         "openai",
         "pydantic>=2.9.2",
@@ -72,6 +81,7 @@ setup(
             "bs4",
             "scikit-learn",
             "numpy",
+            "pypdf",
         ],
         "talk":[
             "pyaudio",

@@ -617,13 +617,26 @@ class EvaluationVisualizer {
             const evalData = report.evaluation;
             const metrics_data = evalData.overall_rating?.metrics;
             if (metrics_data) {
-                metrics.push(
-                    { label: 'Grade', value: metrics_data.quality_score ? this.formatQualityScore(metrics_data.quality_score) : 'N/A' },
-                    { label: 'Excellent', value: metrics_data.excellent_count || 0 },
-                    { label: 'Good', value: metrics_data.good_count || 0 },
-                    { label: 'Fair', value: metrics_data.fair_count || 0 },
-                    { label: 'Poor', value: metrics_data.poor_count || 0 }
-                );
+                // Check if this is a Q&A evaluation (has accuracy_percentage) or summarization (has quality_score)
+                if (metrics_data.accuracy_percentage !== undefined) {
+                    // Q&A evaluation metrics
+                    metrics.push(
+                        { label: 'Accuracy', value: `${metrics_data.accuracy_percentage}%` },
+                        { label: 'Pass Rate', value: `${(metrics_data.pass_rate * 100).toFixed(1)}%` },
+                        { label: 'Questions', value: metrics_data.num_questions || 0 },
+                        { label: 'Passed', value: metrics_data.num_passed || 0 },
+                        { label: 'Failed', value: metrics_data.num_failed || 0 }
+                    );
+                } else if (metrics_data.quality_score !== undefined) {
+                    // Summarization evaluation metrics
+                    metrics.push(
+                        { label: 'Grade', value: this.formatQualityScore(metrics_data.quality_score) },
+                        { label: 'Excellent', value: metrics_data.excellent_count || 0 },
+                        { label: 'Good', value: metrics_data.good_count || 0 },
+                        { label: 'Fair', value: metrics_data.fair_count || 0 },
+                        { label: 'Poor', value: metrics_data.poor_count || 0 }
+                    );
+                }
             }
 
             // Add evaluation cost and usage metrics
@@ -1062,23 +1075,63 @@ class EvaluationVisualizer {
     }
 
     generateExperimentSummaries(experiment) {
-        if (!experiment.analysis || !experiment.analysis.summarization_results) {
+        if (!experiment.analysis) {
             return '';
         }
 
-        const results = experiment.analysis.summarization_results;
-        if (results.length === 0) {
-            return '';
+        let contentHtml = '';
+
+        // Handle Q&A results
+        if (experiment.analysis.qa_results) {
+            const qaResults = experiment.analysis.qa_results;
+            if (qaResults.length > 0) {
+                contentHtml += `
+                    <div class="collapsible-section" data-section="qa-results">
+                        <div class="collapsible-header">
+                            <h4>Q&A Results</h4>
+                            <span class="collapsible-toggle">▶</span>
+                        </div>
+                        <div class="collapsible-content">
+                            <div class="collapsible-body">
+                                ${qaResults.map((qa, index) => `
+                                    <div class="qa-item" style="margin-bottom: 20px; padding: 15px; border: 1px solid #e0e0e0; border-radius: 5px;">
+                                        <div style="margin-bottom: 10px;">
+                                            <strong>Question ${index + 1}:</strong>
+                                            <div style="color: #333; margin-top: 5px;">${this.escapeHtml(qa.query)}</div>
+                                        </div>
+                                        <div style="margin-bottom: 10px;">
+                                            <strong>Model Response:</strong>
+                                            <div style="color: #444; margin-top: 5px; white-space: pre-wrap;">${this.escapeHtml(qa.response)}</div>
+                                        </div>
+                                        <div style="margin-bottom: 10px;">
+                                            <strong>Ground Truth:</strong>
+                                            <div style="color: #666; margin-top: 5px;">${this.escapeHtml(qa.ground_truth)}</div>
+                                        </div>
+                                        ${qa.processing_time_seconds ? `
+                                            <div style="color: #888; font-size: 0.9em;">
+                                                <strong>Processing Time:</strong> ${qa.processing_time_seconds.toFixed(2)}s
+                                            </div>
+                                        ` : ''}
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
         }
 
-        // Generate content for all summarization results
-        let summariesHtml = '';
-        results.forEach((result, index) => {
+        // Handle summarization results
+        if (experiment.analysis.summarization_results) {
+            const results = experiment.analysis.summarization_results;
+            if (results.length > 0) {
+                // Generate content for all summarization results
+                results.forEach((result, index) => {
             if (result.generated_summaries) {
                 const summaries = result.generated_summaries;
                 const sourceFile = result.source_file ? result.source_file.split('\\').pop().split('/').pop() : `Item ${index + 1}`;
 
-                summariesHtml += `
+                contentHtml += `
                     <div class="collapsible-section" data-section="summaries-${index}">
                         <div class="collapsible-header">
                             <h4>Generated Summaries - ${sourceFile}</h4>
@@ -1098,8 +1151,10 @@ class EvaluationVisualizer {
                 `;
             }
         });
+            }
+        }
 
-        return summariesHtml;
+        return contentHtml;
     }
 
     generateEvaluationExplanations(evaluation) {
@@ -1156,7 +1211,7 @@ class EvaluationVisualizer {
     }
 
     generateTestDataSection(testData) {
-        const { content, metadata, type, filename } = testData;
+        const { content, metadata, type, filename, isPdf, message } = testData;
 
         let metadataInfo = '';
         if (metadata) {
@@ -1198,7 +1253,16 @@ class EvaluationVisualizer {
                     <div class="collapsible-body">
                         <div class="summary-item">
                             <div class="summary-label">${filename}</div>
-                            <div class="summary-text">${this.escapeHtml(content.content)}</div>
+                            <div class="summary-text">
+                                ${isPdf ? 
+                                    `<div style="padding: 20px; background: #f0f0f0; border-radius: 5px; text-align: center;">
+                                        <span style="font-size: 48px;">📄</span>
+                                        <p style="margin-top: 10px; color: #666;">${message || 'PDF file - preview not available'}</p>
+                                        <p style="color: #888; font-size: 0.9em;">Size: ${testData.size ? (testData.size / 1024).toFixed(2) + ' KB' : 'Unknown'}</p>
+                                    </div>` :
+                                    this.escapeHtml(content || '')
+                                }
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1546,6 +1610,13 @@ class EvaluationVisualizer {
                     goodCount: 0,
                     fairCount: 0,
                     poorCount: 0,
+                    // Q&A specific metrics
+                    totalAccuracy: 0,
+                    totalPassRate: 0,
+                    totalQuestions: 0,
+                    totalPassed: 0,
+                    totalFailed: 0,
+                    isQAEvaluation: false,
                     testSets: [],
                     totalInferenceInputTokens: 0,
                     totalInferenceOutputTokens: 0,
@@ -1562,13 +1633,25 @@ class EvaluationVisualizer {
                 group.testSets.push(testSetName);
             }
 
-            // Accumulate metrics
+            // Accumulate metrics - check if this is a Q&A or summarization evaluation
             const metrics = evalData.overall_rating?.metrics || {};
-            group.totalScore += metrics.quality_score || 0;
-            group.excellentCount += metrics.excellent_count || 0;
-            group.goodCount += metrics.good_count || 0;
-            group.fairCount += metrics.fair_count || 0;
-            group.poorCount += metrics.poor_count || 0;
+            
+            if (metrics.accuracy_percentage !== undefined) {
+                // Q&A evaluation
+                group.isQAEvaluation = true;
+                group.totalAccuracy += metrics.accuracy_percentage || 0;
+                group.totalPassRate += metrics.pass_rate || 0;
+                group.totalQuestions += metrics.num_questions || 0;
+                group.totalPassed += metrics.num_passed || 0;
+                group.totalFailed += metrics.num_failed || 0;
+            } else {
+                // Summarization evaluation
+                group.totalScore += metrics.quality_score || 0;
+                group.excellentCount += metrics.excellent_count || 0;
+                group.goodCount += metrics.good_count || 0;
+                group.fairCount += metrics.fair_count || 0;
+                group.poorCount += metrics.poor_count || 0;
+            }
 
             // Use inference cost from consolidated report (actual model cost, not evaluation cost)
             let experimentCost = 0;
@@ -1589,19 +1672,51 @@ class EvaluationVisualizer {
 
         // Convert groups to consolidated evaluations
         const consolidatedEvaluations = Object.values(modelGroups).map(group => {
-            const totalRatings = group.excellentCount + group.goodCount + group.fairCount + group.poorCount;
-            
-            // Properly calculate quality score from aggregated rating counts using the same formula as Python
             let avgScore = 0;
-            if (totalRatings > 0) {
-                avgScore = ((group.excellentCount * 4 + group.goodCount * 3 + group.fairCount * 2 + group.poorCount * 1) / totalRatings - 1) * 100 / 3;
-            }
-
-            // Determine overall rating based on average score
             let overallRating = 'poor';
-            if (avgScore >= 85) overallRating = 'excellent';
-            else if (avgScore >= 70) overallRating = 'good';
-            else if (avgScore >= 50) overallRating = 'fair';
+            let metricsData = {};
+            
+            if (group.isQAEvaluation) {
+                // Q&A evaluation - use accuracy as score
+                const numEvals = group.evaluations.length;
+                avgScore = numEvals > 0 ? group.totalAccuracy / numEvals : 0;
+                const avgPassRate = numEvals > 0 ? group.totalPassRate / numEvals : 0;
+                
+                // Determine rating based on accuracy
+                if (avgScore >= 90) overallRating = 'excellent';
+                else if (avgScore >= 75) overallRating = 'good';
+                else if (avgScore >= 60) overallRating = 'fair';
+                
+                metricsData = {
+                    accuracy_percentage: avgScore,
+                    pass_rate: avgPassRate,
+                    num_questions: group.totalQuestions,
+                    num_passed: group.totalPassed,
+                    num_failed: group.totalFailed
+                };
+            } else {
+                // Summarization evaluation
+                const totalRatings = group.excellentCount + group.goodCount + group.fairCount + group.poorCount;
+                
+                // Properly calculate quality score from aggregated rating counts using the same formula as Python
+                if (totalRatings > 0) {
+                    avgScore = ((group.excellentCount * 4 + group.goodCount * 3 + group.fairCount * 2 + group.poorCount * 1) / totalRatings - 1) * 100 / 3;
+                }
+
+                // Determine overall rating based on average score
+                if (avgScore >= 85) overallRating = 'excellent';
+                else if (avgScore >= 70) overallRating = 'good';
+                else if (avgScore >= 50) overallRating = 'fair';
+                
+                metricsData = {
+                    quality_score: avgScore,
+                    excellent_count: group.excellentCount,
+                    good_count: group.goodCount,
+                    fair_count: group.fairCount,
+                    poor_count: group.poorCount,
+                    total_summaries: totalRatings
+                };
+            }
 
             // Calculate average latency across all evaluations for this model
             // Use avg_processing_time_seconds from evaluation data
@@ -1636,14 +1751,7 @@ class EvaluationVisualizer {
                 num_evaluations: group.evaluations.length,
                 overall_rating: {
                     rating: overallRating,
-                    metrics: {
-                        quality_score: avgScore,
-                        excellent_count: group.excellentCount,
-                        good_count: group.goodCount,
-                        fair_count: group.fairCount,
-                        poor_count: group.poorCount,
-                        total_summaries: totalRatings
-                    }
+                    metrics: metricsData
                 },
                 cost: { total_cost: group.totalCost },
                 usage: { total_tokens: group.totalTokens },
@@ -1662,10 +1770,10 @@ class EvaluationVisualizer {
             };
         });
 
-        // Sort consolidated evaluations by quality score
+        // Sort consolidated evaluations by score (quality_score for summarization, accuracy_percentage for Q&A)
         const sortedEvaluations = consolidatedEvaluations.sort((a, b) => {
-            const scoreA = a.overall_rating?.metrics?.quality_score || 0;
-            const scoreB = b.overall_rating?.metrics?.quality_score || 0;
+            const scoreA = a.overall_rating?.metrics?.quality_score || a.overall_rating?.metrics?.accuracy_percentage || 0;
+            const scoreB = b.overall_rating?.metrics?.quality_score || b.overall_rating?.metrics?.accuracy_percentage || 0;
             return scoreB - scoreA;
         });
 
@@ -1813,7 +1921,10 @@ class EvaluationVisualizer {
 
             const rating = evalData.overall_rating || {};
             const metrics = rating.metrics || {};
-            const score = metrics.quality_score || 0;
+            
+            // Check if this is Q&A (has accuracy_percentage) or summarization (has quality_score)
+            const isQA = metrics.accuracy_percentage !== undefined;
+            const score = isQA ? metrics.accuracy_percentage : (metrics.quality_score || 0);
             const cost = evalData.cost?.total_cost || 0;
             const tokens = evalData.usage?.total_tokens || 0;
 
@@ -1860,10 +1971,16 @@ class EvaluationVisualizer {
                     </td>
                     <td class="distribution-cell">
                         <div class="mini-distribution">
-                            <span class="mini-count excellent" data-tooltip="${metrics.excellent_count || 0} summaries rated Excellent (comprehensive & accurate)">${metrics.excellent_count || 0}</span>
-                            <span class="mini-count good" data-tooltip="${metrics.good_count || 0} summaries rated Good (mostly accurate, minor issues)">${metrics.good_count || 0}</span>
-                            <span class="mini-count fair" data-tooltip="${metrics.fair_count || 0} summaries rated Fair (acceptable but missing details)">${metrics.fair_count || 0}</span>
-                            <span class="mini-count poor" data-tooltip="${metrics.poor_count || 0} summaries rated Poor (significant errors or omissions)">${metrics.poor_count || 0}</span>
+                            ${isQA ? `
+                                <span class="mini-count excellent" data-tooltip="Pass Rate: ${((metrics.pass_rate || 0) * 100).toFixed(1)}%">✓ ${metrics.num_passed || 0}</span>
+                                <span class="mini-count poor" data-tooltip="Failed Questions">✗ ${metrics.num_failed || 0}</span>
+                                <span class="mini-count" data-tooltip="Total Questions">Σ ${metrics.num_questions || 0}</span>
+                            ` : `
+                                <span class="mini-count excellent" data-tooltip="${metrics.excellent_count || 0} summaries rated Excellent (comprehensive & accurate)">${metrics.excellent_count || 0}</span>
+                                <span class="mini-count good" data-tooltip="${metrics.good_count || 0} summaries rated Good (mostly accurate, minor issues)">${metrics.good_count || 0}</span>
+                                <span class="mini-count fair" data-tooltip="${metrics.fair_count || 0} summaries rated Fair (acceptable but missing details)">${metrics.fair_count || 0}</span>
+                                <span class="mini-count poor" data-tooltip="${metrics.poor_count || 0} summaries rated Poor (significant errors or omissions)">${metrics.poor_count || 0}</span>
+                            `}
                         </div>
                     </td>
                     <td class="cost-cell">
@@ -1884,10 +2001,10 @@ class EvaluationVisualizer {
                             <tr>
                                 <th class="rank-header" data-tooltip="Model ranking based on Grade">Rank</th>
                                 <th class="model-header" data-tooltip="AI model name and type (LOCAL runs on your machine, CLOUD runs remotely)">Model</th>
-                                <th class="score-header" data-tooltip="Grade: percentage based on summary quality (0-100%)">Grade</th>
-                                <th class="rating-header" data-tooltip="Overall rating based on quality distribution (Excellent/Good/Fair/Poor)">Rating</th>
-                                <th class="distribution-header" data-tooltip="Breakdown of summary quality ratings across all evaluations">Distribution</th>
-                                <th class="cost-header" data-tooltip="Inference cost for generating summaries (FREE for local models)">Cost</th>
+                                <th class="score-header" data-tooltip="Score: accuracy % for Q&A, quality % for summarization">Score</th>
+                                <th class="rating-header" data-tooltip="Overall rating (Excellent/Good/Fair/Poor)">Rating</th>
+                                <th class="distribution-header" data-tooltip="Performance breakdown across evaluations">Performance</th>
+                                <th class="cost-header" data-tooltip="Inference cost (FREE for local models)">Cost</th>
                                 <th class="tokens-header" data-tooltip="Number of tokens processed (1K = 1,000 tokens)">Tokens</th>
                             </tr>
                         </thead>
@@ -1961,7 +2078,9 @@ class EvaluationVisualizer {
             const totalToks = inferenceUsage.total_tokens || 0;
 
             labels.push({ short: shortName, full: fullModelName });
-            scores.push(evalData.overall_rating?.metrics?.quality_score || 0);
+            const metrics = evalData.overall_rating?.metrics || {};
+            const score = metrics.accuracy_percentage !== undefined ? metrics.accuracy_percentage : (metrics.quality_score || 0);
+            scores.push(score);
             costs.push(experimentCost);
             tokens.push((evalData.usage?.total_tokens || 0) / 1000); // in K
             latencies.push(avgLatency);
@@ -2150,9 +2269,11 @@ class EvaluationVisualizer {
 
             modelScores[displayName] = {};
 
-            // Store the quality score (grade) for this model
+            // Store the score (accuracy for Q&A, quality score for summarization) for this model
             if (evalData.overall_rating && evalData.overall_rating.metrics) {
-                modelGrades[displayName] = evalData.overall_rating.metrics.quality_score || 0;
+                const metrics = evalData.overall_rating.metrics;
+                const score = metrics.accuracy_percentage !== undefined ? metrics.accuracy_percentage : (metrics.quality_score || 0);
+                modelGrades[displayName] = score;
             }
 
             // Check if this evaluation has aspect_summary data (from consolidated report)

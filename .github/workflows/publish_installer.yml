@@ -6,6 +6,7 @@ on:
     paths:
       - "installer/**"
       - "src/**"
+      - "setup.py"
     tags:
       - v*
   pull_request:
@@ -14,6 +15,7 @@ on:
     paths:
       - "installer/**"
       - "src/**"
+      - "setup.py"
   merge_group:
   workflow_dispatch:
 

@@ -549,6 +549,7 @@ class GroundTruthGenerator:
             "analysis": {
                 "summaries": {},
                 "transcript_metadata": {},
+                "qa_pairs": {},
                 "evaluation_criteria": {},
             },
         }
@@ -559,8 +560,12 @@ class GroundTruthGenerator:
                 with open(gt_file, "r", encoding="utf-8") as f:
                     gt_data = json.load(f)
 
-                # Extract transcript identifier from filename
-                transcript_id = gt_file.stem.replace(".summarization.groundtruth", "")
+                # Extract transcript identifier from filename (handle all use cases)
+                transcript_id = gt_file.stem
+                for use_case in UseCase:
+                    transcript_id = transcript_id.replace(
+                        f".{use_case.value}.groundtruth", ""
+                    )
 
                 # Store source file info
                 consolidated_data["metadata"]["source_files"].append(
@@ -604,6 +609,12 @@ class GroundTruthGenerator:
                 consolidated_data["analysis"]["transcript_metadata"][transcript_id] = (
                     analysis.get("transcript_metadata", {})
                 )
+
+                # Store qa_pairs if present (for QA use case)
+                if "qa_pairs" in analysis:
+                    consolidated_data["analysis"]["qa_pairs"][transcript_id] = (
+                        analysis.get("qa_pairs", [])
+                    )
 
                 # Store evaluation criteria (should be similar across transcripts, but keep first one)
                 if not consolidated_data["analysis"]["evaluation_criteria"]:
@@ -774,16 +785,21 @@ Examples:
                 print("Error: --consolidate requires --directory (-d) to be specified")
                 return 1
 
+            # Use the specified use case for the consolidation pattern
+            consolidate_pattern = f"*.{use_case.value}.groundtruth.json"
             print(f"Consolidating ground truth files from: {args.directory}")
+            print(f"Pattern: {consolidate_pattern}")
             result = generator.consolidate_groundtruth(
                 input_dir=args.directory,
-                output_path=Path(args.output_dir) / "consolidated_groundtruth.json",
+                output_path=Path(args.output_dir)
+                / f"consolidated_{use_case.value}_groundtruth.json",
+                file_pattern=consolidate_pattern,
             )
             print(
                 f"✅ Successfully consolidated {result['metadata']['consolidated_from']} files"
             )
             print(
-                f"  Output: {Path(args.output_dir) / 'consolidated_groundtruth.json'}"
+                f"  Output: {Path(args.output_dir) / f'consolidated_{use_case.value}_groundtruth.json'}"
             )
             print(
                 f"  Total cost: ${result['metadata']['total_cost']['total_cost']:.4f}"
