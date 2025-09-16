@@ -4,8 +4,7 @@
 - [Introduction](#introduction)
 - [Before you start](#before-you-start)
   - [System Requirements](#system-requirements)
-    - [Hybrid Mode (Ryzen AI Systems)](#hybrid-mode-ryzen-ai-systems)
-    - [Generic Mode](#generic-mode)
+    - [Ryzen AI Systems](#ryzen-ai-systems)
     - [Software](#software)
   - [Software Requirements](#software-requirements)
 - [Prerequisites](#prerequisites)
@@ -30,27 +29,25 @@ GAIA utilizes both NPU and iGPU on Ryzen AI systems for optimal performance on 3
 
 ## System Requirements
 
-- OS: Windows 11 Pro, 24H2
+- OS: Windows 11 Pro, 24H2 or Ubuntu 22.04 LTS / 24.04 LTS (64-bit)
 - RAM: Minimum 16GB
 - CPU: Ryzen AI 300-series processor (e.g., Ryzen AI 9 HX 370)
-- NPU Driver Versions: `32.0.203.237` or `32.0.203.240`
+- NPU Driver Versions: `32.0.203.240` and newer
 - Storage: 20GB free space
 - Tested Configuration: ASUS ProArt (HN7306W) Laptop
 
 ### Software
 - [Miniforge](https://conda-forge.org/download/) (conda-forge's recommended installer)
-- [Visual Studio Build Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe)
+- [Lemonade Server](https://lemonade-server.ai/) (LLM backend server for GAIA)
 
-# Prerequisites
+# Windows Prerequisites
 
 1. Download and install Windows installer from [Miniforge](https://conda-forge.org/download/)
    1. Check _"Add Miniforge3 to my PATH environment variables"_ if you want it accessible in all terminals
-1. Download and install [Visual Studio Build Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe).
-    1. During installation, make sure to select "Desktop development with C++" workload.
-    1. After installation, you may need to restart your computer.
-1. Install the Ryzen AI NPU software drivers from [here](https://ryzenai.docs.amd.com/en/latest/inst.html)
-   1. NOTE: In many cases, your NPU drivers may already be installed
-      - Check via _"Device Manager -> Neural Processors -> NPU Compute Accelerator Device -> Properties -> Driver Tab"_
+2. Download and install [Lemonade Server](https://lemonade-server.ai/)
+   1. Go to https://lemonade-server.ai/ and download the appropriate installer for your system
+   2. Follow the installation instructions provided on the website
+   3. Lemonade Server will be used as the backend for running LLMs with GAIA
 
 # Setup and Installation
 1. Clone GAIA repo: `git clone https://github.com/amd/gaia.git`
@@ -60,33 +57,43 @@ GAIA utilizes both NPU and iGPU on Ryzen AI systems for optimal performance on 3
     1. `conda activate gaiaenv`
 1. Install GAIA dependencies:
     ```bash
-    pip install -e .
+    pip install -e .[dev]
     ```
     ⚠️ NOTE: If actively developing, use `-e` switch to enable editable mode and create links to sources instead.
 
     ⚠️ NOTE: Make sure you are in the correct virtual environment when installing dependencies. If not, run `conda activate gaiaenv`.
 
+    ⚠️ NOTE: Check `./setup.py` for additional packages that support extra features in the CLI tool, e.g. `pip install -e .[dev,eval,talk]`
+
+5. For detailed information about using the Chat SDK and CLI chat features, see the [Chat SDK Documentation](./chat.md).
 
 # Running GAIA
 
 Once the installation and environment variables are set, run the following:
 
-1. Run `gaia-cli -v` in the terminal to verify the installation. You should see a similar output:
+1. Start the Lemonade server (required for LLM operations):
     ```bash
-    amd/v0.7.1+cda0f5d5
+    lemonade-server serve
     ```
-1. Run `gaia` to start the GAIA-UI or `gaia-cli -h` to see CLI options.
+    Keep this running in a separate terminal window.
+
+1. Run `gaia -v` in the terminal to verify the installation. You should see a similar output:
+    ```bash
+    0.10.0
+    ```
+1. Run `gaia -h` to see CLI options.
+1. Try the chat feature with a simple query:
+    ```bash
+    gaia chat "What is artificial intelligence?"
+    ```
+    Or start an interactive chat session:
+    ```bash
+    gaia chat
+    ```
 
 # Troubleshooting
 
 ## Common Issues
-
-### NPU Driver Installation
-
-If you encounter issues with NPU driver installation:
-1. Ensure Windows is fully updated
-2. Try uninstalling and reinstalling the NPU drivers
-3. Verify your system meets the minimum requirements
 
 ### pip Installation Errors
 
@@ -94,6 +101,7 @@ If you encounter pip installation errors:
 1. Ensure you're using the correct Python version (3.10)
 2. Try running: `pip install --upgrade pip`
 3. Try deleting pip cache typically under: _C:\Users\<username>\AppData\Local\pip\cache_
+4. Make sure there are no spaces in your project or or pip file cache paths
 
 ### Model Loading Issues
 

@@ -23,10 +23,29 @@ setup(
         "gaia",
         "gaia.llm",
         "gaia.audio",
+        "gaia.chat",
+        "gaia.talk", 
+        "gaia.apps",
+        "gaia.apps.llm",
+        "gaia.apps.summarize",
+        "gaia.eval",
+        "gaia.mcp",
         "gaia.agents",
-        "gaia.agents.Blender",
+        "gaia.agents.base",
+        "gaia.agents.blender",
+        "gaia.agents.blender.core",
+        "gaia.agents.jira",
     ],
-    package_data={},
+    package_data={
+        "gaia.eval": [
+            "webapp/*.json",
+            "webapp/*.js", 
+            "webapp/*.md",
+            "webapp/public/*.html",
+            "webapp/public/*.css",
+            "webapp/public/*.js",
+        ],
+    },
     install_requires=[
         "openai",
         "pydantic>=2.9.2",
@@ -34,6 +53,7 @@ setup(
         "accelerate",
         "python-dotenv",
         "aiohttp",
+        "rich",
     ],
     extras_require={
         "audio": [
@@ -42,12 +62,7 @@ setup(
             "torchaudio",
         ],
         "blender": [
-            "rich",
             "bpy",
-        ],
-        "notebooks": [
-            "jupyter",
-            "ipywidgets",
         ],
         "dev": [
             "pytest",
@@ -64,6 +79,10 @@ setup(
         ],
         "eval" : [
             "anthropic",
+            "bs4",
+            "scikit-learn",
+            "numpy",
+            "pypdf",
         ],
         "talk":[
             "pyaudio",
@@ -72,6 +91,9 @@ setup(
             "kokoro>=0.3.1",
             "soundfile",
             "sounddevice",
+        ],
+        "youtube": [
+            "llama-index-readers-youtube-transcript",
         ]
     },
     classifiers=[],
@@ -79,9 +101,11 @@ setup(
         "console_scripts": [
             "gaia = gaia.cli:main",
             "gaia-cli = gaia.cli:main",
+            "gaia-mcp = gaia.mcp.mcp_bridge:main",
+            "gaia-mcp-atlassian = gaia.mcp.atlassian_mcp:main",
         ]
     },
-    python_requires=">=3.8, <3.12",
+    python_requires=">=3.8, <3.13",
     long_description=open("README.md", "r", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     include_package_data=True,

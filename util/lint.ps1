@@ -13,7 +13,6 @@ $PYLINT_PATH = "pylint"
 $SRC_DIR = "src\gaia"
 $PYLINT_CONFIG = ".pylintrc"
 $DISABLED_CHECKS = "C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718"
-$EXCLUDE = "ui_form.py"
 
 # Function to run Black
 function Invoke-Black {
@@ -29,7 +28,7 @@ function Invoke-Black {
 # Function to run Pylint
 function Invoke-Pylint {
     Write-Host "Running pylint..."
-    & $PYTHON_PATH -m $PYLINT_PATH $SRC_DIR --rcfile $PYLINT_CONFIG --disable $DISABLED_CHECKS --ignore-paths $EXCLUDE
+    & $PYTHON_PATH -m $PYLINT_PATH $SRC_DIR --rcfile $PYLINT_CONFIG --disable $DISABLED_CHECKS
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Pylint check failed." -ForegroundColor Red
         exit $LASTEXITCODE

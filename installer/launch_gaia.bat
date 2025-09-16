@@ -42,6 +42,6 @@ if "%MODE%"=="ui" (
     REM Use pythonw.exe for UI mode to avoid console window
     start "" "%INSTALL_DIR%\python\Scripts\gaia.exe"
 ) else (
-    REM Use gaia-cli script for CLI mode and keep the window open afterwards
-    cmd /k "%INSTALL_DIR%\\python\\Scripts\\gaia-cli.exe"
+    REM Use gaia script for CLI mode and keep the window open afterwards
+cmd /k "%INSTALL_DIR%\\python\\Scripts\\gaia.exe"
 )

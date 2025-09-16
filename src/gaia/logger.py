@@ -5,10 +5,50 @@ import logging
 import sys
 import warnings
 from pathlib import Path
+import io
+import subprocess
+
+
+def configure_console_encoding():
+    """Configure console encoding to support Unicode characters on Windows."""
+    if sys.platform.startswith("win"):
+        try:
+            # Get the original stdout/stderr
+            original_stdout = sys.stdout
+            original_stderr = sys.stderr
+
+            # Wrap with UTF-8 encoding, using 'replace' error handling
+            sys.stdout = io.TextIOWrapper(
+                original_stdout.buffer,
+                encoding="utf-8",
+                errors="replace",
+                line_buffering=True,
+            )
+            sys.stderr = io.TextIOWrapper(
+                original_stderr.buffer,
+                encoding="utf-8",
+                errors="replace",
+                line_buffering=True,
+            )
+
+            # Also try to set the console code page to UTF-8
+            try:
+                subprocess.run(
+                    ["chcp", "65001"], capture_output=True, shell=True, check=False
+                )
+            except (subprocess.SubprocessError, OSError, FileNotFoundError):
+                pass  # Ignore if chcp command fails
+
+        except Exception:
+            # If configuration fails, fall back to original streams
+            pass
 
 
 class GaiaLogger:
     def __init__(self, log_file="gaia.log"):
+        # Configure console encoding for Unicode support first
+        configure_console_encoding()
+
         self.log_file = Path(log_file)
         self.loggers = {}
 
@@ -42,11 +82,12 @@ class GaiaLogger:
             "[%(asctime)s] | %(levelname)s | %(name)s.%(funcName)s | %(filename)s:%(lineno)d | %(message)s"
         )
 
-        # Create and configure handlers
+        # Create and configure handlers with Unicode support
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(console_formatter)
 
-        file_handler = logging.FileHandler(self.log_file)
+        # Configure file handler with UTF-8 encoding
+        file_handler = logging.FileHandler(self.log_file, encoding="utf-8")
         file_handler.setFormatter(file_formatter)
 
         # Configure root logger

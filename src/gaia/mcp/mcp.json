@@ -1,0 +1,72 @@
+{
+  "mcpServers": {
+    "gaia-bridge": {
+      "command": "python",
+      "args": [
+        "-m",
+        "gaia.mcp.mcp_bridge"
+      ],
+      "env": {
+        "LEMONADE_BASE_URL": "http://localhost:8000/api/v0",
+        "GAIA_MCP_HOST": "localhost",
+        "GAIA_MCP_PORT": "8765"
+      },
+      "description": "GAIA MCP Server for exposing AI agents to third-party applications"
+    }
+  },
+  "clients": {
+    "custom": {
+      "supported": true,
+      "configuration": {
+        "servers": ["gaia-bridge"],
+        "connection": "http://localhost:8765"
+      }
+    }
+  },
+  "tools": {
+    "gaia.query": {
+      "description": "Execute AI queries using GAIA's LLM for testing",
+      "servers": ["gaia-bridge"]
+    },
+    "gaia.chat": {
+      "description": "Interactive chat with conversation history",
+      "servers": ["gaia-bridge"]
+    },
+    "gaia.blender.create": {
+      "description": "Create 3D content using Blender integration",
+      "servers": ["gaia-bridge"]
+    },
+    "gaia.eval": {
+      "description": "Run evaluation and benchmarking",
+      "servers": ["gaia-bridge"]
+    },
+    "gaia.jira": {
+      "description": "Natural language Jira orchestration via GAIA's intelligent agent",
+      "servers": ["gaia-bridge"],
+      "parameters": {
+        "query": {
+          "type": "string",
+          "description": "Natural language query for Jira operations"
+        },
+        "operation": {
+          "type": "string",
+          "enum": ["query", "create", "update"],
+          "default": "query",
+          "description": "Type of operation to perform"
+        }
+      }
+    }
+  },
+  "rateLimits": {
+    "standard": {
+      "requests_per_minute": 100,
+      "requests_per_day": 1000
+    },
+    "premium": {
+      "requests_per_minute": 500,
+      "requests_per_day": 10000
+    }
+  },
+  "version": "1.0.0",
+  "schema": "https://modelcontextprotocol.io/schemas/v1/mcp.json"
+}

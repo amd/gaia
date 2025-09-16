@@ -100,6 +100,43 @@
             "stopOnEntry": false,
         },
         {
+            "name": "MCP Bridge Debug",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "gaia.cli",
+            "args": [
+                "mcp",
+                "start",
+                "--debug"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false,
+        },
+        {
+            "name": "Jira App Debug",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "gaia.cli",
+            "args": [
+                "jira",
+                "show me my projects"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false,
+        },
+        {
             "name": "GAIA Pytest Debug",
             "type": "debugpy",
             "request": "launch",

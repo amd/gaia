@@ -18,86 +18,43 @@
 
 # UI Overview
 
-GAIA provides two user interface experiences:
-1. The Qt-based interface - A robust desktop application interface built with PyQt6
-2. GAIA UI - A modern web-based interface built on Open-WebUI
+GAIA provides a single modern user interface:
+- **GAIA UI (RAUX)** - A modern Electron-based desktop application providing an intuitive interface for GAIA
 
-?? **NOTE**: GAIA UI is currently disabled pending review, will be available in v0.8.4.
+# Installation
 
-# Qt Interface
+Install GAIA UI on Windows and Ubuntu using the packages from the GitHub [Releases](https://github.com/amd/gaia/releases) page.
 
-This guide explains how to modify and enhance the GAIA Qt user interface using Qt Designer. Qt Designer is a visual design tool that allows you to create and edit graphical user interfaces without writing code directly. This guide covers:
+## Supported platforms
+- Windows 11 (64-bit) - Full GUI and CLI support
+- Linux: Ubuntu 22.04 LTS or 24.04 LTS (64-bit) - Full GUI and CLI support
 
-- Setting up the UI development environment
-- Using Qt Designer to modify the interface
-- Compiling and testing UI changes
-- Working with assets and resources
+## Windows (.exe)
+1. Download the latest `gaia-ui-setup.exe` from [Releases](https://github.com/amd/gaia/releases).
+2. Double-click `gaia-ui-setup.exe` and follow the prompts.
+3. Launch GAIA UI from the Start Menu (search for "GAIA UI") or the desktop shortcut.
+4. On first launch, setup may take a moment. An internet connection is required the first time.
+5. Updating: download the newer `gaia-ui-setup.exe` from [Releases](https://github.com/amd/gaia/releases) and run it.
+6. Uninstalling: Windows Settings → Apps → Installed apps → find "GAIA UI" → Uninstall.
 
-![Qt Designer](../data/img/qt-designer.png)
+## Ubuntu (.deb)
+1. Download the latest `gaia-ui-setup.deb` (amd64) from [Releases](https://github.com/amd/gaia/releases).
+2. Open a terminal in the folder where you downloaded `gaia-ui-setup.deb`, then install with apt:
+```bash
+sudo apt update
+sudo apt install ./gaia-ui-setup.deb
+```
+3. Launch GAIA UI from your application menu (search for "GAIA UI").
+4. On first launch, setup may take a moment. An internet connection is required the first time.
+5. Updating: download the newer `gaia-ui-setup.deb` from [Releases](https://github.com/amd/gaia/releases) and install it again with apt (same command as above).
+6. Uninstalling:
+```bash
+sudo apt remove gaiaui
+```
 
-## Prerequisites
+# GAIA UI (RAUX) Interface
 
-1. A working GAIA installation (see [README](README.md))
-2. Python environment with GAIA dependencies installed
-3. UI development dependencies: `pip install -e PyQt6, pyqt6-tools`
-
-## Using Qt Designer
-
-### Launching Qt Designer
-1. Navigate to your Python environment's Qt applications directory:
-   ```bash
-   C:\Users\<YOUR_USER>\miniconda3\envs\<YOUR_GAIA_ENV>\Lib\site-packages\qt6_applications\Qt\bin
-   ```
-2. Run `designer.exe`
-
-### Editing the UI
-1. In Qt Designer, open `src/gaia/interface/form.ui`
-2. Make your desired changes to the interface
-3. Save the file
-
-### Working with Assets
-If you need to add new assets (icons, images, etc.):
-1. Place the new assets under `src/gaia/interface/img`
-2. Update the resource file `src/gaia/interface/resource.qrc`
-3. Make sure to reference the assets correctly in your UI design
-
-## Compiling Changes
-
-After making changes, you need to compile the updated files:
-
-1. Navigate to the interface directory:
-   ```bash
-   cd src/gaia/interface
-   ```
-
-2. Compile the UI form:
-   ```bash
-   pyside6-uic form.ui -o ui_form.py
-   ```
-
-3. If you modified resources (optional):
-   ```bash
-   pyside6-rcc resource.qrc -o rc_resource.py
-   ```
-
-4. Fix the resource import in `ui_form.py`:
-   - Find: `import resource_rc`
-   - Replace with: `import gaia.interface.rc_resource as rc_resource`
-
-5. Test your changes by running:
-   ```bash
-   gaia
-   ```
-
-## Troubleshooting
-
-- If Qt Designer doesn't launch, verify your Python environment is activated
-- If resources aren't showing up, ensure you've recompiled both the UI and resource files
-- For import errors, check that the resource path replacement was done correctly
-
-# GAIA UI Interface
-
-- **GAIA UI (also referred to as RAUX for RyzenAI User Experience)** is a modern web-based interface for GAIA, built as a fork from [Open-WebUI](https://github.com/open-webui/open-webui). It provides an extensible, feature-rich, and user-friendly self-hosted AI platform. GAIA UI is currently in beta and is being actively integrated with new features and improvements rolling out regularly. While it offers a modern web-based experience, please note that it's still under development and some features may be experimental.
+**GAIA UI (also referred to as RAUX for RyzenAI User Experience)** is a modern Electron-based desktop application that provides the primary interface for GAIA. Built as a fork from [Open-WebUI](https://github.com/open-webui/open-webui), it delivers an extensible, feature-rich, and user-friendly AI platform experience. GAIA UI is actively developed with regular feature updates and improvements.
 
 ## New in GAIA UI (RAUX)
 - Improved error handling and progress reporting via inter-process communication (IPC) between the main and renderer processes.

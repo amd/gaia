@@ -1,23 +1,10 @@
 # GAIA Installer Guide
 
-## Installation Modes
+**Note:** This installer is for Windows only. For Linux systems, see the [Linux Installation Guide](../README.md#linux-installation) for source-based installation.
 
-GAIA supports three modes, each optimized for different use cases via the Lemonade Server tool:
+## GAIA Installation (Windows Only)
 
-1. **Hybrid Mode**: Best overall performance
-   - Combines NPU and GPU capabilities
-   - Recommended for most users with supported hardware
-   - Requires Ryzen AI 300-series processor
-
-2. **NPU Mode**: Best power efficiency
-   - Optimized for AMD NPU hardware acceleration
-   - Ideal for laptop users prioritizing battery life
-   - Requires Ryzen AI 300-series processor
-
-3. **CPU/GPU Mode** (Default): Most compatible
-   - Standard GPU/CPU implementation via llama.cpp/Vulkan
-   - Works on any Ryzen System
-   - No special hardware requirements
+GAIA is specifically designed for AMD Ryzen AI systems and uses Lemonade Server for optimal hardware utilization including NPU and iGPU capabilities.
 
 ## Prerequisites
 
@@ -27,8 +14,8 @@ GAIA supports three modes, each optimized for different use cases via the Lemona
    - Miniconda will be automatically installed if missing
    - Creates Python 3.10 environment named 'gaia_env'
 
-2. **Ryzen AI Driver** (NPU/Hybrid Modes Only)
-   - Required version: ${NPU_DRIVER_VERSION}
+2. **Ryzen AI Driver** (Ryzen AI Systems Only)
+   - Required version: Latest available
    - Will be automatically downloaded and installed if needed
    - Installer checks current version and offers updates
 
@@ -39,7 +26,7 @@ GAIA supports three modes, each optimized for different use cases via the Lemona
 - Checks for existing GAIA installation
 - Removes previous versions if found
 - Initializes installation logging
-- Detects CPU compatibility for NPU/Hybrid modes
+- Detects CPU compatibility for Ryzen AI systems
 
 ### 2. Environment Setup
 The installer automatically:
@@ -51,12 +38,12 @@ The installer automatically:
 
 ### 3. Additional Components
 
-- Downloads mode-specific LLM artifacts
-- For NPU/Hybrid modes:
+- Downloads required LLM artifacts
+- For Ryzen AI systems:
   - Checks Ryzen AI driver version
   - Offers automatic driver updates
   - Installs Ryzen AI wheel packages
-- Configures settings.json based on selected mode
+- Configures settings.json for optimal performance
 
 <!-- ### 5. AMD RAUX (Beta)
 
@@ -99,7 +86,7 @@ Available parameters:
 For continuous integration and deployment scenarios, use:
 
 ```
-gaia-windows-setup.exe /S /MODE=GENERIC
+gaia-windows-setup.exe /S
 ```
 
 ## Building the Installer
@@ -133,12 +120,12 @@ Debugging the installer could be tricky on a workflow since NSIS does not log an
 
 If you encounter installation issues:
 1. Check the installation logs - you can generate detailed logs by running `gaia-windows-setup.exe /LOG=install_log.txt`
-2. Verify system requirements for your chosen mode
-3. For NPU/Hybrid mode, verify your Ryzen AI processor is properly detected
+2. Verify system requirements are met
+3. For Ryzen AI systems, verify your processor and drivers are properly detected
 
 Common issues:
-- **CPU Compatibility**: The installer automatically detects if your CPU supports NPU/Hybrid modes
-- **Driver Incompatibility**: For Hybrid/NPU modes, ensure you have a compatible NPU driver version
+- **Hardware Compatibility**: The installer detects available hardware capabilities
+- **Driver Incompatibility**: For Ryzen AI systems, ensure you have compatible NPU drivers
 - **Installation Path**: Avoid paths with special characters or very long directory names
 
 ## Environment Variable Handling
@@ -170,7 +157,6 @@ If you need to manually add GAIA to your system PATH:
 ### Other Environment Variables
 The installer also sets:
 - `GAIA_INSTALL_DIR` - Points to the main installation directory
-- `GAIA_MODE` - Contains your selected mode (GENERIC, NPU, or HYBRID)
 
 # Contact
 Contact [GAIA team](mailto:gaia@amd.com) for any questions, feature requests, access or troubleshooting issues.

@@ -1,0 +1,9 @@
+{
+  "name": "Comprehensive Analysis",
+  "description": "Full analysis with all summary styles (warning: multiple LLM calls)",
+  "styles": ["brief", "detailed", "bullets", "executive", "participants", "action_items"],
+  "format": "json",
+  "max_tokens": 2048,
+  "include_original": true,
+  "combined_prompt": false
+}

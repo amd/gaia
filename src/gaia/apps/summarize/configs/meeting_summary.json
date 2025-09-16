@@ -1,0 +1,9 @@
+{
+  "name": "Meeting Summary",
+  "description": "Standard meeting summary for sharing (executive, participants, action_items)",
+  "styles": ["executive", "participants", "action_items"],
+  "format": "json",
+  "max_tokens": 1024,
+  "include_original": true,
+  "combined_prompt": false
+}

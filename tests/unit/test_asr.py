@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 from gaia.logger import get_logger
 from gaia.audio.whisper_asr import WhisperAsr
-from gaia.cli import GaiaCliClient
+from gaia.talk.sdk import TalkSDK, TalkConfig
 
 
 class TestWhisperAsr(unittest.TestCase):
@@ -80,14 +80,15 @@ class TestWhisperAsr(unittest.TestCase):
 
 
 class TestProcessAudioWrapper(unittest.TestCase):
-    """Integration tests for the process_audio_wrapper method in GaiaCliClient."""
+    """Integration tests for the process_audio_wrapper method in TalkSDK's AudioClient."""
 
     def setUp(self):
         """Set up test fixtures, including mocking necessary components."""
         self.log = get_logger(__name__)
 
-        # Create a client instance
-        self.client = GaiaCliClient()
+        # Create a TalkSDK instance (which has audio_client)
+        config = TalkConfig(enable_tts=False)  # Disable TTS for testing
+        self.client = TalkSDK(config)
 
         # Check if we're in CI environment by checking for audio devices
         try:
@@ -103,19 +104,21 @@ class TestProcessAudioWrapper(unittest.TestCase):
 
         self.log.info(f"Audio devices available: {self.has_audio_devices}")
 
-        # Mock the whisper_asr component
-        self.client.whisper_asr = MagicMock()
-        self.client.whisper_asr.is_recording = True
-        self.client.whisper_asr.start_recording = MagicMock()
-        self.client.whisper_asr.stop_recording = MagicMock()
-        self.client.whisper_asr.pause_recording = MagicMock()
-        self.client.whisper_asr.resume_recording = MagicMock()
+        # Mock the whisper_asr component on audio_client
+        self.client.audio_client.whisper_asr = MagicMock()
+        self.client.audio_client.whisper_asr.is_recording = True
+        self.client.audio_client.whisper_asr.start_recording = MagicMock()
+        self.client.audio_client.whisper_asr.stop_recording = MagicMock()
+        self.client.audio_client.whisper_asr.pause_recording = MagicMock()
+        self.client.audio_client.whisper_asr.resume_recording = MagicMock()
 
-        # Set up transcription queue
-        self.client.transcription_queue = queue.Queue()
+        # Set up transcription queue on audio_client
+        self.client.audio_client.transcription_queue = queue.Queue()
 
         # Default silence threshold - use smaller value in CI for faster tests
-        self.client.silence_threshold = 0.1 if not self.has_audio_devices else 0.3
+        self.client.audio_client.silence_threshold = (
+            0.1 if not self.has_audio_devices else 0.3
+        )
 
         # Mock the process_voice_input method
         self.client.process_voice_input = AsyncMock()
@@ -155,10 +158,10 @@ class TestProcessAudioWrapper(unittest.TestCase):
 
             # Add a transcription to the queue
             test_text = "Hello GAIA, can you hear me?"
-            self.client.transcription_queue.put(test_text)
+            self.client.audio_client.transcription_queue.put(test_text)
 
             # Wait for silence threshold to trigger processing
-            time.sleep(self.client.silence_threshold + 0.5)
+            time.sleep(self.client.audio_client.silence_threshold + 0.5)
 
             # Call count may be 0 in CI environments due to encoding errors
             # Only check the call in interactive environments
@@ -174,7 +177,7 @@ class TestProcessAudioWrapper(unittest.TestCase):
 
         finally:
             # Clean up
-            self.client.whisper_asr.is_recording = False
+            self.client.audio_client.whisper_asr.is_recording = False
             process_thread.join(timeout=1.0)
             self.log.info("Test completed, thread stopped")
 
@@ -196,18 +199,20 @@ class TestProcessAudioWrapper(unittest.TestCase):
             process_thread.start()
 
             # Add stop command to the queue
-            self.client.transcription_queue.put("stop")
+            self.client.audio_client.transcription_queue.put("stop")
 
             # Wait for processing
             time.sleep(0.3)
 
             # Verify stop_recording was called
-            self.assertTrue(self.client.whisper_asr.stop_recording.call_count >= 1)
+            self.assertTrue(
+                self.client.audio_client.whisper_asr.stop_recording.call_count >= 1
+            )
             self.log.info("Verified stop_recording was called")
 
         finally:
             # Clean up
-            self.client.whisper_asr.is_recording = False
+            self.client.audio_client.whisper_asr.is_recording = False
             process_thread.join(timeout=1.0)
             self.log.info("Test completed, thread stopped")
 
@@ -232,18 +237,18 @@ class TestProcessAudioWrapper(unittest.TestCase):
 
             # Add transcription to the queue
             test_text = "What's the weather today?"
-            self.client.transcription_queue.put(test_text)
+            self.client.audio_client.transcription_queue.put(test_text)
 
             # Add a small delay to simulate ongoing transcription
             time.sleep(0.1)
 
             # Add slightly modified transcription to simulate continued speech
             updated_text = "What's the weather today in Seattle?"
-            self.client.transcription_queue.put(updated_text)
+            self.client.audio_client.transcription_queue.put(updated_text)
 
             # Now wait for silence threshold to be reached
             time.sleep(
-                self.client.silence_threshold + 0.5
+                self.client.audio_client.silence_threshold + 0.5
             )  # Increased wait time for reliability
 
             # Check if process_voice_input was called successfully
@@ -275,22 +280,26 @@ class TestProcessAudioWrapper(unittest.TestCase):
 
         finally:
             # Clean up
-            self.client.whisper_asr.is_recording = False
+            self.client.audio_client.whisper_asr.is_recording = False
             process_thread.join(timeout=1.0)
             self.log.info("Test completed, thread stopped")
 
     def _run_wrapped_process(self):
         """Run process_audio_wrapper with error catching for CI environments"""
         try:
-            self.client.process_audio_wrapper()
+            self.client.audio_client._process_audio_wrapper(
+                self.client.process_voice_input
+            )
         except UnicodeEncodeError:
             # Handle Unicode errors that might occur in CI
             self.log.info("Unicode error in process_audio_wrapper (expected in CI)")
             # Process the queue manually to simulate what process_audio_wrapper would do
             try:
-                while self.client.whisper_asr.is_recording:
+                while self.client.audio_client.whisper_asr.is_recording:
                     try:
-                        text = self.client.transcription_queue.get(timeout=0.1)
+                        text = self.client.audio_client.transcription_queue.get(
+                            timeout=0.1
+                        )
                         # Process the text directly
                         asyncio.run(self.client.process_voice_input(text))
                     except queue.Empty:
@@ -301,9 +310,11 @@ class TestProcessAudioWrapper(unittest.TestCase):
             self.log.error(f"Error in test wrapper: {str(e)}")
             # Ensure we process the queue even if there's an error
             try:
-                while self.client.whisper_asr.is_recording:
+                while self.client.audio_client.whisper_asr.is_recording:
                     try:
-                        text = self.client.transcription_queue.get(timeout=0.1)
+                        text = self.client.audio_client.transcription_queue.get(
+                            timeout=0.1
+                        )
                         asyncio.run(self.client.process_voice_input(text))
                     except queue.Empty:
                         time.sleep(0.1)
@@ -313,7 +324,7 @@ class TestProcessAudioWrapper(unittest.TestCase):
     def tearDown(self):
         """Clean up test resources."""
         # Ensure threads are stopped
-        self.client.whisper_asr.is_recording = False
+        self.client.audio_client.whisper_asr.is_recording = False
         # Stop the print patcher
         self.print_patcher.stop()
         super().tearDown()

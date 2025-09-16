@@ -1,0 +1,28 @@
+{
+  "description": "Basic transcript summarization configuration",
+  "experiments": [
+    {
+      "name": "Claude-Sonnet-Basic-Summary",
+      "llm_type": "claude",
+      "model": "claude-sonnet-4-20250514",
+      "experiment_type": "summarization",
+      "system_prompt": "You are an expert meeting analyst. Analyze the transcript carefully and provide clear, accurate information based on the content.",
+      "max_tokens": 1024,
+      "temperature": 0.1,
+      "parameters": {
+        "combined_prompt": false
+      }
+    },
+    {
+      "name": "Qwen3-0.6B-GGUF-Basic-Summary",
+      "llm_type": "lemonade",
+      "model": "Qwen3-0.6B-GGUF",
+      "experiment_type": "summarization",
+      "system_prompt": "You are an expert meeting analyst. Analyze the transcript carefully and provide clear, accurate information based on the content.",
+      "max_tokens": 1024,
+      "temperature": 0.1,
+      "minions": 0,
+      "parameters": {}
+    }
+  ]
+}

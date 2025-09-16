@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GAIA Summary Report</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 3px solid #667eea;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #333;
+            margin: 0;
+        }
+        .gaia-badge {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+        }
+        h2 {
+            color: #667eea;
+            margin-top: 30px;
+        }
+        .metadata {
+            background: #f7f9fc;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .metadata-item {
+            display: inline-block;
+            margin-right: 20px;
+            margin-bottom: 10px;
+        }
+        .metadata-label {
+            font-weight: bold;
+            color: #666;
+        }
+        .metadata code {
+            background: #f0f0f0;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            color: #333;
+        }
+        .summary-section {
+            background: #fff;
+            border: 1px solid #e1e8ed;
+            border-radius: 5px;
+            padding: 20px;
+            margin-bottom: 20px;
+            transition: transform 0.2s;
+        }
+        .summary-section:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        .summary-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #764ba2;
+            margin-bottom: 15px;
+            text-transform: capitalize;
+        }
+        .summary-text {
+            line-height: 1.6;
+            color: #333;
+            white-space: pre-wrap;
+        }
+        .action-item, .participant {
+            background: #f0f4f8;
+            padding: 10px 15px;
+            margin: 8px 0;
+            border-left: 3px solid #667eea;
+            border-radius: 3px;
+            line-height: 1.4;
+        }
+        .action-item {
+            background: #f0f9ff;
+            border-left-color: #10b981;
+        }
+        .participant {
+            background: #fef3f2;
+            border-left-color: #f59e0b;
+        }
+        .performance {
+            background: #fef5e7;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+            font-size: 0.9em;
+        }
+        .performance-metric {
+            display: inline-block;
+            margin-right: 15px;
+            color: #666;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 5px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+        .stat-label {
+            font-size: 0.9em;
+            opacity: 0.9;
+        }
+        .original-content {
+            background: #f9f9f9;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin-top: 30px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .toggle-original {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+        .toggle-original:hover {
+            background: #764ba2;
+        }
+        .hidden {
+            display: none;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e1e8ed;
+            color: #666;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Summary Report</h1>
+            <div class="gaia-badge">GAIA Summarizer</div>
+        </div>
+        
+        <div id="content">
+            <!-- Content will be injected here -->
+        </div>
+        
+        <div class="footer">
+            Generated by GAIA Summarizer | <span id="timestamp"></span>
+        </div>
+    </div>
+
+    <script>
+        const summaryData = {{JSON_DATA}};
+        
+        function formatSummary(data) {
+            const content = document.getElementById('content');
+            
+            // Display metadata
+            let html = '<div class="metadata">';
+            html += '<h2>📋 Document Information</h2>';
+            const metadata = data.metadata;
+            html += `
+                <div class="metadata-item">
+                    <span class="metadata-label">Source File:</span> ${metadata.input_file}
+                </div>
+                <div class="metadata-item">
+                    <span class="metadata-label">JSON Report:</span> <code>${window.jsonFilePath || 'summary.json'}</code>
+                </div>
+                <div class="metadata-item">
+                    <span class="metadata-label">Type:</span> ${metadata.input_type}
+                </div>
+                <div class="metadata-item">
+                    <span class="metadata-label">Model:</span> ${metadata.model}
+                </div>
+                <div class="metadata-item">
+                    <span class="metadata-label">Generated:</span> ${new Date(metadata.timestamp).toLocaleString()}
+                </div>
+                <div class="metadata-item">
+                    <span class="metadata-label">Processing Time:</span> ${(metadata.processing_time_ms/1000).toFixed(1)}s
+                </div>
+            `;
+            html += '</div>';
+
+            // Display aggregate performance stats
+            if (data.aggregate_performance) {
+                html += '<div class="stats-grid">';
+                html += `
+                    <div class="stat-card">
+                        <div class="stat-value">${data.aggregate_performance.total_tokens.toLocaleString()}</div>
+                        <div class="stat-label">Total Tokens</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${(data.aggregate_performance.total_processing_time_ms/1000).toFixed(1)}s</div>
+                        <div class="stat-label">Total Time</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${metadata.summary_styles ? metadata.summary_styles.length : 1}</div>
+                        <div class="stat-label">Summary Styles</div>
+                    </div>
+                `;
+                html += '</div>';
+            }
+
+            // Display summaries
+            html += '<h2>📝 Generated Summaries</h2>';
+            
+            if (data.summaries) {
+                // Multiple summaries
+                for (const [style, summary] of Object.entries(data.summaries)) {
+                    html += `<div class="summary-section">`;
+                    html += `<div class="summary-title">`;
+                    
+                    // Add icons for different styles
+                    const icons = {
+                        'executive': '👔',
+                        'participants': '👥',
+                        'action_items': '✅',
+                        'brief': '📄',
+                        'detailed': '📚',
+                        'bullets': '• '
+                    };
+                    html += `${icons[style] || '📝'} ${style.replace('_', ' ')}`;
+                    html += `</div>`;
+                    
+                    if (summary.text) {
+                        html += `<div class="summary-text">${escapeHtml(summary.text)}</div>`;
+                    }
+                    
+                    if (summary.participants && Array.isArray(summary.participants)) {
+                        html += '<div style="margin-top: 10px;">';
+                        summary.participants.forEach(p => {
+                            // Clean up participant text - remove markdown bold markers
+                            let cleanText = p.replace(/\*\*/g, '').trim();
+                            
+                            // Skip header lines and empty lines
+                            if (cleanText.includes('Participants') || cleanText.includes('Roles:') || cleanText.length < 2) {
+                                return;
+                            }
+                            
+                            // Remove numbering like "1. " or "2. "
+                            cleanText = cleanText.replace(/^\d+\.\s*/, '');
+                            
+                            // Remove bullet points
+                            cleanText = cleanText.replace(/^[\*\-•]\s*/, '');
+                            
+                            // Only add if it looks like a person's name/role
+                            if (cleanText.length > 2 && !cleanText.startsWith('*')) {
+                                html += `<div class="participant">👤 ${escapeHtml(cleanText)}</div>`;
+                            }
+                        });
+                        html += '</div>';
+                    }
+                    
+                    if (summary.items && Array.isArray(summary.items)) {
+                        html += '<div style="margin-top: 10px;">';
+                        let currentItem = null;
+                        summary.items.forEach((item, idx) => {
+                            // Clean up the text
+                            let cleanText = item.replace(/\*\*/g, '').trim();
+                            
+                            // Skip headers and empty lines
+                            if (cleanText.includes('Action Items:') || cleanText.length < 2) {
+                                return;
+                            }
+                            
+                            // Check if this is a main action item (starts with number)
+                            if (cleanText.match(/^\d+\.\s*/)) {
+                                // Save previous item if exists
+                                if (currentItem) {
+                                    html += formatActionItem(currentItem);
+                                }
+                                // Start new item
+                                currentItem = {
+                                    action: cleanText.replace(/^\d+\.\s*/, ''),
+                                    responsible: null,
+                                    deadline: null
+                                };
+                            } else if (cleanText.startsWith('Responsible:')) {
+                                if (currentItem) {
+                                    currentItem.responsible = cleanText.replace('Responsible:', '').trim();
+                                }
+                            } else if (cleanText.startsWith('Deadline:')) {
+                                if (currentItem) {
+                                    currentItem.deadline = cleanText.replace('Deadline:', '').trim();
+                                }
+                            } else if (!cleanText.startsWith('*') && cleanText.length > 5) {
+                                // This might be a simple action item without metadata
+                                if (currentItem) {
+                                    html += formatActionItem(currentItem);
+                                }
+                                currentItem = {
+                                    action: cleanText,
+                                    responsible: null,
+                                    deadline: null
+                                };
+                            }
+                        });
+                        // Don't forget the last item
+                        if (currentItem) {
+                            html += formatActionItem(currentItem);
+                        }
+                        html += '</div>';
+                    }
+                    
+                    if (summary.performance) {
+                        html += '<div class="performance">';
+                        html += '<strong>Performance Metrics:</strong> ';
+                        html += `<span class="performance-metric">Tokens: ${summary.performance.total_tokens}</span>`;
+                        html += `<span class="performance-metric">Time: ${(summary.performance.processing_time_ms/1000).toFixed(1)}s</span>`;
+                        if (summary.performance.tokens_per_second) {
+                            html += `<span class="performance-metric">Speed: ${summary.performance.tokens_per_second.toFixed(1)} tok/s</span>`;
+                        }
+                        html += '</div>';
+                    }
+                    
+                    html += '</div>';
+                }
+            } else if (data.summary) {
+                // Single summary
+                html += `<div class="summary-section">`;
+                html += `<div class="summary-text">${escapeHtml(data.summary.text || data.summary)}</div>`;
+                
+                if (data.performance) {
+                    html += '<div class="performance">';
+                    html += '<strong>Performance:</strong> ';
+                    html += `<span class="performance-metric">Tokens: ${data.performance.total_tokens}</span>`;
+                    html += `<span class="performance-metric">Time: ${(data.performance.processing_time_ms/1000).toFixed(1)}s</span>`;
+                    html += '</div>';
+                }
+                html += '</div>';
+            }
+            
+            // Original content (optional)
+            if (data.original_content) {
+                html += '<button class="toggle-original" onclick="toggleOriginal()">Show Original Content</button>';
+                html += '<div id="original" class="original-content hidden">';
+                html += '<h3>Original Content</h3>';
+                html += '<pre>' + escapeHtml(data.original_content) + '</pre>';
+                html += '</div>';
+            }
+
+            content.innerHTML = html;
+            
+            // Update timestamp
+            document.getElementById('timestamp').textContent = new Date().toLocaleString();
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function formatActionItem(item) {
+            let html = '<div class="action-item">';
+            html += `✅ ${escapeHtml(item.action)}`;
+            if (item.responsible || item.deadline) {
+                html += '<div style="margin-left: 20px; font-size: 0.9em; color: #666; margin-top: 5px;">';
+                if (item.responsible) {
+                    html += `<span style="margin-right: 15px;">👤 ${escapeHtml(item.responsible)}</span>`;
+                }
+                if (item.deadline) {
+                    html += `<span>📅 ${escapeHtml(item.deadline)}</span>`;
+                }
+                html += '</div>';
+            }
+            html += '</div>';
+            return html;
+        }
+        
+        function toggleOriginal() {
+            const original = document.getElementById('original');
+            const button = document.querySelector('.toggle-original');
+            if (original.classList.contains('hidden')) {
+                original.classList.remove('hidden');
+                button.textContent = 'Hide Original Content';
+            } else {
+                original.classList.add('hidden');
+                button.textContent = 'Show Original Content';
+            }
+        }
+        
+        // Format the summary on page load
+        formatSummary(summaryData);
+    </script>
+</body>
+</html>

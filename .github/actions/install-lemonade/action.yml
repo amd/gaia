@@ -22,18 +22,51 @@ runs:
         Add-MpPreference -ExclusionProcess "Lemonade_Server_Installer.exe"
 
         # Download and run installer
-        Invoke-WebRequest -Uri "https://github.com/lemonade-sdk/lemonade/releases/download/v$env:LEMONADE_VERSION/Lemonade_Server_Installer.exe" -OutFile "C:\temp\Lemonade_Server_Installer.exe"
-
-        $installPath = "C:\Users\nimbys\AppData\Local\lemonade_server"
-        Write-Host "Installing to: $installPath"
-
-        $process = Start-Process -FilePath "C:\temp\Lemonade_Server_Installer.exe" -ArgumentList "/S", "/Extras=hybrid", "/Models=Qwen2.5-0.5B-Instruct-CPU", "/D=$installPath" -Wait -PassThru
-
-        if ($process.ExitCode -ne 0) {
-          Write-Host "Lemonade installer failed with exit code: $($process.ExitCode)"
+        $installerPath = "C:\temp\Lemonade_Server_Installer.exe"
+        
+        # Remove existing file if it exists
+        if (Test-Path $installerPath) {
+          Write-Host "Removing existing installer file"
+          Remove-Item $installerPath -Force
+        }
+        
+        Invoke-WebRequest -Uri "https://github.com/lemonade-sdk/lemonade/releases/download/v$env:LEMONADE_VERSION/Lemonade_Server_Installer.exe" -OutFile $installerPath -UseBasicParsing
+        
+        # Check downloaded file
+        if (Test-Path $installerPath) {
+          $fileInfo = Get-Item $installerPath
+          Write-Host "Downloaded installer: $($fileInfo.Length) bytes"
+          
+          # Basic sanity check - installer should be at least 100KB
+          if ($fileInfo.Length -lt 100000) {
+            Write-Host "ERROR: Downloaded file is suspiciously small ($($fileInfo.Length) bytes)"
+            Write-Host "This suggests we downloaded an error page instead of the installer"
+            
+            # Check if we got HTML error page (without -Raw and -TotalCount together)
+            $firstBytes = Get-Content $installerPath -Encoding Byte -TotalCount 200
+            $firstText = [System.Text.Encoding]::ASCII.GetString($firstBytes)
+            Write-Host "First 200 characters of downloaded file:"
+            Write-Host $firstText
+            exit 1
+          }
+        } else {
+          Write-Host "ERROR: Installer file not found after download"
           exit 1
         }
 
+    - name: Run Lemonade Installer
+      shell: powershell
+      run: |
+        Write-Host "Installing Lemonade Server..."
+        cd C:\temp
+        Start-Process -FilePath ".\Lemonade_Server_Installer.exe" -ArgumentList "/S /Extras=hybrid /Models=Llama-3.2-3B-Instruct-Hybrid /D=C:\Users\nimbys\AppData\Local\lemonade_server" -Wait
+        Write-Host "Installer completed"
+
+    - name: Verify Installation
+      shell: powershell  
+      run: |
+        $installPath = "C:\Users\nimbys\AppData\Local\lemonade_server"
+        
         # Remove exclusions after installation
         Remove-MpPreference -ExclusionPath "C:\temp\Lemonade_Server_Installer.exe"
         Remove-MpPreference -ExclusionProcess "Lemonade_Server_Installer.exe"
@@ -50,6 +83,10 @@ runs:
             & $lemonadeExe --version
             Write-Host "Lemonade Server installed successfully"
         } else {
-            Write-Host "Lemonade server executable not found"
+            Write-Host "Lemonade server executable not found at: $lemonadeExe"
+            if (Test-Path "$installPath\python\Scripts") {
+                Write-Host "Scripts directory contents:"
+                Get-ChildItem "$installPath\python\Scripts" | ForEach-Object { Write-Host "  - $($_.Name)" }
+            }
             exit 1
         }

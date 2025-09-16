@@ -6,7 +6,8 @@ Main application entry point for the Blender Agent.
 
 import argparse
 import os
-from gaia.agents.Blender.agent import BlenderAgent
+from gaia.agents.blender.agent import BlenderAgent
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
 
 def wait_for_user():
@@ -126,8 +127,8 @@ def main():
     parser = argparse.ArgumentParser(description="Run the BlenderAgent")
     parser.add_argument(
         "--model",
-        default="Llama-3.2-3B-Instruct-Hybrid",
-        help="Model ID to use (default: Llama-3.2-3B-Instruct-Hybrid)",
+        default=DEFAULT_MODEL_NAME,
+        help=f"Model ID to use (default: {DEFAULT_MODEL_NAME})",
     )
     parser.add_argument(
         "--example",
@@ -143,12 +144,6 @@ def main():
         type=str,
         default="output",
         help="Directory to save output files",
-    )
-    parser.add_argument(
-        "--use-local-llm",
-        action="store_true",
-        default=True,
-        help="Use local LLM resources instead of remote ones",
     )
     parser.add_argument(
         "--stream", action="store_true", help="Enable streaming mode for LLM responses"
@@ -186,15 +181,9 @@ def main():
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
-    if args.use_local_llm:
-        model_id = args.model
-    else:
-        model_id = None
-
     # Create the BlenderAgent
     agent = BlenderAgent(
-        use_local_llm=args.use_local_llm,
-        model_id=model_id,
+        model_id=args.model,
         max_steps=args.steps,
         output_dir=output_dir,
         streaming=args.stream,

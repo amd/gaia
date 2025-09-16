@@ -3,7 +3,7 @@
 ; GAIA Installer Script
 
 ; Define command line parameters
-!define /ifndef RAUX_VERSION "v0.6.5+raux.0.2.2"
+!define /ifndef RAUX_VERSION "v0.6.5+raux.0.2.4"
 !define /ifndef RAUX_PRODUCT_NAME "GAIA UI"
 !define /ifndef RAUX_PRODUCT_SQUIRREL_NAME "GaiaUi"
 !define /ifndef RAUX_PRODUCT_SQUIRREL_PATH "$LOCALAPPDATA\GaiaUi"
@@ -528,6 +528,9 @@ Section "-Install Main Components" SEC01
 
         ; Call RAUX installer after GAIA installation completes
         Call run_raux_installer
+        
+        ; Continue to create shortcuts
+        GoTo create_shortcuts
 
       ${Else}
         DetailPrint "*** INSTALLATION FAILED ***"
@@ -611,7 +614,7 @@ SectionEnd
 
 Function RunGAIACLI
   ${IfNot} ${Silent}
-    ExecShell "open" "$DESKTOP\GAIA CLI.lnk"
+    Exec '"$INSTDIR\bin\launch_gaia.bat" --cli'
   ${EndIf}
 FunctionEnd
 
