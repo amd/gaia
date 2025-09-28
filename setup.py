@@ -102,7 +102,7 @@ setup(
             "gaia-cli = gaia.cli:main",
         ]
     },
-    python_requires=">=3.8, <3.13",
+    python_requires=">=3.8",
     long_description=open("README.md", "r", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     include_package_data=True,
