@@ -14,7 +14,7 @@ from gaia.version import version
 
 # Optional imports
 try:
-    from gaia.agents.Blender.agent import BlenderAgent
+    from gaia.agents.blender.agent import BlenderAgent
     from gaia.mcp.blender_mcp_client import MCPClient
 
     BLENDER_AVAILABLE = True
@@ -156,7 +156,7 @@ class GaiaCliClient:
         self.show_stats = show_stats
 
         # Initialize LLM client for local inference
-        self.llm_client = LLMClient(use_local=True)
+        self.llm_client = LLMClient()
 
         self.log.debug("Gaia CLI client initialized.")
         self.log.debug(f"model: {self.model}\n max_tokens: {self.max_tokens}")
@@ -330,7 +330,6 @@ async def async_main(action, **kwargs):
             ),  # Use default device if not specified
             silence_threshold=kwargs.get("silence_threshold", 0.5),
             enable_tts=not kwargs.get("no_tts", False),
-            use_local_llm=True,  # Always use local LLM for CLI talk
             system_prompt=None,  # Could add this as a parameter later
             show_stats=kwargs.get("stats", False),
             logging_level=kwargs.get(
@@ -654,6 +653,51 @@ def main():
         type=int,
         default=9876,
         help="Port for the Blender MCP server (default: 9876)",
+    )
+
+    # Add Jira app command
+    jira_parser = subparsers.add_parser(
+        "jira",
+        help="Natural language interface for Atlassian tools (Jira, Confluence, Compass)",
+        parents=[parent_parser],
+    )
+    jira_parser.add_argument(
+        "command",
+        nargs="?",
+        help="Natural language command to execute (e.g., 'Create a bug report for login issue')",
+    )
+    jira_parser.add_argument(
+        "-i",
+        "--interactive",
+        action="store_true",
+        help="Run in interactive mode for continuous commands",
+    )
+    jira_parser.add_argument(
+        "--mcp-host",
+        default="localhost",
+        help="MCP bridge host (default: localhost)",
+    )
+    jira_parser.add_argument(
+        "--mcp-port",
+        type=int,
+        default=8765,
+        help="MCP bridge port (default: 8765)",
+    )
+    jira_parser.add_argument(
+        "--model",
+        help="LLM model to use (default: Qwen3-Coder-30B-A3B-Instruct-GGUF)",
+    )
+    jira_parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose output",
+    )
+    jira_parser.add_argument(
+        "-d",
+        "--debug",
+        action="store_true",
+        help="Enable debug logging",
     )
 
     subparsers.add_parser(
@@ -1050,6 +1094,12 @@ Examples:
 
   # Launch with specific workspace directory
   gaia visualize --workspace ./evaluation_workspace
+  
+  # Visualize agent output files
+  gaia visualize --agent-outputs-dir ./agent_outputs
+  
+  # Visualize a single agent output file
+  gaia visualize --agent-output-file ./agent_output_20250827_135905.json
         """,
     )
 
@@ -1094,6 +1144,16 @@ Examples:
         "--groundtruth-dir",
         type=str,
         help="Directory containing groundtruth files (default: ./output/groundtruth)",
+    )
+    visualize_parser.add_argument(
+        "--agent-outputs-dir",
+        type=str,
+        help="Directory containing agent output JSON files (default: current directory)",
+    )
+    visualize_parser.add_argument(
+        "--agent-output-file",
+        type=str,
+        help="Single agent output JSON file to visualize",
     )
 
     # Add new subparser for generating synthetic test data
@@ -1268,6 +1328,106 @@ Examples:
         "--force",
         action="store_true",
         help="Force regeneration of all experiments, even if they already exist (default: skip existing)",
+    )
+
+    # Add MCP (Model Context Protocol) command
+    mcp_parser = subparsers.add_parser(
+        "mcp",
+        help="Start or manage MCP (Model Context Protocol) bridge server",
+        parents=[parent_parser],
+    )
+    mcp_subparsers = mcp_parser.add_subparsers(
+        dest="mcp_action", help="MCP action to perform"
+    )
+
+    # MCP start command
+    mcp_start_parser = mcp_subparsers.add_parser(
+        "start", help="Start the MCP bridge server"
+    )
+    mcp_start_parser.add_argument(
+        "--host",
+        default="localhost",
+        help="Host to bind the server to (default: localhost)",
+    )
+    mcp_start_parser.add_argument(
+        "--port", type=int, default=8765, help="Port to listen on (default: 8765)"
+    )
+    mcp_start_parser.add_argument(
+        "--base-url",
+        default="http://localhost:8000/api/v0",
+        help="GAIA LLM server base URL",
+    )
+    mcp_start_parser.add_argument(
+        "--auth-token", help="Optional authentication token for secure connections"
+    )
+    mcp_start_parser.add_argument(
+        "--no-streaming", action="store_true", help="Disable streaming responses"
+    )
+    mcp_start_parser.add_argument(
+        "--background", action="store_true", help="Run MCP bridge in background mode"
+    )
+    mcp_start_parser.add_argument(
+        "--log-file",
+        default="gaia.mcp.log",
+        help="Log file path for background mode (default: gaia.mcp.log)",
+    )
+    mcp_start_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging for all HTTP requests",
+    )
+
+    # MCP status command
+    mcp_status_parser = mcp_subparsers.add_parser(
+        "status", help="Check MCP server status"
+    )
+    mcp_status_parser.add_argument(
+        "--host", default="localhost", help="Host to check (default: localhost)"
+    )
+    mcp_status_parser.add_argument(
+        "--port", type=int, default=8765, help="Port to check (default: 8765)"
+    )
+
+    # MCP stop command
+    _ = mcp_subparsers.add_parser("stop", help="Stop background MCP bridge server")
+
+    # MCP test command
+    mcp_test_parser = mcp_subparsers.add_parser(
+        "test", help="Test MCP bridge functionality"
+    )
+    mcp_test_parser.add_argument(
+        "--host", default="localhost", help="Host to connect to (default: localhost)"
+    )
+    mcp_test_parser.add_argument(
+        "--port", type=int, default=8765, help="Port to connect to (default: 8765)"
+    )
+    mcp_test_parser.add_argument(
+        "--query", default="Hello, GAIA!", help="Test query to send"
+    )
+    mcp_test_parser.add_argument(
+        "--tool", default="gaia.chat", help="Tool to test (default: gaia.chat)"
+    )
+
+    # MCP agent command
+    mcp_agent_parser = mcp_subparsers.add_parser(
+        "agent", help="Test MCP orchestrator agent functionality"
+    )
+    mcp_agent_parser.add_argument(
+        "--host", default="localhost", help="Host to connect to (default: localhost)"
+    )
+    mcp_agent_parser.add_argument(
+        "--port", type=int, default=8765, help="Port to connect to (default: 8765)"
+    )
+    mcp_agent_parser.add_argument(
+        "request", help="Natural language request for the orchestrator agent"
+    )
+    mcp_agent_parser.add_argument(
+        "--domain",
+        default="all",
+        help="Tool domain to focus on (e.g., 'atlassian', 'gaia', 'all')",
+    )
+    mcp_agent_parser.add_argument(
+        "--context", help="Optional additional context about the request"
     )
 
     args = parser.parse_args()
@@ -2807,9 +2967,19 @@ Let me know your answer!
 
         return
 
+    # Handle MCP command
+    if args.action == "mcp":
+        handle_mcp_command(args)
+        return
+
     # Handle Blender command
     if args.action == "blender":
         handle_blender_command(args)
+        return
+
+    # Handle Jira command
+    if args.action == "jira":
+        handle_jira_command(args)
         return
 
     # Handle visualize command
@@ -3026,6 +3196,43 @@ def run_blender_interactive_mode(agent, print_result=True):
             console.print_error(f"Error processing Blender query: {e}")
 
 
+def handle_jira_command(args):
+    """
+    Handle the Jira app command.
+
+    Args:
+        args: Parsed command line arguments for the jira command
+    """
+    log = get_logger(__name__)
+
+    try:
+        # Import and use JiraApp directly (no MCP needed)
+        from gaia.apps.jira.app import main as jira_main
+
+        # Pass the arguments directly to the Jira app
+        # The app expects certain arguments, so we need to ensure they're set
+        if not hasattr(args, "verbose"):
+            args.verbose = False
+        if not hasattr(args, "debug"):
+            args.debug = False
+        if not hasattr(args, "model"):
+            args.model = None
+
+        # Run the Jira app's main function
+        result = asyncio.run(jira_main(args))
+        sys.exit(result)
+
+    except ImportError as e:
+        log.error(f"Failed to import Jira app: {e}")
+        print("❌ Error: Jira app components are not available")
+        print("Make sure GAIA is installed properly: pip install -e .")
+        sys.exit(1)
+    except Exception as e:
+        log.error(f"Error running Jira app: {e}")
+        print(f"❌ Error: {e}")
+        sys.exit(1)
+
+
 def handle_visualize_command(args):
     """
     Handle the evaluation results visualizer command.
@@ -3065,6 +3272,17 @@ def handle_visualize_command(args):
         if args.groundtruth_dir
         else workspace_dir / "output" / "groundtruth"
     )
+    agent_outputs_dir = (
+        Path(args.agent_outputs_dir) if args.agent_outputs_dir else workspace_dir
+    )
+
+    # Handle single agent output file
+    single_agent_file = None
+    if args.agent_output_file:
+        single_agent_file = Path(args.agent_output_file)
+        if not single_agent_file.exists():
+            print(f"❌ Error: Agent output file not found: {single_agent_file}")
+            return
 
     # Get the webapp directory
     webapp_dir = Path(__file__).parent / "eval" / "webapp"
@@ -3120,6 +3338,9 @@ def handle_visualize_command(args):
     env["EVALUATIONS_PATH"] = str(evaluations_dir.absolute())
     env["TEST_DATA_PATH"] = str(test_data_dir.absolute())
     env["GROUNDTRUTH_PATH"] = str(groundtruth_dir.absolute())
+    env["AGENT_OUTPUTS_PATH"] = str(agent_outputs_dir.absolute())
+    if single_agent_file:
+        env["SINGLE_AGENT_FILE"] = str(single_agent_file.absolute())
 
     print("🚀 Starting evaluation results visualizer...")
     print(f"   Workspace: {workspace_dir.absolute()}")
@@ -3127,6 +3348,9 @@ def handle_visualize_command(args):
     print(f"   Evaluations: {evaluations_dir.absolute()}")
     print(f"   Test Data: {test_data_dir.absolute()}")
     print(f"   Groundtruth: {groundtruth_dir.absolute()}")
+    print(f"   Agent Outputs: {agent_outputs_dir.absolute()}")
+    if single_agent_file:
+        print(f"   Single Agent File: {single_agent_file.absolute()}")
     print(f"   Server: http://{args.host}:{args.port}")
 
     # Start the Node.js server
@@ -3235,7 +3459,6 @@ def handle_blender_command(args):
 
         # Create the BlenderAgent
         agent = BlenderAgent(
-            use_local_llm=True,
             mcp=mcp_client,
             model_id=args.model,
             max_steps=args.steps,
@@ -3263,6 +3486,555 @@ def handle_blender_command(args):
         log.error(f"Error running Blender agent: {e}")
         print(f"❌ Error: {e}")
         sys.exit(1)
+
+
+def handle_mcp_command(args):
+    """
+    Handle the MCP (Model Context Protocol) command.
+
+    Args:
+        args: Parsed command line arguments for the MCP command
+    """
+    log = get_logger(__name__)
+
+    if not hasattr(args, "mcp_action") or args.mcp_action is None:
+        print(
+            "❌ No MCP action specified. Use 'gaia mcp --help' to see available actions."
+        )
+        return
+
+    if args.mcp_action == "start":
+        handle_mcp_start(args)
+    elif args.mcp_action == "status":
+        handle_mcp_status(args)
+    elif args.mcp_action == "stop":
+        handle_mcp_stop(args)
+    elif args.mcp_action == "test":
+        handle_mcp_test(args)
+    elif args.mcp_action == "agent":
+        handle_mcp_agent(args)
+    else:
+        log.error(f"Unknown MCP action: {args.mcp_action}")
+        print(f"❌ Unknown MCP action: {args.mcp_action}")
+
+
+def handle_mcp_start(args):
+    """Start the MCP bridge server (HTTP-native implementation)."""
+    log = get_logger(__name__)
+
+    try:
+        # Check if MCP dependencies are available (HTTP-native, no websockets needed)
+        try:
+            import aiohttp  # pylint: disable=unused-import
+        except ImportError as e:
+            log.error(f"MCP dependencies not installed: {e}")
+            print("❌ Error: MCP dependencies not installed.")
+            print("")
+            print("To fix this, install the MCP dependencies:")
+            print("  pip install .[mcp]")
+            return
+
+        # Import and start the HTTP-native MCP bridge
+        from gaia.mcp.mcp_bridge import start_server as start_mcp_http
+
+        # Handle background mode
+        if args.background:
+            # Run in background mode
+            log_file_path = os.path.abspath(args.log_file)
+
+            # Check if MCP bridge is already running by checking port
+            import socket
+
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            result = sock.connect_ex((args.host, args.port))
+            sock.close()
+
+            if result == 0:
+                print(f"❌ MCP bridge is already running on {args.host}:{args.port}")
+                print(f"📄 Check log file: {log_file_path}")
+                print("📋 Use 'gaia mcp status' to verify or 'gaia mcp stop' to stop")
+                return
+
+            # Start background process - use gaia.cli module to ensure it works everywhere
+            # This avoids PATH issues on Linux where 'gaia' command might not be available
+            cmd_args = [
+                sys.executable,
+                "-m",
+                "gaia.cli",
+                "mcp",
+                "start",
+                "--host",
+                args.host,
+                "--port",
+                str(args.port),
+                "--base-url",
+                args.base_url,
+            ]
+
+            # Add optional arguments if provided
+            if args.auth_token:
+                cmd_args.extend(["--auth-token", args.auth_token])
+            if args.no_streaming:
+                cmd_args.append("--no-streaming")
+            if getattr(args, "verbose", False):
+                cmd_args.append("--verbose")
+
+            print("🚀 Starting GAIA MCP Bridge in background")
+            print(f"📍 Host: {args.host}:{args.port}")
+            print(f"📄 Log file: {log_file_path}")
+
+            # Open log file for appending
+            log_handle = open(log_file_path, "a", encoding="utf-8")
+
+            # Start the process
+            if sys.platform.startswith("win"):
+                # Windows
+                process = subprocess.Popen(
+                    cmd_args,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                    cwd=os.getcwd(),
+                    text=True,
+                )
+            else:
+                # Unix-like systems
+                process = subprocess.Popen(
+                    cmd_args,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                    cwd=os.getcwd(),
+                    text=True,
+                )
+
+            # Write PID to dedicated PID file
+            pid_file_path = os.path.abspath("gaia.mcp.pid")
+            with open(pid_file_path, "w", encoding="utf-8") as pid_file:
+                pid_file.write(str(process.pid))
+
+            # Write PID info to log file
+            with open(log_file_path, "w", encoding="utf-8") as log_file:
+                import datetime
+
+                timestamp = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
+                log_file.write(
+                    f"{timestamp} | INFO | GAIA MCP Bridge started in background mode\n"
+                )
+                log_file.write(f"{timestamp} | INFO | Process ID: {process.pid}\n")
+                log_file.write(f"{timestamp} | INFO | Host: {args.host}:{args.port}\n")
+                log_file.write(f"{timestamp} | INFO | Base URL: {args.base_url}\n")
+                log_file.write(
+                    f"{timestamp} | INFO | Streaming: {'disabled' if args.no_streaming else 'enabled'}\n"
+                )
+                log_file.write(f"{timestamp} | INFO | {'='*60}\n")
+                log_file.flush()
+
+            print("✅ MCP bridge started in background")
+            print(f"📍 Listening on: {args.host}:{args.port}")
+            print(f"📄 Log file: {log_file_path}")
+            print(f"🔢 Process ID: {process.pid}")
+            print("📋 Use 'gaia mcp status' to check status")
+            return
+
+        # Run in foreground mode
+        log.info("Starting GAIA MCP Bridge on %s:%s", args.host, args.port)
+        print(f"🚀 Starting GAIA MCP Bridge on {args.host}:{args.port}")
+
+        if args.auth_token:
+            print("🔒 Authentication enabled")
+
+        print(f"🔗 GAIA LLM server: {args.base_url}")
+        print(f"📡 Streaming: {'disabled' if args.no_streaming else 'enabled'}")
+        if getattr(args, "verbose", False):
+            print("🔍 Verbose logging: enabled")
+        print("")
+        print("Press Ctrl+C to stop the server")
+
+        # Start HTTP-native MCP bridge
+        verbose = getattr(args, "verbose", False)
+        start_mcp_http(
+            host=args.host, port=args.port, base_url=args.base_url, verbose=verbose
+        )
+
+    except KeyboardInterrupt:
+        log.info("MCP bridge stopped by user")
+        print("\n✅ MCP bridge stopped")
+    except Exception as e:
+        log.error(f"Error starting MCP bridge: {e}")
+        print(f"❌ Error starting MCP bridge: {e}")
+
+
+def handle_mcp_stop(_args):
+    """Stop the background MCP bridge server."""
+    log = get_logger(__name__)
+
+    try:
+        # Note: os, sys, subprocess already imported at module level
+
+        # Get PID from gaia.mcp.pid file
+        pid_file_path = os.path.abspath("gaia.mcp.pid")
+
+        if not os.path.exists(pid_file_path):
+            print("❌ No MCP bridge PID file found")
+            print("📋 Use 'gaia mcp status' to check if server is running")
+            return
+
+        try:
+            with open(pid_file_path, "r", encoding="utf-8") as f:
+                pid = int(f.read().strip())
+        except (ValueError, IOError) as e:
+            print(f"❌ Error reading PID file: {e}")
+            return
+
+        # Stop the process
+        try:
+            if sys.platform.startswith("win"):
+                # Windows - check if process exists first
+                result = subprocess.run(
+                    ["tasklist", "/FI", f"PID eq {pid}"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if str(pid) in result.stdout:
+                    print(f"🔄 Stopping MCP bridge process (PID: {pid})")
+                    subprocess.run(["taskkill", "/F", "/PID", str(pid)], check=True)
+                    print(f"✅ Stopped MCP bridge (PID: {pid})")
+                else:
+                    print(f"⚠️  Process {pid} was not running")
+            else:
+                # Unix-like systems
+                try:
+                    print(f"🔄 Stopping MCP bridge process (PID: {pid})")
+                    os.kill(pid, 15)  # SIGTERM
+                    print(f"✅ Stopped MCP bridge (PID: {pid})")
+                except OSError:
+                    print(f"⚠️  Process {pid} was not running")
+
+        except subprocess.CalledProcessError:
+            print(f"❌ Failed to stop process {pid}")
+        except Exception as e:
+            print(f"❌ Error stopping process {pid}: {e}")
+
+        # Clean up PID file
+        try:
+            os.remove(pid_file_path)
+            print("🧹 Cleaned up PID file")
+        except OSError:
+            pass
+
+    except Exception as e:
+        log.error(f"Error stopping MCP bridge: {e}")
+        print(f"❌ Error stopping MCP bridge: {e}")
+
+
+def handle_mcp_status(args):
+    """Check MCP server status (HTTP-native)."""
+    log = get_logger(__name__)
+
+    try:
+        import socket
+
+        print(f"🔍 Checking MCP server status at {args.host}:{args.port}")
+
+        # Test connection
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        result = sock.connect_ex((args.host, args.port))
+        sock.close()
+
+        if result == 0:
+            print(f"✅ MCP server is running and accessible at {args.host}:{args.port}")
+
+            # Try the new /status endpoint for comprehensive details
+            try:
+                import urllib.request
+                import json
+
+                # First try the new /status endpoint
+                status_url = f"http://{args.host}:{args.port}/status"
+                try:
+                    with urllib.request.urlopen(status_url, timeout=3) as response:
+                        data = json.loads(response.read().decode())
+
+                        if data.get("status") == "healthy":
+                            print("✅ MCP server is fully operational (HTTP)")
+                            print(
+                                f"   Service: {data.get('service', 'GAIA MCP Bridge')}"
+                            )
+                            print(f"   Version: {data.get('version', 'Unknown')}")
+                            print(
+                                f"   LLM Backend: {data.get('llm_backend', 'Unknown')}"
+                            )
+
+                            # Display agents
+                            agents = data.get("agents", {})
+                            print(f"\n📦 Agents ({len(agents)}):")
+                            for name, info in agents.items():
+                                print(
+                                    f"   • {name}: {info.get('description', 'No description')}"
+                                )
+                                capabilities = info.get("capabilities", [])
+                                if capabilities:
+                                    print(
+                                        f"     Capabilities: {', '.join(capabilities)}"
+                                    )
+
+                            # Display tools
+                            tools = data.get("tools", {})
+                            print(f"\n🔧 Tools ({len(tools)}):")
+                            for name, info in tools.items():
+                                print(
+                                    f"   • {name}: {info.get('description', 'No description')}"
+                                )
+
+                            # Display endpoints
+                            endpoints = data.get("endpoints", {})
+                            if endpoints:
+                                print("\n📍 Available Endpoints:")
+                                for _, desc in endpoints.items():
+                                    print(f"   • {desc}")
+                        else:
+                            print("⚠️  Server is running but may not be healthy")
+                except urllib.error.HTTPError as e:
+                    if e.code == 404:
+                        # Fall back to /health for older versions
+                        health_url = f"http://{args.host}:{args.port}/health"
+                        with urllib.request.urlopen(health_url, timeout=3) as response:
+                            data = json.loads(response.read().decode())
+                            if data.get("status") == "healthy":
+                                print("✅ MCP server is fully operational (HTTP)")
+                                print(
+                                    f"   Service: {data.get('service', 'GAIA MCP Bridge')}"
+                                )
+                                print(f"   Agents: {data.get('agents', 0)}")
+                                print(f"   Tools: {data.get('tools', 0)}")
+                                print(
+                                    "\n💡 Note: Update the MCP bridge for detailed status information"
+                                )
+                            else:
+                                print("⚠️  Server is running but may not be healthy")
+                    else:
+                        raise
+                except urllib.error.URLError:
+                    print("⚠️  Server is running but status endpoint not accessible")
+                    print("   Server may be starting up or using an older version")
+            except Exception as e:
+                log.debug(f"Cannot perform detailed status check: {e}")
+                print("⚠️  Cannot perform detailed status check")
+        else:
+            print(f"❌ MCP server is not accessible at {args.host}:{args.port}")
+            print("   Make sure the server is running with: gaia mcp start")
+
+    except Exception as e:
+        log.error(f"Error checking MCP status: {e}")
+        print(f"❌ Error checking MCP status: {e}")
+
+
+def handle_mcp_test(args):
+    """Test MCP bridge functionality (HTTP-native)."""
+    log = get_logger(__name__)
+
+    try:
+        import json
+        import urllib.request
+        import urllib.parse
+
+        print(f"🧪 Testing MCP bridge at {args.host}:{args.port}")
+        print(f"📝 Test query: {args.query}")
+        print(f"🔧 Tool: {args.tool}")
+
+        # First check if server is running
+        health_url = f"http://{args.host}:{args.port}/health"
+        try:
+            with urllib.request.urlopen(health_url, timeout=3) as response:
+                health_data = json.loads(response.read().decode())
+                if health_data.get("status") == "healthy":
+                    print("✅ MCP server is healthy")
+                else:
+                    print("⚠️  Server may not be fully operational")
+        except urllib.error.URLError:
+            print(f"❌ Cannot connect to MCP server at {args.host}:{args.port}")
+            print("   Make sure the server is running with: gaia mcp start")
+            return
+
+        # Test the actual tool call via HTTP POST
+        try:
+            # Prepare the JSON-RPC request
+            rpc_request = {
+                "jsonrpc": "2.0",
+                "id": "test-1",
+                "method": "tools/call",
+                "params": {"name": args.tool, "arguments": {"query": args.query}},
+            }
+
+            # Send POST request
+            url = f"http://{args.host}:{args.port}/"
+            data = json.dumps(rpc_request).encode("utf-8")
+            req = urllib.request.Request(
+                url, data=data, headers={"Content-Type": "application/json"}
+            )
+
+            with urllib.request.urlopen(req, timeout=30) as response:
+                result = json.loads(response.read().decode())
+
+                if "result" in result:
+                    print("✅ Query executed successfully")
+                    content = result["result"].get("content", [])
+                    if content and len(content) > 0:
+                        if isinstance(content[0], dict) and "text" in content[0]:
+                            response_text = content[0]["text"]
+                            try:
+                                response_data = json.loads(response_text)
+                                print(
+                                    f"💬 Response: {response_data.get('response', response_text)}"
+                                )
+                            except json.JSONDecodeError:
+                                print(f"💬 Response: {response_text}")
+                        else:
+                            print(f"💬 Response: {content}")
+                    else:
+                        print("⚠️  No response content received")
+                elif "error" in result:
+                    print(f"❌ Query failed: {result['error']}")
+                else:
+                    print("❌ Unexpected response format")
+
+        except urllib.error.HTTPError as e:
+            print(f"❌ HTTP Error: {e.code} {e.reason}")
+        except urllib.error.URLError as e:
+            print(f"❌ Connection error: {e.reason}")
+        except json.JSONDecodeError as e:
+            print(f"❌ Invalid JSON response: {e}")
+        except Exception as e:
+            print(f"❌ Test failed: {e}")
+
+    except Exception as e:
+        log.error(f"Error running MCP test: {e}")
+        print(f"❌ Error running MCP test: {e}")
+
+
+def handle_mcp_agent(args):
+    """Test MCP orchestrator agent functionality (HTTP-native)."""
+    log = get_logger(__name__)
+
+    try:
+        import json
+        import urllib.request
+        import urllib.parse
+
+        print(f"🤖 Testing MCP orchestrator agent at {args.host}:{args.port}")
+        print(f"📝 Agent request: {args.request}")
+        print(f"🎯 Target domain: {args.domain}")
+        if args.context:
+            print(f"💭 Context: {args.context}")
+
+        # First check if server is running
+        health_url = f"http://{args.host}:{args.port}/health"
+        try:
+            with urllib.request.urlopen(health_url, timeout=3) as response:
+                health_data = json.loads(response.read().decode())
+                if health_data.get("status") == "healthy":
+                    print("✅ MCP server is healthy")
+                else:
+                    print("⚠️  Server may not be fully operational")
+        except urllib.error.URLError:
+            print(f"❌ Cannot connect to MCP server at {args.host}:{args.port}")
+            print("   Make sure the server is running with: gaia mcp start")
+            return
+
+        # Test agent call via HTTP POST
+        try:
+            # Prepare agent arguments
+            agent_arguments = {"request": args.request, "domain": args.domain}
+            if args.context:
+                agent_arguments["context"] = args.context
+
+            # Prepare the JSON-RPC request
+            rpc_request = {
+                "jsonrpc": "2.0",
+                "id": "agent-test-1",
+                "method": "tools/call",
+                "params": {"name": "gaia.agent", "arguments": agent_arguments},
+            }
+
+            # Send POST request
+            url = f"http://{args.host}:{args.port}/"
+            data = json.dumps(rpc_request).encode("utf-8")
+            req = urllib.request.Request(
+                url, data=data, headers={"Content-Type": "application/json"}
+            )
+
+            print("🔄 Agent is analyzing request and orchestrating tools...")
+
+            with urllib.request.urlopen(req, timeout=60) as response:
+                agent_data = json.loads(response.read().decode())
+
+                if "result" in agent_data:
+                    print("✅ Agent executed successfully")
+                    content = agent_data["result"].get("content", [])
+                    if content and len(content) > 0:
+                        if isinstance(content[0], dict) and "text" in content[0]:
+                            try:
+                                result = json.loads(content[0]["text"])
+
+                                print("\n🎯 Agent Results:")
+                                print(f"  Domain: {result.get('domain', 'unknown')}")
+                                print(
+                                    f"  Workflow Steps: {result.get('workflow_steps', 0)}"
+                                )
+                                print(f"  Success: {result.get('success', False)}")
+
+                                # Display agent workflow results
+                                agent_results = result.get("agent_results", {})
+                                workflow_results = agent_results.get(
+                                    "workflow_results", {}
+                                )
+
+                                if workflow_results:
+                                    print("\n📋 Workflow Execution Details:")
+                                    for (
+                                        step_key,
+                                        step_result,
+                                    ) in workflow_results.items():
+                                        print(
+                                            f"  {step_key}: {step_result.get('description', 'Unknown step')}"
+                                        )
+                                        if "error" in step_result:
+                                            print(
+                                                f"    ❌ ERROR: {step_result['error']}"
+                                            )
+                                        else:
+                                            print(
+                                                f"    ✅ SUCCESS: {step_result.get('tool', 'unknown')} completed"
+                                            )
+                            except json.JSONDecodeError:
+                                print(f"💬 Response: {content[0]['text']}")
+                        else:
+                            print(f"💬 Response: {content}")
+                    else:
+                        print("⚠️  No response content received")
+                elif "error" in agent_data:
+                    print(f"❌ Agent execution failed: {agent_data['error']}")
+                else:
+                    print("❌ Unexpected response format")
+
+        except urllib.error.HTTPError as e:
+            print(f"❌ HTTP Error: {e.code} {e.reason}")
+        except urllib.error.URLError as e:
+            print(f"❌ Connection error: {e.reason}")
+        except json.JSONDecodeError as e:
+            print(f"❌ Invalid JSON response: {e}")
+        except Exception as e:
+            print(f"❌ Agent test failed: {e}")
+
+    except Exception as e:
+        log.error(f"Error running MCP agent test: {e}")
+        print(f"❌ Error running MCP agent test: {e}")
 
 
 if __name__ == "__main__":

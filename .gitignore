@@ -55,6 +55,7 @@ coverage.xml
 
 # Django stuff
 *.log
+*.pid
 local_settings.py
 
 # Flask stuff
@@ -158,6 +159,18 @@ coverage/
 # Custom
 config.ini
 
+# Electron Apps - exclude .env but keep .env.development
+src/gaia/apps/**/.env
+!src/gaia/apps/**/.env.development
+
+# MCP Configuration and runtime files
+.env
+.env.*
+!.env.example
+mcp_server.log
+atlassian_config.json
+*.mcp.json
+
 # version files
 version.txt
 installer/version.nsh
@@ -172,3 +185,4 @@ version.txt
 **/.gaia_servers.json
 .cursor/mcp.json
 .cursor/plan.md
+**/agent_output_*.json

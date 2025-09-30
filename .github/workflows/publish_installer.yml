@@ -29,6 +29,7 @@ jobs:
   publish-installer:
     runs-on: windows-latest
     needs: build-installer
+    if: always() && needs.build-installer.result == 'success'
     steps:
       - uses: actions/checkout@v4
         with:

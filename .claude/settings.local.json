@@ -1,9 +1,29 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python:*)",
-      "Bash(where python)",
-      "Bash(py --version)",
+      "Bash(git log:*)",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__get-library-docs",
+      "mcp__github-gaia__get_issue",
+      "mcp__github-gaia__get_pull_request",
+      "mcp__github-gaia__get_pull_request_status",
+      "mcp__github-gaia__search_issues",
+      "mcp__perplexity-ask__perplexity_ask",
+      "mcp__memory__add_observations",
+      "mcp__memory__read_graph",
+      "mcp__sequential-thinking__sequentialthinking",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "Bash(gh run list:*)",
+      "Bash(gh workflow:*)",
+      "Bash(gh run view:*)",
+      "Bash(git ls-tree:*)",
+      "Bash(gh pr view:*)",
+      "Bash(grep:*)",
+      "Bash(curl -i -X POST \"https://itomek.ngrok.app/jira/query\" -H \"Content-Type: application/json\" -d \"{\"\"query\"\":\"\"What are my assigned issues?\"\"}\")",
+      "mcp__memory__create_entities",
+      "mcp__memory__search_nodes"
     ],
     "deny": []
   }

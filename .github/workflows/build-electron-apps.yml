@@ -1,0 +1,207 @@
+name: Build Electron Apps
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/gaia/apps/**/webui/**'
+      - '.github/workflows/build-electron-apps.yml'
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    tags:
+      - 'v*'
+      - 'app-*'
+
+permissions:
+  contents: write
+
+jobs:
+  discover-apps:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+      has_apps: ${{ steps.discover.outputs.has_apps }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Discover Electron apps
+        id: discover
+        run: |
+          echo "Discovering apps with webui directories..."
+          apps_json='[]'
+
+          for app_dir in src/gaia/apps/*/webui; do
+            if [ -f "$app_dir/app.config.json" ] && [ -f "$app_dir/package.json" ]; then
+              app_name=$(basename $(dirname "$app_dir"))
+
+              # Read app config
+              config=$(cat "$app_dir/app.config.json")
+              display_name=$(echo "$config" | jq -r '.displayName // .name')
+              version=$(echo "$config" | jq -r '.version // "1.0.0"')
+
+              echo "Found app: $app_name v$version ($display_name)"
+
+              # Add to matrix
+              app_entry=$(jq -n \
+                --arg name "$app_name" \
+                --arg path "$app_dir" \
+                --arg display_name "$display_name" \
+                --arg version "$version" \
+                '{name: $name, path: $path, display_name: $display_name, version: $version}')
+
+              apps_json=$(echo "$apps_json" | jq -c ". += [$app_entry]")
+            fi
+          done
+
+          # Check if we found any apps
+          app_count=$(echo "$apps_json" | jq 'length')
+          if [ "$app_count" -eq 0 ]; then
+            echo "No Electron apps found"
+            echo "has_apps=false" >> $GITHUB_OUTPUT
+            echo "matrix={\"app\":[]}" >> $GITHUB_OUTPUT
+          else
+            echo "Found $app_count app(s)"
+            echo "has_apps=true" >> $GITHUB_OUTPUT
+            echo "matrix={\"app\":$(echo $apps_json | jq -c .)}" >> $GITHUB_OUTPUT
+          fi
+
+  build-apps:
+    needs: discover-apps
+    if: needs.discover-apps.outputs.has_apps == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # os: [windows-latest, ubuntu-latest, macos-latest]
+        os: [windows-latest]
+        app: ${{ fromJson(needs.discover-apps.outputs.matrix).app }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Build Electron app
+        run: |
+          cd ${{ matrix.app.path }}
+          npm ci --prefix .
+          npm run make
+        shell: bash
+
+      - name: Get platform info
+        id: platform
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            echo "name=windows" >> $GITHUB_OUTPUT
+            echo "ext=exe" >> $GITHUB_OUTPUT
+          elif [[ "${{ runner.os }}" == "Linux" ]]; then
+            echo "name=linux" >> $GITHUB_OUTPUT
+            echo "ext=deb" >> $GITHUB_OUTPUT
+          fi
+
+      # Find and upload build artifacts for Windows
+      - name: Find Windows artifacts
+        if: runner.os == 'Windows'
+        id: windows_artifacts
+        shell: pwsh
+        run: |
+          $setupFile = Get-ChildItem -Path "${{ matrix.app.path }}\out\make\squirrel.windows\x64" -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($setupFile) {
+            $fileName = "${{ matrix.app.name }}-${{ matrix.app.version }}-setup.exe"
+            Copy-Item $setupFile.FullName -Destination $fileName
+            echo "artifact_path=$fileName" >> $env:GITHUB_OUTPUT
+            echo "found=true" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "found=false" >> $env:GITHUB_OUTPUT
+            echo "::warning::No Windows setup file found for ${{ matrix.app.name }}"
+          }
+
+      # Find and upload build artifacts for Linux
+      - name: Find Linux artifacts
+        if: runner.os == 'Linux'
+        id: linux_artifacts
+        shell: bash
+        run: |
+          deb_file=$(find "${{ matrix.app.path }}/out/make" -name "*.deb" -type f | head -1)
+          if [ -n "$deb_file" ]; then
+            filename="${{ matrix.app.name }}-${{ matrix.app.version }}.deb"
+            cp "$deb_file" "$filename"
+            echo "artifact_path=$filename" >> $GITHUB_OUTPUT
+            echo "found=true" >> $GITHUB_OUTPUT
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+            echo "::warning::No Linux .deb file found for ${{ matrix.app.name }}"
+          fi
+
+      # Upload artifacts for all platforms (PR and regular builds)
+      - name: Upload build artifacts
+        if: |
+          (runner.os == 'Windows' && steps.windows_artifacts.outputs.found == 'true') ||
+          (runner.os == 'Linux' && steps.linux_artifacts.outputs.found == 'true')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.app.name }}-${{ steps.platform.outputs.name }}-${{ github.event.pull_request.number || github.sha }}
+          path: |
+            ${{ steps.windows_artifacts.outputs.artifact_path }}
+            ${{ steps.linux_artifacts.outputs.artifact_path }}
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
+  # Publish to GitHub Release (only for tags)
+  publish-release:
+    needs: [discover-apps, build-apps]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app: ${{ fromJson(needs.discover-apps.outputs.matrix).app }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Download all platform artifacts for this app
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.app.name }}-windows-${{ github.sha }}
+          path: ./release-assets
+        continue-on-error: true
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.app.name }}-linux-${{ github.sha }}
+          path: ./release-assets
+        continue-on-error: true
+
+      - name: List release assets
+        run: |
+          echo "Release assets for ${{ matrix.app.name }}:"
+          ls -la ./release-assets/ || echo "No assets found"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ matrix.app.display_name }} ${{ matrix.app.version }}
+          body: |
+            ## ${{ matrix.app.display_name }} Release
+
+            Version: ${{ matrix.app.version }}
+
+            ### Downloads
+            - Windows: `${{ matrix.app.name }}-${{ matrix.app.version }}-setup.exe`
+            - Linux: `${{ matrix.app.name }}-${{ matrix.app.version }}.deb`
+
+            ### Installation
+            - **Windows:** Download and run the .exe installer
+            - **Linux:** Install with `sudo dpkg -i *.deb`
+          files: ./release-assets/*
+          fail_on_unmatched_files: false
+          draft: true
+          prerelease: false

@@ -1,0 +1,52 @@
+{
+  "name": "example",
+  "version": "1.0.0",
+  "description": "Example GAIA app demonstrating MCP integration",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make"
+  },
+  "author": "Example Author",
+  "license": "MIT",
+  "config": {
+    "forge": {
+      "packagerConfig": {
+        "name": "Example App - MCP Demo",
+        "executableName": "example",
+        "appBundleId": "com.gaia.example",
+        "appCategoryType": "public.app-category.productivity",
+        "platform": "all"
+      },
+      "makers": [
+        {
+          "name": "@electron-forge/maker-squirrel",
+          "config": {
+            "name": "example"
+          },
+          "platforms": [
+            "win32"
+          ]
+        },
+        {
+          "name": "@electron-forge/maker-zip",
+          "platforms": [
+            "darwin",
+            "linux"
+          ]
+        }
+      ]
+    }
+  },
+  "dependencies": {
+    "electron-squirrel-startup": "^1.0.0",
+    "dotenv": "^16.0.0"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.0.0",
+    "@electron-forge/maker-squirrel": "^7.0.0",
+    "@electron-forge/maker-zip": "^7.0.0",
+    "electron": "^31.0.0"
+  }
+}

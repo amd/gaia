@@ -1,0 +1,23 @@
+{
+  "name": "gaia-apps",
+  "version": "1.0.0",
+  "description": "GAIA Electron Applications",
+  "private": true,
+  "scripts": {
+    "app:jira:run:dev": "node src/gaia/apps/_shared/dev-server.js jira",
+    "app:jira:run:electron": "cross-env GAIA_APP_NAME=jira electron src/gaia/electron/src/main.js",
+    "app:jira:build": "cd src/gaia/apps/jira/webui && npm run build:electron",
+    "app:example:run:dev": "node src/gaia/apps/_shared/dev-server.js example",
+    "install:framework": "cd src/gaia/electron && npm install",
+    "install:apps": "npm run install:framework && npm run install:jira",
+    "install:jira": "cd src/gaia/apps/jira/webui && npm install"
+  },
+  "workspaces": [
+    "src/gaia/electron",
+    "src/gaia/apps/*/webui"
+  ],
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^31.0.0"
+  }
+}

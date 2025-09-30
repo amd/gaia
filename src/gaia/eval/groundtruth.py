@@ -722,8 +722,8 @@ Examples:
         "-m",
         "--model",
         type=str,
-        default="claude-3-7-sonnet-20250219",
-        help="Claude model to use (default: claude-3-7-sonnet-20250219)",
+        default="claude-sonnet-4-20250514",
+        help="Claude model to use (default: claude-sonnet-4-20250514)",
     )
     parser.add_argument(
         "--max-tokens",
