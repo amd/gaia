@@ -21,7 +21,6 @@
       "Bash(git ls-tree:*)",
       "Bash(gh pr view:*)",
       "Bash(grep:*)",
-      "Bash(curl -i -X POST \"https://itomek.ngrok.app/jira/query\" -H \"Content-Type: application/json\" -d \"{\"\"query\"\":\"\"What are my assigned issues?\"\"}\")",
       "mcp__memory__create_entities",
       "mcp__memory__search_nodes"
     ],
