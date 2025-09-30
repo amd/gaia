@@ -1,4 +1,4 @@
-from gaia.agents.Blender.agent_simple import BlenderAgentSimple
+from gaia.agents.blender.agent_simple import BlenderAgentSimple
 
 
 def main():

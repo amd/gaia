@@ -3,10 +3,10 @@ import json
 import logging
 import re
 from unittest.mock import MagicMock, patch, call
-from gaia.agents.Blender.agent import BlenderAgent
+from gaia.agents.blender.agent import BlenderAgent
 from gaia.llm.llm_client import LLMClient
 from gaia.mcp.blender_mcp_client import MCPClient
-from gaia.agents.base.console import AgentConsole, ProgressSpinner
+from gaia.agents.base.console import AgentConsole, ProgressIndicator
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
@@ -241,7 +241,6 @@ def mock_mcp_client():
 def agent(mock_llm_client, mock_mcp_client, mock_console):
     """Create a Blender agent with mock clients for testing."""
     agent = BlenderAgent(
-        use_local_llm=True,
         mcp=mock_mcp_client,
         max_retries=3,
         debug_prompts=False,

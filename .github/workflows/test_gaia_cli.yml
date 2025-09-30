@@ -50,11 +50,18 @@ jobs:
     uses: ./.github/workflows/test_gaia_cli_linux.yml
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
+  # Test MCP Bridge functionality
+  test-mcp:
+    name: MCP Bridge Tests
+    needs: lint
+    uses: ./.github/workflows/test_mcp.yml
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
   # Summary job that reports overall status
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [lint, test-windows, test-linux]
+    needs: [lint, test-windows, test-linux, test-mcp]
     if: always()
     steps:
       - name: Check test results
@@ -63,19 +70,22 @@ jobs:
           echo "Lint Status: ${{ needs.lint.result }}"
           echo "Windows Tests Status: ${{ needs.test-windows.result }}"
           echo "Linux Tests Status: ${{ needs.test-linux.result }}"
+          echo "MCP Tests Status: ${{ needs.test-mcp.result }}"
           echo ""
           
           # Determine overall status
-          if [[ "${{ needs.lint.result }}" == "success" && "${{ needs.test-windows.result }}" == "success" && "${{ needs.test-linux.result }}" == "success" ]]; then
+          if [[ "${{ needs.lint.result }}" == "success" && "${{ needs.test-windows.result }}" == "success" && "${{ needs.test-linux.result }}" == "success" && "${{ needs.test-mcp.result }}" == "success" ]]; then
             echo "✅ All tests passed!"
             echo "- Windows: Full CLI functionality with Lemonade integration"
             echo "- Linux: Full CLI functionality with Lemonade integration"
+            echo "- MCP: HTTP-native bridge and protocol compliance"
             echo "- Cross-platform: Code quality and compatibility"
           else
             echo "❌ Some tests failed:"
             [[ "${{ needs.lint.result }}" != "success" ]] && echo "  - Linting failed"
             [[ "${{ needs.test-windows.result }}" != "success" ]] && echo "  - Windows tests failed"
             [[ "${{ needs.test-linux.result }}" != "success" ]] && echo "  - Linux tests failed"
+            [[ "${{ needs.test-mcp.result }}" != "success" ]] && echo "  - MCP tests failed"
             exit 1
           fi
 
@@ -101,7 +111,16 @@ jobs:
           echo "  ✅ Cross-platform process management"
           echo "  ✅ Python import compatibility"
           echo ""
-          echo "🎉 Linux Full Support Achieved!"
+          echo "🌐 MCP Bridge (Cross-Platform):"
+          echo "  ✅ HTTP-native bridge server"
+          echo "  ✅ JSON-RPC protocol compliance"
+          echo "  ✅ LLM agent integration"
+          echo "  ✅ Tool registration and discovery"
+          echo "  ✅ Error handling and recovery"
+          echo "  ✅ CORS support for browser clients"
+          echo "  ⏭️  Jira integration (skipped - requires auth)"
+          echo ""
+          echo "🎉 Full Platform Support Achieved!"
           echo "  🔧 Future enhancements:"
           echo "  🚧 Audio/TTS functionality testing"
           echo "  🚧 NPU driver support (if available)"

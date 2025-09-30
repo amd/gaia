@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JAX - Jira Agent Experience</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Dark Mode Toggle -->
+    <button id="theme-toggle" class="theme-toggle" aria-label="Toggle dark mode">
+        <svg class="theme-icon sun-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="5"></circle>
+            <line x1="12" y1="1" x2="12" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="23"></line>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+            <line x1="1" y1="12" x2="3" y2="12"></line>
+            <line x1="21" y1="12" x2="23" y2="12"></line>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+        <svg class="theme-icon moon-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: none;">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+    </button>
+    <div id="app">
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Three Column Layout -->
+            <div class="main-layout">
+                <!-- Left Sidebar -->
+                <div class="sidebar" id="sidebar">
+                    <!-- Sidebar component will be initialized here -->
+                </div>
+                
+                <!-- Center Panel - Results Display -->
+                <div class="center-panel" id="results-pane">
+                    <!-- Results panel component will be initialized here -->
+                </div>
+                
+                <!-- Right Panel - Chat Interface -->
+                <div class="chat-panel" id="chat-pane">
+                    <!-- Chat component will be initialized here -->
+                </div>
+            </div>
+            
+            <!-- Loading Overlay (hidden, using chat indicators instead) -->
+            <div id="loading-overlay" class="loading-overlay" style="display: none;">
+                <div class="loading-spinner"></div>
+                <div class="loading-text">Processing your request...</div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Scripts -->
+    <script type="module" src="services/dom-helpers.js"></script>
+    <script type="module" src="services/api-client.js"></script>
+    <script type="module" src="services/result-parser.js"></script>
+    <script type="module" src="components/sidebar.js"></script>
+    <script type="module" src="components/chat-component.js"></script>
+    <script type="module" src="components/results-panel.js"></script>
+    <script type="module" src="renderer.js"></script>
+</body>
+</html>

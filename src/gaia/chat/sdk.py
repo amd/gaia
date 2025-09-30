@@ -27,7 +27,9 @@ class ChatConfig:
     max_history_length: int = 4  # Number of conversation pairs to keep
     show_stats: bool = False
     logging_level: str = "INFO"
-    use_local_llm: bool = True
+    use_claude: bool = False  # Use Claude API
+    use_chatgpt: bool = False  # Use ChatGPT/OpenAI API
+    claude_model: str = "claude-sonnet-4-20250514"  # Claude model when use_claude=True
     assistant_name: str = "gaia"  # Name to use for the assistant in conversations
 
 
@@ -80,9 +82,17 @@ class ChatSDK:
         self.log = get_logger(__name__)
         self.log.setLevel(getattr(logging, self.config.logging_level))
 
-        # Initialize LLM client
+        # Validate that both providers aren't specified
+        if self.config.use_claude and self.config.use_chatgpt:
+            raise ValueError(
+                "Cannot specify both use_claude and use_chatgpt. Please choose one."
+            )
+
+        # Initialize LLM client - it will compute use_local automatically
         self.llm_client = LLMClient(
-            use_local=self.config.use_local_llm,
+            use_claude=self.config.use_claude,
+            use_openai=self.config.use_chatgpt,
+            claude_model=self.config.claude_model,
             system_prompt=None,  # We handle system prompts through Prompts class
         )
 
@@ -100,6 +110,161 @@ class ChatSDK:
             self.config.assistant_name,
             self.config.system_prompt,
         )
+
+    def send_messages(
+        self,
+        messages: List[Dict[str, str]],
+        system_prompt: Optional[str] = None,
+        **kwargs,
+    ) -> ChatResponse:
+        """
+        Send a full conversation history and get a response.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content' keys (user/assistant only)
+            system_prompt: Optional system prompt to use (overrides config)
+            **kwargs: Additional arguments for LLM generation
+
+        Returns:
+            ChatResponse with the complete response
+        """
+        try:
+            # Convert messages to chat history format
+            chat_history = []
+
+            for msg in messages:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+
+                if role == "user":
+                    chat_history.append(f"user: {content}")
+                elif role == "assistant":
+                    chat_history.append(f"assistant: {content}")
+                # Skip system messages since they're passed separately
+
+            # Use provided system prompt or fall back to config default
+            effective_system_prompt = system_prompt or self.config.system_prompt
+
+            # Format according to model type
+            formatted_prompt = Prompts.format_chat_history(
+                model=self.config.model,
+                chat_history=chat_history,
+                assistant_name="assistant",
+                system_prompt=effective_system_prompt,
+            )
+
+            # Debug logging
+            self.log.debug(f"Formatted prompt length: {len(formatted_prompt)} chars")
+            self.log.debug(
+                f"System prompt used: {effective_system_prompt[:100] if effective_system_prompt else 'None'}..."
+            )
+
+            # Set appropriate stop tokens based on model
+            model_lower = self.config.model.lower() if self.config.model else ""
+            if "qwen" in model_lower:
+                kwargs.setdefault("stop", ["<|im_end|>", "<|im_start|>"])
+            elif "llama" in model_lower:
+                kwargs.setdefault("stop", ["<|eot_id|>", "<|start_header_id|>"])
+
+            # Use generate with formatted prompt
+            response = self.llm_client.generate(
+                prompt=formatted_prompt, model=self.config.model, stream=False, **kwargs
+            )
+
+            # Prepare response data
+            stats = None
+            if self.config.show_stats:
+                stats = self.get_stats()
+
+            return ChatResponse(text=response, stats=stats, is_complete=True)
+
+        except ConnectionError as e:
+            # Re-raise connection errors with additional context
+            self.log.error(f"LLM connection error in send_messages: {e}")
+            raise ConnectionError(f"Failed to connect to LLM server: {e}") from e
+        except Exception as e:
+            self.log.error(f"Error in send_messages: {e}")
+            raise
+
+    def send_messages_stream(
+        self,
+        messages: List[Dict[str, str]],
+        system_prompt: Optional[str] = None,
+        **kwargs,
+    ):
+        """
+        Send a full conversation history and get a streaming response.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content' keys (user/assistant only)
+            system_prompt: Optional system prompt to use (overrides config)
+            **kwargs: Additional arguments for LLM generation
+
+        Yields:
+            ChatResponse chunks as they arrive
+        """
+        try:
+            # Convert messages to chat history format
+            chat_history = []
+
+            for msg in messages:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+
+                if role == "user":
+                    chat_history.append(f"user: {content}")
+                elif role == "assistant":
+                    chat_history.append(f"assistant: {content}")
+                # Skip system messages since they're passed separately
+
+            # Use provided system prompt or fall back to config default
+            effective_system_prompt = system_prompt or self.config.system_prompt
+
+            # Format according to model type
+            formatted_prompt = Prompts.format_chat_history(
+                model=self.config.model,
+                chat_history=chat_history,
+                assistant_name="assistant",
+                system_prompt=effective_system_prompt,
+            )
+
+            # Debug logging
+            self.log.debug(f"Formatted prompt length: {len(formatted_prompt)} chars")
+            self.log.debug(
+                f"System prompt used: {effective_system_prompt[:100] if effective_system_prompt else 'None'}..."
+            )
+
+            # Set appropriate stop tokens based on model
+            model_lower = self.config.model.lower() if self.config.model else ""
+            if "qwen" in model_lower:
+                kwargs.setdefault("stop", ["<|im_end|>", "<|im_start|>"])
+            elif "llama" in model_lower:
+                kwargs.setdefault("stop", ["<|eot_id|>", "<|start_header_id|>"])
+
+            # Use generate with formatted prompt for streaming
+            full_response = ""
+            for chunk in self.llm_client.generate(
+                prompt=formatted_prompt, model=self.config.model, stream=True, **kwargs
+            ):
+                full_response += chunk
+                yield ChatResponse(text=chunk, is_complete=False)
+
+            # Send final response with stats if requested
+            stats = None
+            if self.config.show_stats:
+                stats = self.get_stats()
+
+            yield ChatResponse(text="", stats=stats, is_complete=True)
+
+        except ConnectionError as e:
+            # Re-raise connection errors with additional context
+            self.log.error(f"LLM connection error in send_messages_stream: {e}")
+            raise ConnectionError(
+                f"Failed to connect to LLM server (streaming): {e}"
+            ) from e
+        except Exception as e:
+            self.log.error(f"Error in send_messages_stream: {e}")
+            raise
 
     def send(self, message: str, **kwargs) -> ChatResponse:
         """
@@ -260,6 +425,27 @@ class ChatSDK:
         except Exception as e:
             self.log.warning(f"Failed to get stats: {e}")
             return {}
+
+    def get_system_prompt(self) -> Optional[str]:
+        """
+        Get the current system prompt.
+
+        Returns:
+            Current system prompt or None if not set
+        """
+        return self.config.system_prompt
+
+    def set_system_prompt(self, system_prompt: Optional[str]) -> None:
+        """
+        Set the system prompt for future conversations.
+
+        Args:
+            system_prompt: New system prompt to use, or None to clear it
+        """
+        self.config.system_prompt = system_prompt
+        self.log.debug(
+            f"System prompt updated: {system_prompt[:100] if system_prompt else 'None'}..."
+        )
 
     def display_stats(self, stats: Optional[Dict[str, Any]] = None) -> None:
         """
@@ -550,8 +736,11 @@ class ChatSession:
                 logging_level=config_kwargs.get(
                     "logging_level", self.default_config.logging_level
                 ),
-                use_local_llm=config_kwargs.get(
-                    "use_local_llm", self.default_config.use_local_llm
+                use_claude=config_kwargs.get(
+                    "use_claude", self.default_config.use_claude
+                ),
+                use_chatgpt=config_kwargs.get(
+                    "use_chatgpt", self.default_config.use_chatgpt
                 ),
                 assistant_name=config_kwargs.get(
                     "assistant_name", self.default_config.assistant_name

@@ -100,6 +100,43 @@
             "stopOnEntry": false,
         },
         {
+            "name": "MCP Bridge Debug",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "gaia.cli",
+            "args": [
+                "mcp",
+                "start",
+                "--debug"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false,
+        },
+        {
+            "name": "Jira App Debug",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "gaia.cli",
+            "args": [
+                "jira",
+                "show me my projects"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false,
+        },
+        {
             "name": "GAIA Pytest Debug",
             "type": "debugpy",
             "request": "launch",
@@ -122,6 +159,28 @@
             "justMyCode": false,
             "subProcess": true,
             "stopOnEntry": false
+        },
+        {
+            "name": "JIRA Dashboard - Web",
+            "type": "node",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "app:jira:run:dev"],
+            "console": "integratedTerminal",
+            "env": {}
+        },
+        {
+            "name": "JIRA Dashboard - Electron",
+            "type": "node",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "app:jira:run:electron"],
+            "console": "integratedTerminal",
+            "env": {
+                "GAIA_APP_MODE": "development"
+            }
         }
     ]
 }

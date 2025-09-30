@@ -91,6 +91,20 @@ Once the installation and environment variables are set, run the following:
     gaia chat
     ```
 
+## Running Electron Applications
+
+GAIA includes Electron-based GUI applications. To run the JAX (Jira Agent Experience) app locally:
+
+```bash
+# Linux/Mac
+./src/gaia/apps/jira/webui/run.sh
+
+# Windows
+.\src\gaia\apps\jira\webui\run.ps1
+```
+
+This will build the installer and launch the JAX application in development mode. The installer will be created in `src/gaia/apps/jira/webui/out/make/`.
+
 # Troubleshooting
 
 ## Common Issues

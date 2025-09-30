@@ -16,6 +16,7 @@ Currently, the following capabilities are available, more will be added in the n
 | Summarization      | Document and transcript summarization    | AI-powered summarization with multiple output formats          | Windows, Linux   |
 | Evaluation Suite   | Model evaluation and benchmarking       | Comprehensive evaluation framework with groundtruth generation  | Windows, Linux   |
 | Voice Interaction  | Speech-to-speech conversation           | Voice-based AI interaction with TTS and ASR                    | Windows, Linux   |
+| Web Dashboards     | Browser-based interfaces for agents      | JavaScript apps with simple configuration                       | Windows, Linux   |
 
 ## LLM Direct Usage
 
@@ -209,6 +210,14 @@ gaia talk --audio-device-index 1 --whisper-model-size medium
 - **Real-time Processing**: Streaming audio pipeline
 - **Device Selection**: Configure audio input devices
 - **Model Flexibility**: Choose ASR model sizes
+
+**Platform Availability**: Windows and Linux
+
+## Desktop Applications
+
+GAIA provides desktop applications with graphical interfaces for interacting with AI capabilities. These applications are built with Electron and provide native desktop experiences.
+
+For available applications and setup instructions, see the [Apps Documentation](./apps.md).
 
 **Platform Availability**: Windows and Linux
 

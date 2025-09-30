@@ -1,0 +1,17 @@
+{
+  "name": "jira",
+  "displayName": "GAIA JIRA Dashboard",
+  "version": "1.0.0",
+  "description": "AI-powered JIRA management using GAIA MCP integration",
+  "author": "AMD AI Group",
+  "license": "MIT",
+  "window": {
+    "width": 1400,
+    "height": 900,
+    "minWidth": 1000,
+    "minHeight": 600
+  },
+  "devServer": {
+    "port": 4022
+  }
+}

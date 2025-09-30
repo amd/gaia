@@ -13,6 +13,7 @@ load_dotenv()
 MODEL_PRICING = {
     "claude-opus-4": {"input_per_mtok": 15.00, "output_per_mtok": 75.00},
     "claude-sonnet-4": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
+    "claude-sonnet-4-20250514": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
     "claude-3-7-sonnet-20250219": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
     "claude-3-5-sonnet-20241022": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
     "claude-3-5-haiku-20241022": {"input_per_mtok": 0.80, "output_per_mtok": 4.00},
@@ -26,7 +27,7 @@ MODEL_PRICING = {
 class ClaudeClient:
     log = get_logger(__name__)
 
-    def __init__(self, model="claude-3-7-sonnet-20250219", max_tokens=1024):
+    def __init__(self, model="claude-sonnet-4-20250514", max_tokens=1024):
         self.log = self.__class__.log  # Use the class-level logger for instances
         self.api_key = os.getenv("ANTHROPIC_API_KEY")
         if not self.api_key:

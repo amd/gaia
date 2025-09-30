@@ -1,0 +1,9 @@
+// Example local configuration override
+// Copy this file to 'config.local.js' and modify as needed
+// config.local.js is gitignored and won't be committed
+
+// Example: Override MCP Bridge URL for remote access
+window.APP_CONFIG = Object.assign(window.APP_CONFIG || {}, {
+    MCP_BASE_URL: 'https://your-ngrok-url.ngrok-free.app',
+    DEBUG: true
+});

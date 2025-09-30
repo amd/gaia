@@ -17,7 +17,7 @@ class LlmApp:
     def __init__(self, system_prompt: Optional[str] = None):
         """Initialize the LLM app."""
         self.log = get_logger(__name__)
-        self.client = LLMClient(use_local=True, system_prompt=system_prompt)
+        self.client = LLMClient(system_prompt=system_prompt)
         self.log.debug("LLM app initialized")
 
     def query(

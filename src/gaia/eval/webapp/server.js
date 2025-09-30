@@ -1,3 +1,6 @@
+// Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -16,6 +19,8 @@ const EXPERIMENTS_PATH = process.env.EXPERIMENTS_PATH || path.join(__dirname, '.
 const EVALUATIONS_PATH = process.env.EVALUATIONS_PATH || path.join(__dirname, '../../../..', 'evaluation');
 const TEST_DATA_PATH = process.env.TEST_DATA_PATH || path.join(__dirname, '../../../..', 'test_data');
 const GROUNDTRUTH_PATH = process.env.GROUNDTRUTH_PATH || path.join(__dirname, '../../../..', 'groundtruth');
+const AGENT_OUTPUTS_PATH = process.env.AGENT_OUTPUTS_PATH || path.join(__dirname, '../../../..');
+const SINGLE_AGENT_FILE = process.env.SINGLE_AGENT_FILE;
 
 // API endpoint to list available files
 app.get('/api/files', (req, res) => {
@@ -57,13 +62,36 @@ app.get('/api/files', (req, res) => {
             }
         }
 
+        // Collect agent outputs
+        let agentOutputs = [];
+        if (SINGLE_AGENT_FILE && fs.existsSync(SINGLE_AGENT_FILE)) {
+            // Single file mode
+            agentOutputs.push({
+                name: path.basename(SINGLE_AGENT_FILE),
+                path: SINGLE_AGENT_FILE,
+                type: 'agent_output',
+                directory: 'single'
+            });
+        } else if (fs.existsSync(AGENT_OUTPUTS_PATH)) {
+            // Directory mode - look for agent_output_*.json files
+            const agentFiles = fs.readdirSync(AGENT_OUTPUTS_PATH).filter(file => 
+                file.startsWith('agent_output_') && file.endsWith('.json'));
+            agentOutputs = agentFiles.map(file => ({
+                name: file,
+                path: path.join(AGENT_OUTPUTS_PATH, file),
+                type: 'agent_output',
+                directory: 'root'
+            }));
+        }
+
         res.json({
             experiments: experiments.map(file => ({
                 name: file,
                 path: path.join(EXPERIMENTS_PATH, file),
                 type: 'experiment'
             })),
-            evaluations: evaluations
+            evaluations: evaluations,
+            agentOutputs: agentOutputs
         });
     } catch (error) {
         res.status(500).json({ error: 'Failed to list files', details: error.message });
@@ -101,6 +129,46 @@ app.get('/api/evaluation/*', (req, res) => {
         res.json(data);
     } catch (error) {
         res.status(500).json({ error: 'Failed to load evaluation', details: error.message });
+    }
+});
+
+// API endpoint to load agent output data
+app.get('/api/agent-output/:filename(*)', (req, res) => {
+    try {
+        const filename = req.params.filename;
+        let filePath;
+        
+        // Check if it's a single file mode or directory mode
+        if (SINGLE_AGENT_FILE && fs.existsSync(SINGLE_AGENT_FILE) && 
+            path.basename(SINGLE_AGENT_FILE) === filename) {
+            filePath = SINGLE_AGENT_FILE;
+        } else {
+            filePath = path.join(AGENT_OUTPUTS_PATH, filename);
+        }
+        
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'Agent output file not found' });
+        }
+
+        const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        
+        // Process the agent output data to extract useful information
+        const processedData = {
+            ...data,
+            metadata: {
+                filename: filename,
+                filepath: filePath,
+                fileSize: fs.statSync(filePath).size,
+                lastModified: fs.statSync(filePath).mtime,
+                conversationLength: data.conversation ? data.conversation.length : 0,
+                hasPerformanceStats: data.conversation ? 
+                    data.conversation.some(msg => msg.role === 'system' && msg.content?.type === 'stats') : false
+            }
+        };
+        
+        res.json(processedData);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to load agent output', details: error.message });
     }
 });
 
@@ -305,4 +373,8 @@ app.listen(PORT, () => {
     console.log(`Evaluations path: ${EVALUATIONS_PATH}`);
     console.log(`Test data path: ${TEST_DATA_PATH}`);
     console.log(`Groundtruth path: ${GROUNDTRUTH_PATH}`);
+    console.log(`Agent outputs path: ${AGENT_OUTPUTS_PATH}`);
+    if (SINGLE_AGENT_FILE) {
+        console.log(`Single agent file: ${SINGLE_AGENT_FILE}`);
+    }
 }); 

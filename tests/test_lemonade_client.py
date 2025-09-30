@@ -22,6 +22,10 @@ from gaia.llm.lemonade_client import (
 
 # Test constants
 TEST_MODEL = "Llama-3.2-3B-Instruct-Hybrid"
+# TEST_MODEL = "Gemma-3-4b-it-FLM"
+# TEST_MODEL = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+# TEST_MODEL = "Qwen2.5-0.5B-Instruct-CPU"
+
 HOST = "localhost"
 PORT = 8000
 API_BASE = f"http://{HOST}:{PORT}/api/v1"
