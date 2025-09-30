@@ -16,7 +16,6 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:www.npmjs.com)",
       "Bash(gh run list:*)",
-      "Bash(gh workflow:*)",
       "Bash(gh run view:*)",
       "Bash(git ls-tree:*)",
       "Bash(gh pr view:*)",
