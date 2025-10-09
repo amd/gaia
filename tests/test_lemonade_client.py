@@ -1,23 +1,25 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """
 Unit tests for the Lemonade client API.
 """
 
-import unittest
-from unittest.mock import patch, MagicMock
-import sys
-import os
-from io import StringIO
 import logging
-import requests
+import os
+import sys
+import unittest
+from io import StringIO
+from unittest.mock import MagicMock, patch
 
-import responses
 import pytest
+import requests
+import responses
 
 from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     create_lemonade_client,
-    DEFAULT_MODEL_NAME,
 )
 
 # Test constants
@@ -1275,7 +1277,6 @@ class TestLemonadeClientIntegration(unittest.TestCase):
 if __name__ == "__main__":
     # Use pytest to run tests - either all tests or a specific test pattern
     import pytest
-    import sys
 
     print("\n====================================================")
     print("========== RUNNING LEMONADE CLIENT TESTS ===========")

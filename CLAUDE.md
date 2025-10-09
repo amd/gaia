@@ -20,7 +20,7 @@ SPDX-License-Identifier: MIT
 Comprehensive documentation is available in the `docs/` directory:
 
 ### User Guides
-- [`docs/apps.md`](docs/apps.md) - Desktop applications overview
+- [`docs/apps/`](docs/apps/) - Desktop applications overview
   - [`docs/apps/jira.md`](docs/apps/jira.md) - Jira app documentation
 - [`docs/cli.md`](docs/cli.md) - Command Line Interface guide and usage examples
 - [`docs/features.md`](docs/features.md) - Complete feature overview and platform support matrix
@@ -47,7 +47,7 @@ GAIA works in conjunction with RAUX, an Electron-based desktop application that 
 - Enhanced user interface and experience layer
 - Installation management and progress tracking
 - Inter-process communication (IPC) for status updates
-- Unified "GAIA BETA" branding across the platform
+- Unified "GAIA UI" branding across the platform
 
 RAUX serves as the frontend application layer while GAIA provides the core AI framework and backend services. The integration uses:
 - NSIS installer coordination between both systems
@@ -263,8 +263,8 @@ gaia/
 ├── docs/               # Documentation
 │   ├── apps/           # App-specific documentation
 │   │   ├── dev.md              # App development guide
-│   │   └── jira.md             # Jira app documentation
-│   ├── apps.md                 # Desktop applications overview
+│   │   ├── jira.md             # Jira app documentation
+│   │   └── README.md           # Desktop applications overview
 │   ├── cli.md                  # CLI reference guide
 │   ├── mcp.md                  # MCP server documentation
 │   ├── n8n.md                  # n8n workflow integration

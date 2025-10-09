@@ -4,15 +4,14 @@
 Blender-specific agent for creating and modifying 3D scenes.
 """
 
-from gaia.agents.base.agent import Agent
-from gaia.agents.base.tools import tool
-from gaia.agents.base.console import AgentConsole
-from gaia.mcp.blender_mcp_client import MCPClient
-from gaia.agents.blender.core.scene import generate_scene_diagnosis_code
-
-from typing import Dict, Any, Optional
 import logging
-import re
+from typing import Any, Dict, Optional
+
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.tools import tool
+from gaia.agents.blender.core.scene import generate_scene_diagnosis_code
+from gaia.mcp.blender_mcp_client import MCPClient
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

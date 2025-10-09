@@ -4,6 +4,6 @@
 GAIA Jira App - Natural language interface for Atlassian tools via MCP.
 """
 
-from .app import main, JiraApp
+from .app import JiraApp, main
 
 __all__ = ["main", "JiraApp"]

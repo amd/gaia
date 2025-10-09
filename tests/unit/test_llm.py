@@ -1,13 +1,13 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-import unittest
-import subprocess
-import requests
-import time
-import shutil
 import os
+import shutil
+import subprocess
 import sys
+import unittest
+
+import requests
 
 # from gaia.logger import get_logger
 

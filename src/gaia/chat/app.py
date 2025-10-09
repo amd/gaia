@@ -10,14 +10,14 @@ text chat capabilities with conversation history into your applications.
 """
 
 import argparse
-import sys
 import asyncio
+import sys
 
 from gaia.chat.sdk import (
-    ChatSDK,
     ChatConfig,
-    SimpleChat,
+    ChatSDK,
     ChatSession,
+    SimpleChat,
     quick_chat,
     quick_chat_with_memory,
 )

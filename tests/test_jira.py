@@ -54,19 +54,19 @@ Usage:
 """
 
 import asyncio
-import os
-import sys
 import csv
 import datetime
+import os
+import sys
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, List
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from gaia.apps.jira.app import JiraApp, TaskResult
 from gaia.agents.jira.agent import JiraAgent
+from gaia.apps.jira.app import JiraApp, TaskResult
 
 
 class JiraIntegrationTests:
@@ -1012,6 +1012,8 @@ class JiraIntegrationTests:
                 duration = time.time() - start_time
                 steps_taken = 0
                 error_count = 0
+                input_tokens = 0
+                output_tokens = 0
 
             assert result.success, (
                 result.error if hasattr(result, "error") else "Failed"
@@ -1042,7 +1044,7 @@ class JiraIntegrationTests:
         except Exception as e:
             print(f"   ❌ FAILED - {e}")
             duration = time.time() - start_time
-            # Try to get metadata even on failure
+            # Initialize metadata with default values on failure
             steps_taken = 0
             error_count = 0
             input_tokens = 0
@@ -1056,7 +1058,6 @@ class JiraIntegrationTests:
                 except Exception as meta_e:
                     # Log metadata extraction error
                     print(f"      Warning: Failed to extract metadata: {meta_e}")
-                    pass
 
             self.record_result(
                 "Search My Issues",
@@ -1121,6 +1122,8 @@ class JiraIntegrationTests:
             duration = time.time() - start_time
             steps_taken = 0
             error_count = 0
+            input_tokens = 0
+            output_tokens = 0
             if "result" in locals():
                 _, steps_taken, error_count, input_tokens, output_tokens = (
                     self._extract_metadata(result)
@@ -1187,6 +1190,8 @@ class JiraIntegrationTests:
             duration = time.time() - start_time
             steps_taken = 0
             error_count = 0
+            input_tokens = 0
+            output_tokens = 0
             if "result" in locals():
                 _, steps_taken, error_count, input_tokens, output_tokens = (
                     self._extract_metadata(result)
@@ -1255,6 +1260,8 @@ class JiraIntegrationTests:
             duration = time.time() - start_time
             steps_taken = 0
             error_count = 0
+            input_tokens = 0
+            output_tokens = 0
             if "result" in locals():
                 _, steps_taken, error_count, input_tokens, output_tokens = (
                     self._extract_metadata(result)
@@ -1321,6 +1328,8 @@ class JiraIntegrationTests:
             duration = time.time() - start_time
             steps_taken = 0
             error_count = 0
+            input_tokens = 0
+            output_tokens = 0
             if "result" in locals():
                 _, steps_taken, error_count, input_tokens, output_tokens = (
                     self._extract_metadata(result)
@@ -1386,6 +1395,8 @@ class JiraIntegrationTests:
             duration = time.time() - start_time
             steps_taken = 0
             error_count = 0
+            input_tokens = 0
+            output_tokens = 0
             if "result" in locals():
                 _, steps_taken, error_count, input_tokens, output_tokens = (
                     self._extract_metadata(result)
@@ -1536,7 +1547,7 @@ class JiraIntegrationTests:
         print("\n🧪 Test: Advanced JQL Queries")
         import time
 
-        start_time = time.time()
+        time.time()
 
         queries = [
             "Show me issues assigned to me that were created last month and are still open",
@@ -1615,7 +1626,7 @@ class JiraIntegrationTests:
         print("\n🧪 Test: Time-Based Analysis")
         import time
 
-        start_time = time.time()
+        time.time()
 
         queries = [
             "Show me issues created in the last 2 weeks but not updated since",
@@ -1696,7 +1707,7 @@ class JiraIntegrationTests:
         print("\n🧪 Test: Complex Filters")
         import time
 
-        start_time = time.time()
+        time.time()
 
         queries = [
             "Show me critical or blocker issues that have been open for more than 30 days",
@@ -1773,7 +1784,7 @@ class JiraIntegrationTests:
         print("\n🧪 Test: Cross-Project Analysis")
         import time
 
-        start_time = time.time()
+        time.time()
 
         queries = [
             "Compare bug rates across all projects in the last month",
@@ -1853,7 +1864,7 @@ class JiraIntegrationTests:
         print("\n🧪 Test: Complex Business Logic")
         import time
 
-        start_time = time.time()
+        time.time()
 
         queries = [
             "Find all issues where story points are set but the issue is not estimated (missing time tracking)",
@@ -1934,7 +1945,7 @@ class JiraIntegrationTests:
         print("\n🧪 Test: Analytics Queries")
         import time
 
-        start_time = time.time()
+        time.time()
 
         queries = [
             "How many issues were resolved this week?",
@@ -2179,7 +2190,7 @@ class JiraIntegrationTests:
         print("\n🧪 Test: Multi-Step Workflows")
         import time
 
-        start_time = time.time()
+        time.time()
 
         workflows = [
             "Find all critical bugs from last sprint, summarize them, and create a report page in Confluence",
@@ -2250,7 +2261,7 @@ class JiraIntegrationTests:
         print("\n🧪 Test: Advanced Automation Scenarios")
         import time
 
-        start_time = time.time()
+        time.time()
 
         scenarios = [
             "Find all issues with missing descriptions and auto-generate template descriptions based on issue type",
@@ -2332,7 +2343,7 @@ class JiraIntegrationTests:
         print("\n🧪 Test: Predictive Analysis Queries")
         import time
 
-        start_time = time.time()
+        time.time()
 
         predictions = [
             "Predict which issues are at risk of missing their deadlines based on current progress",
@@ -2413,7 +2424,7 @@ class JiraIntegrationTests:
         print("\n🧪 Test: Basic Fetch Queries")
         import time
 
-        start_time = time.time()
+        time.time()
 
         queries = [
             "Show me all my issues",
@@ -2491,7 +2502,7 @@ class JiraIntegrationTests:
         print("\n🧪 Test: Missing Advanced Queries")
         import time
 
-        start_time = time.time()
+        time.time()
 
         queries = [
             # Additional time-based queries from demo
@@ -2588,7 +2599,7 @@ class JiraIntegrationTests:
         print("\n🧪 Test: Strategic Insights Queries")
         import time
 
-        start_time = time.time()
+        time.time()
 
         queries = [
             # Additional predictive analysis queries

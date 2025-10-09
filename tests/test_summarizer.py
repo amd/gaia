@@ -6,12 +6,13 @@
 
 import json
 import os
-import pytest
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
+
+import pytest
 
 # Import after sys.path.insert to get correct import
 sys.path.insert(0, "src")

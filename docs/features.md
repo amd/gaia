@@ -217,7 +217,7 @@ gaia talk --audio-device-index 1 --whisper-model-size medium
 
 GAIA provides desktop applications with graphical interfaces for interacting with AI capabilities. These applications are built with Electron and provide native desktop experiences.
 
-For available applications and setup instructions, see the [Apps Documentation](./apps.md).
+For available applications and setup instructions, see the [Apps Documentation](./apps/).
 
 **Platform Availability**: Windows and Linux
 
@@ -240,6 +240,14 @@ The following is a list of the currently supported LLMs in the generic version o
 | -----------------------|-----------------------------------------------------------------------|----------|--------------------|-----------|
 
 * oga - [Onnx Runtime GenAI](https://github.com/microsoft/onnxruntime-genai)
+
+## Installing Additional Models
+
+GAIA uses Lemonade Server for model management. Additional models can be installed and managed through:
+- **System Tray Icon**: Access the Lemonade model manager from the system tray
+- **Web UI**: Manage models through the Lemonade web interface
+
+For detailed instructions on installing and managing models, see the [Lemonade Server Model Management documentation](https://lemonade-server.ai/docs/server/server_models/).
 
 # License
 

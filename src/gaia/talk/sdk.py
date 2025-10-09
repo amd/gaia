@@ -6,16 +6,15 @@
 Gaia Talk SDK - Unified voice and text chat integration
 """
 
-import asyncio
 import logging
-from typing import Optional, Callable, Dict, Any, AsyncGenerator
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, AsyncGenerator, Callable, Dict, Optional
 
 from gaia.audio.audio_client import AudioClient
-from gaia.logger import get_logger
-from gaia.chat.sdk import ChatSDK, ChatConfig
+from gaia.chat.sdk import ChatConfig, ChatSDK
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+from gaia.logger import get_logger
 
 
 class TalkMode(Enum):

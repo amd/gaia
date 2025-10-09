@@ -1,8 +1,10 @@
-import pytest
-import socket
-import time
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 import logging
-from contextlib import contextmanager
+import socket
+
+import pytest
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

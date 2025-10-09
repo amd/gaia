@@ -7,17 +7,16 @@ Gaia Summarizer Application - Processes meeting transcripts and emails to genera
 """
 
 import json
-import time
 import re
+import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Union, Literal
-from dataclasses import dataclass
+from typing import Any, Dict, List, Literal, Optional
 
-from gaia.logger import get_logger
-from gaia.chat.sdk import ChatSDK, ChatConfig
-from gaia.llm.llm_client import LLMClient
+from gaia.chat.sdk import ChatConfig, ChatSDK
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+from gaia.logger import get_logger
 
 
 def validate_email_address(email: str) -> bool:

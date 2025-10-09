@@ -7,14 +7,14 @@ Gaia Chat SDK - Unified text chat integration with conversation history
 """
 
 import logging
-from typing import Optional, Dict, Any, List
-from dataclasses import dataclass
 from collections import deque
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
-from gaia.logger import get_logger
-from gaia.llm.llm_client import LLMClient
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.chat.prompts import Prompts
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+from gaia.llm.llm_client import LLMClient
+from gaia.logger import get_logger
 
 
 @dataclass

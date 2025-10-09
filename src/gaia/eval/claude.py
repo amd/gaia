@@ -1,11 +1,16 @@
-import os
-import anthropic
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 import base64
-from dotenv import load_dotenv
-from bs4 import BeautifulSoup
-from gaia.logger import get_logger
 import json
+import os
 from pathlib import Path
+
+import anthropic
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+
+from gaia.logger import get_logger
 
 load_dotenv()
 

@@ -8,22 +8,22 @@ PDF Formatter for summarizer output
 
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
 
 try:
     from reportlab.lib import colors
-    from reportlab.lib.pagesizes import letter, A4
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import inch
     from reportlab.platypus import (
+        PageBreak,
+        Paragraph,
         SimpleDocTemplate,
+        Spacer,
         Table,
         TableStyle,
-        Paragraph,
-        Spacer,
-        PageBreak,
     )
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import inch
-    from reportlab.lib.enums import TA_CENTER, TA_LEFT
 
     HAS_REPORTLAB = True
 except ImportError:

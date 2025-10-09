@@ -1,6 +1,17 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 name: Build Electron Apps
 
 on:
+  workflow_call:
+    outputs:
+      matrix:
+        description: "Matrix of discovered apps"
+        value: ${{ jobs.discover-apps.outputs.matrix }}
+      has_apps:
+        description: "Whether any apps were discovered"
+        value: ${{ jobs.discover-apps.outputs.has_apps }}
   workflow_dispatch:
   pull_request:
     branches: [main]
@@ -8,10 +19,6 @@ on:
       - 'src/gaia/apps/**/webui/**'
       - '.github/workflows/build-electron-apps.yml'
     types: [opened, synchronize, reopened, ready_for_review]
-  push:
-    tags:
-      - 'v*'
-      - 'app-*'
 
 permissions:
   contents: write
@@ -151,57 +158,3 @@ jobs:
             ${{ steps.windows_artifacts.outputs.artifact_path }}
             ${{ steps.linux_artifacts.outputs.artifact_path }}
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
-
-  # Publish to GitHub Release (only for tags)
-  publish-release:
-    needs: [discover-apps, build-apps]
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        app: ${{ fromJson(needs.discover-apps.outputs.matrix).app }}
-
-    steps:
-      - uses: actions/checkout@v4
-
-      # Download all platform artifacts for this app
-      - name: Download Windows artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ matrix.app.name }}-windows-${{ github.sha }}
-          path: ./release-assets
-        continue-on-error: true
-
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ matrix.app.name }}-linux-${{ github.sha }}
-          path: ./release-assets
-        continue-on-error: true
-
-      - name: List release assets
-        run: |
-          echo "Release assets for ${{ matrix.app.name }}:"
-          ls -la ./release-assets/ || echo "No assets found"
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ matrix.app.display_name }} ${{ matrix.app.version }}
-          body: |
-            ## ${{ matrix.app.display_name }} Release
-
-            Version: ${{ matrix.app.version }}
-
-            ### Downloads
-            - Windows: `${{ matrix.app.name }}-${{ matrix.app.version }}-setup.exe`
-            - Linux: `${{ matrix.app.name }}-${{ matrix.app.version }}.deb`
-
-            ### Installation
-            - **Windows:** Download and run the .exe installer
-            - **Linux:** Install with `sudo dpkg -i *.deb`
-          files: ./release-assets/*
-          fail_on_unmatched_files: false
-          draft: true
-          prerelease: false

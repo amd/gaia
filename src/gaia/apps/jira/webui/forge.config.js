@@ -1,15 +1,12 @@
 // Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-const path = require('path');
-
 module.exports = {
   packagerConfig: {
     name: 'JAX - Jira Agent Experience',
     executableName: 'gaia-jax-webui',
     appBundleId: 'com.amd.gaia-jax',
     appCategoryType: 'public.app-category.productivity',
-    icon: path.join(__dirname, 'src', 'assets', 'icons', 'icon'), // Will look for icon.ico, icon.icns, etc.
     platform: 'all',
     out: 'out',
     overwrite: true,
@@ -27,7 +24,6 @@ module.exports = {
         name: 'gaia_jax_webui',
         authors: 'AMD AI Group',
         description: 'JAX - AI-powered Jira Agent Experience using MCP integration',
-        setupIcon: path.join(__dirname, 'src', 'assets', 'icons', 'icon.ico'),
         setupExe: 'JAX-Setup.exe',
         noMsi: true
       },

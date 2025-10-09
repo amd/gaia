@@ -1,9 +1,13 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 # This Blender MCP client is a simplified and modified version of the BlenderMCP project from https://github.com/BlenderMCP/blender-mcp
 
-import socket
 import json
 import logging
 import re
+import socket
+
 from gaia.logger import get_logger
 
 

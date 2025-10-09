@@ -3,12 +3,13 @@
 
 import os
 import unittest
-import numpy as np
-import soundfile as sf
 from pathlib import Path
 
-from gaia.logger import get_logger
+import numpy as np
+import soundfile as sf
+
 from gaia.audio.kokoro_tts import KokoroTTS
+from gaia.logger import get_logger
 
 
 class TestKokoroTTS(unittest.TestCase):

@@ -1,9 +1,13 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+import argparse
 import json
 import time
-import argparse
 from datetime import datetime
-from pathlib import Path
 from enum import Enum
+from pathlib import Path
+
 from gaia.eval.claude import ClaudeClient
 from gaia.logger import get_logger
 

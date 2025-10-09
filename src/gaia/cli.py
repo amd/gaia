@@ -1,13 +1,13 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-import sys
-import time
 import asyncio
 import logging
-import subprocess
-from pathlib import Path
 import os
+import subprocess
+import sys
+import time
+from pathlib import Path
 
 from gaia.logger import get_logger
 from gaia.version import version
@@ -23,9 +23,9 @@ except ImportError:
     MCPClient = None
     BLENDER_AVAILABLE = False
 from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_NAME,
     LemonadeClient,
     LemonadeClientError,
-    DEFAULT_MODEL_NAME,
 )
 from gaia.llm.llm_client import LLMClient
 
@@ -205,7 +205,7 @@ class GaiaCliClient:
     ):
         """Chat interface using the new ChatApp - interactive if no message, single message if message provided"""
         try:
-            from gaia.chat.sdk import ChatSDK, ChatConfig
+            from gaia.chat.sdk import ChatConfig, ChatSDK
 
             # Interactive mode if no message provided, single message mode if message provided
             use_interactive = message is None
@@ -287,7 +287,7 @@ async def async_main(action, **kwargs):
         return {"response": response}
     elif action == "chat":
         # Use ChatSDK for chat functionality
-        from gaia.chat.sdk import ChatSDK, ChatConfig
+        from gaia.chat.sdk import ChatConfig, ChatSDK
 
         # Create SDK configuration
         config = ChatConfig(
@@ -320,7 +320,7 @@ async def async_main(action, **kwargs):
         return
     elif action == "talk":
         # Use TalkSDK for voice functionality
-        from gaia.talk.sdk import TalkSDK, TalkConfig
+        from gaia.talk.sdk import TalkConfig, TalkSDK
 
         # Create SDK configuration from CLI arguments
         config = TalkConfig(
@@ -1552,8 +1552,8 @@ Examples:
             if args.summary_only and output_path is None:
                 try:
                     os.remove("temp_report.md")
-                except OSError:
-                    pass
+                except OSError as e:
+                    log.debug(f"Could not remove temp file: {e}")
 
         except Exception as e:
             log.error(f"Error generating report: {e}")
@@ -1565,12 +1565,12 @@ Examples:
     # Handle summarize command
     if args.action == "summarize":
         import json
+
         from gaia.apps.summarize.app import SummarizerApp, SummaryConfig
         from gaia.apps.summarize.html_viewer import HTMLViewer
 
         # Handle list-configs option
         if args.list_configs:
-            from gaia.apps.summarize.app import SummarizerApp
             import gaia.apps.summarize.app
 
             config_dir = Path(gaia.apps.summarize.app.__file__).parent / "configs"
@@ -1775,8 +1775,8 @@ Examples:
                         input()
 
                         # Create mailto URL
-                        import urllib.parse
                         import platform
+                        import urllib.parse
 
                         mailto_params = {
                             "subject": subject,
@@ -1819,8 +1819,8 @@ Examples:
                     # Generate PDF output
                     try:
                         from gaia.apps.summarize.pdf_formatter import (
-                            PDFFormatter,
                             HAS_REPORTLAB,
+                            PDFFormatter,
                         )
 
                         if not HAS_REPORTLAB:
@@ -1895,8 +1895,8 @@ Examples:
                 if args.format in ["pdf", "both"]:
                     try:
                         from gaia.apps.summarize.pdf_formatter import (
-                            PDFFormatter,
                             HAS_REPORTLAB,
+                            PDFFormatter,
                         )
 
                         if HAS_REPORTLAB:
@@ -2742,6 +2742,7 @@ Let me know your answer!
                 generator = TranscriptGenerator(claude_model=args.claude_model)
 
                 # Filter meeting types if specified
+                original_templates = None
                 if args.meeting_types:
                     # Temporarily filter the templates
                     original_templates = generator.meeting_templates.copy()
@@ -2786,7 +2787,7 @@ Let me know your answer!
                 print(f"  Claude model: {generation_info['claude_model']}")
 
                 # Restore original templates if they were filtered
-                if args.meeting_types:
+                if args.meeting_types and original_templates is not None:
                     generator.meeting_templates = original_templates
 
             except Exception as e:
@@ -2816,6 +2817,7 @@ Let me know your answer!
                 generator = EmailGenerator(claude_model=args.claude_model)
 
                 # Filter email types if specified
+                original_templates = None
                 if args.email_types:
                     # Temporarily filter the templates
                     original_templates = generator.email_templates.copy()
@@ -2858,7 +2860,7 @@ Let me know your answer!
                 print(f"  Claude model: {generation_info['claude_model']}")
 
                 # Restore original templates if they were filtered
-                if args.email_types:
+                if args.email_types and original_templates is not None:
                     generator.email_templates = original_templates
 
             except Exception as e:
@@ -3243,8 +3245,8 @@ def handle_visualize_command(args):
     log = get_logger(__name__)
 
     try:
-        import webbrowser
         import socket
+        import webbrowser
     except ImportError as e:
         log.error(f"Failed to import required modules: {e}")
         print("❌ Error: Failed to import required modules for visualizer")
@@ -3396,7 +3398,8 @@ def handle_visualize_command(args):
                 if line.strip():
                     print(f"[SERVER] {line.rstrip()}")
         except KeyboardInterrupt:
-            pass
+            log.debug("User interrupted server output streaming")
+            raise
 
     except KeyboardInterrupt:
         print("\n⏹️  Stopping evaluation visualizer...")
@@ -3525,7 +3528,7 @@ def handle_mcp_start(args):
     try:
         # Check if MCP dependencies are available (HTTP-native, no websockets needed)
         try:
-            import aiohttp  # pylint: disable=unused-import
+            import aiohttp  # noqa: F401  # pylint: disable=unused-import
         except ImportError as e:
             log.error(f"MCP dependencies not installed: {e}")
             print("❌ Error: MCP dependencies not installed.")
@@ -3724,8 +3727,8 @@ def handle_mcp_stop(_args):
         try:
             os.remove(pid_file_path)
             print("🧹 Cleaned up PID file")
-        except OSError:
-            pass
+        except OSError as e:
+            log.debug(f"Could not remove PID file: {e}")
 
     except Exception as e:
         log.error(f"Error stopping MCP bridge: {e}")
@@ -3752,8 +3755,8 @@ def handle_mcp_status(args):
 
             # Try the new /status endpoint for comprehensive details
             try:
-                import urllib.request
                 import json
+                import urllib.request
 
                 # First try the new /status endpoint
                 status_url = f"http://{args.host}:{args.port}/status"
@@ -3841,8 +3844,8 @@ def handle_mcp_test(args):
 
     try:
         import json
-        import urllib.request
         import urllib.parse
+        import urllib.request
 
         print(f"🧪 Testing MCP bridge at {args.host}:{args.port}")
         print(f"📝 Test query: {args.query}")
@@ -3924,8 +3927,8 @@ def handle_mcp_agent(args):
 
     try:
         import json
-        import urllib.request
         import urllib.parse
+        import urllib.request
 
         print(f"🤖 Testing MCP orchestrator agent at {args.host}:{args.port}")
         print(f"📝 Agent request: {args.request}")

@@ -5,9 +5,9 @@ Natural language interface for JIRA operations powered by AI.
 ## For Users
 
 ### Using Released Version
-1. Download GAIA installer from releases
-2. Launch JAX from Start Menu or Applications
-3. Configure your JIRA connection in the app's settings screen
+1. Download [GAIA installer](https://github.com/amd/gaia/releases/latest) from releases
+2. Launch JAX (JIRA Agentic Experience) from Start Menu or Applications
+3. Configure JIRA credentials (see [Prerequisites](../jira.md#prerequisites) for setup)
 
 ### Features
 - **Natural language queries**: "show my open issues"
@@ -37,5 +37,5 @@ npm run app:jira:run:dev         # Web development mode
 JAX (Jira Agent Experience) is located at `src/gaia/apps/jira/webui/` and connects to the MCP server for AI-powered operations.
 
 ## See Also
-- [Apps Documentation](../apps.md) - Overview of all GAIA apps
+- [Apps Documentation](../) - Overview of all GAIA apps
 - [MCP Documentation](../mcp.md) - MCP server setup

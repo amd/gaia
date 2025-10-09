@@ -17,11 +17,12 @@ Key Features:
 """
 
 import asyncio
+import base64
 import logging
 import os
-import base64
-from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
 import aiohttp
 
 from gaia.agents.base.agent import Agent

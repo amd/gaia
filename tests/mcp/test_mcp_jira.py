@@ -1,12 +1,16 @@
 #!/usr/bin/env python
+#
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """Test MCP-based Jira integration."""
 
-import json
-import urllib.request
-import urllib.error
-import uuid
-import sys
 import io
+import json
+import sys
+import urllib.error
+import urllib.request
+import uuid
 
 # Fix Unicode output on Windows
 if sys.platform == "win32":

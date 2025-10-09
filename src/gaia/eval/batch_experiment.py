@@ -1,13 +1,18 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 import json
 import time
-import numpy as np
-from pathlib import Path
-from datetime import datetime
-from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
-from gaia.logger import get_logger
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
+import numpy as np
+
 from gaia.eval.claude import ClaudeClient
 from gaia.llm.lemonade_client import LemonadeClient
+from gaia.logger import get_logger
 
 # Import PDF reader
 try:

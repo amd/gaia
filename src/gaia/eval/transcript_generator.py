@@ -1,10 +1,13 @@
-import json
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 import argparse
-import random
-from datetime import datetime, timedelta
+import json
+from datetime import datetime
 from pathlib import Path
-from gaia.logger import get_logger
+
 from gaia.eval.claude import ClaudeClient
+from gaia.logger import get_logger
 
 
 class TranscriptGenerator:
@@ -451,6 +454,7 @@ Examples:
 
     try:
         # Filter meeting types if specified
+        original_templates = None
         if args.meeting_types:
             # Temporarily filter the templates
             original_templates = generator.meeting_templates.copy()
@@ -488,7 +492,7 @@ Examples:
         print(f"  Claude model: {generation_info['claude_model']}")
 
         # Restore original templates if they were filtered
-        if args.meeting_types:
+        if args.meeting_types and original_templates is not None:
             generator.meeting_templates = original_templates
 
     except Exception as e:
