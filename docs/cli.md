@@ -544,6 +544,7 @@ lemonade-server serve
 - Make sure you have sufficient RAM (16GB+ recommended)
 - Check that your model files are properly downloaded
 - Verify your Hugging Face token if prompted
+- To install additional models, see [Installing Additional Models](./features.md#installing-additional-models)
 
 **Audio Issues:**
 - Use `gaia test --test-type asr-list-audio-devices` to check available devices

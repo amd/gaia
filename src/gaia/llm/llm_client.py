@@ -1,13 +1,17 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 # Standard library imports
 import logging
 import os
-from typing import Optional, Dict, Any, Literal, Union, Iterator
+from typing import Any, Dict, Iterator, Literal, Optional, Union
+
+import httpx
 
 # Third-party imports
 import requests
 from dotenv import load_dotenv
 from openai import OpenAI
-import httpx
 
 # Local imports
 from .lemonade_client import DEFAULT_MODEL_NAME

@@ -1,12 +1,17 @@
-import pytest
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 import json
 import logging
 import re
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from gaia.agents.base.console import AgentConsole
 from gaia.agents.blender.agent import BlenderAgent
 from gaia.llm.llm_client import LLMClient
 from gaia.mcp.blender_mcp_client import MCPClient
-from gaia.agents.base.console import AgentConsole, ProgressIndicator
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
@@ -156,7 +161,7 @@ def mock_console():
     mock.print_prompt = MagicMock()
 
     # Mock the progress spinner
-    mock_progress = MagicMock(spec=ProgressSpinner)
+    mock_progress = MagicMock()  # Generic mock, no spec needed
     mock_progress.start = MagicMock()
     mock_progress.stop = MagicMock()
     mock.progress = mock_progress
@@ -444,10 +449,8 @@ class TestAgentIntegration:
         # Configure a simple success response based on the example
         if "clear the scene" in example.lower():
             agent.llm.generate.return_value = MOCKED_RESPONSES["clear_scene"]
-            expected_tool = "clear_scene"
         elif "red cube" in example.lower():
             agent.llm.generate.return_value = MOCKED_RESPONSES["create_red_cube"]
-            expected_tool = "create_object"
 
         # Process the example query
         result = agent.process_query(example, output_to_file=False)

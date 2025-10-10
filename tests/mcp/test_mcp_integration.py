@@ -1,10 +1,14 @@
 #!/usr/bin/env python
+#
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """Test MCP Bridge Integration for Jira Agent."""
 
 import json
-import urllib.request
-import urllib.error
 import sys
+import urllib.error
+import urllib.request
 
 # Set UTF-8 encoding for Windows
 if sys.platform == "win32":

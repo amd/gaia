@@ -1,25 +1,25 @@
 #!/usr/bin/env python
+#
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """
 GAIA MCP Bridge - HTTP Native Implementation
 No WebSockets, just clean HTTP + JSON-RPC for maximum compatibility
 """
 
 import json
-import logging
 import os
 import sys
-from typing import Dict, Any, Optional, List
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any, Dict
 from urllib.parse import urlparse
-import threading
-import uuid
 
 # Add GAIA to path
 sys.path.insert(
     0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
 
-from gaia.agents.jira.agent import JiraAgent
 from gaia.agents.blender.agent import BlenderAgent
 from gaia.llm.llm_client import LLMClient
 from gaia.logger import get_logger
@@ -234,7 +234,7 @@ class GAIAMCPBridge:
     def _execute_chat(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Execute chat interaction with conversation context."""
         try:
-            from gaia.chat.sdk import ChatSDK, ChatConfig
+            from gaia.chat.sdk import ChatConfig, ChatSDK
 
             # Initialize chat SDK if not already done
             if not hasattr(self, "chat_sdk"):
@@ -470,7 +470,8 @@ def start_server(host="localhost", port=8765, base_url=None, verbose=False):
     bridge = GAIAMCPBridge(host, port, base_url, verbose=verbose)
 
     # Create handler with bridge
-    handler = lambda *args, **kwargs: MCPHTTPHandler(*args, bridge=bridge, **kwargs)
+    def handler(*args, **kwargs):
+        return MCPHTTPHandler(*args, bridge=bridge, **kwargs)
 
     # Start server
     server = HTTPServer((host, port), handler)

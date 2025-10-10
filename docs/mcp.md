@@ -359,7 +359,7 @@ The tests validate:
 
 ## Applications
 
-GAIA provides applications that connect to the MCP server. For using existing apps or building new ones, see the [Apps Documentation](./apps.md).
+GAIA provides applications that connect to the MCP server. For using existing apps or building new ones, see the [Apps Documentation](./apps/).
 
 
 ## See Also

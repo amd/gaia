@@ -1,9 +1,14 @@
-import pytest
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 import json
 import logging
+
+import pytest
+
 from gaia.agents.blender.agent_simple import BlenderAgentSimple
-from gaia.llm.llm_client import LLMClient
 from gaia.agents.blender.mcp.mcp_client import MCPClient
+from gaia.llm.llm_client import LLMClient
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)

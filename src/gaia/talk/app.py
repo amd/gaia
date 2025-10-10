@@ -9,11 +9,11 @@ This demonstrates various ways to use the TalkSDK for integrating
 voice and text chat capabilities into your applications.
 """
 
-import asyncio
 import argparse
+import asyncio
 import sys
 
-from gaia.talk.sdk import TalkSDK, TalkConfig, SimpleTalk, quick_chat
+from gaia.talk.sdk import SimpleTalk, TalkConfig, TalkSDK, quick_chat
 
 
 async def demo_text_chat():
@@ -250,7 +250,7 @@ Demo Types:
                 if choice.startswith("y"):
                     await demo_voice_chat()
             except KeyboardInterrupt:
-                pass
+                print("\nSkipping voice demo...")
 
         elif args.demo == "text":
             await demo_text_chat()

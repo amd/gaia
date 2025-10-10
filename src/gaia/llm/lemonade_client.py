@@ -1,6 +1,6 @@
+#!/usr/bin/env python
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-#!/usr/bin/env python
 """
 Lemonade Server Client for GAIA.
 
@@ -17,14 +17,14 @@ import subprocess
 import sys
 import time
 from threading import Thread
-from typing import Dict, List, Any, Union, Optional, Generator
+from typing import Any, Dict, Generator, List, Optional, Union
 
+import openai  # For exception types
 import psutil
 import requests
 
 # Import OpenAI client for internal use
 from openai import OpenAI
-import openai  # For exception types
 
 from gaia.logger import get_logger
 

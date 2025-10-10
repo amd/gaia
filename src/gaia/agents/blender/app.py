@@ -6,6 +6,7 @@ Main application entry point for the Blender Agent.
 
 import argparse
 import os
+
 from gaia.agents.blender.agent import BlenderAgent
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 

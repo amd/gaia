@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
+#
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """
 Simple microphone test - just records and shows audio levels
 """
 
-import pyaudio
-import numpy as np
 import time
+
+import numpy as np
+import pyaudio
 
 
 def test_mic():

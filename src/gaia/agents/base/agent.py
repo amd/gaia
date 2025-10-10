@@ -12,12 +12,13 @@ import json
 import logging
 import os
 import re
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
+
+from gaia.agents.base.console import AgentConsole, SilentConsole
+from gaia.agents.base.tools import _TOOL_REGISTRY
 
 # First-party imports
-from gaia.chat.sdk import ChatSDK, ChatConfig
-from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.base.console import AgentConsole, SilentConsole
+from gaia.chat.sdk import ChatConfig, ChatSDK
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -279,8 +280,8 @@ class Agent(abc.ABC):
                 result = json.loads(match.group(1))
                 logger.debug("Successfully extracted JSON after fixing format issues")
                 return result
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as e:
+            logger.debug(f"Regex extraction failed to parse JSON: {e}")
 
         return None
 
@@ -322,8 +323,8 @@ class Agent(abc.ABC):
                     json_response = json.loads(response_text)
                     json_was_modified = True
                     logger.warning("[JSON] Extracted JSON from code block")
-                except json.JSONDecodeError:
-                    pass
+                except json.JSONDecodeError as e:
+                    logger.debug(f"[JSON] Code block extraction failed: {e}")
 
             # Step 3: Try to find and extract first complete JSON object
             if not json_was_modified:
@@ -360,7 +361,10 @@ class Agent(abc.ABC):
                                         response_text = truncated
                                         break
                                     except json.JSONDecodeError:
-                                        pass
+                                        logger.debug(
+                                            "[JSON] Truncated text is not valid JSON, trying next bracket pair"
+                                        )
+                                        continue
 
             # Step 4: Try to fix common JSON errors
             if not json_was_modified:
@@ -389,8 +393,8 @@ class Agent(abc.ABC):
                         json_was_modified = True
                         logger.warning("[JSON] Applied automatic JSON fixes")
                         response_text = fixed_text
-                    except json.JSONDecodeError:
-                        pass
+                    except json.JSONDecodeError as e:
+                        logger.debug(f"[JSON] Auto-fix failed: {e}")
 
             # If still no valid JSON, raise the original error
             if not json_was_modified:

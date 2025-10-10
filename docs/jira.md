@@ -596,7 +596,7 @@ Configuration is stored locally and persists between sessions.
 
 ## See Also
 
-- [Apps Documentation](./apps.md) - Desktop applications documentation
+- [Apps Documentation](./apps/) - Desktop applications documentation
 - [GAIA CLI Documentation](./cli.md) - Full command line interface guide
 - [MCP Server Documentation](./mcp.md) - External integration details
 - [Agent Development Guide](./dev.md) - Build your own agents

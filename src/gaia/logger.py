@@ -1,12 +1,12 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
+import io
 import logging
+import subprocess
 import sys
 import warnings
 from pathlib import Path
-import io
-import subprocess
 
 
 def configure_console_encoding():
@@ -144,7 +144,7 @@ class GaiaLogger:
 
     def filter_phonemizer(self, record):
         message = record.getMessage()
-        return not "words count mismatch" in message
+        return "words count mismatch" not in message
 
     def get_logger(self, name):
         if name not in self.loggers:

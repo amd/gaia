@@ -12,6 +12,28 @@ exclude = '''
     | \.venv
     | _build
     | buck-out
+    | node_modules
   )/
 )
 '''
+
+[tool.isort]
+profile = "black"
+line_length = 88
+skip_gitignore = true
+skip = [".git", "__pycache__", "venv", ".venv", ".mypy_cache", ".tox", ".eggs", "_build", "buck-out", "node_modules"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+exclude = [
+    "^venv/",
+    "^.venv/",
+    "^node_modules/",
+]
+
+[tool.bandit]
+exclude_dirs = [".git", "__pycache__", "venv", ".venv", ".mypy_cache", ".tox", ".eggs", "_build", "buck-out", "node_modules"]
+skips = ["B101"]  # Skip assert warnings (common in tests)

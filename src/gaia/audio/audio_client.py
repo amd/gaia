@@ -6,8 +6,8 @@ import queue
 import threading
 import time
 
-from gaia.logger import get_logger
 from gaia.llm.llm_client import LLMClient
+from gaia.logger import get_logger
 
 
 class AudioClient:

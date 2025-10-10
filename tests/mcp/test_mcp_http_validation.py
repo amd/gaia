@@ -1,15 +1,19 @@
 #!/usr/bin/env python
+#
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """
 Comprehensive test suite for HTTP-native MCP system validation.
 Tests all endpoints, protocols, and integration points.
 """
 
-import json
-import urllib.request
-import urllib.error
-import time
-import sys
 import io
+import json
+import sys
+import time
+import urllib.error
+import urllib.request
 
 # Fix Unicode on Windows
 if sys.platform == "win32":
@@ -125,7 +129,7 @@ def test_direct_jira():
     response = make_request("/jira", method="POST", data=data)
 
     assert "success" in response, "Missing success field"
-    assert response["success"] == True, f"Operation failed: {response.get('error')}"
+    assert response["success"] is True, f"Operation failed: {response.get('error')}"
     assert "steps_taken" in response, "Missing steps_taken field"
 
     print(f"   📊 Steps taken: {response['steps_taken']}")
@@ -149,7 +153,7 @@ def test_jsonrpc_initialize():
     assert "capabilities" in result, "Missing capabilities"
 
     caps = result["capabilities"]
-    assert caps.get("tools") == True, "Tools capability not enabled"
+    assert caps.get("tools") is True, "Tools capability not enabled"
 
     print(f"   📌 Protocol: {result['protocolVersion']}")
     print(

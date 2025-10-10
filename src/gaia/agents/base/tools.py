@@ -4,9 +4,9 @@
 Tool registry and decorator for agent tools.
 """
 
-from typing import Dict, Callable
 import inspect
 import logging
+from typing import Callable, Dict
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

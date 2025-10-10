@@ -13,9 +13,10 @@ import pyaudio
 import torch
 import whisper
 
+from gaia.audio.audio_recorder import AudioRecorder
+
 # First-party imports
 from gaia.logger import get_logger
-from gaia.audio.audio_recorder import AudioRecorder
 
 
 class WhisperAsr(AudioRecorder):

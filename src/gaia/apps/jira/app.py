@@ -10,10 +10,10 @@ This app provides:
 """
 
 import asyncio
-import sys
-from typing import Dict, Any, List, Optional
-from dataclasses import dataclass
 import logging
+import sys
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 from gaia.agents.jira.agent import JiraAgent
 

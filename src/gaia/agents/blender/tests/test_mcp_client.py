@@ -1,9 +1,12 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+import logging
+import sys
+from contextlib import contextmanager
 
 import pytest
-import sys
-import logging
-from contextlib import contextmanager
+
 from gaia.mcp.blender_mcp_client import MCPClient, MCPError
 
 logging.getLogger("asyncio").setLevel(logging.INFO)
@@ -35,7 +38,7 @@ def mcp_client():
     # Check if server is running
     print("Checking connection to Blender MCP server...")
     try:
-        response = client.execute_code("import bpy")
+        client.execute_code("import bpy")
         print("Connection successful! Server is running.")
     except MCPError as e:
         print(f"ERROR: {str(e)}")

@@ -1,18 +1,17 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-import os
-import sys
-import unittest
-import threading
-import queue
-import time
 import asyncio
-from unittest.mock import MagicMock, patch, AsyncMock
+import os
+import queue
+import threading
+import time
+import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from gaia.logger import get_logger
 from gaia.audio.whisper_asr import WhisperAsr
-from gaia.talk.sdk import TalkSDK, TalkConfig
+from gaia.logger import get_logger
+from gaia.talk.sdk import TalkConfig, TalkSDK
 
 
 class TestWhisperAsr(unittest.TestCase):

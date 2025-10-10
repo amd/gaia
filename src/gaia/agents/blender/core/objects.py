@@ -1,5 +1,9 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 import math
 from typing import Dict, Tuple
+
 from gaia.mcp.blender_mcp_client import MCPClient
 
 

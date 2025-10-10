@@ -1,16 +1,19 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 import json
-import time
 import threading
-from typing import Dict, Any, List
+import time
+from typing import Any, Dict, List
 
 # Import Rich library for pretty printing and syntax highlighting
 try:
-    from rich.console import Console
-    from rich.syntax import Syntax
-    from rich.panel import Panel
     from rich import print as rprint
+    from rich.console import Console
     from rich.live import Live
+    from rich.panel import Panel
     from rich.spinner import Spinner
+    from rich.syntax import Syntax
     from rich.table import Table
 
     RICH_AVAILABLE = True

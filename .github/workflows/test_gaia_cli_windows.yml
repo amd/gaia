@@ -1,0 +1,364 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# This workflow tests the GAIA CLI on Windows with full Lemonade server integration
+# Tests include: CLI functionality, Lemonade integration, audio features, and core commands
+# Platform: Windows (with Lemonade server and NPU support)
+
+name: GAIA CLI Tests (Windows)
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "setup.py"
+      - "pyproject.toml"
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "setup.py"
+      - "pyproject.toml"
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-gaia-cli-windows:
+    name: Test GAIA CLI on Windows (Full Integration)
+    runs-on: [stx, miniforge]
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download and Install Miniforge
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Windows-x86_64.exe" -OutFile "miniforge3.exe"
+          Start-Process -FilePath "miniforge3.exe" -ArgumentList "/S", "/D=$env:GITHUB_WORKSPACE\miniforge3" -Wait
+
+      - name: Initialize Conda
+        run: |
+          Write-Host "Step 1: Get conda path"
+          $condaPath = "$env:GITHUB_WORKSPACE\miniforge3"
+          $env:Path = "$condaPath;$condaPath\Scripts;$env:Path"
+
+          Write-Host "Step 2: Initialize conda for both shells"
+          & "$condaPath\Scripts\conda.exe" init powershell
+          & "$condaPath\Scripts\conda.exe" init cmd.exe
+
+          Write-Host "Step 3: Create the environment at system level"
+          & "$condaPath\Scripts\conda.exe" create -n gaiaenv python=3.10 -y
+
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
+      - name: Install GAIA dependencies
+        run: |
+          Write-Host "Step 1: Activate conda environment"
+          & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
+          conda activate gaiaenv
+
+          Write-Host "Step 2: Install dependencies"
+          python -m pip install --upgrade pip
+          pip install -e .[dev,talk]
+
+          Write-Host "Step 3: Verify installation"
+          $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
+          if (-not $gaiaPath) {
+            Write-Host "Error: gaia not installed correctly"
+            Write-Host "Current PATH: $env:Path"
+            exit 1
+          }
+          Write-Host "Found gaia at: $($gaiaPath.Source)"
+          python -m pip check
+
+      - uses: FedericoCarboni/setup-ffmpeg@v3
+        id: setup-ffmpeg
+
+      - name: Start Lemonade Server and Run Tests
+        timeout-minutes: 20
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          PYTHONUTF8: 1
+        run: |
+          Write-Host "Activate and verify Conda environment"
+          $env:Path = "$env:GITHUB_WORKSPACE\miniforge3;$env:GITHUB_WORKSPACE\miniforge3\Scripts;$env:Path"
+          & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
+          conda activate gaiaenv
+
+          Write-Host "Verify Python environment"
+          python -c "import sys; print(sys.executable)"
+
+          Write-Host "Find gaia executable location"
+          $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
+          if (-not $gaiaPath) {
+            Write-Host "Error: Cannot find gaia executable in PATH"
+            Write-Host "Current PATH: $env:Path"
+            exit 1
+          }
+          Write-Host "Found gaia at: $($gaiaPath.Source)"
+
+          # Start the server in the background as a process (not PowerShell job)
+          Write-Host "Starting lemonade-server in background..."
+          # Start the server as a background process
+          $serverProcess = Start-Process -FilePath "lemonade-server" -ArgumentList "serve", "--no-tray" -PassThru -WindowStyle Hidden
+          Write-Host "Started lemonade-server process with ID: $($serverProcess.Id)"
+
+          # Wait for server to start up
+          Write-Host "Waiting for server to start up..."
+          $maxWaitTime = 30  # seconds
+          $waitTime = 0
+          $serverReady = $false
+
+          while ($waitTime -lt $maxWaitTime -and -not $serverReady) {
+              Start-Sleep -Seconds 2
+              $waitTime += 2
+
+              try {
+                  $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 5
+                  Write-Host "Server is ready and responding to health checks"
+                  $serverReady = $true
+              } catch {
+                  Write-Host "Server not ready yet (waited $waitTime seconds)..."
+              }
+          }
+
+          if (-not $serverReady) {
+              Write-Host "Server failed to start within $maxWaitTime seconds"
+              try {
+                  if (-not $serverProcess.HasExited) {
+                      $serverProcess.Kill()
+                  }
+              } catch {
+                  Write-Host "Error stopping server process: $_"
+              }
+              throw "Failed to start lemonade-server for tests"
+          }
+
+          Write-Host "Lemonade server started successfully"
+
+          # Pull the model now that server is running
+          Write-Host "Pulling Llama-3.2-3B-Instruct-Hybrid model..."
+          lemonade-server pull Llama-3.2-3B-Instruct-Hybrid
+
+      - name: Run Unit Tests (Direct CMD - Full Error Visibility)
+        shell: cmd
+        env:
+          PYTHONUTF8: 1
+        run: |
+          REM Activate conda environment
+          call "%GITHUB_WORKSPACE%\miniforge3\Scripts\activate.bat" gaiaenv
+
+          echo ================================================================
+          echo                 GAIA UNIT TESTS - FULL ERROR LOGGING
+          echo ================================================================
+          echo Environment: %CONDA_DEFAULT_ENV%
+          echo Python Version:
+          python --version
+          echo Working Directory: %CD%
+          echo.
+
+          REM Initialize test tracking
+          set test_llm_exit=0
+          set test_asr_exit=0
+          set test_tts_exit=0
+
+          REM ================================================================
+          REM TEST_LLM.PY
+          REM ================================================================
+          echo ****************************************************************
+          echo                          TEST_LLM.PY
+          echo ****************************************************************
+          echo Starting test_llm.py at %TIME%...
+          echo.
+
+          python tests\unit\test_llm.py
+          set test_llm_exit=%ERRORLEVEL%
+
+          echo.
+          echo ----------------------------------------------------------------
+          echo test_llm.py completed at %TIME% with exit code: %test_llm_exit%
+          if %test_llm_exit% equ 0 (
+              echo [SUCCESS] test_llm.py passed
+          ) else (
+              echo [FAILURE] test_llm.py failed with exit code %test_llm_exit%
+              echo Full error output displayed above - no truncation
+          )
+          echo ----------------------------------------------------------------
+          echo.
+
+          REM ================================================================
+          REM TEST_ASR.PY
+          REM ================================================================
+          echo ****************************************************************
+          echo                          TEST_ASR.PY
+          echo ****************************************************************
+          echo Starting test_asr.py at %TIME%...
+          echo.
+
+          python tests\unit\test_asr.py
+          set test_asr_exit=%ERRORLEVEL%
+
+          echo.
+          echo ----------------------------------------------------------------
+          echo test_asr.py completed at %TIME% with exit code: %test_asr_exit%
+          if %test_asr_exit% equ 0 (
+              echo [SUCCESS] test_asr.py passed
+          ) else (
+              echo [FAILURE] test_asr.py failed with exit code %test_asr_exit%
+              echo Full error output displayed above - no truncation
+          )
+          echo ----------------------------------------------------------------
+          echo.
+
+          REM ================================================================
+          REM TEST_TTS.PY
+          REM ================================================================
+          echo ****************************************************************
+          echo                          TEST_TTS.PY
+          echo ****************************************************************
+          echo Starting test_tts.py at %TIME%...
+          echo.
+
+          python tests\unit\test_tts.py
+          set test_tts_exit=%ERRORLEVEL%
+
+          echo.
+          echo ----------------------------------------------------------------
+          echo test_tts.py completed at %TIME% with exit code: %test_tts_exit%
+          if %test_tts_exit% equ 0 (
+              echo [SUCCESS] test_tts.py passed
+          ) else (
+              echo [FAILURE] test_tts.py failed with exit code %test_tts_exit%
+              echo Full error output displayed above - no truncation
+          )
+          echo ----------------------------------------------------------------
+          echo.
+
+          REM ================================================================
+          REM FINAL SUMMARY
+          REM ================================================================
+          echo ================================================================
+          echo                      FINAL TEST SUMMARY
+          echo ================================================================
+          echo test_llm.py:  exit code %test_llm_exit%
+          echo test_asr.py:  exit code %test_asr_exit%
+          echo test_tts.py:  exit code %test_tts_exit%
+          echo ================================================================
+
+          REM Calculate total failures
+          set /a total_failures=%test_llm_exit%+%test_asr_exit%+%test_tts_exit%
+
+          if %total_failures% equ 0 (
+              echo [OVERALL SUCCESS] All tests passed successfully
+              echo ================================================================
+              exit /b 0
+          ) else (
+              echo [OVERALL FAILURE] One or more tests failed
+              echo ================================================================
+              echo FAILED TESTS:
+              if %test_llm_exit% neq 0 echo   - test_llm.py ^(exit code %test_llm_exit%^)
+              if %test_asr_exit% neq 0 echo   - test_asr.py ^(exit code %test_asr_exit%^)
+              if %test_tts_exit% neq 0 echo   - test_tts.py ^(exit code %test_tts_exit%^)
+              echo ================================================================
+              echo IMPORTANT: All error messages are displayed in full above
+              echo No PowerShell wrapping or truncation - raw Python output preserved
+              echo ================================================================
+              exit /b 1
+          )
+
+      - name: Run Summarizer Integration Tests (CMD - CLI Testing)
+        shell: cmd
+        env:
+          PYTHONUTF8: 1
+        run: |
+          REM Activate conda environment
+          call "%GITHUB_WORKSPACE%\miniforge3\Scripts\activate.bat" gaiaenv
+
+          echo ================================================================
+          echo              GAIA SUMMARIZER CLI INTEGRATION TESTS
+          echo ================================================================
+          echo Environment: %CONDA_DEFAULT_ENV%
+          echo Python Version:
+          python --version
+          echo Working Directory: %CD%
+          echo.
+
+          REM Initialize test tracking
+          set summarizer_exit=0
+
+          REM ================================================================
+          REM TEST_SUMMARIZER.PY - CLI INTEGRATION TESTS
+          REM ================================================================
+          echo ****************************************************************
+          echo                    SUMMARIZER CLI INTEGRATION TESTS
+          echo ****************************************************************
+          echo Starting test_summarizer.py at %TIME%...
+          echo Testing complete CLI workflow: gaia summarize command
+          echo.
+
+          python -m pytest tests\test_summarizer.py -vs --tb=short
+          set summarizer_exit=%ERRORLEVEL%
+
+          echo.
+          echo ----------------------------------------------------------------
+          echo test_summarizer.py completed at %TIME% with exit code: %summarizer_exit%
+          if %summarizer_exit% equ 0 (
+              echo [SUCCESS] Summarizer CLI integration tests passed
+          ) else (
+              echo [FAILURE] Summarizer CLI integration tests failed with exit code %summarizer_exit%
+              echo Full error output displayed above - no truncation
+          )
+          echo ----------------------------------------------------------------
+          echo.
+
+          REM ================================================================
+          REM SUMMARIZER TEST SUMMARY
+          REM ================================================================
+          echo ================================================================
+          echo                   SUMMARIZER TEST SUMMARY
+          echo ================================================================
+          echo test_summarizer.py:  exit code %summarizer_exit%
+          echo ================================================================
+
+          if %summarizer_exit% neq 0 (
+              echo [FAILURE] Summarizer CLI integration tests failed
+              echo ================================================================
+              echo FAILED TEST:
+              echo   - test_summarizer.py ^(exit code %summarizer_exit%^)
+              echo ================================================================
+              echo IMPORTANT: All error messages are displayed in full above
+              echo No PowerShell wrapping or truncation - raw Python output preserved
+              echo ================================================================
+              exit /b 1
+          ) else (
+              echo [SUCCESS] Summarizer CLI integration tests passed successfully
+              echo ================================================================
+          )
+
+      - name: Debug GAIA Logs on Failure
+        if: failure()
+        shell: cmd
+        run: |
+          echo === Debugging GAIA failure ===
+
+          echo === Check for GAIA log files ===
+          if exist "gaia.cli.log" (
+            echo Found gaia.cli.log:
+            type gaia.cli.log
+          ) else (
+            echo No gaia.cli.log found
+          )
+
+          echo === Check running processes ===
+          tasklist | findstr /i "python gaia lemonade-server"
+
+          echo === Check ports in use ===
+          netstat -an | findstr ":8000 :8001"

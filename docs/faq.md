@@ -20,6 +20,9 @@ GAIA is designed for AMD Ryzen AI systems. For optimal performance, you need an 
 ### Does GAIA support Linux or macOS?
 GAIA fully supports both Windows 11 and Linux (Ubuntu/Debian) with complete UI and CLI functionality. macOS is not currently supported.
 
+### How do I install additional models?
+Additional models can be installed through Lemonade Server's model management interface, accessible via the system tray icon or WebUI. For detailed instructions, see [Installing Additional Models](./features.md#installing-additional-models) in the features documentation.
+
 ## Demo Introduction
 
 Discover the capabilities of Ryzen AI with GAIA, an innovative generative AI application. Our platform seamlessly runs private and local large language models (LLMs) on the Neural Processing Unit (NPU), unlocking powerful potential. Dive into our agent Retrieval-Augmented Generation (RAG) pipeline, where interactive chat, reasoning, planning, and tool use converge. Plus, experience an intuitive and accessible UI that showcases these remarkable features.
