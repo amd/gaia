@@ -1,0 +1,421 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: GAIA Hybrid Local Tests 🌩️
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "src/**"
+      - "installer/**"
+      - "tests/**"
+      - "setup.py"
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "src/**"
+      - "installer/**"
+      - "tests/**"
+      - "setup.py"
+  merge_group:
+  workflow_dispatch:
+
+env:
+  GAIA_INSTALL_PATH: "C:\\Users\\nimbys\\AppData\\Local"
+  GAIA_FULL_PATH: "C:\\Users\\nimbys\\AppData\\Local\\GAIA"
+
+jobs:
+  build-installer:
+    uses: ./.github/workflows/build_installer.yml
+
+  gaia-hybrid-local-tests:
+    runs-on: [stx, miniforge]
+    needs: build-installer
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Remove existing GAIA installation
+        shell: powershell
+        run: |
+          $installPath = "${{ env.GAIA_FULL_PATH }}"
+          if (Test-Path $installPath) {
+            Write-Host "Removing existing GAIA installation from: $installPath"
+            Remove-Item -Path $installPath -Recurse -Force
+            Write-Host "Existing installation removed successfully"
+          } else {
+            Write-Host "No existing GAIA installation found at: $installPath"
+          }
+
+      - name: Log build information
+        shell: powershell
+        run: |
+          Write-Host "Building tests for installer version: ${{ needs.build-installer.outputs.VERSION }}"
+          Write-Host "Built from commit: ${{ needs.build-installer.outputs.COMMIT_HASH }}"
+          Write-Host "Expected installer hash: ${{ needs.build-installer.outputs.INSTALLER_HASH }}"
+
+      - name: Download GAIA Installer
+        uses: actions/download-artifact@v4
+        with:
+          name: gaia-windows-installer-${{ needs.build-installer.outputs.VERSION }}-${{ needs.build-installer.outputs.COMMIT_HASH }}
+          path: installer
+
+      - name: Verify installer hash
+        shell: powershell
+        run: |
+          $expectedHash = "${{ needs.build-installer.outputs.INSTALLER_HASH }}"
+          $filePath = "installer\gaia-windows-setup.exe"
+          $actualHash = (Get-FileHash -Path $filePath -Algorithm SHA256).Hash
+
+          Write-Host "Expected hash: $expectedHash"
+          Write-Host "Actual hash: $actualHash"
+          Write-Host "Commit hash: ${{ needs.build-installer.outputs.COMMIT_HASH }}"
+
+          if ($expectedHash -ne $actualHash) {
+            Write-Host "Error: Hash mismatch! The downloaded installer does not match the built installer."
+            Write-Host "This indicates that the wrong installer was downloaded or the installer was modified."
+            exit 1
+          } else {
+            Write-Host "Hash verification successful: The downloaded installer matches the built installer."
+          }
+
+      - name: Pre-installation check
+        run: |
+          cd installer
+          Write-Host "=== Pre-Installation Check ==="
+          Write-Host "Current directory: $(Get-Location)"
+          Write-Host "Workspace path: ${{ github.workspace }}"
+          Write-Host "Installer exists: $(Test-Path gaia-windows-setup.exe)"
+          Write-Host "Installer size: $((Get-Item gaia-windows-setup.exe).Length) bytes"
+
+          # Check for processes using ports 8000 and 8001
+          Write-Host "`n=== Checking Ports ==="
+          $ports = @(8000, 8001)
+          foreach ($port in $ports) {
+            $process = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
+            if ($process) {
+              Write-Host "Port $port is in use by process ID: $($process.OwningProcess)"
+            } else {
+              Write-Host "Port $port is free"
+            }
+          }
+
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
+      - name: Run GAIA Installer
+        run: |
+          cd installer
+          Write-Host "Running installer..."
+          .\RunInstaller.ps1 -INSTALL_PATH "${{ env.GAIA_INSTALL_PATH }}"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Installer failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Check for processes using ports 8000 and 8001
+        shell: PowerShell
+        run: |
+          Write-Host "Waiting 10 seconds before checking ports..."
+          Start-Sleep -Seconds 10
+          $portsInUse = @()
+          $ports = @(8000, 8001)
+          foreach ($port in $ports) {
+              $process = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
+              if ($process) {
+                  $processId = $process.OwningProcess
+                  $processName = (Get-Process -Id $processId).ProcessName
+                  Write-Host "Port $port is in use by process $processName (ID: $processId)"
+                  $portsInUse += $port
+              } else {
+                  Write-Host "Port $port is free"
+              }
+          }
+          if ($portsInUse.Count -gt 0) {
+              $portList = $portsInUse -join ", "
+              throw "Error: Ports $portList are still in use. Please ensure all GAIA processes are properly terminated."
+          }
+
+      - name: Run unit tests
+        timeout-minutes: 15
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        shell: PowerShell
+        run: |
+          $ErrorActionPreference = "Continue"  # Don't stop on non-fatal errors
+          $cwd = (Get-Item .\).FullName
+          $Env:LEMONADE_CACHE_DIR="$cwd\lemon-cache"
+          $Env:HF_HOME="$cwd\hf-cache"
+          $installDir = "${{ env.GAIA_FULL_PATH }}"
+
+          Write-Host "`n=== Test Environment Debug Info ==="
+          Write-Host "Current working directory: $cwd"
+          Write-Host "Install directory: $installDir"
+          Write-Host "LEMONADE_CACHE_DIR: $Env:LEMONADE_CACHE_DIR"
+          Write-Host "HF_HOME: $Env:HF_HOME"
+
+          # Verify embedded Python installation
+          $pythonExe = Join-Path $installDir "Python\python.exe"
+          if (-not (Test-Path $pythonExe)) {
+            throw "ERROR: Embedded Python not found at $pythonExe"
+          }
+          Write-Host "Embedded Python found at $pythonExe"
+
+          # Check Python version
+          Write-Host "`nPython version:"
+          & $pythonExe --version
+
+          # Verify pip installation
+          Write-Host "`nPip version:"
+          & $pythonExe -m pip --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "ERROR: pip is not correctly installed or configured in the embedded Python environment."
+          }
+
+          # Update PATH to include GAIA scripts
+          $gaiaScripts = Join-Path $installDir "Python\Scripts"
+          $env:PATH = "$gaiaScripts;$env:PATH"
+          Write-Host "`nUpdated PATH with GAIA scripts directory: $gaiaScripts"
+
+          # Install dev dependencies
+          Write-Host "`nInstalling dev dependencies using embedded Python..."
+          & $pythonExe -m pip install .[dev,talk]
+          if ($LASTEXITCODE -ne 0) {
+              throw "Failed to install dev dependencies using embedded pip."
+          }
+
+          # Verify lemonade-server installation
+          Write-Host "`n=== Verifying Lemonade Server Installation ==="
+          Write-Host "Checking if lemonade-server is installed and accessible..."
+          try {
+              $lemonadeVersion = & lemonade-server --version 2>&1
+              Write-Host "Lemonade server version: $lemonadeVersion"
+              Write-Host "Lemonade server verification successful"
+          } catch {
+              Write-Host "ERROR: Failed to run lemonade-server --version"
+              Write-Host "Error details: $_"
+              throw "Lemonade server is not properly installed or accessible"
+          }
+
+          # Additional diagnostics before running tests
+          Write-Host "`n=== Pre-Test Diagnostics ==="
+
+          # Check ports again
+          Write-Host "Checking port availability..."
+          $ports = @(8000, 8001)
+          foreach ($port in $ports) {
+              $process = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
+              if ($process) {
+                  $processId = $process.OwningProcess
+                  $processName = (Get-Process -Id $processId -ErrorAction SilentlyContinue).ProcessName
+                  Write-Host "WARNING: Port $port is in use by process $processName (ID: $processId)"
+              } else {
+                  Write-Host "Port $port is available"
+              }
+          }
+
+          # Check for any existing lemonade processes
+          Write-Host "Checking for existing lemonade processes..."
+          $lemonadeProcesses = Get-Process -Name "*lemonade*" -ErrorAction SilentlyContinue
+          if ($lemonadeProcesses) {
+              Write-Host "Found existing lemonade processes:"
+              $lemonadeProcesses | ForEach-Object { Write-Host "  - $($_.ProcessName) (ID: $($_.Id))" }
+          } else {
+              Write-Host "No existing lemonade processes found"
+          }
+
+          # Get lemonade-server executable info
+          Write-Host "Lemonade server executable information..."
+          try {
+              $lemonadeServerPath = (Get-Command lemonade-server).Source
+              Write-Host "Lemonade server path: $lemonadeServerPath"
+              $fileInfo = Get-Item $lemonadeServerPath
+              Write-Host "File size: $($fileInfo.Length) bytes"
+              Write-Host "Last modified: $($fileInfo.LastWriteTime)"
+          } catch {
+              Write-Host "Could not get lemonade-server executable info: $_"
+          }
+
+          # Start lemonade-server in background for tests
+          Write-Host "`n=== Starting Lemonade Server for Tests ==="
+          Write-Host "Starting lemonade-server in background..."
+          try {
+              # Start the server in the background
+              $serverJob = Start-Job -ScriptBlock {
+                  & lemonade-server serve --no-tray 2>&1
+              }
+              Write-Host "Started lemonade-server job with ID: $($serverJob.Id)"
+
+              # Wait for server to start up
+              Write-Host "Waiting for server to start up..."
+              $maxWaitTime = 30  # seconds
+              $waitTime = 0
+              $serverReady = $false
+
+              while ($waitTime -lt $maxWaitTime -and -not $serverReady) {
+                  Start-Sleep -Seconds 2
+                  $waitTime += 2
+
+                  try {
+                      $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 5
+                      Write-Host "✅ Server is ready and responding to health checks"
+                      Write-Host "Health response: $($response | ConvertTo-Json -Compress)"
+                      $serverReady = $true
+                  } catch {
+                      Write-Host "Server not ready yet (waited $waitTime seconds)..."
+                  }
+              }
+
+              # Pull the model now that server is running
+              if ($serverReady) {
+                  Write-Host "`n=== Pulling Llama-3.2-3B-Instruct-Hybrid model ==="
+                  lemonade-server pull Llama-3.2-3B-Instruct-Hybrid
+
+                  Write-Host "`n=== Checking Available Models ==="
+                  try {
+                      $modelsResponse = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/models" -Method GET -TimeoutSec 10
+                      Write-Host "Available models on CI system:"
+                      if ($modelsResponse.data -and $modelsResponse.data.Count -gt 0) {
+                          $modelsResponse.data | ForEach-Object {
+                              Write-Host "  - Model ID: $($_.id)"
+                              Write-Host "    Checkpoint: $($_.checkpoint)"
+                              Write-Host "    Recipe: $($_.recipe)"
+                              Write-Host "    Created: $($_.created)"
+                              Write-Host ""
+                          }
+                          Write-Host "Total models found: $($modelsResponse.data.Count)"
+                      } else {
+                          Write-Host "⚠️  No models found in the registry"
+                          Write-Host "Raw response: $($modelsResponse | ConvertTo-Json -Compress)"
+                      }
+                  } catch {
+                      Write-Host "❌ Error listing models: $_"
+                                             Write-Host "This might indicate a server issue or missing models endpoint"
+                   }
+
+                   # Test loading the model that tests are trying to use
+                   Write-Host "=== Testing Model Loading ==="
+                   try {
+                       $loadRequest = @{
+                           model_name = "Llama-3.2-3B-Instruct-Hybrid"
+                       } | ConvertTo-Json
+
+                       Write-Host "Attempting to load model: Llama-3.2-3B-Instruct-Hybrid"
+                       $loadResponse = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/load" -Method POST -Body $loadRequest -ContentType "application/json" -TimeoutSec 30
+                       Write-Host "✅ Model load successful: $($loadResponse | ConvertTo-Json -Compress)"
+                   } catch {
+                       Write-Host "❌ Model load failed: $($_.Exception.Message)"
+                       if ($_.ErrorDetails) {
+                           Write-Host "Error details: $($_.ErrorDetails.Message)"
+                       }
+                       Write-Host "This explains why auto_load=True fails in integration tests"
+                   }
+                   Write-Host ""
+              }
+
+              if (-not $serverReady) {
+                  # Server didn't come up - check job state and output
+                  $jobState = Get-Job -Id $serverJob.Id
+                  Write-Host "❌ Server failed to start within $maxWaitTime seconds"
+                  Write-Host "Job state: $($jobState.State)"
+
+                  # Always get job output to see what the server is doing
+                  Write-Host "`n=== Server Output/Logs ==="
+                  $jobOutput = Receive-Job -Id $serverJob.Id
+                  if ($jobOutput) {
+                      Write-Host "Server output:"
+                      $jobOutput | ForEach-Object { Write-Host "  $_" }
+                  } else {
+                      Write-Host "No output captured from server job"
+                  }
+
+                  # Check what's actually listening on ports
+                  Write-Host "`n=== Port Check ==="
+                  try {
+                      $connections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in @(8000, 8001, 8080, 3000) }
+                      if ($connections) {
+                          Write-Host "Found listening ports:"
+                          $connections | ForEach-Object {
+                              $processName = (Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).ProcessName
+                              Write-Host "  Port $($_.LocalPort): Process $processName (PID: $($_.OwningProcess))"
+                          }
+                      } else {
+                          Write-Host "No processes listening on ports 8000, 8001, 8080, or 3000"
+                      }
+                  } catch {
+                      Write-Host "Error checking ports: $_"
+                  }
+
+                  # Check for any python/lemonade processes
+                  Write-Host "`n=== Process Check ==="
+                  try {
+                      $processes = Get-Process | Where-Object { $_.ProcessName -match "(python|lemonade)" }
+                      if ($processes) {
+                          Write-Host "Found python/lemonade processes:"
+                          $processes | ForEach-Object { Write-Host "  $($_.ProcessName) (PID: $($_.Id))" }
+                      } else {
+                          Write-Host "No python/lemonade processes found"
+                      }
+                  } catch {
+                      Write-Host "Error checking processes: $_"
+                  }
+
+                  # Clean up failed job
+                  Stop-Job -Id $serverJob.Id -ErrorAction SilentlyContinue
+                  Remove-Job -Id $serverJob.Id -ErrorAction SilentlyContinue
+                  throw "Failed to start lemonade-server for tests"
+              }
+
+          } catch {
+              Write-Host "❌ Error starting lemonade-server: $_"
+              throw "Failed to start lemonade-server for tests: $_"
+          }
+
+          Write-Host "`n=== Starting Tests ==="
+
+          Write-Host "Running test_lemonade_client.py (server already running)"
+          # Set environment variable to indicate server is already running
+          $Env:LEMONADE_SERVER_RUNNING = "true"
+          $result = & $pythonExe tests\test_lemonade_client.py 2>&1 | Out-String -Stream
+
+          # Format and display the output
+          Write-Host "`n=== Test Output ==="
+          $result | ForEach-Object { Write-Host $_ }
+          Write-Host "`n=== End Test Output ==="
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "test_lemonade_client.py failed with exit code $LASTEXITCODE"
+          }
+
+
+
+          # Clean up the lemonade server
+          Write-Host "`n=== Cleaning Up Lemonade Server ==="
+          if ($serverJob) {
+              try {
+                  $jobState = Get-Job -Id $serverJob.Id -ErrorAction SilentlyContinue
+                  if ($jobState) {
+                      Write-Host "Stopping lemonade-server job..."
+                      Stop-Job -Id $serverJob.Id -ErrorAction SilentlyContinue
+                      Remove-Job -Id $serverJob.Id -ErrorAction SilentlyContinue
+                      Write-Host "✅ Lemonade server cleaned up successfully"
+                  }
+              } catch {
+                  Write-Host "⚠️  Error cleaning up lemonade server: $_"
+              }
+          }
+
+      - name: Cleanup installation
+        if: always()
+        shell: powershell
+        run: |
+          $installPath = "${{ env.GAIA_FULL_PATH }}"
+          if (Test-Path $installPath) {
+            Write-Host "Cleaning up installation from: $installPath"
+            Remove-Item -Path $installPath -Recurse -Force
+            Write-Host "Cleanup completed successfully"
+          } else {
+            Write-Host "No installation found at: $installPath"
+          }

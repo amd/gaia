@@ -1,0 +1,213 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# This workflow tests the Chat SDK functionality with Lemonade server integration
+# Tests include: Chat SDK API, conversation handling, and Lemonade integration
+# Platform: Windows (with Lemonade server support)
+
+name: Chat SDK Tests (Windows)
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "setup.py"
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "setup.py"
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-chat-sdk-windows:
+    name: Test Chat SDK on Windows (Lemonade Integration)
+    runs-on: [stx, miniforge]
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download and Install Miniforge
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Windows-x86_64.exe" -OutFile "miniforge3.exe"
+          Start-Process -FilePath "miniforge3.exe" -ArgumentList "/S", "/D=$env:GITHUB_WORKSPACE\miniforge3" -Wait
+
+      - name: Initialize Conda
+        run: |
+          Write-Host "Step 1: Get conda path"
+          $condaPath = "$env:GITHUB_WORKSPACE\miniforge3"
+          $env:Path = "$condaPath;$condaPath\Scripts;$env:Path"
+
+          Write-Host "Step 2: Initialize conda for both shells"
+          & "$condaPath\Scripts\conda.exe" init powershell
+          & "$condaPath\Scripts\conda.exe" init cmd.exe
+
+          Write-Host "Step 3: Create the environment at system level"
+          & "$condaPath\Scripts\conda.exe" create -n gaiaenv python=3.10 -y
+
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
+      - name: Install GAIA dependencies
+        run: |
+          Write-Host "Step 1: Activate conda environment"
+          & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
+          conda activate gaiaenv
+
+          Write-Host "Step 2: Install dependencies"
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+          Write-Host "Step 3: Verify installation"
+          $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
+          if (-not $gaiaPath) {
+            Write-Host "Error: gaia not installed correctly"
+            Write-Host "Current PATH: $env:Path"
+            exit 1
+          }
+          Write-Host "Found gaia at: $($gaiaPath.Source)"
+          python -m pip check
+
+      - name: Start Lemonade Server for Integration Tests
+        timeout-minutes: 15
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        run: |
+          Write-Host "Activate and verify Conda environment"
+          $env:Path = "$env:GITHUB_WORKSPACE\miniforge3;$env:GITHUB_WORKSPACE\miniforge3\Scripts;$env:Path"
+          & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
+          conda activate gaiaenv
+
+          Write-Host "Verify Python environment"
+          python -c "import sys; print(sys.executable)"
+
+          Write-Host "Find gaia executable location"
+          $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
+          if (-not $gaiaPath) {
+            Write-Host "Error: Cannot find gaia executable in PATH"
+            Write-Host "Current PATH: $env:Path"
+            exit 1
+          }
+          Write-Host "Found gaia at: $($gaiaPath.Source)"
+
+          # Start the server in the background as a process (not PowerShell job)
+          Write-Host "Starting lemonade-server in background..."
+          # Start the server as a background process
+          $serverProcess = Start-Process -FilePath "lemonade-server" -ArgumentList "serve", "--no-tray" -PassThru -WindowStyle Hidden
+          Write-Host "Started lemonade-server process with ID: $($serverProcess.Id)"
+
+          # Wait for server to start up
+          Write-Host "Waiting for server to start up..."
+          $maxWaitTime = 30  # seconds
+          $waitTime = 0
+          $serverReady = $false
+
+          while ($waitTime -lt $maxWaitTime -and -not $serverReady) {
+              Start-Sleep -Seconds 2
+              $waitTime += 2
+
+              try {
+                  $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 5
+                  Write-Host "Server is ready and responding to health checks"
+                  $serverReady = $true
+              } catch {
+                  Write-Host "Server not ready yet (waited $waitTime seconds)..."
+              }
+          }
+
+          if (-not $serverReady) {
+              Write-Host "Server failed to start within $maxWaitTime seconds"
+              try {
+                  if (-not $serverProcess.HasExited) {
+                      $serverProcess.Kill()
+                  }
+              } catch {
+                  Write-Host "Error stopping server process: $_"
+              }
+              throw "Failed to start lemonade-server for tests"
+          }
+
+          Write-Host "Lemonade server started successfully"
+
+          # Pull the model now that server is running
+          Write-Host "Pulling Llama-3.2-3B-Instruct-Hybrid model..."
+          lemonade-server pull Llama-3.2-3B-Instruct-Hybrid
+
+
+
+      - name: Run Chat SDK Integration Tests with Lemonade
+        shell: cmd
+        run: |
+          REM Activate conda environment
+          call "%GITHUB_WORKSPACE%\miniforge3\Scripts\activate.bat" gaiaenv
+
+          echo ================================================================
+          echo           CHAT SDK INTEGRATION TESTS WITH LEMONADE SERVER
+          echo ================================================================
+          echo Testing real LLM integration with running Lemonade server
+          echo.
+
+          echo ****************************************************************
+          echo                 COMPREHENSIVE INTEGRATION TEST SUITE
+          echo ****************************************************************
+          echo Starting comprehensive integration tests at %TIME%...
+          echo.
+
+          REM Run the comprehensive integration test suite
+          set PYTHONIOENCODING=utf-8
+          python tests\test_chat_sdk.py
+          set integration_exit=%ERRORLEVEL%
+
+          echo.
+          echo ----------------------------------------------------------------
+          echo Integration tests completed at %TIME% with exit code: %integration_exit%
+          if %integration_exit% equ 0 (
+              echo [SUCCESS] Chat SDK integration tests passed
+          ) else (
+              echo [FAILURE] Chat SDK integration tests failed with exit code %integration_exit%
+              echo Full error output displayed above - no truncation
+          )
+          echo ----------------------------------------------------------------
+
+          if %integration_exit% neq 0 (
+              exit /b 1
+          )
+
+      - name: Debug Chat SDK Logs on Failure
+        if: failure()
+        shell: cmd
+        run: |
+          echo === Debugging Chat SDK test failure ===
+
+          echo === Check for GAIA log files ===
+          if exist "gaia.cli.log" (
+            echo Found gaia.cli.log:
+            type gaia.cli.log
+          ) else (
+            echo No gaia.cli.log found
+          )
+
+          echo === Check running processes ===
+          tasklist | findstr /i "python gaia lemonade-server"
+
+          echo === Check ports in use ===
+          netstat -an | findstr ":8000 :8001"
+
+          echo === Show recent Python errors ===
+          if exist "*.log" (
+            echo Recent log files:
+            dir *.log
+          )
+
+          echo === Environment information ===
+          echo CONDA_DEFAULT_ENV: %CONDA_DEFAULT_ENV%
+          echo PATH: %PATH%
