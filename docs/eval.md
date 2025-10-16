@@ -839,6 +839,16 @@ If your Q&A batch-experiment fails with "No queries found" or similar errors:
 - ✅ **Fix**: Use `gaia batch-experiment -i ./groundtruth/consolidated_qa_groundtruth.json` (not test data)
 - 🔍 **Why**: Q&A groundtruth contains the specific questions models need to answer consistently
 
+**Dependency Compatibility Issues:**
+If you encounter numpy/pandas/sklearn import errors after installation:
+- ❓ **Symptoms**: `ValueError: numpy.dtype size changed` or `ImportError: cannot import name 'ComplexWarning'`
+- ✅ **Fix**: Reinstall dependencies to rebuild against current numpy version:
+  ```bash
+  pip uninstall -y numpy pandas scikit-learn
+  pip install -e .[eval]
+  ```
+- 🔍 **Why**: Binary incompatibility between numpy 2.x and older pandas/sklearn versions
+
 **API Key Issues:**
 ```bash
 # Verify API key is set

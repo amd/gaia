@@ -7,16 +7,19 @@ from datetime import datetime
 from pathlib import Path
 
 from gaia.eval.claude import ClaudeClient
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL
 from gaia.logger import get_logger
 
 
 class TranscriptGenerator:
     """Generates example meeting transcripts for testing transcript summarization."""
 
-    def __init__(self, claude_model="claude-sonnet-4-20250514", max_tokens=8192):
+    def __init__(self, claude_model=None, max_tokens=8192):
         self.log = get_logger(__name__)
 
         # Initialize Claude client for dynamic content generation
+        if claude_model is None:
+            claude_model = DEFAULT_CLAUDE_MODEL
         try:
             self.claude_client = ClaudeClient(model=claude_model, max_tokens=max_tokens)
             self.log.info(f"Initialized Claude client with model: {claude_model}")
@@ -439,8 +442,8 @@ Examples:
     parser.add_argument(
         "--claude-model",
         type=str,
-        default="claude-sonnet-4-20250514",
-        help="Claude model to use for transcript generation (default: claude-sonnet-4-20250514)",
+        default=None,
+        help=f"Claude model to use for transcript generation (default: {DEFAULT_CLAUDE_MODEL})",
     )
 
     args = parser.parse_args()

@@ -51,6 +51,18 @@ class Prompts:
             "user": "<|User|>{content}\n",
             "assistant": "<|Assistant|>{content}\n",
         },
+        "gpt-oss": {
+            "system": "<|start|>system<|channel|>main<|message|>{system_message}<|end|>",
+            "user": "<|start|>user<|channel|>main<|message|>{content}<|end|>",
+            "assistant": "<|start|>assistant<|channel|>final<|message|>{content}<|end|>",
+            "assistant_prefix": "<|start|>assistant<|channel|>final<|message|>",
+        },
+        "lfm2": {
+            "system": "<|startoftext|><|im_start|>system\n{system_message}<|im_end|>",
+            "user": "<|im_start|>user\n{content}<|im_end|>",
+            "assistant": "<|im_start|>assistant\n{content}<|im_end|>",
+            "assistant_prefix": "<|im_start|>assistant\n",
+        },
         "default": {
             "system": "{system_message}\n",
             "user": "User: {content}\n",
@@ -68,6 +80,7 @@ class Prompts:
         "gemma": "You are Gemma, a helpful AI assistant. You provide clear, accurate, and technically-sound responses while maintaining a friendly demeanor.",
         "deepseek": "You are DeepSeek R1, a large language model trained by DeepSeek. You provide clear, accurate, and technically-sound responses while maintaining a friendly demeanor.",
         "qwen": "You are Qwen, a helpful AI assistant. You provide clear, accurate, and technically-sound responses while maintaining a friendly demeanor.",
+        "lfm2": "You are a helpful assistant trained by Liquid AI.",
         "default": "You are a helpful AI assistant. You provide clear, accurate, and technically-sound responses while maintaining a friendly demeanor.",
         # Add other system messages here...
     }
@@ -122,6 +135,11 @@ class Prompts:
                 elif matched_model == "qwen":
                     system_msg = system_msg.replace(
                         "You are Qwen", f"You are {assistant_name} (Qwen)"
+                    )
+                elif matched_model == "lfm2":
+                    system_msg = system_msg.replace(
+                        "You are a helpful assistant",
+                        f"You are {assistant_name}, a helpful assistant",
                     )
             else:
                 system_msg = base_msg
@@ -256,6 +274,24 @@ class Prompts:
 
             return formatted_prompt
 
+        elif matched_model == "lfm2":
+            # LFM2 format - similar to qwen but with different tags and startoftext
+            for entry in chat_history:
+                if entry.startswith(user_prefix):
+                    content = entry[len(user_prefix) :]
+                    formatted_prompt += format_template["user"].format(content=content)
+                elif entry.startswith(assistant_prefix):
+                    content = entry[len(assistant_prefix) :]
+                    formatted_prompt += format_template["assistant"].format(
+                        content=content
+                    )
+
+            # Add the assistant prefix if the last message was from user
+            if chat_history and chat_history[-1].startswith(user_prefix):
+                formatted_prompt += format_template["assistant_prefix"]
+
+            return formatted_prompt
+
         # Standard handling for other models
         for entry in chat_history:
             if entry.startswith(user_prefix):
@@ -286,7 +322,7 @@ class Prompts:
     def match_model_name(model: str) -> str:
         """Match a model path/name to its corresponding prompt type."""
         Prompts.log.debug(f"Matching model name: {model}")
-        model = model.lower()
+        model = model.lower()  # Convert to lowercase for case-insensitive matching
 
         if any(x in model for x in ["phi-3", "phi3"]):
             return "phi3"
@@ -302,6 +338,10 @@ class Prompts:
             return "chatglm"
         elif "deepseek" in model:
             return "deepseek"
+        elif "gpt-oss" in model or "gptoss" in model:
+            return "gpt-oss"
+        elif any(x in model for x in ["lfm2", "lfm-2", "lfm_2", "liquid", "liquidai"]):
+            return "lfm2"
         else:
             Prompts.log.warning(
                 f"No specific format found for model {model}, using default format"
@@ -438,6 +478,39 @@ def test_llama32_format():
     print(formatted)
 
 
+def test_lfm2_format():
+    """Specific test for LFM2 (Liquid Foundation Model 2) format."""
+    model = "liquid/lfm2-1b"
+    chat_history = [
+        "user: What is C. elegans?",
+        "assistant: It's a tiny nematode that lives in temperate soil environments.",
+        "user: Tell me more about it.",
+    ]
+
+    print("\nTesting LFM2 Format:")
+    print("=" * 60)
+    matched_model = Prompts.match_model_name(model)
+    print(f"Model: {model}")
+    print(f"Matched as: {matched_model}")
+    print("-" * 60)
+    formatted = Prompts.get_system_prompt(model, chat_history)
+    print("Formatted prompt:")
+    print(formatted)
+    print("-" * 60)
+
+    # Also test with empty history (just system prompt)
+    print("\nLFM2 with empty history (system prompt only):")
+    formatted_empty = Prompts.get_system_prompt(model, [])
+    print(formatted_empty)
+    print("-" * 60)
+
+    # Test with single user message
+    print("\nLFM2 with single user message:")
+    single_msg = ["user: Hello!"]
+    formatted_single = Prompts.get_system_prompt(model, single_msg)
+    print(formatted_single)
+
+
 if __name__ == "__main__":
     # Run all tests
     main()
@@ -446,3 +519,4 @@ if __name__ == "__main__":
     test_qwen_format()
     test_chatglm_format()
     test_llama32_format()
+    test_lfm2_format()

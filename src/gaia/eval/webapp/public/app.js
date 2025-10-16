@@ -1484,8 +1484,8 @@ class EvaluationVisualizer {
                         <div class="metric-label">Use Case</div>
                     </div>
                     <div class="metric-card">
-                        <div class="metric-value">${metadata.usage?.total_tokens || 'N/A'}</div>
-                        <div class="metric-label">Total Tokens</div>
+                        <div class="metric-value">${metadata.inference_usage?.total_tokens || 'N/A'}</div>
+                        <div class="metric-label">Generation Tokens</div>
                     </div>
                     <div class="metric-card">
                         <div class="metric-value">$${metadata.cost?.total_cost?.toFixed(4) || 'N/A'}</div>
@@ -1823,8 +1823,11 @@ class EvaluationVisualizer {
             }
             group.totalCost += experimentCost;
 
-            group.totalTokens += evalData.usage?.total_tokens || 0;
-            
+            // Only accumulate inference tokens (actual model usage for generation)
+            // Evaluation tokens are tracked separately and should not be mixed
+            const tokensToAccumulate = evalData.inference_usage?.total_tokens || 0;
+            group.totalTokens += tokensToAccumulate;
+
             // Accumulate inference token usage
             if (evalData.inference_usage) {
                 group.totalInferenceInputTokens += evalData.inference_usage.input_tokens || 0;
@@ -2084,12 +2087,14 @@ class EvaluationVisualizer {
 
             const rating = evalData.overall_rating || {};
             const metrics = rating.metrics || {};
-            
+
             // Check if this is Q&A (has accuracy_percentage) or summarization (has quality_score)
             const isQA = metrics.accuracy_percentage !== undefined;
             const score = isQA ? metrics.accuracy_percentage : (metrics.quality_score || 0);
-            const cost = evalData.cost?.total_cost || 0;
-            const tokens = evalData.usage?.total_tokens || 0;
+            // Only use inference cost and tokens (actual model usage for generation)
+            // Do NOT mix with evaluation/analysis metrics
+            const cost = evalData.inference_cost?.total_cost || 0;
+            const tokens = evalData.inference_usage?.total_tokens || 0;
 
             // Extract model name from experiment name
             let fullModelName = evalData.experiment_name.replace('.experiment', '');
@@ -2245,7 +2250,9 @@ class EvaluationVisualizer {
             const score = metrics.accuracy_percentage !== undefined ? metrics.accuracy_percentage : (metrics.quality_score || 0);
             scores.push(score);
             costs.push(experimentCost);
-            tokens.push((evalData.usage?.total_tokens || 0) / 1000); // in K
+            // Only use inference tokens for the leaderboard (actual model usage for generation)
+            // Do NOT fallback to evaluation tokens as they are completely different
+            tokens.push(totalToks / 1000); // in K
             latencies.push(avgLatency);
             inputTokens.push(inputToks);
             outputTokens.push(outputToks);

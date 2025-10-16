@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -10,7 +11,9 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
+from gaia.chat.prompts import Prompts
 from gaia.eval.claude import ClaudeClient
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL
 from gaia.llm.lemonade_client import LemonadeClient
 from gaia.logger import get_logger
 
@@ -19,6 +22,92 @@ try:
     from pypdf import PdfReader
 except ImportError:
     PdfReader = None
+
+
+def should_use_chat_template(task_type: str) -> bool:
+    """
+    Determine if chat template formatting should be used for a given task.
+
+    Args:
+        task_type: Type of task ('chat', 'qa', 'summarization', etc.)
+
+    Returns:
+        True if chat template should be used, False otherwise
+    """
+    # Only use chat templates for actual conversation/QA tasks
+    # NOT for completion tasks like summarization
+    return task_type in ["chat", "qa"]
+
+
+def format_prompt_with_template(
+    model: str,
+    system_prompt: str,
+    user_content: str,
+    document_content: str = "",
+    use_chat_template: bool = False,
+) -> str:
+    """
+    Format prompt using model-specific template from Prompts class, or simple format.
+
+    Args:
+        model: Model name/path
+        system_prompt: The system instruction
+        user_content: The user's query/content
+        document_content: Optional document/transcript context to include
+        use_chat_template: Whether to use chat template formatting (for QA/chat tasks)
+
+    Returns:
+        Formatted prompt
+    """
+    if use_chat_template:
+        # Use ChatML formatting for chat/QA tasks
+        if document_content:
+            enhanced_system_prompt = (
+                f"{system_prompt}\n\nContext Document:\n{document_content}"
+            )
+        else:
+            enhanced_system_prompt = system_prompt
+
+        # Convert to chat history format expected by Prompts.format_chat_history
+        chat_history = [f"user: {user_content}"]
+        return Prompts.format_chat_history(
+            model=model, chat_history=chat_history, system_prompt=enhanced_system_prompt
+        )
+    else:
+        # Simple format for completion tasks (like summarization)
+        if document_content:
+            return f"{system_prompt}\n\nDocument Content:\n{document_content}\n\n{user_content}"
+        else:
+            return f"{system_prompt}\n\n{user_content}"
+
+
+def extract_thinking_from_response(response_text: str) -> Dict[str, Any]:
+    """
+    Extract thinking content from <think>...</think> tags if present.
+
+    Args:
+        response_text: The raw model response
+
+    Returns:
+        Dict with 'response' (final answer) and 'thinking' (reasoning process, or None)
+    """
+    if not response_text:
+        return {"response": "", "thinking": None}
+
+    # Check for thinking tags
+    think_pattern = r"<think>(.*?)</think>"
+    match = re.search(think_pattern, response_text, flags=re.DOTALL)
+
+    if match:
+        thinking = match.group(1).strip()
+        # Extract everything after the </think> tag as the final response
+        final_response = re.sub(
+            think_pattern, "", response_text, flags=re.DOTALL
+        ).strip()
+        return {"response": final_response, "thinking": thinking}
+
+    # No thinking tags found, return full response
+    return {"response": response_text.strip(), "thinking": None}
 
 
 @dataclass
@@ -126,11 +215,12 @@ class BatchExperimentRunner:
                 model=experiment.model, max_tokens=experiment.max_tokens
             )
         elif experiment.llm_type.lower() == "lemonade":
-            # Filter out non-LLM parameters before passing to client
+            # Filter out non-LLM client parameters before passing to client constructor
+            # Parameters like 'stop', 'combined_prompt' are for completions API, not client init
             llm_params = {
                 k: v
                 for k, v in experiment.parameters.items()
-                if k not in ["combined_prompt"]
+                if k not in ["combined_prompt", "stop"]
             }
             return LemonadeClient(model=experiment.model, verbose=False, **llm_params)
         else:
@@ -191,11 +281,15 @@ class BatchExperimentRunner:
     ) -> Dict:
         """Process a question using Lemonade client."""
         try:
-            # Format the prompt with system message, document content (if available), and question
-            if document_content:
-                formatted_prompt = f"{system_prompt}\n\nDocument Content:\n{document_content}\n\nQuestion: {question}\n\nAnswer:"
-            else:
-                formatted_prompt = f"{system_prompt}\n\nQuestion: {question}\n\nAnswer:"
+            # Format prompt for QA (uses ChatML for supported models)
+            # Document content is passed separately and added to system prompt
+            formatted_prompt = format_prompt_with_template(
+                model=client.model,
+                system_prompt=system_prompt,
+                user_content=question,
+                document_content=document_content,
+                use_chat_template=True,  # Use chat template for QA tasks
+            )
 
             # Use completions method with the client's loaded model
             response_data = client.completions(
@@ -211,6 +305,9 @@ class BatchExperimentRunner:
             if "choices" in response_data and response_data["choices"]:
                 response_text = response_data["choices"][0].get("text", "")
 
+            # Extract thinking tokens if present
+            extracted = extract_thinking_from_response(response_text)
+
             # Get token statistics from Lemonade
             try:
                 stats = client.get_stats()
@@ -221,8 +318,8 @@ class BatchExperimentRunner:
                 self.log.warning(f"Failed to get stats from Lemonade: {e}")
                 input_tokens = output_tokens = total_tokens = 0
 
-            return {
-                "response": response_text.strip(),
+            result = {
+                "response": extracted["response"],
                 "usage": {
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
@@ -235,6 +332,13 @@ class BatchExperimentRunner:
                 },  # Local inference has no cost
                 "error": None,
             }
+
+            # Add thinking tokens if present
+            if extracted["thinking"]:
+                result["thinking"] = extracted["thinking"]
+
+            return result
+
         except Exception as e:
             self.log.error(f"Error processing question with Lemonade: {e}")
             return {
@@ -244,15 +348,19 @@ class BatchExperimentRunner:
                 "error": str(e),
             }
 
-    def _get_summary_prompts(self, base_system_prompt: str) -> Dict[str, str]:
-        """Generate individual prompts for each summary component."""
+    def _get_summary_prompts(self) -> Dict[str, str]:
+        """Generate individual user prompts for each summary component.
+
+        Note: System prompt is passed separately when formatting with chat template.
+        These are just the user-facing questions/tasks.
+        """
         return {
-            "executive_summary": f"{base_system_prompt}\n\nProvide a brief executive summary (2-3 sentences) of the key outcomes and decisions from this transcript:",
-            "detailed_summary": f"{base_system_prompt}\n\nProvide a detailed summary of the transcript, covering all major topics, discussions, and outcomes in paragraph form:",
-            "action_items": f"{base_system_prompt}\n\nList the specific action items that were assigned during this meeting. Include who is responsible for each item when mentioned. Provide as a simple list:",
-            "key_decisions": f"{base_system_prompt}\n\nList the key decisions that were made during this meeting. Focus on concrete decisions and outcomes. Provide as a simple list:",
-            "participants": f"{base_system_prompt}\n\nList the participants mentioned in this transcript. Include their roles or titles when available. Provide as a simple list:",
-            "topics_discussed": f"{base_system_prompt}\n\nList the main topics and subjects that were discussed in this meeting. Provide as a simple list:",
+            "executive_summary": "Provide a brief executive summary (2-3 sentences) of the key outcomes and decisions from this transcript.",
+            "detailed_summary": "Provide a detailed summary of the transcript, covering all major topics, discussions, and outcomes in paragraph form.",
+            "action_items": "List the specific action items that were assigned during this meeting. Include who is responsible for each item when mentioned. Provide as a simple list.",
+            "key_decisions": "List the key decisions that were made during this meeting. Focus on concrete decisions and outcomes. Provide as a simple list.",
+            "participants": "List the participants mentioned in this transcript. Include their roles or titles when available. Provide as a simple list.",
+            "topics_discussed": "List the main topics and subjects that were discussed in this meeting. Provide as a simple list.",
         }
 
     def process_summarization_claude(
@@ -264,7 +372,7 @@ class BatchExperimentRunner:
     ) -> Dict:
         """Process summarization by making independent or combined calls for each component."""
         try:
-            summary_prompts = self._get_summary_prompts(system_prompt)
+            summary_prompts = self._get_summary_prompts()
             results = {}
             total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
             total_cost = {"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0}
@@ -278,10 +386,8 @@ class BatchExperimentRunner:
 
                 # Build combined prompt
                 combined_request = f"{system_prompt}\n\nPlease provide the following summaries for the transcript:\n\n"
-                for component, prompt in summary_prompts.items():
-                    combined_request += (
-                        f"**{component.upper()}**:\n{prompt.split(':')[-1].strip()}\n\n"
-                    )
+                for component, user_prompt in summary_prompts.items():
+                    combined_request += f"**{component.upper()}**:\n{user_prompt}\n\n"
                 combined_request += f"\nTranscript:\n{transcript}\n\nPlease structure your response with clear headers for each section."
 
                 response_data = client.get_completion_with_usage(combined_request)
@@ -348,10 +454,10 @@ class BatchExperimentRunner:
                     f"Summarizing transcript with {len(summary_prompts)} independent model calls: {', '.join(summary_prompts.keys())}"
                 )
 
-                for component, prompt_template in summary_prompts.items():
+                for component, user_prompt in summary_prompts.items():
                     try:
-                        # Create full prompt with transcript
-                        full_prompt = f"{prompt_template}\n\nTranscript:\n{transcript}\n\nResponse:"
+                        # Create full prompt with system prompt, user prompt, and transcript
+                        full_prompt = f"{system_prompt}\n\n{user_prompt}\n\nTranscript:\n{transcript}\n\nResponse:"
 
                         response_data = client.get_completion_with_usage(full_prompt)
 
@@ -411,14 +517,19 @@ class BatchExperimentRunner:
         max_tokens: int,
         temperature: float,
         combined_prompt: bool = False,
+        extra_params: Dict[str, Any] = None,
     ) -> Dict:
         """Process summarization by making independent or combined calls for each component."""
         try:
-            summary_prompts = self._get_summary_prompts(system_prompt)
+            summary_prompts = self._get_summary_prompts()
             results = {}
             total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
             total_cost = {"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0}
             errors = []
+
+            # Prepare extra parameters (like stop sequences)
+            if extra_params is None:
+                extra_params = {}
 
             if combined_prompt:
                 # Make a single call with all components
@@ -426,26 +537,41 @@ class BatchExperimentRunner:
                     f"Summarizing transcript with 1 combined model call for: {', '.join(summary_prompts.keys())}"
                 )
 
-                # Build combined prompt
-                combined_request = f"{system_prompt}\n\nPlease provide the following summaries for the transcript:\n\n"
-                for component, prompt in summary_prompts.items():
-                    combined_request += (
-                        f"**{component.upper()}**:\n{prompt.split(':')[-1].strip()}\n\n"
-                    )
-                combined_request += f"\nTranscript:\n{transcript}\n\nPlease structure your response with clear headers for each section."
+                # Build user request for all components
+                user_request = (
+                    "Please provide the following summaries for the transcript:\n\n"
+                )
+                for component, user_prompt in summary_prompts.items():
+                    user_request += f"**{component.upper()}**:\n{user_prompt}\n\n"
+                user_request += "\nPlease structure your response with clear headers for each section."
+
+                # Format prompt for summarization using chat template
+                formatted_prompt = format_prompt_with_template(
+                    model=client.model,
+                    system_prompt=system_prompt,
+                    user_content=user_request,
+                    document_content=transcript,  # Pass transcript as context
+                    use_chat_template=True,  # Use chat template for summarization
+                )
 
                 response_data = client.completions(
                     model=client.model,
-                    prompt=combined_request,
+                    prompt=formatted_prompt,
                     max_tokens=max_tokens,
                     temperature=temperature,
                     stream=False,
+                    **extra_params,  # Pass stop sequences and other params
                 )
 
                 # Extract text from the response
                 response_text = ""
                 if "choices" in response_data and response_data["choices"]:
                     response_text = response_data["choices"][0].get("text", "")
+
+                # Extract thinking tokens if present
+                extracted = extract_thinking_from_response(response_text)
+                response_text = extracted["response"]
+                thinking_content = extracted["thinking"]
 
                 # Get token statistics from Lemonade
                 try:
@@ -506,23 +632,34 @@ class BatchExperimentRunner:
                 # Total usage already calculated above, cost is always 0 for local
                 total_cost = {"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0}
 
+                # Store thinking content if present (for combined mode)
+                if thinking_content:
+                    results["_thinking"] = thinking_content
+
             else:
                 # Original behavior: independent calls
                 self.log.info(
                     f"Summarizing transcript with {len(summary_prompts)} independent model calls: {', '.join(summary_prompts.keys())}"
                 )
 
-                for component, prompt_template in summary_prompts.items():
+                for component, user_prompt in summary_prompts.items():
                     try:
-                        # Create full prompt with transcript
-                        full_prompt = f"{prompt_template}\n\nTranscript:\n{transcript}\n\nResponse:"
+                        # Format using chat template with separate system prompt and user prompt
+                        formatted_prompt = format_prompt_with_template(
+                            model=client.model,
+                            system_prompt=system_prompt,
+                            user_content=user_prompt,
+                            document_content=transcript,
+                            use_chat_template=True,  # Use chat template for summarization
+                        )
 
                         response_data = client.completions(
                             model=client.model,
-                            prompt=full_prompt,
+                            prompt=formatted_prompt,
                             max_tokens=max_tokens,
                             temperature=temperature,
                             stream=False,
+                            **extra_params,  # Pass stop sequences and other params
                         )
 
                         # Extract text from the response
@@ -530,7 +667,10 @@ class BatchExperimentRunner:
                         if "choices" in response_data and response_data["choices"]:
                             response_text = response_data["choices"][0].get("text", "")
 
-                        results[component] = response_text.strip()
+                        # Extract thinking tokens if present
+                        extracted = extract_thinking_from_response(response_text)
+
+                        results[component] = extracted["response"]
 
                         # Get token statistics from Lemonade
                         try:
@@ -558,12 +698,19 @@ class BatchExperimentRunner:
                         results[component] = f"ERROR: {str(e)}"
                         errors.append(f"{component}: {str(e)}")
 
-            return {
+            result_dict = {
                 "response": results,
                 "usage": total_usage,
                 "cost": total_cost,
                 "error": "; ".join(errors) if errors else None,
             }
+
+            # Add thinking if present (stored with key "_thinking" in results dict)
+            if "_thinking" in results:
+                result_dict["thinking"] = results.pop("_thinking")
+
+            return result_dict
+
         except Exception as e:
             self.log.error(f"Error in independent summarization with Lemonade: {e}")
             return {
@@ -1146,6 +1293,10 @@ class BatchExperimentRunner:
                     "response": result["response"],
                 }
 
+                # Add thinking tokens if present
+                if "thinking" in result and result["thinking"]:
+                    result_entry["thinking"] = result["thinking"]
+
             elif data_type == "qa_raw":
                 # Process raw transcript with predefined questions
                 qa_results = []
@@ -1157,10 +1308,9 @@ class BatchExperimentRunner:
                 }
 
                 for query in data_item["queries"]:
-                    # Create context-aware prompt with transcript
-                    context_prompt = f"{experiment.system_prompt}\n\nTranscript:\n{data_item['transcript']}\n\nQuestion: {query}\n\nAnswer:"
-
                     if experiment.llm_type.lower() == "claude":
+                        # Create context-aware prompt with transcript
+                        context_prompt = f"{experiment.system_prompt}\n\nTranscript:\n{data_item['transcript']}\n\nQuestion: {query}\n\nAnswer:"
                         # For Claude, we can use the context as system prompt
                         query_result = {
                             "response": "",
@@ -1206,7 +1356,7 @@ class BatchExperimentRunner:
                             query_result["error"] = str(e)
 
                     elif experiment.llm_type.lower() == "lemonade":
-                        # For Lemonade, use the full context prompt directly
+                        # For Lemonade, use ChatML formatting
                         query_result = {
                             "response": "",
                             "usage": {
@@ -1222,9 +1372,18 @@ class BatchExperimentRunner:
                             "error": None,
                         }
                         try:
+                            # Format with ChatML template for QA tasks, transcript as document context
+                            formatted_prompt = format_prompt_with_template(
+                                model=client.model,
+                                system_prompt=experiment.system_prompt,
+                                user_content=query,
+                                document_content=data_item["transcript"],
+                                use_chat_template=True,  # Use chat template for QA tasks
+                            )
+
                             response_data = client.completions(
                                 model=client.model,  # Use model from experiment config
-                                prompt=context_prompt,
+                                prompt=formatted_prompt,
                                 max_tokens=experiment.max_tokens,
                                 temperature=experiment.temperature,
                                 stream=False,
@@ -1237,15 +1396,27 @@ class BatchExperimentRunner:
                                     "text", ""
                                 )
 
-                            query_result["response"] = response_text.strip()
+                            # Extract thinking tokens if present
+                            extracted = extract_thinking_from_response(response_text)
+
+                            query_result["response"] = extracted["response"]
+                            # Store thinking for this query if present
+                            if extracted["thinking"]:
+                                query_result["thinking"] = extracted["thinking"]
+
                         except Exception as e:
                             self.log.error(f"Error processing QA with Lemonade: {e}")
                             query_result["response"] = f"ERROR: {str(e)}"
                             query_result["error"] = str(e)
 
-                    qa_results.append(
-                        {"query": query, "response": query_result["response"]}
-                    )
+                    qa_result_item = {
+                        "query": query,
+                        "response": query_result["response"],
+                    }
+                    # Add thinking if present
+                    if "thinking" in query_result and query_result["thinking"]:
+                        qa_result_item["thinking"] = query_result["thinking"]
+                    qa_results.append(qa_result_item)
 
                     # Accumulate usage/cost
                     if query_result["usage"]:
@@ -1287,6 +1458,12 @@ class BatchExperimentRunner:
                     )
                 elif experiment.llm_type.lower() == "lemonade":
                     combined = experiment.parameters.get("combined_prompt", False)
+                    # Extract parameters to pass (excluding combined_prompt)
+                    extra_params = {
+                        k: v
+                        for k, v in experiment.parameters.items()
+                        if k != "combined_prompt"
+                    }
                     result = self.process_summarization_lemonade(
                         client,
                         data_item["transcript"],
@@ -1294,6 +1471,7 @@ class BatchExperimentRunner:
                         experiment.max_tokens,
                         experiment.temperature,
                         combined,
+                        extra_params,
                     )
 
                 # Use the structured response directly from independent calls
@@ -1315,6 +1493,10 @@ class BatchExperimentRunner:
                     result_entry["groundtruth_summaries"] = data_item[
                         "groundtruth_summaries"
                     ]
+
+                # Add thinking tokens if present (for combined mode)
+                if "thinking" in result and result["thinking"]:
+                    result_entry["thinking"] = result["thinking"]
 
             else:
                 self.log.error(f"Unsupported data type: {data_type}")
@@ -1812,7 +1994,7 @@ class BatchExperimentRunner:
                 {
                     "name": "Claude-Sonnet-QA-Standard",
                     "llm_type": "claude",
-                    "model": "claude-sonnet-4-20250514",
+                    "model": DEFAULT_CLAUDE_MODEL,
                     "experiment_type": "qa",
                     "system_prompt": "You are a helpful assistant that answers questions about meeting transcripts. Provide accurate, concise answers based on the transcript content.",
                     "max_tokens": 512,
@@ -1823,7 +2005,7 @@ class BatchExperimentRunner:
                 {
                     "name": "Claude-Sonnet-Summarization-Standard",
                     "llm_type": "claude",
-                    "model": "claude-sonnet-4-20250514",
+                    "model": DEFAULT_CLAUDE_MODEL,
                     "experiment_type": "summarization",
                     "system_prompt": "You are an expert meeting analyst. Analyze the transcript carefully and provide clear, accurate information based on the content.",
                     "max_tokens": 512,
@@ -1834,7 +2016,7 @@ class BatchExperimentRunner:
                 {
                     "name": "Claude-Sonnet-QA-Detailed",
                     "llm_type": "claude",
-                    "model": "claude-sonnet-4-20250514",
+                    "model": DEFAULT_CLAUDE_MODEL,
                     "experiment_type": "qa",
                     "system_prompt": "You are an expert meeting analyst. Provide comprehensive, detailed answers about meeting transcripts including context, participants, and implications. Be thorough and precise.",
                     "max_tokens": 1024,
@@ -1885,7 +2067,7 @@ class BatchExperimentRunner:
 
             # Extract key information
             use_case = metadata.get("use_case", "qa")
-            original_model = metadata.get("claude_model", "claude-sonnet-4-20250514")
+            original_model = metadata.get("claude_model", DEFAULT_CLAUDE_MODEL)
             original_prompt = metadata.get("system_prompt", "")
             max_tokens = metadata.get("max_tokens", 512 if use_case == "qa" else 1024)
             temperature = metadata.get("temperature", 0.1)
@@ -1921,7 +2103,7 @@ class BatchExperimentRunner:
             model_variants = [
                 ("claude-3-haiku-20240307", "Haiku"),
                 ("claude-3-opus-20240229", "Opus"),
-                ("claude-sonnet-4-20250514", "Sonnet-4"),
+                (DEFAULT_CLAUDE_MODEL, "Sonnet-4.5"),
             ]
 
             for model, name in model_variants:

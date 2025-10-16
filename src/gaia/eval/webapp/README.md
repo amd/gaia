@@ -17,14 +17,41 @@ A simple Node.js web application for visualizing and comparing Gaia evaluation e
 - Node.js (v14 or higher)
 - npm
 
-### Installation
+### Using the GAIA CLI (Recommended)
+
+The easiest way to launch the visualizer is using the GAIA CLI command:
+
+```bash
+gaia visualize
+```
+
+This will automatically:
+- Install npm dependencies if needed (first time only)
+- Start the server on port 3000
+- Open your browser to the visualizer
+
+Options:
+```bash
+# Use custom port
+gaia visualize --port 8080
+
+# Don't open browser automatically
+gaia visualize --no-browser
+
+# Specify custom data directories
+gaia visualize --experiments-dir ./my_experiments --evaluations-dir ./my_evaluations
+```
+
+### Manual Installation
+
+If you prefer to run the server manually:
 
 1. Navigate to the webapp directory:
    ```bash
    cd src/gaia/eval/webapp
    ```
 
-2. Install dependencies:
+2. Install dependencies (only needed once):
    ```bash
    npm install
    ```

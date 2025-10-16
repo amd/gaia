@@ -86,8 +86,8 @@ setup(
         "eval" : [
             "anthropic",
             "bs4",
-            "scikit-learn",
-            "numpy",
+            "scikit-learn>=1.5.0",
+            "numpy>=2.0,<2.3.0",
             "pypdf",
         ],
         "talk":[
