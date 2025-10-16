@@ -42,7 +42,7 @@ if %ERRORLEVEL% neq 0 (
 
 :: Install GAIA using direct installation (not editable mode)
 echo Installing GAIA... >> %LOG_FILE%
-%PYTHON_EXE% -m pip install --no-warn-script-location "%INSTALL_DIR%[talk,dev,eval,youtube,audio]" >> %LOG_FILE% 2>&1
+%PYTHON_EXE% -m pip install --no-warn-script-location "%INSTALL_DIR%[talk,dev,youtube,audio]" >> %LOG_FILE% 2>&1
 
 :: Check final error level
 if %ERRORLEVEL% neq 0 (

@@ -9,6 +9,7 @@ import sys
 import time
 from pathlib import Path
 
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL
 from gaia.logger import get_logger
 from gaia.version import version
 
@@ -882,8 +883,8 @@ Examples:
         "-m",
         "--model",
         type=str,
-        default="claude-sonnet-4-20250514",
-        help="Claude model to use (default: claude-sonnet-4-20250514)",
+        default=DEFAULT_CLAUDE_MODEL,
+        help=f"Claude model to use (default: {DEFAULT_CLAUDE_MODEL})",
     )
     gt_parser.add_argument(
         "--max-tokens",
@@ -948,10 +949,10 @@ Examples:
         help="Similarity threshold for evaluation (default: 0.7)",
     )
 
-    # Add new subparser for RAG evaluation
+    # Add new subparser for evaluation
     eval_parser = subparsers.add_parser(
         "eval",
-        help="Evaluate RAG system performance using results data",
+        help="Evaluate experiment results (summarization, Q&A, RAG, etc.)",
         parents=[parent_parser],
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
@@ -1001,8 +1002,8 @@ Examples:
         "-m",
         "--model",
         type=str,
-        default="claude-sonnet-4-20250514",
-        help="Claude model to use for evaluation (default: claude-sonnet-4-20250514)",
+        default=DEFAULT_CLAUDE_MODEL,
+        help=f"Claude model to use for evaluation (default: {DEFAULT_CLAUDE_MODEL})",
     )
     eval_parser.add_argument(
         "-g",
@@ -1249,8 +1250,8 @@ Examples:
     generate_parser.add_argument(
         "--claude-model",
         type=str,
-        default="claude-sonnet-4-20250514",
-        help="Claude model to use for generation (default: claude-sonnet-4-20250514)",
+        default=DEFAULT_CLAUDE_MODEL,
+        help=f"Claude model to use for generation (default: {DEFAULT_CLAUDE_MODEL})",
     )
 
     # Add type-specific arguments
@@ -1463,14 +1464,14 @@ Examples:
     if args.action == "report":
         log.info("Generating summary report from evaluation directory")
         try:
-            from gaia.eval.eval import RagEvaluator
+            from gaia.eval.eval import Evaluator
         except ImportError as e:
-            log.error(f"Failed to import RagEvaluator: {e}")
+            log.error(f"Failed to import evaluator: {e}")
             print("❌ Error: Failed to import eval module.")
             print("The evaluation dependencies are not installed.")
             print("")
             print("To fix this, install the evaluation dependencies:")
-            print("  pip install .[eval]")
+            print("  pip install -e .[eval]")
             print("")
             print("This will install required packages including:")
             print("  - anthropic (for Claude AI)")
@@ -1479,7 +1480,7 @@ Examples:
             return
 
         try:
-            evaluator = RagEvaluator()
+            evaluator = Evaluator()
 
             # If summary_only is True, don't save the report file
             output_path = None if args.summary_only else args.output_file
@@ -2021,7 +2022,7 @@ Let me know your answer!
                 log.debug("ASR initialized successfully")
             except ImportError:
                 log.error(
-                    "WhisperAsr not found. Please install voice support with: pip install .[talk]"
+                    "WhisperAsr not found. Please install voice support with: pip install -e .[talk]"
                 )
                 raise
             except Exception as e:
@@ -2168,7 +2169,7 @@ Let me know your answer!
             print("The evaluation dependencies are not installed.")
             print("")
             print("To fix this, install the evaluation dependencies:")
-            print("  pip install .[eval]")
+            print("  pip install -e .[eval]")
             print("")
             print("This will install required packages including:")
             print("  - anthropic (for Claude AI)")
@@ -2333,14 +2334,14 @@ Let me know your answer!
     if args.action == "create-template":
         log.info("Creating template results file")
         try:
-            from gaia.eval.eval import RagEvaluator
+            from gaia.eval.eval import Evaluator
         except ImportError as e:
-            log.error(f"Failed to import RagEvaluator: {e}")
+            log.error(f"Failed to import evaluator: {e}")
             print("❌ Error: Failed to import eval module.")
             print("The evaluation dependencies are not installed.")
             print("")
             print("To fix this, install the evaluation dependencies:")
-            print("  pip install .[eval]")
+            print("  pip install -e .[eval]")
             print("")
             print("This will install required packages including:")
             print("  - anthropic (for Claude AI)")
@@ -2349,7 +2350,7 @@ Let me know your answer!
             return
 
         try:
-            evaluator = RagEvaluator()
+            evaluator = Evaluator()
             template_path = evaluator.create_template(
                 groundtruth_file=args.groundtruth_file,
                 output_dir=args.output_dir,
@@ -2358,7 +2359,7 @@ Let me know your answer!
             print("✅ Successfully created template file")
             print(f"  Template: {template_path}")
             print(
-                "  Instructions: Fill in the 'response' fields with your RAG system outputs"
+                "  Instructions: Fill in the 'response' fields with your model outputs"
             )
             print("  Then run: gaia eval <template_file> to evaluate performance")
 
@@ -2369,18 +2370,18 @@ Let me know your answer!
 
         return
 
-    # Handle RAG evaluation
+    # Handle evaluation
     if args.action == "eval":
-        log.info("Evaluating RAG system performance")
+        log.info("Evaluating experiment results")
         try:
-            from gaia.eval.eval import RagEvaluator
+            from gaia.eval.eval import Evaluator
         except ImportError as e:
-            log.error(f"Failed to import RagEvaluator: {e}")
+            log.error(f"Failed to import evaluator: {e}")
             print("❌ Error: Failed to import eval module.")
             print("The evaluation dependencies are not installed.")
             print("")
             print("To fix this, install the evaluation dependencies:")
-            print("  pip install .[eval]")
+            print("  pip install -e .[eval]")
             print("")
             print("This will install required packages including:")
             print("  - anthropic (for Claude AI)")
@@ -2389,7 +2390,7 @@ Let me know your answer!
             return
 
         try:
-            evaluator = RagEvaluator(model=args.model)
+            evaluator = Evaluator(model=args.model)
 
             # If summary_only is True, don't save to output_dir (None)
             output_dir = None if args.summary_only else args.output_dir
@@ -2631,6 +2632,15 @@ Let me know your answer!
                 if total_cost["total_cost"] > 0:
                     print(f"  Total Cost: ${total_cost['total_cost']:.4f}")
 
+                # Suggest next steps
+                print("\nNext steps:")
+                print(
+                    f"  1. View results interactively: gaia visualize --experiments-dir {args.directory} --evaluations-dir {args.output_dir}"
+                )
+                print(
+                    f"  2. Generate markdown report: gaia report -d {args.output_dir}"
+                )
+
             else:
                 # Handle single file processing (existing logic)
                 if args.report_only:
@@ -2646,7 +2656,7 @@ Let me know your answer!
                     groundtruth_path=getattr(args, "groundtruth", None),
                 )
 
-                print("✅ Successfully evaluated RAG system")
+                print("✅ Successfully evaluated experiment")
 
                 # Display summary information
                 overall_rating = evaluation_data.get("overall_rating", {})
@@ -2730,7 +2740,7 @@ Let me know your answer!
                 print("The evaluation dependencies are not installed.")
                 print("")
                 print("To fix this, install the evaluation dependencies:")
-                print("  pip install .[eval]")
+                print("  pip install -e .[eval]")
                 print("")
                 print("This will install required packages including:")
                 print("  - anthropic (for Claude AI)")
@@ -2805,7 +2815,7 @@ Let me know your answer!
                 print("The evaluation dependencies are not installed.")
                 print("")
                 print("To fix this, install the evaluation dependencies:")
-                print("  pip install .[eval]")
+                print("  pip install -e .[eval]")
                 print("")
                 print("This will install required packages including:")
                 print("  - anthropic (for Claude AI)")
@@ -2881,7 +2891,7 @@ Let me know your answer!
             print("The evaluation dependencies are not installed.")
             print("")
             print("To fix this, install the evaluation dependencies:")
-            print("  pip install .[eval]")
+            print("  pip install -e .[eval]")
             print("")
             print("This will install required packages including:")
             print("  - anthropic (for Claude AI)")
@@ -2959,7 +2969,7 @@ Let me know your answer!
                 print(f"    - {Path(result_file).name}")
 
             print("\nNext steps:")
-            print("  1. Evaluate results using: gaia eval -f <result_file>")
+            print(f"  1. Evaluate results using: gaia eval -d {args.output_dir}")
             print(f"  2. Generate comparative report: gaia report -d {args.output_dir}")
 
         except Exception as e:
@@ -3432,7 +3442,7 @@ def handle_blender_command(args):
     # Check if Blender components are available
     if not BLENDER_AVAILABLE:
         print("❌ Error: Blender agent components are not available")
-        print("Install blender dependencies with: pip install .[blender]")
+        print("Install blender dependencies with: pip install -e .[blender]")
         sys.exit(1)
 
     # Check if Lemonade server is running
@@ -3534,7 +3544,7 @@ def handle_mcp_start(args):
             print("❌ Error: MCP dependencies not installed.")
             print("")
             print("To fix this, install the MCP dependencies:")
-            print("  pip install .[mcp]")
+            print("  pip install -e .[mcp]")
             return
 
         # Import and start the HTTP-native MCP bridge

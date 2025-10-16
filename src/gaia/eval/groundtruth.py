@@ -9,6 +9,7 @@ from enum import Enum
 from pathlib import Path
 
 from gaia.eval.claude import ClaudeClient
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL
 from gaia.logger import get_logger
 
 
@@ -153,8 +154,10 @@ class GroundTruthGenerator:
         else:
             raise ValueError(f"Unsupported use case: {use_case}")
 
-    def __init__(self, model="claude-sonnet-4-20250514", max_tokens=4096):
+    def __init__(self, model=None, max_tokens=4096):
         self.log = get_logger(__name__)
+        if model is None:
+            model = DEFAULT_CLAUDE_MODEL
         self.claude = ClaudeClient(model=model, max_tokens=max_tokens)
 
     def generate(
@@ -362,12 +365,39 @@ class GroundTruthGenerator:
         for match in matching_files:
             self.log.info(f"  Found: {match}")
 
+        # Filter out metadata files
+        filtered_files = []
+        for f in matching_files:
+            # Skip metadata files
+            if f.name in [
+                "transcript_metadata.json",
+                "metadata.json",
+                "experiment_metadata.json",
+            ]:
+                self.log.info(f"Skipping metadata file: {f.name}")
+                continue
+            # Skip any file with 'metadata' in the name and .json extension
+            if "metadata" in f.name.lower() and f.suffix == ".json":
+                self.log.info(f"Skipping metadata file: {f.name}")
+                continue
+            filtered_files.append(f)
+
+        if not filtered_files:
+            self.log.warning(
+                f"No valid files to process after filtering out metadata files"
+            )
+            return None
+
+        self.log.info(
+            f"Processing {len(filtered_files)} files (excluded {len(matching_files) - len(filtered_files)} metadata files)"
+        )
+
         # Create progress tracking directory
         progress_dir = output_dir / f"groundtruth_{use_case.value}_progress"
         progress_dir.mkdir(parents=True, exist_ok=True)
 
-        for i, file_path in enumerate(matching_files):
-            self.log.info(f"Processing file {i+1}/{len(matching_files)}: {file_path}")
+        for i, file_path in enumerate(filtered_files):
+            self.log.info(f"Processing file {i+1}/{len(filtered_files)}: {file_path}")
             file_start_time = time.time()
 
             try:
@@ -416,9 +446,9 @@ class GroundTruthGenerator:
                 # Update overall progress
                 overall_progress_file = progress_dir / "overall_progress.json"
                 overall_progress_data = {
-                    "total_files": len(matching_files),
+                    "total_files": len(filtered_files),
                     "completed_files": i + 1,
-                    "progress_percent": round((i + 1) / len(matching_files) * 100, 1),
+                    "progress_percent": round((i + 1) / len(filtered_files) * 100, 1),
                     "use_case": use_case.value,
                     "last_updated": datetime.now().isoformat(),
                 }
@@ -427,7 +457,7 @@ class GroundTruthGenerator:
                     json.dump(overall_progress_data, f, indent=2)
 
                 self.log.info(
-                    f"Ground truth progress: {i+1}/{len(matching_files)} files completed ({overall_progress_data['progress_percent']}%)"
+                    f"Ground truth progress: {i+1}/{len(filtered_files)} files completed ({overall_progress_data['progress_percent']}%)"
                 )
 
             except Exception as e:
@@ -726,8 +756,8 @@ Examples:
         "-m",
         "--model",
         type=str,
-        default="claude-sonnet-4-20250514",
-        help="Claude model to use (default: claude-sonnet-4-20250514)",
+        default=None,
+        help=f"Claude model to use (default: {DEFAULT_CLAUDE_MODEL})",
     )
     parser.add_argument(
         "--max-tokens",

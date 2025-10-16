@@ -158,7 +158,7 @@ class TestEvalCore:
 
     def test_evaluate_summary_quality(self):
         """Test summary quality evaluation with mocked Claude"""
-        # Test our mock directly since we can't import RagEvaluator without anthropic
+        # Test our mock directly since we can't import Evaluator without anthropic
         mock_client = MockLLMClient()
         response = mock_client.complete("evaluate the quality of this summary")
         result = json.loads(response)

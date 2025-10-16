@@ -10,34 +10,30 @@ import anthropic
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
 from gaia.logger import get_logger
 
 load_dotenv()
-
-# Anthropic API pricing (per million tokens) - based on https://www.anthropic.com/pricing
-MODEL_PRICING = {
-    "claude-opus-4": {"input_per_mtok": 15.00, "output_per_mtok": 75.00},
-    "claude-sonnet-4": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
-    "claude-sonnet-4-20250514": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
-    "claude-3-7-sonnet-20250219": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
-    "claude-3-5-sonnet-20241022": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
-    "claude-3-5-haiku-20241022": {"input_per_mtok": 0.80, "output_per_mtok": 4.00},
-    "claude-3-opus-20240229": {"input_per_mtok": 15.00, "output_per_mtok": 75.00},
-    "claude-3-haiku-20240307": {"input_per_mtok": 0.25, "output_per_mtok": 1.25},
-    # Default fallback for unknown models (using Sonnet pricing)
-    "default": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
-}
 
 
 class ClaudeClient:
     log = get_logger(__name__)
 
-    def __init__(self, model="claude-sonnet-4-20250514", max_tokens=1024):
+    def __init__(self, model=None, max_tokens=1024):
+        if model is None:
+            model = DEFAULT_CLAUDE_MODEL
         self.log = self.__class__.log  # Use the class-level logger for instances
         self.api_key = os.getenv("ANTHROPIC_API_KEY")
         if not self.api_key:
-            self.log.error("ANTHROPIC_API_KEY not found in environment")
-            raise ValueError("ANTHROPIC_API_KEY not found in environment")
+            error_msg = (
+                "ANTHROPIC_API_KEY not found in environment.\n"
+                "Please add your Anthropic API key to the .env file:\n"
+                "  ANTHROPIC_API_KEY=your_api_key_here\n"
+                "Alternatively, export it as an environment variable:\n"
+                "  export ANTHROPIC_API_KEY=your_api_key_here\n"
+            )
+            self.log.error(error_msg)
+            raise ValueError(error_msg)
         self.client = anthropic.Anthropic(api_key=self.api_key)
         self.model = model
         self.max_tokens = max_tokens
