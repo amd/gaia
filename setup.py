@@ -24,16 +24,18 @@ setup(
         "gaia.llm",
         "gaia.audio",
         "gaia.chat",
-        "gaia.talk", 
+        "gaia.talk",
         "gaia.apps",
         "gaia.apps.llm",
         "gaia.apps.summarize",
         "gaia.eval",
         "gaia.mcp",
+        "gaia.mcp.servers",
         "gaia.agents",
         "gaia.agents.base",
         "gaia.agents.blender",
         "gaia.agents.blender.core",
+        "gaia.agents.docker",
         "gaia.agents.jira",
     ],
     package_data={
@@ -63,6 +65,11 @@ setup(
         ],
         "blender": [
             "bpy",
+        ],
+        "mcp": [
+            "mcp>=1.1.0",
+            "starlette",
+            "uvicorn",
         ],
         "dev": [
             "pytest",

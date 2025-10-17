@@ -91,8 +91,13 @@ gaia mcp stop
 1. **GAIA Installation**: Follow the [Development Guide](./dev.md) to install GAIA
 2. **Lemonade Server**: Ensure the LLM backend is running:
    ```bash
+   # Default context size (4096) - sufficient for chat, LLM, and Jira
    lemonade-server serve
+   
+   # Extended context size (8192) - required for Docker agent
+   lemonade-server serve --ctx-size 8192
    ```
+3. **Docker (for Docker agent)**: Install Docker Engine or Desktop from [docker.com](https://www.docker.com/)
 
 ### Configuration (Optional)
 
@@ -133,6 +138,8 @@ gaia mcp test --query "Hello GAIA!"
 | `/jira` | POST | Jira operations | See examples below |
 | `/` | POST | JSON-RPC 2.0 endpoint | See examples below |
 
+**Note**: Docker uses a newer framework using FastMCP-powered server. See examples in [Docker section](#docker-operations-fastmcp-framework) below.
+
 ### Example API Calls
 
 #### Health Check
@@ -166,6 +173,28 @@ curl -X POST http://localhost:8765/llm \
 curl -X POST http://localhost:8765/jira \
   -H "Content-Type: application/json" \
   -d '{"query": "show my open issues"}'
+```
+
+#### Docker Operations
+```bash
+# Start Docker MCP server
+gaia mcp docker --port 8080
+
+# Containerize application via JSON-RPC
+curl -X POST http://localhost:8080/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "1",
+    "method": "tools/call",
+    "params": {
+      "name": "dockerize",
+      "arguments": {
+        "appPath": "/absolute/path/to/app",
+        "port": 5000
+      }
+    }
+  }'
 ```
 
 #### JSON-RPC Protocol
@@ -271,6 +300,15 @@ The MCP server exposes the following GAIA agents as tools:
 | `gaia.jira` | Natural language Jira operations | `{"query": "show my issues"}` |
 | `gaia.blender.create` | 3D content creation | `{"command": "create_cube", "parameters": {}}` |
 
+**Docker Tool** (FastMCP framework on port 8080):
+| Tool | Description | Example Arguments |
+|------|-------------|-------------------|
+| `dockerize` | Containerize application (analyze → create Dockerfile → build → run) | `{"appPath": "/absolute/path/to/app", "port": 5000}` |
+
+To use the Docker tool, start the Docker MCP server: `gaia mcp docker --port 8080`
+
+**Note**: The Docker agent is GAIA's first to use the new FastMCP framework. See [Docker Agent Documentation](./docker.md).
+
 
 
 
@@ -332,13 +370,16 @@ python tests/mcp/test_mcp_http_validation.py
 # Jira-specific MCP tests
 python tests/mcp/test_mcp_jira.py
 
+# Docker-specific MCP tests
+python tests/mcp/test_mcp_docker.py
+
 # Integration tests
 python tests/mcp/test_mcp_integration.py
 ```
 
 The tests validate:
 - Health checks and tool listing
-- Direct endpoints (/chat, /jira, /llm)
+- Direct endpoints (/chat, /jira, /docker, /llm)
 - JSON-RPC protocol compliance
 - Error handling and CORS headers
 
@@ -366,6 +407,7 @@ GAIA provides applications that connect to the MCP server. For using existing ap
 
 - [n8n Integration Guide](./n8n.md) - Detailed workflow automation examples
 - [Jira Agent Documentation](./jira.md) - Natural language Jira operations
+- [Docker Agent Documentation](./docker.md) - Natural language Docker containerization
 - [GAIA CLI Guide](./cli.md) - Command line interface reference
 - [Development Guide](./dev.md) - Setup and contribution guidelines
 

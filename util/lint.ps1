@@ -14,7 +14,12 @@ param(
 )
 
 # Set console to UTF-8 for Unicode support
-$OutputEncoding = [console]::InputEncoding = [console]::OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::InputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+$env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUTF8 = "1"
+chcp 65001 | Out-Null  # Set console code page to UTF-8
 
 # Configuration
 $PYTHON_PATH = "python"
@@ -53,9 +58,9 @@ function Invoke-Black {
     Write-Host "----------------------------------------"
 
     if ($Fix) {
-        $blackOutput = & $PYTHON_PATH -m black $INSTALLER_DIR $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1
+        $blackOutput = & $PYTHON_PATH -m black $INSTALLER_DIR $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1 | Out-String -Width 4096
     } else {
-        $blackOutput = & $PYTHON_PATH -m black --check --diff $INSTALLER_DIR $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1
+        $blackOutput = & $PYTHON_PATH -m black --check --diff $INSTALLER_DIR $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1 | Out-String -Width 4096
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -82,9 +87,9 @@ function Invoke-Isort {
     Write-Host "----------------------------------------"
 
     if ($Fix) {
-        $isortOutput = & $PYTHON_PATH -m isort $INSTALLER_DIR $SRC_DIR $TEST_DIR 2>&1
+        $isortOutput = & $PYTHON_PATH -m isort $INSTALLER_DIR $SRC_DIR $TEST_DIR 2>&1 | Out-String -Width 4096
     } else {
-        $isortOutput = & $PYTHON_PATH -m isort --check-only --diff $INSTALLER_DIR $SRC_DIR $TEST_DIR 2>&1
+        $isortOutput = & $PYTHON_PATH -m isort --check-only --diff $INSTALLER_DIR $SRC_DIR $TEST_DIR 2>&1 | Out-String -Width 4096
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -110,7 +115,7 @@ function Invoke-Pylint {
     Write-Host "`n[3/7] Running Pylint (errors only)..." -ForegroundColor Cyan
     Write-Host "----------------------------------------"
 
-    $pylintOutput = & $PYTHON_PATH -m $PYLINT_PATH $SRC_DIR --rcfile $PYLINT_CONFIG --disable $DISABLED_CHECKS 2>&1
+    $pylintOutput = & $PYTHON_PATH -m $PYLINT_PATH $SRC_DIR --rcfile $PYLINT_CONFIG --disable $DISABLED_CHECKS 2>&1 | Out-String -Width 4096
 
     if ($LASTEXITCODE -ne 0) {
         # Count error lines (lines starting with file path and containing error indicators)
@@ -133,7 +138,7 @@ function Invoke-Flake8 {
     Write-Host "`n[4/7] Running Flake8..." -ForegroundColor Cyan
     Write-Host "----------------------------------------"
 
-    $flake8Output = & $PYTHON_PATH -m flake8 $INSTALLER_DIR $SRC_DIR $TEST_DIR --exclude=$EXCLUDE_DIRS --count --statistics --max-line-length=88 --extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722 2>&1
+    $flake8Output = & $PYTHON_PATH -m flake8 $INSTALLER_DIR $SRC_DIR $TEST_DIR --exclude=$EXCLUDE_DIRS --count --statistics --max-line-length=88 --extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722 2>&1 | Out-String -Width 4096
 
     if ($LASTEXITCODE -ne 0) {
         # Count actual violation lines (format: filepath:line:col: error_code message)
@@ -159,7 +164,7 @@ function Invoke-MyPy {
     Write-Host "`n[5/7] Running MyPy type checking (warning only)..." -ForegroundColor Cyan
     Write-Host "----------------------------------------"
 
-    $mypyOutput = & $PYTHON_PATH -m mypy $SRC_DIR --ignore-missing-imports 2>&1
+    $mypyOutput = & $PYTHON_PATH -m mypy $SRC_DIR --ignore-missing-imports 2>&1 | Out-String -Width 4096
 
     if ($LASTEXITCODE -ne 0) {
         # Count error lines (format: filepath:line: error: message)
@@ -187,7 +192,7 @@ function Invoke-Bandit {
     Write-Host "`n[6/7] Running security check with Bandit (warning only)..." -ForegroundColor Cyan
     Write-Host "----------------------------------------"
 
-    $banditOutput = & $PYTHON_PATH -m bandit -r $SRC_DIR -ll --exclude $EXCLUDE_DIRS 2>&1
+    $banditOutput = & $PYTHON_PATH -m bandit -r $SRC_DIR -ll --exclude $EXCLUDE_DIRS 2>&1 | Out-String -Width 4096
 
     if ($LASTEXITCODE -ne 0) {
         # Count issue lines (look for >> Issue: patterns)
@@ -226,7 +231,7 @@ function Invoke-ImportTests {
     $failed = $false
     $script:ImportsIssues = 0
     foreach ($import in $imports) {
-        & $PYTHON_PATH -c "import $($import.Module); print('OK: $($import.Desc) imports')"
+        & $PYTHON_PATH -c "import $($import.Module); print('OK: $($import.Desc) imports')" 2>&1 | Out-String -Width 4096
         if ($LASTEXITCODE -ne 0) {
             Write-Host "[!] Failed to import $($import.Module)" -ForegroundColor Red
             $failed = $true
@@ -289,21 +294,21 @@ $pyFiles = @(Get-ChildItem -Path $SRC_DIR,$TEST_DIR,$INSTALLER_DIR -Recurse -Fil
 $totalPyFiles = $pyFiles.Count
 $totalLines = 0
 foreach ($file in $pyFiles) {
-    $totalLines += (Get-Content $file.FullName -ErrorAction SilentlyContinue).Count
+    $totalLines += (Get-Content $file.FullName -Encoding UTF8 -ErrorAction SilentlyContinue).Count
 }
 
 # Print summary table
 Write-Host "`n"
-Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║                   LINT SUMMARY REPORT                      ║" -ForegroundColor Cyan
-Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "================================================================" -ForegroundColor Cyan
+Write-Host "                    LINT SUMMARY REPORT                        " -ForegroundColor Cyan
+Write-Host "================================================================" -ForegroundColor Cyan
 
 # Print statistics
 Write-Host ""
-Write-Host "📊 Project Statistics:" -ForegroundColor White
-Write-Host "   • Python Files: $totalPyFiles" -ForegroundColor Gray
-Write-Host "   • Lines of Code: $($totalLines.ToString('N0'))" -ForegroundColor Gray
-Write-Host "   • Directories: src/gaia, tests, installer" -ForegroundColor Gray
+Write-Host "[STATS] Project Statistics:" -ForegroundColor White
+Write-Host "   - Python Files: $totalPyFiles" -ForegroundColor Gray
+Write-Host "   - Lines of Code: $($totalLines.ToString('N0'))" -ForegroundColor Gray
+Write-Host "   - Directories: src/gaia, tests, installer" -ForegroundColor Gray
 
 # Build results table
 $results = @()
@@ -314,7 +319,7 @@ $warnCount = 0
 # Track which checks were run
 if ($RunBlack -or $All) {
     $isPassed = $script:BlackPassed
-    $status = if ($isPassed) { "✓ PASS" } else { "✗ FAIL" }
+    $status = if ($isPassed) { "[OK] PASS" } else { "[X] FAIL" }
     $color = if ($isPassed) { "Green" } else { "Red" }
     $results += @{Check="Code Formatting (Black)"; Status=$status; Color=$color; Type=if($isPassed){"pass"}else{"fail"}; Issues=$script:BlackIssues}
     if ($isPassed) { $passCount++ } else { $failCount++ }
@@ -322,7 +327,7 @@ if ($RunBlack -or $All) {
 
 if ($RunIsort -or $All) {
     $isPassed = $script:IsortPassed
-    $status = if ($isPassed) { "✓ PASS" } else { "✗ FAIL" }
+    $status = if ($isPassed) { "[OK] PASS" } else { "[X] FAIL" }
     $color = if ($isPassed) { "Green" } else { "Red" }
     $results += @{Check="Import Sorting (isort)"; Status=$status; Color=$color; Type=if($isPassed){"pass"}else{"fail"}; Issues=$script:IsortIssues}
     if ($isPassed) { $passCount++ } else { $failCount++ }
@@ -330,7 +335,7 @@ if ($RunIsort -or $All) {
 
 if ($RunPylint -or $All) {
     $isPassed = $script:PylintPassed
-    $status = if ($isPassed) { "✓ PASS" } else { "✗ FAIL" }
+    $status = if ($isPassed) { "[OK] PASS" } else { "[X] FAIL" }
     $color = if ($isPassed) { "Green" } else { "Red" }
     $results += @{Check="Critical Errors (Pylint)"; Status=$status; Color=$color; Type=if($isPassed){"pass"}else{"fail"}; Issues=$script:PylintIssues}
     if ($isPassed) { $passCount++ } else { $failCount++ }
@@ -338,7 +343,7 @@ if ($RunPylint -or $All) {
 
 if ($RunFlake8 -or $All) {
     $isPassed = $script:Flake8Passed
-    $status = if ($isPassed) { "✓ PASS" } else { "✗ FAIL" }
+    $status = if ($isPassed) { "[OK] PASS" } else { "[X] FAIL" }
     $color = if ($isPassed) { "Green" } else { "Red" }
     $results += @{Check="Style Compliance (Flake8)"; Status=$status; Color=$color; Type=if($isPassed){"pass"}else{"fail"}; Issues=$script:Flake8Issues}
     if ($isPassed) { $passCount++ } else { $failCount++ }
@@ -346,7 +351,7 @@ if ($RunFlake8 -or $All) {
 
 if ($RunMyPy -or $All) {
     $isPassed = $script:MyPyPassed
-    $status = if (-not $isPassed) { "⚠ WARN" } else { "✓ PASS" }
+    $status = if (-not $isPassed) { "[!] WARN" } else { "[OK] PASS" }
     $color = if (-not $isPassed) { "Yellow" } else { "Green" }
     $results += @{Check="Type Checking (MyPy)"; Status=$status; Color=$color; Type=if($isPassed){"pass"}else{"warn"}; Issues=$script:MyPyIssues}
     if ($isPassed) { $passCount++ } else { $warnCount++ }
@@ -354,7 +359,7 @@ if ($RunMyPy -or $All) {
 
 if ($RunImportTests -or $All) {
     $isPassed = $script:ImportsPassed
-    $status = if ($isPassed) { "✓ PASS" } else { "✗ FAIL" }
+    $status = if ($isPassed) { "[OK] PASS" } else { "[X] FAIL" }
     $color = if ($isPassed) { "Green" } else { "Red" }
     $results += @{Check="Import Validation"; Status=$status; Color=$color; Type=if($isPassed){"pass"}else{"fail"}; Issues=$script:ImportsIssues}
     if ($isPassed) { $passCount++ } else { $failCount++ }
@@ -362,7 +367,7 @@ if ($RunImportTests -or $All) {
 
 if ($RunBandit -or $All) {
     $isPassed = $script:BanditPassed
-    $status = if (-not $isPassed) { "⚠ WARN" } else { "✓ PASS" }
+    $status = if (-not $isPassed) { "[!] WARN" } else { "[OK] PASS" }
     $color = if (-not $isPassed) { "Yellow" } else { "Green" }
     $results += @{Check="Security Check (Bandit)"; Status=$status; Color=$color; Type=if($isPassed){"pass"}else{"warn"}; Issues=$script:BanditIssues}
     if ($isPassed) { $passCount++ } else { $warnCount++ }
@@ -370,11 +375,11 @@ if ($RunBandit -or $All) {
 
 # Print table
 Write-Host ""
-Write-Host "🔍 Quality Check Results:" -ForegroundColor White
+Write-Host "[RESULTS] Quality Check Results:" -ForegroundColor White
 Write-Host ""
-Write-Host "┌────────────────────────────────┬────────────┬───────────┐" -ForegroundColor Cyan
-Write-Host "│ Check                          │ Status     │ Issues    │" -ForegroundColor Cyan
-Write-Host "├────────────────────────────────┼────────────┼───────────┤" -ForegroundColor Cyan
+Write-Host "+--------------------------------+------------+-----------+" -ForegroundColor Cyan
+Write-Host "| Check                          | Status     | Issues    |" -ForegroundColor Cyan
+Write-Host "+--------------------------------+------------+-----------+" -ForegroundColor Cyan
 
 foreach ($result in $results) {
     $checkPadded = $result.Check.PadRight(30)
@@ -397,55 +402,55 @@ foreach ($result in $results) {
         $issueColor = "Gray"
     }
 
-    Write-Host "│ $checkPadded │ " -ForegroundColor Cyan -NoNewline
+    Write-Host "| $checkPadded | " -ForegroundColor Cyan -NoNewline
     Write-Host $statusPadded -ForegroundColor $result.Color -NoNewline
-    Write-Host " │ " -ForegroundColor Cyan -NoNewline
+    Write-Host " | " -ForegroundColor Cyan -NoNewline
     Write-Host $issueCount -ForegroundColor $issueColor -NoNewline
-    Write-Host " │" -ForegroundColor Cyan
+    Write-Host " |" -ForegroundColor Cyan
 }
 
-Write-Host "└────────────────────────────────┴────────────┴───────────┘" -ForegroundColor Cyan
+Write-Host "+--------------------------------+------------+-----------+" -ForegroundColor Cyan
 
 # Print detailed statistics
 $totalChecks = $results.Count
 Write-Host ""
-Write-Host "📈 Summary Statistics:" -ForegroundColor White
-Write-Host "   • Total Checks Run: $totalChecks" -ForegroundColor Gray
-Write-Host "   • Passed: " -NoNewline -ForegroundColor Gray
+Write-Host "[SUMMARY] Statistics:" -ForegroundColor White
+Write-Host "   - Total Checks Run: $totalChecks" -ForegroundColor Gray
+Write-Host "   - Passed: " -NoNewline -ForegroundColor Gray
 Write-Host $passCount -ForegroundColor Green -NoNewline
 Write-Host " ($([math]::Round($passCount/$totalChecks*100,1))%)" -ForegroundColor Gray
-Write-Host "   • Failed: " -NoNewline -ForegroundColor Gray
+Write-Host "   - Failed: " -NoNewline -ForegroundColor Gray
 Write-Host $failCount -ForegroundColor Red -NoNewline
 Write-Host " ($([math]::Round($failCount/$totalChecks*100,1))%)" -ForegroundColor Gray
-Write-Host "   • Warnings: " -NoNewline -ForegroundColor Gray
+Write-Host "   - Warnings: " -NoNewline -ForegroundColor Gray
 Write-Host $warnCount -ForegroundColor Yellow -NoNewline
 Write-Host " ($([math]::Round($warnCount/$totalChecks*100,1))%)" -ForegroundColor Gray
 
 # Print final verdict
 Write-Host ""
-Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "============================================================" -ForegroundColor Cyan
 if ($ErrorCount -eq 0) {
-    Write-Host "✓ ALL QUALITY CHECKS PASSED!" -ForegroundColor Green
+    Write-Host "[SUCCESS] ALL QUALITY CHECKS PASSED!" -ForegroundColor Green
     if ($WarningCount -gt 0) {
-        Write-Host "⚠ $WarningCount warning(s) found (non-blocking)" -ForegroundColor Yellow
+        Write-Host "[WARNING] $WarningCount warning(s) found (non-blocking)" -ForegroundColor Yellow
     }
-    Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "============================================================" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "🎉 Your code meets quality standards!" -ForegroundColor Green
-    Write-Host "✅ Ready for PR submission" -ForegroundColor Green
+    Write-Host "[OK] Your code meets quality standards!" -ForegroundColor Green
+    Write-Host "[OK] Ready for PR submission" -ForegroundColor Green
     exit 0
 } else {
-    Write-Host "✗ QUALITY CHECKS FAILED" -ForegroundColor Red
-    Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "[FAILED] QUALITY CHECKS FAILED" -ForegroundColor Red
+    Write-Host "============================================================" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "❌ Issues Found:" -ForegroundColor Red
-    Write-Host "   • $ErrorCount critical error(s) - must fix before PR" -ForegroundColor Red
+    Write-Host "[ERROR] Issues Found:" -ForegroundColor Red
+    Write-Host "   - $ErrorCount critical error(s) - must fix before PR" -ForegroundColor Red
     if ($WarningCount -gt 0) {
-        Write-Host "   • $WarningCount warning(s) - non-blocking" -ForegroundColor Yellow
+        Write-Host "   - $WarningCount warning(s) - non-blocking" -ForegroundColor Yellow
     }
     Write-Host ""
-    Write-Host "💡 Review the error messages above and fix the issues." -ForegroundColor Yellow
-    Write-Host "💡 Use -Fix flag to auto-fix formatting issues:" -ForegroundColor Yellow
+    Write-Host "[TIP] Review the error messages above and fix the issues." -ForegroundColor Yellow
+    Write-Host "[TIP] Use -Fix flag to auto-fix formatting issues:" -ForegroundColor Yellow
     Write-Host "   powershell util\lint.ps1 -RunBlack -Fix" -ForegroundColor Gray
     Write-Host "   powershell util\lint.ps1 -RunIsort -Fix" -ForegroundColor Gray
     exit 1
