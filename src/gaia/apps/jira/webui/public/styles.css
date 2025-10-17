@@ -769,3 +769,7 @@ body {
     color: var(--text-secondary);
     transition: opacity 0.3s ease;
 }
+
+.theme-icon.active {
+    color: var(--primary-color);
+}

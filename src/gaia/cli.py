@@ -701,6 +701,38 @@ def main():
         help="Enable debug logging",
     )
 
+    # Add Docker app command
+    docker_parser = subparsers.add_parser(
+        "docker",
+        help="Natural language interface for Docker containerization",
+        parents=[parent_parser],
+    )
+    docker_parser.add_argument(
+        "command",
+        help="Natural language command to execute (e.g., 'Create a Dockerfile for my Flask app')",
+    )
+    docker_parser.add_argument(
+        "-d",
+        "--directory",
+        default=".",
+        help="Directory to analyze/containerize (default: current directory)",
+    )
+    docker_parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose output",
+    )
+    docker_parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging",
+    )
+    docker_parser.add_argument(
+        "--model",
+        help="LLM model to use (default: Qwen3-Coder-30B-A3B-Instruct-GGUF)",
+    )
+
     subparsers.add_parser(
         "stats",
         help="Show Gaia statistics from the most recent run.",
@@ -1429,6 +1461,20 @@ Examples:
     )
     mcp_agent_parser.add_argument(
         "--context", help="Optional additional context about the request"
+    )
+
+    # MCP Docker command (per-agent MCP server)
+    mcp_docker_parser = mcp_subparsers.add_parser(
+        "docker", help="Start Docker MCP server (per-agent architecture)"
+    )
+    mcp_docker_parser.add_argument(
+        "--host", default="localhost", help="Host to bind to (default: localhost)"
+    )
+    mcp_docker_parser.add_argument(
+        "--port", type=int, default=8080, help="Port to listen on (default: 8080)"
+    )
+    mcp_docker_parser.add_argument(
+        "--verbose", action="store_true", help="Enable verbose logging"
     )
 
     args = parser.parse_args()
@@ -2994,6 +3040,11 @@ Let me know your answer!
         handle_jira_command(args)
         return
 
+    # Handle Docker command
+    if args.action == "docker":
+        handle_docker_command(args)
+        return
+
     # Handle visualize command
     if args.action == "visualize":
         handle_visualize_command(args)
@@ -3241,6 +3292,45 @@ def handle_jira_command(args):
         sys.exit(1)
     except Exception as e:
         log.error(f"Error running Jira app: {e}")
+        print(f"❌ Error: {e}")
+        sys.exit(1)
+
+
+def handle_docker_command(args):
+    """
+    Handle the Docker app command.
+
+    Args:
+        args: Parsed command line arguments for the docker command
+    """
+    log = get_logger(__name__)
+
+    try:
+        # Import and use DockerApp directly
+        from gaia.apps.docker.app import main as docker_main
+
+        # Pass the arguments directly to the Docker app
+        # The app expects certain arguments, so we need to ensure they're set
+        if not hasattr(args, "verbose"):
+            args.verbose = False
+        if not hasattr(args, "debug"):
+            args.debug = False
+        if not hasattr(args, "model"):
+            args.model = None
+        if not hasattr(args, "directory"):
+            args.directory = "."
+
+        # Run the Docker app's main function
+        result = asyncio.run(docker_main(args))
+        sys.exit(result)
+
+    except ImportError as e:
+        log.error(f"Failed to import Docker app: {e}")
+        print("❌ Error: Docker app components are not available")
+        print("Make sure GAIA is installed properly: pip install -e .")
+        sys.exit(1)
+    except Exception as e:
+        log.error(f"Error running Docker app: {e}")
         print(f"❌ Error: {e}")
         sys.exit(1)
 
@@ -3526,6 +3616,8 @@ def handle_mcp_command(args):
         handle_mcp_test(args)
     elif args.mcp_action == "agent":
         handle_mcp_agent(args)
+    elif args.mcp_action == "docker":
+        handle_mcp_docker(args)
     else:
         log.error(f"Unknown MCP action: {args.mcp_action}")
         print(f"❌ Unknown MCP action: {args.mcp_action}")
@@ -4048,6 +4140,40 @@ def handle_mcp_agent(args):
     except Exception as e:
         log.error(f"Error running MCP agent test: {e}")
         print(f"❌ Error running MCP agent test: {e}")
+
+
+def handle_mcp_docker(args):
+    """Start the Docker MCP server (per-agent architecture)."""
+    log = get_logger(__name__)
+
+    try:
+        from gaia.mcp.servers.docker_mcp import start_docker_mcp
+
+        print("=" * 60)
+        print("🐳 GAIA Docker MCP Server")
+        print("=" * 60)
+        print(f"Starting on {args.host}:{args.port}")
+        if args.verbose:
+            print("🔍 Verbose mode: ENABLED")
+        print("\nPress Ctrl+C to stop")
+        print("=" * 60)
+
+        # Start the Docker MCP server
+        start_docker_mcp(
+            port=args.port,
+            host=args.host,
+            verbose=args.verbose,
+        )
+
+    except KeyboardInterrupt:
+        print("\n✅ Docker MCP server stopped")
+    except ImportError as e:
+        log.error(f"Failed to import Docker MCP server: {e}")
+        print("❌ Error: Could not load Docker MCP server")
+        print(f"   {e}")
+    except Exception as e:
+        log.error(f"Error starting Docker MCP server: {e}")
+        print(f"❌ Error starting Docker MCP server: {e}")
 
 
 if __name__ == "__main__":
