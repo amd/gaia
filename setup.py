@@ -1,8 +1,9 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-from setuptools import setup
 import re
+
+from setuptools import setup
 
 with open("src/gaia/version.py", encoding="utf-8") as fp:
     version_content = fp.read()
@@ -41,7 +42,7 @@ setup(
     package_data={
         "gaia.eval": [
             "webapp/*.json",
-            "webapp/*.js", 
+            "webapp/*.js",
             "webapp/*.md",
             "webapp/public/*.html",
             "webapp/public/*.css",
@@ -90,14 +91,14 @@ setup(
             "responses",
             "requests",
         ],
-        "eval" : [
+        "eval": [
             "anthropic",
             "bs4",
             "scikit-learn>=1.5.0",
             "numpy>=2.0,<2.3.0",
             "pypdf",
         ],
-        "talk":[
+        "talk": [
             "pyaudio",
             "openai-whisper",
             "numpy==1.26.4",
@@ -107,7 +108,7 @@ setup(
         ],
         "youtube": [
             "llama-index-readers-youtube-transcript",
-        ]
+        ],
     },
     classifiers=[],
     entry_points={

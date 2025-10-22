@@ -2,9 +2,9 @@
   "description": "Basic transcript summarization configuration",
   "experiments": [
     {
-      "name": "Qwen3-8B-GGUF-Basic-Summary",
+      "name": "Qwen3-1.7B-GGUF-Basic-Summary",
       "llm_type": "lemonade",
-      "model": "Qwen3-8B-GGUF",
+      "model": "Qwen3-1.7B-GGUF",
       "experiment_type": "summarization",
       "system_prompt": "You are a professional meeting analyst. Provide clear, concise summaries based on the transcript content. Do NOT include reasoning or explanations - only provide the requested summary.",
       "max_tokens": 1024,
@@ -15,17 +15,19 @@
       }
     },
     {
-      "name": "GPT-OSS-20B-GGUF",
+      "name": "Qwen3-0.6B-GGUF-Basic-Summary",
       "llm_type": "lemonade",
-      "model": "gpt-oss-20b-GGUF",
+      "model": "Qwen3-0.6B-GGUF",
       "experiment_type": "summarization",
       "system_prompt": "You are a professional meeting analyst. Provide clear, concise summaries based on the transcript content. Do NOT include reasoning or explanations - only provide the requested summary.",
       "max_tokens": 1024,
       "temperature": 0.3,
       "minions": 0,
       "parameters": {
-        "stop": ["<|end|>"]
+        "stop": ["<|im_end|>"]
       }
     }
-  ]
+  ],
+  "use_case": "summarization",
+  "styles": ["executive", "action_items"]
 }
