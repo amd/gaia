@@ -1827,11 +1827,24 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
             # Calculate total report generation time
             report_generation_time = time.time() - report_start_time
 
+            # Load experiment results to extract tested model info
+            with open(results_path, "r", encoding="utf-8") as f:
+                experiment_results = json.load(f)
+
+            # Extract tested model info from experiment results
+            experiment_metadata = experiment_results.get("metadata", {})
+            tested_model = experiment_metadata.get("model", "unknown")
+            tested_model_type = experiment_metadata.get("llm_type", "unknown")
+            inference_type = experiment_metadata.get("inference_type", "unknown")
+
             # Create evaluation data without depending on threshold_metrics
             evaluation_data = {
                 "metadata": {
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "model": self.claude.model,
+                    "evaluator_model": self.claude.model,  # Model doing the evaluation
+                    "tested_model": tested_model,  # The model being evaluated
+                    "tested_model_type": tested_model_type,  # Provider (lemonade, anthropic, etc.)
+                    "tested_model_inference": inference_type,  # local or cloud
                     "original_results_file": str(results_path),
                     "groundtruth_file": (
                         str(groundtruth_path) if groundtruth_path else None
@@ -1974,17 +1987,25 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                     evaluation_data = json.load(f)
 
                 # For consolidated report, only include summary statistics
+                metadata = evaluation_data.get("metadata", {})
                 eval_info = {
                     "experiment_name": eval_path.stem.replace(".eval", ""),
                     "file_path": str(eval_path.relative_to(output_base_path)),
-                    "timestamp": evaluation_data.get("metadata", {}).get(
-                        "timestamp", ""
-                    ),
-                    "model": evaluation_data.get("metadata", {}).get("model", ""),
+                    "timestamp": metadata.get("timestamp", ""),
+                    "evaluator_model": metadata.get(
+                        "evaluator_model", ""
+                    ),  # Model doing the evaluation
+                    "tested_model": metadata.get(
+                        "tested_model", "unknown"
+                    ),  # Model being tested
+                    "tested_model_type": metadata.get(
+                        "tested_model_type", "unknown"
+                    ),  # Provider
+                    "tested_model_inference": metadata.get(
+                        "tested_model_inference", "unknown"
+                    ),  # Local/cloud
                     "overall_rating": evaluation_data.get("overall_rating", {}),
-                    "original_results_file": evaluation_data.get("metadata", {}).get(
-                        "original_results_file", ""
-                    ),
+                    "original_results_file": metadata.get("original_results_file", ""),
                     "usage": evaluation_data.get("total_usage", {}),
                     "cost": evaluation_data.get(
                         "total_cost", {}
@@ -2700,7 +2721,7 @@ Performance ranking: {ranking_text}
         return report
 
     def generate_summary_report(
-        self, eval_dir: str, output_path: str = "LLM_RAG_Evaluation_Report.md"
+        self, eval_dir: str, output_path: str = "LLM_Evaluation_Report.md"
     ) -> Dict:
         """
         Generate a comprehensive summary report from multiple evaluation files.

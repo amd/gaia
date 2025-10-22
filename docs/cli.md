@@ -367,13 +367,13 @@ gaia eval -f ./results/experiment.json
 gaia report -d ./eval_results
 
 # Default behavior: automatically skip existing evaluations 
-gaia eval -d ./experiments -o ./evaluation
+gaia eval -d ./output/experiments -o ./output/evaluations
 
 # Force regeneration of ALL evaluations (overrides skip behavior)
-gaia eval -d ./experiments -o ./evaluation --force
+gaia eval -d ./output/experiments -o ./output/evaluations --force
 
 # Update consolidated report incrementally
-gaia eval -d ./experiments -o ./evaluation --incremental-update
+gaia eval -d ./output/experiments -o ./output/evaluations --incremental-update
 
 # Launch interactive visualizer for results comparison
 gaia visualize
@@ -389,8 +389,8 @@ gaia visualize [OPTIONS]
 
 **Available options:**
 - `--port`: Port to run the visualizer server on (default: 3000)
-- `--experiments-dir`: Directory containing experiment JSON files (default: ./experiments)
-- `--evaluations-dir`: Directory containing evaluation JSON files (default: ./evaluation)
+- `--experiments-dir`: Directory containing experiment JSON files (default: ./output/experiments)
+- `--evaluations-dir`: Directory containing evaluation JSON files (default: ./output/evaluations)
 - `--workspace`: Base workspace directory (default: current directory)
 - `--no-browser`: Don't automatically open browser after starting server
 - `--host`: Host address for the visualizer server (default: localhost)
@@ -407,7 +407,7 @@ gaia visualize --experiments-dir ./my_experiments --evaluations-dir ./my_evaluat
 gaia visualize --port 8080 --no-browser
 
 # Launch with specific workspace directory
-gaia visualize --workspace ./evaluation_workspace
+gaia visualize --workspace ./output/evaluations_workspace
 ```
 
 **Features:**
@@ -422,9 +422,9 @@ gaia visualize --workspace ./evaluation_workspace
 **Workflow Integration:**
 ```bash
 # Complete evaluation workflow with visualization
-gaia batch-experiment -c config.json -i ./data -o ./experiments
-gaia eval -d ./experiments -o ./evaluation
-gaia visualize --experiments-dir ./experiments --evaluations-dir ./evaluation
+gaia batch-experiment -c config.json -i ./data -o ./output/experiments
+gaia eval -d ./output/experiments -o ./output/evaluations
+gaia visualize --experiments-dir ./output/experiments --evaluations-dir ./output/evaluations
 ```
 
 ## Test Commands

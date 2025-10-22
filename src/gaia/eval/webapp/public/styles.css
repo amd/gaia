@@ -3508,3 +3508,154 @@ select:focus {
     color: #dc3545;
     font-weight: 600;
 }
+/* Path display styling */
+.path-display {
+    display: block;
+    font-size: 0.75em;
+    color: #666;
+    margin-top: 2px;
+    margin-bottom: 8px;
+    font-family: monospace;
+    word-break: break-all;
+}
+
+/* Grade calculation details */
+.grade-calculation-details {
+    margin-top: 16px;
+    padding: 12px;
+    background-color: #f8f9fa;
+    border-left: 3px solid #007bff;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+
+.grade-calculation-details h6 {
+    margin: 0 0 8px 0;
+    color: #495057;
+    font-size: 0.95em;
+}
+
+.grade-calc-item {
+    padding: 6px 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.grade-calc-item code {
+    background-color: #e9ecef;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9em;
+    color: #212529;
+}
+
+.grade-calc-item strong {
+    color: #212529;
+}
+
+/* Improved grade calculation details */
+.formula-explanation {
+    background-color: #fff;
+    padding: 12px;
+    border-radius: 4px;
+    margin-bottom: 12px;
+    border: 1px solid #dee2e6;
+}
+
+.formula-explanation code {
+    display: block;
+    background-color: #e9ecef;
+    padding: 8px 12px;
+    border-radius: 3px;
+    font-family: 'Courier New', monospace;
+    font-size: 1em;
+    color: #212529;
+    margin-bottom: 8px;
+}
+
+.formula-legend {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 0.9em;
+}
+
+.formula-legend span {
+    color: #495057;
+}
+
+.formula-note {
+    font-size: 0.85em;
+    color: #6c757d;
+    font-style: italic;
+    margin-top: 8px;
+}
+
+.model-calc-header {
+    font-size: 1em;
+    margin-bottom: 6px;
+    color: #212529;
+}
+
+.calc-step {
+    margin-left: 12px;
+    margin-bottom: 4px;
+    font-size: 0.9em;
+}
+
+.step-label {
+    display: inline-block;
+    min-width: 120px;
+    color: #6c757d;
+    font-size: 0.9em;
+}
+
+.calc-step code {
+    background-color: #e9ecef;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.95em;
+    color: #212529;
+    margin: 0 4px;
+}
+
+/* Collapsible grade calculation */
+.grade-calc-header {
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    user-select: none;
+}
+
+.grade-calc-header:hover {
+    opacity: 0.8;
+}
+
+.grade-calc-header h6 {
+    margin: 0;
+    display: inline-block;
+}
+
+.toggle-icon {
+    font-size: 0.8em;
+    transition: transform 0.2s ease;
+    color: #007bff;
+}
+
+.grade-calculation-details.expanded .toggle-icon {
+    transform: rotate(90deg);
+}
+
+.grade-calc-content {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+}
+
+.grade-calculation-details.expanded .grade-calc-content {
+    max-height: 1000px;
+}

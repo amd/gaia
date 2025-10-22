@@ -12,19 +12,25 @@ class EvaluationVisualizer {
     // Helper method to identify main evaluation entries (skip individual meeting files)
     isMainEvaluationEntry(evalData) {
         const name = evalData.experiment_name || evalData.file_path || '';
-        // Skip entries that are individual meeting files
-        const meetingPatterns = [
-            'all_hands_meeting_', 'standup_meeting_', 'budget_planning_meeting_',
-            'client_call_meeting_', 'design_review_meeting_', 'performance_review_meeting_',
-            'planning_meeting_', 'product_roadmap_meeting_', 'transcript_metadata'
-        ];
         
-        // Check if file_path indicates it's in a subdirectory (meetings/ or misc/)
-        if (evalData.file_path && evalData.file_path.includes('/')) {
+        // Skip entries that are individual meeting/email files (have test data prefix)
+        // Pattern: "testdata_name.Model-Config.experiment" where testdata_name contains _meeting or _email
+        const parts = name.split('.');
+        if (parts.length > 1) {
+            const prefix = parts[0];
+            // If prefix contains meeting/email patterns, it's an individual file
+            if (prefix.includes('_meeting') || prefix.includes('_email')) {
+                return false;
+            }
+        }
+        
+        // Check if file_path indicates it's in a subdirectory (meetings/ or emails/)
+        // Handle both forward slashes (Unix) and backslashes (Windows)
+        if (evalData.file_path && (evalData.file_path.includes('/') || evalData.file_path.includes('\\'))) {
             return false; // It's an individual file in a subdirectory
         }
         
-        return !meetingPatterns.some(pattern => name.includes(pattern));
+        return true;
     }
 
     initializeEventListeners() {
@@ -128,6 +134,14 @@ class EvaluationVisualizer {
             });
         }
 
+        // Display paths
+        if (data.paths) {
+            document.getElementById('testDataPath').textContent = data.paths.testData || '';
+            document.getElementById('groundtruthPath').textContent = data.paths.groundtruth || '';
+            document.getElementById('experimentsPath').textContent = data.paths.experiments || '';
+            document.getElementById('evaluationsPath').textContent = data.paths.evaluations || '';
+        }
+
         // Populate test data
         if (!data.testData || data.testData.directories.length === 0) {
             testDataSelect.innerHTML = '<option disabled>No test data found</option>';
@@ -138,7 +152,9 @@ class EvaluationVisualizer {
                     const option = document.createElement('option');
                     const fullPath = `${dir.name}/${file}`;
                     option.value = fullPath;
-                    option.textContent = `${dir.name}/${file.replace('.txt', '')}`;
+                    // Remove 'test_data' prefix if present (when files are at root)
+                    const displayName = dir.name === 'test_data' ? file.replace('.txt', '') : `${dir.name}/${file.replace('.txt', '')}`;
+                    option.textContent = displayName;
                     option.title = fullPath; // Add tooltip showing full path
                     testDataSelect.appendChild(option);
                 });
@@ -408,10 +424,12 @@ class EvaluationVisualizer {
             const reportId = `testdata-${type}-${filename.replace('.txt', '')}`;
             this.loadedReports.set(reportId, {
                 testData: {
-                    content: contentData,
+                    content: contentData.content,  // Extract just the content string
                     metadata: metadataData,
                     type: type,
-                    filename: filename
+                    filename: filename,
+                    isPdf: contentData.isPdf,  // Pass through PDF flag
+                    message: contentData.message  // Pass through any message
                 },
                 filename: fileSpec,
                 type: 'testdata'
@@ -1222,7 +1240,7 @@ class EvaluationVisualizer {
             <div class="experiment-details">
                 <h4>Experiment Details</h4>
                 <div class="detail-grid">
-                    <div><strong>Model:</strong> ${metadata.model || 'N/A'}</div>
+                    <div><strong>Tested Model:</strong> ${metadata.tested_model || metadata.model || 'N/A'}</div>
                     <div><strong>Inference Type:</strong> ${isLocal ?
                         '<span style="color: #28a745;">🖥️ Local (Free)</span>' :
                         '<span style="color: #007bff;">☁️ Cloud (Paid)</span>'}</div>
@@ -1492,8 +1510,8 @@ class EvaluationVisualizer {
                         <div class="metric-label">Generation Cost</div>
                     </div>
                     <div class="metric-card">
-                        <div class="metric-value">${metadata.model || 'N/A'}</div>
-                        <div class="metric-label">Model</div>
+                        <div class="metric-value">${metadata.tested_model || metadata.model || 'N/A'}</div>
+                        <div class="metric-label">Tested Model</div>
                     </div>
                 </div>
             `;
@@ -1572,7 +1590,8 @@ class EvaluationVisualizer {
                         <div class="detail-grid">
                             <div><strong>Generated:</strong> ${metadata.timestamp}</div>
                             <div><strong>Source File:</strong> ${metadata.source_file}</div>
-                            <div><strong>Model:</strong> ${metadata.model}</div>
+                            <div><strong>Tested Model:</strong> ${metadata.tested_model || metadata.model || 'N/A'}</div>
+                            <div><strong>Evaluator:</strong> ${metadata.evaluator_model || 'N/A'}</div>
                             <div><strong>Use Case:</strong> ${metadata.use_case}</div>
                             <div><strong>Input Tokens:</strong> ${metadata.usage?.input_tokens || 'N/A'}</div>
                             <div><strong>Output Tokens:</strong> ${metadata.usage?.output_tokens || 'N/A'}</div>
@@ -1744,7 +1763,13 @@ class EvaluationVisualizer {
         const evaluations = data.evaluations || [];
         const fullPath = filename || 'consolidated_evaluations_report.json';
 
-
+        // Calculate unique models count from metadata.evaluation_files
+        // Filter out files in subdirectories (those with / or \ in path)
+        const evaluationFiles = metadata.evaluation_files || [];
+        const uniqueModelsCount = evaluationFiles.filter(file => {
+            const path = file.file_path || '';
+            return !path.includes('/') && !path.includes('\\');
+        }).length;
 
         // Group evaluations by model to combine results from different test sets
         const modelGroups = {};
@@ -1961,7 +1986,7 @@ class EvaluationVisualizer {
                 <div class="report-header">
                     <h3 title="${fullPath}">📊 Consolidated Evaluation Report</h3>
                     <div class="meta">
-                        ${consolidatedEvaluations.length} Unique Models | ${metadata.total_evaluations} Total Evaluations |
+                        ${uniqueModelsCount} Unique Models | ${metadata.total_evaluations} Total Evaluations |
                         ${metadata.timestamp || 'N/A'}
                     </div>
                     <div class="report-actions">
@@ -2013,16 +2038,29 @@ class EvaluationVisualizer {
                 fairCount += metrics.fair_count || 0;
                 poorCount += metrics.poor_count || 0;
 
-                // Extract and count unique models
-                const expName = evalData.experiment_name;
-                let modelName = expName.replace('.experiment', '');
-                uniqueModelNames.add(modelName);
+                // Use tested_model field, but fall back to experiment_name if unknown
+                let modelName = evalData.tested_model || 'unknown';
+                if (modelName === 'unknown') {
+                    // Fall back to experiment_name and clean it up
+                    modelName = evalData.experiment_name.replace('.experiment', '');
+                }
 
-                // Count cloud vs local models (for subcaption display)
-                if (expName.includes('Claude')) {
-                    cloudCount++;
-                } else {
-                    localCount++;
+                // Only count if this is a new unique model (avoid double counting)
+                if (!uniqueModelNames.has(modelName)) {
+                    uniqueModelNames.add(modelName);
+
+                    // Count cloud vs local models
+                    // Support both new format (tested_model_inference) and old format (inference from name)
+                    const isCloud = evalData.tested_model_inference === 'cloud' ||
+                                   evalData.tested_model_type === 'anthropic' ||
+                                   modelName.toLowerCase().includes('claude') ||
+                                   modelName.toLowerCase().includes('gpt-4') ||
+                                   modelName.toLowerCase().includes('gemini');
+                    if (isCloud) {
+                        cloudCount++;
+                    } else {
+                        localCount++;
+                    }
                 }
             }
 
@@ -2031,10 +2069,12 @@ class EvaluationVisualizer {
             if (expName.includes('.')) {
                 const meetingName = expName.split('.')[0];
                 // Clean up meeting type name - only count actual meetings, not metadata
-                if (meetingName.includes('_meeting_')) {
-                    // Extract base meeting type (e.g., "all_hands_meeting")
-                    const parts = meetingName.split('_meeting_');
-                    meetingTypes.add(parts[0] + '_meeting');
+                if (meetingName.includes('_meeting')) {
+                    // Extract base meeting type (e.g., "standup_meeting" from "standup_meeting.Model")
+                    const baseType = meetingName.replace(/_\d+$/, ''); // Remove numeric suffix if present
+                    if (baseType !== 'transcript_metadata') {
+                        meetingTypes.add(baseType);
+                    }
                 }
                 // Note: transcript_metadata is excluded as it's not a meeting type
             }
@@ -2067,7 +2107,7 @@ class EvaluationVisualizer {
                     </div>
                     <div class="summary-card">
                         <div class="summary-value">${(totalTokens / 1000).toFixed(1)}K</div>
-                        <div class="summary-label" data-tooltip="Total tokens processed">Tokens Used</div>
+                        <div class="summary-label" data-tooltip="Total tokens processed (input + output). Note: Input tokens represent content sent to the model; models may apply prompt caching which reduces processing time and costs for repeated content without affecting this count.">Tokens Used</div>
                         <div class="summary-subcaption">${(inputTokens/1000).toFixed(0)}K in, ${(outputTokens/1000).toFixed(0)}K out</div>
                     </div>
                 </div>
@@ -2076,6 +2116,11 @@ class EvaluationVisualizer {
     }
 
     generateComparisonTable(evaluations) {
+        // NOTE: This generates the "Model Performance Comparison" table which shows the Score.
+        // The Score here is the same as the Score shown in the "Model Performance Summary" table.
+        // For summarization: Score = quality_score = ((E×4 + G×3 + F×2 + P×1) / Total - 1) / 3 × 100
+        // For Q&A: Score = accuracy_percentage (pass rate)
+        // The Performance column shows the rating counts (E, G, F, P) used to calculate the Score.
 
         let tableRows = '';
 
@@ -2167,11 +2212,11 @@ class EvaluationVisualizer {
                     <table class="comparison-table">
                         <thead>
                             <tr>
-                                <th class="rank-header" data-tooltip="Model ranking based on Grade">Rank</th>
+                                <th class="rank-header" data-tooltip="Model ranking based on Score">Rank</th>
                                 <th class="model-header" data-tooltip="AI model name and type (LOCAL runs on your machine, CLOUD runs remotely)">Model</th>
-                                <th class="score-header" data-tooltip="Score: accuracy % for Q&A, quality % for summarization">Score</th>
+                                <th class="score-header" data-tooltip="Quality score (0-100%): Calculated from performance rating counts using formula ((E×4 + G×3 + F×2 + P×1) / Total - 1) / 3 × 100. For Q&A tasks, shows accuracy percentage instead. See Model Performance Summary table below for detailed breakdown.">Score</th>
                                 <th class="rating-header" data-tooltip="Overall rating (Excellent/Good/Fair/Poor)">Rating</th>
-                                <th class="distribution-header" data-tooltip="Performance breakdown across evaluations">Performance</th>
+                                <th class="distribution-header" data-tooltip="Performance breakdown: Excellent, Good, Fair, Poor counts used to calculate Score above">Performance</th>
                                 <th class="cost-header" data-tooltip="Inference cost (FREE for local models)">Cost</th>
                                 <th class="tokens-header" data-tooltip="Number of tokens processed (1K = 1,000 tokens)">Tokens</th>
                             </tr>
@@ -2350,9 +2395,9 @@ class EvaluationVisualizer {
                     <div class="chart-bar-container">
                         <div class="stacked-bar-wrapper" style="height: ${totalHeight}%; position: relative;">
                             <span class="bar-value-top">${formatTokens(totalTokens[i])}</span>
-                            <div class="stacked-bar input-tokens" 
+                            <div class="stacked-bar input-tokens"
                                  style="height: ${(inputHeight / totalHeight) * 100}%"
-                                 data-tooltip="Input Tokens: ${formatTokens(inputTokens[i])} (${inputPercentage}% of total)">
+                                 data-tooltip="Input Tokens: ${formatTokens(inputTokens[i])} (${inputPercentage}% of total). Note: Models may use prompt caching to reduce processing time and costs for repeated content.">
                             </div>
                             <div class="stacked-bar output-tokens" 
                                  style="height: ${(outputHeight / totalHeight) * 100}%"
@@ -2382,7 +2427,7 @@ class EvaluationVisualizer {
                 <div class="chart-container-full">
                     <h5>📈 Token Usage Comparison</h5>
                     <div class="token-legend">
-                        <span class="legend-item"><span class="legend-color input-color"></span> Input Tokens</span>
+                        <span class="legend-item"><span class="legend-color input-color"></span> <span data-tooltip="Input tokens processed. Note: Actual tokens processed may differ due to prompt caching, which can significantly reduce repeated content processing time and costs.">Input Tokens ℹ️</span></span>
                         <span class="legend-item"><span class="legend-color output-color"></span> Output Tokens</span>
                     </div>
                     <div class="bar-chart token-chart">
@@ -2422,7 +2467,7 @@ class EvaluationVisualizer {
             }
 
             // For consolidated reports, the actual evaluation data might be nested
-            let modelName = evalData.experiment_name || evalData.model || 'Unknown';
+            let modelName = evalData.tested_model || evalData.experiment_name || evalData.model || 'Unknown';
             modelName = modelName.replace('.experiment', '').replace('standup_meeting.', '');
 
             // Get shortened display name
@@ -2605,12 +2650,15 @@ These models struggle with ${aspect.tooltip.toLowerCase()}` : '';
             }
         });
 
-        // Create model-aspect matrix with clean table format
+        // Create model-aspect matrix with clean table format (Model Performance Summary table)
+        // NOTE: The Score column here is calculated the same way as in the Model Performance Comparison table above.
+        // Both tables use the same formula: Score = ((E×4 + G×3 + F×2 + P×1) / Total - 1) / 3 × 100
+        // The counts E, G, F, P shown in the Performance column of the Comparison table are used here.
         let matrixHtml = '';
         if (Object.keys(modelScores).length > 0) {
-            // Create table header with Grade column
+            // Create table header with Score column
             let headerRow = '<tr><th class="model-header">Model</th>';
-            headerRow += '<th class="grade-header">Grade</th>'; // Add Grade column
+            headerRow += '<th class="grade-header" data-tooltip="Quality score: ((E×4 + G×3 + F×2 + P×1) / Total - 1) / 3 × 100. Normalizes 1-4 scale to 0-100%. Excellent=100%, Good=67%, Fair=33%, Poor=0%">Score ℹ️</th>'; // Add Score column with tooltip
             aspects.forEach(aspect => {
                 headerRow += `<th class="aspect-header" data-tooltip="${aspect.tooltip}">${aspect.label.replace(' Quality', '').replace(' Structure', '').replace(' Information', '')}</th>`;
             });
@@ -2621,12 +2669,28 @@ These models struggle with ${aspect.tooltip.toLowerCase()}` : '';
             Object.entries(modelScores).forEach(([model, scores]) => {
                 tableRows += `<tr><td class="model-name">${model}</td>`;
 
-                // Add grade cell
-                const grade = modelGrades[model] || 0;
-                const gradeClass = grade >= 85 ? 'cell-excellent' :
-                                   grade >= 70 ? 'cell-good' :
-                                   grade >= 50 ? 'cell-fair' : 'cell-poor';
-                tableRows += `<td class="${gradeClass} grade-cell" title="Grade">${Math.round(grade)}%</td>`;
+                // Add score cell with detailed calculation
+                const score = modelGrades[model] || 0;
+                const scoreClass = score >= 85 ? 'cell-excellent' :
+                                   score >= 70 ? 'cell-good' :
+                                   score >= 50 ? 'cell-fair' : 'cell-poor';
+
+                // Find the evaluation data for this model to get rating counts
+                const evalForModel = evaluations.find(e => {
+                    const expName = e.experiment_name || '';
+                    return expName.includes(model.split(' ')[0]);
+                });
+                const metrics = evalForModel?.overall_rating?.metrics || {};
+                const exc = metrics.excellent_count || 0;
+                const good = metrics.good_count || 0;
+                const fair = metrics.fair_count || 0;
+                const poor = metrics.poor_count || 0;
+                const total = exc + good + fair + poor;
+
+                // Calculate raw score and show actual formula
+                const rawScore = total > 0 ? (exc * 4 + good * 3 + fair * 2 + poor * 1) / total : 0;
+                const tooltip = `Calculation: ((E:${exc}×4 + G:${good}×3 + F:${fair}×2 + P:${poor}×1) / ${total} - 1) / 3 × 100 = ((${rawScore.toFixed(2)} - 1) / 3) × 100 = ${Math.round(score)}%`;
+                tableRows += `<td class="${scoreClass} grade-cell" title="${tooltip}">${Math.round(score)}%</td>`;
 
                 // Add aspect rating cells
                 aspects.forEach(aspect => {
@@ -2637,6 +2701,71 @@ These models struggle with ${aspect.tooltip.toLowerCase()}` : '';
                 tableRows += '</tr>';
             });
 
+            // Build score calculation details as collapsible section
+            let scoreDetails = `
+                <div class="grade-calculation-details">
+                    <div class="grade-calc-header" onclick="this.parentElement.classList.toggle('expanded')">
+                        <h6>📐 Score Calculation Formula</h6>
+                        <span class="toggle-icon">▶</span>
+                    </div>
+                    <div class="grade-calc-content">
+                        <div class="formula-explanation">
+                            <code>Score = ((E×4 + G×3 + F×2 + P×1) / Total - 1) / 3 × 100</code>
+                            <div class="formula-legend">
+                                <span><strong>E</strong> = Excellent count</span>
+                                <span><strong>G</strong> = Good count</span>
+                                <span><strong>F</strong> = Fair count</span>
+                                <span><strong>P</strong> = Poor count</span>
+                                <span><strong>Total</strong> = E + G + F + P</span>
+                            </div>
+                            <div class="formula-note">
+                                <p><strong>Why this formula?</strong> Evaluations use a 1-4 rating scale (Poor=1, Fair=2, Good=3, Excellent=4). To convert to a 0-100% score, we calculate the average rating, subtract 1 (making it 0-3), divide by 3 (normalizing to 0-1), then multiply by 100.</p>
+                                <p><strong>Result:</strong> Excellent=100%, Good=67%, Fair=33%, Poor=0%</p>
+                                <p><strong>Note:</strong> This Score is the same as the "Score" column shown in the Model Performance Comparison table above, which is computed from the same performance rating counts (Excellent, Good, Fair, Poor).</p>
+                            </div>
+                        </div>
+            `;
+            
+            // Add calculation for each model
+            Object.entries(modelScores).forEach(([model, scores]) => {
+                const evalForModel = evaluations.find(e => {
+                    const expName = e.experiment_name || '';
+                    return expName.includes(model.split(' ')[0]);
+                });
+                const metrics = evalForModel?.overall_rating?.metrics || {};
+                const exc = metrics.excellent_count || 0;
+                const good = metrics.good_count || 0;
+                const fair = metrics.fair_count || 0;
+                const poor = metrics.poor_count || 0;
+                const total = exc + good + fair + poor;
+                const score = modelGrades[model] || 0;
+
+                if (total > 0) {
+                    const rawScore = (exc * 4 + good * 3 + fair * 2 + poor * 1) / total;
+                    const normalized = (rawScore - 1) / 3 * 100;
+                    scoreDetails += `
+                        <div class="grade-calc-item">
+                            <div class="model-calc-header"><strong>${model}</strong></div>
+                            <div class="calc-step">
+                                <span class="step-label">With actual data:</span>
+                                <code>((E:${exc}×4 + G:${good}×3 + F:${fair}×2 + P:${poor}×1) / ${total} - 1) / 3 × 100</code>
+                            </div>
+                            <div class="calc-step">
+                                <span class="step-label">Simplified:</span>
+                                <code>((${rawScore.toFixed(2)} - 1) / 3) × 100</code>
+                                = <code>${normalized.toFixed(2)}%</code>
+                                ≈ <strong>${Math.round(score)}%</strong>
+                            </div>
+                        </div>
+                    `;
+                }
+            });
+
+            scoreDetails += `
+                    </div>
+                </div>
+            `;
+
             matrixHtml = `
                 <div class="clean-matrix-container">
                     <h5>🎯 Model Performance Summary</h5>
@@ -2644,6 +2773,7 @@ These models struggle with ${aspect.tooltip.toLowerCase()}` : '';
                         <thead>${headerRow}</thead>
                         <tbody>${tableRows}</tbody>
                     </table>
+                    ${scoreDetails}
                 </div>
             `;
         }

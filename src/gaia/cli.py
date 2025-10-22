@@ -38,6 +38,13 @@ current_dir = Path(__file__).resolve().parent
 parent_dir = current_dir.parent.parent.parent
 sys.path.append(str(parent_dir))
 
+# Default directories for evaluation workflow
+DEFAULT_WORKSPACE = Path.cwd()
+DEFAULT_TEST_DATA_DIR = "output/test_data"
+DEFAULT_GROUNDTRUTH_DIR = "output/groundtruth"
+DEFAULT_EXPERIMENTS_DIR = "output/experiments"
+DEFAULT_EVALUATIONS_DIR = "output/evaluations"
+
 
 def check_lemonade_health(host="127.0.0.1", port=8000):
     """Check if Lemonade server is running and healthy using LemonadeClient."""
@@ -877,7 +884,7 @@ Examples:
     )
 
     # Input source (mutually exclusive)
-    gt_input_group = gt_parser.add_mutually_exclusive_group(required=True)
+    gt_input_group = gt_parser.add_mutually_exclusive_group(required=False)
     gt_input_group.add_argument(
         "-f", "--file", type=str, help="Path to a single document file to process"
     )
@@ -885,7 +892,8 @@ Examples:
         "-d",
         "--directory",
         type=str,
-        help="Directory containing documents to process (results will be consolidated into a single JSON file)",
+        default=f"./{DEFAULT_TEST_DATA_DIR}",
+        help=f"Directory containing documents to process (results will be consolidated into a single JSON file) (default: ./{DEFAULT_TEST_DATA_DIR})",
     )
 
     # Optional arguments for groundtruth
@@ -893,8 +901,8 @@ Examples:
         "-o",
         "--output-dir",
         type=str,
-        default="./output/groundtruth",
-        help="Output directory for generated ground truth files (default: ./output/groundtruth)",
+        default=f"./{DEFAULT_GROUNDTRUTH_DIR}",
+        help=f"Output directory for generated ground truth files (default: ./{DEFAULT_GROUNDTRUTH_DIR})",
     )
     gt_parser.add_argument(
         "-p",
@@ -908,8 +916,8 @@ Examples:
         "--use-case",
         type=str,
         choices=["rag", "summarization", "qa", "email"],
-        default="rag",
-        help="Use case for ground truth generation: 'rag' for document Q&A pairs, 'summarization' for transcript summaries, 'qa' for transcript Q&A pairs, 'email' for email processing analysis (default: rag)",
+        default="summarization",
+        help="Use case for ground truth generation: 'rag' for document Q&A pairs, 'summarization' for transcript summaries, 'qa' for transcript Q&A pairs, 'email' for email processing analysis (default: summarization)",
     )
     gt_parser.add_argument(
         "-m",
@@ -990,27 +998,27 @@ Examples:
         epilog="""
 Examples:
   # Evaluate single experiment file
-  gaia eval -f ./experiments/emails/customer_support_email.Claude-Sonnet-Basic-Summary.experiment.json
+  gaia eval -f ./output/experiments/emails/customer_support_email.Claude-Sonnet-Basic-Summary.experiment.json
 
   # Evaluate all experiment files in a directory (hierarchical structure supported)
-  gaia eval -d ./experiments -o ./evaluation
+  gaia eval -d ./output/experiments -o ./output/evaluations
 
   # Evaluate with custom output directory
-  gaia eval -f ./experiments/my_experiment.experiment.json -o ./evaluation
+  gaia eval -f ./output/experiments/my_experiment.experiment.json -o ./output/evaluations
 
   # Evaluate summarization results with separate groundtruth file
-  gaia eval -f ./experiments/meetings/design_review_meeting.Claude-Sonnet-Basic-Summary.experiment.json -g ./groundtruth/meetings/design_review_meeting.summarization.groundtruth.json
+  gaia eval -f ./output/experiments/meetings/design_review_meeting.Claude-Sonnet-Basic-Summary.experiment.json -g ./output/groundtruth/meetings/design_review_meeting.summarization.groundtruth.json
 
   # Evaluate directory with specific Claude model
-  gaia eval -d ./experiments -m claude-3-opus-20240229
+  gaia eval -d ./output/experiments -m claude-3-opus-20240229
 
   # Evaluate and display summary only (no detailed report file)
-  gaia eval -d ./experiments --summary-only
+  gaia eval -d ./output/experiments --summary-only
         """,
     )
 
     # Create mutually exclusive group for file vs directory input
-    file_group = eval_parser.add_mutually_exclusive_group(required=True)
+    file_group = eval_parser.add_mutually_exclusive_group(required=False)
     file_group.add_argument(
         "-f",
         "--results-file",
@@ -1021,14 +1029,15 @@ Examples:
         "-d",
         "--directory",
         type=str,
-        help="Path to directory containing JSON experiment files to process",
+        default=f"./{DEFAULT_EXPERIMENTS_DIR}",
+        help=f"Path to directory containing JSON experiment files to process (default: ./{DEFAULT_EXPERIMENTS_DIR})",
     )
     eval_parser.add_argument(
         "-o",
         "--output-dir",
         type=str,
-        default="./evaluation",
-        help="Output directory for evaluation report (default: ./evaluation)",
+        default=f"./{DEFAULT_EVALUATIONS_DIR}",
+        help=f"Output directory for evaluation report (default: ./{DEFAULT_EVALUATIONS_DIR})",
     )
     eval_parser.add_argument(
         "-m",
@@ -1061,7 +1070,7 @@ Examples:
     eval_parser.add_argument(
         "--regenerate-report",
         action="store_true",
-        help="Force full regeneration of consolidated report",
+        help="Regenerate consolidated report only (without re-running evaluations)",
     )
     eval_parser.add_argument(
         "--incremental-update",
@@ -1092,15 +1101,15 @@ Examples:
         "-d",
         "--eval-dir",
         type=str,
-        required=True,
-        help="Directory containing .eval.json files to analyze",
+        default=f"./{DEFAULT_EVALUATIONS_DIR}",
+        help=f"Directory containing .eval.json files to analyze (default: ./{DEFAULT_EVALUATIONS_DIR})",
     )
     report_parser.add_argument(
         "-o",
         "--output-file",
         type=str,
-        default="LLM_RAG_Evaluation_Report.md",
-        help="Output filename for the markdown report (default: LLM_RAG_Evaluation_Report.md)",
+        default="LLM_Evaluation_Report.md",
+        help="Output filename for the markdown report (default: LLM_Evaluation_Report.md)",
     )
     report_parser.add_argument(
         "--summary-only",
@@ -1120,19 +1129,23 @@ Examples:
   gaia visualize
 
   # Launch with custom data directories
-  gaia visualize --experiments-dir ./my_experiments --evaluations-dir ./my_evaluations
+  gaia visualize --experiments-dir ./output/my_experiments --evaluations-dir ./output/my_evaluations
 
   # Launch on custom port without opening browser
   gaia visualize --port 8080 --no-browser
 
   # Launch with specific workspace directory
-  gaia visualize --workspace ./evaluation_workspace
+  gaia visualize --workspace ./output/evaluations_workspace
   
   # Visualize agent output files
   gaia visualize --agent-outputs-dir ./agent_outputs
   
   # Visualize a single agent output file
   gaia visualize --agent-output-file ./agent_output_20250827_135905.json
+  
+  # Use GAIA_WORKSPACE environment variable for workspace root
+  export GAIA_WORKSPACE=./my_workspace
+  gaia visualize  # Will use ./my_workspace as base for all directories
         """,
     )
 
@@ -1145,12 +1158,12 @@ Examples:
     visualize_parser.add_argument(
         "--experiments-dir",
         type=str,
-        help="Directory containing experiment JSON files (default: ./experiments)",
+        help=f"Directory containing experiment JSON files (default: ./{DEFAULT_EXPERIMENTS_DIR})",
     )
     visualize_parser.add_argument(
         "--evaluations-dir",
         type=str,
-        help="Directory containing evaluation JSON files (default: ./evaluation)",
+        help=f"Directory containing evaluation JSON files (default: ./{DEFAULT_EVALUATIONS_DIR})",
     )
     visualize_parser.add_argument(
         "--workspace",
@@ -1171,12 +1184,12 @@ Examples:
     visualize_parser.add_argument(
         "--test-data-dir",
         type=str,
-        help="Directory containing test data files (default: ./output/test_data)",
+        help=f"Directory containing test data files (default: ./{DEFAULT_TEST_DATA_DIR})",
     )
     visualize_parser.add_argument(
         "--groundtruth-dir",
         type=str,
-        help="Directory containing groundtruth files (default: ./output/groundtruth)",
+        help=f"Directory containing groundtruth files (default: ./{DEFAULT_GROUNDTRUTH_DIR})",
     )
     visualize_parser.add_argument(
         "--agent-outputs-dir",
@@ -1224,26 +1237,26 @@ Examples:
   gaia batch-experiment --create-config-from-groundtruth ./output/groundtruth/meeting.qa.groundtruth.json
 
   # Run batch experiments on transcript directory
-  gaia batch-experiment -c experiment_config.json -i ./transcripts -o ./experiments
+  gaia batch-experiment -c experiment_config.json -i ./transcripts -o ./output/experiments
 
   # Run batch experiments on transcript directory with custom queries from groundtruth
-  gaia batch-experiment -c experiment_config.json -i ./transcripts -q ./groundtruth/meeting.qa.groundtruth.json -o ./experiments
+  gaia batch-experiment -c experiment_config.json -i ./transcripts -q ./output/groundtruth/meeting.qa.groundtruth.json -o ./output/experiments
 
   # Run batch experiments on single transcript file
-  gaia batch-experiment -c experiment_config.json -i ./meeting_transcript.txt -o ./experiments
+  gaia batch-experiment -c experiment_config.json -i ./meeting_transcript.txt -o ./output/experiments
 
   # Run batch experiments on groundtruth file
-  gaia batch-experiment -c experiment_config.json -i ./groundtruth/transcript.qa.groundtruth.json -o ./experiments
+  gaia batch-experiment -c experiment_config.json -i ./output/groundtruth/transcript.qa.groundtruth.json -o ./output/experiments
 
   # Run batch experiments on consolidated groundtruth file
-  gaia batch-experiment -c experiment_config.json -i ./groundtruth/consolidated_summarization_groundtruth.json -o ./experiments
+  gaia batch-experiment -c experiment_config.json -i ./output/groundtruth/consolidated_summarization_groundtruth.json -o ./output/experiments
 
   # Run with custom delay between requests to avoid rate limiting
-  gaia batch-experiment -c experiment_config.json -i ./transcripts -o ./experiments --delay 2.0
+  gaia batch-experiment -c experiment_config.json -i ./transcripts -o ./output/experiments --delay 2.0
 
   # Process multiple experiment results
-  gaia eval -f ./experiments/Claude-Sonnet-Standard.experiment.json
-  gaia report -d ./experiments
+  gaia eval -f ./output/experiments/Claude-Sonnet-Standard.experiment.json
+  gaia report -d ./output/experiments
         """,
     )
 
@@ -1265,8 +1278,8 @@ Examples:
         "-o",
         "--output-dir",
         type=str,
-        required=True,
-        help="Output directory for generated files",
+        default=None,  # Will be set to ./output/test_data
+        help=f"Output directory for generated files (default: ./{DEFAULT_TEST_DATA_DIR})",
     )
     generate_parser.add_argument(
         "--target-tokens",
@@ -1326,7 +1339,8 @@ Examples:
         "-i",
         "--input",
         type=str,
-        help="Path to input data: transcript file, directory of transcripts, or groundtruth JSON file",
+        default=f"./{DEFAULT_TEST_DATA_DIR}",
+        help=f"Path to input data: transcript file, directory of transcripts, or groundtruth JSON file (default: ./{DEFAULT_TEST_DATA_DIR})",
     )
     batch_exp_parser.add_argument(
         "-q",
@@ -1338,8 +1352,8 @@ Examples:
         "-o",
         "--output-dir",
         type=str,
-        default="./output/experiments",
-        help="Output directory for experiment results (default: ./output/experiments)",
+        default=f"./{DEFAULT_EXPERIMENTS_DIR}",
+        help=f"Output directory for experiment results (default: ./{DEFAULT_EXPERIMENTS_DIR})",
     )
     batch_exp_parser.add_argument(
         "--delay",
@@ -2454,7 +2468,7 @@ Let me know your answer!
                         print(
                             "Please run evaluation first or specify correct output directory."
                         )
-                        return
+                        sys.exit(1)
 
                     # Find all evaluation files
                     eval_files = list(eval_dir.rglob("*.eval.json"))
@@ -2462,7 +2476,7 @@ Let me know your answer!
                         print(
                             f"❌ No .eval.json files found in directory: {args.output_dir}"
                         )
-                        return
+                        sys.exit(1)
 
                     print(f"Found {len(eval_files)} evaluation files")
 
@@ -2482,7 +2496,7 @@ Let me know your answer!
                     print(
                         f"❌ No .experiment.json files found in directory: {args.directory}"
                     )
-                    return
+                    sys.exit(1)
 
                 # Convert to strings for compatibility
                 json_files = [str(f) for f in json_files]
@@ -2508,7 +2522,7 @@ Let me know your answer!
 
                 if not files_to_process:
                     print(
-                        "✅ All evaluations already exist. Use --regenerate-report to update consolidated report."
+                        "✅ All evaluations already exist. Use --force to re-run evaluations, or --regenerate-report to rebuild the consolidated report."
                     )
                     if args.regenerate_report or args.incremental_update:
                         # Generate report from existing evaluations
@@ -2694,7 +2708,7 @@ Let me know your answer!
                         "❌ Error: --report-only flag can only be used with directory input (-d)"
                     )
                     print("For single file evaluation, run without --report-only flag.")
-                    return
+                    sys.exit(1)
 
                 evaluation_data = evaluator.generate_enhanced_report(
                     results_path=args.results_file,
@@ -2776,6 +2790,11 @@ Let me know your answer!
 
     # Handle generate command
     if args.action == "generate":
+        # Set default output directory to test_data root if not specified
+        # The generator will create subdirectories based on content type
+        if args.output_dir is None:
+            args.output_dir = f"./{DEFAULT_TEST_DATA_DIR}"
+
         if args.meeting_transcript:
             log.info("Generating example meeting transcripts")
             try:
@@ -3353,26 +3372,33 @@ def handle_visualize_command(args):
         return
 
     # Determine workspace and data directories
-    workspace_dir = Path(args.workspace) if args.workspace else Path.cwd()
+    # Check for GAIA_WORKSPACE environment variable
+    workspace_env = os.getenv("GAIA_WORKSPACE")
+    if args.workspace:
+        workspace_dir = Path(args.workspace)
+    elif workspace_env:
+        workspace_dir = Path(workspace_env)
+    else:
+        workspace_dir = Path.cwd()
     experiments_dir = (
         Path(args.experiments_dir)
         if args.experiments_dir
-        else workspace_dir / "experiments"
+        else workspace_dir / DEFAULT_EXPERIMENTS_DIR
     )
     evaluations_dir = (
         Path(args.evaluations_dir)
         if args.evaluations_dir
-        else workspace_dir / "evaluation"
+        else workspace_dir / DEFAULT_EVALUATIONS_DIR
     )
     test_data_dir = (
         Path(args.test_data_dir)
         if args.test_data_dir
-        else workspace_dir / "output" / "test_data"
+        else workspace_dir / DEFAULT_TEST_DATA_DIR
     )
     groundtruth_dir = (
         Path(args.groundtruth_dir)
         if args.groundtruth_dir
-        else workspace_dir / "output" / "groundtruth"
+        else workspace_dir / DEFAULT_GROUNDTRUTH_DIR
     )
     agent_outputs_dir = (
         Path(args.agent_outputs_dir) if args.agent_outputs_dir else workspace_dir
@@ -3483,7 +3509,7 @@ def handle_visualize_command(args):
             url = f"http://{args.host}:{args.port}"
             try:
                 webbrowser.open(url)
-                print(f"🌐 Opened browser at {url}")
+                # Browser opened automatically
             except Exception as e:
                 print(f"⚠️  Could not open browser automatically: {e}")
                 print(f"   Please open {url} manually")

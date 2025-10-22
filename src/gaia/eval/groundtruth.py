@@ -368,6 +368,10 @@ class GroundTruthGenerator:
         # Filter out metadata files
         filtered_files = []
         for f in matching_files:
+            # Skip directories (rglob returns both files and directories)
+            if f.is_dir():
+                self.log.info(f"Skipping directory: {f.name}")
+                continue
             # Skip metadata files
             if f.name in [
                 "transcript_metadata.json",

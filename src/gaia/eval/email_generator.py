@@ -300,7 +300,10 @@ Generate only the additional email content (without repeating the existing conte
     def generate_email_set(self, output_dir, target_tokens=800, count_per_type=1):
         """Generate a set of business emails and save them to the output directory."""
         output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # Create emails subdirectory for organized output
+        emails_dir = output_dir / "emails"
+        emails_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = emails_dir  # Use emails subdirectory as base
 
         generated_files = []
         all_metadata = []

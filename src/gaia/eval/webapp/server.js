@@ -91,7 +91,13 @@ app.get('/api/files', (req, res) => {
                 type: 'experiment'
             })),
             evaluations: evaluations,
-            agentOutputs: agentOutputs
+            agentOutputs: agentOutputs,
+            paths: {
+                experiments: EXPERIMENTS_PATH,
+                evaluations: EVALUATIONS_PATH,
+                testData: TEST_DATA_PATH,
+                groundtruth: GROUNDTRUTH_PATH
+            }
         });
     } catch (error) {
         res.status(500).json({ error: 'Failed to list files', details: error.message });
@@ -207,32 +213,55 @@ app.get('/api/report/:experimentFile/:evaluationFile?', (req, res) => {
 app.get('/api/test-data', (req, res) => {
     try {
         const testData = { directories: [], files: [] };
-        
+
         if (!fs.existsSync(TEST_DATA_PATH)) {
             return res.json(testData);
         }
 
         const entries = fs.readdirSync(TEST_DATA_PATH, { withFileTypes: true });
-        
-        for (const entry of entries) {
-            if (entry.isDirectory()) {
-                const dirPath = path.join(TEST_DATA_PATH, entry.name);
-                const dirFiles = fs.readdirSync(dirPath, { withFileTypes: true });
-                
-                const dataFiles = dirFiles
-                    .filter(file => file.isFile() && (file.name.endsWith('.txt') || file.name.endsWith('.pdf')))
-                    .map(file => file.name);
-                
-                const hasMetadata = dirFiles.some(file => 
-                    file.isFile() && file.name.endsWith('_metadata.json')
-                );
 
-                testData.directories.push({
-                    name: entry.name,
-                    path: dirPath,
-                    files: dataFiles,
-                    hasMetadata: hasMetadata
-                });
+        // Check if TEST_DATA_PATH itself contains data files (user pointed to specific subdirectory)
+        const rootDataFiles = entries
+            .filter(entry => entry.isFile() && (entry.name.endsWith('.txt') || entry.name.endsWith('.pdf')))
+            .map(entry => entry.name);
+
+        if (rootDataFiles.length > 0) {
+            // User pointed directly at a data directory (e.g., test_data/meetings)
+            const hasMetadata = entries.some(entry =>
+                entry.isFile() && entry.name.endsWith('_metadata.json')
+            );
+
+            // Use the directory name from the path
+            const dirName = path.basename(TEST_DATA_PATH);
+
+            testData.directories.push({
+                name: dirName,
+                path: TEST_DATA_PATH,
+                files: rootDataFiles,
+                hasMetadata: hasMetadata
+            });
+        } else {
+            // User pointed at parent directory - scan for subdirectories
+            for (const entry of entries) {
+                if (entry.isDirectory()) {
+                    const dirPath = path.join(TEST_DATA_PATH, entry.name);
+                    const dirFiles = fs.readdirSync(dirPath, { withFileTypes: true });
+
+                    const dataFiles = dirFiles
+                        .filter(file => file.isFile() && (file.name.endsWith('.txt') || file.name.endsWith('.pdf')))
+                        .map(file => file.name);
+
+                    const hasMetadata = dirFiles.some(file =>
+                        file.isFile() && file.name.endsWith('_metadata.json')
+                    );
+
+                    testData.directories.push({
+                        name: entry.name,
+                        path: dirPath,
+                        files: dataFiles,
+                        hasMetadata: hasMetadata
+                    });
+                }
             }
         }
 
@@ -247,10 +276,17 @@ app.get('/api/test-data/:type/:filename', (req, res) => {
     try {
         const type = req.params.type;
         const filename = req.params.filename;
-        const filePath = path.join(TEST_DATA_PATH, type, filename);
-        
+        // Try subdirectory first, then root level
+        let filePath = path.join(TEST_DATA_PATH, type, filename);
+
+        // If not found in subdirectory, try root level
         if (!fs.existsSync(filePath)) {
-            return res.status(404).json({ error: 'Test data file not found' });
+            const rootPath = path.join(TEST_DATA_PATH, filename);
+            if (fs.existsSync(rootPath)) {
+                filePath = rootPath;
+            } else {
+                return res.status(404).json({ error: 'Test data file not found' });
+            }
         }
 
         // Check if file is PDF

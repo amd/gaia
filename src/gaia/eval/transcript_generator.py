@@ -292,7 +292,10 @@ Generate only the additional transcript content (without repeating the existing 
     def generate_transcript_set(self, output_dir, target_tokens=1000, count_per_type=1):
         """Generate a set of meeting transcripts and save them to the output directory."""
         output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # Create meetings subdirectory for organized output
+        meetings_dir = output_dir / "meetings"
+        meetings_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = meetings_dir  # Use meetings subdirectory as base
 
         generated_files = []
         all_metadata = []
