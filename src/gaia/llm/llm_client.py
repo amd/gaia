@@ -53,6 +53,7 @@ class LLMClient:
             claude_model: Claude model to use (e.g., "claude-sonnet-4-20250514").
 
         Note: Uses local LLM server by default unless use_claude or use_openai is True.
+              Context size is configured when starting the Lemonade server with --ctx-size parameter.
         """
         # Compute use_local: True if neither claude nor openai is selected
         use_local = not (use_claude or use_openai)
@@ -75,7 +76,7 @@ class LLMClient:
                 api_key="None",
                 timeout=httpx.Timeout(
                     connect=15.0,  # 15 seconds to establish connection
-                    read=60.0,  # 60 seconds between data chunks (for streaming)
+                    read=120.0,  # 120 seconds between data chunks (matches Lemonade DEFAULT_REQUEST_TIMEOUT)
                     write=15.0,  # 15 seconds to send request
                     pool=15.0,  # 15 seconds to acquire connection from pool
                 ),
@@ -170,7 +171,7 @@ class LLMClient:
                     )
 
                 # Use Claude client
-                logger.info("Making request to Claude API")
+                logger.debug("Making request to Claude API")
                 result = self.claude_client.get_completion(full_prompt)
 
                 # Claude returns a list of content blocks, extract text
@@ -213,7 +214,7 @@ class LLMClient:
             try:
                 # Set stream parameter in the API call
                 # Stop tokens should be provided by caller if needed
-                logger.info(
+                logger.debug(
                     f"Making LLM request to {self.base_url} with timeout settings"
                 )
                 response = self.client.completions.create(

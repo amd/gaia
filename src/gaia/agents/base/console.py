@@ -4,7 +4,8 @@
 import json
 import threading
 import time
-from typing import Any, Dict, List
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional
 
 # Import Rich library for pretty printing and syntax highlighting
 try:
@@ -22,6 +23,154 @@ except ImportError:
     print(
         "Rich library not found. Install with 'pip install rich' for syntax highlighting."
     )
+
+
+class OutputHandler(ABC):
+    """
+    Abstract base class for handling agent output.
+
+    Defines the minimal interface that agents use to report their progress.
+    Each implementation handles the output differently:
+    - AgentConsole: Rich console output for CLI
+    - SilentConsole: Suppressed output for testing
+    - SSEOutputHandler: Server-Sent Events for API streaming
+
+    This interface focuses on WHAT agents need to report, not HOW
+    each handler chooses to display it.
+    """
+
+    # === Core Progress/State Methods (Required) ===
+
+    @abstractmethod
+    def print_processing_start(self, query: str, max_steps: int):
+        """Print processing start message."""
+        ...
+
+    @abstractmethod
+    def print_step_header(self, step_num: int, step_limit: int):
+        """Print step header."""
+        ...
+
+    @abstractmethod
+    def print_state_info(self, state_message: str):
+        """Print current execution state."""
+        ...
+
+    @abstractmethod
+    def print_thought(self, thought: str):
+        """Print agent's reasoning/thought."""
+        ...
+
+    @abstractmethod
+    def print_goal(self, goal: str):
+        """Print agent's current goal."""
+        ...
+
+    @abstractmethod
+    def print_plan(self, plan: List[Any], current_step: int = None):
+        """Print agent's plan with optional current step highlight."""
+        ...
+
+    # === Tool Execution Methods (Required) ===
+
+    @abstractmethod
+    def print_tool_usage(self, tool_name: str):
+        """Print tool being called."""
+        ...
+
+    @abstractmethod
+    def print_tool_complete(self):
+        """Print tool completion."""
+        ...
+
+    @abstractmethod
+    def pretty_print_json(self, data: Dict[str, Any], title: str = None):
+        """Print JSON data (tool args/results)."""
+        ...
+
+    # === Status Messages (Required) ===
+
+    @abstractmethod
+    def print_error(self, error_message: str):
+        """Print error message."""
+        ...
+
+    @abstractmethod
+    def print_warning(self, warning_message: str):
+        """Print warning message."""
+        ...
+
+    @abstractmethod
+    def print_info(self, message: str):
+        """Print informational message."""
+        ...
+
+    # === Progress Indicators (Required) ===
+
+    @abstractmethod
+    def start_progress(self, message: str):
+        """Start progress indicator."""
+        ...
+
+    @abstractmethod
+    def stop_progress(self):
+        """Stop progress indicator."""
+        ...
+
+    # === Completion Methods (Required) ===
+
+    @abstractmethod
+    def print_final_answer(self, answer: str):
+        """Print final answer/result."""
+        ...
+
+    @abstractmethod
+    def print_repeated_tool_warning(self):
+        """Print warning about repeated tool calls (loop detection)."""
+        ...
+
+    @abstractmethod
+    def print_completion(self, steps_taken: int, steps_limit: int):
+        """Print completion summary."""
+        ...
+
+    # === Optional Methods (with default no-op implementations) ===
+
+    def print_prompt(
+        self, prompt: str, title: str = "Prompt"
+    ):  # pylint: disable=unused-argument
+        """Print prompt (for debugging). Optional - default no-op."""
+        ...
+
+    def print_response(
+        self, response: str, title: str = "Response"
+    ):  # pylint: disable=unused-argument
+        """Print response (for debugging). Optional - default no-op."""
+        ...
+
+    def print_streaming_text(
+        self, text_chunk: str, end_of_stream: bool = False
+    ):  # pylint: disable=unused-argument
+        """Print streaming text. Optional - default no-op."""
+        ...
+
+    def display_stats(self, stats: Dict[str, Any]):  # pylint: disable=unused-argument
+        """Display performance statistics. Optional - default no-op."""
+        ...
+
+    def print_header(self, text: str):  # pylint: disable=unused-argument
+        """Print header. Optional - default no-op."""
+        ...
+
+    def print_separator(self, length: int = 50):  # pylint: disable=unused-argument
+        """Print separator. Optional - default no-op."""
+        ...
+
+    def print_tool_info(
+        self, name: str, params_str: str, description: str
+    ):  # pylint: disable=unused-argument
+        """Print tool info. Optional - default no-op."""
+        ...
 
 
 class ProgressIndicator:
@@ -97,7 +246,10 @@ class ProgressIndicator:
         if RICH_AVAILABLE:
             if self.rich_spinner:
                 self.rich_spinner.text = self.message
-                self.live = Live(self.rich_spinner, refresh_per_second=10)
+                # Use transient=True to auto-clear when done
+                self.live = Live(
+                    self.rich_spinner, refresh_per_second=10, transient=True
+                )
                 self.live.start()
         else:
             self.thread = threading.Thread(target=self._animate)
@@ -119,10 +271,11 @@ class ProgressIndicator:
             print("\r" + " " * (len(self.message) + 5) + "\r", end="", flush=True)
 
 
-class AgentConsole:
+class AgentConsole(OutputHandler):
     """
     A class to handle all display-related functionality for the agent.
     Provides rich text formatting and progress indicators when available.
+    Implements OutputHandler for CLI-based output.
     """
 
     def __init__(self):
@@ -133,30 +286,78 @@ class AgentConsole:
         self.rprint = rprint
         self.Panel = Panel
         self.streaming_buffer = ""  # Buffer for accumulating streaming text
+        self.file_preview_live: Optional[Live] = None
+        self.file_preview_content = ""
+        self.file_preview_filename = ""
+        self.file_preview_max_lines = 15
+        self._paused_preview = False  # Track if preview was paused for progress
+        self._last_preview_update_time = 0  # Throttle preview updates
+        self._preview_update_interval = 0.25  # Minimum seconds between updates
+
+    # Implementation of OutputHandler abstract methods
 
     def pretty_print_json(self, data: Dict[str, Any], title: str = None) -> None:
         """
         Pretty print JSON data with syntax highlighting if Rich is available.
+        If data contains a "command" field, shows it prominently.
 
         Args:
             data: Dictionary data to print
             title: Optional title for the panel
         """
         if self.rich_available:
-            # Convert to formatted JSON string
-            json_str = json.dumps(data, indent=2)
-            # Create a syntax object with JSON highlighting
-            syntax = Syntax(json_str, "json", theme="monokai", line_numbers=False)
-            # Create a panel with a title if provided
-            if title:
-                self.console.print(Panel(syntax, title=title, border_style="blue"))
+            # Check if this is a command execution result
+            if "command" in data and "stdout" in data:
+                # Show command execution in a special format
+                command = data.get("command", "")
+                stdout = data.get("stdout", "")
+                stderr = data.get("stderr", "")
+                return_code = data.get("return_code", 0)
+
+                # Build preview text
+                preview = f"$ {command}\n\n"
+                if stdout:
+                    preview += stdout[:500]  # First 500 chars
+                    if len(stdout) > 500:
+                        preview += "\n... (output truncated)"
+                if stderr:
+                    preview += f"\n\nSTDERR:\n{stderr[:200]}"
+                if return_code != 0:
+                    preview += f"\n\n[Return code: {return_code}]"
+
+                self.console.print(
+                    Panel(
+                        preview,
+                        title=title or "Command Output",
+                        border_style="blue",
+                        expand=False,
+                    )
+                )
             else:
-                self.console.print(syntax)
+                # Regular JSON output
+                # Convert to formatted JSON string
+                json_str = json.dumps(data, indent=2)
+                # Create a syntax object with JSON highlighting
+                syntax = Syntax(json_str, "json", theme="monokai", line_numbers=False)
+                # Create a panel with a title if provided
+                if title:
+                    self.console.print(Panel(syntax, title=title, border_style="blue"))
+                else:
+                    self.console.print(syntax)
         else:
             # Fallback to standard pretty printing without highlighting
             if title:
                 print(f"\n--- {title} ---")
-            print(json.dumps(data, indent=2))
+            # Check if this is a command execution
+            if "command" in data and "stdout" in data:
+                print(f"\n$ {data.get('command', '')}")
+                stdout = data.get("stdout", "")
+                if stdout:
+                    print(stdout[:500])
+                    if len(stdout) > 500:
+                        print("... (output truncated)")
+            else:
+                print(json.dumps(data, indent=2))
 
     def print_header(self, text: str) -> None:
         """
@@ -365,9 +566,47 @@ class AgentConsole:
             message: The information message to display
         """
         if self.rich_available:
+            self.console.print()  # Add newline before
             self.console.print(Panel(message, title="ℹ️  Info", border_style="blue"))
         else:
             print(f"\nℹ️ INFO: {message}\n")
+
+    def print_success(self, message: str) -> None:
+        """
+        Print a success message.
+
+        Args:
+            message: The success message to display
+        """
+        if self.rich_available:
+            self.console.print()  # Add newline before
+            self.console.print(Panel(message, title="✅ Success", border_style="green"))
+        else:
+            print(f"\n✅ SUCCESS: {message}\n")
+
+    def print_diff(self, diff: str, filename: str) -> None:
+        """
+        Print a code diff with syntax highlighting.
+
+        Args:
+            diff: The diff content to display
+            filename: Name of the file being changed
+        """
+        if self.rich_available:
+            from rich.syntax import Syntax
+
+            self.console.print()  # Add newline before
+            diff_panel = Panel(
+                Syntax(diff, "diff", theme="monokai", line_numbers=True),
+                title=f"🔧 Changes to {filename}",
+                border_style="yellow",
+            )
+            self.console.print(diff_panel)
+        else:
+            print(f"\n🔧 DIFF for {filename}:")
+            print("=" * 50)
+            print(diff)
+            print("=" * 50 + "\n")
 
     def print_repeated_tool_warning(self) -> None:
         """Print a warning about repeated tool calls."""
@@ -511,11 +750,37 @@ class AgentConsole:
         Args:
             message: Message to display with the indicator
         """
+        # If file preview is active, pause it temporarily
+        self._paused_preview = False
+        if self.file_preview_live is not None:
+            try:
+                self.file_preview_live.stop()
+                self._paused_preview = True
+                self.file_preview_live = None
+                # Small delay to ensure clean transition
+                time.sleep(0.05)
+            except Exception:
+                pass
+
         self.progress.start(message)
 
     def stop_progress(self) -> None:
         """Stop the progress indicator."""
         self.progress.stop()
+
+        # Ensure clean line separation after progress stops
+        if self.rich_available:
+            # Longer delay to ensure the transient display is FULLY cleared
+            time.sleep(0.15)
+            # Explicitly move to a new line
+            print()  # Use print() instead of console.print() to avoid Live display conflicts
+
+        # NOTE: Do NOT create Live display here - let update_file_preview() handle it
+        # This prevents double panels from appearing when both stop_progress and update_file_preview execute
+
+        # Reset the paused flag
+        if hasattr(self, "_paused_preview"):
+            self._paused_preview = False
 
     def print_state_info(self, state_message: str):
         """
@@ -543,6 +808,7 @@ class AgentConsole:
             warning_message: Warning message to display
         """
         if self.rich_available:
+            self.console.print()  # Add newline before
             self.console.print(
                 self.Panel(
                     f"⚠️ [bold yellow] {warning_message} [/bold yellow]",
@@ -624,117 +890,293 @@ class AgentConsole:
             print(f"\n📌 {name}({params_str})")
             print(f"   {description}")
 
+    def start_file_preview(
+        self, filename: str, max_lines: int = 15, title_prefix: str = "📄"
+    ) -> None:
+        """
+        Start a live streaming file preview window.
 
-class SilentConsole:
+        Args:
+            filename: Name of the file being generated
+            max_lines: Maximum number of lines to show (default: 15)
+            title_prefix: Emoji/prefix for the title (default: 📄)
+        """
+        # CRITICAL: Stop progress indicator if running to prevent overlapping Live displays
+        if self.progress.is_running:
+            self.stop_progress()
+
+        # Stop any existing preview first to prevent stacking
+        if self.file_preview_live is not None:
+            try:
+                self.file_preview_live.stop()
+            except Exception:
+                pass  # Ignore errors if already stopped
+            finally:
+                self.file_preview_live = None
+                # Small delay to ensure display cleanup
+                time.sleep(0.1)
+                # Ensure we're on a new line after stopping the previous preview
+                if self.rich_available:
+                    self.console.print()
+
+        # Reset state for new file
+        self.file_preview_filename = filename
+        self.file_preview_content = ""
+        self.file_preview_max_lines = max_lines
+
+        if self.rich_available:
+            # DON'T start the live preview here - wait for first content
+            pass
+        else:
+            # For non-rich mode, just print a header
+            print(f"\n{title_prefix} Generating {filename}...")
+            print("=" * 80)
+
+    def update_file_preview(self, content_chunk: str) -> None:
+        """
+        Update the live file preview with new content.
+
+        Args:
+            content_chunk: New content to append to the preview
+        """
+        self.file_preview_content += content_chunk
+
+        if self.rich_available:
+            # Only process if we have a filename set (preview has been started)
+            if not self.file_preview_filename:
+                return
+
+            # Check if enough time has passed for throttling
+            current_time = time.time()
+            time_since_last_update = current_time - self._last_preview_update_time
+
+            # Start the live preview on first content if not already started
+            if self.file_preview_live is None and self.file_preview_content:
+                preview = self._generate_file_preview_panel("📄")
+                self.file_preview_live = Live(
+                    preview,
+                    console=self.console,
+                    refresh_per_second=4,
+                    transient=False,  # Keep False to prevent double rendering
+                )
+                self.file_preview_live.start()
+                self._last_preview_update_time = current_time
+            elif (
+                self.file_preview_live
+                and time_since_last_update >= self._preview_update_interval
+            ):
+                try:
+                    # Update existing live display with new content
+                    preview = self._generate_file_preview_panel("📄")
+                    # Just update, don't force refresh
+                    self.file_preview_live.update(preview)
+                    self._last_preview_update_time = current_time
+                except Exception:
+                    # If update fails, continue accumulating content
+                    # (silently ignore preview update failures)
+                    pass
+        else:
+            # For non-rich mode, print new content directly
+            print(content_chunk, end="", flush=True)
+
+    def stop_file_preview(self) -> None:
+        """Stop the live file preview and show final summary."""
+        if self.rich_available:
+            # Only stop if it was started
+            if self.file_preview_live:
+                try:
+                    self.file_preview_live.stop()
+                except Exception:
+                    pass
+                finally:
+                    self.file_preview_live = None
+
+            # Show completion message only if we generated content
+            if self.file_preview_content:
+                total_lines = len(self.file_preview_content.splitlines())
+                self.console.print(
+                    f"[green]✅ Generated {self.file_preview_filename} ({total_lines} lines)[/green]\n"
+                )
+        else:
+            print("\n" + "=" * 80)
+            total_lines = len(self.file_preview_content.splitlines())
+            print(f"✅ Generated {self.file_preview_filename} ({total_lines} lines)\n")
+
+        # Reset state - IMPORTANT: Clear filename first to prevent updates
+        self.file_preview_filename = ""
+        self.file_preview_content = ""
+
+    def _generate_file_preview_panel(self, title_prefix: str) -> Panel:
+        """
+        Generate a Rich Panel with the current file preview content.
+
+        Args:
+            title_prefix: Emoji/prefix for the title
+
+        Returns:
+            Rich Panel with syntax-highlighted content
+        """
+        lines = self.file_preview_content.splitlines()
+        total_lines = len(lines)
+
+        # Truncate extremely long lines to prevent display issues
+        max_line_length = 120
+        truncated_lines = []
+        for line in lines:
+            if len(line) > max_line_length:
+                truncated_lines.append(line[:max_line_length] + "...")
+            else:
+                truncated_lines.append(line)
+
+        # Show last N lines
+        if total_lines <= self.file_preview_max_lines:
+            preview_lines = truncated_lines
+            line_info = f"All {total_lines} lines"
+        else:
+            preview_lines = truncated_lines[-self.file_preview_max_lines :]
+            line_info = f"Last {self.file_preview_max_lines} of {total_lines} lines"
+
+        # Determine syntax highlighting
+        ext = (
+            self.file_preview_filename.split(".")[-1]
+            if "." in self.file_preview_filename
+            else "txt"
+        )
+        syntax_map = {
+            "py": "python",
+            "js": "javascript",
+            "ts": "typescript",
+            "jsx": "jsx",
+            "tsx": "tsx",
+            "json": "json",
+            "md": "markdown",
+            "yml": "yaml",
+            "yaml": "yaml",
+            "toml": "toml",
+            "ini": "ini",
+            "sh": "bash",
+            "bash": "bash",
+            "ps1": "powershell",
+            "sql": "sql",
+            "html": "html",
+            "css": "css",
+            "xml": "xml",
+            "c": "c",
+            "cpp": "cpp",
+            "java": "java",
+            "go": "go",
+            "rs": "rust",
+        }
+        syntax_lang = syntax_map.get(ext.lower(), "text")
+
+        # Create syntax-highlighted preview
+        preview_content = (
+            "\n".join(preview_lines) if preview_lines else "[dim]Generating...[/dim]"
+        )
+
+        if preview_lines:
+            # Calculate starting line number for the preview
+            if total_lines <= self.file_preview_max_lines:
+                start_line = 1
+            else:
+                start_line = total_lines - self.file_preview_max_lines + 1
+
+            syntax = Syntax(
+                preview_content,
+                syntax_lang,
+                theme="monokai",
+                line_numbers=True,
+                start_line=start_line,
+                word_wrap=False,  # Prevent line wrapping that causes display issues
+            )
+        else:
+            syntax = preview_content
+
+        return Panel(
+            syntax,
+            title=f"{title_prefix} {self.file_preview_filename} ({line_info})",
+            border_style="cyan",
+            padding=(1, 2),
+        )
+
+
+class SilentConsole(OutputHandler):
     """
     A silent console that suppresses all output for JSON-only mode.
     Provides the same interface as AgentConsole but with no-op methods.
+    Implements OutputHandler for silent/suppressed output.
     """
 
     def __init__(self):
         """Initialize the silent console."""
         self.streaming_buffer = ""  # Maintain compatibility
 
-    def pretty_print_json(self, *_args, **_kwargs) -> None:
+    # Implementation of OutputHandler abstract methods - all no-ops
+
+    def print_processing_start(self, query: str, max_steps: int):
         """Silent no-op method."""
         ...
 
-    def print_header(self, *_args, **_kwargs) -> None:
+    def print_step_header(self, step_num: int, step_limit: int):
         """Silent no-op method."""
         ...
 
-    def print_processing_start(self, *_args, **_kwargs) -> None:
+    def print_state_info(self, state_message: str):
         """Silent no-op method."""
         ...
 
-    def print_separator(self, *_args, **_kwargs) -> None:
+    def print_thought(self, thought: str):
         """Silent no-op method."""
         ...
 
-    def print_step_header(self, *_args, **_kwargs) -> None:
+    def print_goal(self, goal: str):
         """Silent no-op method."""
         ...
 
-    def print_thought(self, *_args, **_kwargs) -> None:
+    def print_plan(self, plan: List[Any], current_step: int = None):
         """Silent no-op method."""
         ...
 
-    def print_goal(self, *_args, **_kwargs) -> None:
+    def print_tool_usage(self, tool_name: str):
         """Silent no-op method."""
         ...
 
-    def print_plan(self, *_args, **_kwargs) -> None:
+    def print_tool_complete(self):
         """Silent no-op method."""
         ...
 
-    def print_plan_progress(self, *_args, **_kwargs):
+    def pretty_print_json(self, data: Dict[str, Any], title: str = None):
         """Silent no-op method."""
         ...
 
-    def print_tool_usage(self, *_args, **_kwargs) -> None:
+    def print_error(self, error_message: str):
         """Silent no-op method."""
         ...
 
-    def print_tool_complete(self) -> None:
+    def print_warning(self, warning_message: str):
         """Silent no-op method."""
         ...
 
-    def print_error(self, *_args, **_kwargs) -> None:
+    def print_info(self, message: str):
         """Silent no-op method."""
         ...
 
-    def print_info(self, *_args, **_kwargs) -> None:
+    def start_progress(self, message: str):
         """Silent no-op method."""
         ...
 
-    def print_repeated_tool_warning(self, *_args, **_kwargs) -> None:
+    def stop_progress(self):
         """Silent no-op method."""
         ...
 
-    def print_final_answer(self, *_args, **_kwargs) -> None:
+    def print_final_answer(self, answer: str):
         """Silent no-op method."""
         ...
 
-    def print_completion(self, *_args, **_kwargs) -> None:
+    def print_repeated_tool_warning(self):
         """Silent no-op method."""
         ...
 
-    def print_prompt(self, *_args, **_kwargs) -> None:
-        """Silent no-op method."""
-        ...
-
-    def display_stats(self, *_args, **_kwargs) -> None:
-        """Silent no-op method."""
-        ...
-
-    def start_progress(self, *_args, **_kwargs) -> None:
-        """Silent no-op method."""
-        ...
-
-    def stop_progress(self) -> None:
-        """Silent no-op method."""
-        ...
-
-    def print_state_info(self, *_args, **_kwargs):
-        """Silent no-op method."""
-        ...
-
-    def print_warning(self, *_args, **_kwargs):
-        """Silent no-op method."""
-        ...
-
-    def print_streaming_text(self, *_args, **_kwargs) -> None:
-        """Silent no-op method."""
-        ...
-
-    def get_streaming_buffer(self) -> str:
-        """Silent no-op method - returns empty string."""
-        return ""
-
-    def print_response(self, *_args, **_kwargs) -> None:
-        """Silent no-op method."""
-        ...
-
-    def print_tool_info(self, *_args, **_kwargs) -> None:
+    def print_completion(self, steps_taken: int, steps_limit: int):
         """Silent no-op method."""
         ...

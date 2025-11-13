@@ -57,11 +57,18 @@ jobs:
     uses: ./.github/workflows/test_mcp.yml
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
+  # Test Code Agent functionality
+  test-code-agent:
+    name: Code Agent Tests
+    needs: lint
+    uses: ./.github/workflows/test_code_agent.yml
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
   # Summary job that reports overall status
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [lint, test-windows, test-linux, test-mcp]
+    needs: [lint, test-windows, test-linux, test-mcp, test-code-agent]
     if: always()
     steps:
       - name: Check test results
@@ -71,14 +78,16 @@ jobs:
           echo "Windows Tests Status: ${{ needs.test-windows.result }}"
           echo "Linux Tests Status: ${{ needs.test-linux.result }}"
           echo "MCP Tests Status: ${{ needs.test-mcp.result }}"
+          echo "Code Agent Tests Status: ${{ needs.test-code-agent.result }}"
           echo ""
-          
+
           # Determine overall status
-          if [[ "${{ needs.lint.result }}" == "success" && "${{ needs.test-windows.result }}" == "success" && "${{ needs.test-linux.result }}" == "success" && "${{ needs.test-mcp.result }}" == "success" ]]; then
+          if [[ "${{ needs.lint.result }}" == "success" && "${{ needs.test-windows.result }}" == "success" && "${{ needs.test-linux.result }}" == "success" && "${{ needs.test-mcp.result }}" == "success" && "${{ needs.test-code-agent.result }}" == "success" ]]; then
             echo "✅ All tests passed!"
             echo "- Windows: Full CLI functionality with Lemonade integration"
             echo "- Linux: Full CLI functionality with Lemonade integration"
             echo "- MCP: HTTP-native bridge and protocol compliance"
+            echo "- Code Agent: Autonomous code generation and modification"
             echo "- Cross-platform: Code quality and compatibility"
           else
             echo "❌ Some tests failed:"
@@ -86,6 +95,7 @@ jobs:
             [[ "${{ needs.test-windows.result }}" != "success" ]] && echo "  - Windows tests failed"
             [[ "${{ needs.test-linux.result }}" != "success" ]] && echo "  - Linux tests failed"
             [[ "${{ needs.test-mcp.result }}" != "success" ]] && echo "  - MCP tests failed"
+            [[ "${{ needs.test-code-agent.result }}" != "success" ]] && echo "  - Code Agent tests failed"
             exit 1
           fi
 

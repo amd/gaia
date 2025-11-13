@@ -30,7 +30,7 @@ jobs:
       matrix: ${{ steps.discover.outputs.matrix }}
       has_apps: ${{ steps.discover.outputs.has_apps }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Discover Electron apps
         id: discover
@@ -85,10 +85,10 @@ jobs:
         app: ${{ fromJson(needs.discover-apps.outputs.matrix).app }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: 'npm'
@@ -151,7 +151,7 @@ jobs:
         if: |
           (runner.os == 'Windows' && steps.windows_artifacts.outputs.found == 'true') ||
           (runner.os == 'Linux' && steps.linux_artifacts.outputs.found == 'true')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.app.name }}-${{ steps.platform.outputs.name }}-${{ github.event.pull_request.number || github.sha }}
           path: |

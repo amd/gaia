@@ -67,6 +67,10 @@ GAIA utilizes both NPU and iGPU on Ryzen AI systems for optimal performance on 3
 
 5. For detailed information about using the Chat SDK and CLI chat features, see the [Chat SDK Documentation](./chat.md).
 
+## Dependency Management
+
+For information on managing dependencies and configuring Dependabot for automated updates, see the [Dependency Management Guide](./dependency-management.md).
+
 # Running GAIA
 
 Once the installation and environment variables are set, run the following:

@@ -45,7 +45,7 @@ jobs:
       INSTALLER_HASH: ${{ steps.calculate_hash.outputs.INSTALLER_HASH }}
       COMMIT_HASH: ${{ steps.get_commit.outputs.COMMIT_HASH }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Print Git History and Version Info
         run: |
@@ -116,7 +116,7 @@ jobs:
           Write-Host "Installer SHA256: $hash"
 
       - name: Upload Windows installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: gaia-windows-installer-${{ steps.extract_version.outputs.VERSION }}-${{ steps.get_commit.outputs.COMMIT_HASH }}
           path: installer\gaia-windows-setup.exe

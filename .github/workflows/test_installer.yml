@@ -33,7 +33,7 @@ jobs:
     needs: build-installer
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Log build information
         shell: powershell
@@ -43,7 +43,7 @@ jobs:
           Write-Host "Expected installer hash: ${{ needs.build-installer.outputs.INSTALLER_HASH }}"
 
       - name: Download GAIA Installer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: gaia-windows-installer-${{ needs.build-installer.outputs.VERSION }}-${{ needs.build-installer.outputs.COMMIT_HASH }}
           path: installer

@@ -1,0 +1,51 @@
+{
+  "name": "gaia-vscode",
+  "displayName": "GAIA Language Model Provider",
+  "description": "GAIA AI Assistant integration for VSCode - exposes GAIA agents as language models",
+  "version": "0.1.0",
+  "publisher": "amd",
+  "engines": {
+    "vscode": "^1.104.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "gaia",
+        "displayName": "GAIA",
+        "managementCommand": "gaia.manage"
+      }
+    ],
+    "commands": [
+      {
+        "command": "gaia.manage",
+        "title": "GAIA: Manage API Server"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.104.0",
+    "@vscode/vsce": "^3.2.1",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {},
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/amd/gaia"
+  }
+}

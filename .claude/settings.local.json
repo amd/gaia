@@ -1,6 +1,10 @@
 {
   "permissions": {
     "allow": [
+      "Bash(./util/lint.ps1:*)",
+      "Bash(./util/lint.sh:*)",
+      "Bash(gaia:*)",
+      "Bash(dir:*)",
       "Bash(gh issue list:*)",
       "Bash(gh issue view:*)",
       "Bash(gh pr list:*)",
@@ -8,7 +12,6 @@
       "Bash(gh release list:*)",
       "Bash(gh run list:*)",
       "Bash(gh run view:*)",
-      "Bash(gh workflow:*)",
       "Bash(gh pr view:*)",
       "Bash(git log:*)",
       "Bash(git ls-tree:*)",
@@ -30,8 +33,22 @@
       "mcp__memory__search_nodes",
       "mcp__sequential-thinking__sequentialthinking",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:lemonade-server.ai)"
     ],
     "deny": []
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -ExecutionPolicy Bypass -File \"$CLAUDE_PROJECT_DIR/util/lint.ps1\""
+          }
+        ]
+      }
+    ]
   }
 }

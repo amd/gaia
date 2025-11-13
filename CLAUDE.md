@@ -6,6 +6,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 GAIA (Generative AI Is Awesome) is AMD's open-source framework for running generative AI applications locally on AMD hardware, with specialized optimizations for Ryzen AI processors with NPU support.
 
+
+## Development Environment
+
+### Recent Code Agent Improvements (2024-12-01)
+- **Architectural Planning**: Creates detailed PLAN.md with project structure before implementation
+- **GAIA.md Support**: Automatically reads project context from GAIA.md and includes in system prompt
+- **Project Initialization**: `gaia code /init` analyzes existing codebase to generate GAIA.md
+- **Dynamic Project Generation**: Intelligently creates folder structures based on project type (game, API, library)
+- **Enhanced File I/O**: Added markdown support and project structure creation tools
+- **Code Quality**: Fixed all pylint warnings and integrated Black formatting
+- **Generic Implementation**: Removed hardcoded examples - now generates appropriate code for ANY Python project
+
+### Code Agent Key Capabilities
+The CodeAgent provides comprehensive Python development support with over 30 specialized tools:
+
+- **Architectural Planning**: Creates PLAN.md with detailed project architecture before coding
+- **Project Context**: Reads GAIA.md for project-specific guidance (run `gaia code /init` to create)
+- **Workflow Planning**: Analyzes complex requirements and creates multi-step execution plans
+- **Code Generation**: Creates functions, classes, and tests with proper structure and documentation
+- **Project Scaffolding**: Generates complete project structures with appropriate folder hierarchy
+- **Test Generation**: Automatically generates unit tests from existing source code
+- **Quality Assurance**: Runs pylint and Black, automatically fixing issues
+- **Error Recovery**: Iteratively fixes syntax, runtime, and linting errors
+- **File Management**: All generated code is automatically saved with appropriate naming
+- **Diff Support**: Generates and applies unified diffs (Git-style)
+- **Comprehensive Tools**: 30+ tools including file operations, code analysis, project management, and error fixing
+
 ## File Headers
 
 **IMPORTANT: All new files created in this project MUST start with the following copyright header (using appropriate comment syntax for the file type):**
@@ -25,6 +52,7 @@ Comprehensive documentation is available in the `docs/` directory:
 - [`docs/cli.md`](docs/cli.md) - Command Line Interface guide and usage examples
 - [`docs/features.md`](docs/features.md) - Complete feature overview and platform support matrix
 - [`docs/chat.md`](docs/chat.md) - Interactive chat agent documentation
+- [`docs/code.md`](docs/code.md) - **Code Agent**: Autonomous Python development with architectural planning (PLAN.md), project scaffolding, GAIA.md context support, test generation, linting, and iterative error correction
 - [`docs/talk.md`](docs/talk.md) - Voice interaction and speech-to-speech features
 - [`docs/blender.md`](docs/blender.md) - Blender 3D agent for content creation
 - [`docs/jira.md`](docs/jira.md) - Jira agent for issue management with natural language interface
@@ -113,6 +141,26 @@ This ensures:
 
 ## Development Commands
 
+### Windows PowerShell Commands
+When developing on Windows, use these PowerShell equivalents:
+
+```powershell
+# Search for files
+Get-ChildItem -Path src -Recurse -Filter "*.py" | Select-String -Pattern "CodeAgent"
+
+# Find specific patterns
+Select-String -Pattern "def \w+\(" -Path src\gaia\agents\code\*.py
+
+# Run tests with verbose output
+python -m pytest tests/test_code.py -xvs
+
+# Check file encoding
+Get-Content src\gaia\agents\code\agent.py -Encoding UTF8 | Out-Null
+
+# Count lines of code
+(Get-Content src\gaia\agents\code\agent.py | Measure-Object -Line).Lines
+```
+
 ### Setup and Installation
 ```bash
 # Install in development mode with all extras
@@ -130,18 +178,27 @@ conda activate gaiaenv
 ```
 
 ### Testing
-```bash
-# Run all tests
-pytest tests/
+```powershell
+# Run all tests (Windows PowerShell)
+python -m pytest tests/
 
 # Run specific test file
-pytest tests/test_gaia.py
+python -m pytest tests/test_gaia.py
 
 # Run unit tests only
-pytest tests/unit/
+python -m pytest tests/unit/
 
 # Run with hybrid configuration
-pytest --hybrid
+python -m pytest --hybrid
+
+# Run Code Agent tests
+python -m pytest tests/test_code.py -v
+python -m pytest tests/test_code_workflow.py -v
+python -m pytest tests/test_code_workflow_enhanced.py -v
+
+# Test specific Code Agent features
+python -m pytest tests/test_code.py::TestCodeAgent::test_generate_function -xvs
+python -m pytest tests/test_code.py::TestCodeAgent::test_generate_test -xvs
 
 # Run Jira agent tests
 python tests/test_jira.py
@@ -152,30 +209,34 @@ python tests/test_jira.py --debug --show-prompts  # Full debug output
 python run_jira_tests.py  # Comprehensive Jira test suite
 
 # Run MCP tests
-pytest tests/mcp/
+python -m pytest tests/mcp/
 python tests/mcp/test_mcp_simple.py
 python tests/mcp/test_mcp_jira.py
 python tests/mcp/test_mcp_http_validation.py
 python validate_mcp.py  # Validate MCP protocol compliance
 
 # Run other integration tests
-pytest tests/test_chat_sdk.py
-pytest tests/test_eval.py
-pytest tests/test_summarizer.py
-pytest tests/test_lemonade_client.py
+python -m pytest tests/test_chat_sdk.py
+python -m pytest tests/test_eval.py
+python -m pytest tests/test_summarizer.py
+python -m pytest tests/test_lemonade_client.py
 ```
 
 ### Linting and Formatting
-```bash
+```powershell
 # Format code (Black is configured in pyproject.toml)
-black src/ tests/
+python -m black src/ tests/
 
 # Run linting via PowerShell script
-powershell util/lint.ps1
+.\util\lint.ps1
 
 # Run specific linting tools
-powershell util/lint.ps1 -RunBlack
-powershell util/lint.ps1 -RunPylint
+.\util\lint.ps1 -RunBlack
+.\util\lint.ps1 -RunPylint
+
+# For Code Agent development
+python -m pylint src/gaia/agents/code/
+python -m black src/gaia/agents/code/ --check
 ```
 
 ### Running the Application
@@ -188,6 +249,35 @@ gaia llm "What is artificial intelligence?"
 
 # Interactive chat
 gaia chat
+
+# Code development with autonomous workflow
+# IMPORTANT: Code Agent requires larger context size
+# Start Lemonade server with: lemonade-server serve --ctx-size 32768
+
+# Initialize GAIA.md for existing project
+gaia code /init                                      # Analyze codebase and create GAIA.md
+
+# Create complete applications with architectural planning
+gaia code "Create a snake arcade game"              # Creates PLAN.md, folder structure, and implementation
+gaia code "Build a REST API for user management"    # Generates API structure with FastAPI
+gaia code "Create a data processing library"        # Scaffolds library with proper structure
+
+# Code generation and analysis
+gaia code "Generate unit tests for my_module.py"    # Analyze code and create tests
+gaia code "Fix linting issues in script.py"         # Run pylint and auto-fix
+gaia code --interactive                             # Interactive coding session
+gaia code --list-tools                              # Show available code operations
+
+# Use with cloud LLM (no server setup required)
+gaia code "Create a REST API" --use-claude
+gaia code "Create a REST API" --use-chatgpt
+
+# Note: Code Agent workflow:
+# 1. Creates PLAN.md with detailed architecture
+# 2. Generates project structure (folders/files)
+# 3. Implements all components
+# 4. Runs linting and formatting
+# 5. Tests and fixes errors
 
 # Voice interaction
 gaia talk
@@ -223,6 +313,22 @@ gaia/
 │   │   ├── blender/    # Blender 3D agent
 │   │   │   ├── agent.py        # Blender agent implementation
 │   │   │   └── app.py          # Blender agent entry point
+│   │   ├── code/       # Code development agent
+│   │   │   ├── agent.py        # Autonomous coding workflow
+│   │   │   ├── file_io_tools.py # File operations and markdown support
+│   │   │   └── app.py          # CLI entry point
+│   │   │       # Key Features:
+│   │   │       # - Architectural planning with PLAN.md generation
+│   │   │       # - GAIA.md context awareness (auto-loads project context)
+│   │   │       # - Project initialization with `gaia code /init`
+│   │   │       # - Dynamic project scaffolding based on type (game/API/library)
+│   │   │       # - Complete folder structure generation
+│   │   │       # - Code generation with automatic file saving
+│   │   │       # - Automatic unit test creation from source code
+│   │   │       # - Linting with pylint and auto-fix
+│   │   │       # - Black formatting with correction
+│   │   │       # - Iterative error correction
+│   │   │       # - Markdown file support for documentation
 │   │   └── jira/       # Jira integration agent
 │   │       ├── agent.py        # Jira agent with NLP capabilities
 │   │       └── app.py          # Jira agent entry point
@@ -284,6 +390,7 @@ gaia/
 │   │   ├── jira.md             # Jira app documentation
 │   │   └── README.md           # Desktop applications overview
 │   ├── cli.md                  # CLI reference guide
+│   ├── code.md                 # Code agent guide
 │   ├── mcp.md                  # MCP server documentation
 │   ├── n8n.md                  # n8n workflow integration
 │   ├── jira.md                 # Jira agent guide
@@ -324,7 +431,20 @@ gaia/
    - Base `Agent` class (`src/gaia/agents/base/agent.py`) handles communication protocol, tool execution, and conversation management
    - State management: PLANNING → EXECUTING_PLAN → COMPLETION with error recovery
    - Tool registry system for domain-specific functionality
-   - Current agents: Llm (direct LLM queries), Blender (3D content creation), Jira (issue management with automatic configuration discovery)
+   - Current agents:
+     - **Llm**: Direct LLM queries
+     - **Code**: Autonomous Python development with comprehensive workflow:
+       - Creates multi-step plans for complex tasks
+       - Generates code from natural language descriptions
+       - Automatically writes generated code to files (functions, classes, tests)
+       - Creates unit tests with proper naming (test_[module].py)
+       - Runs pylint and automatically fixes linting errors
+       - Applies Black formatting with auto-fix capability
+       - Executes code and fixes runtime errors iteratively
+       - Supports file operations with unified diff generation
+       - Returns file paths instead of code content for better usability
+     - **Blender**: 3D content creation
+     - **Jira**: Issue management with automatic configuration discovery
    - Console-based agent interface (`src/gaia/agents/base/console.py`) for interactive sessions
 
 2. **LLM Backend Layer** (`src/gaia/llm/`): Multiple backend support
@@ -411,6 +531,17 @@ GitHub Actions workflows are configured for:
 ### Feature-Specific Documentation
 - **LLM Direct Usage**: See [`docs/features.md`](docs/features.md#llm-direct-usage) and [`docs/cli.md`](docs/cli.md#gaia-cli-llm-demo)
 - **Chat Interface**: See [`docs/chat.md`](docs/chat.md) for interactive conversation features
+- **Code Development**: Complete autonomous Python development workflow. Features include:
+  - Workflow planning from complex requirements
+  - Code generation with best practices (docstrings, type hints)
+  - **Automatic file saving**: All generated code is written to appropriately named files
+  - **Smart test generation**: Creates test_[module].py files with comprehensive test cases
+  - **Pylint integration**: Analyzes code and automatically fixes linting errors
+  - **Black formatting**: Ensures consistent code style with auto-fix
+  - **Iterative error correction**: Fixes runtime and syntax errors automatically
+  - **File operations**: Supports Git-style diffs and unified diff format
+  - **Cache management**: Uses ~/.gaia/cache for temporary files
+  - See [`docs/code.md`](docs/code.md) for full documentation
 - **Voice Interaction**: See [`docs/talk.md`](docs/talk.md) for speech-to-speech capabilities
 - **3D Content Creation**: See [`docs/blender.md`](docs/blender.md) for Blender automation
 - **Jira Integration**: Natural language interface with automatic configuration discovery, LLM-driven JQL generation, and JSON API for webapp integration. See [`docs/jira.md`](docs/jira.md)
@@ -431,3 +562,26 @@ GitHub Actions workflows are configured for:
 - **Evaluation Framework**: See [`docs/eval.md`](docs/eval.md) for creating tests and benchmarks
 - **Test Documentation**: See [`tests/TEST_JIRA_GUIDE.md`](tests/TEST_JIRA_GUIDE.md) for Jira testing guide
 - **Workshop Materials**: Available in `workshop/` directory for tutorials and examples
+
+### Code Agent Troubleshooting
+
+#### Common Issues and Fixes:
+1. **"unexpected indent" errors**: Fixed - Code indentation logic now properly handles pre-indented lines
+2. **"'CodeSymbol' object has no attribute 'params'"**: Fixed - Uses `signature` attribute instead
+3. **"gaia code" command not recognized**: Fixed - Added `set_defaults(action="code")` to CLI parser
+4. **Generated code not saved**: Fixed - All generation tools now write to files by default
+5. **Test files naming**: Fixed - Tests are now properly named with `test_` prefix
+
+#### File Output Locations:
+- Generated functions: `[function_name]_generated.py` in current directory
+- Generated classes: `[class_name]_generated.py` in current directory
+- Generated tests: `test_[module_name].py` in current directory
+- Cache files: `~/.gaia/cache/` directory
+- stop apologizing!
+
+## File Path Rules (Workaround for Claude Code v1.0.111 Bug)
+- When reading or editing a file, **ALWAYS use relative paths.**
+- Example: `./src/components/Component.tsx` ✅
+- **DO NOT use absolute paths.**
+- Example: `C:/Users/user/project/src/components/Component.tsx` ❌
+- Reason: This is a workaround for a known bug in Claude Code v1.0.111 (GitHub Issue

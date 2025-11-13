@@ -1,0 +1,98 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: Test MCPAgent and AgentMCPServer
+
+on:
+  push:
+    branches: [main, tmi/copilot-code, tmi/831-mcpagent-tests]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-mcp-agent:
+    name: Test MCPAgent (${{ matrix.os }})
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        # Skip macOS - Docker not available on macOS GitHub runners
+      fail-fast: false  # Continue testing other platforms even if one fails
+
+    runs-on: ${{ matrix.os }}
+
+    timeout-minutes: 30  # Prevent hanging tests
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Verify Docker is available
+        run: |
+          docker --version
+          docker info
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Install FastMCP for AgentMCPServer tests
+        run: |
+          pip install "fastmcp>=0.1.0"
+
+      # TODO: Start Lemonade server for integration tests
+      # For now, integration tests requiring LLM will be skipped
+      # - name: Start Lemonade server
+      #   run: |
+      #     lemonade-server serve --ctx-size 32768 &
+      #     sleep 10
+
+      - name: Run MCPAgent tests (fast tests only)
+        run: |
+          pytest tests/mcp/test_agent_mcp_server.py -v -m "not slow and not integration"
+
+      - name: Run slow tests (with Docker operations)
+        if: success() || failure()  # Run even if fast tests fail
+        run: |
+          pytest tests/mcp/test_agent_mcp_server.py -v -m "slow and not integration" --tb=short
+
+      # Integration tests require Lemonade server - skip for now
+      # - name: Run integration tests (with LLM orchestration)
+      #   if: success() || failure()
+      #   run: |
+      #     pytest tests/mcp/test_agent_mcp_server.py -v -m "integration" --tb=short
+
+      - name: Cleanup Docker resources
+        if: always()  # Always cleanup, even if tests fail
+        run: |
+          docker system prune -af --volumes || true
+        shell: bash
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: |
+            .pytest_cache/
+            **/.coverage
+          retention-days: 7
+
+  test-summary:
+    name: Test Summary
+    needs: test-mcp-agent
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Check test results
+        run: |
+          echo "MCPAgent tests completed"
+          echo "Check individual job results for details"
