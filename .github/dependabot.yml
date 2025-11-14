@@ -1,0 +1,104 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Dependabot configuration for automated dependency updates
+# This file configures Dependabot to check for updates to Python, JavaScript, and GitHub Actions dependencies
+#
+# For detailed documentation on adding/modifying entries, see: docs/dependency-management.md
+# Official Dependabot docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # Python dependencies (setup.py, requirements files)
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "python"
+    open-pull-requests-limit: 1
+    # Group all Python dependency updates together to reduce PR noise
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"
+
+  # JavaScript dependencies - main package.json (if exists)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "javascript"
+    open-pull-requests-limit: 1
+    ignore:
+      # Ignore node_modules from app builds - they have their own configs below
+      - dependency-name: "*"
+        update-types: ["version-update:semver-patch"]
+
+  # Note: Electron framework (src/gaia/electron) is scanned via the root workspace
+  # configuration above, so no separate entry is needed.
+
+  # JavaScript - Example app (monitor only, no PRs)
+  - package-ecosystem: "npm"
+    directory: "/src/gaia/apps/example/webui"
+    schedule:
+      interval: "monthly"
+    labels:
+      - "dependencies"
+      - "javascript"
+      - "example-app"
+    open-pull-requests-limit: 0
+    groups:
+      example-app-dependencies:
+        patterns:
+          - "*"
+
+  # JavaScript - Jira app (monitor only, no PRs)
+  - package-ecosystem: "npm"
+    directory: "/src/gaia/apps/jira/webui"
+    schedule:
+      interval: "monthly"
+    labels:
+      - "dependencies"
+      - "javascript"
+      - "jira-app"
+    open-pull-requests-limit: 0
+    groups:
+      jira-app-dependencies:
+        patterns:
+          - "*"
+
+  # JavaScript - Eval webapp (monitor only, no PRs)
+  - package-ecosystem: "npm"
+    directory: "/src/gaia/eval/webapp"
+    schedule:
+      interval: "monthly"
+    labels:
+      - "dependencies"
+      - "javascript"
+      - "eval-webapp"
+    open-pull-requests-limit: 0
+    groups:
+      eval-webapp-dependencies:
+        patterns:
+          - "*"
+
+  # GitHub Actions dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    open-pull-requests-limit: 1
+    groups:
+      github-actions:
+        patterns:
+          - "*"

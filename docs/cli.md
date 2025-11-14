@@ -130,6 +130,7 @@ gaia --help
 - **`prompt`**: Send a single message to an agent and get a response
 - **`chat`**: Start an interactive text chat session with message history
 - **`talk`**: Start a voice-based conversation session
+- **`code`**: Python code assistant with analysis, generation, and linting (see [Code Guide](./code.md))
 - **`blender`**: Create and modify 3D scenes using the Blender agent (see [Blender Guide](./blender.md))
 - **`mcp`**: Start and manage MCP (Model Context Protocol) bridge servers for integration with external clients and services (see [MCP Bridge Guide](./mcp.md))
 - **`stats`**: View model performance statistics from the most recent run
@@ -269,6 +270,53 @@ gaia talk [OPTIONS]
 - `--whisper-model-size`: Size of the Whisper model [tiny, base, small, medium, large] (default: base)
 
 For detailed voice interaction instructions, see the [Voice Interaction Guide](./talk.md).
+
+## Code Command
+
+For comprehensive documentation of GAIA's Code agent including Python code analysis, generation, and linting, see the **[Code Guide](./code.md)**.
+
+**Prerequisites**: The Code Agent requires a larger context size (32,768 tokens). When using the local Lemonade server, start it with:
+```bash
+lemonade-server serve --ctx-size 32768
+```
+
+The Code agent provides:
+- **Code Generation**: Create functions, classes, and unit tests from descriptions
+- **Autonomous Workflow**: Complete development lifecycle with planning, implementation, testing, and verification
+- **Automatic Test Generation**: Creates comprehensive unit tests after implementation
+- **Iterative Error Correction**: Automatically fixes linting, syntax, and runtime errors
+- **Code Analysis**: Parse Python files with AST, extract symbols, validate syntax
+- **Linting & Formatting**: Analyze with pylint, format with black, auto-fix issues
+- **File Editing**: Edit files with diffs, replace functions by name
+- **Interactive Mode**: Multiple queries in a single session
+- **Search**: Find patterns across Python files
+
+Quick examples:
+```bash
+# Complete workflow: generate, validate, lint, test
+gaia code "Create a calculator that adds two numbers with error handling"
+
+# Generate a function
+gaia code "Generate a Python function to calculate factorial"
+
+# Interactive mode
+gaia code --interactive
+
+# Analyze, lint, and fix a file
+gaia code "Analyze and fix linting issues in my_script.py"
+
+# Generate tests for existing code
+gaia code "Generate unit tests for the functions in utils.py"
+
+# List available tools
+gaia code --list-tools
+
+# Silent JSON output
+gaia code "Validate syntax of: def hello() print('hi')" --silent
+
+# Use with cloud LLM (no server setup required)
+gaia code "Create a REST API" --use-claude
+```
 
 ## Blender Command
 

@@ -310,6 +310,27 @@ The best way to contribute is by adding a new agent that covers a unique use-cas
 
 # System Requirements
 
+## Minimum Requirements:
+
+- OS: Windows, Linux
+- CPU: Any modern CPU, such as Ryzen 5700X or higher
+- RAM: 16GB
+
+## Minimally Recommended:
+
+- OS: Windows, Linux
+- CPU/GPU with NPU: AMD Ryzen AI 7 350
+- RAM: 16GB+
+
+## Ultra Performance:
+
+- OS: Windows, Linux
+- CPU/GPU with NPU: AMD Ryzen AI Max+ 395
+- or if discrete GPU: any modern GPU with at least 16GB, such as Radeon RX 9070 XT
+- RAM: 64GB+
+
+---
+
 GAIA with Ryzen AI Hybrid NPU/iGPU execution has been tested on the following system below. Any system that has the AMD Ryzen AI 9 300 series processor with NPU Driver 32.0.203.237 on Windows 11 or newer with minimum of 16GB of main memory should work. For more details on what is supported, see [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
 
 ⚠️ **NOTE**: 

@@ -138,6 +138,17 @@ cd src/gaia/apps/your-app/webui
 - **Local development:** Start MCP server with `gaia mcp start`
 - **Remote server:** Configure `.env` with remote URL (see Environment Variables section)
 
+## Step 6: Configure Dependabot
+
+If your app has dependencies (package.json), you must add it to Dependabot configuration for automated security updates.
+
+**See:** [Dependency Management Guide](../dependency-management.md#how-to-add-your-app) for:
+- Configuration template
+- Examples
+- When and how to add your app
+
+**Quick rule:** Apps in `src/gaia/apps/` with `package.json` → Add to `.github/dependabot.yml`
+
 ## Environment Variables
 
 Optional `.env` file in webui folder for configuring MCP connection and other settings.

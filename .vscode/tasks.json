@@ -39,6 +39,20 @@
             },
             "problemMatcher": [],
             "detail": "Build and run the JAX Electron application"
+        },
+        {
+            "label": "Compile GAIA Code Extension",
+            "type": "npm",
+            "script": "compile",
+            "path": "src/vscode/gaia/",
+            "group": "build",
+            "presentation": {
+                "reveal": "silent",
+                "focus": false,
+                "close": true
+            },
+            "problemMatcher": "$tsc",
+            "detail": "Compile GAIA VSCode extension"
         }
     ],
     "inputs": [
@@ -46,6 +60,12 @@
             "id": "ogaToken",
             "type": "promptString",
             "description": "Enter your GitHub token for NPU mode"
+        },
+        {
+            "id": "apiServerUrl",
+            "type": "promptString",
+            "description": "GAIA API Server URL",
+            "default": "http://localhost:8080"
         }
     ]
 }

@@ -16,20 +16,28 @@ The GAIA MCP Server provides an HTTP-native bridge that exposes GAIA's AI agents
 - Using GAIA CLI directly (`gaia jira`, `gaia llm`, etc.)
 - Building Python applications (use GAIA's Python API directly)
 - Running GAIA agents locally from the command line
+- Integrating with VSCode as a Language Model Provider (use the API Server instead - see [API documentation](./api.md))
 
-## Architecture
+## Setup
 
+### Prerequisites
+
+1. **GAIA Installation**: Follow the [Development Guide](./dev.md) to install GAIA
+2. **Lemonade Server**: Ensure the LLM backend is running:
+   ```bash
+   lemonade-server serve --ctx-size 8192
+   ```
+3. **Docker (for Docker agent)**: Install Docker Engine or Desktop from [docker.com](https://www.docker.com/)
+
+### Verify Installation
+
+```bash
+# Check server status
+gaia mcp status
+
+# Test with a simple query
+gaia mcp test --query "Hello GAIA!"
 ```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│ External Apps   │────▶│  GAIA MCP Server │────▶│  GAIA Agents    │
-│ (n8n, Zapier,   │     │   HTTP/REST      │     │ (LLM, Chat,     │
-│  Web Apps, etc) │     │   Port 8765      │     │  Jira, Blender) │
-└─────────────────┘     └──────────────────┘     └─────────────────┘
-        HTTP                    Python                  Python
-     Requests                   Bridge                  Native
-```
-
-The MCP Server acts as an HTTP bridge between external applications and GAIA's native Python agents.
 
 ## Quick Start
 
@@ -84,46 +92,19 @@ gaia mcp test --query "Hello, GAIA!"
 gaia mcp stop
 ```
 
-## Setup
+## Architecture
 
-### Prerequisites
-
-1. **GAIA Installation**: Follow the [Development Guide](./dev.md) to install GAIA
-2. **Lemonade Server**: Ensure the LLM backend is running:
-   ```bash
-   # Default context size (4096) - sufficient for chat, LLM, and Jira
-   lemonade-server serve
-   
-   # Extended context size (8192) - required for Docker agent
-   lemonade-server serve --ctx-size 8192
-   ```
-3. **Docker (for Docker agent)**: Install Docker Engine or Desktop from [docker.com](https://www.docker.com/)
-
-### Configuration (Optional)
-
-The MCP server works out of the box with default settings. For advanced configuration, you can use environment variables:
-
-```bash
-# MCP Server Configuration
-GAIA_MCP_HOST=localhost  # Host to bind to
-GAIA_MCP_PORT=8765       # Port to listen on
-
-# LLM Backend Configuration
-LEMONADE_BASE_URL=http://localhost:8000/api/v0
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│ External Apps   │────▶│  GAIA MCP Server │────▶│  GAIA Agents    │
+│ (n8n, Zapier,   │     │   HTTP/REST      │     │ (LLM, Chat,     │
+│  Web Apps, etc) │     │   Port 8765      │     │  Jira, Blender) │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+        HTTP                    Python                  Python
+     Requests                   Bridge                  Native
 ```
 
-Or modify the configuration in `src/gaia/mcp/mcp.json` for advanced settings like rate limiting.
-
-### Verify Installation
-
-```bash
-# Check server status
-gaia mcp status
-
-# Test with a simple query
-gaia mcp test --query "Hello GAIA!"
-```
-
+The MCP Server acts as an HTTP bridge between external applications and GAIA's native Python agents.
 
 ## API Endpoints
 
@@ -403,8 +384,21 @@ The tests validate:
 GAIA provides applications that connect to the MCP server. For using existing apps or building new ones, see the [Apps Documentation](./apps/).
 
 
+## VSCode Integration
+
+GAIA MCP Server can be integrated with VSCode using MCP client capabilities. This provides an alternative integration approach to the VSCode Language Model Provider extension.
+
+For complete VSCode integration documentation, see [VSCode Integration Documentation](./vscode.md#mcp-client-integration).
+
+**Quick Setup:**
+1. Start MCP server: `gaia mcp start`
+2. Configure MCP client in VSCode to connect to `http://localhost:8765`
+3. Access GAIA tools via MCP client
+
 ## See Also
 
+- [VSCode Integration Documentation](./vscode.md) - VSCode extension and MCP integration
+- [GAIA API Server Documentation](./api.md) - OpenAI-compatible API for VSCode extension
 - [n8n Integration Guide](./n8n.md) - Detailed workflow automation examples
 - [Jira Agent Documentation](./jira.md) - Natural language Jira operations
 - [Docker Agent Documentation](./docker.md) - Natural language Docker containerization

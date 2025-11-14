@@ -24,6 +24,12 @@ Welcome to the GAIA documentation! This directory contains comprehensive guides 
 - **Document Summarization**: [Features - Summarization](features.md)
 - **Workflow Integration**: [n8n Documentation](n8n.md)
 
+### 🔌 I want to use GAIA via API
+- **API Server**: [API Server Documentation](api.md)
+- **Code Agent via API**: [Code Agent - API Usage](code.md#using-code-agent-via-api-server)
+- **OpenAI Compatibility**: Works with OpenAI Python client and compatible tools
+- **VSCode Integration**: [VSCode Extension](api.md#vscode-integration)
+
 ### 🛠️ I want to develop with GAIA
 - **Development Setup**: [Developer Guide](dev.md)
 - **Building Desktop Apps**: [App Development Guide](apps/dev.md)
@@ -48,6 +54,7 @@ Welcome to the GAIA documentation! This directory contains comprehensive guides 
 - [**Development Guide**](dev.md) - Environment setup and contribution guidelines
 - [**App Development**](apps/dev.md) - Building GAIA Electron applications
 - [**Evaluation Framework**](eval.md) - Model testing and benchmarking
+- [**API Server**](api.md) - OpenAI-compatible REST API for agent integration
 - [**MCP Documentation**](mcp.md) - Model Context Protocol server and API reference
 
 ### Installation & Setup

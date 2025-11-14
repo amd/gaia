@@ -1,0 +1,128 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# This workflow tests the GAIA OpenAI-compatible API server functionality
+# Tests include: Chat completions, streaming SSE, model listing, error handling
+
+name: API Server Tests
+
+on:
+  workflow_call:
+  push:
+    branches: ["main"]
+    paths:
+      - "src/gaia/api/**"
+      - "tests/test_api*.py"
+      - "src/gaia/cli.py"
+      - ".github/workflows/test_api.yml"
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "src/gaia/api/**"
+      - "tests/test_api*.py"
+      - "src/gaia/cli.py"
+      - ".github/workflows/test_api.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-api:
+    name: API Tests
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev,api]
+          pip install pytest pytest-timeout requests
+
+      - name: Note about Lemonade
+        run: |
+          echo "ℹ️ Running API tests without Lemonade server"
+          echo "   Agent LLM queries will return connection errors but API server functionality will be tested"
+
+      - name: Start API Server
+        run: |
+          # Start API server using gaia CLI (runs on default port 8080)
+          echo "Starting GAIA API server using gaia CLI..."
+          gaia api start &
+
+          # Wait for server to start
+          echo "Waiting for API server to start..."
+          sleep 5
+
+          # Check health endpoint
+          max_attempts=10
+          attempt=0
+          server_ready=false
+
+          while [ $attempt -lt $max_attempts ]; do
+            if curl -s -f http://localhost:8080/health | grep -q "ok"; then
+              echo "✅ API server is running and healthy"
+              server_ready=true
+              break
+            fi
+            echo "Attempt $((attempt + 1))/$max_attempts - Server not ready yet..."
+            sleep 2
+            attempt=$((attempt + 1))
+          done
+
+          if [ "$server_ready" != "true" ]; then
+            echo "❌ API server failed to start"
+            echo "Checking for log files..."
+            [ -f "gaia.api.log" ] && cat gaia.api.log
+            [ -f "gaia_api.log" ] && cat gaia_api.log
+            exit 1
+          fi
+
+      - name: Run API Tests
+        env:
+          CI: true
+        run: |
+          # Run comprehensive API integration tests
+          echo "Running GAIA API integration tests..."
+          echo "  - Core API functionality (chat completions, models, health)"
+          echo "  - SSE streaming (connection mgmt, chunk format, content)"
+          echo "  - Error handling (validation, edge cases, resilience)"
+          echo ""
+
+          python -m pytest tests/test_api.py -v --tb=short
+
+          echo ""
+          echo "✅ All API tests passed"
+
+      - name: Stop API Server
+        if: always()
+        run: |
+          # Kill process on port 8080
+          echo "Stopping API server..."
+          pids=$(lsof -ti :8080 2>/dev/null || true)
+          if [ -n "$pids" ]; then
+            echo "Killing PIDs: $pids"
+            kill -9 $pids 2>/dev/null || true
+            echo "✅ API server stopped"
+          else
+            echo "ℹ️ No server found on port 8080"
+          fi
+
+      - name: Upload API Server Logs
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: api-server-logs
+          path: |
+            gaia.api.log
+            gaia_api.log

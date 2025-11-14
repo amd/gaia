@@ -20,10 +20,8 @@ IGNORE_DIRS = {
     "venv",
 }
 
-# Supported file extensions
+# Supported file extensions (excluding .md and .txt as they don't require headers)
 SUPPORTED_EXTENSIONS = {
-    ".txt",
-    ".md",
     ".py",
     ".js",
     ".ts",

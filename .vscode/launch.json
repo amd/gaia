@@ -137,6 +137,46 @@
             "stopOnEntry": false,
         },
         {
+            "name": "Code Agent Debug (CLI)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "gaia.cli",
+            "args": [
+                "code",
+                "${input:codeAgentPrompt}",
+                "--debug"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false
+        },
+        {
+            "name": "Code Agent Debug (API)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "gaia.cli",
+            "args": [
+                "code",
+                "${input:codeAgentPrompt}",
+                "--debug",
+                "--use-api"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "GAIA_API_URL": "${input:apiUrl}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false
+        },
+        {
             "name": "GAIA Pytest Debug",
             "type": "debugpy",
             "request": "launch",
@@ -161,14 +201,23 @@
             "stopOnEntry": false
         },
         {
-            "name": "JIRA Dashboard - Web",
-            "type": "node",
+            "name": "API Server Debug",
+            "type": "debugpy",
             "request": "launch",
+            "module": "gaia.cli",
+            "args": [
+                "api",
+                "start"
+            ],
             "cwd": "${workspaceFolder}",
-            "runtimeExecutable": "npm",
-            "runtimeArgs": ["run", "app:jira:run:dev"],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "GAIA_API_URL": "${input:apiServerUrl}"
+            },
             "console": "integratedTerminal",
-            "env": {}
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false,
         },
         {
             "name": "JIRA Dashboard - Electron",
@@ -181,6 +230,49 @@
             "env": {
                 "GAIA_APP_MODE": "development"
             }
+        },
+        {
+            "name": "GAIA VSCode Extension (API)",
+            "type": "extensionHost",
+            "request": "launch",
+            "args": [
+                "--extensionDevelopmentPath=${workspaceFolder}/src/vscode/gaia",
+                "--user-data-dir=${workspaceFolder}/.vscode-test-user-data"
+            ],
+            "outFiles": [
+                "${workspaceFolder}/src/vscode/gaia/out/**/*.js"
+            ],
+            "preLaunchTask": "Compile GAIA Code Extension",
+            "env": {
+                "GAIA_API_URL": "${input:apiUrl}",
+                "VSCODE_DEBUG_MODE": "true"
+            }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "apiServerUrl",
+            "type": "promptString",
+            "description": "GAIA API Server URL",
+            "default": "http://localhost:8080"
+        },
+        {
+            "id": "apiUrl",
+            "type": "promptString",
+            "description": "GAIA API Server URL",
+            "default": "http://localhost:8080"
+        },
+        {
+            "id": "mcpUrl",
+            "type": "promptString",
+            "description": "GAIA MCP Server URL",
+            "default": "http://localhost:8765"
+        },
+        {
+            "id": "codeAgentPrompt",
+            "type": "promptString",
+            "description": "Code Agent task/prompt",
+            "default": "Create a simple calculator function"
         }
     ]
 }

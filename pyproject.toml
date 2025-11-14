@@ -37,3 +37,14 @@ exclude = [
 [tool.bandit]
 exclude_dirs = [".git", "__pycache__", "venv", ".venv", ".mypy_cache", ".tox", ".eggs", "_build", "buck-out", "node_modules"]
 skips = ["B101"]  # Skip assert warnings (common in tests)
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (real Docker operations, may take > 5 seconds)",
+    "integration: marks tests as integration tests (require external services like Lemonade server)",
+]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--tb=short --strict-markers"

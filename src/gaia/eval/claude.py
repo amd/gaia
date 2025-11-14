@@ -65,7 +65,7 @@ class ClaudeClient:
         }
 
     def get_completion(self, prompt):
-        self.log.info("Getting completion from Claude")
+        self.log.debug("Getting completion from Claude")
         self.log.debug(f"Prompt token count: {self.count_tokens(prompt)}")
         try:
             message = self.client.messages.create(

@@ -1,0 +1,263 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: Test Electron Framework and Apps
+
+on:
+  workflow_call:
+  push:
+    branches: ["main"]
+    paths:
+      - 'src/gaia/electron/**'
+      - 'src/gaia/apps/**/webui/**'
+      - 'tests/electron/**'
+      - 'tests/apps/**'
+      - '.github/workflows/test_electron.yml'
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/gaia/electron/**'
+      - 'src/gaia/apps/**/webui/**'
+      - 'tests/electron/**'
+      - 'tests/apps/**'
+      - '.github/workflows/test_electron.yml'
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test-electron-framework:
+    name: Test Electron Framework
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: tests/electron/package.json
+
+      - name: Install test dependencies
+        run: |
+          cd tests/electron
+          npm ci
+
+      - name: Run Electron framework unit tests
+        run: |
+          cd tests/electron
+          npm test
+
+      - name: Upload test coverage
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: electron-framework-coverage
+          path: tests/electron/coverage/
+          retention-days: 7
+
+  test-apps-integration:
+    name: Test Apps Integration
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: tests/electron/package.json
+
+      - name: Install test dependencies
+        run: |
+          cd tests/electron
+          npm ci
+
+      - name: Run app integration tests
+        run: |
+          cd tests/electron
+          # Run structure tests only (not functional - those are separate)
+          npm test -- test_jira_app.js test_example_app.js
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: apps-integration-test-results
+          path: tests/electron/coverage/
+          retention-days: 7
+
+  test-apps-functional:
+    name: Test Apps Functionality
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    timeout-minutes: 20
+    
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Install test dependencies
+        run: |
+          cd tests/electron
+          npm ci
+
+      - name: Run functional tests (builds and installs apps)
+        run: |
+          cd tests/electron
+          # These tests actually install deps and try to build the apps
+          npm test -- test_functional.js --verbose
+        timeout-minutes: 15
+
+      - name: Upload functional test results
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: apps-functional-test-results
+          path: tests/electron/coverage/
+          retention-days: 7
+
+  test-apps-build:
+    name: Test Apps Build (${{ matrix.app.name }})
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - name: jira
+            path: src/gaia/apps/jira/webui
+          - name: example
+            path: src/gaia/apps/example/webui
+    
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ${{ matrix.app.path }}/package.json
+
+      - name: Install app dependencies
+        run: |
+          cd ${{ matrix.app.path }}
+          npm ci
+
+      - name: Check for high-severity vulnerabilities
+        run: |
+          cd ${{ matrix.app.path }}
+          # Allow command to fail but capture output
+          npm audit --json > audit-results.json || true
+          
+          # Check for high/critical vulnerabilities
+          HIGH=$(cat audit-results.json | jq -r '.metadata.vulnerabilities.high // 0')
+          CRITICAL=$(cat audit-results.json | jq -r '.metadata.vulnerabilities.critical // 0')
+          
+          echo "High severity vulnerabilities: $HIGH"
+          echo "Critical severity vulnerabilities: $CRITICAL"
+          
+          if [ "$HIGH" -gt 0 ] || [ "$CRITICAL" -gt 0 ]; then
+            echo "::warning::Found $HIGH high and $CRITICAL critical vulnerabilities in ${{ matrix.app.name }}"
+            cat audit-results.json | jq '.vulnerabilities'
+          fi
+        continue-on-error: true
+
+      - name: Verify package scripts
+        run: |
+          cd ${{ matrix.app.path }}
+          npm run --if-present lint || echo "No lint script"
+
+      - name: Test app packaging
+        run: |
+          cd ${{ matrix.app.path }}
+          # Try to package the app - this validates dependencies work together
+          npm run package || echo "::warning::Package failed for ${{ matrix.app.name }} - may be platform-specific"
+        continue-on-error: true
+
+      - name: Verify build artifacts exist
+        run: |
+          cd ${{ matrix.app.path }}
+          if [ -d "out" ]; then
+            echo "Build artifacts created successfully"
+            ls -R out/ | head -20
+          else
+            echo "::warning::No build artifacts found - packaging may have failed"
+          fi
+
+  dependency-audit:
+    name: Audit Dependencies
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    strategy:
+      matrix:
+        package:
+          - name: electron-framework
+            path: src/gaia/electron
+          - name: jira-app
+            path: src/gaia/apps/jira/webui
+          - name: example-app
+            path: src/gaia/apps/example/webui
+    
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Audit ${{ matrix.package.name }} dependencies
+        run: |
+          cd ${{ matrix.package.path }}
+          npm audit --audit-level=high || true
+          npm audit --json > audit-results.json || true
+        continue-on-error: true
+
+      - name: Upload audit results
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: audit-${{ matrix.package.name }}
+          path: ${{ matrix.package.path }}/audit-results.json
+          retention-days: 30
+
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [test-electron-framework, test-apps-integration, test-apps-functional, test-apps-build, dependency-audit]
+    
+    steps:
+      - name: Check test results
+        run: |
+          echo "Test Electron Framework: ${{ needs.test-electron-framework.result }}"
+          echo "Test Apps Integration: ${{ needs.test-apps-integration.result }}"
+          echo "Test Apps Functionality: ${{ needs.test-apps-functional.result }}"
+          echo "Test Apps Build: ${{ needs.test-apps-build.result }}"
+          echo "Dependency Audit: ${{ needs.dependency-audit.result }}"
+          
+          if [[ "${{ needs.test-electron-framework.result }}" == "failure" ]] || \
+             [[ "${{ needs.test-apps-integration.result }}" == "failure" ]] || \
+             [[ "${{ needs.test-apps-functional.result }}" == "failure" ]] || \
+             [[ "${{ needs.test-apps-build.result }}" == "failure" ]]; then
+            echo "❌ Some tests failed"
+            exit 1
+          else
+            echo "✅ All tests passed"
+          fi

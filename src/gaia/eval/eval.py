@@ -1003,11 +1003,48 @@ class Evaluator:
                                     transcript_id = source_mapping.get("transcript_id")
                                     break
 
-                            # If no match found, use first available transcript
-                            if not transcript_id and gt_summaries:
-                                transcript_id = list(gt_summaries.keys())[0]
-                                self.log.warning(
-                                    f"No exact match found for source {source_file}, using {transcript_id}"
+                            # If no match found, fail loudly - DO NOT use fallback
+                            if not transcript_id:
+                                available_sources = [
+                                    s.get("source_file", "") for s in source_files
+                                ]
+                                available_ids = (
+                                    list(gt_summaries.keys()) if gt_summaries else []
+                                )
+
+                                error_msg = (
+                                    f"\n{'='*70}\n"
+                                    f"ERROR: No matching ground truth found for experiment result\n"
+                                    f"{'='*70}\n"
+                                    f"Source file in experiment: {source_file}\n"
+                                    f"\nAvailable source files in ground truth:\n"
+                                )
+                                for idx, src in enumerate(available_sources[:10], 1):
+                                    error_msg += f"  {idx}. {src}\n"
+                                if len(available_sources) > 10:
+                                    error_msg += f"  ... and {len(available_sources) - 10} more\n"
+
+                                error_msg += f"\nAvailable transcript IDs:\n"
+                                for idx, tid in enumerate(available_ids[:10], 1):
+                                    error_msg += f"  {idx}. {tid}\n"
+                                if len(available_ids) > 10:
+                                    error_msg += (
+                                        f"  ... and {len(available_ids) - 10} more\n"
+                                    )
+
+                                error_msg += (
+                                    f"\nPossible fixes:\n"
+                                    f"  1. Ensure ground truth source_file paths match experiment paths exactly\n"
+                                    f"  2. Check if ground truth was generated from the same test data\n"
+                                    f"  3. Verify path separators (forward vs backslash) are consistent\n"
+                                    f"  4. Run fix_groundtruth_paths.py to normalize path prefixes\n"
+                                    f"{'='*70}\n"
+                                )
+
+                                self.log.error(error_msg)
+                                raise ValueError(
+                                    f"No matching ground truth found for source: {source_file}. "
+                                    f"Cannot evaluate without correct ground truth data."
                                 )
 
                             if transcript_id and transcript_id in gt_summaries:

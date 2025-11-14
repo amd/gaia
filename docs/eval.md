@@ -930,13 +930,13 @@ The webapp displays:
 2. **Via JSON Files**:
 ```bash
 # View timing in experiment files
-cat experiments/[filename].experiment.json | jq '.metadata.timing'
+cat ./output/experiments/[filename].experiment.json | jq '.metadata.timing'
 
 # View timing in evaluation files
-cat evaluation/[filename].eval.json | jq '.timing'
+cat ./output/evaluations/[filename].eval.json | jq '.timing'
 
 # Check consolidated report timing
-cat experiments/consolidated_experiments_report.json | jq '.metadata.total_execution_time_seconds'
+cat ./output/experiments/consolidated_experiments_report.json | jq '.metadata.total_execution_time_seconds'
 ```
 
 ## Examples
