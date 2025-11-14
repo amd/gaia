@@ -3,6 +3,9 @@
 
 name: Test MCPAgent and AgentMCPServer
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main, tmi/copilot-code, tmi/831-mcpagent-tests]
@@ -90,6 +93,7 @@ jobs:
     needs: test-mcp-agent
     runs-on: ubuntu-latest
     if: always()
+    permissions: {}
 
     steps:
       - name: Check test results
