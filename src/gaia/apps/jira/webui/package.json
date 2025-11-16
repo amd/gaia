@@ -90,6 +90,6 @@
     "@electron-forge/maker-squirrel": "^7.0.0",
     "@electron-forge/maker-zip": "^7.0.0",
     "@electron-forge/publisher-github": "^7.0.0",
-    "electron": "^31.0.0"
+    "electron": "^35.7.5"
   }
 }
