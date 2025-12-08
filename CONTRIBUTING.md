@@ -1,6 +1,6 @@
 # Contributing to GAIA
 
-Small change
+Small change, second change
 
 🚀 **Welcome to the GAIA Community!** 🚀
 
