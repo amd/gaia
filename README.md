@@ -20,7 +20,6 @@
 **GAIA is an open-source solution designed for the quick setup and execution of generative AI applications on local PC hardware.** It enables fast and efficient execution of LLM-based applications using a hybrid hardware approach that combines the AMD Neural Processing Unit (NPU) and Integrated Graphics Processing Unit (iGPU) in the Ryzen-AI PC. GAIA provides the following key features:
 
 **Platform Support:**
-- **Windows 11 Home/Pro**: Full GUI and CLI support with installer
 - **Linux (Ubuntu/Debian)**: Full GUI and CLI support via source installation
 
 - 🏠 **Local LLM Processing**: Easily run powerful language models directly on your device without cloud dependencies
