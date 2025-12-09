@@ -27,7 +27,6 @@
 - 🎯 **Specialized Agents**: Includes Blender agent for 3D content creation and workflow automation
 - ⚡ **Optimized Performance**: GAIA uses Lemonade Server for hardware-optimized model execution on AMD NPU and iGPU
 - 🖥️ **Easy-to-Use Interface**: Provides both a command-line interface (CLI) and a graphical user interface (GUI) option for easy interaction with models and agents
-- 🔧 **Extensible Architecture**: Easily build and integrate your own agents and use cases
 
 For more details, see our [GAIA Blog Article](https://www.amd.com/en/developer/resources/technical-articles/gaia-an-open-source-project-from-amd-for-running-local-llms-on-ryzen-ai.html) or [Frequently Asked Questions](docs/faq.md).
 For Ryzen AI LLM app development similar to GAIA, see [this developer guide](https://ryzenai.docs.amd.com/en/latest/llm/overview.html).
