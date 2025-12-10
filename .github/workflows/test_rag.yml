@@ -1,0 +1,270 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: Test RAG
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-rag-unit:
+    name: RAG Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Free disk space
+      uses: ./.github/actions/free-disk-space
+
+    - name: Setup Python environment
+      uses: ./.github/actions/setup-venv
+      with:
+        python-version: '3.12'
+        install-package: '.[dev,rag]'
+
+    - name: Install additional test dependencies
+      run: |
+        uv pip install pytest-cov --python .venv/bin/python
+
+    - name: Run RAG unit tests
+      run: |
+        echo "Running RAG unit tests..."
+        pytest tests/test_rag.py -v -s --tb=short --cov=src/gaia/rag --cov-report=term-missing
+
+    - name: Upload coverage report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: rag-unit-test-coverage
+        path: .coverage
+
+  test-rag-integration:
+    name: RAG Integration Tests
+    runs-on: [stx]
+    needs: test-rag-unit
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Setup Python environment
+      uses: ./.github/actions/setup-venv
+      with:
+        python-version: '3.12'
+        install-package: '.[dev,rag]'
+
+    - name: Install additional test dependencies
+      shell: powershell
+      run: |
+        uv pip install reportlab --python .venv\Scripts\python.exe
+
+    - name: Install Lemonade Server
+      uses: ./.github/actions/install-lemonade
+
+    - name: Start Lemonade Server and Run Tests
+      shell: powershell
+      run: |
+        # Set console to UTF-8 for Unicode support
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        [Console]::InputEncoding = [System.Text.Encoding]::UTF8
+        $OutputEncoding = [System.Text.Encoding]::UTF8
+        $env:PYTHONIOENCODING = "utf-8"
+        $env:PYTHONUTF8 = "1"
+        chcp 65001 | Out-Null
+
+        try {
+            Write-Host "Starting Lemonade server..."
+            $serverJob = Start-Job -ScriptBlock {
+                # Workaround for Issue #612: Disable Vulkan cooperative matrix optimization
+                $env:GGML_VK_DISABLE_COOPMAT = "1"
+                & lemonade-server serve --host localhost --port 8000 --no-tray 2>&1
+            }
+            Write-Host "Started Lemonade server job with ID: $($serverJob.Id)"
+            $env:LEMONADE_JOB_ID = $serverJob.Id
+
+            # Wait for server to be ready
+            Write-Host "Waiting for Lemonade server to start..."
+            $maxWaitTime = 60
+            $waitTime = 0
+            $serverReady = $false
+
+            while ($waitTime -lt $maxWaitTime -and -not $serverReady) {
+                Start-Sleep -Seconds 2
+                $waitTime += 2
+
+                try {
+                    $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 5
+                    Write-Host "[OK] Lemonade server is ready"
+                    Write-Host "Health response: $($response | ConvertTo-Json -Compress)"
+                    $serverReady = $true
+                } catch {
+                    Write-Host "Waiting... ($waitTime/$maxWaitTime seconds)"
+                }
+            }
+
+            if (-not $serverReady) {
+                Write-Host "[ERROR] Server health check failed after $maxWaitTime seconds"
+                throw "Server failed to start"
+            }
+
+            # Clear any cached/corrupted model files to force fresh download
+            # See: https://github.com/ggml-org/llama.cpp/issues/13534
+            Write-Host "`n=== Clearing Model Cache ==="
+            $lemonadeCache = "$env:LOCALAPPDATA\lemonade-server"
+            if (Test-Path "$lemonadeCache\models") {
+                Write-Host "Removing cached models from: $lemonadeCache\models"
+                Get-ChildItem "$lemonadeCache\models" -Directory | ForEach-Object {
+                    Write-Host "   Removing: $($_.Name)"
+                    Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+
+            # Pull required models (actual models used in RAG tests)
+            Write-Host "`n=== Pulling Required Models ==="
+
+            # Pull LLM model
+            Write-Host "Pulling Qwen3-0.6B-GGUF..."
+            try {
+                $body = @{ model_name = "Qwen3-0.6B-GGUF" } | ConvertTo-Json
+                $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/pull" `
+                    -Method POST -ContentType "application/json" -Body $body -TimeoutSec 600
+                Write-Host "   [OK] Qwen3-0.6B-GGUF pull initiated"
+            } catch {
+                Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
+            }
+
+            # Pull embedding model (actual RAG default)
+            Write-Host "Pulling nomic-embed-text-v2-moe-GGUF..."
+            try {
+                $body = @{ model_name = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
+                $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/pull" `
+                    -Method POST -ContentType "application/json" -Body $body -TimeoutSec 600
+                Write-Host "   [OK] nomic-embed-text-v2-moe-GGUF pull initiated"
+            } catch {
+                Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
+            }
+
+            # Pull VLM model (for PDFs with images)
+            Write-Host "Pulling Qwen2.5-VL-7B-Instruct-GGUF..."
+            try {
+                $body = @{ model_name = "Qwen2.5-VL-7B-Instruct-GGUF" } | ConvertTo-Json
+                $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/pull" `
+                    -Method POST -ContentType "application/json" -Body $body -TimeoutSec 1200
+                Write-Host "   [OK] Qwen2.5-VL-7B-Instruct-GGUF pull initiated"
+            } catch {
+                Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
+            }
+
+            # Load embedding model into memory (required in Lemonade v9.x)
+            Write-Host "`n=== Loading Embedding Model ==="
+            try {
+                $loadRequest = @{
+                    model_name = "nomic-embed-text-v2-moe-GGUF"
+                } | ConvertTo-Json
+
+                Write-Host "Loading model: nomic-embed-text-v2-moe-GGUF"
+                $loadResponse = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/load" `
+                    -Method POST -Body $loadRequest -ContentType "application/json" -TimeoutSec 60
+                Write-Host "[OK] Model loaded successfully: $($loadResponse | ConvertTo-Json -Compress)"
+            } catch {
+                Write-Host "[ERROR] Model load failed: $($_.Exception.Message)"
+                if ($_.ErrorDetails) {
+                    Write-Host "Error details: $($_.ErrorDetails.Message)"
+                }
+                throw "Failed to load embedding model"
+            }
+
+            # Wait for llamacpp backend to fully initialize (increased from 10s)
+            Write-Host "Waiting 30 seconds for llamacpp backend initialization..."
+            Start-Sleep -Seconds 30
+
+            # Verify models
+            try {
+                $models = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/models" -Method GET
+                Write-Host "`n[OK] Available models:"
+                $models.data | ForEach-Object { Write-Host "   - $($_.id)" }
+            } catch {
+                Write-Host "[WARN] Could not list models: $($_.Exception.Message)"
+            }
+
+            # Verify server is still responding before embeddings test
+            Write-Host "`n=== Verifying Server Health ==="
+            try {
+                $health = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 10
+                Write-Host "[OK] Server responding: $($health | ConvertTo-Json -Compress)"
+            } catch {
+                Write-Host "[ERROR] Server health check failed: $($_.Exception.Message)"
+                # Show server job output for debugging
+                if ($env:LEMONADE_JOB_ID) {
+                    $jobOutput = Receive-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
+                    Write-Host "Server output: $jobOutput"
+                }
+                throw "Server not responding after model load"
+            }
+
+            # Verify embedding model with actual API call
+            Write-Host "`n=== Verifying Embedding Model ==="
+            $maxRetries = 3
+            $retryCount = 0
+            $modelReady = $false
+
+            while ($retryCount -lt $maxRetries -and -not $modelReady) {
+                try {
+                    $testBody = @{ input = @("test embedding"); model = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
+                    # Use localhost consistently and increased timeout for first embedding request
+                    $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/embeddings" `
+                        -Method POST -ContentType "application/json" -Body $testBody -TimeoutSec 300
+                    Write-Host "[OK] Embedding model verified successfully"
+                    $modelReady = $true
+                } catch {
+                    $retryCount++
+                    Write-Host "[WARN] Embedding verification attempt $retryCount failed: $($_.Exception.Message)"
+                    if ($retryCount -lt $maxRetries) {
+                        Write-Host "Waiting 30 seconds before retry..."
+                        Start-Sleep -Seconds 30
+                    }
+                }
+            }
+
+            if (-not $modelReady) {
+                throw "Embedding model failed to load after $maxRetries attempts"
+            }
+
+            # Run tests in same session while server is running
+            Write-Host "`n=== Running RAG Integration Tests ==="
+            python tests/test_rag_integration.py
+            $testExitCode = $LASTEXITCODE
+
+            Write-Host "`nTests completed with exit code: $testExitCode"
+
+            if ($testExitCode -ne 0) {
+                throw "Tests failed with exit code $testExitCode"
+            }
+        } finally {
+            # Always cleanup server
+            if ($env:LEMONADE_JOB_ID) {
+                Write-Host "`n=== Stopping Lemonade Server ==="
+                Stop-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
+                Remove-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
+                Write-Host "[OK] Server stopped"
+            }
+        }
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: rag-integration-test-results
+        path: |
+          pytest-results/
+          *.log
