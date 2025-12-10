@@ -813,6 +813,7 @@ if __name__ == "__main__":
 
                         test_results["status"] = "partial"
                         test_results["stderr"] = test_run_result.get("stderr", "")
+                        test_results["stdout"] = stdout
                         test_results["failure_summary"] = failure_summary
 
                         # Try to fix test failures

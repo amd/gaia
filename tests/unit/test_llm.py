@@ -12,6 +12,60 @@ import requests
 # from gaia.logger import get_logger
 
 
+class TestBaseUrlNormalization(unittest.TestCase):
+    """Test base_url normalization in LLMClient (fast unit tests, no server needed)."""
+
+    def _run_normalization_test(self, input_url, expected_url):
+        """Run a base_url normalization test in a subprocess to avoid bytecode cache issues."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                f"""
+import sys
+sys.path.insert(0, "src")
+from unittest.mock import patch, MagicMock
+from gaia.llm.llm_client import LLMClient
+
+with patch("gaia.llm.llm_client.OpenAI", MagicMock()):
+    client = LLMClient(base_url="{input_url}")
+    print(client.base_url)
+""",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        actual = result.stdout.strip()
+        self.assertEqual(
+            actual,
+            expected_url,
+            f"Expected {expected_url}, got {actual}. stderr: {result.stderr}",
+        )
+
+    def test_base_url_normalization_adds_api_v1(self):
+        """Test that base_url without /api/v1 gets it appended."""
+        # Test: URL without path should get /api/v1 appended
+        self._run_normalization_test(
+            "http://localhost:8000", "http://localhost:8000/api/v1"
+        )
+
+        # Test: URL with trailing slash should get /api/v1 appended
+        self._run_normalization_test(
+            "http://localhost:8000/", "http://localhost:8000/api/v1"
+        )
+
+        # Test: URL already with /api/v1 should remain unchanged
+        self._run_normalization_test(
+            "http://localhost:8000/api/v1", "http://localhost:8000/api/v1"
+        )
+
+        # Test: Custom port should work
+        self._run_normalization_test(
+            "http://192.168.1.100:9000", "http://192.168.1.100:9000/api/v1"
+        )
+
+
 class TestLlmCli(unittest.TestCase):
     def setUp(self):
         # self.log = get_logger(__name__)
@@ -63,11 +117,23 @@ class TestLlmCli(unittest.TestCase):
             )
 
         try:
-            print("Executing command: gaia llm 'What is 1+1?' --max-tokens 20")
+            # Test with explicit --base-url (without /api/v1 to test normalization)
+            print(
+                "Executing command: gaia llm 'What is 1+1?' --max-tokens 20 --base-url http://localhost:8000"
+            )
 
-            # Test the LLM command (assuming server is already running)
+            # Test the LLM command with explicit --base-url
+            # This validates both the CLI arg and the base_url normalization
             result = subprocess.run(
-                ["gaia", "llm", "What is 1+1?", "--max-tokens", "20"],
+                [
+                    "gaia",
+                    "llm",
+                    "What is 1+1?",
+                    "--max-tokens",
+                    "20",
+                    "--base-url",
+                    "http://localhost:8000",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=60,

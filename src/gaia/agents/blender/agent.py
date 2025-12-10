@@ -31,7 +31,7 @@ class BlenderAgent(Agent):
         self,
         mcp: Optional[MCPClient] = None,
         model_id: str = None,
-        base_url: str = "http://localhost:8000/api/v0",
+        base_url: str = "http://localhost:8000/api/v1",
         max_steps: int = 5,
         debug_prompts: bool = False,
         output_dir: str = None,
@@ -532,7 +532,7 @@ Examples of colored requests:
         self,
         scene_description: str,
         max_steps: int = None,
-        output_to_file: bool = True,
+        trace: bool = True,
         filename: str = None,
     ) -> Dict[str, Any]:
         """
@@ -541,8 +541,8 @@ Examples of colored requests:
         Args:
             scene_description: Description of the scene to create
             max_steps: Maximum number of steps to take in the conversation (overrides class default if provided)
-            output_to_file: If True, write results to a JSON file
-            filename: Optional filename for output, if None a timestamped name will be generated
+            trace: If True, write detailed trace to file
+            filename: Optional filename for trace output, if None a timestamped name will be generated
 
         Returns:
             Dict containing the scene creation result
@@ -551,6 +551,6 @@ Examples of colored requests:
         return self.process_query(
             f"Create a complete 3D scene with the following description: {scene_description}",
             max_steps=max_steps if max_steps is not None else self.max_steps * 2,
-            output_to_file=output_to_file,
+            trace=trace,
             filename=filename,
         )

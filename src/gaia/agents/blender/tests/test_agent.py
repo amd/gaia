@@ -453,7 +453,7 @@ class TestAgentIntegration:
             agent.llm.generate.return_value = MOCKED_RESPONSES["create_red_cube"]
 
         # Process the example query
-        result = agent.process_query(example, output_to_file=False)
+        result = agent.process_query(example, trace=False)
 
         # Verify successful processing
         assert result["status"] == "success" or result["status"] == "incomplete"

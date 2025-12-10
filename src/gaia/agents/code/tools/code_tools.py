@@ -13,6 +13,11 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Code generation constants
+MAX_CODE_RETRIES = 2
+FIRST_ATTEMPT_MAX_TOKENS = 4096
+RETRY_MAX_TOKENS = 2048
+
 
 class CodeToolsMixin:
     """Consolidated mixin providing code generation, analysis, and helper methods.
@@ -611,12 +616,15 @@ Generate ONLY the code, no explanations."""
             self.console.start_file_preview(filename, max_lines=15)
 
             code_chunks = []
-            max_retries = 2
             retry_count = 0
 
-            while retry_count <= max_retries:
+            while retry_count <= MAX_CODE_RETRIES:
                 try:
-                    max_tokens = 4096 if retry_count == 0 else 2048
+                    max_tokens = (
+                        FIRST_ATTEMPT_MAX_TOKENS
+                        if retry_count == 0
+                        else RETRY_MAX_TOKENS
+                    )
 
                     for chunk in self.chat.send_stream(prompt, max_tokens=max_tokens):
                         if chunk.is_complete:
@@ -630,15 +638,15 @@ Generate ONLY the code, no explanations."""
                 except Exception as e:
                     retry_count += 1
                     if "timeout" in str(e).lower() or "timed out" in str(e).lower():
-                        if retry_count <= max_retries:
+                        if retry_count <= MAX_CODE_RETRIES:
                             self.console.print_warning(
-                                f"⚠️ Generation timeout for {filename}, retrying ({retry_count}/{max_retries})..."
+                                f"⚠️ Generation timeout for {filename}, retrying ({retry_count}/{MAX_CODE_RETRIES})..."
                             )
-                            if retry_count == 2:
+                            if retry_count == MAX_CODE_RETRIES:
                                 prompt = f"Generate minimal working code for {filename}. Purpose: {purpose}"
                         else:
                             self.console.print_error(
-                                f"❌ Generation failed after {max_retries} retries for {filename}"
+                                f"❌ Generation failed after {MAX_CODE_RETRIES} retries for {filename}"
                             )
                             code_chunks = [
                                 self._get_timeout_placeholder(filename, purpose)
@@ -664,7 +672,12 @@ Generate ONLY the code, no explanations."""
             return self._get_timeout_placeholder(filename, purpose)
 
     def _fix_code_with_llm(
-        self, code: str, error_msg: str, context: str = "", max_attempts: int = 3
+        self,
+        code: str,
+        file_path: str,
+        error_msg: str,
+        context: str = "",
+        max_attempts: int = 3,
     ) -> Optional[str]:
         """Fix code using LLM based on error message.
 
@@ -680,6 +693,7 @@ Generate ONLY the code, no explanations."""
         for attempt in range(max_attempts):
             prompt = f"""Fix the following Python code error:
 
+File path: {file_path}
 Error: {error_msg}
 
 Code:
@@ -692,7 +706,7 @@ Code:
 Return ONLY the corrected code, no explanations."""
 
             try:
-                response = self.chat.send(prompt)
+                response = self.chat.send(prompt, timeout=600)
                 fixed_code = response.text.strip()
 
                 # Extract code from markdown blocks

@@ -10,9 +10,9 @@ GAIA is specifically designed for AMD Ryzen AI systems and uses Lemonade Server 
 
 ### Required Components
 
-1. **Conda Environment** (All Modes)
-   - Miniconda will be automatically installed if missing
-   - Creates Python 3.10 environment named 'gaia_env'
+1. **Python Environment** (All Modes)
+   - Python 3.12 will be automatically installed if missing
+   - Creates a virtual environment for GAIA
 
 2. **Ryzen AI Driver** (Ryzen AI Systems Only)
    - Required version: Latest available
@@ -30,9 +30,8 @@ GAIA is specifically designed for AMD Ryzen AI systems and uses Lemonade Server 
 
 ### 2. Environment Setup
 The installer automatically:
-- Checks for and installs Miniconda if needed
-- Creates dedicated conda environment: gaia_env
-- Configures Python 3.10
+- Checks for and installs Python 3.12 if needed
+- Creates a dedicated virtual environment
 - Sets required environment variables
 - Creates activation scripts
 

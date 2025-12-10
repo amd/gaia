@@ -49,6 +49,9 @@ class TalkConfig:
     show_stats: bool = False
     logging_level: str = "INFO"
 
+    # RAG settings (optional - for document Q&A)
+    rag_documents: Optional[list] = None  # PDF documents to index
+
 
 @dataclass
 class TalkResponse:
@@ -81,6 +84,11 @@ class TalkSDK:
         # Streaming chat
         async for chunk in talk.chat_stream("Tell me a story"):
             print(chunk.text, end="", flush=True)
+
+        # Voice chat with document Q&A
+        talk_rag = TalkSDK(TalkConfig(enable_tts=True))
+        talk_rag.enable_rag(documents=["manual.pdf", "guide.pdf"])
+        await talk_rag.start_voice_session()
 
         # Voice chat with callback
         def on_voice_input(text):
@@ -129,6 +137,10 @@ class TalkSDK:
 
         self.show_stats = self.config.show_stats
         self._voice_session_active = False
+
+        # Enable RAG if documents are provided
+        if self.config.rag_documents:
+            self.enable_rag(documents=self.config.rag_documents)
 
         self.log.info("TalkSDK initialized with ChatSDK integration")
 
@@ -328,6 +340,57 @@ class TalkSDK:
     def get_formatted_history(self) -> list:
         """Get the conversation history in structured format."""
         return self.chat_sdk.get_formatted_history()
+
+    def enable_rag(self, documents: Optional[list] = None, **rag_kwargs) -> bool:
+        """
+        Enable RAG (Retrieval-Augmented Generation) for document-based voice/text chat.
+
+        Args:
+            documents: List of PDF file paths to index
+            **rag_kwargs: Additional RAG configuration options
+
+        Returns:
+            True if RAG was successfully enabled
+        """
+        try:
+            self.chat_sdk.enable_rag(documents=documents, **rag_kwargs)
+            self.log.info(
+                f"RAG enabled with {len(documents) if documents else 0} documents"
+            )
+            return True
+        except ImportError:
+            self.log.warning(
+                "RAG dependencies not available. Install with: pip install -e .[rag]"
+            )
+            return False
+        except Exception as e:
+            self.log.error(f"Failed to enable RAG: {e}")
+            return False
+
+    def disable_rag(self) -> None:
+        """Disable RAG functionality."""
+        self.chat_sdk.disable_rag()
+        self.log.info("RAG disabled")
+
+    def add_document(self, document_path: str) -> bool:
+        """
+        Add a document to the RAG index.
+
+        Args:
+            document_path: Path to PDF file to index
+
+        Returns:
+            True if document was successfully added
+        """
+        if not self.chat_sdk.rag_enabled:
+            self.log.warning("RAG not enabled. Call enable_rag() first.")
+            return False
+
+        try:
+            return self.chat_sdk.add_document(document_path)
+        except Exception as e:
+            self.log.error(f"Failed to add document {document_path}: {e}")
+            return False
 
     @property
     def is_voice_session_active(self) -> bool:

@@ -24,13 +24,38 @@ The GAIA VSCode extension integrates GAIA agents as selectable language models i
 
 ### Prerequisites
 
-1. **GAIA Framework**: Install GAIA from [github.com/amd/gaia](https://github.com/amd/gaia)
-2. **Lemonade Server**: Ensure the LLM backend is running with extended context (installed with GAIA):
+1. **GAIA Framework**: Install GAIA with API support (see [API Server Prerequisites](./api.md#prerequisites))
+2. **Lemonade Server**: Ensure the LLM backend is running with extended context:
    ```bash
    lemonade-server serve --ctx-size 32768
    ```
+3. **Node.js v20.19.x**: Required for building the VSCode extension
+   - **Windows**: Download and install from [nodejs.org](https://nodejs.org/en/download) (select Windows Installer for v20.x LTS)
+   - **Linux**: Install using a package manager or nvm:
+     ```bash
+     # Using nvm (recommended)
+     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash
+     source ~/.bashrc
+     nvm install 20
+     nvm use 20
+
+     # Or using NodeSource repository (Debian/Ubuntu)
+     curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+     sudo apt-get install -y nodejs
+     ```
+   - Verify installation: `node --version` (should show v20.x.x)
+4. **GitHub Copilot Chat**: Required for the chat interface that integrates with GAIA
+   - Install from the [VSCode Marketplace](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot-chat)
+   - This provides the chat UI that GAIA models integrate with via the Language Model Provider API
 
 ### Getting Started
+
+**Important**: GAIA Code requires **three services** running simultaneously:
+1. **Lemonade Server** (LLM backend on port 8000)
+2. **GAIA API Server** (REST API on port 8080)
+3. **VSCode Extension** (installed in VSCode)
+
+Follow these steps in order:
 
 #### 1. Start Lemonade Server (LLM Backend)
 
@@ -38,13 +63,15 @@ The GAIA VSCode extension integrates GAIA agents as selectable language models i
 lemonade-server serve --ctx-size 32768
 ```
 
+Keep this terminal running and open a new terminal for the next step.
+
 #### 2. Start the GAIA API Server
 
 ```bash
 gaia api start
 ```
 
-The server will run on `http://localhost:8080` by default.
+The server will run on `http://localhost:8080` by default. Keep this terminal running.
 
 #### 3. Build and Install the Extension
 
@@ -65,6 +92,8 @@ Then install it:
 ```bash
 code --install-extension gaia-vscode-0.1.0.vsix
 ```
+1. Open a new instance of VSCode
+1. Open a directory (i.e., ~/src/test) that you wish to test GAIA Code against in new VSCode instance
 
 **Option B: Development Mode**
 1. Open the GAIA project root in VSCode
@@ -73,15 +102,15 @@ code --install-extension gaia-vscode-0.1.0.vsix
 
 #### 4. Select a GAIA Model
 
-1. Open the VSCode Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
+1. Open athe VSCode Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
 2. Select "Chat: Manage Language Models..." or [follow this guide](https://code.visualstudio.com/docs/copilot/customization/language-models#_customize-the-model-picker).
 3. Click on the model picker
-4. Select a GAIA model: ⚠️ GAIA API server must be running to see this; see step above.
+4. Select a GAIA model using Github Copilot Chat from the Secondary Side Bar: ⚠️ GAIA API server must be running to see this; see step above.
    - **gaia-code**: For GAIA Code tasks
 
 #### 5. Use GAIA in Chat
 
-Type your request in the chat and GAIA will process it using the selected agent.
+Type your request in the GitHub Copilot chat and GAIA will process it using the selected agent.
 
 ### Configuration
 
@@ -293,6 +322,8 @@ src/vscode/gaia/
 ```
 
 ### Setup Development Environment
+
+**Note**: Node.js v20.19.x is required. See [Prerequisites](#prerequisites) for installation instructions.
 
 #### 1. Install Dependencies
 

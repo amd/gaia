@@ -112,7 +112,7 @@ n8n start
 
 n8n will open automatically at `http://localhost:5678`
 
-⚠️ **IMPORTANT**: Throughout this guide, always use `http://127.0.0.1:8765` instead of `http://localhost:8765` in n8n to avoid IPv6 connection issues!
+⚠️ **IMPORTANT**: Throughout this guide, use `http://localhost:8765` for MCP server connections.
 
 ## Getting Started: Step-by-Step
 
@@ -125,7 +125,7 @@ Before creating workflows, verify the MCP server is accessible:
 gaia mcp status
 
 # Test with curl
-curl http://127.0.0.1:8765/health
+curl http://localhost:8765/health
 ```
 
 ### Step 2: Create Your First n8n Workflow
@@ -196,7 +196,7 @@ The MCP bridge provides the following HTTP endpoints:
 1. Add an **HTTP Request** node
 2. Configure:
    - **Method**: `GET`
-   - **URL**: `http://127.0.0.1:8765/health`
+   - **URL**: `http://localhost:8765/health`
 3. Click "Execute Node"
 4. Expected response:
    ```json
@@ -215,7 +215,7 @@ The MCP bridge provides the following HTTP endpoints:
 1. Add an **HTTP Request** node
 2. Configure:
    - **Method**: `GET`
-   - **URL**: `http://127.0.0.1:8765/status`
+   - **URL**: `http://localhost:8765/status`
 3. Execute to see all available agents, tools, and endpoints
 
 ### Example 3: Simple Chat (POST Request)
@@ -225,7 +225,7 @@ The MCP bridge provides the following HTTP endpoints:
 1. Add an **HTTP Request** node
 2. Configure:
    - **Method**: `POST`
-   - **URL**: `http://127.0.0.1:8765/chat`
+   - **URL**: `http://localhost:8765/chat`
    - **Body Content Type**: `JSON`
    - **JSON Body**:
      ```json
@@ -242,7 +242,7 @@ The MCP bridge provides the following HTTP endpoints:
 1. Add an **HTTP Request** node
 2. Configure:
    - **Method**: `POST`
-   - **URL**: `http://127.0.0.1:8765/llm`
+   - **URL**: `http://localhost:8765/llm`
    - **Body Content Type**: `JSON`
    - **JSON Body**:
      ```json
@@ -258,7 +258,7 @@ The MCP bridge provides the following HTTP endpoints:
 1. Add an **HTTP Request** node
 2. Configure:
    - **Method**: `POST`
-   - **URL**: `http://127.0.0.1:8765/jira`
+   - **URL**: `http://localhost:8765/jira`
    - **Body Content Type**: `JSON`
    - **JSON Body**:
      ```json
@@ -325,7 +325,7 @@ Before configuring n8n, verify the MCP server is accessible:
 gaia mcp status
 
 # Test with curl
-curl http://127.0.0.1:8765/health
+curl http://localhost:8765/health
 ```
 
 ### Step 2: Create Your First n8n Workflow
@@ -390,7 +390,7 @@ Each endpoint returns different data structures:
 ## Best Practices
 
 1. **Start Simple**: Begin with GET requests, then move to POST
-2. **Use 127.0.0.1**: Always use IP instead of localhost
+2. **Use localhost**: Use `localhost` for local server connections
 3. **Test Incrementally**: Test each node before building complex workflows
 4. **Handle Errors**: Add IF nodes to check `success` field
 5. **Set Timeouts**: Use 30s timeout for Jira/LLM operations
@@ -402,17 +402,16 @@ Each endpoint returns different data structures:
 
 If you get "The service refused the connection - perhaps it is offline" or `ECONNREFUSED ::1:8765` error:
 
-**QUICK FIX**: Use `http://127.0.0.1:8765` instead of `http://localhost:8765` in all n8n nodes!
+**QUICK FIX**: Ensure the MCP server is running with `gaia mcp start` and use `http://localhost:8765` for connections.
 
 For detailed MCP server troubleshooting (ports, processes, Docker/WSL), see the [MCP Server Documentation](./mcp.md#troubleshooting).
 
 7. **n8n-specific connection issues** (when MCP works locally but n8n doesn't):
 
-   **✅ SOLUTION: IPv6 vs IPv4 issue (Most Common)**
-   - Error: `connect ECONNREFUSED ::1:8765` means n8n is trying IPv6
-   - **FIX**: Always use `http://127.0.0.1:8765` instead of `http://localhost:8765`
-   - Why: `localhost` resolves to `::1` (IPv6) on Windows/some systems, but MCP binds to IPv4 only
-   - This fixes 90% of n8n connection issues!
+   **✅ SOLUTION: Connection refused issue (Most Common)**
+   - Error: `connect ECONNREFUSED ::1:8765` means the MCP server may not be running
+   - **FIX**: Ensure MCP server is running with `gaia mcp start` and use `http://localhost:8765`
+   - If issues persist, check firewall settings or try `http://127.0.0.1:8765` as an alternative
 
    **If n8n is in browser (n8n.cloud or self-hosted web)**:
    - ⚠️ **Browser security blocks ALL localhost connections from web apps**
@@ -472,7 +471,7 @@ For detailed MCP server troubleshooting (ports, processes, Docker/WSL), see the 
    **Test the correct URL first**:
    ```bash
    # From where n8n is running, test:
-   curl http://127.0.0.1:8765/health  # IPv4 localhost
+   curl http://localhost:8765/health  # localhost
    curl http://192.168.1.100:8765/health  # Using your machine's IP
    ```
 
@@ -487,7 +486,7 @@ For detailed MCP server troubleshooting (ports, processes, Docker/WSL), see the 
 - Consider using smaller models for faster responses
 
 ### n8n Connection Issues
-- **First try**: Use `http://127.0.0.1:8765` instead of `http://localhost:8765`
+- **First try**: Ensure MCP server is running and use `http://localhost:8765`
 - Verify n8n can reach the MCP bridge
 - Check CORS settings if using browser-based n8n
 - Test with curl first to isolate issues

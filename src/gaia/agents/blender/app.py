@@ -84,7 +84,7 @@ def run_examples(agent, selected_example=None, print_result=True):
         if example.get("use_interactive_scene", False):
             agent.create_interactive_scene(example["query"])
         else:
-            agent.process_query(example["query"], output_to_file=True)
+            agent.process_query(example["query"], trace=True)
 
         agent.display_result(print_result=print_result)
 

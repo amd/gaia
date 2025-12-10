@@ -155,8 +155,7 @@ Examples:
                     result = agent.process_query(
                         query,
                         max_steps=args.max_steps,
-                        output_to_file=bool(args.output),
-                        filename=args.output,
+                        trace=args.trace,
                     )
 
                     # Display result in interactive mode
@@ -181,8 +180,7 @@ Examples:
             result = agent.process_query(
                 args.query,
                 max_steps=args.max_steps,
-                output_to_file=bool(args.output),
-                filename=args.output,
+                trace=args.trace,
             )
 
             # Output result
@@ -225,8 +223,7 @@ Examples:
                     result = agent.process_query(
                         query,
                         max_steps=args.max_steps,
-                        output_to_file=bool(args.output),
-                        filename=args.output,
+                        trace=args.trace,
                     )
 
                     # Display result in interactive mode

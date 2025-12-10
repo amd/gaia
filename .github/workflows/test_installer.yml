@@ -4,19 +4,12 @@
 name: GAIA Installer Test
 
 on:
+  workflow_call:
   push:
-    branches: ["main"]
-    paths:
-      - "installer/**"
-      - "src/**"
-      - "setup.py"
+    branches: [ main ]
   pull_request:
-    branches: ["main"]
+    branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "installer/**"
-      - "src/**"
-      - "setup.py"
   merge_group:
   workflow_dispatch:
 

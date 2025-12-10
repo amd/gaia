@@ -9,9 +9,21 @@ import time
 
 # Third-party imports
 import numpy as np
-import pyaudio
-import torch
-import whisper
+
+try:
+    import pyaudio
+except ImportError:
+    pyaudio = None
+
+try:
+    import torch
+except ImportError:
+    torch = None
+
+try:
+    import whisper
+except ImportError:
+    whisper = None
 
 from gaia.audio.audio_recorder import AudioRecorder
 
@@ -31,6 +43,25 @@ class WhisperAsr(AudioRecorder):
         silence_threshold=None,  # Custom silence threshold
         min_audio_length=None,  # Custom minimum audio length
     ):
+        # Check for required dependencies
+        missing = []
+        if pyaudio is None:
+            missing.append("pyaudio")
+        if torch is None:
+            missing.append("torch")
+        if whisper is None:
+            missing.append("openai-whisper")
+
+        if missing:
+            error_msg = (
+                f"\n❌ Error: Missing required talk dependencies: {', '.join(missing)}\n\n"
+                f"Please install the talk dependencies:\n"
+                f"  pip install -e .[talk]\n\n"
+                f"Or install packages directly:\n"
+                f"  pip install {' '.join(missing)}\n"
+            )
+            raise ImportError(error_msg)
+
         super().__init__(device_index)
 
         # Override thresholds if provided

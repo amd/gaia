@@ -6,6 +6,7 @@
 Gaia Chat SDK - Unified text chat integration with conversation history
 """
 
+import json
 import logging
 from collections import deque
 from dataclasses import dataclass
@@ -29,7 +30,11 @@ class ChatConfig:
     logging_level: str = "INFO"
     use_claude: bool = False  # Use Claude API
     use_chatgpt: bool = False  # Use ChatGPT/OpenAI API
+    use_local_llm: bool = (
+        True  # Use local LLM (computed as not use_claude and not use_chatgpt if not explicitly set)
+    )
     claude_model: str = "claude-sonnet-4-20250514"  # Claude model when use_claude=True
+    base_url: str = "http://localhost:8000/api/v1"  # Lemonade server base URL
     assistant_name: str = "gaia"  # Name to use for the assistant in conversations
 
 
@@ -93,11 +98,16 @@ class ChatSDK:
             use_claude=self.config.use_claude,
             use_openai=self.config.use_chatgpt,
             claude_model=self.config.claude_model,
+            base_url=self.config.base_url,
             system_prompt=None,  # We handle system prompts through Prompts class
         )
 
         # Store conversation history
         self.chat_history = deque(maxlen=self.config.max_history_length * 2)
+
+        # RAG support
+        self.rag = None
+        self.rag_enabled = False
 
         self.log.debug("ChatSDK initialized")
 
@@ -111,9 +121,30 @@ class ChatSDK:
             self.config.system_prompt,
         )
 
+    def _normalize_message_content(self, content: Any) -> str:
+        """
+        Convert message content into a string for prompt construction, handling structured payloads.
+        """
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for entry in content:
+                if isinstance(entry, dict):
+                    if entry.get("type") == "text":
+                        parts.append(entry.get("text", ""))
+                    else:
+                        parts.append(json.dumps(entry))
+                else:
+                    parts.append(str(entry))
+            return "\n".join(part for part in parts if part)
+        if isinstance(content, dict):
+            return json.dumps(content)
+        return str(content)
+
     def send_messages(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
         **kwargs,
     ) -> ChatResponse:
@@ -121,7 +152,7 @@ class ChatSDK:
         Send a full conversation history and get a response.
 
         Args:
-            messages: List of message dicts with 'role' and 'content' keys (user/assistant only)
+            messages: List of message dicts with 'role' and 'content' keys
             system_prompt: Optional system prompt to use (overrides config)
             **kwargs: Additional arguments for LLM generation
 
@@ -134,12 +165,15 @@ class ChatSDK:
 
             for msg in messages:
                 role = msg.get("role", "")
-                content = msg.get("content", "")
+                content = self._normalize_message_content(msg.get("content", ""))
 
                 if role == "user":
                     chat_history.append(f"user: {content}")
                 elif role == "assistant":
                     chat_history.append(f"assistant: {content}")
+                elif role == "tool":
+                    tool_name = msg.get("name", "tool")
+                    chat_history.append(f"assistant: [tool:{tool_name}] {content}")
                 # Skip system messages since they're passed separately
 
             # Use provided system prompt or fall back to config default
@@ -168,7 +202,10 @@ class ChatSDK:
 
             # Use generate with formatted prompt
             response = self.llm_client.generate(
-                prompt=formatted_prompt, model=self.config.model, stream=False, **kwargs
+                prompt=formatted_prompt,
+                model=self.config.model,
+                stream=False,
+                **kwargs,
             )
 
             # Prepare response data
@@ -188,7 +225,7 @@ class ChatSDK:
 
     def send_messages_stream(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
         **kwargs,
     ):
@@ -196,7 +233,7 @@ class ChatSDK:
         Send a full conversation history and get a streaming response.
 
         Args:
-            messages: List of message dicts with 'role' and 'content' keys (user/assistant only)
+            messages: List of message dicts with 'role' and 'content' keys
             system_prompt: Optional system prompt to use (overrides config)
             **kwargs: Additional arguments for LLM generation
 
@@ -209,12 +246,15 @@ class ChatSDK:
 
             for msg in messages:
                 role = msg.get("role", "")
-                content = msg.get("content", "")
+                content = self._normalize_message_content(msg.get("content", ""))
 
                 if role == "user":
                     chat_history.append(f"user: {content}")
                 elif role == "assistant":
                     chat_history.append(f"assistant: {content}")
+                elif role == "tool":
+                    tool_name = msg.get("name", "tool")
+                    chat_history.append(f"assistant: [tool:{tool_name}] {content}")
                 # Skip system messages since they're passed separately
 
             # Use provided system prompt or fall back to config default
@@ -249,10 +289,9 @@ class ChatSDK:
                 full_response += chunk
                 yield ChatResponse(text=chunk, is_complete=False)
 
-            # Send final response with stats if requested
-            stats = None
-            if self.config.show_stats:
-                stats = self.get_stats()
+            # Send final response with stats
+            # Always get stats for token tracking (show_stats controls display, not collection)
+            stats = self.get_stats()
 
             yield ChatResponse(text="", stats=stats, is_complete=True)
 
@@ -281,19 +320,35 @@ class ChatSDK:
             if not message.strip():
                 raise ValueError("Message cannot be empty")
 
-            # Add user message to history
+            # Enhance message with RAG context if enabled
+            enhanced_message, _rag_metadata = self._enhance_with_rag(message.strip())
+
+            # Add user message to history (use original message for history)
             self.chat_history.append(f"user: {message.strip()}")
 
-            # Prepare prompt with conversation context
-            full_prompt = self._format_history_for_context()
+            # Prepare prompt with conversation context (use enhanced message for LLM)
+            # Temporarily replace the last message with enhanced version for formatting
+            if self.rag_enabled and enhanced_message != message.strip():
+                # Save original and replace with enhanced version
+                original_last = self.chat_history.pop()
+                self.chat_history.append(f"user: {enhanced_message}")
+                full_prompt = self._format_history_for_context()
+                # Restore original for history
+                self.chat_history.pop()
+                self.chat_history.append(original_last)
+            else:
+                full_prompt = self._format_history_for_context()
 
             # Generate response
             generate_kwargs = dict(kwargs)
             if "max_tokens" not in generate_kwargs:
                 generate_kwargs["max_tokens"] = self.config.max_tokens
 
+            # Note: Retry logic is now handled at the LLM client level
             response = self.llm_client.generate(
-                full_prompt, model=self.config.model, **generate_kwargs
+                full_prompt,
+                model=self.config.model,
+                **generate_kwargs,
             )
 
             # Add assistant message to history
@@ -333,11 +388,24 @@ class ChatSDK:
             if not message.strip():
                 raise ValueError("Message cannot be empty")
 
-            # Add user message to history
+            # Enhance message with RAG context if enabled
+            enhanced_message, _rag_metadata = self._enhance_with_rag(message.strip())
+
+            # Add user message to history (use original message for history)
             self.chat_history.append(f"user: {message.strip()}")
 
-            # Prepare prompt with conversation context
-            full_prompt = self._format_history_for_context()
+            # Prepare prompt with conversation context (use enhanced message for LLM)
+            # Temporarily replace the last message with enhanced version for formatting
+            if self.rag_enabled and enhanced_message != message.strip():
+                # Save original and replace with enhanced version
+                original_last = self.chat_history.pop()
+                self.chat_history.append(f"user: {enhanced_message}")
+                full_prompt = self._format_history_for_context()
+                # Restore original for history
+                self.chat_history.pop()
+                self.chat_history.append(original_last)
+            else:
+                full_prompt = self._format_history_for_context()
 
             # Generate streaming response
             generate_kwargs = dict(kwargs)
@@ -595,6 +663,215 @@ class ChatSDK:
     def conversation_pairs(self) -> int:
         """Get the number of conversation pairs (user + assistant)."""
         return len(self.chat_history) // 2
+
+    def enable_rag(self, documents: Optional[List[str]] = None, **rag_kwargs):
+        """
+        Enable RAG (Retrieval-Augmented Generation) for document-based chat.
+
+        Args:
+            documents: List of PDF file paths to index
+            **rag_kwargs: Additional RAG configuration options
+        """
+        try:
+            from gaia.rag.sdk import RAGSDK, RAGConfig
+        except ImportError:
+            raise ImportError(
+                "RAG dependencies not installed. Install with: pip install .[rag]"
+            )
+
+        # Create RAG config matching chat config
+        rag_config = RAGConfig(
+            model=self.config.model,
+            show_stats=self.config.show_stats,
+            use_local_llm=self.config.use_local_llm,
+            **rag_kwargs,
+        )
+
+        self.rag = RAGSDK(rag_config)
+        self.rag_enabled = True
+
+        # Index documents if provided
+        if documents:
+            for doc_path in documents:
+                self.log.info(f"Indexing document: {doc_path}")
+                result = self.rag.index_document(doc_path)
+
+                if result:
+                    self.log.info(f"Successfully indexed: {doc_path}")
+                else:
+                    self.log.warning(f"Failed to index document: {doc_path}")
+
+        self.log.info(
+            f"RAG enabled with {len(documents) if documents else 0} documents"
+        )
+
+    def disable_rag(self):
+        """Disable RAG functionality."""
+        self.rag = None
+        self.rag_enabled = False
+        self.log.info("RAG disabled")
+
+    def add_document(self, document_path: str) -> bool:
+        """
+        Add a document to the RAG index.
+
+        Args:
+            document_path: Path to PDF file to index
+
+        Returns:
+            True if indexing succeeded
+        """
+        if not self.rag_enabled or not self.rag:
+            raise ValueError("RAG not enabled. Call enable_rag() first.")
+
+        return self.rag.index_document(document_path)
+
+    def _estimate_tokens(self, text: str) -> int:
+        """
+        Estimate the number of tokens in text.
+        Uses rough approximation of 4 characters per token.
+
+        Args:
+            text: The text to estimate tokens for
+
+        Returns:
+            Estimated token count
+        """
+        # Rough approximation: ~4 characters per token for English text
+        # This is conservative to avoid overrunning context
+        return len(text) // 4
+
+    def _truncate_rag_context(self, context: str, max_tokens: int) -> str:
+        """
+        Truncate RAG context to fit within token budget.
+
+        Args:
+            context: The RAG context to truncate
+            max_tokens: Maximum tokens allowed
+
+        Returns:
+            Truncated context with ellipsis if needed
+        """
+        estimated_tokens = self._estimate_tokens(context)
+
+        if estimated_tokens <= max_tokens:
+            return context
+
+        # Calculate how many characters we can keep
+        target_chars = max_tokens * 4  # Using same 4:1 ratio
+
+        # Truncate and add ellipsis
+        truncated = context[: target_chars - 20]  # Leave room for ellipsis
+        truncated += "\n... [context truncated for length]"
+
+        self.log.warning(
+            f"RAG context truncated from ~{estimated_tokens} to ~{max_tokens} tokens"
+        )
+        return truncated
+
+    def _enhance_with_rag(self, message: str) -> tuple:
+        """
+        Enhance user message with relevant document context using RAG.
+
+        Args:
+            message: Original user message
+
+        Returns:
+            Tuple of (enhanced_message, metadata_dict)
+        """
+        if not self.rag_enabled or not self.rag:
+            return message, None
+
+        try:
+            # Query RAG for relevant context with metadata
+            rag_response = self.rag.query(message, include_metadata=True)
+
+            if rag_response.chunks:
+                # Build context with source information
+                context_parts = []
+                if rag_response.chunk_metadata:
+                    for i, (chunk, metadata) in enumerate(
+                        zip(rag_response.chunks, rag_response.chunk_metadata)
+                    ):
+                        context_parts.append(
+                            f"Context {i+1} (from {metadata['source_file']}, relevance: {metadata['relevance_score']:.2f}):\n{chunk}"
+                        )
+                else:
+                    context_parts = [
+                        f"Context {i+1}:\n{chunk}"
+                        for i, chunk in enumerate(rag_response.chunks)
+                    ]
+
+                context = "\n\n".join(context_parts)
+
+                # Check token limits
+                message_tokens = self._estimate_tokens(message)
+                template_tokens = 150  # Template text overhead
+                response_tokens = self.config.max_tokens
+                history_tokens = self._estimate_tokens(str(self.chat_history))
+
+                # Conservative context size for models
+                model_context_size = 32768
+                available_for_rag = (
+                    model_context_size
+                    - message_tokens
+                    - template_tokens
+                    - response_tokens
+                    - history_tokens
+                )
+
+                # Ensure minimum RAG context
+                if available_for_rag < 500:
+                    self.log.warning(
+                        f"Limited space for RAG context: {available_for_rag} tokens"
+                    )
+                    available_for_rag = 500
+
+                # Truncate context if needed
+                context = self._truncate_rag_context(context, available_for_rag)
+
+                # Build enhanced message
+                enhanced_message = f"""Based on the provided documents, please answer the following question. Use the context below to inform your response.
+
+Context from documents:
+{context}
+
+User question: {message}
+
+Note: When citing information, please mention which context number it came from."""
+
+                # Prepare metadata for return
+                metadata = {
+                    "rag_used": True,
+                    "chunks_retrieved": len(rag_response.chunks),
+                    "estimated_context_tokens": self._estimate_tokens(context),
+                    "available_tokens": available_for_rag,
+                    "context_truncated": (
+                        len(context) < sum(len(c) for c in rag_response.chunks)
+                        if rag_response.chunks
+                        else False
+                    ),
+                }
+
+                # Add query metadata if available
+                if rag_response.query_metadata:
+                    metadata["query_metadata"] = rag_response.query_metadata
+
+                self.log.debug(
+                    f"Enhanced message with {len(rag_response.chunks)} chunks from "
+                    f"{len(set(rag_response.source_files)) if rag_response.source_files else 0} documents, "
+                    f"~{metadata['estimated_context_tokens']} context tokens"
+                )
+                return enhanced_message, metadata
+            else:
+                self.log.debug("No relevant document context found")
+                return message, {"rag_used": True, "chunks_retrieved": 0}
+
+        except Exception as e:
+            self.log.warning(
+                f"RAG enhancement failed: {e}, falling back to direct query"
+            )
+            return message, {"rag_used": False, "error": str(e)}
 
 
 class SimpleChat:

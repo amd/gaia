@@ -6,6 +6,7 @@
 [![Latest Release](https://img.shields.io/github/v/release/amd/gaia?include_prereleases)](https://github.com/amd/gaia/releases/latest "Download the latest release")
 [![OS - Windows](https://img.shields.io/badge/OS-Windows-blue)](https://github.com/amd/gaia/blob/main/docs/installer.md "Windows installer")
 [![OS - Linux](https://img.shields.io/badge/OS-Linux-green)](https://github.com/amd/gaia/blob/main/README.md#linux-installation "Linux support")
+[![OS - macOS](https://img.shields.io/badge/OS-macOS-black)](https://github.com/amd/gaia/blob/main/docs/dev.md "macOS support")
 [![Made with Python](https://img.shields.io/badge/Python-3.10-blue?logo=python&logoColor=white)](https://github.com/amd/gaia/blob/main/docs/install.md "Check out our instructions")
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://makeapullrequest.com)
@@ -22,6 +23,7 @@
 **Platform Support:**
 - **Windows 11 Home/Pro**: Full GUI and CLI support with installer
 - **Linux (Ubuntu/Debian)**: Full GUI and CLI support via source installation
+- **macOS**: CLI support via source installation (see [Development Guide](docs/dev.md))
 
 - 🏠 **Local LLM Processing**: Easily run powerful language models directly on your device without cloud dependencies
 - ⚡ **Direct LLM Access**: Query models instantly with the new `gaia llm` command - no server setup required
@@ -80,10 +82,15 @@ For more details and setup instructions, see the [UI Documentation](docs/ui.md).
 - **16GB RAM minimum** (32GB recommended)
 - **AMD Ryzen processor** (any generation)
 
-**Linux (CLI Only):**
+**Linux:**
 - **Ubuntu 20.04+** or **Debian 11+**
 - **16GB RAM minimum** (32GB recommended)
 - **x86_64 architecture**
+
+**macOS:**
+- **macOS 11 (Big Sur)** or newer
+- **16GB RAM minimum** (32GB recommended)
+- **Intel or Apple Silicon (M1/M2/M3)**
 
 **Performance Tiers:**
 - **🚀 Hybrid Mode** (NPU + iGPU): Requires AMD Ryzen AI 9 HX 300 series or newer
@@ -131,6 +138,12 @@ gaia talk
 ```
 Have a voice-based conversation with AI (includes speech recognition and text-to-speech).
 
+**Option 2b: Voice + Document Q&A**
+```bash
+gaia talk --index manual.pdf
+```
+Ask questions about your documents using voice - hands-free document assistance!
+
 **Option 3: Web Interface**
 Double-click the **GAIA-GUI** desktop icon to launch the modern web interface in your browser.
 
@@ -163,30 +176,51 @@ For GAIA UI (graphical interface) installation on Linux, see the [UI Documentati
 **CLI Installation from Source:**
 
 **Prerequisites:**
-- Python 3.10+
-- pip package manager
+- Python 3.10+ (3.12 recommended)
 - git
 
 **Installation Steps:**
-1. Clone the repository:
+
+1. Install uv (fast Python package manager):
+
+   **Linux/macOS:**
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
+
+   **Windows (PowerShell):**
+   ```powershell
+   irm https://astral.sh/uv/install.ps1 | iex
+   ```
+
+2. Clone the repository:
    ```bash
    git clone https://github.com/amd/gaia.git
    cd gaia
    ```
 
-2. Install GAIA CLI:
+3. Create virtual environment and install GAIA:
+
+   **Linux/macOS:**
    ```bash
-   pip install -e .
+   uv venv .venv --python 3.12
+   source .venv/bin/activate
+   uv pip install -e .
    ```
 
-3. Install Lemonade server (for model serving):
-   ```bash
-   # Download and install Lemonade server
-   # Visit https://www.lemonade-server.ai for latest Linux release
-   # Or build from source following their documentation
+   **Windows (PowerShell):**
+   ```powershell
+   uv venv .venv --python 3.12
+   .\.venv\Scripts\Activate.ps1
+   uv pip install -e .
    ```
 
-4. Verify installation:
+4. Install Lemonade server (for model serving):
+   - Visit [lemonade-server.ai](https://www.lemonade-server.ai) for the latest release
+   - Windows: Download and run `lemonade-server-minimal.msi`
+   - Linux: Follow the documentation for source installation
+
+5. Verify installation:
    ```bash
    gaia -v
    ```
@@ -224,14 +258,14 @@ Most GAIA CLI commands require the Lemonade server to be running. If you install
 
 ### Option 1: Standalone Installation
 1. Visit [www.lemonade-server.ai](https://www.lemonade-server.ai) to download the latest release
-2. Download and install `Lemonade_Server_Installer.exe` from the latest release
+2. Download and install `lemonade-server-minimal.msi` from the latest release
 3. Ensure your system has the recommended Ryzen AI drivers installed (NPU Driver `32.0.203.237` or `32.0.203.240`)
 4. Launch the server by double-clicking the `lemonade_server` desktop shortcut created during installation
 
 ### Option 2: Already Included with GAIA Installer
 If you installed GAIA using our unified installer, Lemonade server is already included. Simply:
 1. Double-click the GAIA-CLI desktop shortcut
-2. Run `lemonade-server serve` in the command prompt to start the server
+2. GAIA will automatically start Lemonade Server when needed. You can also start it manually by running `lemonade-server serve`
 
 **Note**: The Lemonade server provides OpenAI-compatible REST API endpoints and enables hybrid NPU/iGPU acceleration on Ryzen AI systems. For more details, see the [AMD Ryzen AI documentation](https://ryzenai.docs.amd.com/en/latest/llm/server_interface.html).
 
@@ -244,19 +278,19 @@ To quickly get started with GAIA via the command line, you can use the GAIA CLI 
 **Direct LLM Queries** (fastest option, no server management required):
 ```bash
 gaia llm "What is artificial intelligence?"
-gaia llm "Explain machine learning" --model llama3.2:3b --max-tokens 200
+gaia llm "Explain machine learning" --model Qwen2.5-0.5B-Instruct-CPU --max-tokens 200
 ```
 
 **Interactive Chat Sessions**:
 ```bash
-gaia chat                        # Start text chat with default agent
-gaia chat --agent-name Blender   # Chat with Blender agent for 3D tasks
+gaia chat                     # Start text chat with the AI assistant
+gaia chat --index manual.pdf  # Chat with document Q&A support
 ```
 
-**Single Prompts to Agents**:
+**Single Prompts**:
 ```bash
-gaia prompt "Create a red cube" --agent-name Blender
 gaia prompt "What's the weather?" --stats
+gaia llm "Explain quantum computing"
 ```
 
 **Voice Interaction**:
@@ -278,14 +312,22 @@ gaia blender --example 2                        # Run specific example
 - `prompt` - Send single message to an agent
 - `chat` - Interactive text conversation
 - `talk` - Voice-based conversation
+- `code` - Python code assistant with analysis and generation
 - `blender` - Create and modify 3D scenes using the Blender agent
+- `jira` - Natural language interface for Atlassian tools
+- `docker` - Natural language interface for Docker containerization
+- `summarize` - Summarize meeting transcripts and emails
+- `api` - Start GAIA API server for IDE integrations
+- `mcp` - Start MCP bridge for external integrations
+- `download` - Download models for GAIA agents
+- `pull` - Download a specific model
 - `stats` - View performance statistics
 - `groundtruth` - Generate evaluation data with Claude
 - `test` - Run audio/speech tests
 - `youtube` - Download YouTube transcripts
 - `kill` - Kill processes on specific ports
 
-**Note**: Most commands require the Lemonade server to be running. Start it by double-clicking the desktop shortcut or running `lemonade-server serve`.
+**Note**: Most commands require the Lemonade server. GAIA will automatically start Lemonade Server when needed. You can also start it manually by double-clicking the desktop shortcut or running `lemonade-server serve`.
 
 **Blender Command**: The `blender` command additionally requires a Blender MCP server. See [CLI documentation](docs/cli.md#blender-command) for setup instructions.
 
@@ -333,10 +375,10 @@ The best way to contribute is by adding a new agent that covers a unique use-cas
 
 GAIA with Ryzen AI Hybrid NPU/iGPU execution has been tested on the following system below. Any system that has the AMD Ryzen AI 9 300 series processor with NPU Driver 32.0.203.237 on Windows 11 or newer with minimum of 16GB of main memory should work. For more details on what is supported, see [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
 
-⚠️ **NOTE**: 
+⚠️ **NOTE**:
 - **Windows**: Full GUI and CLI support with installer
 - **Linux**: Full GUI and CLI support via source installation
-- **macOS**: Not supported at this time
+- **macOS**: CLI support via source installation (see [Development Guide](docs/dev.md))
 
 GAIA has been tested on the following system:
 
@@ -355,10 +397,12 @@ GAIA has been tested on the following system:
 ## Dependencies
 
 The GAIA installer will automatically set up most dependencies, including:
-- Python 3.10
-- Miniconda (if not already installed)
+- Python 3.12
 - FFmpeg
 - All required Python packages
+
+**For development/source installations:**
+- [uv](https://docs.astral.sh/uv/) - Fast Python package manager (10-100x faster than pip)
 
 # Troubleshooting
 

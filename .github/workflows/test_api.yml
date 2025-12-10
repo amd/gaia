@@ -10,19 +10,10 @@ on:
   workflow_call:
   push:
     branches: ["main"]
-    paths:
-      - "src/gaia/api/**"
-      - "tests/test_api*.py"
-      - "src/gaia/cli.py"
-      - ".github/workflows/test_api.yml"
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "src/gaia/api/**"
-      - "tests/test_api*.py"
-      - "src/gaia/cli.py"
-      - ".github/workflows/test_api.yml"
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -37,17 +28,21 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.10'
-          cache: 'pip'
+          python-version: '3.12'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e .[dev,api]
-          pip install pytest pytest-timeout requests
+          uv pip install --system -e .[dev,api]
+          uv pip install --system pytest pytest-timeout requests
 
       - name: Note about Lemonade
         run: |
@@ -57,8 +52,9 @@ jobs:
       - name: Start API Server
         run: |
           # Start API server using gaia CLI (runs on default port 8080)
+          # Use --no-lemonade-check since Lemonade is not running in CI
           echo "Starting GAIA API server using gaia CLI..."
-          gaia api start &
+          gaia api start --no-lemonade-check &
 
           # Wait for server to start
           echo "Waiting for API server to start..."

@@ -17,6 +17,11 @@ You are a search specialist expert at finding and synthesizing information from 
 
 ## Search Strategies
 
+### External Search Tools
+- If you have access to Context7 via MCP, use that first
+- If you have access to Perplexity via MCP, use that if Context7 doesn't give you the answer
+- If you don't have access to the above, use WebFetch or WebSearch
+
 ### Query Optimization
 
 - Use specific phrases in quotes for exact matches

@@ -12,13 +12,13 @@ on:
       has_apps:
         description: "Whether any apps were discovered"
         value: ${{ jobs.discover-apps.outputs.has_apps }}
-  workflow_dispatch:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
-    paths:
-      - 'src/gaia/apps/**/webui/**'
-      - '.github/workflows/build-electron-apps.yml'
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -31,6 +31,9 @@ jobs:
       has_apps: ${{ steps.discover.outputs.has_apps }}
     steps:
       - uses: actions/checkout@v5
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
 
       - name: Discover Electron apps
         id: discover

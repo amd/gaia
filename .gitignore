@@ -89,6 +89,7 @@ celerybeat-schedule
 # virtualenv
 .venv
 venv/
+gaiaenv/
 ENV/
 
 # Spyder project settings
@@ -158,6 +159,9 @@ coverage/
 
 # Custom
 config.ini
+
+# GAIA cache directory
+.gaia/
 
 # Electron Apps - exclude .env but keep .env.development
 src/gaia/apps/**/.env

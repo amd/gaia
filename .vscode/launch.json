@@ -34,19 +34,73 @@
             "stopOnEntry": false,
         },
         {
-            "name": "Chat Debug",
+            "name": "Chat Agent Debug - Interactive",
             "type": "debugpy",
             "request": "launch",
             "module": "gaia.cli",
             "args": ["chat"],
-            "cwd": "${workspaceFolder}/src/gaia",
+            "cwd": "${workspaceFolder}",
             "env": {
-                "PYTHONPATH": "${workspaceFolder}"
+                "PYTHONPATH": "${workspaceFolder}/src"
             },
             "console": "integratedTerminal",
             "justMyCode": false,
             "subProcess": true,
             "stopOnEntry": false,
+            "purpose": ["Debug chat agent with interactive mode"]
+        },
+        {
+            "name": "Chat Agent Debug - Model Selection",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "gaia.agents.chat.app",
+            "args": ["--query", "hi"],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": true,
+            "purpose": ["Stops at entry to set breakpoints", "Use to debug model selection", "Set breakpoint in chat/agent.py line 222 (model_id variable)"]
+        },
+        {
+            "name": "Chat Agent Debug - With Query",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "gaia.cli",
+            "args": ["chat", "--query", "what files are indexed?"],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false,
+            "purpose": ["Test tool invocation with single query"]
+        },
+        {
+            "name": "Chat Agent Debug - Index + Query",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "gaia.cli",
+            "args": [
+                "chat",
+                "--index", "C:\\Users\\14255\\Work\\gaia\\data\\pdf\\Oil-and-Gas-Activity-Operations-Manual-1-10.pdf",
+                "--query", "what is this document about?",
+                "--debug"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false,
+            "purpose": ["Test index + query one-shot", "Debug empty response issue"]
         },
         {
             "name": "Talk Debug",

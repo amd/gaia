@@ -2,124 +2,179 @@
 
 **Table of Contents**
 - [Introduction](#introduction)
-- [Before you start](#before-you-start)
-  - [System Requirements](#system-requirements)
-    - [Ryzen AI Systems](#ryzen-ai-systems)
-    - [Software](#software)
-  - [Software Requirements](#software-requirements)
-- [Prerequisites](#prerequisites)
+- [Before You Start](#before-you-start)
 - [Setup and Installation](#setup-and-installation)
-- [Environment Configuration](#environment-configuration)
+- [Running GAIA](#running-gaia)
 - [Troubleshooting](#troubleshooting)
-  - [Common Issues](#common-issues)
-    - [NPU Driver Installation](#npu-driver-installation)
-    - [pip Installation Errors](#pip-installation-errors)
-    - [Model Loading Issues](#model-loading-issues)
-    - [Environment Variable Issues](#environment-variable-issues)
 - [Support](#support)
-- [License](#license)
 
-# Introduction
+---
 
-GAIA is an open-source framework that runs generative AI applications on AMD hardware. GAIA uses the [ONNX Runtime GenAI (aka OGA)](https://github.com/microsoft/onnxruntime-genai/tree/main?tab=readme-ov-file) backend via [Lemonade Server](https://lemonade-server.ai/) tool for running Large Language Models (LLMs).
+## Introduction
+
+GAIA is an open-source framework that runs generative AI applications on AMD hardware. GAIA uses [ONNX Runtime GenAI](https://github.com/microsoft/onnxruntime-genai) via [Lemonade Server](https://lemonade-server.ai/) for running Large Language Models (LLMs).
 
 GAIA utilizes both NPU and iGPU on Ryzen AI systems for optimal performance on 300 series processors or above.
 
-# Before you start
+---
 
-## System Requirements
+## Before You Start
 
-- OS: Windows 11 Pro, 24H2 or Ubuntu 22.04 LTS / 24.04 LTS (64-bit)
-- RAM: Minimum 16GB
-- CPU: Ryzen AI 300-series processor (e.g., Ryzen AI 9 HX 370)
-- NPU Driver Versions: `32.0.203.240` and newer
-- Storage: 20GB free space
-- Tested Configuration: ASUS ProArt (HN7306W) Laptop
+### System Requirements
 
-### Software
-- [Miniforge](https://conda-forge.org/download/) (conda-forge's recommended installer)
-- [Lemonade Server](https://lemonade-server.ai/) (LLM backend server for GAIA)
+| Requirement | Minimum | Recommended |
+|-------------|---------|-------------|
+| **OS** | Windows 11 Pro 24H2 / Ubuntu 22.04+ | - |
+| **RAM** | 16GB | 64GB |
+| **CPU** | Ryzen AI 300-series | Ryzen AI MAX+ 395 |
+| **Storage** | 20GB free | - |
 
-# Windows Prerequisites
+**Driver Requirements:**
+| Component | Minimum Version |
+|-----------|-----------------|
+| Radeon iGPU | `32.0.22029.1019` |
+| NPU | `32.0.203.314` |
 
-1. Download and install Windows installer from [Miniforge](https://conda-forge.org/download/)
-   1. Check _"Add Miniforge3 to my PATH environment variables"_ if you want it accessible in all terminals
-2. Download and install [Lemonade Server](https://lemonade-server.ai/)
-   1. Go to https://lemonade-server.ai/ and download the appropriate installer for your system
-   2. Follow the installation instructions provided on the website
-   3. Lemonade Server will be used as the backend for running LLMs with GAIA
+### Software Requirements
 
-# Setup and Installation
-1. Clone GAIA repo: `git clone https://github.com/amd/gaia.git`
-1. Open a powershell prompt and go to the GAIA root: `cd ./gaia`
-1. Create and activate a conda environment:
-    1. `conda create -n gaiaenv python=3.10 -y`
-    1. `conda activate gaiaenv`
-1. Install GAIA dependencies:
-    ```bash
-    pip install -e .[dev]
-    ```
-    ⚠️ NOTE: If actively developing, use `-e` switch to enable editable mode and create links to sources instead.
+- **Git** - For version control
+- **Lemonade Server** - Download from [lemonade-server.ai](https://lemonade-server.ai/)
 
-    ⚠️ NOTE: Make sure you are in the correct virtual environment when installing dependencies. If not, run `conda activate gaiaenv`.
+---
 
-    ⚠️ NOTE: Check `./setup.py` for additional packages that support extra features in the CLI tool, e.g. `pip install -e .[dev,eval,talk]`
+## Setup and Installation
 
-5. For detailed information about using the Chat SDK and CLI chat features, see the [Chat SDK Documentation](./chat.md).
+GAIA uses [uv](https://docs.astral.sh/uv/), a fast Python package manager that handles virtual environments, Python installation, and dependencies automatically.
 
-## Dependency Management
+### Step 1: Install uv
 
-For information on managing dependencies and configuring Dependabot for automated updates, see the [Dependency Management Guide](./dependency-management.md).
+**Windows (PowerShell):**
+```powershell
+irm https://astral.sh/uv/install.ps1 | iex
+```
 
-# Running GAIA
+**Linux/macOS:**
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
 
-Once the installation and environment variables are set, run the following:
-
-1. Start the Lemonade server (required for LLM operations):
-    ```bash
-    lemonade-server serve
-    ```
-    Keep this running in a separate terminal window.
-
-1. Run `gaia -v` in the terminal to verify the installation. You should see a similar output:
-    ```bash
-    0.10.0
-    ```
-1. Run `gaia -h` to see CLI options.
-1. Try the chat feature with a simple query:
-    ```bash
-    gaia chat "What is artificial intelligence?"
-    ```
-    Or start an interactive chat session:
-    ```bash
-    gaia chat
-    ```
-
-## Running Electron Applications
-
-GAIA includes Electron-based GUI applications. To run the JAX (Jira Agent Experience) app locally:
+### Step 2: Clone GAIA
 
 ```bash
-# Linux/Mac
-./src/gaia/apps/jira/webui/run.sh
+git clone https://github.com/amd/gaia.git
+cd gaia
+```
 
-# Windows
+### Step 3: Create Virtual Environment
+
+```bash
+uv venv .venv --python 3.12
+```
+
+> **Note:** uv will automatically download Python 3.12 if not already installed.
+
+### Step 4: Activate the Environment
+
+**Windows (PowerShell):**
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+**Windows (Command Prompt):**
+```cmd
+.\.venv\Scripts\activate.bat
+```
+
+**Linux/macOS:**
+```bash
+source .venv/bin/activate
+```
+
+You should see `(.venv)` in your terminal prompt when activated.
+
+### Step 5: Install Dependencies
+
+```bash
+uv pip install -e ".[dev]"
+```
+
+Or install with all extras:
+```bash
+uv pip install -e ".[dev,talk,rag]"
+```
+
+### Deactivating
+
+When done working:
+```bash
+deactivate
+```
+
+> **See also:** [Chat SDK Documentation](./chat.md) | [Dependency Management Guide](./dependency-management.md)
+
+---
+
+## Running GAIA
+
+### Verify Installation
+
+```bash
+gaia -v    # Check version
+gaia -h    # View CLI options
+```
+
+### Start Chatting
+
+```bash
+# Single query
+gaia chat -q "What is artificial intelligence?"
+
+# Interactive session
+gaia chat
+```
+
+> **Note:** GAIA automatically starts Lemonade Server when needed. For manual start: `lemonade-server serve`
+
+### Running Electron Applications
+
+GAIA includes Electron-based GUI applications. To run the JAX (Jira Agent Experience) app:
+
+**Windows:**
+```powershell
 .\src\gaia\apps\jira\webui\run.ps1
 ```
 
-This will build the installer and launch the JAX application in development mode. The installer will be created in `src/gaia/apps/jira/webui/out/make/`.
+**Linux/macOS:**
+```bash
+./src/gaia/apps/jira/webui/run.sh
+```
 
-# Troubleshooting
+---
 
-## Common Issues
+## Troubleshooting
 
-### pip Installation Errors
+### "uv" command not found (Windows)
 
-If you encounter pip installation errors:
-1. Ensure you're using the correct Python version (3.10)
-2. Try running: `pip install --upgrade pip`
-3. Try deleting pip cache typically under: _C:\Users\<username>\AppData\Local\pip\cache_
-4. Make sure there are no spaces in your project or or pip file cache paths
+After installing uv, the command may not be recognized because PATH hasn't updated.
+
+**Solution 1:** Restart PowerShell (simplest)
+
+**Solution 2:** Update PATH in current session:
+```powershell
+$env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
+```
+
+**Solution 3:** Use full path:
+```powershell
+$env:USERPROFILE\.local\bin\uv.exe --version
+```
+
+### Virtual Environment Activation Fails (Windows)
+
+If you see a script execution error:
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
 
 ### Model Loading Issues
 
@@ -129,21 +184,19 @@ If you encounter pip installation errors:
 
 ### Environment Variable Issues
 
-If GAIA is not working correctly:
+1. Verify the virtual environment is activated (look for `(.venv)` prefix)
+2. Try restarting your terminal
+3. Re-run the activation command for your platform
 
-1. Verify the installation completed successfully by checking the log files
-2. Ensure all dependencies are installed correctly
-3. Check that you're using the correct conda environment:
-   ```bash
-   conda activate gaiaenv
-   ```
-4. Try restarting your terminal or command prompt
+---
 
-# Support
+## Support
 
-Report any issues to the GAIA team at `gaia@amd.com` or create an [issue](https://github.com/amd/gaia/issues) on the [GAIA GitHub repo](https://github.com/amd/gaia.git).
+Report issues to `gaia@amd.com` or create an [issue on GitHub](https://github.com/amd/gaia/issues).
 
-# License
+---
+
+## License
 
 [MIT License](../LICENSE.md)
 

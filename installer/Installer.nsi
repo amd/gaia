@@ -384,20 +384,20 @@ Section "-Install Main Components" SEC01
 
     install_lemonade:
       ; Check if file already exists and delete it first
-      IfFileExists "$TEMP\Lemonade_Server_Installer.exe" 0 download_lemonade
-        Delete "$TEMP\Lemonade_Server_Installer.exe"
+      IfFileExists "$TEMP\lemonade-server-minimal.msi" 0 download_lemonade
+        Delete "$TEMP\lemonade-server-minimal.msi"
 
       download_lemonade:
         DetailPrint "- Downloading Lemonade installer..."
         ; Use nsExec::ExecToStack to capture the output and error code
-        nsExec::ExecToStack 'curl -L -f -v --retry 3 --retry-delay 2 -o "$TEMP\Lemonade_Server_Installer.exe" "https://github.com/lemonade-sdk/lemonade/releases/download/v${LEMONADE_VERSION}/Lemonade_Server_Installer.exe"'
+        nsExec::ExecToStack 'curl -L -f -v --retry 3 --retry-delay 2 -o "$TEMP\lemonade-server-minimal.msi" "https://github.com/lemonade-sdk/lemonade/releases/download/v${LEMONADE_VERSION}/lemonade-server-minimal.msi"'
         Pop $0  ; Return value
         Pop $1  ; Command output
         DetailPrint "- Curl return code: $0"
         DetailPrint "- Curl output: $1"
 
       ; Check if download was successful
-      IfFileExists "$TEMP\Lemonade_Server_Installer.exe" lemonade_download_success lemonade_download_failed
+      IfFileExists "$TEMP\lemonade-server-minimal.msi" lemonade_download_success lemonade_download_failed
 
       lemonade_download_failed:
         DetailPrint "- Failed to download Lemonade installer"
@@ -407,9 +407,9 @@ Section "-Install Main Components" SEC01
         GoTo skip_lemonade
 
       lemonade_download_success:
-        DetailPrint "- Download successful ($TEMP\Lemonade_Server_Installer.exe), installing Lemonade..."
+        DetailPrint "- Download successful ($TEMP\lemonade-server-minimal.msi), installing Lemonade..."
 
-        ExecWait '"$TEMP\Lemonade_Server_Installer.exe" /Extras=hybrid' $2
+        ExecWait 'msiexec /i "$TEMP\lemonade-server-minimal.msi" /qn EXTRAS=hybrid' $2
         DetailPrint "- Lemonade installer finished with exit code: $2"
 
         ; Check if Lemonade installer succeeded based on exit code
@@ -429,7 +429,7 @@ Section "-Install Main Components" SEC01
         ${EndIf}
 
         ; Clean up the downloaded installer
-        Delete "$TEMP\Lemonade_Server_Installer.exe"
+        Delete "$TEMP\lemonade-server-minimal.msi"
         GoTo create_env
 
     skip_lemonade:

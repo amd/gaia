@@ -58,8 +58,12 @@ function Invoke-Black {
     Write-Host "----------------------------------------"
 
     if ($Fix) {
+        $cmd = "$PYTHON_PATH -m black $INSTALLER_DIR $SRC_DIR $TEST_DIR --config pyproject.toml"
+        Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
         $blackOutput = & $PYTHON_PATH -m black $INSTALLER_DIR $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1 | Out-String -Width 4096
     } else {
+        $cmd = "$PYTHON_PATH -m black --check --diff $INSTALLER_DIR $SRC_DIR $TEST_DIR --config pyproject.toml"
+        Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
         $blackOutput = & $PYTHON_PATH -m black --check --diff $INSTALLER_DIR $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1 | Out-String -Width 4096
     }
 
@@ -87,8 +91,12 @@ function Invoke-Isort {
     Write-Host "----------------------------------------"
 
     if ($Fix) {
+        $cmd = "$PYTHON_PATH -m isort $INSTALLER_DIR $SRC_DIR $TEST_DIR"
+        Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
         $isortOutput = & $PYTHON_PATH -m isort $INSTALLER_DIR $SRC_DIR $TEST_DIR 2>&1 | Out-String -Width 4096
     } else {
+        $cmd = "$PYTHON_PATH -m isort --check-only --diff $INSTALLER_DIR $SRC_DIR $TEST_DIR"
+        Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
         $isortOutput = & $PYTHON_PATH -m isort --check-only --diff $INSTALLER_DIR $SRC_DIR $TEST_DIR 2>&1 | Out-String -Width 4096
     }
 
@@ -115,6 +123,8 @@ function Invoke-Pylint {
     Write-Host "`n[3/7] Running Pylint (errors only)..." -ForegroundColor Cyan
     Write-Host "----------------------------------------"
 
+    $cmd = "$PYTHON_PATH -m $PYLINT_PATH $SRC_DIR --rcfile $PYLINT_CONFIG --disable $DISABLED_CHECKS"
+    Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
     $pylintOutput = & $PYTHON_PATH -m $PYLINT_PATH $SRC_DIR --rcfile $PYLINT_CONFIG --disable $DISABLED_CHECKS 2>&1 | Out-String -Width 4096
 
     if ($LASTEXITCODE -ne 0) {
@@ -138,6 +148,8 @@ function Invoke-Flake8 {
     Write-Host "`n[4/7] Running Flake8..." -ForegroundColor Cyan
     Write-Host "----------------------------------------"
 
+    $cmd = "$PYTHON_PATH -m flake8 $INSTALLER_DIR $SRC_DIR $TEST_DIR --exclude=$EXCLUDE_DIRS --count --statistics --max-line-length=88 --extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722"
+    Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
     $flake8Output = & $PYTHON_PATH -m flake8 $INSTALLER_DIR $SRC_DIR $TEST_DIR --exclude=$EXCLUDE_DIRS --count --statistics --max-line-length=88 --extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722 2>&1 | Out-String -Width 4096
 
     if ($LASTEXITCODE -ne 0) {
@@ -164,6 +176,8 @@ function Invoke-MyPy {
     Write-Host "`n[5/7] Running MyPy type checking (warning only)..." -ForegroundColor Cyan
     Write-Host "----------------------------------------"
 
+    $cmd = "$PYTHON_PATH -m mypy $SRC_DIR --ignore-missing-imports"
+    Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
     $mypyOutput = & $PYTHON_PATH -m mypy $SRC_DIR --ignore-missing-imports 2>&1 | Out-String -Width 4096
 
     if ($LASTEXITCODE -ne 0) {
@@ -192,6 +206,8 @@ function Invoke-Bandit {
     Write-Host "`n[6/7] Running security check with Bandit (warning only)..." -ForegroundColor Cyan
     Write-Host "----------------------------------------"
 
+    $cmd = "$PYTHON_PATH -m bandit -r $SRC_DIR -ll --exclude $EXCLUDE_DIRS"
+    Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
     $banditOutput = & $PYTHON_PATH -m bandit -r $SRC_DIR -ll --exclude $EXCLUDE_DIRS 2>&1 | Out-String -Width 4096
 
     if ($LASTEXITCODE -ne 0) {
@@ -231,6 +247,8 @@ function Invoke-ImportTests {
     $failed = $false
     $script:ImportsIssues = 0
     foreach ($import in $imports) {
+        $cmd = "$PYTHON_PATH -c `"import $($import.Module); print('OK: $($import.Desc) imports')`""
+        Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
         & $PYTHON_PATH -c "import $($import.Module); print('OK: $($import.Desc) imports')" 2>&1 | Out-String -Width 4096
         if ($LASTEXITCODE -ne 0) {
             Write-Host "[!] Failed to import $($import.Module)" -ForegroundColor Red

@@ -24,6 +24,9 @@ except ImportError:
         "Rich library not found. Install with 'pip install rich' for syntax highlighting."
     )
 
+# Display configuration constants
+MAX_DISPLAY_LINE_LENGTH = 120
+
 
 class OutputHandler(ABC):
     """
@@ -523,15 +526,48 @@ class AgentConsole(OutputHandler):
 
     def print_tool_usage(self, tool_name: str) -> None:
         """
-        Print tool usage information.
+        Print tool usage information with user-friendly descriptions.
 
         Args:
             tool_name: Name of the tool being used
         """
+        # Map tool names to user-friendly action descriptions
+        tool_descriptions = {
+            # RAG Tools
+            "list_indexed_documents": "📚 Checking which documents are currently indexed",
+            "query_documents": "🔍 Searching through indexed documents for relevant information",
+            "query_specific_file": "📄 Searching within a specific document",
+            "search_indexed_chunks": "🔎 Performing exact text search in indexed content",
+            "index_document": "📥 Adding document to the knowledge base",
+            "index_directory": "📁 Indexing all documents in a directory",
+            "dump_document": "📝 Exporting document content for analysis",
+            "summarize_document": "📋 Creating a summary of the document",
+            "rag_status": "ℹ️ Retrieving RAG system status",
+            # File System Tools
+            "search_file": "🔍 Searching for files on your system",
+            "search_directory": "📂 Looking for directories on your system",
+            "search_file_content": "📝 Searching for content within files",
+            "read_file": "📖 Reading file contents",
+            "write_file": "✏️ Writing content to a file",
+            "add_watch_directory": "👁️ Starting to monitor a directory for changes",
+            # Shell Tools
+            "run_shell_command": "💻 Executing shell command",
+            # Default for unknown tools
+            "default": "🔧 Executing operation",
+        }
+
+        # Get the description or use the tool name if not found
+        action_desc = tool_descriptions.get(tool_name, tool_descriptions["default"])
+
         if self.rich_available:
-            self.console.print(f"\n[bold blue]🔧 Using tool:[/bold blue] {tool_name}")
+            self.console.print(f"\n[bold blue]{action_desc}[/bold blue]")
+            if action_desc == tool_descriptions["default"]:
+                # If using default, also show the tool name
+                self.console.print(f"  [dim]Tool: {tool_name}[/dim]")
         else:
-            print(f"\n🔧 Using tool: {tool_name}")
+            print(f"\n{action_desc}")
+            if action_desc == tool_descriptions["default"]:
+                print(f"  Tool: {tool_name}")
 
     def print_tool_complete(self) -> None:
         """Print that tool execution is complete."""
@@ -625,17 +661,21 @@ class AgentConsole(OutputHandler):
         else:
             print(f"\n⚠️ WARNING: {message}\n")
 
-    def print_final_answer(self, answer: str) -> None:
+    def print_final_answer(
+        self, answer: str, streaming: bool = True  # pylint: disable=unused-argument
+    ) -> None:
         """
         Print the final answer with appropriate styling.
 
         Args:
             answer: The final answer to display
+            streaming: Not used (kept for compatibility)
         """
+        # Use the "🧠 gaia:" prefix for consistency
         if self.rich_available:
-            self.console.print(f"\n[bold green]✅ Final answer:[/bold green] {answer}")
+            self.console.print(f"\n[bold blue]🧠 gaia:[/bold blue] {answer}")
         else:
-            print(f"\n✅ Final answer: {answer}")
+            print(f"\n🧠 gaia: {answer}")
 
     def print_completion(self, steps_taken: int, steps_limit: int) -> None:
         """
@@ -684,64 +724,64 @@ class AgentConsole(OutputHandler):
 
     def display_stats(self, stats: Dict[str, Any]) -> None:
         """
-        Display LLM performance statistics.
+        Display LLM performance statistics or query execution stats.
 
         Args:
             stats: Dictionary containing performance statistics
+                   Can include: duration, steps_taken, total_tokens (query stats)
+                   Or: time_to_first_token, tokens_per_second, etc. (LLM stats)
         """
         if not stats:
             return
 
+        # Check if we have query-level stats or LLM-level stats
+        has_query_stats = any(
+            key in stats for key in ["duration", "steps_taken", "total_tokens"]
+        )
+        has_llm_stats = any(
+            key in stats for key in ["time_to_first_token", "tokens_per_second"]
+        )
+
         # Skip if there's no meaningful stats
-        if not stats.get("time_to_first_token") and not stats.get("tokens_per_second"):
+        if not has_query_stats and not has_llm_stats:
             return
 
-        # Create a nice display of the stats
-        if self.rich_available:
-            # Create a table for the stats
-            table = Table(
-                title="🚀 LLM Performance Stats",
-                show_header=True,
-                header_style="bold cyan",
-            )
-            table.add_column("Metric", style="dim")
-            table.add_column("Value", justify="right")
+        # Create a table for the stats
+        title = "📊 Query Stats" if has_query_stats else "🚀 LLM Performance Stats"
+        table = Table(
+            title=title,
+            show_header=True,
+            header_style="bold cyan",
+        )
+        table.add_column("Metric", style="dim")
+        table.add_column("Value", justify="right")
 
-            # Add stats to the table
-            if (
-                "time_to_first_token" in stats
-                and stats["time_to_first_token"] is not None
-            ):
-                table.add_row(
-                    "Time to First Token", f"{stats['time_to_first_token']:.2f} sec"
-                )
+        # Add query-level stats (timing and steps)
+        if "duration" in stats and stats["duration"] is not None:
+            table.add_row("Duration", f"{stats['duration']:.2f}s")
 
-            if "tokens_per_second" in stats and stats["tokens_per_second"] is not None:
-                table.add_row("Tokens per Second", f"{stats['tokens_per_second']:.2f}")
+        if "steps_taken" in stats and stats["steps_taken"] is not None:
+            table.add_row("Steps", f"{stats['steps_taken']}")
 
-            if "input_tokens" in stats and stats["input_tokens"] is not None:
-                table.add_row("Input Tokens", f"{stats['input_tokens']}")
+        # Add LLM performance stats (timing)
+        if "time_to_first_token" in stats and stats["time_to_first_token"] is not None:
+            table.add_row("Time to First Token", f"{stats['time_to_first_token']:.2f}s")
 
-            if "output_tokens" in stats and stats["output_tokens"] is not None:
-                table.add_row("Output Tokens", f"{stats['output_tokens']}")
+        if "tokens_per_second" in stats and stats["tokens_per_second"] is not None:
+            table.add_row("Tokens/Second", f"{stats['tokens_per_second']:.1f}")
 
-            # Print the table in a panel
-            self.console.print(Panel(table, border_style="blue"))
-        else:
-            # Plain text fallback
-            print("\n--- LLM Performance Stats ---")
-            if (
-                "time_to_first_token" in stats
-                and stats["time_to_first_token"] is not None
-            ):
-                print(f"Time to First Token: {stats['time_to_first_token']:.2f} sec")
-            if "tokens_per_second" in stats and stats["tokens_per_second"] is not None:
-                print(f"Tokens per Second: {stats['tokens_per_second']:.2f}")
-            if "input_tokens" in stats and stats["input_tokens"] is not None:
-                print(f"Input Tokens: {stats['input_tokens']}")
-            if "output_tokens" in stats and stats["output_tokens"] is not None:
-                print(f"Output Tokens: {stats['output_tokens']}")
-            print("-----------------------------")
+        # Add token usage stats (always show in consistent format)
+        if "input_tokens" in stats and stats["input_tokens"] is not None:
+            table.add_row("Input Tokens", f"{stats['input_tokens']:,}")
+
+        if "output_tokens" in stats and stats["output_tokens"] is not None:
+            table.add_row("Output Tokens", f"{stats['output_tokens']:,}")
+
+        if "total_tokens" in stats and stats["total_tokens"] is not None:
+            table.add_row("Total Tokens", f"{stats['total_tokens']:,}")
+
+        # Print the table in a panel
+        self.console.print(Panel(table, border_style="blue"))
 
     def start_progress(self, message: str) -> None:
         """
@@ -1020,11 +1060,10 @@ class AgentConsole(OutputHandler):
         total_lines = len(lines)
 
         # Truncate extremely long lines to prevent display issues
-        max_line_length = 120
         truncated_lines = []
         for line in lines:
-            if len(line) > max_line_length:
-                truncated_lines.append(line[:max_line_length] + "...")
+            if len(line) > MAX_DISPLAY_LINE_LENGTH:
+                truncated_lines.append(line[:MAX_DISPLAY_LINE_LENGTH] + "...")
             else:
                 truncated_lines.append(line)
 
@@ -1107,76 +1146,144 @@ class SilentConsole(OutputHandler):
     Implements OutputHandler for silent/suppressed output.
     """
 
-    def __init__(self):
-        """Initialize the silent console."""
+    def __init__(self, silence_final_answer: bool = False):
+        """Initialize the silent console.
+
+        Args:
+            silence_final_answer: If True, suppress even the final answer (for JSON-only mode)
+        """
         self.streaming_buffer = ""  # Maintain compatibility
+        self.silence_final_answer = silence_final_answer
 
     # Implementation of OutputHandler abstract methods - all no-ops
+    def print_final_answer(
+        self, answer: str, streaming: bool = True  # pylint: disable=unused-argument
+    ) -> None:
+        """
+        Print the final answer.
+        Only suppressed if silence_final_answer is True.
 
+        Args:
+            answer: The final answer to display
+            streaming: Not used (kept for compatibility)
+        """
+        if self.silence_final_answer:
+            return  # Completely silent
+
+        # Print the final answer directly
+        print(f"\n🧠 gaia: {answer}")
+
+    def display_stats(self, stats: Dict[str, Any]) -> None:
+        """
+        Display stats even in silent mode (since explicitly requested).
+        Uses the same Rich table format as AgentConsole.
+
+        Args:
+            stats: Dictionary containing performance statistics
+        """
+        if not stats:
+            return
+
+        # Check if we have query-level stats or LLM-level stats
+        has_query_stats = any(
+            key in stats for key in ["duration", "steps_taken", "total_tokens"]
+        )
+        has_llm_stats = any(
+            key in stats for key in ["time_to_first_token", "tokens_per_second"]
+        )
+
+        # Skip if there's no meaningful stats
+        if not has_query_stats and not has_llm_stats:
+            return
+
+        # Use Rich table format (same as AgentConsole)
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+
+        console = Console()
+
+        title = "📊 Query Stats" if has_query_stats else "🚀 LLM Performance Stats"
+        table = Table(
+            title=title,
+            show_header=True,
+            header_style="bold cyan",
+        )
+        table.add_column("Metric", style="dim")
+        table.add_column("Value", justify="right")
+
+        # Add query-level stats (timing and steps)
+        if "duration" in stats and stats["duration"] is not None:
+            table.add_row("Duration", f"{stats['duration']:.2f}s")
+
+        if "steps_taken" in stats and stats["steps_taken"] is not None:
+            table.add_row("Steps", f"{stats['steps_taken']}")
+
+        # Add LLM performance stats (timing)
+        if "time_to_first_token" in stats and stats["time_to_first_token"] is not None:
+            table.add_row("Time to First Token", f"{stats['time_to_first_token']:.2f}s")
+
+        if "tokens_per_second" in stats and stats["tokens_per_second"] is not None:
+            table.add_row("Tokens/Second", f"{stats['tokens_per_second']:.1f}")
+
+        # Add token usage stats (always show in consistent format)
+        if "input_tokens" in stats and stats["input_tokens"] is not None:
+            table.add_row("Input Tokens", f"{stats['input_tokens']:,}")
+
+        if "output_tokens" in stats and stats["output_tokens"] is not None:
+            table.add_row("Output Tokens", f"{stats['output_tokens']:,}")
+
+        if "total_tokens" in stats and stats["total_tokens"] is not None:
+            table.add_row("Total Tokens", f"{stats['total_tokens']:,}")
+
+        # Print the table in a panel
+        console.print(Panel(table, border_style="blue"))
+
+    # All other abstract methods as no-ops
     def print_processing_start(self, query: str, max_steps: int):
-        """Silent no-op method."""
-        ...
+        """No-op implementation."""
 
     def print_step_header(self, step_num: int, step_limit: int):
-        """Silent no-op method."""
-        ...
+        """No-op implementation."""
 
     def print_state_info(self, state_message: str):
-        """Silent no-op method."""
-        ...
+        """No-op implementation."""
 
     def print_thought(self, thought: str):
-        """Silent no-op method."""
-        ...
+        """No-op implementation."""
 
     def print_goal(self, goal: str):
-        """Silent no-op method."""
-        ...
+        """No-op implementation."""
 
     def print_plan(self, plan: List[Any], current_step: int = None):
-        """Silent no-op method."""
-        ...
+        """No-op implementation."""
 
     def print_tool_usage(self, tool_name: str):
-        """Silent no-op method."""
-        ...
+        """No-op implementation."""
 
     def print_tool_complete(self):
-        """Silent no-op method."""
-        ...
+        """No-op implementation."""
 
     def pretty_print_json(self, data: Dict[str, Any], title: str = None):
-        """Silent no-op method."""
-        ...
+        """No-op implementation."""
 
     def print_error(self, error_message: str):
-        """Silent no-op method."""
-        ...
+        """No-op implementation."""
 
     def print_warning(self, warning_message: str):
-        """Silent no-op method."""
-        ...
+        """No-op implementation."""
 
     def print_info(self, message: str):
-        """Silent no-op method."""
-        ...
+        """No-op implementation."""
 
     def start_progress(self, message: str):
-        """Silent no-op method."""
-        ...
+        """No-op implementation."""
 
     def stop_progress(self):
-        """Silent no-op method."""
-        ...
-
-    def print_final_answer(self, answer: str):
-        """Silent no-op method."""
-        ...
+        """No-op implementation."""
 
     def print_repeated_tool_warning(self):
-        """Silent no-op method."""
-        ...
+        """No-op implementation."""
 
     def print_completion(self, steps_taken: int, steps_limit: int):
-        """Silent no-op method."""
-        ...
+        """No-op implementation."""
