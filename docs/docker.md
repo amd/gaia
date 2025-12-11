@@ -14,7 +14,9 @@ The GAIA Docker Agent provides a natural language interface for containerizing a
 2. **Setup GAIA Development Environment**:
    Follow the [GAIA Development Guide](./dev.md) for complete setup instructions.
 
-   Quick install: `pip install -e .[mcp,dev]` (includes MCP and Docker agent dependencies)
+   Quick install (includes MCP and Docker agent dependencies):
+   - Linux/Windows: `pip install -e .[mcp,dev]`
+   - macOS: `pip install -e ".[mcp,dev]"`
 
 3. **Download Required Model**:
    The Docker agent uses the `Qwen3-Coder-30B-A3B-Instruct-GGUF` model for reliable Dockerfile generation and application analysis.

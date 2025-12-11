@@ -7,12 +7,25 @@ import ast
 from pathlib import Path
 from typing import Any, Dict, List
 
+# Code quality thresholds for anti-pattern detection
+MAX_FUNCTION_NAME_LENGTH = 80
+MAX_FUNCTION_NAME_LENGTH_WARNING = 40
+MAX_CLASS_NAME_LENGTH = 30
+MAX_COMBINATORIAL_NAMING_THRESHOLD = 3
+MAX_FUNCTION_PARAMETERS = 6
+MAX_FUNCTION_LINES = 50
+MAX_FILE_LINES = 1000
+MAX_UNDERSCORES_IN_NAME = 5
+MAX_NESTING_DEPTH = 4
+MAX_BRANCHES = 10
+MAX_LOOPS = 3
+
 
 class AntipatternChecker:
     """Checks for combinatorial anti-patterns and code smells."""
 
     def check(self, _file_path: Path, content: str) -> Dict[str, Any]:
-        """Check for combinatorial anti-patterns like in HRMS services.py.
+        """Check for combinatorial anti-patterns.
 
         Args:
             _file_path: Path to the file being checked (unused currently)
@@ -36,8 +49,8 @@ class AntipatternChecker:
                     arg.arg for arg in node.args.args if arg.arg not in ("self", "cls")
                 ]
 
-                # Check for excessive function name length (HRMS had 311 chars!)
-                if len(func_name) > 80:
+                # Check for excessive function name length
+                if len(func_name) > MAX_FUNCTION_NAME_LENGTH:
                     errors.append(
                         f"Line {node.lineno}: Function name {len(func_name)} chars: {func_name[:60]}..."
                     )
@@ -45,13 +58,16 @@ class AntipatternChecker:
                 # Check for combinatorial naming
                 and_count = func_name.count("_and_")
                 by_count = func_name.count("_by_")
-                if and_count >= 3 or by_count >= 3:
+                if (
+                    and_count >= MAX_COMBINATORIAL_NAMING_THRESHOLD
+                    or by_count >= MAX_COMBINATORIAL_NAMING_THRESHOLD
+                ):
                     errors.append(
                         f"Line {node.lineno}: Combinatorial function with {and_count} 'and' and {by_count} 'by'"
                     )
 
-                # Check parameter count (HRMS had 12+ params)
-                if len(params) > 6:
+                # Check parameter count
+                if len(params) > MAX_FUNCTION_PARAMETERS:
                     warnings.append(
                         f"Line {node.lineno}: Function has {len(params)} parameters"
                     )
@@ -60,7 +76,7 @@ class AntipatternChecker:
                 function_lines = 0
                 if hasattr(node, "end_lineno") and node.end_lineno is not None:
                     function_lines = node.end_lineno - node.lineno
-                if function_lines > 50:
+                if function_lines > MAX_FUNCTION_LINES:
                     warnings.append(
                         f"Line {node.lineno}: Function '{func_name}' is {function_lines} lines long (consider breaking it up)"
                     )
@@ -77,7 +93,7 @@ class AntipatternChecker:
 
             # Check for excessive file length
             lines = content.split("\n")
-            if len(lines) > 1000:
+            if len(lines) > MAX_FILE_LINES:
                 warnings.append(
                     f"File has {len(lines)} lines (consider splitting into multiple modules)"
                 )
@@ -113,13 +129,13 @@ class AntipatternChecker:
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef):
                 # Check for overly long names
-                if len(node.name) > 40:
+                if len(node.name) > MAX_FUNCTION_NAME_LENGTH_WARNING:
                     issues.append(
-                        f"Function '{node.name[:40]}...' has excessively long name ({len(node.name)} chars)"
+                        f"Function '{node.name[:MAX_FUNCTION_NAME_LENGTH_WARNING]}...' has excessively long name ({len(node.name)} chars)"
                     )
 
                 # Check for too many underscores (indicates poor design)
-                if node.name.count("_") > 5:
+                if node.name.count("_") > MAX_UNDERSCORES_IN_NAME:
                     issues.append(
                         f"Function '{node.name}' has too many underscores ({node.name.count('_')})"
                     )
@@ -132,9 +148,9 @@ class AntipatternChecker:
                     )
 
                 # Check for overly long class names
-                if len(node.name) > 30:
+                if len(node.name) > MAX_CLASS_NAME_LENGTH:
                     issues.append(
-                        f"Class '{node.name[:30]}...' has excessively long name ({len(node.name)} chars)"
+                        f"Class '{node.name[:MAX_CLASS_NAME_LENGTH]}...' has excessively long name ({len(node.name)} chars)"
                     )
 
         return issues
@@ -152,17 +168,17 @@ class AntipatternChecker:
 
         # Count nested levels
         max_depth = self._get_max_nesting_depth(node)
-        if max_depth > 4:
+        if max_depth > MAX_NESTING_DEPTH:
             issues.append(f"Function has excessive nesting depth: {max_depth}")
 
         # Count number of branches
         branches = self._count_branches(node)
-        if branches > 10:
+        if branches > MAX_BRANCHES:
             issues.append(f"Function has too many branches: {branches}")
 
         # Count number of loops
         loops = self._count_loops(node)
-        if loops > 3:
+        if loops > MAX_LOOPS:
             issues.append(f"Function has too many loops: {loops}")
 
         return issues

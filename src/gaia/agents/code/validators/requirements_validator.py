@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 class RequirementsValidator:
     """Validates requirements.txt files for hallucinated packages."""
 
-    # Patterns indicating hallucinated packages (from HRMS issue)
+    # Patterns indicating hallucinated packages
     HALLUCINATION_PATTERNS = [
         r".*-ibm-cloud-ibm-cloud.*",  # Recursive IBM
         r".*-azure-.*-azure.*",  # Recursive Azure

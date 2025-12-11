@@ -42,6 +42,7 @@ class JiraApp:
         debug: bool = False,
         model: str = None,
         step_mode: bool = False,
+        base_url: str = None,
     ):
         """
         Initialize the Jira App.
@@ -51,14 +52,17 @@ class JiraApp:
             debug: Enable debug logging
             model: LLM model to use (optional)
             step_mode: Enable step-by-step execution mode
+            base_url: Base URL for local LLM server (defaults to LEMONADE_BASE_URL env var)
         """
         self.verbose = verbose
         self.debug = debug
         self.model = model or "Qwen3-Coder-30B-A3B-Instruct-GGUF"
         self.step_mode = step_mode
+        self.base_url = base_url
         # In demo/debug mode, never use silent mode so we see all agent steps
         self.agent = JiraAgent(
             model_id=self.model,
+            base_url=self.base_url,
             debug_prompts=False,  # Don't include prompts in conversation history by default
             show_prompts=False,  # Don't show prompts by default, even in debug mode
             show_stats=self.debug or self.verbose,
@@ -88,7 +92,7 @@ class JiraApp:
         ...
 
     async def execute_command(
-        self, command: str, context: Optional[str] = None, output_to_file: bool = False
+        self, command: str, context: Optional[str] = None, trace: bool = False
     ) -> TaskResult:
         """
         Execute a natural language command.
@@ -96,7 +100,7 @@ class JiraApp:
         Args:
             command: Natural language command to execute
             context: Additional context (optional)
-            output_to_file: Whether to save output to file
+            trace: Whether to save detailed trace to file
 
         Returns:
             TaskResult with execution outcome
@@ -107,7 +111,7 @@ class JiraApp:
                 command = f"{command}\nContext: {context}"
 
             # Use the agent's process_query directly - single entry point
-            result = self.agent.process_query(command, output_to_file=output_to_file)
+            result = self.agent.process_query(command, trace=trace)
 
             # Base agent returns: status ("success", "failed", "incomplete"), result, conversation, etc.
             return TaskResult(
@@ -344,11 +348,20 @@ async def main(cli_args=None):
             "-i", "--interactive", action="store_true", help="Interactive mode"
         )
         parser.add_argument("--model", help="LLM model to use")
+        parser.add_argument(
+            "--base-url",
+            help="Base URL for local LLM server (defaults to LEMONADE_BASE_URL env var)",
+        )
 
         args = parser.parse_args()
 
     # Create app
-    app = JiraApp(verbose=args.verbose, debug=args.debug, model=args.model)
+    app = JiraApp(
+        verbose=args.verbose,
+        debug=args.debug,
+        model=args.model,
+        base_url=getattr(args, "base_url", None),
+    )
     try:
         # Initialize
         if not await app.connect():

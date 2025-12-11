@@ -42,7 +42,7 @@ class GAIAMCPBridge:
     ):
         self.host = host
         self.port = port
-        self.base_url = base_url or "http://localhost:8000/api/v0"
+        self.base_url = base_url or "http://localhost:8000/api/v1"
         self.agents = {}
         self.tools = {}
         self.llm_client = None
@@ -209,7 +209,7 @@ class GAIAMCPBridge:
         agent = agent_config["instance"]
 
         # Execute query
-        result = agent.process_query(query, output_to_file=False)
+        result = agent.process_query(query, trace=False)
 
         return {
             "success": True,
@@ -466,6 +466,15 @@ def start_server(host="localhost", port=8765, base_url=None, verbose=False):
     if sys.platform == "win32":
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
+    # Fix Linux IPv6 issue: When host is "localhost", Python's socket might bind
+    # to ::1 (IPv6) which curl can't connect to by default. Use 0.0.0.0 on Linux
+    # to bind to all IPv4 interfaces. Keep localhost on Windows where it works.
+    bind_host = host
+    if host == "localhost" and sys.platform != "win32":
+        bind_host = "0.0.0.0"
+
+    logger.info(f"Creating MCP bridge for {host}:{port}")
+
     # Create bridge with verbose flag
     bridge = GAIAMCPBridge(host, port, base_url, verbose=verbose)
 
@@ -473,10 +482,18 @@ def start_server(host="localhost", port=8765, base_url=None, verbose=False):
     def handler(*args, **kwargs):
         return MCPHTTPHandler(*args, bridge=bridge, **kwargs)
 
-    # Start server
-    server = HTTPServer((host, port), handler)
+    # Start server - use bind_host for actual socket binding
+    logger.info(f"Creating HTTP server on {bind_host}:{port}")
+    try:
+        server = HTTPServer((bind_host, port), handler)
+        logger.info(
+            f"HTTP server created successfully, listening on {bind_host}:{port}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to create HTTP server: {e}")
+        raise
 
-    print("=" * 60)
+    print("=" * 60, flush=True)
     print("🚀 GAIA MCP Bridge - HTTP Native")
     print("=" * 60)
     print(f"Server: http://{host}:{port}")
@@ -507,8 +524,9 @@ def start_server(host="localhost", port=8765, base_url=None, verbose=False):
     print('  n8n: HTTP Request → POST /chat → {"query": "..."}')
     print("  MCP: JSON-RPC to / with method: tools/call")
     print("=" * 60)
-    print("\nPress Ctrl+C to stop\n")
+    print("\nPress Ctrl+C to stop\n", flush=True)
 
+    logger.info(f"Starting serve_forever() on {bind_host}:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -522,7 +540,7 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="localhost", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8765, help="Port to listen on")
     parser.add_argument(
-        "--base-url", default="http://localhost:8000/api/v0", help="LLM server URL"
+        "--base-url", default="http://localhost:8000/api/v1", help="LLM server URL"
     )
     parser.add_argument(
         "--verbose", action="store_true", help="Enable verbose logging for all requests"

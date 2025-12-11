@@ -7,9 +7,21 @@ import time
 
 import numpy as np
 import psutil
-import sounddevice as sd
-import soundfile as sf
-from kokoro import KPipeline
+
+try:
+    import sounddevice as sd
+except ImportError:
+    sd = None
+
+try:
+    import soundfile as sf
+except ImportError:
+    sf = None
+
+try:
+    from kokoro import KPipeline
+except ImportError:
+    KPipeline = None
 
 from gaia.logger import get_logger
 
@@ -18,6 +30,25 @@ class KokoroTTS:
     log = get_logger(__name__)
 
     def __init__(self):
+        # Check for required dependencies
+        missing = []
+        if sd is None:
+            missing.append("sounddevice")
+        if sf is None:
+            missing.append("soundfile")
+        if KPipeline is None:
+            missing.append("kokoro>=0.3.1")
+
+        if missing:
+            error_msg = (
+                f"\n❌ Error: Missing required talk dependencies: {', '.join(missing)}\n\n"
+                f"Please install the talk dependencies:\n"
+                f"  pip install -e .[talk]\n\n"
+                f"Or install packages directly:\n"
+                f"  pip install {' '.join(missing)}\n"
+            )
+            raise ImportError(error_msg)
+
         self.log = self.__class__.log
 
         # Initialize Kokoro pipeline with American English

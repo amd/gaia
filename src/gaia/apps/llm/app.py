@@ -18,10 +18,17 @@ from gaia.logger import get_logger
 class LlmApp:
     """Simple LLM application wrapper using LLMClient."""
 
-    def __init__(self, system_prompt: Optional[str] = None):
-        """Initialize the LLM app."""
+    def __init__(
+        self, system_prompt: Optional[str] = None, base_url: Optional[str] = None
+    ):
+        """Initialize the LLM app.
+
+        Args:
+            system_prompt: Optional system prompt for the LLM
+            base_url: Base URL for local LLM server (defaults to LEMONADE_BASE_URL env var)
+        """
         self.log = get_logger(__name__)
-        self.client = LLMClient(system_prompt=system_prompt)
+        self.client = LLMClient(system_prompt=system_prompt, base_url=base_url)
         self.log.debug("LLM app initialized")
 
     def query(
@@ -59,12 +66,22 @@ def main(
     max_tokens: int = 512,
     system_prompt: Optional[str] = None,
     stream: bool = True,
+    base_url: Optional[str] = None,
 ) -> str:
-    """Main function to run the LLM app."""
+    """Main function to run the LLM app.
+
+    Args:
+        query: Query to send to the LLM
+        model: Model name to use
+        max_tokens: Maximum tokens to generate
+        system_prompt: Optional system prompt
+        stream: Whether to stream the response
+        base_url: Base URL for local LLM server (defaults to LEMONADE_BASE_URL env var)
+    """
     if not query:
         raise ValueError("Query is required")
 
-    app = LlmApp(system_prompt=system_prompt)
+    app = LlmApp(system_prompt=system_prompt, base_url=base_url)
     response = app.query(
         prompt=query, model=model, max_tokens=max_tokens, stream=stream
     )
@@ -94,6 +111,10 @@ def cli_main():
     parser.add_argument("--stream", action="store_true", help="Stream response")
     parser.add_argument("--stats", action="store_true", help="Show stats")
     parser.add_argument(
+        "--base-url",
+        help="Base URL for local LLM server (defaults to LEMONADE_BASE_URL env var)",
+    )
+    parser.add_argument(
         "--logging-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -110,7 +131,7 @@ def cli_main():
     log_manager.set_level("gaia", getattr(logging, args.logging_level))
 
     try:
-        app = LlmApp(system_prompt=args.system_prompt)
+        app = LlmApp(system_prompt=args.system_prompt, base_url=args.base_url)
 
         response = app.query(
             prompt=args.query,

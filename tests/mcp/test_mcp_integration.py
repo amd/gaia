@@ -96,10 +96,14 @@ def main():
             if len(json.dumps(result)) > 500
             else json.dumps(result, indent=2)
         )
+        print("=" * 60)
+        return True
     else:
         print("MCP Bridge Test Failed - Make sure 'gaia mcp start' is running")
-    print("=" * 60)
+        print("=" * 60)
+        return False
 
 
 if __name__ == "__main__":
-    main()
+    success = main()
+    sys.exit(0 if success else 1)

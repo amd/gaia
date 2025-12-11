@@ -6,7 +6,7 @@ GAIA (Generative AI Acceleration Infrastructure & Applications) provides a comma
 
 - **Windows 11**: Full GUI and CLI support with installer and desktop shortcuts
 - **Linux (Ubuntu/Debian)**: Full GUI and CLI support via source installation
-- **macOS**: Not supported
+- **macOS**: CLI support via source installation (see [Development Guide](./dev.md))
 
 ## GAIA-CLI Getting Started Guide
 
@@ -17,7 +17,7 @@ GAIA (Generative AI Acceleration Infrastructure & Applications) provides a comma
 
 3. Once installed, double click on the desktop icon **GAIA-CLI** to launch the command-line shell with the GAIA environment activated.
 
-4. The GAIA CLI connects to the Lemonade server for AI processing. Make sure the server is running by:
+4. The GAIA CLI connects to the Lemonade server for AI processing. GAIA will automatically start Lemonade Server when needed. If auto-start fails, you can start it manually by:
    - Double-clicking the desktop shortcut, or
    - Running: `lemonade-server serve`
 
@@ -53,7 +53,7 @@ The fastest way to interact with AI models is through the direct LLM command:
 2. Use advanced options:
    ```bash
    # Specify model and token limit
-   gaia llm "Explain quantum computing in simple terms" --model Llama-3.2-3B-Instruct-Hybrid --max-tokens 200
+   gaia llm "Explain quantum computing in simple terms" --model Qwen2.5-0.5B-Instruct-CPU --max-tokens 200
 
    # Disable streaming for batch processing
    gaia llm "Write a short poem about AI" --no-stream
@@ -132,7 +132,13 @@ gaia --help
 - **`talk`**: Start a voice-based conversation session
 - **`code`**: Python code assistant with analysis, generation, and linting (see [Code Guide](./code.md))
 - **`blender`**: Create and modify 3D scenes using the Blender agent (see [Blender Guide](./blender.md))
+- **`jira`**: Natural language interface for Atlassian tools - Jira, Confluence, and Compass (see [Jira Guide](./jira.md))
+- **`docker`**: Natural language interface for Docker containerization (see [Docker Guide](./docker.md))
+- **`summarize`**: Summarize meeting transcripts and emails with multiple output formats
+- **`api`**: Start and manage the GAIA API Server for VSCode and OpenAI-compatible integrations (see [API Server Guide](./api.md))
 - **`mcp`**: Start and manage MCP (Model Context Protocol) bridge servers for integration with external clients and services (see [MCP Bridge Guide](./mcp.md))
+- **`download`**: Download all models required for GAIA agents (with streaming progress)
+- **`pull`**: Download/install a specific model from the Lemonade registry
 - **`stats`**: View model performance statistics from the most recent run
 - **`test`**: Run various audio/speech tests for development and troubleshooting
 - **`youtube`**: YouTube utilities for transcript downloading
@@ -171,7 +177,7 @@ gaia llm QUERY [OPTIONS]
 gaia llm "What is machine learning?"
 
 # Use specific model with token limit
-gaia llm "Explain neural networks" --model Llama-3.2-3B-Instruct-Hybrid --max-tokens 300
+gaia llm "Explain neural networks" --model Qwen2.5-0.5B-Instruct-CPU --max-tokens 300
 
 # Disable streaming for batch processing
 gaia llm "Generate a Python function to sort a list" --no-stream
@@ -188,8 +194,8 @@ gaia prompt "MESSAGE" [OPTIONS]
 ```
 
 **Available options:**
-- `--model`: Model to use for the agent (default: "Llama-3.2-3B-Instruct-Hybrid")
-- `--max-new-tokens`: Maximum number of new tokens to generate (default: 512)
+- `--model`: Model to use for the agent (default: "Qwen2.5-0.5B-Instruct-CPU")
+- `--max-tokens`: Maximum number of tokens to generate (default: 512)
 - `--stats`: Show performance statistics after generation
 
 **Examples:**
@@ -198,10 +204,10 @@ gaia prompt "MESSAGE" [OPTIONS]
 gaia prompt "What is the weather like today?"
 
 # Use a different model with stats
-gaia prompt "Create a poem about AI" --model Llama-3.2-3B-Instruct-Hybrid --stats
+gaia prompt "Create a poem about AI" --model Qwen2.5-0.5B-Instruct-CPU --stats
 
 # Use different model and token limit
-gaia prompt "Write a story" --model Llama-3.2-3B-Instruct-Hybrid --max-new-tokens 1000
+gaia prompt "Write a story" --model Qwen2.5-0.5B-Instruct-CPU --max-tokens 1000
 ```
 
 ## Chat Command
@@ -217,28 +223,41 @@ gaia chat [MESSAGE] [OPTIONS]
 - **Message provided**: Sends single message and exits
 
 **Available options:**
-- `--model`: Model name to use (default: Llama-3.2-3B-Instruct-Hybrid)
-- `--max-tokens`: Maximum tokens to generate (default: 512)
-- `--system-prompt`: Custom system prompt for the conversation
-- `--assistant-name`: Name to use for the assistant (default: "gaia")
-- `--stats`: Show performance statistics (single message mode only)
+- `--query, -q`: Single query to execute (defaults to interactive mode if not provided)
+- `--model`: Model name to use (default: Qwen3-Coder-30B-A3B-Instruct-GGUF)
+- `--max-steps`: Maximum conversation steps (default: 10)
+- `--index, -i`: PDF document(s) to index for RAG (space-separated)
+- `--watch, -w`: Directories to monitor for new documents
+- `--chunk-size`: Document chunk size for RAG (default: 500)
+- `--max-chunks`: Maximum chunks to retrieve for RAG (default: 3)
+- `--stats`, `--show-stats`: Show performance statistics
+- `--streaming`: Enable streaming responses
+- `--show-prompts`: Display prompts sent to LLM
+- `--debug`: Enable debug output
+- `--list-tools`: List available tools and exit
 
 **Examples:**
 ```bash
 # Start interactive chat session (default behavior when no message provided)
 gaia chat
 
-# Send a single message
-gaia chat "What is machine learning?"
+# Send a single message (using --query)
+gaia chat --query "What is machine learning?"
 
-# Use specific model with custom system prompt for single message
-gaia chat "Help me code" --system-prompt "You are a helpful coding assistant"
+# Chat with single document
+gaia chat --index manual.pdf
 
-# Use custom assistant name
-gaia chat "Hello" --assistant-name "Gaia"
+# Chat with multiple documents
+gaia chat --index doc1.pdf doc2.pdf doc3.pdf
 
-# Interactive mode with custom settings and assistant name
-gaia chat --max-tokens 1000 --model Llama-3.2-3B-Instruct-Hybrid --assistant-name "Gaia"
+# Index and query in one command
+gaia chat --index report.pdf --query "Summarize the report"
+
+# Interactive mode with custom settings
+gaia chat --model Qwen3-Coder-30B-A3B-Instruct-GGUF --streaming --show-stats
+
+# List available tools
+gaia chat --list-tools
 ```
 
 **Interactive Commands:**
@@ -254,33 +273,199 @@ During an interactive chat session, you can use these special commands:
 
 **Requirements**: The lemonade server must be running. The chat maintains conversation context automatically and supports both streaming and non-streaming modes.
 
-## Talk Command
+## API Command
 
-Start a voice-based conversation:
+The GAIA API Server provides an OpenAI-compatible REST API that exposes GAIA agents as "models". This enables integration with VSCode extensions, IDEs, and other tools that support OpenAI's API format.
+
+**Prerequisites**: Install GAIA with API support - see [API Server Prerequisites](./api.md#prerequisites).
+
+**For complete API documentation including usage examples and integration guides, see the [API Server Guide](./api.md).**
+
+### Quick Start
 
 ```bash
-gaia talk [OPTIONS]
+# 1. Start Lemonade server with extended context (required for Code agent)
+lemonade-server serve --ctx-size 32768
+
+# 2. Start GAIA API server
+gaia api start
+
+# 3. Test the server
+curl http://localhost:8080/health
+```
+
+### Available Subcommands
+
+- **`start`** - Start the GAIA API server
+- **`status`** - Check if the API server is running
+- **`stop`** - Stop the GAIA API server
+
+### Command Details
+
+#### Start API Server
+
+```bash
+gaia api start [OPTIONS]
 ```
 
 **Available options:**
-- `--model`: Model to use for the agent (default: "Llama-3.2-3B-Instruct-Hybrid")
-- `--max-new-tokens`: Maximum number of new tokens to generate (default: 512)
+- `--host` - Server host address (default: localhost)
+- `--port` - Server port (default: 8080)
+- `--background` - Run server in background mode
+- `--debug` - Enable debug logging
+
+**Examples:**
+```bash
+# Start in foreground (default)
+gaia api start
+
+# Start in background
+gaia api start --background
+
+# Start with debug logging
+gaia api start --debug
+
+# Start on custom host and port
+gaia api start --host 0.0.0.0 --port 8888
+```
+
+**Expected output:**
+```
+Starting GAIA API server on http://localhost:8080
+INFO:     Started server process
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+```
+
+#### Check API Server Status
+
+```bash
+gaia api status
+```
+
+Shows whether the API server is currently running and displays connection information.
+
+**Example output:**
+```
+GAIA API Server is running on http://localhost:8080
+```
+
+#### Stop API Server
+
+```bash
+gaia api stop
+```
+
+Stops the running API server gracefully.
+
+**Example output:**
+```
+Stopping GAIA API server...
+Server stopped successfully.
+```
+
+### Available Models
+
+The API server exposes GAIA agents as models:
+
+| Model ID | Description | Requirements |
+|----------|-------------|--------------|
+| `gaia-code` | Autonomous code development agent | Lemonade with `--ctx-size 32768` |
+
+### VSCode Integration
+
+The API server enables GAIA Code integration with Visual Studio Code:
+
+1. Start the API server: `gaia api start`
+2. Install the GAIA VSCode extension
+3. Select GAIA models from VSCode's model picker
+
+**For complete VSCode setup, see the [VSCode Integration Guide](./vscode.md).**
+
+### Testing the API
+
+```bash
+# Check server health
+curl http://localhost:8080/health
+
+# List available models
+curl http://localhost:8080/v1/models
+
+# Send a test request
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gaia-code",
+    "messages": [{"role": "user", "content": "Write a hello world function"}]
+  }'
+```
+
+### Common Issues
+
+**Port already in use:**
+```bash
+# Use a different port
+gaia api start --port 8888
+```
+
+**Connection refused:**
+```bash
+# Verify server is running
+gaia api status
+
+# Check health endpoint
+curl http://localhost:8080/health
+```
+
+**Agent processing failed:**
+```bash
+# Ensure Lemonade server is running with correct context size
+lemonade-server serve --ctx-size 32768
+```
+
+For more troubleshooting, see the [API Server Guide](./api.md#troubleshooting).
+
+## Talk Command
+
+Start a voice-based conversation with optional document Q&A:
+
+```bash
+gaia talk [OPTIONS]
+
+# Examples
+gaia talk                        # Basic voice chat
+gaia talk --index manual.pdf     # Voice + document Q&A
+gaia talk -i guide.pdf --no-tts  # Document Q&A, no TTS
+```
+
+**Voice options:**
+- `--model`: Model to use for the agent (default: "Qwen2.5-0.5B-Instruct-CPU")
+- `--max-tokens`: Maximum number of tokens to generate (default: 512)
 - `--no-tts`: Disable text-to-speech in voice chat mode
-- `--audio-device-index`: Index of the audio input device to use (default: 1)
+- `--audio-device-index`: Index of the audio input device to use (default: auto-detect)
 - `--whisper-model-size`: Size of the Whisper model [tiny, base, small, medium, large] (default: base)
+- `--silence-threshold`: Silence threshold in seconds (default: 0.5)
+- `--stats`: Show performance statistics during voice chat
+
+**RAG option (for document Q&A):**
+- `--index, -i`: PDF document to index for voice Q&A
 
 For detailed voice interaction instructions, see the [Voice Interaction Guide](./talk.md).
 
 ## Code Command
 
-For comprehensive documentation of GAIA's Code agent including Python code analysis, generation, and linting, see the **[Code Guide](./code.md)**.
+For comprehensive documentation of GAIA's Code agent including Python/TypeScript code analysis, generation, and linting, see the **[Code Guide](./code.md)**.
 
 **Prerequisites**: The Code Agent requires a larger context size (32,768 tokens). When using the local Lemonade server, start it with:
 ```bash
 lemonade-server serve --ctx-size 32768
 ```
 
+**Intelligent Routing**: The `gaia code` command uses GAIA's Routing Agent to automatically detect your target programming language and project type. For details on how routing works, see the **[Routing Guide](./routing.md)**.
+
 The Code agent provides:
+- **Intelligent Language Detection**: Automatically routes to Python or TypeScript based on framework mentions (Express, Django, React, etc.)
+- **Conversational Disambiguation**: Asks clarifying questions when the request is ambiguous
 - **Code Generation**: Create functions, classes, and unit tests from descriptions
 - **Autonomous Workflow**: Complete development lifecycle with planning, implementation, testing, and verification
 - **Automatic Test Generation**: Creates comprehensive unit tests after implementation
@@ -293,6 +478,22 @@ The Code agent provides:
 
 Quick examples:
 ```bash
+# TypeScript/Express backend (routing detects "Express" → TypeScript)
+gaia code "Create a REST API with Express and SQLite for managing products"
+
+# Python backend (routing detects "Django" → Python)
+gaia code "Create a Django REST API with authentication"
+
+# React frontend (routing detects "React" → TypeScript frontend)
+gaia code "Create a React dashboard with user management"
+
+# Conversational disambiguation (routing asks for clarification)
+gaia code "Build me a todo backend app"
+# → What language/framework would you like to use for your backend project?
+# → (e.g., 'Express', 'Django', 'React', 'FastAPI')
+# User: Express
+# → Creates TypeScript backend agent
+
 # Complete workflow: generate, validate, lint, test
 gaia code "Create a calculator that adds two numbers with error handling"
 
@@ -359,7 +560,11 @@ The MCP (Model Context Protocol) command provides integration with MCP-compatibl
 
 ```bash
 # Install MCP support
+# Linux/Windows:
 pip install -e .[mcp]
+
+# macOS:
+pip install -e ".[mcp]"
 
 # Start the MCP bridge
 gaia mcp start
@@ -374,10 +579,12 @@ gaia mcp test --query "What are the most popular LLMs on Hugging Face?"
 
 ### Available Subcommands
 
-- **`start`** - Start the main MCP bridge server
-- **`status`** - Check if the MCP server is running
-- **`test`** - Test MCP functionality with a sample query
-- **`atlassian`** - Start Atlassian integration for Jira/Confluence/Compass
+- **`start`** - Start the MCP bridge server
+- **`status`** - Check MCP server status
+- **`stop`** - Stop background MCP bridge server
+- **`test`** - Test MCP bridge functionality
+- **`agent`** - Test MCP orchestrator agent functionality
+- **`docker`** - Start Docker MCP server (per-agent architecture)
 
 ### Common Options
 
@@ -389,6 +596,123 @@ Most MCP commands support:
 - `--background` - Run server in background mode (for `start` command)
 
 For detailed usage, configuration options, SDK integration, and examples, see the [MCP Bridge Guide](./mcp.md).
+
+## Download Command
+
+Download all models required for GAIA agents with streaming progress display:
+
+```bash
+gaia download [OPTIONS]
+```
+
+**Available options:**
+- `--agent`: Agent to download models for (default: all)
+- `--list`: List required models without downloading
+- `--timeout`: Timeout per model in seconds (default: 1800)
+- `--host`: Lemonade server host (default: localhost)
+- `--port`: Lemonade server port (default: 8000)
+
+**Available agents:** chat, code, talk, rag, blender, jira, docker, vlm, minimal, mcp
+
+**Examples:**
+```bash
+# List all required models and their download status
+gaia download --list
+
+# List models for a specific agent
+gaia download --list --agent chat
+
+# Download all models for all agents
+gaia download
+
+# Download models for chat agent only
+gaia download --agent chat
+
+# Download models for code agent
+gaia download --agent code
+```
+
+**Example output:**
+```
+📥 Downloading 3 model(s) for 'chat'...
+
+📥 Qwen3-Coder-30B-A3B-Instruct-GGUF
+   ⏳ [1/31] Qwen3-Coder-30B-A3B-Q4_K_M.gguf: 1.4 GB/17.7 GB (8%)
+   ⏳ [1/31] Qwen3-Coder-30B-A3B-Q4_K_M.gguf: 3.5 GB/17.7 GB (20%)
+   ...
+   ✅ Download complete
+
+✅ nomic-embed-text-v2-moe-GGUF (already downloaded)
+
+📥 Qwen2.5-VL-7B-Instruct-GGUF
+   ⏳ [1/3] qwen2.5-vl-7b-Q4_K_M.gguf: 500 MB/4.2 GB (12%)
+   ...
+   ✅ Download complete
+
+==================================================
+📊 Download Summary:
+   ✅ Downloaded: 2
+   ⏭️  Skipped (already available): 1
+==================================================
+```
+
+**Notes:**
+- Models are automatically downloaded when needed during agent initialization
+- Use `gaia download` to pre-download models before running agents
+- Streaming progress shows real-time download status every 5%
+- Already downloaded models are skipped automatically
+
+## Pull Command
+
+Download/install a specific model from the Lemonade Server registry:
+
+```bash
+gaia pull MODEL_NAME [OPTIONS]
+```
+
+**Available options:**
+- `--checkpoint`: HuggingFace checkpoint for custom models (e.g., unsloth/Model-GGUF:Q4_K_M)
+- `--recipe`: Lemonade recipe for custom models (e.g., llamacpp, oga-cpu)
+- `--reasoning`: Mark model as a reasoning model (like DeepSeek)
+- `--vision`: Mark model as having vision capabilities
+- `--embedding`: Mark model as an embedding model
+- `--reranking`: Mark model as a reranking model
+- `--mmproj`: Multimodal projector file for vision models
+- `--timeout`: Timeout in seconds for model download (default: 1200)
+- `--host`: Lemonade server host (default: localhost)
+- `--port`: Lemonade server port (default: 8000)
+
+**Examples:**
+```bash
+# Pull a registered model
+gaia pull Qwen3-0.6B-GGUF
+
+# Pull a specific model with streaming progress
+gaia pull Qwen3-Coder-30B-A3B-Instruct-GGUF
+
+# Pull and register a custom model from HuggingFace
+gaia pull user.Custom-Model-GGUF --checkpoint unsloth/Custom-Model-GGUF:Q4_K_M --recipe llamacpp
+
+# Pull a reasoning model
+gaia pull user.DeepSeek-GGUF --checkpoint unsloth/DeepSeek-R1-GGUF --recipe llamacpp --reasoning
+
+# Pull a vision model with mmproj
+gaia pull user.Vision-Model --checkpoint model/vision:Q4 --recipe llamacpp --vision --mmproj mmproj.gguf
+```
+
+**Example output:**
+```
+📥 Pulling model: Qwen3-0.6B-GGUF
+   ⏳ [1/2] qwen3-0.6b-Q4_K_M.gguf: 200 MB/450 MB (44%)
+   ⏳ [1/2] qwen3-0.6b-Q4_K_M.gguf: 400 MB/450 MB (89%)
+   ⏳ [2/2] config.json: 1.2 KB/1.2 KB (100%)
+✅ Model downloaded successfully: Qwen3-0.6B-GGUF
+```
+
+**Notes:**
+- Use the `user.` prefix for custom models not in the official registry
+- Custom models require both `--checkpoint` and `--recipe` parameters
+- The Lemonade server must be running for this command to work
 
 ## Evaluation Commands
 
@@ -516,7 +840,7 @@ gaia test --test-type tts-audio-file --test-text "Save this as audio" --output-a
 **ASR options:**
 - `--input-audio-file`: Input audio file path for file transcription test
 - `--recording-duration`: Recording duration in seconds for microphone test (default: 10)
-- `--audio-device-index`: Index of audio input device (default: 1)
+- `--audio-device-index`: Index of audio input device (optional)
 - `--whisper-model-size`: Whisper model size [tiny, base, small, medium, large] (default: base)
 
 **Examples:**
@@ -590,7 +914,8 @@ lemonade-server serve
 
 **Model Issues:**
 - Make sure you have sufficient RAM (16GB+ recommended)
-- Check that your model files are properly downloaded
+- Check that your model files are properly downloaded: `gaia download --list`
+- Pre-download all required models: `gaia download`
 - Verify your Hugging Face token if prompted
 - To install additional models, see [Installing Additional Models](./features.md#installing-additional-models)
 

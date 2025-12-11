@@ -10,20 +10,10 @@ name: GAIA CLI Tests (All Platforms)
 on:
   workflow_call:
   push:
-    branches: ["main"]
-    paths:
-      - "src/**"
-      - "tests/**"
-      - "setup.py"
-      - "pyproject.toml"
+    branches: [ main ]
   pull_request:
-    branches: ["main"]
+    branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "src/**"
-      - "tests/**"
-      - "setup.py"
-      - "pyproject.toml"
   merge_group:
   workflow_dispatch:
 
@@ -64,11 +54,18 @@ jobs:
     uses: ./.github/workflows/test_code_agent.yml
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
+  # Test Security features
+  test-security:
+    name: Security Tests
+    needs: lint
+    uses: ./.github/workflows/test_security.yml
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
   # Summary job that reports overall status
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [lint, test-windows, test-linux, test-mcp, test-code-agent]
+    needs: [lint, test-windows, test-linux, test-mcp, test-code-agent, test-security]
     if: always()
     steps:
       - name: Check test results
@@ -79,15 +76,17 @@ jobs:
           echo "Linux Tests Status: ${{ needs.test-linux.result }}"
           echo "MCP Tests Status: ${{ needs.test-mcp.result }}"
           echo "Code Agent Tests Status: ${{ needs.test-code-agent.result }}"
+          echo "Security Tests Status: ${{ needs.test-security.result }}"
           echo ""
 
           # Determine overall status
-          if [[ "${{ needs.lint.result }}" == "success" && "${{ needs.test-windows.result }}" == "success" && "${{ needs.test-linux.result }}" == "success" && "${{ needs.test-mcp.result }}" == "success" && "${{ needs.test-code-agent.result }}" == "success" ]]; then
+          if [[ "${{ needs.lint.result }}" == "success" && "${{ needs.test-windows.result }}" == "success" && "${{ needs.test-linux.result }}" == "success" && "${{ needs.test-mcp.result }}" == "success" && "${{ needs.test-code-agent.result }}" == "success" && "${{ needs.test-security.result }}" == "success" ]]; then
             echo "✅ All tests passed!"
             echo "- Windows: Full CLI functionality with Lemonade integration"
             echo "- Linux: Full CLI functionality with Lemonade integration"
             echo "- MCP: HTTP-native bridge and protocol compliance"
             echo "- Code Agent: Autonomous code generation and modification"
+            echo "- Security: Path validation and shell injection prevention"
             echo "- Cross-platform: Code quality and compatibility"
           else
             echo "❌ Some tests failed:"
@@ -96,6 +95,7 @@ jobs:
             [[ "${{ needs.test-linux.result }}" != "success" ]] && echo "  - Linux tests failed"
             [[ "${{ needs.test-mcp.result }}" != "success" ]] && echo "  - MCP tests failed"
             [[ "${{ needs.test-code-agent.result }}" != "success" ]] && echo "  - Code Agent tests failed"
+            [[ "${{ needs.test-security.result }}" != "success" ]] && echo "  - Security tests failed"
             exit 1
           fi
 
@@ -129,6 +129,14 @@ jobs:
           echo "  ✅ Error handling and recovery"
           echo "  ✅ CORS support for browser clients"
           echo "  ⏭️  Jira integration (skipped - requires auth)"
+          echo ""
+          echo "🔒 Security Tests (Cross-Platform):"
+          echo "  ✅ Path traversal prevention (PathValidator)"
+          echo "  ✅ Shell command injection prevention"
+          echo "  ✅ Agent security boundary enforcement"
+          echo "  ✅ Argument sanitization"
+          echo "  ✅ Access control validation"
+          echo "  ✅ Windows and Linux security verification"
           echo ""
           echo "🎉 Full Platform Support Achieved!"
           echo "  🔧 Future enhancements:"

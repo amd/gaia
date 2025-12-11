@@ -90,7 +90,7 @@ By the end of this workshop, participants will have:
 - Demo of existing GAIA agents and capabilities
 - Setting up the development environment:
   - GAIA installation verification
-  - Conda environment setup
+  - Python virtual environment setup
   - Jupyter notebook configuration
   - Starting Lemonade Server
 - Testing basic LLM functionality with OpenAI API
@@ -205,7 +205,7 @@ By the end of this workshop, participants will have:
 
 ## Software Requirements
 - https://lemonade-server.ai/
-- https://conda-forge.org/download/
+- https://www.python.org/downloads/ (Python 3.12+)
 - https://git-scm.com/downloads/win
 - https://code.visualstudio.com/download
 - https://www.blender.org/download/releases/4-4/

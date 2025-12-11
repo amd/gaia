@@ -1,70 +1,87 @@
 # Gaia Chat SDK
 
-The Gaia Chat SDK provides a unified, programmable interface for integrating text chat capabilities with conversation memory into applications. It offers multiple levels of abstraction from simple one-off questions to advanced session management.
+The Gaia Chat SDK provides a programmable interface for text chat with conversation memory and optional document Q&A (RAG).
 
 ## Table of Contents
 
 - [Quick Start](#quick-start)
 - [Core Classes](#core-classes)
-- [Usage Examples](#usage-examples)
-- [Assistant Naming](#assistant-naming)
-- [CLI Integration](#cli-integration)
-- [Advanced Features](#advanced-features)
+- [CLI Usage](#cli-usage)
+- [Python SDK Examples](#python-sdk-examples)
+- [Document Q&A (RAG)](#document-qa-rag)
 - [API Reference](#api-reference)
 
 ## Quick Start
 
 ### Installation
 
-The Chat SDK is included with Gaia. Import the components you need:
+```bash
+# Activate virtual environment (if not already active)
+# Windows PowerShell:
+.\.venv\Scripts\Activate.ps1
+# Linux/macOS:
+source .venv/bin/activate
 
-```python
-from gaia.chat.sdk import ChatSDK, ChatConfig, SimpleChat
+# Using uv (recommended - much faster):
+uv pip install -e .[rag]  # Include RAG for document Q&A
+
+# Or using pip:
+# Linux/Windows:
+pip install -e .[rag]
+
+# macOS:
+pip install -e ".[rag]"
 ```
 
-### Simple Usage
+### Simple Chat
 
 ```python
 from gaia.chat.sdk import SimpleChat
 
-# Create a simple chat instance
 chat = SimpleChat()
-
-# Ask a question
 response = chat.ask("What is Python?")
 print(response)
 
-# Ask follow-up questions (conversation memory included)
+# Follow-up with conversation memory
 response = chat.ask("Give me an example")
 print(response)
 ```
 
+### Full SDK
+
+```python
+from gaia.chat.sdk import ChatSDK, ChatConfig
+
+config = ChatConfig(
+    show_stats=True,
+    max_history_length=6
+)
+chat = ChatSDK(config)
+
+response = chat.send("Hello! My name is Alex.")
+print(response.text)
+
+response = chat.send("What's my name?")
+print(response.text)  # Will remember "Alex"
+```
+
 ## Core Classes
 
-### ChatSDK
-
-The main SDK class providing full chat functionality with conversation memory, streaming, and performance statistics.
-
 ### ChatConfig
-
-Configuration class for customizing chat behavior:
 
 ```python
 @dataclass
 class ChatConfig:
-    model: str = "Llama-3.2-3B-Instruct-Hybrid"
+    model: str = "Qwen3-Coder-30B-A3B-Instruct-GGUF"  # Default validated model
     max_tokens: int = 512
     system_prompt: Optional[str] = None
-    max_history_length: int = 4  # Number of conversation pairs to keep
+    max_history_length: int = 4
     show_stats: bool = False
-    logging_level: str = "INFO"
     use_local_llm: bool = True
-    assistant_name: str = "assistant"  # Name to use for the assistant in conversations
+    assistant_name: str = "assistant"
 ```
 
 ### ChatResponse
-
-Response object containing the AI's reply and optional metadata:
 
 ```python
 @dataclass
@@ -72,46 +89,42 @@ class ChatResponse:
     text: str
     history: Optional[List[str]] = None
     stats: Optional[Dict[str, Any]] = None
-    is_complete: bool = True
 ```
 
 ### SimpleChat
 
-Lightweight wrapper for basic chat functionality without complex configuration.
+Lightweight wrapper for basic chat without complex configuration.
 
-### ChatSession
+## CLI Usage
 
-Session manager for handling multiple separate conversations with different contexts.
+### Interactive Mode
 
-## Usage Examples
+```bash
+# Start interactive chat
+gaia chat
 
-### Basic Chat with Memory
-
-```python
-from gaia.chat.sdk import ChatSDK, ChatConfig
-
-# Create SDK instance with custom configuration
-config = ChatConfig(
-    model="Llama-3.2-3B-Instruct-Hybrid",
-    show_stats=True,
-    max_history_length=6
-)
-chat = ChatSDK(config)
-
-# Send messages with conversation memory
-response1 = chat.send("Hello! My name is Alex and I'm a software developer.")
-print(response1.text)
-
-response2 = chat.send("What's my name?")
-print(response2.text)  # Will remember "Alex"
-
-response3 = chat.send("What's my profession?")
-print(response3.text)  # Will remember "software developer"
-
-# Display performance statistics
-if response3.stats:
-    chat.display_stats(response3.stats)
+# With performance statistics
+gaia chat --stats
 ```
+
+**Interactive Commands:**
+- `/clear` - Clear conversation history
+- `/history` - Show conversation history
+- `/stats` - Show performance statistics
+- `/help` - Show help message
+- `quit`, `exit`, `bye` - End conversation
+
+### Single Query Mode
+
+```bash
+# One-shot query
+gaia chat "What is artificial intelligence?"
+
+# With statistics
+gaia chat --query "Hello" --show-stats
+```
+
+## Python SDK Examples
 
 ### Streaming Chat
 
@@ -124,118 +137,20 @@ print("AI: ", end="", flush=True)
 for chunk in chat.send_stream("Tell me a story"):
     if not chunk.is_complete:
         print(chunk.text, end="", flush=True)
-    else:
-        # Final chunk with stats
-        if chunk.stats:
-            chat.display_stats(chunk.stats)
-print()  # Newline after complete response
+print()
 ```
 
-### Simple Integration
+### Custom Assistant Name
 
 ```python
-from gaia.chat.sdk import SimpleChat
-
-# Ultra-simple interface with default assistant name
-chat = SimpleChat()
-response = chat.ask("What's the weather like?")
-print(response)
-
-# With custom system prompt and assistant name
-professional_chat = SimpleChat(
-    system_prompt="You are a professional business assistant.",
-    assistant_name="BusinessBot"
-)
-response = professional_chat.ask("Draft a meeting agenda")
-print(response)
-
-# Streaming version
-for chunk in chat.ask_stream("Tell me about Python"):
-    print(chunk, end="", flush=True)
-```
-
-## Assistant Naming
-
-The Chat SDK supports customizable assistant names, allowing you to personalize the AI's identity in conversations and interactive sessions.
-
-### Basic Assistant Naming
-
-```python
-from gaia.chat.sdk import ChatSDK, ChatConfig
-
-# Create chat with custom assistant name
 config = ChatConfig(
-    model="Llama-3.2-3B-Instruct-Hybrid",
-    assistant_name="Gaia"
+    assistant_name="Gaia",
+    system_prompt="You are Gaia, a helpful AI assistant."
 )
 chat = ChatSDK(config)
 
 response = chat.send("What's your name?")
 print(f"Gaia: {response.text}")
-
-# Interactive session will display "Gaia:" instead of "Assistant:"
-await chat.start_interactive_session()
-```
-
-### Different Assistant Names for Different Contexts
-
-```python
-from gaia.chat.sdk import ChatSDK, ChatConfig
-
-# Code helper
-code_config = ChatConfig(
-    assistant_name="CodeBot",
-    system_prompt="You are an expert programming assistant."
-)
-code_chat = ChatSDK(code_config)
-
-# Creative helper
-creative_config = ChatConfig(
-    assistant_name="Muse", 
-    system_prompt="You are a creative writing assistant."
-)
-creative_chat = ChatSDK(creative_config)
-
-# Each has distinct identity
-code_response = code_chat.send("Help me debug this Python function")
-creative_response = creative_chat.send("Help me write a short story")
-
-print(f"CodeBot: {code_response.text}")
-print(f"Muse: {creative_response.text}")
-```
-
-### Assistant Names in Conversation History
-
-```python
-chat = ChatSDK(ChatConfig(assistant_name="Helper"))
-
-chat.send("Hello!")
-chat.send("How are you?")
-
-# History maintains assistant name
-history = chat.get_formatted_history()
-for entry in history:
-    print(f"{entry['role']}: {entry['message']}")
-# Output:
-# user: Hello!
-# Helper: Hi there! I'm doing well, thank you for asking!
-# user: How are you?
-# Helper: I'm doing great! How can I help you today?
-```
-
-### Dynamic Assistant Name Changes
-
-```python
-chat = ChatSDK(ChatConfig(assistant_name="Bot"))
-
-response1 = chat.send("Hello")
-print(f"Bot: {response1.text}")
-
-# Change assistant name dynamically
-chat.update_config(assistant_name="Gaia")
-
-response2 = chat.send("What's your name now?")
-print(f"Gaia: {response2.text}")
 ```
 
 ### Session Management
@@ -243,271 +158,235 @@ print(f"Gaia: {response2.text}")
 ```python
 from gaia.chat.sdk import ChatSession
 
-# Create session manager
 sessions = ChatSession()
 
-# Create different chat sessions with different contexts and assistant names
+# Create different contexts with custom names
 work_chat = sessions.create_session(
-    "work", 
-    system_prompt="You are a professional assistant for workplace tasks.",
+    "work",
+    system_prompt="You are a professional assistant.",
     assistant_name="WorkBot"
 )
 
 personal_chat = sessions.create_session(
-    "personal", 
-    system_prompt="You are a friendly companion for casual conversation.",
+    "personal",
+    system_prompt="You are a friendly companion.",
     assistant_name="Buddy"
 )
 
-# Chat in different contexts
-work_response = work_chat.send("Draft an email to my team about the project update")
-personal_response = personal_chat.send("What's a good recipe for dinner?")
-
-print(f"WorkBot: {work_response.text}")
-print(f"Buddy: {personal_response.text}")
-
-# Sessions maintain separate conversation histories
-print(f"Work chat history: {work_chat.get_formatted_history()}")
-print(f"Personal chat history: {personal_chat.get_formatted_history()}")
-
-# List all sessions
-print(f"Active sessions: {sessions.list_sessions()}")
+# Separate conversation histories
+work_response = work_chat.send("Draft a team email")
+personal_response = personal_chat.send("What's for dinner?")
 ```
 
-### Quick One-off Usage
-
-```python
-from gaia.chat.sdk import quick_chat, quick_chat_with_memory
-
-# Single message without conversation memory
-response = quick_chat("What is machine learning?")
-print(response)
-
-# With custom assistant name
-response = quick_chat("What is machine learning?", assistant_name="Expert")
-print(response)
-
-# Multi-turn conversation with memory and custom assistant name
-responses = quick_chat_with_memory([
-    "My name is John and I live in Seattle",
-    "What's my name?",
-    "Where do I live?"
-], assistant_name="Helper")
-
-for i, response in enumerate(responses, 1):
-    print(f"Helper Response {i}: {response}")
-```
-
-### Interactive Chat Session
-
-```python
-from gaia.chat.sdk import ChatSDK
-import asyncio
-
-async def interactive_demo():
-    config = ChatConfig(show_stats=True)
-    chat = ChatSDK(config)
-    
-    # Start interactive session with built-in commands
-    await chat.start_interactive_session()
-
-# Run the interactive session
-asyncio.run(interactive_demo())
-```
-
-## CLI Integration
-
-The Chat SDK is integrated into the Gaia CLI for command-line usage:
-
-### Interactive Mode
-
-```bash
-# Start interactive chat session
-gaia chat
-
-# Start with custom model
-gaia chat --model "Llama-3.2-3B-Instruct-Hybrid"
-
-# Start with performance statistics
-gaia chat --stats
-```
-
-### Single Message Mode
-
-```bash
-# Send single message
-gaia chat "What is artificial intelligence?"
-
-# With custom parameters
-gaia chat "Explain Python" --model "Llama-3.2-3B-Instruct-Hybrid" --max-tokens 1000
-
-# With system prompt
-gaia chat "Help me code" --system-prompt "You are an expert Python developer"
-
-# Show performance statistics
-gaia chat "Hello" --stats
-```
-
-### Interactive Session Commands
-
-When in interactive mode, use these commands:
-
-- `/clear` - Clear conversation history
-- `/history` - Show conversation history
-- `/stats` - Show performance statistics
-- `/help` - Show help message
-- `quit`, `exit`, or `bye` - End conversation
-
-## Advanced Features
-
-### Dynamic Configuration Updates
+### Conversation History
 
 ```python
 chat = ChatSDK()
 
-# Update configuration on the fly
-chat.update_config(
-    max_tokens=1000,
-    show_stats=True,
-    max_history_length=10,
-    assistant_name="UpdatedBot"  # Change assistant name dynamically
-)
-```
-
-### Conversation History Management
-
-```python
-chat = ChatSDK()
-
-# Send some messages
 chat.send("Hello")
 chat.send("How are you?")
 
-# Get raw history
-history = chat.get_history()
-print(history)  # ['user: Hello', 'assistant: ...', 'user: How are you?' 'assistant: ...']
-# Note: Assistant name in history reflects the configured name
-
 # Get formatted history
-formatted = chat.get_formatted_history()
-for entry in formatted:
+for entry in chat.get_formatted_history():
     print(f"{entry['role']}: {entry['message']}")
 
 # Clear history
 chat.clear_history()
 
-# Check conversation metrics
-print(f"History length: {chat.history_length}")
+# Check metrics
 print(f"Conversation pairs: {chat.conversation_pairs}")
 ```
 
-### Performance Monitoring
+## Document Q&A (RAG)
 
-```python
-config = ChatConfig(show_stats=True)
-chat = ChatSDK(config)
+RAG enables chatting with PDF documents using semantic search and context retrieval.
 
-response = chat.send("Hello")
-
-# Get performance statistics
-stats = chat.get_stats()
-print(stats)
-
-# Display formatted statistics
-chat.display_stats(stats)
-
-# Stats include:
-# - time_to_first_token: Time to generate first token (seconds)
-# - tokens_per_second: Generation speed
-# - input_tokens: Number of input tokens
-# - output_tokens: Number of generated tokens
-```
-
-### Error Handling
+### Python SDK with RAG
 
 ```python
 from gaia.chat.sdk import ChatSDK
 
 chat = ChatSDK()
 
-try:
-    response = chat.send("")  # Empty message
-except ValueError as e:
-    print(f"Invalid input: {e}")
+# Enable RAG and index documents
+chat.enable_rag(documents=["manual.pdf", "guide.pdf"])
 
-try:
-    response = chat.send("Hello")
-except Exception as e:
-    print(f"Chat error: {e}")
+# Chat with document context
+response = chat.send("What does the manual say about installation?")
+print(response.text)
+
+# Add more documents
+chat.add_document("troubleshooting.pdf")
+
+# Disable RAG when done
+chat.disable_rag()
+```
+
+### CLI with RAG
+
+```bash
+# Chat with single document
+gaia chat --index manual.pdf
+
+# Chat with multiple documents
+gaia chat --index doc1.pdf doc2.pdf doc3.pdf
+
+# One-shot query with document
+gaia chat --index report.pdf --query "Summarize the key findings"
+
+# Voice with documents
+gaia talk --index manual.pdf
+```
+
+### RAG Configuration
+
+```python
+# Advanced RAG setup
+chat.enable_rag(
+    documents=["doc1.pdf", "doc2.pdf"],
+    chunk_size=600,      # Larger chunks for more context
+    max_chunks=4,        # More chunks per query
+    chunk_overlap=100,   # Overlap for context preservation
+    show_stats=True
+)
+
+# Check indexed documents
+if chat.rag:
+    status = chat.rag.get_status()
+    print(f"Indexed {status['indexed_files']} files")
+    print(f"Total chunks: {status['total_chunks']}")
+```
+
+### RAG Debug Mode
+
+Enable debug mode to see detailed retrieval information:
+
+```bash
+# CLI with debug
+gaia chat --index document.pdf --debug
+```
+
+```python
+# Python SDK with debug
+from gaia.agents.chat.agent import ChatAgent
+
+agent = ChatAgent(
+    rag_documents=['document.pdf'],
+    debug=True,
+    silent_mode=False
+)
+
+result = agent.process_query("What is the vision statement?")
+print(f"Debug trace saved to: {result['output_file']}")
+```
+
+**Debug info includes:**
+- Search keys generated by the LLM
+- Chunks found for each search
+- Relevance scores
+- Deduplication statistics
+- Score distributions
+
+### Chunking Strategies
+
+```python
+# 1. Structural Chunking (Default) - Fast
+agent = ChatAgent(
+    rag_documents=['document.pdf'],
+    chunk_size=500,
+    chunk_overlap=50
+)
+
+# 2. LLM-Based Semantic Chunking - More accurate
+agent = ChatAgent(
+    rag_documents=['document.pdf'],
+    use_llm_chunking=True,
+    chunk_size=500
+)
+```
+
+### RAG Troubleshooting
+
+**Missing dependencies:**
+```bash
+# Using uv (recommended):
+uv pip install -e .[rag]
+
+# Or using pip:
+# Linux/Windows:
+pip install -e .[rag]
+# macOS:
+pip install -e ".[rag]"
+```
+
+**PDF issues:**
+- Ensure PDF has extractable text (not scanned images)
+- Check file is not password-protected
+- Verify file is not corrupted
+
+**Performance tuning:**
+```python
+# Faster processing
+chat.enable_rag(documents=["doc.pdf"], chunk_size=300, max_chunks=2)
+
+# Better quality
+chat.enable_rag(documents=["doc.pdf"], chunk_size=600, max_chunks=5, chunk_overlap=100)
+
+# Memory efficient
+chat.enable_rag(documents=["doc.pdf"], chunk_size=400, max_chunks=2)
 ```
 
 ## API Reference
 
-### ChatSDK Methods
+### ChatSDK Core Methods
 
-#### Core Methods
-- `send(message: str, **kwargs) -> ChatResponse` - Send message and get complete response
-- `send_stream(message: str, **kwargs)` - Send message and get streaming response
+**Messaging:**
+- `send(message: str) -> ChatResponse` - Send message, get complete response
+- `send_stream(message: str)` - Send message, get streaming response
+
+**History:**
 - `get_history() -> List[str]` - Get conversation history
-- `clear_history() -> None` - Clear conversation history
-- `get_formatted_history() -> List[Dict[str, str]]` - Get structured history
+- `clear_history()` - Clear conversation history
+- `get_formatted_history() -> List[Dict]` - Get structured history
 
-#### Configuration & Stats
-- `update_config(**kwargs) -> None` - Update configuration dynamically
-- `get_stats() -> Dict[str, Any]` - Get performance statistics
-- `display_stats(stats: Optional[Dict[str, Any]] = None) -> None` - Display formatted stats
+**RAG (Document Q&A):**
+- `enable_rag(documents=None, **kwargs)` - Enable RAG with optional documents
+- `disable_rag()` - Disable RAG
+- `add_document(path: str) -> bool` - Add document to index
 
-#### Interactive Mode
-- `start_interactive_session() -> None` - Start CLI-style interactive session
+**Configuration:**
+- `update_config(**kwargs)` - Update configuration dynamically
+- `get_stats() -> Dict` - Get performance statistics
+- `display_stats(stats=None)` - Display formatted statistics
 
-#### Properties
-- `history_length: int` - Number of history entries
-- `conversation_pairs: int` - Number of conversation pairs
+**Interactive:**
+- `start_interactive_session()` - Start CLI-style interactive mode
 
 ### SimpleChat Methods
 
-- `__init__(system_prompt: Optional[str] = None, model: Optional[str] = None, assistant_name: Optional[str] = None)` - Initialize with optional assistant name
-- `ask(question: str) -> str` - Ask question and get response
-- `ask_stream(question: str)` - Ask question and get streaming response
-- `clear_memory() -> None` - Clear conversation memory
-- `get_conversation() -> List[Dict[str, str]]` - Get conversation history
+- `ask(question: str) -> str` - Ask question, get response
+- `ask_stream(question: str)` - Ask question, stream response
+- `clear_memory()` - Clear conversation memory
+- `get_conversation() -> List[Dict]` - Get conversation history
 
 ### ChatSession Methods
 
-- `create_session(session_id: str, config: Optional[ChatConfig] = None, **config_kwargs) -> ChatSDK`
-  - `config_kwargs` supports `assistant_name`, `system_prompt`, `model`, etc.
-- `get_session(session_id: str) -> Optional[ChatSDK]`
-- `delete_session(session_id: str) -> bool`
-- `list_sessions() -> List[str]`
-- `clear_all_sessions() -> None`
+- `create_session(id, config=None, **kwargs) -> ChatSDK` - Create new session
+- `get_session(id) -> ChatSDK` - Get existing session
+- `delete_session(id) -> bool` - Delete session
+- `list_sessions() -> List[str]` - List all sessions
+- `clear_all_sessions()` - Delete all sessions
 
 ### Utility Functions
 
-- `quick_chat(message: str, system_prompt: Optional[str] = None, model: Optional[str] = None, assistant_name: Optional[str] = None) -> str`
-- `quick_chat_with_memory(messages: List[str], system_prompt: Optional[str] = None, model: Optional[str] = None, assistant_name: Optional[str] = None) -> List[str]`
+- `quick_chat(message, system_prompt=None, model=None, assistant_name=None) -> str`
+- `quick_chat_with_memory(messages, system_prompt=None, model=None, assistant_name=None) -> List[str]`
 
 ## Best Practices
 
-1. **Choose the Right Interface**: Use `SimpleChat` for basic needs, `ChatSDK` for advanced features, and `ChatSession` for multi-context applications.
-
-2. **Memory Management**: Configure `max_history_length` based on your needs. Longer histories provide better context but use more memory.
-
-3. **Performance Monitoring**: Enable `show_stats=True` during development to monitor performance.
-
-4. **Error Handling**: Always wrap chat operations in try-catch blocks for production applications.
-
-5. **Resource Cleanup**: Clear sessions and history when no longer needed to free memory.
-
-6. **Model Selection**: Choose appropriate models based on your performance and accuracy requirements.
-
-7. **Assistant Naming**: Use meaningful assistant names to create distinct identities for different use cases (e.g., "CodeBot" for programming, "Writer" for creative tasks).
-
-## Examples Repository
-
-For more examples and integration patterns, run:
-
-```bash
-python src/gaia/chat/app.py examples
-```
-
-This will show additional usage patterns and integration examples.
+1. **Choose the Right Interface**: `SimpleChat` for basic needs, `ChatSDK` for full features, `ChatSession` for multi-context apps
+2. **Memory Management**: Configure `max_history_length` based on memory constraints
+3. **Performance**: Enable `show_stats=True` during development
+4. **Error Handling**: Wrap chat operations in try-catch blocks
+5. **Resource Cleanup**: Clear sessions when done to free memory
+6. **Assistant Naming**: Use meaningful names for distinct use cases

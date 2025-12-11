@@ -263,7 +263,7 @@ For detailed n8n workflow automation examples, see the [n8n Integration Guide](.
 
 2. In n8n, add an HTTP Request node:
    - **Method**: POST
-   - **URL**: `http://127.0.0.1:8765/chat` (use 127.0.0.1, not localhost)
+   - **URL**: `http://localhost:8765/chat`
    - **Body**: JSON with your query
 
 3. Import the example workflow:
@@ -315,7 +315,9 @@ To use the Docker tool, start the Docker MCP server: `gaia mcp docker --port 808
 4. **No tools available**
    - Check server logs: `gaia mcp start --verbose`
    - Verify GAIA installation: `pip show gaia`
-   - Reinstall MCP dependencies: `pip install -e .[mcp]`
+   - Reinstall MCP dependencies:
+     - Linux/Windows: `pip install -e .[mcp]`
+     - macOS: `pip install -e ".[mcp]"`
 
 ### CLI Testing & Debugging
 

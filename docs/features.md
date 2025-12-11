@@ -6,7 +6,7 @@ Currently, the following capabilities are available, more will be added in the n
 
 - **Windows 11**: Full GUI and CLI support with all features
 - **Linux (Ubuntu/Debian)**: Full GUI and CLI support with all features
-- **macOS**: Not supported
+- **macOS**: CLI support via source installation (see [Development Guide](./dev.md))
 
 | Use-Case Example   | Function                                 | Description                                                     | Platform Support |
 | ------------------ | ---------------------------------------- | --------------------------------------------------------------- | ---------------- |
@@ -27,7 +27,7 @@ The `gaia llm` command provides direct access to language models without requiri
 gaia llm "What is 1+1?"
 
 # Specify model and token limit
-gaia llm "Explain quantum computing" --model Llama-3.2-3B-Instruct-Hybrid --max-tokens 200
+gaia llm "Explain quantum computing" --model Qwen2.5-0.5B-Instruct-CPU --max-tokens 200
 
 # Disable streaming for batch processing
 gaia llm "Write a short poem" --no-stream
@@ -51,16 +51,19 @@ gaia chat "What is machine learning?"
 # Use a specific model
 gaia chat --model Llama-3.2-1B-Instruct-Hybrid
 
-# Set custom system prompt
-gaia chat --system-prompt "You are a helpful coding assistant"
+# Use document Q&A with RAG (single file)
+gaia chat --index manual.pdf
 
-# Use custom assistant name
-gaia chat --assistant-name "Gaia"
+# Multiple documents
+gaia chat --index doc1.pdf doc2.pdf
+
+# Show detailed statistics
+gaia chat --show-stats
 ```
 
 **Key features:**
 - **Conversation History**: Maintains context across messages with configurable history length
-- **Assistant Naming**: Customize the assistant's name for personalized interactions
+- **Document Q&A**: RAG support for querying PDF documents with --index option
 - **Interactive Commands**: Built-in commands for session management and debugging
 - **Streaming Responses**: Real-time response streaming for better user experience
 - **Model Flexibility**: Support for different LLM models with automatic prompt formatting
@@ -76,7 +79,7 @@ gaia chat --assistant-name "Gaia"
 - `/help` - Show available commands
 - `quit`, `exit`, or `bye` - End the chat session
 
-**Requirements:** Requires lemonade-server to be running. The chat agent defaults to Llama-3.2-3B-Instruct-Hybrid model for optimal performance.
+**Requirements:** Requires lemonade-server to be running. The chat agent defaults to Qwen3-Coder-30B-A3B-Instruct-GGUF model for optimal performance.
 
 **Platform Availability**: Windows and Linux
 
@@ -194,19 +197,23 @@ The Talk feature enables voice-based conversations with AI models:
 # Start voice conversation
 gaia talk
 
-# Use specific model with voice
-gaia talk --model Llama-3.2-3B-Instruct-Hybrid
+# Voice chat with document Q&A (RAG)
+gaia talk --index manual.pdf
 
-# Disable text-to-speech (ASR only)
-gaia talk --no-tts
+# Use specific model with voice and document
+gaia talk --model Qwen2.5-0.5B-Instruct-CPU --index report.pdf
 
-# Configure audio settings
-gaia talk --audio-device-index 1 --whisper-model-size medium
+# Disable text-to-speech (ASR only) with document
+gaia talk --no-tts --index technical_manual.pdf
+
+# Configure audio settings with document
+gaia talk --audio-device-index 1 --whisper-model-size medium --index doc.pdf
 ```
 
 **Key features:**
 - **Speech Recognition**: Whisper ASR for voice input
 - **Text-to-Speech**: Kokoro TTS for natural voice output
+- **Document Q&A**: RAG support for hands-free document queries
 - **Real-time Processing**: Streaming audio pipeline
 - **Device Selection**: Configure audio input devices
 - **Model Flexibility**: Choose ASR model sizes

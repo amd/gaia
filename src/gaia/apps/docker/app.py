@@ -42,6 +42,7 @@ class DockerApp:
         verbose: bool = False,
         debug: bool = False,
         model: str = None,
+        base_url: str = None,
     ):
         """
         Initialize the Docker App.
@@ -51,15 +52,18 @@ class DockerApp:
             verbose: Enable verbose output
             debug: Enable debug logging
             model: LLM model to use (optional)
+            base_url: Base URL for local LLM server (defaults to LEMONADE_BASE_URL env var)
         """
         self.directory = directory
         self.verbose = verbose
         self.debug = debug
         self.model = model or DEFAULT_MODEL
+        self.base_url = base_url
 
         # Create agent with debug settings
         self.agent = DockerAgent(
             model_id=self.model,
+            base_url=self.base_url,
             debug_prompts=False,
             show_prompts=self.debug,
             show_stats=self.debug or self.verbose,
@@ -243,6 +247,10 @@ async def main(cli_args=None):
         )
         parser.add_argument("--debug", action="store_true", help="Enable debug logging")
         parser.add_argument("--model", help="LLM model to use")
+        parser.add_argument(
+            "--base-url",
+            help="Base URL for local LLM server (defaults to LEMONADE_BASE_URL env var)",
+        )
 
         args = parser.parse_args()
 
@@ -252,6 +260,7 @@ async def main(cli_args=None):
         verbose=args.verbose,
         debug=args.debug,
         model=args.model,
+        base_url=getattr(args, "base_url", None),
     )
 
     # Execute command

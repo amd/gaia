@@ -56,6 +56,7 @@ Welcome to the GAIA documentation! This directory contains comprehensive guides 
 - [**Evaluation Framework**](eval.md) - Model testing and benchmarking
 - [**API Server**](api.md) - OpenAI-compatible REST API for agent integration
 - [**MCP Documentation**](mcp.md) - Model Context Protocol server and API reference
+- [**Routing Agent**](routing.md) - Intelligent language/framework detection and agent routing
 
 ### Installation & Setup
 - [**Installer Documentation**](installer.md) - NSIS installer and customization

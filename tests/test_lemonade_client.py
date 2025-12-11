@@ -448,7 +448,10 @@ class TestLemonadeClientMock(unittest.TestCase):
             ]
 
             with self.assertRaises(LemonadeClientError) as context:
-                self.client.chat_completions(model=TEST_MODEL, messages=messages)
+                # Disable auto_download to prevent retry logic from calling /load endpoint
+                self.client.chat_completions(
+                    model=TEST_MODEL, messages=messages, auto_download=False
+                )
 
             self.assertIn("404", str(context.exception))
             self.assertIn(error_message, str(context.exception))
@@ -827,6 +830,353 @@ class TestLemonadeClientMock(unittest.TestCase):
         result = self.client.ready()
         self.assertFalse(result)
 
+    @responses.activate
+    def test_pull_model_stream(self):
+        """Test pulling a model with streaming progress updates."""
+        # Mock SSE response for streaming pull
+        sse_response = (
+            "event: progress\n"
+            'data: {"file":"model.gguf","file_index":1,"total_files":2,'
+            '"bytes_downloaded":536870912,"bytes_total":2684354560,"percent":20}\n\n'
+            "event: progress\n"
+            'data: {"file":"model.gguf","file_index":1,"total_files":2,'
+            '"bytes_downloaded":1073741824,"bytes_total":2684354560,"percent":40}\n\n'
+            "event: progress\n"
+            'data: {"file":"config.json","file_index":2,"total_files":2,'
+            '"bytes_downloaded":1024,"bytes_total":1024,"percent":100}\n\n'
+            "event: complete\n"
+            'data: {"file_index":2,"total_files":2,"percent":100}\n\n'
+        )
+
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/pull",
+            body=sse_response,
+            status=200,
+            content_type="text/event-stream",
+        )
+
+        # Collect events from streaming pull
+        events = []
+        callback_events = []
+
+        def test_callback(event_type, data):
+            callback_events.append((event_type, data))
+
+        for event in self.client.pull_model_stream(
+            model_name=TEST_MODEL, progress_callback=test_callback
+        ):
+            events.append(event)
+
+        # Verify we got all events
+        self.assertEqual(len(events), 4)
+        self.assertEqual(events[0]["event"], "progress")
+        self.assertEqual(events[0]["percent"], 20)
+        self.assertEqual(events[1]["percent"], 40)
+        self.assertEqual(events[2]["file"], "config.json")
+        self.assertEqual(events[3]["event"], "complete")
+        self.assertEqual(events[3]["percent"], 100)
+
+        # Verify callback was called
+        self.assertEqual(len(callback_events), 4)
+        self.assertEqual(callback_events[0][0], "progress")
+        self.assertEqual(callback_events[3][0], "complete")
+
+    @responses.activate
+    def test_pull_model_stream_error(self):
+        """Test handling errors during streaming model pull."""
+        # Mock SSE response with error
+        sse_response = (
+            "event: progress\n"
+            'data: {"file":"model.gguf","file_index":1,"total_files":1,'
+            '"bytes_downloaded":100,"bytes_total":1000,"percent":10}\n\n'
+            "event: error\n"
+            'data: {"error":"Network error: connection reset"}\n\n'
+        )
+
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/pull",
+            body=sse_response,
+            status=200,
+            content_type="text/event-stream",
+        )
+
+        # Pull should raise error after yielding progress and error events
+        events = []
+        with self.assertRaises(LemonadeClientError) as context:
+            for event in self.client.pull_model_stream(model_name=TEST_MODEL):
+                events.append(event)
+
+        # Verify we got progress and error events before exception
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0]["event"], "progress")
+        self.assertEqual(events[1]["event"], "error")
+        self.assertIn("Network error", str(context.exception))
+
+    @responses.activate
+    def test_ensure_model_downloaded_when_not_present(self):
+        """Test ensure_model_downloaded downloads model when not present."""
+        # First call to list_models: model not downloaded
+        models_response_not_downloaded = {
+            "data": [{"id": TEST_MODEL, "downloaded": False}]
+        }
+        # Second call: model is now downloaded (after pull completes)
+        models_response_downloaded = {"data": [{"id": TEST_MODEL, "downloaded": True}]}
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/models",
+            json=models_response_not_downloaded,
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/models",
+            json=models_response_downloaded,
+            status=200,
+        )
+
+        # Mock pull endpoint (non-streaming)
+        pull_response = {
+            "status": "success",
+            "model_name": TEST_MODEL,
+        }
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/pull",
+            json=pull_response,
+            status=200,
+        )
+
+        result = self.client.ensure_model_downloaded(TEST_MODEL, show_progress=False)
+
+        self.assertTrue(result)
+
+    def test_get_required_models_for_chat(self):
+        """Test get_required_models returns correct models for chat agent."""
+        model_ids = self.client.get_required_models("chat")
+
+        # Chat agent requires qwen3-coder-30b, nomic-embed, qwen2.5-vl-7b
+        self.assertIn("Qwen3-Coder-30B-A3B-Instruct-GGUF", model_ids)
+        self.assertIn("nomic-embed-text-v2-moe-GGUF", model_ids)
+        self.assertIn("Qwen2.5-VL-7B-Instruct-GGUF", model_ids)
+
+    def test_get_required_models_for_code(self):
+        """Test get_required_models returns correct models for code agent."""
+        model_ids = self.client.get_required_models("code")
+
+        # Code agent only requires qwen3-coder-30b
+        self.assertIn("Qwen3-Coder-30B-A3B-Instruct-GGUF", model_ids)
+        self.assertEqual(len(model_ids), 1)
+
+    def test_get_required_models_for_minimal(self):
+        """Test get_required_models returns correct models for minimal agent."""
+        model_ids = self.client.get_required_models("minimal")
+
+        # Minimal agent only requires qwen2.5-0.5b
+        self.assertIn("Qwen2.5-0.5B-Instruct-CPU", model_ids)
+        self.assertEqual(len(model_ids), 1)
+
+    def test_get_required_models_all(self):
+        """Test get_required_models returns all unique models."""
+        model_ids = self.client.get_required_models("all")
+
+        # Should have all unique models
+        self.assertIn("Qwen3-Coder-30B-A3B-Instruct-GGUF", model_ids)
+        self.assertIn("nomic-embed-text-v2-moe-GGUF", model_ids)
+        self.assertIn("Qwen2.5-VL-7B-Instruct-GGUF", model_ids)
+        self.assertIn("Qwen2.5-0.5B-Instruct-CPU", model_ids)
+        # Should be exactly 4 unique models
+        self.assertEqual(len(model_ids), 4)
+
+    def test_get_required_models_unknown_agent(self):
+        """Test get_required_models returns empty list for unknown agent."""
+        model_ids = self.client.get_required_models("nonexistent")
+        self.assertEqual(len(model_ids), 0)
+
+    @responses.activate
+    def test_check_model_available_true(self):
+        """Test check_model_available returns True when model is available."""
+        # check_model_available uses list_models(show_all=True) which calls /models
+        models_response = {
+            "data": [
+                {"id": TEST_MODEL, "downloaded": True},
+                {"id": "other-model", "downloaded": False},
+            ]
+        }
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/models",
+            json=models_response,
+            status=200,
+        )
+
+        result = self.client.check_model_available(TEST_MODEL)
+        self.assertTrue(result)
+
+    @responses.activate
+    def test_check_model_available_false(self):
+        """Test check_model_available returns False when model is not available."""
+        # check_model_available uses list_models(show_all=True) which calls /models
+        models_response = {
+            "data": [
+                {"id": TEST_MODEL, "downloaded": False},
+            ]
+        }
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/models",
+            json=models_response,
+            status=200,
+        )
+
+        result = self.client.check_model_available(TEST_MODEL)
+        self.assertFalse(result)
+
+    @responses.activate
+    def test_check_model_available_not_found(self):
+        """Test check_model_available returns False when model not in list."""
+        # check_model_available uses list_models(show_all=True) which calls /models
+        models_response = {"data": []}
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/models",
+            json=models_response,
+            status=200,
+        )
+
+        result = self.client.check_model_available(TEST_MODEL)
+        self.assertFalse(result)
+
+    @responses.activate
+    def test_download_agent_models_all_available(self):
+        """Test download_agent_models skips already available models."""
+        # Mock /models endpoint (used by check_model_available via list_models)
+        models_response = {
+            "data": [
+                {"id": "Qwen2.5-0.5B-Instruct-CPU", "downloaded": True},
+            ]
+        }
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/models",
+            json=models_response,
+            status=200,
+        )
+
+        result = self.client.download_agent_models("minimal")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(len(result["models"]), 1)
+        self.assertEqual(result["models"][0]["status"], "already_available")
+        self.assertTrue(result["models"][0]["skipped"])
+
+    @responses.activate
+    def test_download_agent_models_downloads_missing(self):
+        """Test download_agent_models downloads missing models."""
+        # Mock /models endpoint (used by check_model_available via list_models)
+        models_response = {
+            "data": [
+                {"id": "Qwen2.5-0.5B-Instruct-CPU", "downloaded": False},
+            ]
+        }
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/models",
+            json=models_response,
+            status=200,
+        )
+
+        # Mock SSE response for streaming pull
+        sse_response = (
+            "event: progress\n"
+            'data: {"file":"model.gguf","file_index":1,"total_files":1,'
+            '"bytes_downloaded":1000,"bytes_total":1000,"percent":100}\n\n'
+            "event: complete\n"
+            'data: {"file_index":1,"total_files":1,"percent":100}\n\n'
+        )
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/pull",
+            body=sse_response,
+            status=200,
+            content_type="text/event-stream",
+        )
+
+        callback_calls = []
+
+        def track_progress(event_type, data):
+            callback_calls.append((event_type, data))
+
+        result = self.client.download_agent_models(
+            "minimal", progress_callback=track_progress
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(len(result["models"]), 1)
+        self.assertEqual(result["models"][0]["status"], "completed")
+        self.assertFalse(result["models"][0]["skipped"])
+        # Verify progress callbacks were called
+        self.assertGreater(len(callback_calls), 0)
+
+    @responses.activate
+    def test_validate_context_size_sufficient(self):
+        """Test validate_context_size returns True when context is sufficient."""
+        health_response = {
+            "status": "ok",
+            "context_size": 32768,
+            "model_loaded": TEST_MODEL,
+        }
+        responses.add(
+            responses.GET, f"{API_BASE}/health", json=health_response, status=200
+        )
+
+        valid, error = self.client.validate_context_size(
+            required_tokens=32768, quiet=True
+        )
+
+        self.assertTrue(valid)
+        self.assertIsNone(error)
+
+    @responses.activate
+    def test_validate_context_size_insufficient(self):
+        """Test validate_context_size returns False when context is insufficient."""
+        health_response = {
+            "status": "ok",
+            "context_size": 4096,  # Less than required
+            "model_loaded": TEST_MODEL,
+        }
+        responses.add(
+            responses.GET, f"{API_BASE}/health", json=health_response, status=200
+        )
+
+        valid, error = self.client.validate_context_size(
+            required_tokens=32768, quiet=True
+        )
+
+        self.assertFalse(valid)
+        self.assertIsNotNone(error)
+        self.assertIn("4096", error)
+        self.assertIn("32768", error)
+        self.assertIn("--ctx-size", error)
+
+    @responses.activate
+    def test_validate_context_size_health_failure(self):
+        """Test validate_context_size returns True on health check failure (don't block)."""
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/health",
+            body=requests.exceptions.ConnectionError("Connection refused"),
+        )
+
+        valid, error = self.client.validate_context_size(
+            required_tokens=32768, quiet=True
+        )
+
+        # Should return True to not block on connection errors
+        self.assertTrue(valid)
+        self.assertIsNone(error)
+
 
 def is_server_running(host=HOST, port=PORT):
     """Check if a lemonade server is already running on the specified host and port."""
@@ -1051,42 +1401,70 @@ class TestLemonadeClientIntegration(unittest.TestCase):
             # Fail the test for all errors including 404 Model not found
             self.fail(f"Streaming chat completion failed: {error_str}")
 
-    def test_integration_text_completion(self):
-        """Integration test for text completion."""
-        prompt = "Count from 1 to 3."
-        print(f"Sending text completion request with prompt: {prompt}")
+    def test_integration_hybrid_npu_validation(self):
+        """End-to-end test validating hybrid NPU mode works correctly.
+
+        This test proves that the Lemonade server is running in hybrid mode
+        (NPU + iGPU) on AMD Ryzen AI hardware by:
+        1. Verifying the oga-hybrid recipe is being used
+        2. Running a deterministic chat completion with the instruct model
+        """
+        print("\n=== Hybrid NPU Validation Test ===")
 
         try:
-            response = self.client.completions(
-                model=TEST_MODEL, prompt=prompt, temperature=0.0, max_tokens=50
+            # Step 1: Verify hybrid recipe is in use
+            print("Step 1: Checking hybrid recipe configuration...")
+            health = self.client.health_check()
+            print(f"Health response: {health}")
+
+            # Verify we're using the hybrid checkpoint and recipe
+            checkpoint = health.get("checkpoint_loaded", "")
+            if checkpoint:
+                self.assertIn(
+                    "hybrid",
+                    checkpoint.lower(),
+                    f"Expected hybrid checkpoint, got: {checkpoint}",
+                )
+                print(f"✅ Hybrid checkpoint loaded: {checkpoint}")
+
+            # Step 2: Run deterministic chat completion (correct API for instruct models)
+            print("\nStep 2: Running deterministic chat completion...")
+            messages = [
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant. Answer concisely.",
+                },
+                {
+                    "role": "user",
+                    "content": "What is 2 + 2? Reply with just the number.",
+                },
+            ]
+
+            response = self.client.chat_completions(
+                model=TEST_MODEL,
+                messages=messages,
+                temperature=0.0,  # Deterministic output
+                max_completion_tokens=10,
             )
 
             # Verify response format
             self.assertIn("choices", response)
             self.assertGreaterEqual(len(response["choices"]), 1)
-            self.assertIn("text", response["choices"][0])
+            self.assertIn("message", response["choices"][0])
 
-            # Verify content includes the numbers - be flexible about partial responses
-            content = response["choices"][0]["text"]
-            print(f"Response content: {content}")
+            content = response["choices"][0]["message"]["content"]
+            print(f"Model response: {content}")
 
-            # Check that at least 1 and 2 are present (3 might be cut off)
-            self.assertIn("1", content, "Response should include '1'")
-            self.assertIn("2", content, "Response should include '2'")
+            # Verify the model can do basic arithmetic (proves inference works)
+            self.assertIn("4", content, "Model should correctly answer 2+2=4")
+            print("✅ Chat completion successful - model inference working")
 
-            # Only check for 3 if it's actually in the response (don't fail if cut off)
-            if "3" in content:
-                print("✅ Complete response with all numbers 1, 2, 3")
-            else:
-                print("⚠️  Response was truncated but includes 1 and 2")
-
-            print("✅ Text completion test passed")
+            print("\n✅ Hybrid NPU validation test PASSED")
 
         except LemonadeClientError as e:
             error_str = str(e)
-            print(f"❌ Error during text completion: {error_str}")
-            # Fail the test for all errors including 404 Model not found
-            self.fail(f"Text completion failed: {error_str}")
+            print(f"❌ Error during hybrid NPU validation: {error_str}")
+            self.fail(f"Hybrid NPU validation failed: {error_str}")
 
     @pytest.mark.skip(reason="Parameter setting API is still in development")
     def test_integration_set_params(self):

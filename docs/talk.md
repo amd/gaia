@@ -50,8 +50,54 @@ Customize the voice interaction experience:
 gaia talk --whisper-model-size medium  # Options: tiny, base, small, medium, large
 
 # Specify which microphone to use
-gaia talk --audio-device-index 2  # Default: 1
+gaia talk --audio-device-index 2  # Optional, auto-detects by default
+
+# Show performance statistics
+gaia talk --stats
 ```
+
+## Document Q&A with Voice (RAG Support)
+
+Voice interaction now supports document-based Q&A through RAG (Retrieval-Augmented Generation). Ask questions about your PDF documents using natural speech!
+
+### Quick Start
+
+```bash
+# Voice chat with a document
+gaia talk --index manual.pdf
+
+# Or use short form
+gaia talk -i guide.pdf
+
+# Without text-to-speech (ASR only)
+gaia talk --index manual.pdf --no-tts
+```
+
+### CLI Options for RAG
+
+```bash
+gaia talk [voice options] [rag option]
+
+RAG Option:
+  --index, -i FILE    PDF document to index for voice Q&A
+```
+
+### Use Cases
+
+- **Technical Support**: Voice chat with product manuals and troubleshooting guides
+- **Research**: Speak questions about research papers and documentation
+- **Learning**: Voice interaction with textbooks and educational materials
+- **Accessibility**: Hands-free document Q&A for users with mobility needs
+- **Field Work**: Voice queries about procedures and manuals when hands are busy
+
+### How It Works
+
+1. **Document Indexing**: PDFs are automatically indexed when you start talk with `--index`
+2. **Voice Input**: Speak your question about the documents
+3. **Context Retrieval**: Relevant document sections are retrieved automatically
+4. **Voice Response**: AI answers based on document context and speaks the response
+
+See the [Chat documentation - Document Q&A section](chat.md#document-qa-with-rag) for more details on RAG capabilities.
 
 ## Automatic Speech Recognition (ASR) Tests
 You can test the ASR system using the `gaia test` command with various test types:
@@ -81,7 +127,7 @@ gaia test --test-type asr-microphone --recording-duration 15
 Options:
 - `--recording-duration`: Recording duration in seconds (default: 10)
 - `--whisper-model-size`: Choose Whisper model size ["tiny", "base", "small", "medium", "large"] (default: "base")
-- `--audio-device-index`: Select which microphone to use (default: 1)
+- `--audio-device-index`: Select which microphone to use (optional)
 
 ## Testing TTS Components
 You can test different aspects of the TTS system using the `gaia test` command with various test types:
@@ -120,6 +166,8 @@ gaia test --test-type tts-audio-file --test-text "Your test text here" --output-
 Use the `--output-audio-file` option to specify the output file path.
 
 ## Troubleshooting Voice Features
+
+### Audio Issues
 - If you get audio device errors, try different `--audio-device-index` values
 - For better ASR accuracy, try larger Whisper models (e.g., "medium" or "large")
 - Ensure you're in a quiet environment for ASR tests
@@ -131,6 +179,13 @@ Use the `--output-audio-file` option to specify the output file path.
   - Ensure your system volume is not muted
 - Check your system's audio input settings in Settings > Audio > Input and ensure the correct microphone is selected as the default input device
 - Speaking clearly and at a moderate pace will improve transcription quality
+
+### RAG Issues
+- **Missing RAG dependencies**: Install with `pip install -e .[rag]` (Linux/Windows) or `pip install -e ".[rag]"` (macOS)
+- **PDF processing errors**: Ensure PDFs have extractable text (not scanned images)
+- **Slow document indexing**: Use `--stats` to monitor progress; larger documents take time
+- **Document context not used**: Verify documents are indexed successfully at startup
+- **Empty responses**: Check that PDFs contain extractable text (not just images)
 
 # License
 

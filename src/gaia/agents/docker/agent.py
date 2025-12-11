@@ -7,7 +7,6 @@ Docker Agent for GAIA.
 This agent provides an intelligent interface for containerizing applications,
 generating Dockerfiles, and managing Docker containers through natural language commands.
 """
-
 import json
 import logging
 import subprocess
@@ -17,13 +16,13 @@ from typing import Any, Dict
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.mcp_agent import MCPAgent
 from gaia.agents.base.tools import tool
+from gaia.security import PathValidator
 
 logger = logging.getLogger(__name__)
 
-# Constants
-DEFAULT_PORT = 5000
 DEFAULT_MODEL = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
 DEFAULT_MAX_STEPS = 10
+DEFAULT_PORT = 8080
 
 
 class DockerAgent(MCPAgent):
@@ -57,6 +56,11 @@ class DockerAgent(MCPAgent):
 
         if "max_steps" not in kwargs:
             kwargs["max_steps"] = DEFAULT_MAX_STEPS
+
+        # Security: Configure allowed paths for file operations
+        # If None, allow current directory and subdirectories
+        self.allowed_paths = kwargs.pop("allowed_paths", None)
+        self.path_validator = PathValidator(self.allowed_paths)
 
         super().__init__(**kwargs)
 
@@ -236,6 +240,13 @@ Step 3: Build with build_image
         """Analyze directory to determine application type and structure."""
         logger.debug(f"Analyzing directory: {path}")
 
+        # Security check
+        if not self.path_validator.is_path_allowed(path):
+            return {
+                "status": "error",
+                "error": f"Access denied: {path} is not in allowed paths",
+            }
+
         path_obj = Path(path).resolve()
         if not path_obj.exists():
             return {"status": "error", "error": f"Directory {path} does not exist"}
@@ -344,6 +355,13 @@ Step 3: Build with build_image
         """
         logger.debug(f"Saving Dockerfile to: {path}")
 
+        # Security check
+        if not self.path_validator.is_path_allowed(path):
+            return {
+                "status": "error",
+                "error": f"Access denied: {path} is not in allowed paths",
+            }
+
         path_obj = Path(path).resolve()
         if not path_obj.exists():
             return {"status": "error", "error": f"Directory {path} does not exist"}
@@ -386,6 +404,13 @@ Step 3: Build with build_image
     def _build_image(self, path: str, tag: str) -> Dict[str, Any]:
         """Build Docker image from Dockerfile."""
         logger.debug(f"Building Docker image: {tag} from {path}")
+
+        # Security check
+        if not self.path_validator.is_path_allowed(path):
+            return {
+                "status": "error",
+                "error": f"Access denied: {path} is not in allowed paths",
+            }
 
         # Check if Docker is available
         try:
@@ -553,6 +578,13 @@ Step 3: Build with build_image
                     "error": f"Path is not a directory: {app_path}",
                 }
 
+            # Security check
+            if not self.path_validator.is_path_allowed(app_path):
+                return {
+                    "success": False,
+                    "error": f"Access denied: {app_path} is not in allowed paths",
+                }
+
             # Get parameters
             port = arguments.get("port", DEFAULT_PORT)
 
@@ -568,7 +600,7 @@ Step 3: Build with build_image
             query = " ".join(query_parts) + "."
 
             # Let the LLM orchestrate the workflow
-            result = self.process_query(user_input=query, output_to_file=False)
+            result = self.process_query(user_input=query, trace=False)
 
             # Extract the final result
             # process_query returns: {status: "success"/"failed"/"incomplete", result: ..., error_history: [...]}

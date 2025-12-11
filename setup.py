@@ -30,12 +30,15 @@ setup(
         "gaia.apps.llm",
         "gaia.apps.summarize",
         "gaia.eval",
+        "gaia.rag",
         "gaia.mcp",
         "gaia.mcp.servers",
         "gaia.agents",
         "gaia.agents.base",
         "gaia.agents.blender",
         "gaia.agents.blender.core",
+        "gaia.agents.chat",
+        "gaia.agents.chat.tools",
         "gaia.agents.docker",
         "gaia.agents.jira",
         "gaia.agents.code",
@@ -59,6 +62,7 @@ setup(
         "python-dotenv",
         "aiohttp",
         "rich",
+        "watchdog>=2.1.0",
     ],
     extras_require={
         "api": [
@@ -115,6 +119,20 @@ setup(
         "youtube": [
             "llama-index-readers-youtube-transcript",
         ],
+        "rag": [
+            "pypdf",
+            "sentence-transformers",
+            "faiss-cpu>=1.7.0",
+        ],
+        "lint": [
+            "black",
+            "pylint",
+            "isort",
+            "flake8",
+            "autoflake",
+            "mypy",
+            "bandit",
+        ],
     },
     classifiers=[],
     entry_points={
@@ -125,7 +143,7 @@ setup(
             "gaia-mcp-atlassian = gaia.mcp.atlassian_mcp:main",
         ]
     },
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     long_description=open("README.md", "r", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     include_package_data=True,

@@ -30,7 +30,11 @@ The GAIA Code Agent is an autonomous agent that attempts to handle coding tasks 
 
 ```bash
 # Install GAIA with development dependencies
+# Linux/Windows:
 pip install -e .[dev]
+
+# macOS:
+pip install -e ".[dev]"
 ```
 
 ## Prerequisites
@@ -86,48 +90,36 @@ gaia code "Create a todo CLI app" --debug
 # Show prompts sent to LLM in console
 gaia code "Create a todo CLI app" --show-prompts
 
-# Step-through debugging mode (pause at each agent step)
-gaia code "Create a todo CLI app" --step-through
-
-# Save complete trace to JSON file
-gaia code "Create a todo CLI app" --output trace.json
-
-# Include prompts in JSON conversation history
-gaia code "Create a todo CLI app" --output trace.json --debug-prompts
-
-# Maximum debug: console + JSON with full trace
-gaia code "Create a todo CLI app" --debug --show-prompts --debug-prompts --output full_trace.json
+# Save detailed JSON trace of agent execution
+gaia code "Create a todo CLI app" --trace
 
 # Silent mode: JSON output only (for scripts/automation)
-gaia code "Create a todo CLI app" --silent --output trace.json
+gaia code "Create a todo CLI app" --silent
+
+# Enable step-through debugging mode (pause at each agent step)
+gaia code "Create a todo CLI app" --step-through
 
 # Control maximum steps (default: 100)
 gaia code "Create a todo CLI app" --max-steps 150
 
 # Show LLM performance statistics (tokens, timing)
 gaia code "Create a todo CLI app" --show-stats
+
+# Maximum debug: console + trace with full logs
+gaia code "Create a todo CLI app" --debug --show-prompts --trace
 ```
 
 **Debug Flags:**
 - `--debug`: Enable DEBUG level logging with internal decision traces
 - `--show-prompts`: Display every prompt sent to the LLM in real-time
-- `--step-through`: Interactive step-through debugging mode (pause at each agent step)
-- `--debug-prompts`: Include all prompts in the JSON conversation history
-- `--output <file>`: Save complete execution trace to JSON file
-- `--silent`: Suppress console output, only write to JSON file
+- `--trace`: Save detailed JSON trace of agent execution
+- `--silent`: Suppress console output, return JSON only
+- `--step-through`: Enable step-through debugging mode (pause at each agent step)
 - `--max-steps <n>`: Override default maximum steps (default: 100)
-- `--show-stats`: Display LLM performance statistics after each response (disabled by default)
-
-**Step-Through Debug Commands:**
-When using `--step-through`, the agent pauses at each step with these commands:
-- `[Enter]` or `n`: Continue to next step
-- `c`: Continue without stepping (run to completion)
-- `q`: Quit debugging session
-- `s`: Show current agent state (step count, state, messages, plan)
-- `v <variable>`: View specific agent variable (e.g., `v plan`, `v conversation`)
+- `--stats`, `--show-stats`: Display LLM performance statistics after each response
 
 **JSON Output Structure:**
-The `--output` flag saves a complete trace with:
+The `--trace` flag saves a complete trace with:
 ```json
 {
   "status": "success",
@@ -135,7 +127,6 @@ The `--output` flag saves a complete trace with:
   "system_prompt": "Complete system prompt used",
   "conversation": [
     {"role": "user", "content": "User's query"},
-    {"role": "system", "content": {"prompt": "Step 1 prompt"}},  // if --debug-prompts
     {"role": "assistant", "content": {"thought": "...", "tool": "...", "tool_args": {...}}},
     {"role": "system", "content": {...}},  // Tool results
     ...
@@ -198,16 +189,21 @@ result = agent.process_query("Generate a function to sort a list")
 
 The Code Agent is available through the GAIA API Server as the `gaia-code` model, providing an OpenAI-compatible REST API for integration with VSCode, IDEs, and other tools.
 
+**Want to use GAIA Code in VSCode?** See the [VSCode Integration Guide](./vscode.md) for complete setup instructions.
+
 ### Quick Start
 
 ```bash
 # 1. Start Lemonade server with extended context (required for Code agent)
 lemonade-server serve --ctx-size 32768
 
-# 2. Start GAIA API server
+# 2. Install dependencies
+pip install -e .[api]
+
+# 3. Start GAIA API server
 gaia api start
 
-# 3. Use with any OpenAI-compatible client
+# 4. Use with any OpenAI-compatible client
 curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
@@ -225,10 +221,9 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 
 ### For More Information
 
-- **API Examples & Usage**: See [API Server - Using the Code Agent](./api.md#using-the-code-agent)
-- **OpenAI Client Integration**: See [API Server - Integration Examples](./api.md#integration-examples)
-- **VSCode Extension**: See [API Server - VSCode Integration](./api.md#vscode-integration)
-- **Troubleshooting**: See [API Troubleshooting Guide](./api.md#troubleshooting)
+- **VSCode Integration**: See [VSCode Integration Guide](./vscode.md) for complete setup
+- **API Examples & Usage**: See [API Server Documentation](./api.md)
+- **Troubleshooting**: See [VSCode Troubleshooting](./vscode.md#troubleshooting) or [API Troubleshooting](./api.md#troubleshooting)
 
 ## Workflow Capabilities
 
@@ -324,29 +319,6 @@ The Code Agent provides over 30 comprehensive tools for code operations:
 
 ## Debugging
 
-### Interactive Step-Through Debugging (CLI)
-
-The Code Agent includes an interactive step-through mode for debugging agent execution:
-
-```bash
-gaia code "Create a calculator function" --step-through
-```
-
-**Available commands during step-through:**
-- `[Enter]` - Next step
-- `c` - Continue without stepping
-- `q` - Quit
-- `s` - Show current state
-- `v <variable>` - View variable value
-
-**Use cases:**
-- Understanding agent workflow
-- Inspecting agent state between steps
-- Debugging failed generations
-- Learning how the agent processes requests
-
-For detailed documentation, see [CODE_AGENT_DEBUG_MODE.md](../CODE_AGENT_DEBUG_MODE.md)
-
 ### VS Code Debugging (Developers)
 
 For code-level debugging with breakpoints, use the VS Code debugger with pre-configured launch configurations:
@@ -397,7 +369,7 @@ If you experience incomplete code generation or truncated responses:
 ### Other Common Issues
 
 - **LLM timeout errors**: Ensure Lemonade server is running with `--ctx-size 32768`
-- **Import errors**: Install with `pip install -e .[dev]`
+- **Import errors**: Install with `pip install -e .[dev]` (Linux/Windows) or `pip install -e ".[dev]"` (macOS)
 - **File not found**: Check working directory and file paths
 - **Incomplete code generation**: Restart Lemonade server with larger context size
 - **Pylint not found**: Ensure pylint is installed (`pip install pylint`)

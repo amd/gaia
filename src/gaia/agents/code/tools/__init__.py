@@ -12,7 +12,9 @@ from .error_fixing import ErrorFixingMixin
 from .file_io import FileIOToolsMixin
 from .project_management import ProjectManagementMixin
 from .testing import TestingMixin
+from .typescript_tools import TypeScriptToolsMixin
 from .validation_parsing import ValidationAndParsingMixin
+from .web_dev_tools import WebToolsMixin
 
 __all__ = [
     # New consolidated mixins
@@ -24,4 +26,7 @@ __all__ = [
     "ProjectManagementMixin",
     "TestingMixin",
     "ErrorFixingMixin",
+    # TypeScript/Web mixins
+    "TypeScriptToolsMixin",
+    "WebToolsMixin",
 ]

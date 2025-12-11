@@ -23,6 +23,10 @@ try:
 except ImportError:
     PdfReader = None
 
+# Experiment configuration constants
+CREATIVE_TEMPERATURE_MAX = 0.7
+CREATIVE_TEMPERATURE_INCREMENT = 0.3
+
 
 def should_use_chat_template(task_type: str) -> bool:
     """
@@ -2031,7 +2035,7 @@ class BatchExperimentRunner:
                     "system_prompt": "Answer questions about meeting transcripts clearly and accurately. Focus on the key information requested.",
                     "max_tokens": 512,
                     "temperature": 0.1,
-                    "parameters": {"host": "127.0.0.1", "port": 8000},
+                    "parameters": {"host": "localhost", "port": 8000},
                     "_comment": "Local inference - FREE, runs on your hardware",
                 },
                 {
@@ -2042,7 +2046,7 @@ class BatchExperimentRunner:
                     "system_prompt": "You are a creative meeting analyst. Analyze the transcript thoughtfully and provide insightful information that captures key insights and implications.",
                     "max_tokens": 512,
                     "temperature": 0.7,
-                    "parameters": {"host": "127.0.0.1", "port": 8000},
+                    "parameters": {"host": "localhost", "port": 8000},
                     "_comment": "Local inference - FREE, runs on your hardware",
                 },
             ],
@@ -2131,7 +2135,10 @@ class BatchExperimentRunner:
                         "experiment_type": use_case,
                         "system_prompt": original_prompt,
                         "max_tokens": max_tokens,
-                        "temperature": min(0.7, temperature + 0.3),
+                        "temperature": min(
+                            CREATIVE_TEMPERATURE_MAX,
+                            temperature + CREATIVE_TEMPERATURE_INCREMENT,
+                        ),
                         "parameters": {},
                     }
                 )

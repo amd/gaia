@@ -7,21 +7,9 @@ on:
   workflow_call:
   push:
     branches: ["main"]
-    paths:
-      - 'src/gaia/electron/**'
-      - 'src/gaia/apps/**/webui/**'
-      - 'tests/electron/**'
-      - 'tests/apps/**'
-      - '.github/workflows/test_electron.yml'
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - 'src/gaia/electron/**'
-      - 'src/gaia/apps/**/webui/**'
-      - 'tests/electron/**'
-      - 'tests/apps/**'
-      - '.github/workflows/test_electron.yml'
   merge_group:
   workflow_dispatch:
 
@@ -34,9 +22,12 @@ jobs:
     name: Test Electron Framework
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    
+
     steps:
       - uses: actions/checkout@v5
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -67,9 +58,12 @@ jobs:
     name: Test Apps Integration
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    
+
     steps:
       - uses: actions/checkout@v5
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -102,9 +96,12 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     timeout-minutes: 20
-    
+
     steps:
       - uses: actions/checkout@v5
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -146,6 +143,9 @@ jobs:
     
     steps:
       - uses: actions/checkout@v5
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -213,9 +213,12 @@ jobs:
             path: src/gaia/apps/jira/webui
           - name: example-app
             path: src/gaia/apps/example/webui
-    
+
     steps:
       - uses: actions/checkout@v5
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
 
       - name: Setup Node.js
         uses: actions/setup-node@v6

@@ -1,0 +1,74 @@
+{
+  "name": "GAIA Development Container",
+  "image": "gaia:amd",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      "TZ": "${localEnv:TZ:America/Los_Angeles}",
+      "GIT_DELTA_VERSION": "0.18.2",
+      "ZSH_IN_DOCKER_VERSION": "1.2.0"
+    },
+    "tags": [
+      "gaia-alpha:amd"
+    ]
+  },
+  "runArgs": [
+    "--name=gaia-alpha",
+    "--cap-add=NET_ADMIN",
+    "--cap-add=NET_RAW"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.black-formatter",
+        "ms-python.isort",
+        "ms-python.pylint",
+        "eamodio.gitlens"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.codeActionsOnSave": {
+          "source.organizeImports": "explicit"
+        },
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.linting.enabled": true,
+        "python.linting.pylintEnabled": true,
+        "python.formatting.provider": "black",
+        "python.testing.pytestEnabled": true,
+        "python.testing.unittestEnabled": false,
+        "[python]": {
+          "editor.formatOnSave": true,
+          "editor.defaultFormatter": "ms-python.black-formatter"
+        },
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.profiles.linux": {
+          "bash": {
+            "path": "bash",
+            "icon": "terminal-bash"
+          },
+          "zsh": {
+            "path": "zsh"
+          }
+        }
+      }
+    }
+  },
+  "remoteUser": "gaia",
+  "mounts": [
+    "source=gaia-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
+    "source=gaia-config-${devcontainerId},target=/home/gaia/.claude,type=volume"
+  ],
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/gaia/.claude",
+    "POWERLEVEL9K_DISABLE_GITSTATUS": "true",
+    "PYTHONUNBUFFERED": "1"
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
+  "workspaceFolder": "/workspace",
+  "postCreateCommand": "pip install -e .[dev,mcp,eval,rag]",
+  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh",
+  "waitFor": "postStartCommand"
+}
