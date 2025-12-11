@@ -1584,6 +1584,86 @@ Examples:
         help="Update consolidated report incrementally with new evaluations only",
     )
 
+    # Nested eval subcommands (e.g., fix_code testbench)
+    eval_subparsers = eval_parser.add_subparsers(
+        dest="eval_command",
+        help="Additional evaluation utilities",
+    )
+    fix_code_parser = eval_subparsers.add_parser(
+        "fix-code",
+        help="Run the fix_code testbench prompts via Gaia CLI",
+        parents=[parent_parser],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run fix_code testbench with local Lemonade model
+  gaia eval fix-code util/fix_code_testbench/off_by_one_bug/off_by_one_bug.py \\
+      "Loop stops too early" \\
+      output/off_by_one_bug_fixed.py \\
+      --model Qwen3-Coder-30B-A3B-Instruct-GGUF
+
+  # Run fix_code testbench and ask for edit_file tool output
+  gaia eval fix-code src/app.ts "TS2322 type error" fixed.ts --use-edit-file
+
+  # Use Claude instead of the local model (requires ANTHROPIC_API_KEY)
+  gaia eval fix-code src/app.ts "TS7053 index error" fixed.ts --use-claude
+        """,
+    )
+    fix_code_parser.add_argument(
+        "file",
+        help="Path to the source file that should be repaired",
+    )
+    fix_code_parser.add_argument(
+        "error",
+        help="Error description that explains what needs to be fixed",
+    )
+    fix_code_parser.add_argument(
+        "output_file",
+        help="Path where the patched code should be written",
+    )
+    fix_code_parser.add_argument(
+        "--context",
+        help="Optional additional context appended to the prompt (e.g., logs)",
+    )
+    fix_code_parser.add_argument(
+        "--language",
+        help="Override detected language label (python, typescript, etc.)",
+    )
+    fix_code_parser.add_argument(
+        "--use-prompt-engineering",
+        action="store_true",
+        help="Inject additional prompt engineering guidance",
+    )
+    fix_code_parser.add_argument(
+        "--use-edit-file",
+        action="store_true",
+        help="Ask the model to emit an edit_file tool call instead of full code",
+    )
+    fix_code_parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.2,
+        help="Sampling temperature sent to the model (default: 0.2)",
+    )
+    fix_code_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="HTTP timeout for the completion request (default: 600)",
+    )
+    fix_code_parser.add_argument(
+        "--start-line",
+        type=int,
+        default=1,
+        help="First line in the file to include in the prompt (default: 1)",
+    )
+    fix_code_parser.add_argument(
+        "--end-line",
+        type=int,
+        default=None,
+        help="Last line in the file to include in the prompt (default: EOF)",
+    )
+
     # Add new subparser for generating summary reports from evaluation directories
     report_parser = subparsers.add_parser(
         "report",
@@ -3309,6 +3389,46 @@ Let me know your answer!
 
     # Handle evaluation
     if args.action == "eval":
+        if getattr(args, "eval_command", None) == "fix-code":
+            try:
+                from gaia.eval.fix_code_testbench.fix_code_testbench import (
+                    FixCodeTestbench,
+                    DEFAULT_LOCAL_MODEL,
+                )
+            except ImportError as e:
+                log.error(f"Failed to import fix_code_testbench: {e}")
+                print("❌ Error: fix_code_testbench dependencies are missing.")
+                print("The evaluation CLI fix-code helper requires the eval extras.")
+                print("")
+                print("To install the dependencies, run:")
+                print('  uv pip install -e ".[eval]"')
+                return
+
+            if args.use_chatgpt:
+                print("❌ The fix_code testbench does not support the ChatGPT backend yet.")
+                print("Please use the local Lemonade endpoint (default) or --use-claude.")
+                return
+
+            model_name = args.model or DEFAULT_LOCAL_MODEL
+            bench = FixCodeTestbench(
+                model=model_name,
+                use_claude=args.use_claude,
+                use_prompt_engineering=args.use_prompt_engineering,
+                use_edit_file=args.use_edit_file,
+                temperature=args.temperature,
+                timeout=args.timeout,
+                context=args.context,
+                language_override=args.language,
+            )
+            bench.run(
+                source_path=Path(args.file),
+                error_description=args.error,
+                output_path=Path(args.output_file),
+                start_line=args.start_line,
+                end_line=args.end_line,
+            )
+            return
+
         log.info("Evaluating experiment results")
         try:
             from gaia.eval.eval import Evaluator
