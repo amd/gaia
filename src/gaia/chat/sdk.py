@@ -305,12 +305,13 @@ class ChatSDK:
             self.log.error(f"Error in send_messages_stream: {e}")
             raise
 
-    def send(self, message: str, **kwargs) -> ChatResponse:
+    def send(self, message: str, *, no_history: bool = False, **kwargs) -> ChatResponse:
         """
         Send a message and get a complete response with conversation history.
 
         Args:
             message: The message to send
+            no_history: When True, bypass stored chat history and send only this prompt
             **kwargs: Additional arguments for LLM generation
 
         Returns:
@@ -323,21 +324,30 @@ class ChatSDK:
             # Enhance message with RAG context if enabled
             enhanced_message, _rag_metadata = self._enhance_with_rag(message.strip())
 
-            # Add user message to history (use original message for history)
-            self.chat_history.append(f"user: {message.strip()}")
-
-            # Prepare prompt with conversation context (use enhanced message for LLM)
-            # Temporarily replace the last message with enhanced version for formatting
-            if self.rag_enabled and enhanced_message != message.strip():
-                # Save original and replace with enhanced version
-                original_last = self.chat_history.pop()
-                self.chat_history.append(f"user: {enhanced_message}")
-                full_prompt = self._format_history_for_context()
-                # Restore original for history
-                self.chat_history.pop()
-                self.chat_history.append(original_last)
+            if no_history:
+                # Build a prompt using only the current enhanced message
+                full_prompt = Prompts.format_chat_history(
+                    model=self.config.model,
+                    chat_history=[f"user: {enhanced_message}"],
+                    assistant_name=self.config.assistant_name,
+                    system_prompt=self.config.system_prompt,
+                )
             else:
-                full_prompt = self._format_history_for_context()
+                # Add user message to history (use original message for history)
+                self.chat_history.append(f"user: {message.strip()}")
+
+                # Prepare prompt with conversation context (use enhanced message for LLM)
+                # Temporarily replace the last message with enhanced version for formatting
+                if self.rag_enabled and enhanced_message != message.strip():
+                    # Save original and replace with enhanced version
+                    original_last = self.chat_history.pop()
+                    self.chat_history.append(f"user: {enhanced_message}")
+                    full_prompt = self._format_history_for_context()
+                    # Restore original for history
+                    self.chat_history.pop()
+                    self.chat_history.append(original_last)
+                else:
+                    full_prompt = self._format_history_for_context()
 
             # Generate response
             generate_kwargs = dict(kwargs)
@@ -351,8 +361,9 @@ class ChatSDK:
                 **generate_kwargs,
             )
 
-            # Add assistant message to history
-            self.chat_history.append(f"{self.config.assistant_name}: {response}")
+            # Add assistant message to history when tracking conversation
+            if not no_history:
+                self.chat_history.append(f"{self.config.assistant_name}: {response}")
 
             # Prepare response data
             stats = None
@@ -740,6 +751,77 @@ class ChatSDK:
         # Rough approximation: ~4 characters per token for English text
         # This is conservative to avoid overrunning context
         return len(text) // 4
+
+    def summarize_conversation_history(self, max_history_tokens: int) -> Optional[str]:
+        """
+        Summarize conversation history when it exceeds the token budget.
+
+        Args:
+            max_history_tokens: Maximum allowed tokens for stored history
+
+        Returns:
+            The generated summary (when summarization occurred) or None
+        """
+        if max_history_tokens <= 0:
+            raise ValueError("max_history_tokens must be positive")
+
+        history_entries = list(self.chat_history)
+        if not history_entries:
+            return None
+
+        history_text = "\n".join(history_entries)
+        history_tokens = self._estimate_tokens(history_text)
+
+        if history_tokens <= max_history_tokens:
+            print(
+                "History tokens are less than max history tokens, so no summarization is needed"
+            )
+            return None
+
+        print(
+            "History tokens are greater than max history tokens, so summarization is needed"
+        )
+
+        self.log.info(
+            "Conversation history (~%d tokens) exceeds budget (%d). Summarizing...",
+            history_tokens,
+            max_history_tokens,
+        )
+
+        summary_prompt = (
+            "Summarize the following conversation between a user and the GAIA web "
+            "development agent. Preserve:\n"
+            "- The app requirements and inferred schema/data models\n"
+            "- Key implementation details already completed\n"
+            "- Outstanding issues, validation failures, or TODOs (quote error/warning text verbatim)\n"
+            "- Any constraints or preferences the user emphasized\n\n"
+            "Write the summary in under 400 tokens, using concise paragraphs, and include the exact text of any warnings/errors so future fixes have full context."
+        )
+        full_prompt = (
+            f"{summary_prompt}\n\nConversation History:\n{history_text}\n\nSummary:"
+        )
+
+        try:
+            summary = self.llm_client.generate(
+                full_prompt,
+                model=self.config.model,
+                max_tokens=min(self.config.max_tokens, 2048),
+                timeout=1200,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self.log.error("Failed to summarize conversation history: %s", exc)
+            return None
+
+        summary = summary.strip()
+        if not summary:
+            self.log.warning("Summarization returned empty content; keeping history.")
+            return None
+
+        self.chat_history.clear()
+        self.chat_history.append(
+            f"{self.config.assistant_name}: Conversation summary so far:\n{summary}"
+        )
+        return summary
 
     def _truncate_rag_context(self, context: str, max_tokens: int) -> str:
         """

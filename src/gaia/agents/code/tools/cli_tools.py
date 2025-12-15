@@ -275,7 +275,7 @@ class CLIToolsMixin:
         )
         def run_cli_command(
             command: str,
-            working_dir: str = ".",
+            working_dir: str = None,
             background: bool = False,
             timeout: Optional[int] = None,
             startup_timeout: int = 5,
@@ -287,7 +287,7 @@ class CLIToolsMixin:
 
             Args:
                 command: Command to execute
-                working_dir: Directory to run command in
+                working_dir: Directory to run command in (default: current directory)
                 background: Run as background process
                 timeout: Timeout for foreground commands (default: 120s)
                 startup_timeout: Timeout for error detection (default: 5s)
@@ -295,13 +295,21 @@ class CLIToolsMixin:
                 auto_respond: Response for interactive prompts
 
             Returns:
-                Dict with execution status, output, errors, and suggestions
+                Dict with execution status, output, and errors
             """
             try:
+                # Use workspace_root if available, else current directory
+                if working_dir is None:
+                    if hasattr(self, "workspace_root") and self.workspace_root:
+                        working_dir = self.workspace_root
+                    else:
+                        working_dir = "."
+
                 # Resolve working directory
                 work_path = Path(working_dir).resolve()
                 if not work_path.exists():
                     return {
+                        "status": "error",
                         "success": False,
                         "error": f"Working directory not found: {working_dir}",
                         "has_errors": True,
@@ -309,6 +317,7 @@ class CLIToolsMixin:
 
                 if not work_path.is_dir():
                     return {
+                        "status": "error",
                         "success": False,
                         "error": f"Path is not a directory: {working_dir}",
                         "has_errors": True,
@@ -326,16 +335,12 @@ class CLIToolsMixin:
                 if expected_port and not is_port_available(expected_port):
                     existing_pid = find_process_on_port(expected_port)
                     return {
+                        "status": "error",
                         "success": False,
                         "error": f"Port {expected_port} is already in use",
                         "port": expected_port,
                         "blocking_pid": existing_pid,
                         "has_errors": True,
-                        "suggestions": [
-                            f"Kill the process using port {expected_port}: PID {existing_pid}",
-                            f"Use a different port: PORT={expected_port + 1} {command}",
-                            f"Stop the process with: stop_process({existing_pid})",
-                        ],
                     }
 
                 if background:
@@ -357,6 +362,7 @@ class CLIToolsMixin:
             except Exception as e:
                 logger.error(f"Error executing CLI command: {e}")
                 return {
+                    "status": "error",
                     "success": False,
                     "error": str(e),
                     "has_errors": True,
@@ -503,23 +509,107 @@ class CLIToolsMixin:
             Dict with command output and status
         """
         try:
-            logger.info(f"Executing foreground command: {command}")
+            # Log to debug instead of info
+            logger.debug(f"Executing foreground command: {command}")
 
-            # Run command
-            result = subprocess.run(
+            # Check if console is available for preview
+            console = getattr(self, "console", None)
+
+            if console:
+                console.start_file_preview(command, max_lines=15, title_prefix="💻")
+            elif getattr(self, "console", None):
+                self.console.print_command_executing(command)
+            else:
+                print(f"\nExecuting Command: {command}")
+
+            # Run command with real-time streaming
+            # Use stdin=PIPE to prevent inheriting terminal stdin (which can cause
+            # hangs waiting for input), while still allowing auto_respond to work
+            process = subprocess.Popen(
                 command,
                 cwd=str(work_path),
                 shell=True,
-                capture_output=True,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=timeout,
-                input=auto_respond if auto_respond else None,
-                check=False,
+                encoding="utf-8",
+                bufsize=1,
             )
 
-            # Truncate output if too long
-            stdout = result.stdout or ""
-            stderr = result.stderr or ""
+            # Send auto_respond and close stdin to prevent command from waiting
+            if process.stdin:
+                try:
+                    if auto_respond:
+                        process.stdin.write(auto_respond)
+                    process.stdin.close()
+                except Exception as e:
+                    logger.debug(f"Error writing to stdin: {e}")
+
+            stdout_lines = []
+            stderr_lines = []
+
+            # Function to read and print streams
+            def read_stream(stream, output_list, is_stderr=False):
+                for line in iter(stream.readline, ""):
+                    output_list.append(line)
+                    if console:
+                        console.update_file_preview(line)
+                    else:
+                        if is_stderr:
+                            # Print stderr in red if it's not just info/warning
+                            print(f"{line.rstrip()}", flush=True)
+                        else:
+                            print(line.rstrip(), flush=True)
+                stream.close()
+
+            # Start threads to read streams
+            stdout_thread = Thread(
+                target=read_stream, args=(process.stdout, stdout_lines, False)
+            )
+            stderr_thread = Thread(
+                target=read_stream, args=(process.stderr, stderr_lines, True)
+            )
+
+            stdout_thread.start()
+            stderr_thread.start()
+
+            # Wait for command to finish
+            try:
+                process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout_thread.join()
+                stderr_thread.join()
+                raise subprocess.TimeoutExpired(
+                    process.args,
+                    timeout,
+                    output="".join(stdout_lines),
+                    stderr="".join(stderr_lines),
+                )
+
+            stdout_thread.join()
+            stderr_thread.join()
+
+            # Stop preview
+            if console:
+                console.stop_file_preview()
+
+            # Collect full output
+            stdout = "".join(stdout_lines)
+            stderr = "".join(stderr_lines)
+            returncode = process.returncode
+
+            # Print status
+            if not console:
+                if returncode == 0:
+                    print("✓ Command successful\n")
+                else:
+                    print(f"✗ Command failed (exit code {returncode})\n")
+
+            # Scan for errors
+            errors = self._scan_output_for_errors(stdout + stderr)
+
             truncated = False
             max_output = MAX_OUTPUT_CHARS
 
@@ -531,27 +621,44 @@ class CLIToolsMixin:
                 stderr = stderr[:max_output] + "\n...output truncated (stderr)..."
                 truncated = True
 
-            # Scan for errors
-            errors = self._scan_output_for_errors(stdout + stderr)
-
             return {
-                "success": result.returncode == 0,
+                "status": "error" if returncode != 0 else "success",
+                "success": returncode == 0,
                 "command": command,
                 "stdout": stdout,
                 "stderr": stderr,
-                "return_code": result.returncode,
-                "has_errors": result.returncode != 0 or len(errors) > 0,
+                "return_code": returncode,
+                "has_errors": returncode != 0 or len(errors) > 0,
+                "error": stderr if returncode != 0 else None,
                 "errors": errors,
-                "suggestions": self._generate_error_suggestions(errors),
                 "output_truncated": truncated,
                 "working_dir": str(work_path),
             }
 
         except subprocess.TimeoutExpired as e:
-            stdout_str = e.stdout.decode("utf-8") if e.stdout else ""
-            stderr_str = e.stderr.decode("utf-8") if e.stderr else ""
+            # Ensure preview is stopped on timeout
+            if getattr(self, "console", None):
+                self.console.stop_file_preview()
+
+            # Handle both string and bytes output (text=True returns strings)
+            stdout_str = ""
+            if e.stdout:
+                stdout_str = (
+                    e.stdout
+                    if isinstance(e.stdout, str)
+                    else e.stdout.decode("utf-8", errors="replace")
+                )
+
+            stderr_str = ""
+            if e.stderr:
+                stderr_str = (
+                    e.stderr
+                    if isinstance(e.stderr, str)
+                    else e.stderr.decode("utf-8", errors="replace")
+                )
 
             return {
+                "status": "error",
                 "success": False,
                 "error": f"Command timed out after {timeout} seconds",
                 "command": command,
@@ -563,7 +670,12 @@ class CLIToolsMixin:
             }
 
         except Exception as e:
+            # Ensure preview is stopped on error
+            if getattr(self, "console", None):
+                self.console.stop_file_preview()
+
             return {
+                "status": "error",
                 "success": False,
                 "error": str(e),
                 "command": command,
@@ -708,7 +820,6 @@ class CLIToolsMixin:
                     "command": command,
                     "output": final_output[-MAX_ERROR_OUTPUT_CHARS:],
                     "errors": errors_detected,
-                    "suggestions": self._generate_error_suggestions(errors_detected),
                     "has_errors": True,
                     "log_file": log_file.name,
                 }
@@ -794,50 +905,6 @@ class CLIToolsMixin:
                     detected_errors.append(error_info)
 
         return detected_errors
-
-    def _generate_error_suggestions(self, errors: List[Dict[str, Any]]) -> List[str]:
-        """
-        Generate helpful suggestions for detected errors.
-
-        Args:
-            errors: List of detected errors
-
-        Returns:
-            List of actionable suggestions
-        """
-        suggestions = []
-
-        for error in errors:
-            error_type = error.get("type")
-
-            if error_type == "port_conflict":
-                port = error.get("port", "N/A")
-                suggestions.append(f"Port {port} is in use. Try a different port.")
-                suggestions.append("Or kill the process: stop_process(<pid>)")
-
-            elif error_type == "missing_deps":
-                module = error.get("module", "unknown")
-                suggestions.append(f"Install missing dependency: npm install {module}")
-                suggestions.append("Or run: npm install to install all dependencies")
-
-            elif error_type == "compilation":
-                suggestions.append("Fix compilation errors in your code")
-                suggestions.append("Check syntax and type errors")
-
-            elif error_type == "permissions":
-                suggestions.append("Check file permissions")
-                suggestions.append("You may need elevated permissions")
-
-            elif error_type == "resources":
-                suggestions.append(
-                    "Increase memory: NODE_OPTIONS=--max-old-space-size=4096"
-                )
-
-            elif error_type == "network":
-                suggestions.append("Check network connectivity")
-                suggestions.append("Verify URLs and API endpoints")
-
-        return list(set(suggestions))  # Remove duplicates
 
     def _stop_process(self, pid: int, force: bool = False) -> Dict[str, Any]:
         """

@@ -107,7 +107,6 @@ ENV/
 
 # IDE settings
 .idea/
-.cursor/mcp.json
 
 # Node.js
 node_modules/
@@ -174,6 +173,7 @@ src/gaia/apps/**/.env
 mcp_server.log
 atlassian_config.json
 *.mcp.json
+.mcp.json
 
 # version files
 version.txt
@@ -187,6 +187,4 @@ release_info.json
 version.txt
 **/version.nsh
 **/.gaia_servers.json
-.cursor/mcp.json
-.cursor/plan.md
 **/agent_output_*.json

@@ -2,113 +2,63 @@
 # SPDX-License-Identifier: MIT
 
 name: 'Install Lemonade Server'
-description: 'Downloads and installs Lemonade Server with hybrid extras'
+description: 'Verifies Lemonade Server is available and exports its path'
+
+# Note: This action uses the pre-installed lemonade-server on the runner.
+# It does NOT install a new version to avoid conflicts.
+
+outputs:
+  lemonade-path:
+    description: 'Full path to the lemonade-server executable'
+    value: ${{ steps.verify.outputs.lemonade_path }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Get Lemonade Version
+    - name: Get Expected Lemonade Version
       shell: powershell
       run: |
         $lemonadeVersion = python -c "import sys; sys.path.append('src'); from gaia.version import LEMONADE_VERSION; print(LEMONADE_VERSION)"
         echo "LEMONADE_VERSION=$lemonadeVersion" >> $env:GITHUB_ENV
-        Write-Host "Using Lemonade version: $lemonadeVersion"
+        Write-Host "Expected Lemonade version: $lemonadeVersion"
 
-    - name: Install Lemonade Server
+    - name: Verify Lemonade Server
+      id: verify
       shell: powershell
       run: |
-        Write-Host "=== Installing Lemonade Server ==="
+        Write-Host "=== Checking for Lemonade Server ==="
 
-        # Add exclusions for the installer and common install directories
-        Add-MpPreference -ExclusionPath "C:\temp\lemonade-server-minimal.msi"
-        Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\Programs\lemonade-server"
-        Add-MpPreference -ExclusionPath "$env:ProgramFiles\lemonade-server"
-        Add-MpPreference -ExclusionProcess "msiexec.exe"
-        Add-MpPreference -ExclusionProcess "lemonade-server.exe"
-
-        # Download and run installer
-        $installerPath = "C:\temp\lemonade-server-minimal.msi"
-
-        # Remove existing file if it exists
-        if (Test-Path $installerPath) {
-          Write-Host "Removing existing installer file"
-          Remove-Item $installerPath -Force
-        }
-
-        Invoke-WebRequest -Uri "https://github.com/lemonade-sdk/lemonade/releases/download/v$env:LEMONADE_VERSION/lemonade-server-minimal.msi" -OutFile $installerPath -UseBasicParsing
-
-        # Check downloaded file
-        if (Test-Path $installerPath) {
-          $fileInfo = Get-Item $installerPath
-          Write-Host "Downloaded installer: $($fileInfo.Length) bytes"
-
-          # Basic sanity check - installer should be at least 100KB
-          if ($fileInfo.Length -lt 100000) {
-            Write-Host "ERROR: Downloaded file is suspiciously small ($($fileInfo.Length) bytes)"
-            Write-Host "This suggests we downloaded an error page instead of the installer"
-
-            # Check if we got HTML error page (without -Raw and -TotalCount together)
-            $firstBytes = Get-Content $installerPath -Encoding Byte -TotalCount 200
-            $firstText = [System.Text.Encoding]::ASCII.GetString($firstBytes)
-            Write-Host "First 200 characters of downloaded file:"
-            Write-Host $firstText
-            exit 1
-          }
-        } else {
-          Write-Host "ERROR: Installer file not found after download"
-          exit 1
-        }
-
-    - name: Run Lemonade Installer
-      shell: powershell
-      run: |
-        Write-Host "Installing Lemonade Server..."
-        cd C:\temp
-        # Install with default options - the MSI will add lemonade-server to PATH
-        Start-Process -FilePath "msiexec.exe" -ArgumentList "/i lemonade-server-minimal.msi /qn EXTRAS=hybrid" -Wait
-        Write-Host "Installer completed"
-
-    - name: Verify Installation
-      shell: powershell
-      run: |
-        # Remove exclusions after installation
-        Remove-MpPreference -ExclusionPath "C:\temp\lemonade-server-minimal.msi"
-        Remove-MpPreference -ExclusionProcess "msiexec.exe"
-
-        # Refresh PATH to pick up newly installed lemonade-server
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
-
-        # Test lemonade-server command (v9.x C++ server adds itself to PATH)
         $lemonadeCmd = Get-Command lemonade-server -ErrorAction SilentlyContinue
-        if ($lemonadeCmd) {
-            Write-Host "Found lemonade-server at: $($lemonadeCmd.Source)"
-            & lemonade-server --version
-            Write-Host "Lemonade Server installed successfully"
-        } else {
-            Write-Host "lemonade-server not found in PATH"
-            Write-Host "Checking common installation locations..."
+        if (-not $lemonadeCmd) {
+            Write-Host "ERROR: lemonade-server not found in PATH"
+            Write-Host "Please ensure Lemonade Server is installed on this runner"
+            exit 1
+        }
 
-            # Check common installation paths for the C++ server
-            $possiblePaths = @(
-                "$env:LOCALAPPDATA\Programs\lemonade-server\lemonade-server.exe",
-                "$env:ProgramFiles\lemonade-server\lemonade-server.exe",
-                "C:\Program Files\lemonade-server\lemonade-server.exe"
-            )
+        $lemonadePath = $lemonadeCmd.Source
+        Write-Host "Found lemonade-server at: $lemonadePath"
 
-            $found = $false
-            foreach ($path in $possiblePaths) {
-                if (Test-Path $path) {
-                    Write-Host "Found lemonade-server at: $path"
-                    & $path --version
-                    Write-Host "Lemonade Server installed successfully"
-                    $found = $true
-                    break
-                }
-            }
+        $versionOutput = & lemonade-server --version 2>&1
+        Write-Host $versionOutput
 
-            if (-not $found) {
-                Write-Host "ERROR: Could not find lemonade-server executable"
-                Write-Host "Please check Lemonade installation documentation for v9.x"
-                exit 1
+        # Extract version and compare
+        if ($versionOutput -match "(\d+\.\d+\.\d+)") {
+            $installedVersion = $matches[1]
+            Write-Host ""
+            Write-Host "Installed version: $installedVersion"
+            Write-Host "Expected version:  $env:LEMONADE_VERSION"
+
+            if ($installedVersion -ne $env:LEMONADE_VERSION) {
+                Write-Host ""
+                Write-Host "WARNING: Version mismatch!"
+                Write-Host "The runner has v$installedVersion but GAIA expects v$env:LEMONADE_VERSION"
+                Write-Host "Tests will proceed with v$installedVersion"
             }
         }
+
+        # Export path for use by other steps
+        echo "lemonade_path=$lemonadePath" >> $env:GITHUB_OUTPUT
+        echo "LEMONADE_SERVER_PATH=$lemonadePath" >> $env:GITHUB_ENV
+
+        Write-Host ""
+        Write-Host "Lemonade Server ready"

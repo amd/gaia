@@ -110,7 +110,7 @@ When done working:
 deactivate
 ```
 
-> **See also:** [Chat SDK Documentation](./chat.md) | [Dependency Management Guide](./dependency-management.md)
+> **See also:** [Chat SDK Documentation](./chat.md)
 
 ---
 

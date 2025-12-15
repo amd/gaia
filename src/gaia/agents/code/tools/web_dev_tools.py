@@ -13,6 +13,8 @@ All file I/O operations are delegated to FileIOToolsMixin for clean separation o
 """
 
 import logging
+import re
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -24,18 +26,89 @@ from gaia.agents.code.prompts.code_patterns import (
     API_ROUTE_GET,
     API_ROUTE_GET_PAGINATED,
     API_ROUTE_POST,
+    APP_GLOBALS_CSS,
+    APP_LAYOUT,
     CLIENT_COMPONENT_FORM,
+    COMPONENT_TEST_ACTIONS,
+    COMPONENT_TEST_FORM,
+    LANDING_PAGE_WITH_LINKS,
     SERVER_COMPONENT_LIST,
+    generate_actions_component,
     generate_api_imports,
     generate_detail_page,
     generate_field_display,
     generate_form_field,
+    generate_form_field_assertions,
+    generate_form_fill_actions,
     generate_new_page,
+    generate_test_data_fields,
     generate_zod_schema,
     pluralize,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def read_prisma_model(project_dir: str, model_name: str) -> Dict[str, Any]:
+    """Read model definition from Prisma schema.
+
+    Parses the Prisma schema file to extract field definitions and metadata
+    for a specific model. This allows tools to adapt to the actual schema
+    instead of relying on hardcoded assumptions.
+
+    Args:
+        project_dir: Path to the project directory
+        model_name: Name of the model to read (case-insensitive)
+
+    Returns:
+        Dictionary with:
+            success: Whether the model was found
+            model_name: The model name (as defined in schema)
+            fields: Dict of field names to types
+            has_timestamps: Whether model has createdAt/updatedAt
+            error: Error message if failed
+    """
+    schema_path = Path(project_dir) / "prisma" / "schema.prisma"
+    if not schema_path.exists():
+        return {
+            "success": False,
+            "error": "Schema file not found at prisma/schema.prisma",
+        }
+
+    try:
+        content = schema_path.read_text()
+        model_pattern = rf"model\s+{model_name}\s*\{{([^}}]+)\}}"
+        match = re.search(model_pattern, content, re.DOTALL | re.IGNORECASE)
+
+        if not match:
+            return {
+                "success": False,
+                "error": f"Model {model_name} not found in schema",
+            }
+
+        # Parse fields from model body
+        fields = {}
+        for line in match.group(1).strip().split("\n"):
+            line = line.strip()
+            if not line or line.startswith("//") or line.startswith("@@"):
+                continue
+            # Skip field decorators like @id, @default, etc.
+            if line.startswith("@") and not line.startswith("@@"):
+                continue
+            parts = line.split()
+            if len(parts) >= 2:
+                field_name = parts[0]
+                field_type = parts[1].rstrip("?[]")  # Remove optional/array markers
+                fields[field_name] = field_type
+
+        return {
+            "success": True,
+            "model_name": model_name,
+            "fields": fields,
+            "has_timestamps": "createdAt" in fields and "updatedAt" in fields,
+        }
+    except Exception as e:
+        return {"success": False, "error": f"Failed to parse schema: {str(e)}"}
 
 
 class WebToolsMixin:
@@ -52,6 +125,98 @@ class WebToolsMixin:
         """Register generic web development tools with the agent."""
 
         @tool
+        def setup_app_styling(
+            project_dir: str,
+            app_title: str = "My App",
+            app_description: str = "A modern web application",
+        ) -> Dict[str, Any]:
+            """Set up app-wide styling with modern design system.
+
+            Creates/updates the root layout and globals.css with a modern dark theme
+            that all pages will inherit. This should be run early in the project
+            setup, after create-next-app.
+
+            The design system includes:
+            - Dark gradient background at the layout level
+            - Glass morphism card effects (.glass-card)
+            - Modern button variants (.btn-primary, .btn-secondary, .btn-danger)
+            - Input field styling (.input-field)
+            - Custom checkbox styling (.checkbox-modern)
+            - Gradient text for titles (.page-title)
+            - Back link styling (.link-back)
+            - Custom scrollbar styling
+
+            Args:
+                project_dir: Path to the Next.js project directory
+                app_title: Application title for metadata
+                app_description: Application description for metadata
+
+            Returns:
+                Dictionary with success status and created/updated files
+            """
+            try:
+                project_path = Path(project_dir)
+                app_dir = project_path / "src" / "app"
+
+                if not app_dir.exists():
+                    return {
+                        "success": False,
+                        "error": f"App directory not found: {app_dir}",
+                        "hint": "Run create-next-app first to initialize the project",
+                    }
+
+                files_created = []
+
+                # Generate layout.tsx
+                layout_path = app_dir / "layout.tsx"
+                layout_content = APP_LAYOUT.format(
+                    app_title=app_title,
+                    app_description=app_description,
+                )
+
+                # Write layout file using FileIOToolsMixin
+                if hasattr(self, "write_file"):
+                    result = self.write_file(str(layout_path), layout_content)
+                    if result.get("success"):
+                        files_created.append(str(layout_path))
+                else:
+                    layout_path.write_text(layout_content)
+                    files_created.append(str(layout_path))
+
+                # Generate globals.css
+                globals_path = app_dir / "globals.css"
+                globals_content = APP_GLOBALS_CSS
+
+                # Write globals file
+                if hasattr(self, "write_file"):
+                    result = self.write_file(str(globals_path), globals_content)
+                    if result.get("success"):
+                        files_created.append(str(globals_path))
+                else:
+                    globals_path.write_text(globals_content)
+                    files_created.append(str(globals_path))
+
+                logger.info(f"Set up app-wide styling: {files_created}")
+                return {
+                    "success": True,
+                    "message": "App-wide styling configured successfully",
+                    "files": files_created,
+                    "design_system": [
+                        ".glass-card - Glass morphism card effect",
+                        ".btn-primary - Primary gradient button",
+                        ".btn-secondary - Secondary button",
+                        ".btn-danger - Danger/delete button",
+                        ".input-field - Styled form input",
+                        ".checkbox-modern - Modern checkbox styling",
+                        ".page-title - Gradient title text",
+                        ".link-back - Back navigation link",
+                    ],
+                }
+            except Exception as e:
+                logger.exception("Failed to set up app styling")
+                return {"success": False, "error": str(e)}
+
+        @tool
         def manage_api_endpoint(
             project_dir: str,
             resource_name: str,
@@ -63,6 +228,12 @@ class WebToolsMixin:
 
             Creates or updates API routes with functional CRUD operations,
             validation, and error handling. Works for ANY resource type.
+
+            REQUIREMENTS (Tier 2 - Prerequisites):
+            - Must be called AFTER manage_data_model (needs Prisma model to exist)
+            - Ensure 'prisma generate' was run (manage_data_model does this automatically)
+            - API routes always import: NextResponse, prisma, z (zod)
+            - Use try/catch with appropriate status codes (200, 201, 400, 500)
 
             Args:
                 project_dir: Path to the web project directory
@@ -76,28 +247,105 @@ class WebToolsMixin:
             """
             try:
                 operations = operations or ["GET", "POST"]
-                fields = fields or {"name": "string", "description": "string"}
 
                 project_path = Path(project_dir)
+
+                # Phase 1 Fix (Issue #885): Read from Prisma schema instead of
+                # using dangerous defaults. This makes tools schema-aware.
+                if not fields:
+                    model_info = read_prisma_model(
+                        project_dir, resource_name.capitalize()
+                    )
+                    if model_info["success"]:
+                        # Convert Prisma types to our field types and filter out auto-fields
+                        prisma_to_field_type = {
+                            "String": "string",
+                            "Int": "number",
+                            "Float": "float",
+                            "Boolean": "boolean",
+                            "DateTime": "datetime",
+                        }
+                        fields = {}
+                        for field_name, prisma_type in model_info["fields"].items():
+                            # Skip auto-generated fields
+                            if field_name.lower() in {"id", "createdat", "updatedat"}:
+                                continue
+                            fields[field_name] = prisma_to_field_type.get(
+                                prisma_type, "string"
+                            )
+
+                        if not fields:
+                            return {
+                                "success": False,
+                                "error": f"Model {resource_name} has no user-facing fields in Prisma schema",
+                                "hint": "Run manage_data_model first to create the model with fields",
+                            }
+                        logger.info(
+                            f"Auto-read fields from Prisma schema for {resource_name}: {fields}"
+                        )
+                    else:
+                        return {
+                            "success": False,
+                            "error": f"Cannot find model {resource_name} in Prisma schema. {model_info.get('error', '')}",
+                            "hint": "Run manage_data_model first to create the Prisma model",
+                        }
+
                 if not project_path.exists():
                     return {
                         "success": False,
                         "error": f"Project directory does not exist: {project_dir}",
                     }
 
-                # Generate resource variants
-                resource = resource_name.lower()
-                Resource = resource_name.capitalize()
+                # Sanitize resource_name: remove path components, brackets, slashes
+                # This prevents malformed paths like "todos/[id]s/route.ts"
+                clean_resource = resource_name.strip()
+                # Remove common path patterns that shouldn't be in resource names
+                clean_resource = clean_resource.replace("/[id]", "").replace("[id]", "")
+                clean_resource = clean_resource.rstrip("/").lstrip("/")
+                # Extract just the base resource name if path-like
+                if "/" in clean_resource:
+                    clean_resource = clean_resource.split("/")[0]
+                # Remove any remaining special characters
+                clean_resource = re.sub(r"[^\w]", "", clean_resource)
+
+                if not clean_resource:
+                    return {
+                        "success": False,
+                        "error": f"Invalid resource_name: '{resource_name}' - must be a simple name like 'todo' or 'product'",
+                        "hint": "Use singular form without paths, e.g., 'todo' not 'todos/[id]'",
+                    }
+
+                # Safety net: Ensure Prisma singleton exists before creating routes
+                singleton_path = project_path / "src" / "lib" / "prisma.ts"
+                if not singleton_path.exists():
+                    from gaia.agents.code.tools.prisma_tools import (
+                        PRISMA_SINGLETON_TEMPLATE,
+                    )
+
+                    singleton_path.parent.mkdir(parents=True, exist_ok=True)
+                    singleton_path.write_text(
+                        PRISMA_SINGLETON_TEMPLATE, encoding="utf-8"
+                    )
+                    logger.info(f"Auto-created Prisma singleton at {singleton_path}")
+
+                # Generate resource variants from cleaned name
+                resource = clean_resource.lower()
+                Resource = clean_resource.capitalize()
                 resource_plural = pluralize(resource)
 
                 # Build API route content
+                # Phase 4 Fix (Issue #885): Check all operations that need validation
+                needs_validation = any(
+                    op in operations for op in ["POST", "PATCH", "PUT"]
+                )
                 imports = generate_api_imports(
-                    operations, uses_validation="POST" in operations
+                    operations, uses_validation=needs_validation
                 )
 
                 # Generate validation schema if needed
                 validation_schema = ""
-                if "POST" in operations or "PATCH" in operations or "PUT" in operations:
+                if needs_validation:
+                    print("WE ARE IN THE DUDUUUUUUDE")
                     validation_schema = generate_zod_schema(Resource, fields)
 
                 # Generate handlers based on operations
@@ -125,21 +373,24 @@ class WebToolsMixin:
                             )
                         )
 
-                # Combine into complete file
-                full_content = (
-                    f"{imports}\n\n{validation_schema}\n\n{''.join(handlers)}"
-                )
+                # Combine into complete file - use \n\n to separate handlers
+                full_content = f"{imports}\n\n{validation_schema}\n\n{(chr(10) + chr(10)).join(handlers)}"
 
                 # Write API route file
                 api_file_path = Path(
                     f"{project_dir}/src/app/api/{resource_plural}/route.ts"
                 )
                 api_file_path.parent.mkdir(parents=True, exist_ok=True)
-                api_file_path.write_text(full_content, encoding="utf-8")
+
+                # Only write collection route if POST is in operations OR route doesn't exist
+                # This prevents dynamic route calls from overwriting collection route
+                created_files = []
+                if "POST" in operations or not api_file_path.exists():
+                    api_file_path.write_text(full_content, encoding="utf-8")
+                    created_files.append(str(api_file_path))
                 result = {"success": True}
 
                 # Create dynamic route if PATCH or DELETE requested
-                created_files = [str(api_file_path)]
                 if (
                     "PATCH" in operations
                     or "DELETE" in operations
@@ -163,7 +414,7 @@ class WebToolsMixin:
                             API_ROUTE_DYNAMIC_DELETE.format(resource=resource)
                         )
 
-                    dynamic_content = f"{imports}\n\n{validation_schema}\n\n{''.join(dynamic_handlers)}"
+                    dynamic_content = f"{imports}\n\n{validation_schema}\n\n{(chr(10) + chr(10)).join(dynamic_handlers)}"
                     dynamic_file_path = Path(
                         f"{project_dir}/src/app/api/{resource_plural}/[id]/route.ts"
                     )
@@ -178,12 +429,16 @@ class WebToolsMixin:
                     "resource": resource,
                     "operations": operations,
                     "files": created_files,
-                    "note": "API endpoints created with actual Prisma queries. Run 'npm run dev' to test.",
                 }
 
             except Exception as e:
                 logger.error(f"Error managing API endpoint: {e}")
-                return {"success": False, "error": str(e)}
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "error_type": "api_endpoint_error",
+                    "hint": "Check project directory structure and permissions",
+                }
 
         @tool
         def manage_react_component(
@@ -199,6 +454,13 @@ class WebToolsMixin:
             Creates or updates React components with real data fetching,
             state management, and event handlers. Works for ANY resource.
 
+            REQUIREMENTS (Tier 2 - Prerequisites):
+            - Must be called AFTER manage_api_endpoint (components need API routes)
+            - Must be called AFTER manage_data_model (components need Prisma types)
+            - Use 'import type { X } from @prisma/client' for type imports
+            - Server components: import { prisma } from '@/lib/prisma'
+            - Client components: NEVER import prisma directly - use API routes
+
             Args:
                 project_dir: Path to the web project directory
                 component_name: Component name (e.g., "TodoList", "UserForm")
@@ -210,6 +472,7 @@ class WebToolsMixin:
                         - "form": Reusable form component for create/edit (client component)
                         - "new": Create new item page (client page using form)
                         - "detail": View/edit single item page with delete (client page)
+                        - "actions": Delete/edit button component (client component)
 
             Returns:
                 Dictionary with success status and component path
@@ -222,12 +485,67 @@ class WebToolsMixin:
                         "error": f"Project directory does not exist: {project_dir}",
                     }
 
+                # Sanitize resource_name if provided (same logic as manage_api_endpoint)
+                clean_resource_name = resource_name
+                if resource_name:
+                    clean_resource = resource_name.strip()
+                    clean_resource = clean_resource.replace("/[id]", "").replace(
+                        "[id]", ""
+                    )
+                    clean_resource = clean_resource.rstrip("/").lstrip("/")
+                    if "/" in clean_resource:
+                        clean_resource = clean_resource.split("/")[0]
+                    clean_resource = re.sub(r"[^\w]", "", clean_resource)
+                    clean_resource_name = (
+                        clean_resource if clean_resource else resource_name
+                    )
+
+                # Auto-set component_type for client-side variants
+                # These variants always generate client components with "use client"
+                # This prevents the stub fallback when variant="form" but component_type
+                # defaults to "server"
+                if variant in ["form", "new", "detail", "actions"]:
+                    component_type = "client"
+
+                # Phase 1 Fix (Issue #885): Read from Prisma schema instead of
+                # using dangerous defaults. This makes tools schema-aware.
+                if not fields and clean_resource_name:
+                    model_info = read_prisma_model(
+                        project_dir, clean_resource_name.capitalize()
+                    )
+                    if model_info["success"]:
+                        # Convert Prisma types to our field types and filter out auto-fields
+                        prisma_to_field_type = {
+                            "String": "string",
+                            "Int": "number",
+                            "Float": "float",
+                            "Boolean": "boolean",
+                            "DateTime": "datetime",
+                        }
+                        fields = {}
+                        for field_name, prisma_type in model_info["fields"].items():
+                            # Skip auto-generated fields
+                            if field_name.lower() in {"id", "createdat", "updatedat"}:
+                                continue
+                            fields[field_name] = prisma_to_field_type.get(
+                                prisma_type, "string"
+                            )
+                        if fields:
+                            logger.info(
+                                f"Auto-read fields from Prisma schema for {clean_resource_name}: {fields}"
+                            )
+                    # Note: We don't fail here - some components don't need fields
+
                 content = ""
 
-                if component_type == "server" and variant == "list" and resource_name:
+                if (
+                    component_type == "server"
+                    and variant == "list"
+                    and clean_resource_name
+                ):
                     # Generate server component with data fetching
-                    resource = resource_name.lower()
-                    Resource = resource_name.capitalize()
+                    resource = clean_resource_name.lower()
+                    Resource = clean_resource_name.capitalize()
                     resource_plural = pluralize(resource)
 
                     field_display = generate_field_display(fields or {})
@@ -239,22 +557,43 @@ class WebToolsMixin:
                         field_display=field_display,
                     )
 
-                elif component_type == "client" and variant == "form" and resource_name:
+                elif (
+                    component_type == "client"
+                    and variant == "form"
+                    and clean_resource_name
+                ):
                     # Generate client component with form and state
-                    resource = resource_name.lower()
-                    Resource = resource_name.capitalize()
-                    fields = fields or {"name": "string", "description": "string"}
+                    resource = clean_resource_name.lower()
+                    Resource = clean_resource_name.capitalize()
+
+                    # Phase 3 Fix (Issue #885): Fail clearly if no fields available
+                    # instead of using dangerous defaults
+                    if not fields:
+                        return {
+                            "success": False,
+                            "error": f"No fields available for {clean_resource_name} form component",
+                            "hint": "Run manage_data_model first to create the Prisma model with fields",
+                        }
 
                     # Generate form state fields
                     form_state = []
+                    date_field_names = []
                     for field_name, field_type in fields.items():
                         if field_name not in ["id", "createdAt", "updatedAt"]:
+                            normalized_type = (
+                                field_type.lower()
+                                if isinstance(field_type, str)
+                                else str(field_type).lower()
+                            )
                             default = (
-                                '""'
-                                if field_type == "string"
-                                else "0" if field_type == "number" else "false"
+                                "0"
+                                if normalized_type
+                                in {"number", "int", "integer", "float"}
+                                else "false" if normalized_type == "boolean" else '""'
                             )
                             form_state.append(f"    {field_name}: {default}")
+                            if normalized_type in {"date", "datetime", "timestamp"}:
+                                date_field_names.append(f'"{field_name}"')
 
                     # Generate form fields
                     form_fields = []
@@ -268,17 +607,32 @@ class WebToolsMixin:
                         resource=resource,
                         Resource=Resource,
                         form_state_fields=",\n".join(form_state),
+                        date_fields=(
+                            f"[{', '.join(date_field_names)}] as const"
+                            if date_field_names
+                            else "[] as const"
+                        ),
                         form_fields="\n".join(form_fields),
                     )
 
-                elif variant == "new" and resource_name:
+                elif variant == "new" and clean_resource_name:
                     # Generate "new" page that uses the form component
-                    content = generate_new_page(resource_name)
+                    content = generate_new_page(clean_resource_name)
 
-                elif variant == "detail" and resource_name:
+                elif variant == "detail" and clean_resource_name:
                     # Generate detail/edit page with form and delete functionality
-                    fields = fields or {"name": "string", "description": "string"}
-                    content = generate_detail_page(resource_name, fields)
+                    # Phase 3 Fix (Issue #885): Fail clearly if no fields available
+                    if not fields:
+                        return {
+                            "success": False,
+                            "error": f"No fields available for {clean_resource_name} detail page",
+                            "hint": "Run manage_data_model first to create the Prisma model with fields",
+                        }
+                    content = generate_detail_page(clean_resource_name, fields)
+
+                elif variant == "actions" and clean_resource_name:
+                    # Generate actions component with delete functionality
+                    content = generate_actions_component(clean_resource_name)
 
                 else:
                     # Generic component template
@@ -294,22 +648,30 @@ export function {component_name}({{ }}: {component_name}Props) {{
   );
 }}"""
 
-                # Determine file path
-                if component_type == "server" and variant == "list":
+                # Determine file path (use clean_resource_name to avoid malformed paths)
+                if (
+                    component_type == "server"
+                    and variant == "list"
+                    and clean_resource_name
+                ):
                     file_path = Path(
-                        f"{project_dir}/src/app/{pluralize(resource_name)}/page.tsx"
+                        f"{project_dir}/src/app/{pluralize(clean_resource_name)}/page.tsx"
                     )
                 elif variant == "form":
                     file_path = Path(
                         f"{project_dir}/src/components/{component_name}.tsx"
                     )
-                elif variant == "new" and resource_name:
+                elif variant == "new" and clean_resource_name:
                     file_path = Path(
-                        f"{project_dir}/src/app/{pluralize(resource_name)}/new/page.tsx"
+                        f"{project_dir}/src/app/{pluralize(clean_resource_name)}/new/page.tsx"
                     )
-                elif variant == "detail" and resource_name:
+                elif variant == "detail" and clean_resource_name:
                     file_path = Path(
-                        f"{project_dir}/src/app/{pluralize(resource_name)}/[id]/page.tsx"
+                        f"{project_dir}/src/app/{pluralize(clean_resource_name)}/[id]/page.tsx"
+                    )
+                elif variant == "actions" and clean_resource_name:
+                    file_path = Path(
+                        f"{project_dir}/src/components/{clean_resource_name.capitalize()}Actions.tsx"
                     )
                 else:
                     file_path = Path(
@@ -320,6 +682,63 @@ export function {component_name}({{ }}: {component_name}Props) {{
                 file_path.parent.mkdir(parents=True, exist_ok=True)
                 file_path.write_text(content, encoding="utf-8")
                 result = {"success": True}
+                created_files = [str(file_path)]
+
+                # Generate component tests for form and actions variants
+                if variant in ["form", "actions"] and clean_resource_name and fields:
+                    try:
+                        resource = clean_resource_name.lower()
+                        Resource = clean_resource_name.capitalize()
+                        resource_plural = pluralize(resource)
+                        test_data_fields = generate_test_data_fields(fields, variant=1)
+
+                        if variant == "form":
+                            # Generate form component test
+                            form_field_assertions = generate_form_field_assertions(
+                                fields
+                            )
+                            form_fill_actions = generate_form_fill_actions(fields)
+
+                            form_test_content = COMPONENT_TEST_FORM.format(
+                                Resource=Resource,
+                                resource_plural=resource_plural,
+                                form_field_assertions=form_field_assertions,
+                                form_fill_actions=form_fill_actions,
+                                test_data_fields=test_data_fields,
+                            )
+                            form_test_path = Path(
+                                f"{project_dir}/src/components/__tests__/{Resource}Form.test.tsx"
+                            )
+                            form_test_path.parent.mkdir(parents=True, exist_ok=True)
+                            form_test_path.write_text(
+                                form_test_content, encoding="utf-8"
+                            )
+                            created_files.append(str(form_test_path))
+                            logger.info(f"Created form component test for {Resource}")
+
+                        elif variant == "actions":
+                            # Generate actions component test
+                            actions_test_content = COMPONENT_TEST_ACTIONS.format(
+                                Resource=Resource,
+                                resource=resource,
+                                resource_plural=resource_plural,
+                            )
+                            actions_test_path = Path(
+                                f"{project_dir}/src/components/__tests__/{Resource}Actions.test.tsx"
+                            )
+                            actions_test_path.parent.mkdir(parents=True, exist_ok=True)
+                            actions_test_path.write_text(
+                                actions_test_content, encoding="utf-8"
+                            )
+                            created_files.append(str(actions_test_path))
+                            logger.info(
+                                f"Created actions component test for {Resource}"
+                            )
+
+                    except Exception as test_error:
+                        logger.warning(
+                            f"Could not generate component test: {test_error}"
+                        )
 
                 logger.info(f"Created React component: {component_name}")
 
@@ -328,12 +747,231 @@ export function {component_name}({{ }}: {component_name}Props) {{
                     "component": component_name,
                     "type": component_type,
                     "file_path": str(file_path),
-                    "note": "Component created with functional implementation",
+                    "files": created_files,
                 }
 
             except Exception as e:
                 logger.error(f"Error managing React component: {e}")
-                return {"success": False, "error": str(e)}
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "error_type": "component_error",
+                    "hint": "Check project structure and component syntax",
+                }
+
+        @tool
+        def update_landing_page(
+            project_dir: str,
+            resource_name: str,
+            description: Optional[str] = None,
+        ) -> Dict[str, Any]:
+            """Update the landing page to include a link to the new resource.
+
+            Modifies src/app/page.tsx to add navigation to the newly created
+            resource pages. This ensures users can easily access the new features
+            from the main page.
+
+            Args:
+                project_dir: Path to the Next.js project directory
+                resource_name: Name of the resource (e.g., "todo", "product")
+                description: Optional description for the link
+
+            Returns:
+                Dictionary with success status and updated file path
+            """
+            try:
+                project_path = Path(project_dir)
+                page_path = project_path / "src" / "app" / "page.tsx"
+
+                if not page_path.exists():
+                    return {
+                        "success": False,
+                        "error": f"Landing page not found: {page_path}",
+                        "hint": "Ensure this is a Next.js project with app router",
+                    }
+
+                resource = resource_name.lower()
+                Resource = resource_name.capitalize()
+                resource_plural = pluralize(resource)
+                link_description = description or f"Manage your {resource_plural}"
+
+                # Read current content
+                current_content = page_path.read_text(encoding="utf-8")
+
+                # Check if link already exists
+                if (
+                    f'href="/{resource_plural}"' in current_content
+                    or f"href='/{resource_plural}'" in current_content
+                ):
+                    return {
+                        "success": True,
+                        "message": f"Link to /{resource_plural} already exists in landing page",
+                        "file_path": str(page_path),
+                        "already_exists": True,
+                    }
+
+                # Generate new landing page with link to resource using dark theme
+                new_content = LANDING_PAGE_WITH_LINKS.format(
+                    resource_plural=resource_plural,
+                    Resource=Resource,
+                    link_description=link_description,
+                )
+
+                # Write updated content
+                page_path.write_text(new_content, encoding="utf-8")
+
+                logger.info(f"Updated landing page with link to /{resource_plural}")
+
+                return {
+                    "success": True,
+                    "message": f"Landing page updated with link to /{resource_plural}",
+                    "file_path": str(page_path),
+                    "resource": resource_name,
+                    "link_path": f"/{resource_plural}",
+                }
+
+            except Exception as e:
+                logger.error(f"Error updating landing page: {e}")
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "hint": "Check that src/app/page.tsx exists and is writable",
+                }
+
+        @tool
+        def setup_nextjs_testing(
+            project_dir: str,
+            resource_name: Optional[str] = None,
+        ) -> Dict[str, Any]:
+            """Set up Vitest testing infrastructure for a Next.js project.
+
+            Installs testing dependencies and creates configuration files:
+            - Vitest + React Testing Library
+            - vitest.config.ts with proper aliases and jsdom environment
+            - tests/setup.ts with common mocks (next/navigation, Prisma)
+            - Updates package.json with test scripts
+
+            Should be called after the project is initialized but before running tests.
+
+            Args:
+                project_dir: Path to the Next.js project directory
+                resource_name: Optional resource name to customize Prisma mocks
+
+            Returns:
+                Dictionary with success status and created files
+            """
+            from gaia.agents.code.prompts.code_patterns import TEST_SETUP, VITEST_CONFIG
+
+            try:
+                project_path = Path(project_dir)
+                if not project_path.exists():
+                    return {
+                        "success": False,
+                        "error": f"Project directory does not exist: {project_dir}",
+                    }
+
+                created_files = []
+                resource = resource_name.lower() if resource_name else "todo"
+
+                # Install testing dependencies
+                install_cmd = (
+                    "npm install -D vitest @vitejs/plugin-react jsdom "
+                    "@testing-library/react @testing-library/jest-dom @testing-library/user-event "
+                    "@types/node"
+                )
+                install_result = subprocess.run(
+                    install_cmd,
+                    shell=True,
+                    cwd=project_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=1200,
+                    check=False,
+                )
+
+                if install_result.returncode != 0:
+                    return {
+                        "success": False,
+                        "error": "Failed to install testing dependencies",
+                        "details": install_result.stderr,
+                        "hint": "Check npm configuration and network connectivity",
+                    }
+
+                # Create vitest.config.ts
+                vitest_config_path = project_path / "vitest.config.ts"
+                vitest_config_path.write_text(VITEST_CONFIG, encoding="utf-8")
+                created_files.append(str(vitest_config_path))
+
+                # Create tests/setup.ts with resource-specific Prisma mocks
+                tests_dir = project_path / "tests"
+                tests_dir.mkdir(exist_ok=True)
+
+                setup_content = TEST_SETUP.format(resource=resource)
+                setup_path = tests_dir / "setup.ts"
+                setup_path.write_text(setup_content, encoding="utf-8")
+                created_files.append(str(setup_path))
+
+                # Update package.json to add test scripts
+                package_json_path = project_path / "package.json"
+                if package_json_path.exists():
+                    import json
+
+                    package_data = json.loads(
+                        package_json_path.read_text(encoding="utf-8")
+                    )
+
+                    if "scripts" not in package_data:
+                        package_data["scripts"] = {}
+
+                    # Add test scripts if not present
+                    if "test" not in package_data["scripts"]:
+                        package_data["scripts"]["test"] = "vitest run"
+                    if "test:watch" not in package_data["scripts"]:
+                        package_data["scripts"]["test:watch"] = "vitest"
+                    if "test:coverage" not in package_data["scripts"]:
+                        package_data["scripts"][
+                            "test:coverage"
+                        ] = "vitest run --coverage"
+
+                    package_json_path.write_text(
+                        json.dumps(package_data, indent=2) + "\n", encoding="utf-8"
+                    )
+                    created_files.append(str(package_json_path))
+
+                logger.info(f"Set up Vitest testing infrastructure in {project_dir}")
+
+                return {
+                    "success": True,
+                    "message": "Testing infrastructure configured successfully",
+                    "files": created_files,
+                    "dependencies_installed": [
+                        "vitest",
+                        "@vitejs/plugin-react",
+                        "jsdom",
+                        "@testing-library/react",
+                        "@testing-library/jest-dom",
+                        "@testing-library/user-event",
+                    ],
+                    "scripts_added": {
+                        "test": "vitest run",
+                        "test:watch": "vitest",
+                        "test:coverage": "vitest run --coverage",
+                    },
+                }
+
+            except subprocess.TimeoutExpired:
+                return {
+                    "success": False,
+                    "error": "npm install timed out",
+                    "hint": "Check network connectivity and try again",
+                }
+            except Exception as e:
+                logger.error(f"Error setting up testing: {e}")
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "hint": "Check project structure and npm configuration",
+                }
 
         @tool
         def validate_crud_completeness(
@@ -431,16 +1069,15 @@ export function {component_name}({{ }}: {component_name}Props) {{
                         "existing": existing_count,
                         "missing": missing_count,
                     },
-                    "recommendation": (
-                        "All CRUD files present - application is complete!"
-                        if all_complete
-                        else f"Missing {missing_count} file(s) - use manage_react_component to create missing pages"
-                    ),
                 }
 
             except Exception as e:
                 logger.error(f"Error validating CRUD completeness: {e}")
-                return {"success": False, "error": str(e)}
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "error_type": "validation_error",
+                }
 
         @tool
         def generate_crud_scaffold(
@@ -558,7 +1195,24 @@ export function {component_name}({{ }}: {component_name}Props) {{
                         f"Detail page generation failed: {detail_result.get('error')}"
                     )
 
-                # 6. Validate completeness
+                # 6. Generate actions component (edit/delete buttons)
+                logger.info("  → Generating actions component...")
+                actions_result = manage_react_component(
+                    project_dir=project_dir,
+                    component_name=f"{resource_name.capitalize()}Actions",
+                    component_type="client",
+                    resource_name=resource_name,
+                    fields=fields,
+                    variant="actions",
+                )
+                if actions_result.get("success"):
+                    results["components"].append(actions_result.get("file_path"))
+                else:
+                    results["errors"].append(
+                        f"Actions component generation failed: {actions_result.get('error')}"
+                    )
+
+                # 7. Validate completeness
                 logger.info("  → Validating completeness...")
                 validation = validate_crud_completeness(project_dir, resource_name)
 
@@ -572,18 +1226,15 @@ export function {component_name}({{ }}: {component_name}Props) {{
                     "resource": resource_name,
                     "generated": results,
                     "validation": validation,
-                    "summary": f"Generated complete CRUD scaffold for {resource_name}",
-                    "next_steps": [
-                        "Run 'npm run db:generate' to update Prisma client",
-                        "Run 'npm run db:push' to apply database changes",
-                        "Run 'npm run dev' to start the development server",
-                        f"Visit /{pluralize(resource_name)} to see your application",
-                    ],
                 }
 
             except Exception as e:
                 logger.error(f"Error generating CRUD scaffold: {e}")
-                return {"success": False, "error": str(e)}
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "error_type": "scaffold_generation_error",
+                }
 
         @tool
         def manage_data_model(
@@ -627,6 +1278,25 @@ export function {component_name}({{ }}: {component_name}Props) {{
                 # Read existing schema
                 schema_content = schema_file.read_text()
 
+                # Validate schema doesn't have forbidden output field in generator block
+                if "output" in schema_content:
+                    # Check if it's in generator client block specifically
+                    generator_match = re.search(
+                        r"generator\s+client\s*\{[^}]*output[^}]*\}",
+                        schema_content,
+                        re.DOTALL,
+                    )
+                    if generator_match:
+                        # Auto-fix: remove the output line
+                        fixed_content = re.sub(
+                            r'\n\s*output\s*=\s*"[^"]*"', "", schema_content
+                        )
+                        schema_file.write_text(fixed_content, encoding="utf-8")
+                        schema_content = fixed_content
+                        logger.warning(
+                            "Removed invalid 'output' field from generator client block"
+                        )
+
                 # Generate field definitions
                 field_lines = []
                 field_lines.append("  id        Int      @id @default(autoincrement())")
@@ -645,7 +1315,16 @@ export function {component_name}({{ }}: {component_name}Props) {{
                     "url": "String",
                 }
 
+                # Define reserved fields that are auto-generated
+                reserved_fields = {"id", "createdat", "updatedat"}
+
+                # Build field lines from user input (skip reserved fields)
                 for field_name, field_type in fields.items():
+                    if field_name.lower() in reserved_fields:
+                        logger.warning(
+                            f"Skipping reserved field '{field_name}' - auto-generated by Prisma"
+                        )
+                        continue
                     prisma_type = type_mapping.get(field_type.lower(), "String")
                     field_lines.append(f"  {field_name:<12} {prisma_type}")
 
@@ -663,9 +1342,22 @@ export function {component_name}({{ }}: {component_name}Props) {{
                                 f"  {rel_model.lower()}     {rel_model}?"
                             )
 
-                # Add timestamps
-                field_lines.append("  createdAt DateTime @default(now())")
-                field_lines.append("  updatedAt DateTime @updatedAt")
+                # Always add timestamps - they're standard for Prisma and our templates expect them
+                # Note: Reserved fields (including createdAt/updatedAt) are already skipped
+                # from user input above, so there's no risk of duplication
+                field_lines.append("  createdAt    DateTime @default(now())")
+                field_lines.append("  updatedAt    DateTime @updatedAt")
+
+                # Check if model already exists in schema
+                model_pattern = rf"model\s+{model_name}\s*\{{"
+                if re.search(model_pattern, schema_content):
+                    return {
+                        "success": False,
+                        "error": f"Model '{model_name}' already exists in schema",
+                        "error_type": "duplicate_model",
+                        "hint": "Use a different model name or edit the existing model",
+                        "suggested_fix": f"Read schema.prisma to see existing {model_name} definition",
+                    }
 
                 # Generate model definition
                 model_definition = f"""
@@ -675,25 +1367,158 @@ model {model_name} {{
 }}
 """
 
+                # Save original schema for rollback
+                original_schema = schema_content
+
                 # Append to schema
                 schema_content += model_definition
 
-                # Write schema file
+                # Write new schema
                 schema_file.write_text(schema_content, encoding="utf-8")
+
+                # Validate with prisma format
+                validate_result = subprocess.run(
+                    f'npx prisma format --schema="{schema_file}"',
+                    cwd=str(project_path),
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=600,
+                    check=False,
+                )
+
+                if validate_result.returncode != 0:
+                    # Rollback to original schema
+                    schema_file.write_text(original_schema, encoding="utf-8")
+                    return {
+                        "success": False,
+                        "error": f"Schema validation failed: {validate_result.stderr}",
+                        "error_type": "schema_validation_error",
+                        "hint": "The schema changes caused validation errors",
+                        "suggested_fix": "Check field types and model syntax",
+                    }
+
                 result = {"success": True}
 
                 logger.info(f"Added Prisma model: {model_name}")
+
+                # Auto-generate Prisma client types
+                prisma_generated = False
+                generation_note = ""
+
+                try:
+                    # Format schema first
+                    subprocess.run(
+                        f'npx prisma format --schema="{schema_file}"',
+                        cwd=str(project_path),
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=600,
+                        check=False,
+                    )
+
+                    # Generate Prisma client types
+                    generate_result = subprocess.run(
+                        f'npx prisma generate --schema="{schema_file}"',
+                        cwd=str(project_path),
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=1200,
+                        check=False,
+                    )
+
+                    if generate_result.returncode != 0:
+                        stderr = generate_result.stderr
+                        logger.error(f"prisma generate failed: {stderr}")
+                        return {
+                            "success": False,
+                            "error": f"prisma generate failed: {stderr}",
+                            "schema_file": str(schema_file),
+                            "fix_hint": "Check schema.prisma for syntax errors",
+                        }
+
+                    # Verify Prisma client was actually generated
+                    client_index = (
+                        project_path
+                        / "node_modules"
+                        / ".prisma"
+                        / "client"
+                        / "index.js"
+                    )
+                    if not client_index.exists():
+                        logger.error("Prisma client not generated despite no errors")
+                        return {
+                            "success": False,
+                            "error": "Prisma client not generated despite no errors",
+                            "fix_hint": "Run 'npm install' then 'npx prisma generate'",
+                        }
+
+                    prisma_generated = True
+                    generation_note = (
+                        "Schema updated and Prisma client generated successfully"
+                    )
+                    logger.info(generation_note)
+
+                    # Push schema changes to database
+                    logger.info(f"Running prisma db push in {project_dir}")
+                    db_push_result = subprocess.run(
+                        "npx prisma db push",
+                        cwd=str(project_path),
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=1200,
+                        check=False,
+                    )
+
+                    if db_push_result.returncode != 0:
+                        logger.error(f"prisma db push failed: {db_push_result.stderr}")
+                        return {
+                            "success": False,
+                            "error": f"prisma db push failed: {db_push_result.stderr}",
+                            "fix_hint": "Check DATABASE_URL in .env file",
+                            "generated": True,  # Client was generated successfully
+                            "pushed": False,
+                        }
+
+                    generation_note = "Schema updated, Prisma client generated, and database pushed successfully"
+                    logger.info(generation_note)
+
+                except Exception as e:
+                    # Prisma generation failed - block the operation
+                    logger.error(f"Could not generate Prisma client: {e}")
+                    return {
+                        "success": False,
+                        "error": f"Could not generate Prisma client: {e}",
+                        "fix_hint": "Ensure prisma is installed (npm install)",
+                    }
 
                 return {
                     "success": result.get("success", True),
                     "model_name": model_name,
                     "schema_file": str(schema_file),
-                    "note": "Run 'npm run db:generate && npm run db:push' to apply schema changes",
+                    "schema_updated": True,
+                    "prisma_generated": prisma_generated,
+                    "note": generation_note,
                 }
 
             except Exception as e:
                 logger.error(f"Error managing data model: {e}")
-                return {"success": False, "error": str(e)}
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "error_type": "data_model_error",
+                }
 
         @tool
         def manage_prisma_client(project_dir: str) -> Dict[str, Any]:
@@ -736,12 +1561,15 @@ model {model_name} {{
                     "success": True,
                     "commands": commands,
                     "working_dir": str(project_path),
-                    "note": "Run these commands in sequence to update your database",
                 }
 
             except Exception as e:
                 logger.error(f"Error managing Prisma client: {e}")
-                return {"success": False, "error": str(e)}
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "error_type": "prisma_client_error",
+                }
 
         @tool
         def manage_web_config(
@@ -801,9 +1629,116 @@ model {model_name} {{
                 else:
                     return {
                         "success": True,
-                        "note": f"Manual configuration needed for {config_type}. Apply: {updates}",
+                        "config_type": config_type,
+                        "updates": updates,
                     }
 
             except Exception as e:
                 logger.error(f"Error managing config: {e}")
-                return {"success": False, "error": str(e)}
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "error_type": "config_error",
+                }
+
+        @tool
+        def generate_style_tests(
+            project_dir: str, resource_name: str = "Item"
+        ) -> Dict[str, Any]:
+            """Generate CSS and styling tests for the project.
+
+            Creates test files that validate:
+            1. CSS file integrity (no TypeScript in CSS - Issue #1002)
+            2. Tailwind directive presence
+            3. Design system class definitions
+            4. Layout imports globals.css
+            5. App router structure
+
+            Tests are placed in the project's /tests directory.
+
+            Args:
+                project_dir: Path to the Next.js project directory
+                resource_name: Resource name for component styling tests
+
+            Returns:
+                Dictionary with success status and generated files
+            """
+            from gaia.agents.code.prompts.code_patterns import (
+                generate_routes_test_content,
+                generate_style_test_content,
+            )
+
+            try:
+                project_path = Path(project_dir)
+                tests_dir = project_path / "tests"
+                styling_dir = tests_dir / "styling"
+
+                # Ensure directories exist
+                tests_dir.mkdir(parents=True, exist_ok=True)
+                styling_dir.mkdir(parents=True, exist_ok=True)
+
+                files_created = []
+
+                # 1. Generate styles.test.ts (main CSS integrity test)
+                styles_test_path = tests_dir / "styles.test.ts"
+                styles_content = generate_style_test_content(resource_name)
+
+                if hasattr(self, "write_file"):
+                    result = self.write_file(str(styles_test_path), styles_content)
+                    if result.get("success"):
+                        files_created.append(str(styles_test_path))
+                else:
+                    styles_test_path.write_text(styles_content)
+                    files_created.append(str(styles_test_path))
+
+                # 2. Generate routes.test.ts (app router structure test)
+                routes_test_path = styling_dir / "routes.test.ts"
+                routes_content = generate_routes_test_content(resource_name)
+
+                if hasattr(self, "write_file"):
+                    result = self.write_file(str(routes_test_path), routes_content)
+                    if result.get("success"):
+                        files_created.append(str(routes_test_path))
+                else:
+                    routes_test_path.write_text(routes_content)
+                    files_created.append(str(routes_test_path))
+
+                # 3. Install glob package if not present (needed for tests)
+                package_json = project_path / "package.json"
+                if package_json.exists():
+                    pkg_content = package_json.read_text()
+                    if '"glob"' not in pkg_content:
+                        try:
+                            subprocess.run(
+                                ["npm", "install", "--save-dev", "glob", "@types/glob"],
+                                cwd=str(project_path),
+                                capture_output=True,
+                                text=True,
+                                timeout=600,
+                                check=False,
+                            )
+                            logger.info("Installed glob package for style tests")
+                        except Exception as e:
+                            logger.warning(f"Could not install glob package: {e}")
+
+                logger.info(
+                    f"Generated {len(files_created)} style test files for {resource_name}"
+                )
+
+                return {
+                    "success": True,
+                    "files": files_created,
+                    "message": f"Generated style tests for {resource_name}",
+                    "tests_description": [
+                        "styles.test.ts - CSS integrity (TypeScript detection, Tailwind, braces)",
+                        "styling/routes.test.ts - App router structure and styling consistency",
+                    ],
+                }
+
+            except Exception as e:
+                logger.error(f"Error generating style tests: {e}")
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "error_type": "test_generation_error",
+                }

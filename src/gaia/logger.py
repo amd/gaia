@@ -161,10 +161,23 @@ class GaiaLogger:
         return self.default_level
 
     def set_level(self, name, level):
+        """Set logging level for a logger name or prefix.
+
+        If name matches an existing logger exactly, update that logger.
+        Otherwise, set as default_level for future loggers matching the prefix.
+        Also updates all existing loggers that start with the given name prefix.
+        """
+        # Update exact match if it exists
         if name in self.loggers:
             self.loggers[name].setLevel(level)
-        else:
-            self.default_levels[name] = level
+
+        # Update all existing loggers that start with this prefix
+        for logger_name, logger in self.loggers.items():
+            if logger_name.startswith(name + ".") or logger_name == name:
+                logger.setLevel(level)
+
+        # Set as default for future loggers matching this prefix
+        self.default_levels[name] = level
 
 
 # Create a global instance

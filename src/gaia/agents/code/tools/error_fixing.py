@@ -200,6 +200,11 @@ class ErrorFixingMixin:
                         "message": f"Fixed {os.path.basename(file_path)}",
                     }
                 else:
+                    console = getattr(self, "console", None)
+                    if console:
+                        console.print_info(
+                            f"fix_code: No changes were made to {os.path.basename(file_path)}"
+                        )
                     return {
                         "status": "info",
                         "file_modified": False,

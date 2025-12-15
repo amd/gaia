@@ -23,6 +23,7 @@ The GAIA Code Agent is an autonomous agent that attempts to handle coding tasks 
 - **Markdown Support**: Read and write markdown files for documentation with streaming preview
 - **Error Recovery**: Attempts iterative error correction for syntax, runtime, and linting issues
 - **GAIA.md Integration**: Automatically reads project context and can initialize GAIA.md for existing projects
+- **External Information Lookup**: Automatic documentation search (Context7) and web search (Perplexity) when needed
 - **Execution Safety**: Built-in timeout prevents hanging on scripts waiting for input
 - **Performance Monitoring**: Optional LLM statistics tracking (tokens, timing) via --show-stats flag
 
@@ -79,6 +80,21 @@ gaia code "Create a REST API" --use-claude
 
 # Use with ChatGPT API (no server setup required)
 gaia code "Create a REST API" --use-chatgpt
+```
+
+### Next.js Full-Stack App Generation
+
+The Code Agent can generate complete Next.js applications with database integration:
+
+```bash
+# Generate a todo app with Prisma + SQLite
+gaia code "Create a todo app" --use-claude
+
+# Generate a blog with posts
+gaia code "Create a blog with posts that have title, content, and published date"
+
+# Generate a task tracker with categories
+gaia code "Create a task tracker with categories and priority levels"
 ```
 
 ### Debug and Trace Options
@@ -168,9 +184,18 @@ gaia code "Build an HRMS SaaS app with role-based access (HR, employee), employe
 # Run all Code Agent tests
 python -m pytest tests/test_code_agent.py -v
 
+# Run orchestration tests (Next.js generation)
+python -m pytest tests/test_checklist_orchestration.py -v
+
 # Test specific features
 python -m pytest tests/test_code_agent.py::TestCodeAgent::test_generate_function -xvs
 python -m pytest tests/test_code_agent.py::TestCodeAgent::test_workflow_with_validation_and_linting -xvs
+
+# Test LLM code generation
+python -m pytest tests/test_checklist_orchestration.py::TestLLMCodeGeneration -xvs
+
+# Test error recovery
+python -m pytest tests/test_checklist_orchestration.py::TestErrorRecovery -xvs
 ```
 
 ## Python API
@@ -307,6 +332,65 @@ The Code Agent provides over 30 comprehensive tools for code operations:
 - `init_gaia_md`: Initialize GAIA.md by analyzing current codebase
 - `update_gaia_md`: Create or update GAIA.md file for project context
 
+### Web Development (Next.js/TypeScript)
+- `manage_data_model`: Create/update Prisma database models with proper schema appending
+- `manage_api_endpoint`: Generate REST API routes with Zod validation
+- `manage_react_component`: Create React components (list, form, new, detail variants)
+- `setup_nextjs_testing`: Configure Vitest testing infrastructure
+- `setup_app_styling`: Apply dark theme design system with Tailwind CSS
+- `update_landing_page`: Update home page with navigation links
+- `validate_typescript`: Run TypeScript compiler checks
+- `setup_prisma`: Initialize Prisma ORM with SQLite database
+
+### External Information Lookup
+- `search_web`: Search the web for current information and best practices using Perplexity AI
+
+The Code Agent can automatically look up documentation and web information when needed:
+
+
+**Perplexity Web Search:**
+- Aids system in figuring out errors
+- Aids system in helping to expand
+- Works only if `PERPLEXITY_API_KEY` environment variable to be set
+
+**Configuration:**
+```bash
+# Set Perplexity API key in .env file
+PERPLEXITY_API_KEY=your_api_key_here
+```
+
+### CLI Tools (Process Management)
+- `run_cli_command`: Execute any CLI command (npm, python, docker, etc.) with optional background execution for servers. Automatically detects startup errors and manages process lifecycle.
+  - **Parameters**: `command`, `working_dir`, `background`, `timeout`, `startup_timeout`, `expected_port`, `auto_respond`
+  - **Background mode**: Runs processes with automatic startup error detection
+  - **Error detection**: Identifies port conflicts, missing dependencies, compilation errors, permission issues, resource limits, and network errors
+- `stop_process`: Stop a background process gracefully (SIGINT/Ctrl+C), with optional force kill
+- `list_processes`: List all managed background processes with runtime info
+- `get_process_logs`: Get output logs from a background process
+- `cleanup_all_processes`: Stop all managed background processes gracefully
+
+**Error Pattern Detection:**
+The CLI tools automatically detect common issues:
+- **Port conflicts**: `EADDRINUSE`, "address already in use"
+- **Missing dependencies**: `Cannot find module`, `ModuleNotFoundError`
+- **Compilation errors**: `SyntaxError`, `TypeError`, `Failed to compile`, TypeScript errors
+- **Permission errors**: `EACCES`, "Permission denied"
+- **Resource errors**: "out of memory", `ENOMEM`
+- **Network errors**: `ECONNREFUSED`, "fetch failed"
+
+### Validation and Testing Tools
+- `test_crud_api`: Test CRUD API endpoints using curl-based validation
+  - Tests all CRUD operations: POST (create), GET (list/single), PATCH (update), DELETE
+  - Automatically generates test payloads from Prisma schema
+  - Starts dev server if not running, cleans up afterward
+- `validate_typescript`: Run TypeScript compiler checks (noEmit mode) with Tier 4 error messaging
+  - Detects missing imports, type errors, and common Next.js issues
+  - Provides specific fix instructions for detected violations
+- `validate_crud_structure`: Validate that all required CRUD files exist (pages, components, API routes)
+- `validate_styles`: Validate CSS files and design system consistency
+  - Detects TypeScript code accidentally written to CSS files
+  - Checks for Tailwind directives and proper imports
+
 ## Architecture
 
 - **Tool-Based System**: All operations exposed as tools for LLM interaction
@@ -342,8 +426,6 @@ For code-level debugging with breakpoints, use the VS Code debugger with pre-con
 - `src/gaia/agents/code/tools/code_tools.py` - Code generation tools
 - `src/gaia/agents/code/tools/validation_parsing.py` - Validation and parsing
 - `src/gaia/agents/base/agent.py` - Base agent logic
-
-For comprehensive debugging guide, see [CODE_AGENT_VSCODE_DEBUG_GUIDE.md](../CODE_AGENT_VSCODE_DEBUG_GUIDE.md)
 
 ## Troubleshooting
 

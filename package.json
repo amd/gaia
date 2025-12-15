@@ -19,5 +19,10 @@
   "devDependencies": {
     "cross-env": "^7.0.3",
     "electron": "^31.0.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "prisma": "^5.22.0",
+    "zod": "^4.1.13"
   }
 }

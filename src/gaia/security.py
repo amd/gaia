@@ -84,6 +84,16 @@ class PathValidator:
         except Exception as e:
             logger.error(f"Failed to save allowed path to {self.config_file}: {e}")
 
+    def add_allowed_path(self, path: str) -> None:
+        """
+        Add a path to the allowed paths set.
+
+        Args:
+            path: Path to add to allowed paths
+        """
+        self.allowed_paths.add(Path(path).resolve())
+        logger.debug(f"Added allowed path: {path}")
+
     def is_path_allowed(self, path: str, prompt_user: bool = True) -> bool:
         """
         Check if a path is allowed. If not, optionally prompt the user.

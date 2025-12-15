@@ -118,15 +118,11 @@
             "stopOnEntry": false,
         },
         {
-            "name": "CLI Server Debug",
+            "name": "GAIA CLI Debug",
             "type": "debugpy",
             "request": "launch",
             "module": "gaia.cli",
-            "args": [
-                "start",
-                "--background",
-                "none"
-            ],
+            "args": "${input:cliArgs}",
             "cwd": "${workspaceFolder}",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
@@ -327,6 +323,12 @@
             "type": "promptString",
             "description": "Code Agent task/prompt",
             "default": "Create a simple calculator function"
+        },
+        {
+            "id": "cliArgs",
+            "type": "promptString",
+            "description": "CLI arguments (e.g., 'api start', 'chat --debug', 'mcp start')",
+            "default": "api start"
         }
     ]
 }

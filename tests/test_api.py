@@ -21,11 +21,290 @@ import time
 import pytest
 import requests
 
+# Test imports
+try:
+    from fastapi.testclient import TestClient
+
+    from gaia.api.openai_server import app
+
+    API_AVAILABLE = True
+except ImportError as e:
+    API_AVAILABLE = False
+    IMPORT_ERROR = str(e)
+    app = None  # Placeholder for when imports fail
+
+# =============================================================================
+# UNIT TESTS (TestClient-based, no external dependencies)
+# =============================================================================
+
+
+class TestApiUnitValidation:
+    """
+    Unit tests using FastAPI TestClient - NO external server needed.
+
+    These tests validate request/response schemas and error handling
+    without starting the GAIA API server or requiring Lemonade.
+    They can run on any CI runner (ubuntu-latest, windows-latest).
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Set up TestClient for each test."""
+        if not API_AVAILABLE:
+            pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
+        self.client = TestClient(app)
+
+    # -------------------------------------------------------------------------
+    # Model Validation Tests
+    # -------------------------------------------------------------------------
+
+    def test_invalid_model_returns_404(self):
+        """Test that invalid model returns 404 error."""
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "nonexistent-model",
+                "messages": [{"role": "user", "content": "test"}],
+                "stream": False,
+            },
+        )
+        assert response.status_code == 404
+        assert "not found" in response.json()["detail"].lower()
+
+    def test_empty_model_name_returns_404(self):
+        """Test that empty model name returns 404."""
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "",
+                "messages": [{"role": "user", "content": "test"}],
+                "stream": False,
+            },
+        )
+        assert response.status_code == 404
+
+    # -------------------------------------------------------------------------
+    # Request Validation Tests (Pydantic)
+    # -------------------------------------------------------------------------
+
+    def test_missing_model_returns_422(self):
+        """Test that missing model field returns 422."""
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": "test"}], "stream": False},
+        )
+        assert response.status_code == 422
+
+    def test_missing_messages_returns_422(self):
+        """Test that missing messages field returns 422."""
+        response = self.client.post(
+            "/v1/chat/completions", json={"model": "gaia-code", "stream": False}
+        )
+        assert response.status_code == 422
+
+    def test_invalid_message_role_returns_422(self):
+        """Test that invalid message role returns 422 (Pydantic Literal validation)."""
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gaia-code",
+                "messages": [{"role": "invalid_role", "content": "test"}],
+                "stream": False,
+            },
+        )
+        assert response.status_code == 422
+
+    def test_message_without_role_returns_422(self):
+        """Test that message missing role field returns 422."""
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gaia-code",
+                "messages": [{"content": "test"}],
+                "stream": False,
+            },
+        )
+        assert response.status_code == 422
+
+    def test_messages_not_array_returns_422(self):
+        """Test that messages field that is not an array returns 422."""
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={"model": "gaia-code", "messages": "not an array", "stream": False},
+        )
+        assert response.status_code == 422
+
+    def test_invalid_stream_value_returns_422(self):
+        """Test that invalid stream field value returns 422."""
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gaia-code",
+                "messages": [{"role": "user", "content": "test"}],
+                "stream": "not a boolean",
+            },
+        )
+        assert response.status_code == 422
+
+    def test_empty_json_object_returns_422(self):
+        """Test that empty JSON object returns 422."""
+        response = self.client.post("/v1/chat/completions", json={})
+        assert response.status_code == 422
+
+    def test_invalid_json_returns_422(self):
+        """Test that completely invalid JSON returns 422."""
+        response = self.client.post(
+            "/v1/chat/completions",
+            content="this is not json",
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 422
+
+    # -------------------------------------------------------------------------
+    # Server Logic Validation Tests (400 errors)
+    # -------------------------------------------------------------------------
+
+    def test_empty_messages_returns_400(self):
+        """Test that empty messages array returns 400 (no user message)."""
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={"model": "gaia-code", "messages": [], "stream": False},
+        )
+        assert response.status_code == 400
+        assert "no user message" in response.json()["detail"].lower()
+
+    def test_message_without_content_returns_400(self):
+        """
+        Test that message with None content returns 400.
+
+        Content is Optional in schema (passes Pydantic), but server logic
+        returns 400 because no user message content is found.
+        """
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gaia-code",
+                "messages": [{"role": "user"}],  # content defaults to None
+                "stream": False,
+            },
+        )
+        assert response.status_code == 400
+
+    def test_only_system_message_returns_400(self):
+        """Test that request with only system message returns 400."""
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gaia-code",
+                "messages": [{"role": "system", "content": "You are helpful"}],
+                "stream": False,
+            },
+        )
+        assert response.status_code == 400
+
+    def test_messages_with_null_element_returns_422(self):
+        """Test that messages array containing null returns 422."""
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gaia-code",
+                "messages": [None, {"role": "user", "content": "test"}],
+                "stream": False,
+            },
+        )
+        assert response.status_code == 422
+
+    # -------------------------------------------------------------------------
+    # Endpoint Tests
+    # -------------------------------------------------------------------------
+
+    def test_health_endpoint_returns_ok(self):
+        """Test that /health endpoint returns status ok."""
+        response = self.client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
+        assert data["service"] == "gaia-api"
+
+    def test_models_endpoint_returns_list(self):
+        """Test that /v1/models returns list of available models."""
+        response = self.client.get("/v1/models")
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify OpenAI-compatible structure
+        assert data["object"] == "list"
+        assert "data" in data
+        assert isinstance(data["data"], list)
+        assert len(data["data"]) > 0
+
+        # Verify model structure
+        for model in data["data"]:
+            assert model["object"] == "model"
+            assert "id" in model
+            assert "created" in model
+            assert isinstance(model["created"], int)
+            assert "owned_by" in model
+            assert model["owned_by"] == "amd-gaia"
+
+        # Verify gaia-code model exists
+        model_ids = [m["id"] for m in data["data"]]
+        assert "gaia-code" in model_ids, "gaia-code not in models"
+
+    def test_nonexistent_endpoint_returns_404(self):
+        """Test that non-existent endpoint returns 404."""
+        response = self.client.get("/v1/nonexistent")
+        assert response.status_code == 404
+
+    def test_wrong_method_completions_returns_405(self):
+        """Test that GET on completions endpoint returns 405."""
+        response = self.client.get("/v1/chat/completions")
+        assert response.status_code == 405
+
+    def test_wrong_method_models_returns_405(self):
+        """Test that POST on models endpoint returns 405."""
+        response = self.client.post("/v1/models", json={})
+        assert response.status_code == 405
+
+    # -------------------------------------------------------------------------
+    # Error Response Format Tests
+    # -------------------------------------------------------------------------
+
+    def test_404_error_has_detail_field(self):
+        """Test that 404 error response has detail field."""
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "nonexistent",
+                "messages": [{"role": "user", "content": "test"}],
+                "stream": False,
+            },
+        )
+        assert response.status_code == 404
+        error_data = response.json()
+        assert "detail" in error_data
+        assert isinstance(error_data["detail"], str)
+
+    def test_422_error_has_detail_field(self):
+        """Test that 422 validation error has detail field."""
+        response = self.client.post(
+            "/v1/chat/completions", json={"model": "gaia-code"}  # Missing messages
+        )
+        assert response.status_code == 422
+        error_data = response.json()
+        assert "detail" in error_data
+
+
+# =============================================================================
+# INTEGRATION TESTS (Require running API server and/or Lemonade)
+# =============================================================================
+
 # =============================================================================
 # CORE API FUNCTIONALITY TESTS
 # =============================================================================
 
 
+@pytest.mark.integration
 class TestChatCompletionsNonStreaming:
     """Test POST /v1/chat/completions without streaming"""
 
@@ -93,8 +372,9 @@ class TestChatCompletionsNonStreaming:
         assert response.status_code == 400
 
 
+@pytest.mark.integration
 class TestChatCompletionsStreaming:
-    """Test POST /v1/chat/completions with streaming"""
+    """Test POST /v1/chat/completions with streaming - requires Lemonade"""
 
     def test_streaming_completion_sse_format(self, api_server, api_client):
         """Test that streaming returns proper Server-Sent Events format"""
@@ -262,12 +542,13 @@ class TestHealthEndpoint:
 
 
 # =============================================================================
-# SSE STREAMING TESTS
+# SSE STREAMING TESTS (require Lemonade for actual LLM responses)
 # =============================================================================
 
 
+@pytest.mark.integration
 class TestStreamingConnectionManagement:
-    """Test SSE connection lifecycle and management"""
+    """Test SSE connection lifecycle and management - requires Lemonade"""
 
     def test_streaming_connection_closes_properly(self, api_server, api_client):
         """Test that streaming connections close properly after completion"""
@@ -281,7 +562,7 @@ class TestStreamingConnectionManagement:
             f"{api_server}/v1/chat/completions", json=payload, stream=True
         ) as response:
             # Consume the stream
-            for line in response.iter_lines():
+            for _ in response.iter_lines():
                 pass
 
         # Connection should be closed after context exits
@@ -323,15 +604,16 @@ class TestStreamingConnectionManagement:
             stream=True,
             timeout=30,  # 30 second timeout
         ) as response:
-            for line in response.iter_lines():
+            for _ in response.iter_lines():
                 pass
 
         elapsed = time.time() - start_time
         assert elapsed < 30, "Streaming took longer than timeout"
 
 
+@pytest.mark.integration
 class TestStreamingChunkFormat:
-    """Test detailed SSE chunk formatting"""
+    """Test detailed SSE chunk formatting - requires Lemonade"""
 
     def test_all_chunks_have_valid_json(self, api_server, api_client):
         """Test that all SSE chunks contain valid JSON"""
@@ -415,8 +697,9 @@ class TestStreamingChunkFormat:
         assert found_finish_reason, "No finish_reason found in stream"
 
 
+@pytest.mark.integration
 class TestStreamingContent:
-    """Test streaming content reconstruction and integrity"""
+    """Test streaming content reconstruction and integrity - requires Lemonade"""
 
     def test_streaming_content_not_empty(self, api_server, api_client):
         """Test that streaming produces non-empty content"""
@@ -507,8 +790,9 @@ class TestStreamingErrorCases:
         assert response.status_code == 400
 
 
+@pytest.mark.integration
 class TestStreamingHeaders:
-    """Test HTTP headers in streaming responses"""
+    """Test HTTP headers in streaming responses - requires Lemonade"""
 
     def test_streaming_content_type_header(self, api_server, api_client):
         """Test that streaming sets correct Content-Type header"""
@@ -570,34 +854,34 @@ class TestRequestValidation:
         assert response.status_code == 422
 
     def test_invalid_message_role(self, api_server, api_client):
-        """Test message with invalid role"""
+        """Test message with invalid role - Pydantic validates Literal type"""
         payload = {
             "model": "gaia-code",
             "messages": [{"role": "invalid_role", "content": "test"}],
             "stream": False,
         }
         response = api_client.post(f"{api_server}/v1/chat/completions", json=payload)
-        assert response.status_code in [400, 422]
+        assert response.status_code == 422
 
     def test_message_without_content(self, api_server, api_client):
-        """Test message missing content field"""
+        """Test message missing content field - content is Optional, server returns 400"""
         payload = {
             "model": "gaia-code",
             "messages": [{"role": "user"}],
             "stream": False,
         }
         response = api_client.post(f"{api_server}/v1/chat/completions", json=payload)
-        assert response.status_code in [400, 422]
+        assert response.status_code == 400
 
     def test_message_without_role(self, api_server, api_client):
-        """Test message missing role field"""
+        """Test message missing role field - role is required in schema"""
         payload = {
             "model": "gaia-code",
             "messages": [{"content": "test"}],
             "stream": False,
         }
         response = api_client.post(f"{api_server}/v1/chat/completions", json=payload)
-        assert response.status_code in [400, 422]
+        assert response.status_code == 422
 
 
 class TestInvalidPayloads:
@@ -617,8 +901,9 @@ class TestInvalidPayloads:
         )
         assert response.status_code == 422
 
+    @pytest.mark.integration
     def test_json_with_extra_fields(self, api_server, api_client):
-        """Test that extra fields in request are ignored"""
+        """Test that extra fields in request are ignored - Pydantic allows extra by default"""
         payload = {
             "model": "gaia-code",
             "messages": [{"role": "user", "content": "test"}],
@@ -626,20 +911,19 @@ class TestInvalidPayloads:
             "unknown_field": "should be ignored",
             "another_unknown": 12345,
         }
-        # Should succeed - extra fields ignored
+        # Extra fields are ignored, request should succeed
         response = api_client.post(f"{api_server}/v1/chat/completions", json=payload)
-        # Might succeed or fail depending on strict validation
-        assert response.status_code in [200, 400, 422]
+        assert response.status_code == 200
 
     def test_invalid_stream_value(self, api_server, api_client):
-        """Test invalid value for stream field"""
+        """Test invalid value for stream field - Pydantic validates boolean type"""
         payload = {
             "model": "gaia-code",
             "messages": [{"role": "user", "content": "test"}],
             "stream": "not a boolean",
         }
         response = api_client.post(f"{api_server}/v1/chat/completions", json=payload)
-        assert response.status_code in [400, 422]
+        assert response.status_code == 422
 
 
 class TestModelErrors:
@@ -659,14 +943,14 @@ class TestModelErrors:
         assert "not found" in error_data["detail"].lower()
 
     def test_empty_model_name(self, api_server, api_client):
-        """Test request with empty model name"""
+        """Test request with empty model name - empty string passes Pydantic, model not found"""
         payload = {
             "model": "",
             "messages": [{"role": "user", "content": "test"}],
             "stream": False,
         }
         response = api_client.post(f"{api_server}/v1/chat/completions", json=payload)
-        assert response.status_code in [400, 404, 422]
+        assert response.status_code == 404
 
     def test_model_name_with_special_chars(self, api_server, api_client):
         """Test model name with special characters"""
@@ -704,18 +988,19 @@ class TestMessageArrayErrors:
         assert response.status_code == 422
 
     def test_messages_with_null_element(self, api_server, api_client):
-        """Test messages array containing null"""
+        """Test messages array containing null - Pydantic validation error"""
         payload = {
             "model": "gaia-code",
             "messages": [None, {"role": "user", "content": "test"}],
             "stream": False,
         }
         response = api_client.post(f"{api_server}/v1/chat/completions", json=payload)
-        assert response.status_code in [400, 422]
+        assert response.status_code == 422
 
 
+@pytest.mark.integration
 class TestLargePayloads:
-    """Test handling of large payloads"""
+    """Test handling of large payloads - requires Lemonade for 200 responses"""
 
     def test_very_long_message(self, api_server, api_client):
         """Test message with very long content"""
@@ -758,16 +1043,16 @@ class TestEndpointErrors:
         assert response.status_code == 404
 
     def test_wrong_http_method_completions(self, api_server, api_client):
-        """Test wrong HTTP method on completions endpoint"""
+        """Test wrong HTTP method on completions endpoint - FastAPI returns 405"""
         # GET instead of POST
         response = api_client.get(f"{api_server}/v1/chat/completions")
-        assert response.status_code in [405, 404]  # Method not allowed
+        assert response.status_code == 405  # Method not allowed
 
     def test_wrong_http_method_models(self, api_server, api_client):
-        """Test wrong HTTP method on models endpoint"""
+        """Test wrong HTTP method on models endpoint - FastAPI returns 405"""
         # POST instead of GET
         response = api_client.post(f"{api_server}/v1/models", json={})
-        assert response.status_code in [405, 404]
+        assert response.status_code == 405
 
     def test_models_endpoint_with_query_params(self, api_server, api_client):
         """Test models endpoint ignores query parameters"""
@@ -780,7 +1065,7 @@ class TestContentTypeErrors:
     """Test Content-Type handling"""
 
     def test_missing_content_type(self, api_server):
-        """Test POST request without Content-Type header"""
+        """Test POST request without Content-Type header - FastAPI may auto-parse"""
         payload = {
             "model": "gaia-code",
             "messages": [{"role": "user", "content": "test"}],
@@ -791,12 +1076,13 @@ class TestContentTypeErrors:
             data=json.dumps(payload),
             # No Content-Type header
         )
-        # FastAPI might still parse it or reject it
-        assert response.status_code in [200, 415, 422]
+        # FastAPI may auto-detect JSON or return validation error
+        assert response.status_code in [200, 422]
 
 
+@pytest.mark.integration
 class TestRateLimitingAndThrottling:
-    """Test rate limiting if implemented"""
+    """Test rate limiting if implemented - requires Lemonade for 200 responses"""
 
     def test_rapid_sequential_requests(self, api_server, api_client):
         """Test making many rapid requests"""

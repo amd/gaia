@@ -54,6 +54,13 @@ jobs:
     uses: ./.github/workflows/test_code_agent.yml
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
+  # Test Chat Agent functionality
+  test-chat-agent:
+    name: Chat Agent Tests
+    needs: lint
+    uses: ./.github/workflows/test_chat_agent.yml
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
   # Test Security features
   test-security:
     name: Security Tests
@@ -65,7 +72,7 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [lint, test-windows, test-linux, test-mcp, test-code-agent, test-security]
+    needs: [lint, test-windows, test-linux, test-mcp, test-code-agent, test-chat-agent, test-security]
     if: always()
     steps:
       - name: Check test results
@@ -76,16 +83,18 @@ jobs:
           echo "Linux Tests Status: ${{ needs.test-linux.result }}"
           echo "MCP Tests Status: ${{ needs.test-mcp.result }}"
           echo "Code Agent Tests Status: ${{ needs.test-code-agent.result }}"
+          echo "Chat Agent Tests Status: ${{ needs.test-chat-agent.result }}"
           echo "Security Tests Status: ${{ needs.test-security.result }}"
           echo ""
 
           # Determine overall status
-          if [[ "${{ needs.lint.result }}" == "success" && "${{ needs.test-windows.result }}" == "success" && "${{ needs.test-linux.result }}" == "success" && "${{ needs.test-mcp.result }}" == "success" && "${{ needs.test-code-agent.result }}" == "success" && "${{ needs.test-security.result }}" == "success" ]]; then
+          if [[ "${{ needs.lint.result }}" == "success" && "${{ needs.test-windows.result }}" == "success" && "${{ needs.test-linux.result }}" == "success" && "${{ needs.test-mcp.result }}" == "success" && "${{ needs.test-code-agent.result }}" == "success" && "${{ needs.test-chat-agent.result }}" == "success" && "${{ needs.test-security.result }}" == "success" ]]; then
             echo "✅ All tests passed!"
             echo "- Windows: Full CLI functionality with Lemonade integration"
             echo "- Linux: Full CLI functionality with Lemonade integration"
             echo "- MCP: HTTP-native bridge and protocol compliance"
             echo "- Code Agent: Autonomous code generation and modification"
+            echo "- Chat Agent: Session persistence and chat history"
             echo "- Security: Path validation and shell injection prevention"
             echo "- Cross-platform: Code quality and compatibility"
           else
@@ -95,6 +104,7 @@ jobs:
             [[ "${{ needs.test-linux.result }}" != "success" ]] && echo "  - Linux tests failed"
             [[ "${{ needs.test-mcp.result }}" != "success" ]] && echo "  - MCP tests failed"
             [[ "${{ needs.test-code-agent.result }}" != "success" ]] && echo "  - Code Agent tests failed"
+            [[ "${{ needs.test-chat-agent.result }}" != "success" ]] && echo "  - Chat Agent tests failed"
             [[ "${{ needs.test-security.result }}" != "success" ]] && echo "  - Security tests failed"
             exit 1
           fi

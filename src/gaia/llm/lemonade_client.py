@@ -43,32 +43,37 @@ load_dotenv()
 # Default server host and port (can be overridden via LEMONADE_BASE_URL env var)
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 8000
-DEFAULT_LEMONADE_URL = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
+# API version supported by this client
+LEMONADE_API_VERSION = "v1"
+# Default URL includes /api/v1 to match documentation and other clients
+DEFAULT_LEMONADE_URL = (
+    f"http://{DEFAULT_HOST}:{DEFAULT_PORT}/api/{LEMONADE_API_VERSION}"
+)
 
 
 def _get_lemonade_config() -> tuple:
     """
-    Get Lemonade host and port from environment or defaults.
+    Get Lemonade host, port, and base_url from environment or defaults.
 
     Parses LEMONADE_BASE_URL env var if set, otherwise uses defaults.
+    The base_url is expected to include /api/v1 suffix per documentation.
 
     Returns:
-        Tuple of (host, port)
+        Tuple of (host, port, base_url)
     """
-    base_url = os.getenv("LEMONADE_BASE_URL")
-    if base_url:
-        # Parse the URL to extract host and port
-        from urllib.parse import urlparse
+    from urllib.parse import urlparse
 
-        parsed = urlparse(base_url)
-        host = parsed.hostname or DEFAULT_HOST
-        port = parsed.port or DEFAULT_PORT
-        return (host, port)
-    return (DEFAULT_HOST, DEFAULT_PORT)
+    base_url = os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
+    # Parse the URL to extract host and port for backwards compatibility
+    parsed = urlparse(base_url)
+    host = parsed.hostname or DEFAULT_HOST
+    port = (
+        80
+        if (parsed.port is None and host is not None)
+        else (parsed.port or DEFAULT_PORT)
+    )
+    return (host, port, base_url)
 
-
-# API version supported by this client
-LEMONADE_API_VERSION = "v1"
 
 # =========================================================================
 # Model Configuration Defaults
@@ -440,10 +445,14 @@ class LemonadeClient:
             keep_alive: If True, don't terminate server in __del__
         """
         # Use provided host/port, or get from env var, or use defaults
-        env_host, env_port = _get_lemonade_config()
+        env_host, env_port, env_base_url = _get_lemonade_config()
         self.host = host if host is not None else env_host
         self.port = port if port is not None else env_port
-        self.base_url = f"http://{self.host}:{self.port}/api/{LEMONADE_API_VERSION}"
+        # If host/port explicitly provided, construct URL; otherwise use env URL directly
+        if host is not None or port is not None:
+            self.base_url = f"http://{self.host}:{self.port}/api/{LEMONADE_API_VERSION}"
+        else:
+            self.base_url = env_base_url
         self.model = model
         self.server_process = None
         self.log = get_logger(__name__)
@@ -2250,6 +2259,7 @@ class LemonadeClient:
             success, error = client.validate_context_size(required_tokens=32768)
             if not success:
                 print(f"Context validation failed: {error}")
+                sys.exit(1)
         """
         try:
             health = self.health_check()
@@ -2267,7 +2277,7 @@ class LemonadeClient:
                     f"Restart with: lemonade-server serve --ctx-size {required_tokens}"
                 )
                 if not quiet:
-                    print(f"⚠️  {error_msg}")
+                    print(f"❌ {error_msg}")
                 return False, error_msg
 
         except Exception as e:
@@ -2480,12 +2490,33 @@ class LemonadeClient:
 
     def _check_lemonade_installed(self) -> bool:
         """
-        Check if lemonade-server is installed.
+        Check if lemonade-server is available.
+
+        Checks in this order:
+        1. Try health check on configured URL (LEMONADE_BASE_URL or default)
+        2. If localhost and health check fails, check if binary is in PATH (for auto-start)
+        3. If remote server and health check fails, return False (can't auto-start)
 
         Returns:
-            True if lemonade-server command exists, False otherwise
+            True if server is available or can be started, False otherwise
         """
-        return shutil.which("lemonade-server") is not None
+        # First, always try health check to see if server is already running
+        try:
+            health = self.health_check()
+            if health.get("status") == "ok":
+                return True
+        except Exception:
+            pass
+
+        # Health check failed - determine if we can auto-start
+        is_localhost = self.host in ("localhost", "127.0.0.1", "::1")
+
+        if is_localhost:
+            # Local server not running - check if binary is installed for auto-start
+            return shutil.which("lemonade-server") is not None
+        else:
+            # Remote server not responding and we can't auto-start it
+            return False
 
     def get_lemonade_version(self) -> Optional[str]:
         """

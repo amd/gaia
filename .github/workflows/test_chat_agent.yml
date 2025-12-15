@@ -1,0 +1,131 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# This workflow tests the GAIA Chat Agent functionality
+# Tests include: Session persistence, chat history, RAG, and path validation
+
+name: Chat Agent Tests
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-chat-agent:
+    name: Test Chat Agent
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e .[dev,rag]
+          # Install pytest-mock for mocking tests
+          uv pip install --system pytest-mock
+
+      - name: Run Chat Agent Unit Tests
+        run: |
+          echo "================================================================"
+          echo "                    CHAT AGENT UNIT TESTS"
+          echo "================================================================"
+          echo "Testing core functionality: initialization, tools, session management..."
+          echo ""
+
+          # Run unit tests
+          python -m pytest tests/test_chat_agent.py::TestChatAgent -v --tb=short
+
+          # Store the result
+          UNIT_TEST_EXIT=$?
+
+          if [ $UNIT_TEST_EXIT -eq 0 ]; then
+            echo "[SUCCESS] Unit tests passed"
+          else
+            echo "[FAILURE] Unit tests failed"
+            exit 1
+          fi
+
+      - name: Run Chat Agent Session Tests
+        run: |
+          echo ""
+          echo "================================================================"
+          echo "                 CHAT AGENT SESSION TESTS"
+          echo "================================================================"
+          echo "Testing session persistence and chat history..."
+          echo ""
+
+          # Run session tests
+          python -m pytest tests/test_chat_agent.py::TestChatAgentSessions -v --tb=short
+
+          # Store the result
+          SESSION_TEST_EXIT=$?
+
+          if [ $SESSION_TEST_EXIT -eq 0 ]; then
+            echo "[SUCCESS] Session tests passed"
+          else
+            echo "[FAILURE] Session tests failed"
+            exit 1
+          fi
+
+      - name: Run Chat Agent Path Validation Tests
+        run: |
+          echo ""
+          echo "================================================================"
+          echo "              CHAT AGENT PATH VALIDATION TESTS"
+          echo "================================================================"
+          echo "Testing path security and validation..."
+          echo ""
+
+          # Run path validation tests
+          python -m pytest tests/test_chat_agent.py::TestChatAgentPathValidation -v --tb=short
+
+          # Store the result
+          PATH_TEST_EXIT=$?
+
+          if [ $PATH_TEST_EXIT -eq 0 ]; then
+            echo "[SUCCESS] Path validation tests passed"
+          else
+            echo "[FAILURE] Path validation tests failed"
+            exit 1
+          fi
+
+      - name: Test Summary
+        if: always()
+        run: |
+          echo ""
+          echo "================================================================"
+          echo "                   CHAT AGENT TEST SUMMARY"
+          echo "================================================================"
+          echo "Test Categories:"
+          echo "  - Unit Tests: Agent initialization, tool registration"
+          echo "  - Session Tests: Save/load sessions, chat history persistence"
+          echo "  - Path Tests: Security validation, allowed paths"
+          echo ""
+          echo "Test Coverage:"
+          echo "  - Chat agent initialization and configuration"
+          echo "  - Session management (save/load/resume)"
+          echo "  - Chat history persistence across sessions"
+          echo "  - RAG document indexing"
+          echo "  - Path validation and security"
+          echo "================================================================"

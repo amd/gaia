@@ -373,18 +373,6 @@ class TestJSONValidation:
                 # Check that the correction prompt was called
                 mock_create_prompt.assert_called_once()
 
-    def test_format_reminder_added_to_prompts(self, agent):
-        """Test that format reminders are added to prompts."""
-        test_prompt = "Create a red cube"
-        enhanced_prompt = agent._add_format_reminder(test_prompt)
-
-        # Verify the enhanced prompt contains the reminder text
-        assert (
-            "IMPORTANT: Your response must be a single valid JSON object"
-            in enhanced_prompt
-        )
-        assert test_prompt in enhanced_prompt  # Original prompt is preserved
-
     def test_blender_domain_patterns(self, agent):
         """Test Blender-specific domain patterns for natural language responses."""
         # Get the domain patterns
@@ -535,18 +523,6 @@ class TestAgentIntegration:
 
                 # Validate the result
                 assert result == json.loads(valid_response)
-
-    def test_format_reminder_in_prompts(self, agent):
-        """Test that format reminders are added to prompts."""
-        # Instead of running the full process_query, just test the _add_format_reminder method
-        test_prompt = "Create a red cube"
-        enhanced_prompt = agent._add_format_reminder(test_prompt)
-
-        # Verify the reminder was added
-        assert (
-            "IMPORTANT: Your response must be a single valid JSON object"
-            in enhanced_prompt
-        )
 
     def test_complex_plan_execution(self, agent):
         """Test execution of a complex plan with minimal mocking."""

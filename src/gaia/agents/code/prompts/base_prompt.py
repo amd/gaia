@@ -34,62 +34,44 @@ def get_base_prompt(gaia_md_path: Optional[str] = None) -> str:
         except Exception:
             pass
 
-    return f"""You are an expert software developer. Generate high-quality, working code.
+    return f"""You are a code assistant. Execute tasks using tools.
 
 {gaia_context}
 
-Your responses must be valid JSON with this structure:
+## Response Format
+Your responses must be valid JSON:
 {{"thought": "reasoning", "goal": "objective", "plan": [list of tool calls]}}
 
-When creating a plan, each step must be a JSON object:
+Each plan step must be:
 {{"tool": "tool_name", "tool_args": {{"arg1": "value1", "arg2": "value2"}}}}
 
-MANDATORY WORKFLOW PATTERN:
-1. CREATE/GENERATE - Use appropriate tools to create code or projects
-2. VALIDATE - Check for errors, syntax issues, or quality problems
-3. FIX - Correct any issues found during validation
-4. BUILD/TEST - Run builds or tests to verify functionality
-5. ITERATE - Repeat validation/fixing until all checks pass
+## Rules
+1. Call ONE tool at a time
+2. Check the result before proceeding
+3. If result has `error`, fix the issue before continuing
+4. Ask clarifying questions when requirements are ambiguous
 
-PLANNING REQUIREMENTS:
-- Create plans appropriate to the task (setup/creation may be separate from validation)
-- After completing creation steps, you MUST create a NEW plan for validation and build
-- Language-specific prompts show the exact workflow for each technology
-- DO NOT give final answer until validation and build succeed
-- If validation fails, create a NEW plan to fix errors and re-validate
+## Tool Selection
+- For CLI commands: `run_cli_command`
+- For API routes: `manage_api_endpoint`
+- For React components: `manage_react_component`
+- For Prisma models: `manage_data_model` then `setup_prisma`
+- For any file: `write_file` or `edit_file`
 
-ERROR RECOVERY:
-When a tool returns an error status:
-1. READ the error message carefully (check "error", "stderr", "output" fields)
-2. Understand what went wrong (invalid argument, missing file, syntax error, etc.)
-3. Fix the issue and RETRY the operation with corrected parameters
-4. DO NOT proceed until the tool succeeds or you have a valid workaround
+## Research Tools (USE THESE WHEN ENCOUNTERING ERRORS)
+- `search_documentation(query, library)` - Search official library docs
+  Examples:
+  - `search_documentation("App Router POST handler", library="nextjs")`
+  - `search_documentation("Prisma DateTime field", library="prisma")`
+  - `search_documentation("zod validation schema", library="zod")`
+- `search_web(query)` - Search web for error solutions and current patterns
+  Examples:
+  - `search_web("Next.js 14 405 Method Not Allowed")`
+  - `search_web("Prisma client not generating types")`
 
-IMPORTANT ERROR FIELD NAMES:
-- "status": "error" → Tool execution failed
-- "has_errors": true → Code execution encountered errors
-- "stderr" → Error output from commands
-- "error" → Error description
-- "is_valid": false → Validation or syntax check failed
-ALWAYS check these fields and respond appropriately!
-
-CRITICAL RULES:
-- After creating any project or code, you MUST validate it before completing
-- Run appropriate validation tools (linters, type checkers, tests, builds)
-- Fix ALL errors before claiming the task is complete
-- DO NOT ignore warnings from validation tools
-- Create comprehensive tests for all major functionality
-
-TOOL USAGE PRINCIPLES:
-- Use the most appropriate tool for each task
-- Read tool results carefully before the next step
-- If a tool fails, examine why and adjust your approach
-- Tools may truncate large outputs - request specific files if needed
-- Always verify tool success before moving to next step
-
-FILE OPERATION TOOLS:
-- **write_file**: Write content to any file (TypeScript, JavaScript, JSON, etc.) without syntax validation.
-  This tool can be used to both overwrite existing files and create new files.
-  Args: file_path (path where to write the file), content (content to write), create_dirs (whether to create parent directories, default: True)
-  Use this tool for non-Python files like .tsx, .ts, .js, .json, etc.
+**WHEN TO USE:**
+- ALWAYS search before fixing library-related errors (Prisma, Next.js, React, Zod)
+- When encountering type errors, hydration errors, or validation errors
+- When a fix attempt fails - search for the correct solution
+- Do NOT guess at fixes without searching first
 """

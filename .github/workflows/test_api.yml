@@ -22,103 +22,185 @@ permissions:
 jobs:
   test-api:
     name: API Tests
-    runs-on: ubuntu-latest
+    runs-on: [stx]
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
       - uses: actions/checkout@v5
 
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
+          install-package: '.[dev,api]'
 
-      - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
-
-      - name: Install dependencies
+      - name: Install additional test dependencies
+        shell: powershell
         run: |
-          uv pip install --system -e .[dev,api]
-          uv pip install --system pytest pytest-timeout requests
+          uv pip install pytest pytest-timeout requests --python .venv\Scripts\python.exe
 
-      - name: Note about Lemonade
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
+      - name: Start Lemonade Server and Run Tests
+        shell: powershell
         run: |
-          echo "ℹ️ Running API tests without Lemonade server"
-          echo "   Agent LLM queries will return connection errors but API server functionality will be tested"
+          # Set console to UTF-8 for Unicode support
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          [Console]::InputEncoding = [System.Text.Encoding]::UTF8
+          $OutputEncoding = [System.Text.Encoding]::UTF8
+          $env:PYTHONIOENCODING = "utf-8"
+          $env:PYTHONUTF8 = "1"
+          chcp 65001 | Out-Null
 
-      - name: Start API Server
-        run: |
-          # Start API server using gaia CLI (runs on default port 8080)
-          # Use --no-lemonade-check since Lemonade is not running in CI
-          echo "Starting GAIA API server using gaia CLI..."
-          gaia api start --no-lemonade-check &
+          try {
+              Write-Host "Starting Lemonade server..."
+              $serverJob = Start-Job -ScriptBlock {
+                  # Workaround for Issue #612: Disable Vulkan cooperative matrix optimization
+                  $env:GGML_VK_DISABLE_COOPMAT = "1"
+                  & lemonade-server serve --ctx-size 8192 --host localhost --port 8000 --no-tray 2>&1
+              }
+              Write-Host "Started Lemonade server job with ID: $($serverJob.Id)"
+              $env:LEMONADE_JOB_ID = $serverJob.Id
 
-          # Wait for server to start
-          echo "Waiting for API server to start..."
-          sleep 5
+              # Wait for server to be ready
+              Write-Host "Waiting for Lemonade server to start..."
+              $maxWaitTime = 60
+              $waitTime = 0
+              $serverReady = $false
 
-          # Check health endpoint
-          max_attempts=10
-          attempt=0
-          server_ready=false
+              while ($waitTime -lt $maxWaitTime -and -not $serverReady) {
+                  Start-Sleep -Seconds 2
+                  $waitTime += 2
 
-          while [ $attempt -lt $max_attempts ]; do
-            if curl -s -f http://localhost:8080/health | grep -q "ok"; then
-              echo "✅ API server is running and healthy"
-              server_ready=true
-              break
-            fi
-            echo "Attempt $((attempt + 1))/$max_attempts - Server not ready yet..."
-            sleep 2
-            attempt=$((attempt + 1))
-          done
+                  try {
+                      $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 5
+                      Write-Host "[OK] Lemonade server is ready"
+                      Write-Host "Health response: $($response | ConvertTo-Json -Compress)"
+                      $serverReady = $true
+                  } catch {
+                      Write-Host "Waiting... ($waitTime/$maxWaitTime seconds)"
+                  }
+              }
 
-          if [ "$server_ready" != "true" ]; then
-            echo "❌ API server failed to start"
-            echo "Checking for log files..."
-            [ -f "gaia.api.log" ] && cat gaia.api.log
-            [ -f "gaia_api.log" ] && cat gaia_api.log
-            exit 1
-          fi
+              if (-not $serverReady) {
+                  Write-Host "[ERROR] Server health check failed after $maxWaitTime seconds"
+                  throw "Server failed to start"
+              }
 
-      - name: Run API Tests
-        env:
-          CI: true
-        run: |
-          # Run comprehensive API integration tests
-          echo "Running GAIA API integration tests..."
-          echo "  - Core API functionality (chat completions, models, health)"
-          echo "  - SSE streaming (connection mgmt, chunk format, content)"
-          echo "  - Error handling (validation, edge cases, resilience)"
-          echo ""
+              # Pull required model for API tests
+              Write-Host "`n=== Pulling Required Models ==="
+              Write-Host "Pulling Qwen3-0.6B-GGUF..."
+              try {
+                  $body = @{ model_name = "Qwen3-0.6B-GGUF" } | ConvertTo-Json
+                  $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/pull" `
+                      -Method POST -ContentType "application/json" -Body $body -TimeoutSec 600
+                  Write-Host "   [OK] Qwen3-0.6B-GGUF pull initiated"
+              } catch {
+                  Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
+              }
 
-          python -m pytest tests/test_api.py -v --tb=short
+              # Wait for model to be available
+              Write-Host "Waiting 5 seconds for model files to sync..."
+              Start-Sleep -Seconds 5
 
-          echo ""
-          echo "✅ All API tests passed"
+              # Load the model into Lemonade (required for inference)
+              Write-Host "`n=== Loading LLM Model ==="
+              try {
+                  $loadRequest = @{ model_name = "Qwen3-0.6B-GGUF" } | ConvertTo-Json
+                  Write-Host "Loading model: Qwen3-0.6B-GGUF"
+                  $loadResponse = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/load" `
+                      -Method POST -Body $loadRequest -ContentType "application/json" -TimeoutSec 120
+                  Write-Host "[OK] Model loaded successfully: $($loadResponse | ConvertTo-Json -Compress)"
+              } catch {
+                  Write-Host "[ERROR] Model load failed: $($_.Exception.Message)"
+                  if ($_.ErrorDetails) {
+                      Write-Host "Error details: $($_.ErrorDetails.Message)"
+                  }
+              }
 
-      - name: Stop API Server
-        if: always()
-        run: |
-          # Kill process on port 8080
-          echo "Stopping API server..."
-          pids=$(lsof -ti :8080 2>/dev/null || true)
-          if [ -n "$pids" ]; then
-            echo "Killing PIDs: $pids"
-            kill -9 $pids 2>/dev/null || true
-            echo "✅ API server stopped"
-          else
-            echo "ℹ️ No server found on port 8080"
-          fi
+              # Wait for llamacpp backend initialization
+              Write-Host "Waiting 10 seconds for llamacpp backend initialization..."
+              Start-Sleep -Seconds 10
+
+              # Verify models
+              try {
+                  $models = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/models" -Method GET
+                  Write-Host "`n[OK] Available models:"
+                  $models.data | ForEach-Object { Write-Host "   - $($_.id)" }
+              } catch {
+                  Write-Host "[WARN] Could not list models: $($_.Exception.Message)"
+              }
+
+              # Start API server using gaia CLI (runs on default port 8080)
+              Write-Host "`n=== Starting GAIA API Server ==="
+              $apiJob = Start-Job -ScriptBlock {
+                  Set-Location $using:PWD
+                  & .\.venv\Scripts\Activate.ps1
+                  $env:AGENT_ROUTING_MODEL = "Qwen3-0.6B-GGUF"
+                  & gaia api start 2>&1
+              }
+              Write-Host "Started API server job with ID: $($apiJob.Id)"
+              $env:API_JOB_ID = $apiJob.Id
+
+              # Wait for API server to start
+              Write-Host "Waiting for API server to start..."
+              $maxWaitTime = 30
+              $waitTime = 0
+              $apiReady = $false
+
+              while ($waitTime -lt $maxWaitTime -and -not $apiReady) {
+                  Start-Sleep -Seconds 2
+                  $waitTime += 2
+
+                  try {
+                      $response = Invoke-RestMethod -Uri "http://localhost:8080/health" -Method GET -TimeoutSec 5
+                      Write-Host "[OK] API server is running and healthy"
+                      $apiReady = $true
+                  } catch {
+                      Write-Host "Waiting for API server... ($waitTime/$maxWaitTime seconds)"
+                  }
+              }
+
+              if (-not $apiReady) {
+                  Write-Host "[ERROR] API server failed to start after $maxWaitTime seconds"
+                  throw "API server failed to start"
+              }
+
+              # Run tests in same session while servers are running
+              Write-Host "`n=== Running API Integration Tests ==="
+              $env:CI = "true"
+              uv run pytest tests/test_api.py -v --tb=short --capture=no
+              $testExitCode = $LASTEXITCODE
+
+              Write-Host "`nTests completed with exit code: $testExitCode"
+
+              if ($testExitCode -ne 0) {
+                  throw "Tests failed with exit code $testExitCode"
+              }
+          } finally {
+              # Always cleanup servers
+              Write-Host "`n=== Stopping Servers ==="
+              if ($env:API_JOB_ID) {
+                  Write-Host "Stopping API server..."
+                  Stop-Job -Id $env:API_JOB_ID -ErrorAction SilentlyContinue
+                  Remove-Job -Id $env:API_JOB_ID -ErrorAction SilentlyContinue
+                  Write-Host "[OK] API server stopped"
+              }
+              if ($env:LEMONADE_JOB_ID) {
+                  Write-Host "Stopping Lemonade server..."
+                  Stop-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
+                  Remove-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
+                  Write-Host "[OK] Lemonade server stopped"
+              }
+          }
 
       - name: Upload API Server Logs
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
           name: api-server-logs
           path: |
             gaia.api.log
             gaia_api.log
+            *.log
