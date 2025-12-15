@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: MIT
 """Language-specific prompt modules for Code Agent."""
 
+from .nextjs_prompt import NEXTJS_PROMPT
 from .python_prompt import get_python_prompt
-from .typescript_prompt import get_typescript_prompt
 
 __all__ = [
     "get_python_prompt",
-    "get_typescript_prompt",
+    "NEXTJS_PROMPT",
 ]

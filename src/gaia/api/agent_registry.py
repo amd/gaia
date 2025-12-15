@@ -30,13 +30,14 @@ logger = logging.getLogger(__name__)
 # These are the "models" exposed in /v1/models and selectable in VSCode
 AGENT_MODELS = {
     "gaia-code": {
-        "class_name": "gaia.agents.code.agent.CodeAgent",
+        "class_name": "gaia.agents.routing.agent.RoutingAgent",
         "init_params": {
+            "api_mode": True,  # Skip interactive questions, use defaults/best-guess
             "silent_mode": True,
             "streaming": False,
             "max_steps": 100,
         },
-        "description": "Autonomous Python coding agent with planning, generation, and testing",
+        "description": "Intelligent routing agent that detects language/project type and routes to CodeAgent",
     }
 }
 
@@ -56,7 +57,6 @@ def _apply_env_overrides():
     debug = os.environ.get("GAIA_API_DEBUG") == "1"
     show_prompts = os.environ.get("GAIA_API_SHOW_PROMPTS") == "1"
     streaming = os.environ.get("GAIA_API_STREAMING") == "1"
-    step_through = os.environ.get("GAIA_API_STEP_THROUGH") == "1"
 
     # Apply overrides to all agents
     for model_id, config in AGENT_MODELS.items():
@@ -75,10 +75,6 @@ def _apply_env_overrides():
         if streaming:
             init_params["streaming"] = True
             logger.info(f"Streaming enabled for {model_id}")
-
-        if step_through:
-            init_params["step_through"] = True
-            logger.info(f"Step-through mode enabled for {model_id}")
 
 
 # Apply environment overrides at module import time

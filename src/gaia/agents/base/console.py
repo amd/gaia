@@ -28,6 +28,18 @@ except ImportError:
 MAX_DISPLAY_LINE_LENGTH = 120
 
 
+# ANSI Color Codes for fallback when Rich is not available
+ANSI_RESET = "\033[0m"
+ANSI_BOLD = "\033[1m"
+ANSI_DIM = "\033[90m"  # Dark Gray
+ANSI_RED = "\033[91m"
+ANSI_GREEN = "\033[92m"
+ANSI_YELLOW = "\033[93m"
+ANSI_BLUE = "\033[94m"
+ANSI_MAGENTA = "\033[95m"
+ANSI_CYAN = "\033[96m"
+
+
 class OutputHandler(ABC):
     """
     Abstract base class for handling agent output.
@@ -135,6 +147,21 @@ class OutputHandler(ABC):
     @abstractmethod
     def print_completion(self, steps_taken: int, steps_limit: int):
         """Print completion summary."""
+        ...
+
+    @abstractmethod
+    def print_step_paused(self, description: str):
+        """Print step paused message."""
+        ...
+
+    @abstractmethod
+    def print_command_executing(self, command: str):
+        """Print command executing message."""
+        ...
+
+    @abstractmethod
+    def print_agent_selected(self, agent_name: str, language: str, project_type: str):
+        """Print agent selected message."""
         ...
 
     # === Optional Methods (with default no-op implementations) ===
@@ -297,6 +324,22 @@ class AgentConsole(OutputHandler):
         self._last_preview_update_time = 0  # Throttle preview updates
         self._preview_update_interval = 0.25  # Minimum seconds between updates
 
+    def print(self, *args, **kwargs):
+        """
+        Print method that delegates to Rich Console or standard print.
+
+        This allows code to call console.print() directly on AgentConsole instances.
+
+        Args:
+            *args: Arguments to print
+            **kwargs: Keyword arguments (style, etc.) for Rich Console
+        """
+        if self.rich_available and self.console:
+            self.console.print(*args, **kwargs)
+        else:
+            # Fallback to standard print
+            print(*args, **kwargs)
+
     # Implementation of OutputHandler abstract methods
 
     def pretty_print_json(self, data: Dict[str, Any], title: str = None) -> None:
@@ -373,6 +416,22 @@ class AgentConsole(OutputHandler):
             self.console.print(f"\n[bold blue]{text}[/bold blue]")
         else:
             print(f"\n{text}")
+
+    def print_step_paused(self, description: str) -> None:
+        """
+        Print step paused message.
+
+        Args:
+            description: Description of the step being paused after
+        """
+        if self.rich_available:
+            self.console.print(
+                f"\n[bold yellow]⏸️  Paused after step:[/bold yellow] {description}"
+            )
+            self.console.print("Press Enter to continue, or 'n'/'q' to stop...")
+        else:
+            print(f"\n⏸️  Paused after step: {description}")
+            print("Press Enter to continue, or 'n'/'q' to stop...")
 
     def print_processing_start(self, query: str, max_steps: int) -> None:
         """
@@ -523,6 +582,100 @@ class AgentConsole(OutputHandler):
             self.rprint(f"[cyan]{progress_str}[/cyan] {progress_bar}")
         else:
             print(f"{progress_str} {progress_bar}")
+
+    def print_checklist(self, items: List[Any], current_idx: int) -> None:
+        """Print the checklist with current item highlighted.
+
+        Args:
+            items: List of checklist items (must have .description attribute)
+            current_idx: Index of the item currently being executed (0-based)
+        """
+        if self.rich_available:
+            self.console.print("\n[bold magenta]📋 EXECUTION PLAN[/bold magenta]")
+            self.console.print("=" * 60, style="dim")
+
+            for i, item in enumerate(items):
+                desc = getattr(item, "description", str(item))
+
+                if i < current_idx:
+                    # Completed
+                    self.console.print(f"  [green]✓ {desc}[/green]")
+                elif i == current_idx:
+                    # Current
+                    self.console.print(f"  [bold blue]➜ {desc}[/bold blue]")
+                else:
+                    # Pending
+                    self.console.print(f"  [dim]○ {desc}[/dim]")
+
+            self.console.print("=" * 60, style="dim")
+            self.console.print("")
+        else:
+            print("\n" + "=" * 60)
+            print(f"{ANSI_BOLD}📋 EXECUTION PLAN{ANSI_RESET}")
+            print("=" * 60)
+
+            for i, item in enumerate(items):
+                desc = getattr(item, "description", str(item))
+                if i < current_idx:
+                    print(f"  {ANSI_GREEN}✓ {desc}{ANSI_RESET}")
+                elif i == current_idx:
+                    print(f"  {ANSI_BLUE}{ANSI_BOLD}➜ {desc}{ANSI_RESET}")
+                else:
+                    print(f"  {ANSI_DIM}○ {desc}{ANSI_RESET}")
+
+            print("=" * 60 + "\n")
+
+    def print_checklist_reasoning(self, reasoning: str) -> None:
+        """
+        Print checklist reasoning.
+
+        Args:
+            reasoning: The reasoning text to display
+        """
+        if self.rich_available:
+            self.console.print("\n[bold]📝 CHECKLIST REASONING[/bold]")
+            self.console.print("=" * 60, style="dim")
+            self.console.print(f"{reasoning}")
+            self.console.print("=" * 60, style="dim")
+            self.console.print("")
+        else:
+            print("\n" + "=" * 60)
+            print(f"{ANSI_BOLD}📝 CHECKLIST REASONING{ANSI_RESET}")
+            print("=" * 60)
+            print(f"{reasoning}")
+            print("=" * 60 + "\n")
+
+    def print_command_executing(self, command: str) -> None:
+        """
+        Print command executing message.
+
+        Args:
+            command: The command being executed
+        """
+        if self.rich_available:
+            self.console.print(f"\n[bold]Executing Command:[/bold] {command}")
+        else:
+            print(f"\nExecuting Command: {command}")
+
+    def print_agent_selected(
+        self, agent_name: str, language: str, project_type: str
+    ) -> None:
+        """
+        Print agent selected message.
+
+        Args:
+            agent_name: The name of the selected agent
+            language: The detected programming language
+            project_type: The detected project type
+        """
+        if self.rich_available:
+            self.console.print(
+                f"[bold]🤖 Agent Selected:[/bold] [blue]{agent_name}[/blue] (language={language}, project_type={project_type})\n"
+            )
+        else:
+            print(
+                f"{ANSI_BOLD}🤖 Agent Selected:{ANSI_RESET} {ANSI_BLUE}{agent_name}{ANSI_RESET} (language={language}, project_type={project_type})\n"
+            )
 
     def print_tool_usage(self, tool_name: str) -> None:
         """
@@ -1256,6 +1409,21 @@ class SilentConsole(OutputHandler):
         """No-op implementation."""
 
     def print_plan(self, plan: List[Any], current_step: int = None):
+        """No-op implementation."""
+
+    def print_step_paused(self, description: str):
+        """No-op implementation."""
+
+    def print_checklist(self, items: List[Any], current_idx: int):
+        """No-op implementation."""
+
+    def print_checklist_reasoning(self, reasoning: str):
+        """No-op implementation."""
+
+    def print_command_executing(self, command: str):
+        """No-op implementation."""
+
+    def print_agent_selected(self, agent_name: str, language: str, project_type: str):
         """No-op implementation."""
 
     def print_tool_usage(self, tool_name: str):

@@ -105,6 +105,9 @@ class Agent(abc.ABC):
         Note: Uses local LLM server by default unless use_claude or use_chatgpt is True.
         """
         self.error_history = []  # Store error history for learning
+        self.conversation_history = (
+            []
+        )  # Store conversation history for session persistence
         self.max_steps = max_steps
         self.debug_prompts = debug_prompts
         self.show_prompts = show_prompts  # Separate flag for displaying prompts
@@ -277,9 +280,6 @@ class Agent(abc.ABC):
             r"```(?:json)?\s*(.*?)\s*```",  # Standard code block
             r"`json\s*(.*?)\s*`",  # Single backtick with json tag
             r"<json>\s*(.*?)\s*</json>",  # XML-style tags
-            r'\{\s*"thought".*\}',  # Direct JSON object starting with thought
-            r'\{\s*"tool".*\}',  # Direct JSON object starting with tool
-            r'\{\s*"answer".*\}',  # Direct JSON object starting with answer
         ]
 
         for pattern in json_patterns:
@@ -295,23 +295,44 @@ class Agent(abc.ABC):
                 except json.JSONDecodeError:
                     continue
 
-        # Strategy 2: Try to fix common JSON format issues and parse again
-        fixed_response = response
-        # Replace single quotes with double quotes
-        fixed_response = re.sub(r"'([^']*)':", r'"\1":', fixed_response)
-        # Fix trailing commas in objects and arrays
-        fixed_response = re.sub(r",\s*}", "}", fixed_response)
-        fixed_response = re.sub(r",\s*]", "]", fixed_response)
+        start_idx = response.find("{")
+        if start_idx >= 0:
+            bracket_count = 0
+            in_string = False
+            escape_next = False
 
-        try:
-            # Try to find JSON object in the fixed text
-            match = re.search(r"(\{.*\})", fixed_response, re.DOTALL)
-            if match:
-                result = json.loads(match.group(1))
-                logger.debug("Successfully extracted JSON after fixing format issues")
-                return result
-        except json.JSONDecodeError as e:
-            logger.debug(f"Regex extraction failed to parse JSON: {e}")
+            for i, char in enumerate(response[start_idx:], start_idx):
+                if escape_next:
+                    escape_next = False
+                    continue
+                if char == "\\":
+                    escape_next = True
+                    continue
+                if char == '"' and not escape_next:
+                    in_string = not in_string
+                if not in_string:
+                    if char == "{":
+                        bracket_count += 1
+                    elif char == "}":
+                        bracket_count -= 1
+                        if bracket_count == 0:
+                            # Found complete JSON object
+                            try:
+                                extracted = response[start_idx : i + 1]
+                                # Fix common issues before parsing
+                                fixed = re.sub(r",\s*}", "}", extracted)
+                                fixed = re.sub(r",\s*]", "]", fixed)
+                                result = json.loads(fixed)
+                                # Ensure tool_args exists if tool is present
+                                if "tool" in result and "tool_args" not in result:
+                                    result["tool_args"] = {}
+                                logger.debug(
+                                    "Successfully extracted JSON using bracket-matching"
+                                )
+                                return result
+                            except json.JSONDecodeError as e:
+                                logger.debug(f"Bracket-matched JSON parse failed: {e}")
+                                break
 
         return None
 
@@ -584,16 +605,42 @@ class Agent(abc.ABC):
             return result
 
         if tool_match:
-            tool_args_match = re.search(r'"tool_args":\s*(\{.*\})', response, re.DOTALL)
             tool_args = {}
 
-            if tool_args_match:
-                try:
-                    tool_args = json.loads(tool_args_match.group(1))
-                except json.JSONDecodeError as e:
-                    error_msg = f"Failed to parse tool_args JSON: {str(e)}, content: {tool_args_match.group(1)[:100]}..."
-                    logger.error(error_msg)
-                    self.error_history.append(error_msg)
+            tool_args_start = response.find('"tool_args"')
+
+            if tool_args_start >= 0:
+                # Find the opening brace after "tool_args":
+                brace_start = response.find("{", tool_args_start)
+                if brace_start >= 0:
+                    # Use bracket-matching to find the complete object
+                    bracket_count = 0
+                    in_string = False
+                    escape_next = False
+                    for i, char in enumerate(response[brace_start:], brace_start):
+                        if escape_next:
+                            escape_next = False
+                            continue
+                        if char == "\\":
+                            escape_next = True
+                            continue
+                        if char == '"' and not escape_next:
+                            in_string = not in_string
+                        if not in_string:
+                            if char == "{":
+                                bracket_count += 1
+                            elif char == "}":
+                                bracket_count -= 1
+                                if bracket_count == 0:
+                                    # Found complete tool_args object
+                                    tool_args_str = response[brace_start : i + 1]
+                                    try:
+                                        tool_args = json.loads(tool_args_str)
+                                    except json.JSONDecodeError as e:
+                                        error_msg = f"Failed to parse tool_args JSON: {str(e)}, content: {tool_args_str[:100]}..."
+                                        logger.error(error_msg)
+                                        self.error_history.append(error_msg)
+                                    break
 
             result = {
                 "thought": thought_match.group(1) if thought_match else "",
@@ -931,29 +978,6 @@ class Agent(abc.ABC):
         half = max_chars // 2 - 20
         return f"{content_str[:half]}\n...[truncated]...\n{content_str[-half:]}"
 
-    def _add_format_reminder(self) -> str:
-        """
-        Add JSON format reminders to reinforce proper response structure.
-
-        Returns:
-            Format reminder string for prompts
-        """
-        # Short reminder for standard prompts
-        reminder = """
-IMPORTANT: Your response must be a single valid JSON object.
-Use double quotes for keys and string values. Ensure all fields are present.
-DO NOT include text, markdown, or explanations outside the JSON structure.
-NEVER wrap your response in code blocks or backticks.
-
-CONTINUING WORK: When a plan completes, evaluate if more work is needed:
-- If more work is needed (validation, testing, fixing), create a NEW plan
-- Only provide an "answer" when ALL work is truly complete
-- Format for new plan: {{"thought": "...", "goal": "...", "plan": [...]}}
-- Format for completion: {{"thought": "...", "goal": "...", "answer": "..."}}
-        """
-
-        return reminder
-
     def process_query(
         self,
         user_input: str,
@@ -982,6 +1006,14 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
         conversation = []
         # Build messages array for chat completions
         messages = []
+
+        # Prepopulate with conversation history if available (for session persistence)
+        if hasattr(self, "conversation_history") and self.conversation_history:
+            messages.extend(self.conversation_history)
+            logger.debug(
+                f"Loaded {len(self.conversation_history)} messages from conversation history"
+            )
+
         steps_taken = 0
         final_answer = None
         error_count = 0
@@ -1019,9 +1051,6 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                 "   2. Include both a plan and a 'tool' field, the 'tool' field MUST match the tool in the first step of the plan.\n"
                 "   3. Create plans with clear, executable steps that include both the tool name and the exact arguments for each step.\n"
             )
-
-        # Apply format reminders to the prompt
-        prompt += self._add_format_reminder()
 
         logger.debug(f"Input prompt: {prompt[:200]}...")
 
@@ -1163,13 +1192,27 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                         self._create_tool_message(tool_name, truncated_result)
                     )
 
-                    # Check for error
-                    if (
-                        isinstance(tool_result, dict)
-                        and tool_result.get("status") == "error"
-                    ):
+                    # Check for error (support multiple error formats)
+                    is_error = isinstance(tool_result, dict) and (
+                        tool_result.get("status") == "error"  # Standard format
+                        or tool_result.get("success")
+                        is False  # Tools returning success: false
+                        or tool_result.get("has_errors") is True  # CLI tools
+                        or tool_result.get("return_code", 0) != 0  # Build failures
+                    )
+
+                    if is_error:
                         error_count += 1
-                        last_error = tool_result.get("error")
+                        # Extract error message from various formats
+                        last_error = (
+                            tool_result.get("error")
+                            or tool_result.get("stderr")
+                            or tool_result.get("hint")  # Many tools provide hints
+                            or tool_result.get(
+                                "suggested_fix"
+                            )  # Some tools provide fix suggestions
+                            or f"Command failed with return code {tool_result.get('return_code')}"
+                        )
                         logger.warning(
                             f"Tool execution error in plan (count: {error_count}): {last_error}"
                         )
@@ -1230,8 +1273,7 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                                     f"- Summarize what was successfully accomplished\n"
                                     f"- Clearly state if anything remains incomplete or if errors occurred\n"
                                     f"- If the task is fully complete, state that clearly\n\n"
-                                    f'Provide {{"thought": "...", "goal": "...", "answer": "..."}}\n\n'
-                                    f"{self._add_format_reminder()}"
+                                    f'Provide {{"thought": "...", "goal": "...", "answer": "..."}}'
                                 )
                             else:
                                 completion_message = (
@@ -1244,8 +1286,7 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                                     "- If critical validation/testing is needed, you may create ONE more plan\n"
                                     "- Only create additional plans if absolutely necessary\n\n"
                                     'If more work needed: Provide a NEW plan with {{"thought": "...", "goal": "...", "plan": [...]}}\n'
-                                    'If everything is complete: Provide {{"thought": "...", "goal": "...", "answer": "..."}}\n\n'
-                                    f"{self._add_format_reminder()}"
+                                    'If everything is complete: Provide {{"thought": "...", "goal": "...", "answer": "..."}}'
                                 )
 
                             # Debug logging - only show if truncation happened
@@ -1283,9 +1324,6 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                         "Please interpret this step and decide what tool to use next.\n\n"
                         f"Task: {user_input}\n\n"
                     )
-
-                    # Apply format reminders to the prompt
-                    prompt += self._add_format_reminder()
             else:
                 # Normal execution flow - query the LLM
                 if self.execution_state == self.STATE_DIRECT_EXECUTION:
@@ -1539,9 +1577,6 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                     "Create a detailed plan with all necessary steps in JSON format, including exact tool names and arguments.\n"
                     "Respond with your reasoning, plan, and the first tool to use."
                 )
-
-                # Apply format reminders to the prompt
-                plan_prompt = self._add_format_reminder()
 
                 # Store the plan prompt in conversation if debug is enabled
                 if self.debug_prompts:
@@ -1807,13 +1842,22 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                     # The tool result has already been added to messages, so the next iteration
                     # will call the LLM with that result
 
-                # Check if tool execution resulted in an error
-                if (
-                    isinstance(tool_result, dict)
-                    and tool_result.get("status") == "error"
-                ):
+                # Check if tool execution resulted in an error (support multiple error formats)
+                is_error = isinstance(tool_result, dict) and (
+                    tool_result.get("status") == "error"
+                    or tool_result.get("success") is False
+                    or tool_result.get("has_errors") is True
+                    or tool_result.get("return_code", 0) != 0
+                )
+                if is_error:
                     error_count += 1
-                    last_error = tool_result.get("error")
+                    last_error = (
+                        tool_result.get("error")
+                        or tool_result.get("stderr")
+                        or tool_result.get("hint")
+                        or tool_result.get("suggested_fix")
+                        or f"Command failed with return code {tool_result.get('return_code')}"
+                    )
                     logger.warning(
                         f"Tool execution error in plan (count: {error_count}): {last_error}"
                     )

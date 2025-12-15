@@ -6,10 +6,11 @@ Tests for Chat Agent with RAG capabilities.
 
 import tempfile
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import pytest
 
-from gaia.agents.chat.agent import ChatAgent
+from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
 
 class TestChatAgent:
@@ -32,10 +33,19 @@ class TestChatAgent:
     @pytest.fixture
     def agent(self):
         """Create Chat Agent instance."""
-        agent = ChatAgent(silent_mode=True, debug=False, max_steps=5)
+        agent = ChatAgent(ChatAgentConfig(silent_mode=True, debug=False, max_steps=5))
         yield agent
         # Cleanup
         agent.stop_watching()
+
+    @pytest.fixture
+    def mock_llm_response(self):
+        """Create a mock LLM response for testing without real LLM server."""
+        mock_response = Mock()
+        mock_response.text = "Mocked response for testing"
+        mock_response.stats = {"tokens": 50}
+        mock_response.tool_calls = []
+        return mock_response
 
     def test_agent_initialization(self, agent):
         """Test agent initializes correctly."""
@@ -43,23 +53,26 @@ class TestChatAgent:
         assert agent.rag is not None
         assert len(agent.indexed_files) == 0
 
-    def test_list_indexed_documents(self, agent):
+    def test_list_indexed_documents(self, agent, mock_llm_response):
         """Test listing indexed documents."""
-        result = agent.process_query("List all indexed documents")
-        assert result["status"] in ["success", "incomplete"]
-        assert "result" in result
+        with patch.object(agent.chat, "send_messages", return_value=mock_llm_response):
+            result = agent.process_query("List all indexed documents")
+            assert result["status"] in ["success", "incomplete"]
+            assert "result" in result
 
-    def test_rag_status(self, agent):
+    def test_rag_status(self, agent, mock_llm_response):
         """Test RAG system status."""
-        result = agent.process_query("Show RAG system status")
-        assert result["status"] in ["success", "incomplete"]
-        assert "result" in result
+        with patch.object(agent.chat, "send_messages", return_value=mock_llm_response):
+            result = agent.process_query("Show RAG system status")
+            assert result["status"] in ["success", "incomplete"]
+            assert "result" in result
 
-    def test_query_without_documents(self, agent):
+    def test_query_without_documents(self, agent, mock_llm_response):
         """Test querying when no documents are indexed."""
-        result = agent.process_query("What is machine learning?")
-        assert result["status"] in ["success", "incomplete"]
-        # Should handle gracefully
+        with patch.object(agent.chat, "send_messages", return_value=mock_llm_response):
+            result = agent.process_query("What is machine learning?")
+            assert result["status"] in ["success", "incomplete"]
+            # Should handle gracefully
 
     @pytest.mark.parametrize(
         "query,expected_keys",
@@ -84,7 +97,11 @@ class TestChatAgentEval:
     def agent_with_docs(self, temp_dir):
         """Create agent with test documents."""
         # This would be expanded with actual test documents
-        agent = ChatAgent(silent_mode=True, debug=False, rag_documents=[], max_steps=10)
+        agent = ChatAgent(
+            ChatAgentConfig(
+                silent_mode=True, debug=False, rag_documents=[], max_steps=10
+            )
+        )
         yield agent
         agent.stop_watching()
 
@@ -148,7 +165,7 @@ class TestChatAgentTools:
     @pytest.fixture
     def agent(self):
         """Create Chat Agent instance."""
-        agent = ChatAgent(silent_mode=True, debug=False, max_steps=5)
+        agent = ChatAgent(ChatAgentConfig(silent_mode=True, debug=False, max_steps=5))
         yield agent
         agent.stop_watching()
 
@@ -339,7 +356,7 @@ class TestChatAgentSummarization:
     @pytest.fixture
     def agent(self):
         """Create Chat Agent instance."""
-        agent = ChatAgent(silent_mode=True, debug=False, max_steps=5)
+        agent = ChatAgent(ChatAgentConfig(silent_mode=True, debug=False, max_steps=5))
         yield agent
         agent.stop_watching()
 
@@ -382,7 +399,7 @@ class TestChatAgentSessions:
     @pytest.fixture
     def agent(self):
         """Create Chat Agent instance."""
-        agent = ChatAgent(silent_mode=True, debug=False, max_steps=5)
+        agent = ChatAgent(ChatAgentConfig(silent_mode=True, debug=False, max_steps=5))
         yield agent
         agent.stop_watching()
 
@@ -411,11 +428,103 @@ class TestChatAgentSessions:
         agent.save_current_session()
 
         # Create a new agent and load the session
-        new_agent = ChatAgent(silent_mode=True)
+        new_agent = ChatAgent(ChatAgentConfig(silent_mode=True))
         success = new_agent.load_session(session_id)
 
         assert success
         assert new_agent.current_session.session_id == session_id
+
+        new_agent.stop_watching()
+
+    def test_chat_history_persistence(self, agent):
+        """Test that chat history is persisted and restored across sessions."""
+        # Create session and add conversation history
+        if not agent.current_session:
+            agent.current_session = agent.session_manager.create_session()
+
+        # Simulate a conversation by adding messages directly
+        agent.conversation_history.append(
+            {"role": "user", "content": "My name is Alice"}
+        )
+        agent.conversation_history.append(
+            {"role": "assistant", "content": "Nice to meet you, Alice!"}
+        )
+        agent.conversation_history.append({"role": "user", "content": "What is 2+2?"})
+        agent.conversation_history.append(
+            {"role": "assistant", "content": "The answer is 4."}
+        )
+
+        session_id = agent.current_session.session_id
+        agent.save_current_session()
+
+        # Verify chat_history was saved to session
+        assert len(agent.current_session.chat_history) == 4
+
+        # Create a new agent and load the session
+        new_agent = ChatAgent(ChatAgentConfig(silent_mode=True))
+        success = new_agent.load_session(session_id)
+
+        assert success
+        # Verify conversation_history was restored
+        assert len(new_agent.conversation_history) == 4
+        assert new_agent.conversation_history[0] == {
+            "role": "user",
+            "content": "My name is Alice",
+        }
+        assert new_agent.conversation_history[1] == {
+            "role": "assistant",
+            "content": "Nice to meet you, Alice!",
+        }
+
+        new_agent.stop_watching()
+
+    def test_chat_history_restored_after_reload(self, agent):
+        """Verify chat history is restored and available after session reload.
+
+        This test verifies the critical bug fix: chat history persistence.
+        The conversation_history is used by process_query() to prepopulate
+        the messages array sent to the LLM (see base/agent.py:986-991).
+        """
+        # Create session with history
+        if not agent.current_session:
+            agent.current_session = agent.session_manager.create_session()
+
+        # Add conversation history
+        agent.conversation_history = [
+            {"role": "user", "content": "My name is Alice"},
+            {"role": "assistant", "content": "Nice to meet you, Alice!"},
+            {"role": "user", "content": "Remember my favorite color is blue"},
+            {"role": "assistant", "content": "Got it! Your favorite color is blue."},
+        ]
+        session_id = agent.current_session.session_id
+        agent.save_current_session()
+
+        # Verify session file has the history
+        session_from_disk = agent.session_manager.load_session(session_id)
+        assert len(session_from_disk.chat_history) == 4
+
+        # Load in new agent instance (simulating restart)
+        new_agent = ChatAgent(ChatAgentConfig(silent_mode=True, max_steps=1))
+        new_agent.load_session(session_id)
+
+        # Verify conversation history was restored
+        assert len(new_agent.conversation_history) == 4
+        assert new_agent.conversation_history[0] == {
+            "role": "user",
+            "content": "My name is Alice",
+        }
+        assert new_agent.conversation_history[1] == {
+            "role": "assistant",
+            "content": "Nice to meet you, Alice!",
+        }
+        assert new_agent.conversation_history[2] == {
+            "role": "user",
+            "content": "Remember my favorite color is blue",
+        }
+        assert new_agent.conversation_history[3] == {
+            "role": "assistant",
+            "content": "Got it! Your favorite color is blue.",
+        }
 
         new_agent.stop_watching()
 
@@ -427,7 +536,9 @@ class TestChatAgentPathValidation:
     def agent(self):
         """Create Chat Agent instance with restricted paths."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            agent = ChatAgent(silent_mode=True, debug=False, allowed_paths=[tmpdir])
+            agent = ChatAgent(
+                ChatAgentConfig(silent_mode=True, debug=False, allowed_paths=[tmpdir])
+            )
             yield agent, tmpdir
             agent.stop_watching()
 
@@ -450,7 +561,7 @@ class TestChatAgentCodeSupport:
     @pytest.fixture
     def agent(self):
         """Create Chat Agent instance."""
-        agent = ChatAgent(silent_mode=True, debug=False, max_steps=5)
+        agent = ChatAgent(ChatAgentConfig(silent_mode=True, debug=False, max_steps=5))
         yield agent
         agent.stop_watching()
 

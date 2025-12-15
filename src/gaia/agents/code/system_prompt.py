@@ -9,13 +9,14 @@ based on the language and project_type provided by RoutingAgent.
 
 from typing import Optional
 
+from .prompts.base_prompt import get_base_prompt
+from .prompts.nextjs_prompt import NEXTJS_PROMPT
 from .prompts.python_prompt import get_python_prompt
-from .prompts.typescript_prompt import get_typescript_prompt
 
 
 def get_system_prompt(
     language: str = "python",
-    project_type: str = "script",
+    project_type: str = "script",  # pylint: disable=unused-argument
     gaia_md_path: Optional[str] = None,
 ) -> str:
     """Get the appropriate system prompt based on language and project type.
@@ -32,8 +33,9 @@ def get_system_prompt(
         Complete system prompt string (base + language-specific instructions)
     """
     if language == "typescript":
-        # TypeScript prompt will internally select frontend/backend based on project_type
-        return get_typescript_prompt(gaia_md_path, project_type)
+        # All TypeScript projects use Next.js unified approach
+        base = get_base_prompt(gaia_md_path)
+        return base + NEXTJS_PROMPT
     else:
         # Python prompt (default)
         return get_python_prompt(gaia_md_path)

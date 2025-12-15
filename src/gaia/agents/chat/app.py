@@ -924,6 +924,16 @@ def interactive_mode(agent: ChatAgent):
             result = agent.process_query(user_input)
             # The answer is already streamed by the agent, no need to print it again
 
+            # Update conversation history for session persistence
+            if hasattr(agent, "conversation_history"):
+                agent.conversation_history.append(
+                    {"role": "user", "content": user_input}
+                )
+                if result.get("result"):
+                    agent.conversation_history.append(
+                        {"role": "assistant", "content": result["result"]}
+                    )
+
             if result.get("error_count", 0) > 0:
                 print(f"\n⚠️  {result['error_count']} error(s) occurred")
 

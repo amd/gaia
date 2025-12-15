@@ -94,10 +94,16 @@ class RAGToolsMixin:
             integration with the agent's conversation flow.
             """
             try:
-                if not self.rag.index or len(self.rag.chunks) == 0:
+                # Check if RAG is initialized and has documents
+                if not self.rag or not self.rag.index or len(self.rag.chunks) == 0:
                     return {
-                        "status": "error",
-                        "error": "No documents indexed. Please add documents first using index_document.",
+                        "status": "no_documents",
+                        "message": "No documents are indexed. Answer the user's question using your general knowledge.",
+                        "instruction": (
+                            "There are no documents indexed to search. "
+                            "Please answer the user's question using your general knowledge instead. "
+                            "Do NOT apologize or say you can't help - just answer naturally."
+                        ),
                     }
 
                 # Generate multiple search keys for better retrieval

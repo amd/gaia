@@ -3,8 +3,20 @@ FROM python:3.10-slim
 ARG TZ
 ENV TZ="$TZ"
 
-# Install basic development tools and iptables/ipset
+# Pin Node.js version for consistency
+ARG NODE_MAJOR=20
+
+# Install Node.js and basic development tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
+  ca-certificates \
+  curl \
+  gnupg \
+  && mkdir -p /etc/apt/keyrings \
+  && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+  && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends \
+  nodejs \
   less \
   git \
   procps \
@@ -13,23 +25,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   zsh \
   man-db \
   unzip \
-  gnupg2 \
   gh \
-  iptables \
-  ipset \
-  iproute2 \
-  dnsutils \
-  aggregate \
   jq \
   nano \
   vim \
   wget \
-  curl \
   build-essential \
   libportaudio2 \
   portaudio19-dev \
   ffmpeg \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install Claude CLI (from claude.ai)
+RUN curl -fsSL https://claude.ai/install.sh | bash && \
+  # Make sure it's available in the system PATH
+  if [ -f "$HOME/.local/bin/claude" ]; then \
+    cp "$HOME/.local/bin/claude" /usr/local/bin/claude && \
+    chmod +x /usr/local/bin/claude; \
+  fi
 
 # Create gaia user
 ARG USERNAME=gaia
@@ -64,9 +77,9 @@ USER $USERNAME
 # Set the default shell to zsh rather than sh
 ENV SHELL=/bin/zsh
 
-# Set the default editor and visual
-ENV EDITOR=nano
-ENV VISUAL=nano
+# Set the default editor and visual (VS Code CLI with --wait for proper integration)
+ENV EDITOR="code --wait"
+ENV VISUAL="code --wait"
 
 # Default powerline10k theme
 ARG ZSH_IN_DOCKER_VERSION=1.2.0
@@ -77,13 +90,5 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
   -a "source /usr/share/doc/fzf/examples/key-bindings.zsh" \
   -a "source /usr/share/doc/fzf/examples/completion.zsh" \
   -a "export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
+  -a "export PATH=\"\$HOME/.local/bin:\$PATH\"" \
   -x
-
-# Copy and set up firewall script
-USER root
-COPY init-firewall.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/init-firewall.sh && \
-  echo "gaia ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/gaia-firewall && \
-  chmod 0440 /etc/sudoers.d/gaia-firewall
-
-USER $USERNAME

@@ -86,7 +86,7 @@ def check_lemonade_health(host=None, port=None):
     log = get_logger(__name__)
 
     # Use provided host/port, or get from env var, or use defaults
-    env_host, env_port = _get_lemonade_config()
+    env_host, env_port, _ = _get_lemonade_config()
     host = host if host is not None else env_host
     port = port if port is not None else env_port
 
@@ -113,6 +113,17 @@ def check_lemonade_health(host=None, port=None):
         return False
 
 
+def is_lemonade_installed() -> bool:
+    """Check if Lemonade server is installed by attempting to get its version.
+
+    Uses LemonadeClient.get_lemonade_version() which runs 'lemonade-server --version'.
+    Returns True if the version can be retrieved, False otherwise.
+    """
+    # Create a minimal client instance just to check version
+    client = LemonadeClient(verbose=False)
+    return client.get_lemonade_version() is not None
+
+
 def print_lemonade_error(for_code_agent=False):
     """Print informative error message when Lemonade is not running.
 
@@ -123,31 +134,46 @@ def print_lemonade_error(for_code_agent=False):
         "❌ Error: Lemonade server is not running or not accessible.", file=sys.stderr
     )
     print("", file=sys.stderr)
-    print(
-        "GAIA will automatically start Lemonade Server if installed.", file=sys.stderr
-    )
-    print("If auto-start fails, you can start it manually by:", file=sys.stderr)
-    print("  • Double-clicking the desktop shortcut, or", file=sys.stderr)
-    if for_code_agent:
-        print(
-            "  • Running: lemonade-server serve --ctx-size 32768",
-            file=sys.stderr,
-        )
-    else:
-        print("  • Running: lemonade-server serve", file=sys.stderr)
-    print("", file=sys.stderr)
-    if for_code_agent:
-        print(
-            "Note: GAIA requires larger context size (32768 tokens)",
-            file=sys.stderr,
-        )
+
+    # Check if lemonade-server is installed
+    if not is_lemonade_installed():
+        print("📥 Lemonade server is not installed on your system.", file=sys.stderr)
         print("", file=sys.stderr)
-    base_url = os.getenv("LEMONADE_BASE_URL", f"{DEFAULT_LEMONADE_URL}/api/v1")
-    print(
-        f"The server should be accessible at {base_url}/health",
-        file=sys.stderr,
-    )
-    print("Then try your command again.", file=sys.stderr)
+        print("To install Lemonade server:", file=sys.stderr)
+        print("  1. Visit: https://lemonade-server.ai", file=sys.stderr)
+        print("  2. Download the installer for your platform", file=sys.stderr)
+        print("  3. Run the installer and follow prompts", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("After installation, try your command again.", file=sys.stderr)
+    else:
+        print("Lemonade server is installed but not running.", file=sys.stderr)
+        print("", file=sys.stderr)
+        print(
+            "GAIA will automatically start Lemonade Server if installed.",
+            file=sys.stderr,
+        )
+        print("If auto-start fails, you can start it manually by:", file=sys.stderr)
+        print("  • Double-clicking the desktop shortcut, or", file=sys.stderr)
+        if for_code_agent:
+            print(
+                "  • Running: lemonade-server serve --ctx-size 32768",
+                file=sys.stderr,
+            )
+        else:
+            print("  • Running: lemonade-server serve", file=sys.stderr)
+        print("", file=sys.stderr)
+        if for_code_agent:
+            print(
+                "Note: GAIA requires larger context size (32768 tokens)",
+                file=sys.stderr,
+            )
+            print("", file=sys.stderr)
+        base_url = os.getenv("LEMONADE_BASE_URL", f"{DEFAULT_LEMONADE_URL}/api/v1")
+        print(
+            f"The server should be accessible at {base_url}/health",
+            file=sys.stderr,
+        )
+        print("Then try your command again.", file=sys.stderr)
 
 
 def initialize_lemonade_for_agent(
@@ -191,13 +217,13 @@ def initialize_lemonade_for_agent(
     log = get_logger(__name__)
 
     # Use provided host/port, or get from env var, or use defaults
-    env_host, env_port = _get_lemonade_config()
+    env_host, env_port, env_base_url = _get_lemonade_config()
     host = host if host is not None else env_host
     port = port if port is not None else env_port
 
     # Skip initialization if using external API
     if skip_if_external and (use_claude or use_chatgpt):
-        return True, f"http://{host}:{port}/api/v1", None
+        return True, env_base_url, None
 
     try:
         client = LemonadeClient(host=host, port=port, keep_alive=True, verbose=False)
@@ -212,14 +238,40 @@ def initialize_lemonade_for_agent(
                 print_lemonade_error(for_code_agent=(agent in ["code", "chat"]))
             return False, None, None
 
+        # For chat and code agents, check if context size is sufficient
+        # These agents require 32768 tokens and will fail mid-execution with
+        # cryptic errors if context is insufficient
+        required_ctx = 32768
+        if agent in ["code", "chat"] and status.context_size < required_ctx:
+            if not quiet:
+                print("")
+                print(
+                    f"❌ Insufficient context size for {agent} agent.", file=sys.stderr
+                )
+                print(
+                    f"   Current: {status.context_size} tokens, "
+                    f"Required: {required_ctx} tokens",
+                    file=sys.stderr,
+                )
+                print("", file=sys.stderr)
+                print("   To fix this issue:", file=sys.stderr)
+                print(
+                    "   1. Stop the Lemonade server (if running)",
+                    file=sys.stderr,
+                )
+                print(
+                    f"   2. Restart with: lemonade-server serve --ctx-size {required_ctx}",
+                    file=sys.stderr,
+                )
+                print("", file=sys.stderr)
+            return False, None, None
+
         # Get server version for logging/debugging
         server_version = client.get_lemonade_version()
 
         # Use the client's base_url which is configured for the correct API version
         base_url = client.base_url
 
-        # Warning for context size is already printed by initialize()
-        # Return True even if context size is small (warning was shown)
         return True, base_url, server_version
 
     except Exception as e:
@@ -612,7 +664,7 @@ async def async_main(action, **kwargs):
                 claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
                 base_url=kwargs.get(
                     "base_url",
-                    os.getenv("LEMONADE_BASE_URL", f"{DEFAULT_LEMONADE_URL}/api/v1"),
+                    os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL),
                 ),
                 model_id=kwargs.get("model", None),
                 max_steps=kwargs.get("max_steps", 100),
@@ -770,7 +822,7 @@ def main():
     parent_parser.add_argument(
         "--base-url",
         default=None,
-        help=f"Lemonade LLM server base URL (default: from LEMONADE_BASE_URL env or {DEFAULT_LEMONADE_URL}/api/v1)",
+        help=f"Lemonade LLM server base URL (default: from LEMONADE_BASE_URL env or {DEFAULT_LEMONADE_URL})",
     )
     parent_parser.add_argument(
         "--model",
@@ -1128,6 +1180,13 @@ def main():
         "--step-through",
         action="store_true",
         help="Enable step-through debugging mode (pause at each agent step)",
+    )
+    code_parser.add_argument(
+        "--path",
+        "-p",
+        type=str,
+        default=None,
+        help="Project directory path. Creates directory if it doesn't exist. All operations will use this as working directory.",
     )
     code_parser.set_defaults(action="code")
 
@@ -2079,6 +2138,26 @@ Examples:
     )
     mcp_docker_parser.add_argument(
         "--verbose", action="store_true", help="Enable verbose logging"
+    )
+
+    # Cache command (for Context7 cache management)
+    cache_parser = subparsers.add_parser(
+        "cache", help="Manage Context7 API cache and rate limiting"
+    )
+    cache_subparsers = cache_parser.add_subparsers(
+        dest="cache_action", help="Cache action to perform"
+    )
+
+    # Cache status command
+    _ = cache_subparsers.add_parser("status", help="Show cache and rate limiter status")
+
+    # Cache clear command
+    cache_clear_parser = cache_subparsers.add_parser("clear", help="Clear cached data")
+    cache_clear_parser.add_argument(
+        "--context7", action="store_true", help="Clear Context7 cache"
+    )
+    cache_clear_parser.add_argument(
+        "--all", action="store_true", help="Clear all caches"
     )
 
     args = parser.parse_args()
@@ -3981,6 +4060,11 @@ Let me know your answer!
         handle_mcp_command(args)
         return
 
+    # Handle Cache command
+    if args.action == "cache":
+        handle_cache_command(args)
+        return
+
     # Handle Blender command
     if args.action == "blender":
         handle_blender_command(args)
@@ -4229,6 +4313,26 @@ def handle_code_command(args):
     """
     log = get_logger(__name__)
 
+    # Set logging level to DEBUG if --debug flag is used
+    if getattr(args, "debug", False):
+        from gaia.logger import log_manager
+
+        # Set root logger level first to ensure all handlers process DEBUG messages
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)
+
+        # Update all existing loggers that start with "gaia"
+        for logger_name in list(log_manager.loggers.keys()):
+            if logger_name.startswith("gaia"):
+                log_manager.loggers[logger_name].setLevel(logging.DEBUG)
+
+        # Set default level for future loggers
+        log_manager.set_level("gaia", logging.DEBUG)
+
+        # Also ensure all handlers have DEBUG level
+        for handler in root_logger.handlers:
+            handler.setLevel(logging.DEBUG)
+
     if not CODE_AVAILABLE:
         log.error("Code agent is not available. Please check your installation.")
         return
@@ -4236,7 +4340,7 @@ def handle_code_command(args):
     # Get base_url from args or environment
     base_url = getattr(args, "base_url", None)
     if base_url is None:
-        base_url = os.getenv("LEMONADE_BASE_URL", f"{DEFAULT_LEMONADE_URL}/api/v1")
+        base_url = os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
 
     # Initialize Lemonade with code agent profile (32768 context)
     # Skip for remote servers (e.g., devtunnel URLs) or external APIs
@@ -4256,6 +4360,15 @@ def handle_code_command(args):
         # Import RoutingAgent for intelligent language detection
         from gaia.agents.routing.agent import RoutingAgent
 
+        # Handle --path argument
+        project_path = getattr(args, "path", None)
+        if project_path:
+            project_path = Path(project_path).expanduser().resolve()
+            # Create directory if it doesn't exist
+            project_path.mkdir(parents=True, exist_ok=True)
+            project_path = str(project_path)
+            log.debug(f"Using project path: {project_path}")
+
         # Get the query to analyze
         query = args.query if hasattr(args, "query") and args.query else None
 
@@ -4270,7 +4383,6 @@ def handle_code_command(args):
                 "use_claude": getattr(args, "use_claude", False),
                 "use_chatgpt": getattr(args, "use_chatgpt", False),
                 "streaming": getattr(args, "streaming", False),
-                "step_through": getattr(args, "step_through", False),
                 "base_url": getattr(args, "base_url", None),
             }
 
@@ -4288,7 +4400,6 @@ def handle_code_command(args):
                 use_claude=getattr(args, "use_claude", False),
                 use_chatgpt=getattr(args, "use_chatgpt", False),
                 streaming=getattr(args, "streaming", False),
-                step_through=getattr(args, "step_through", False),
                 base_url=getattr(args, "base_url", None),
             )
 
@@ -4328,6 +4439,7 @@ def handle_code_command(args):
                     # Process the query
                     result = agent.process_query(
                         query,
+                        workspace_root=project_path,
                         max_steps=getattr(args, "max_steps", 100),
                         trace=args.trace,
                     )
@@ -4353,8 +4465,10 @@ def handle_code_command(args):
         elif hasattr(args, "query") and args.query:
             result = agent.process_query(
                 args.query,
+                workspace_root=project_path,
                 max_steps=args.max_steps,
                 trace=args.trace,
+                step_through=getattr(args, "step_through", False),
             )
 
             # Output result
@@ -4396,6 +4510,7 @@ def handle_code_command(args):
                     # Process the query
                     result = agent.process_query(
                         query,
+                        workspace_root=project_path,
                         max_steps=getattr(args, "max_steps", 100),
                         trace=args.trace,
                     )
@@ -4900,7 +5015,90 @@ def handle_blender_command(args):
             )
 
     except Exception as e:
-        log.error(f"Error running Blender agent: {e}")
+        blender_log = get_logger(__name__)
+        blender_log.error(f"Error running Blender agent: {e}")
+        print(f"❌ Error: {e}")
+        sys.exit(1)
+
+
+def handle_cache_command(args):
+    """Handle the cache management command.
+
+    Args:
+        args: Parsed command-line arguments
+    """
+    if not hasattr(args, "cache_action") or args.cache_action is None:
+        print("❌ Error: No cache action specified")
+        print("Available actions: status, clear")
+        print("Run 'gaia cache --help' for more information")
+        return
+
+    from gaia.mcp.context7_cache import Context7Cache, Context7RateLimiter
+    from gaia.mcp.external_services import Context7Service
+
+    try:
+        if args.cache_action == "status":
+            # Check Context7 availability first
+            is_available = Context7Service.check_availability()
+
+            print("\n=== Context7 Service Status ===")
+            if is_available:
+                print("✓ Context7 is AVAILABLE (npx found, service working)")
+            else:
+                print("✗ Context7 is UNAVAILABLE (npx not found or service failed)")
+                print("  The Code Agent will use embedded knowledge instead.")
+
+            # Show cache and rate limiter status
+            cache = Context7Cache()
+            rate_limiter = Context7RateLimiter()
+
+            status = rate_limiter.get_status()
+
+            print("\n=== Context7 Cache Status ===")
+            print(f"Cache directory: {cache.cache_dir}")
+            # Use glob to count library ID files since _load_json is protected
+            library_id_count = (
+                len(list(cache.cache_dir.glob("library_*.json")))
+                if hasattr(cache, "cache_dir")
+                else 0
+            )
+            print(f"Library IDs cached: {library_id_count}")
+
+            # Count documentation files
+            doc_count = len(list(cache.docs_dir.glob("*.json")))
+            print(f"Documentation entries: {doc_count}")
+
+            print("\n=== Rate Limiter Status ===")
+            print(
+                f"Tokens available: {status['tokens_available']}/{status['max_tokens']}"
+            )
+            print(f"Circuit breaker: {'OPEN' if status['circuit_open'] else 'CLOSED'}")
+            print(f"Consecutive failures: {status['consecutive_failures']}")
+
+            if status["tokens_available"] < 5:
+                print("\n⚠️  Warning: Low token count. Rate limiting may occur soon.")
+
+            if not is_available:
+                print("\n💡 To enable Context7:")
+                print("   1. Install Node.js and npm")
+                print("   2. Ensure 'npx' is in your PATH")
+                print(
+                    "   3. Optionally add CONTEXT7_API_KEY to .env for higher rate limits"
+                )
+
+        elif args.cache_action == "clear":
+            # Clear caches
+            if args.all or args.context7:
+                cache = Context7Cache()
+                cache.clear()
+                print("✓ Context7 cache cleared")
+            else:
+                print("Specify --context7 or --all to clear caches")
+                print("Run 'gaia cache clear --help' for more information")
+
+    except Exception as e:
+        cache_log = get_logger(__name__)
+        cache_log.error(f"Error managing cache: {e}")
         print(f"❌ Error: {e}")
         sys.exit(1)
 

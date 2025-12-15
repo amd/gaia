@@ -11,8 +11,10 @@ This file (conftest.py) is a special pytest file that provides:
 See: https://docs.pytest.org/en/stable/reference/fixtures.html#conftest-py-sharing-fixtures-across-multiple-files
 
 Current fixtures:
-- api_server: Session-scoped fixture that starts GAIA API server for integration tests
+- api_server: Function-scoped fixture that starts GAIA API server for integration tests
 - api_client: HTTP client (requests.Session) configured for API testing
+- lemonade_available: Session-scoped fixture checking if Lemonade server is running
+- require_lemonade: Fixture that skips tests if Lemonade is not available
 
 Current options:
 - --hybrid: Run tests with hybrid configuration (cloud + local models)
@@ -35,6 +37,45 @@ def pytest_addoption(parser):
         default=False,
         help="Run with hybrid configuration (default: False)",
     )
+
+
+# =============================================================================
+# LEMONADE SERVER FIXTURES
+# =============================================================================
+
+
+@pytest.fixture(scope="session")
+def lemonade_available():
+    """
+    Check if Lemonade server is available and healthy.
+
+    This is a session-scoped fixture that checks once at the start of the
+    test session whether Lemonade server is running on localhost:8000.
+
+    Returns:
+        bool: True if Lemonade server is available and responding to health checks
+    """
+    try:
+        response = requests.get("http://localhost:8000/api/v1/health", timeout=5)
+        return response.status_code == 200
+    except (requests.RequestException, requests.ConnectionError):
+        return False
+
+
+@pytest.fixture
+def require_lemonade(lemonade_available):
+    """
+    Skip test if Lemonade server is not available.
+
+    Use this fixture in integration tests that require actual LLM responses.
+
+    Example:
+        def test_chat_completion(self, require_lemonade, api_server, api_client):
+            # This test will be skipped if Lemonade is not running
+            ...
+    """
+    if not lemonade_available:
+        pytest.skip("Lemonade server not available - skipping integration test")
 
 
 @pytest.fixture(scope="function")
@@ -64,11 +105,13 @@ def api_server():
     except (requests.RequestException, requests.ConnectionError):
         pass  # Server not running, will start it
 
-    # Start API server
-    print("Starting GAIA API server...")
+    # Start API server with --no-lemonade-check to allow tests to run
+    # even when Lemonade server is not available. Integration tests that
+    # need actual LLM responses should use the require_lemonade fixture.
+    print("Starting GAIA API server (with --no-lemonade-check)...")
     try:
         server_process = subprocess.Popen(
-            ["gaia", "api", "start"],
+            ["gaia", "api", "start", "--no-lemonade-check"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

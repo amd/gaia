@@ -28,12 +28,25 @@ class RoutingAgent:
     4. Once resolved, return configured agent ready to execute
     """
 
-    def __init__(self, **agent_kwargs):
+    def __init__(
+        self,
+        api_mode: bool = False,
+        output_handler=None,
+        **agent_kwargs,
+    ):
         """Initialize routing agent with LLM client.
 
         Args:
+            api_mode: If True, skip interactive questions and use defaults/best-guess.
+                     If False (default), ask clarification questions via input().
+            output_handler: Optional OutputHandler for streaming events (passed to created agents).
+                           If None (default), agents create their own AgentConsole.
             **agent_kwargs: Additional kwargs to pass to created agents
         """
+        # API mode settings
+        self.api_mode = api_mode
+        self.output_handler = output_handler
+
         # Initialize LLM client for language detection
         # Extract LLM-specific params from agent_kwargs
         use_claude = agent_kwargs.get("use_claude", False)
@@ -60,23 +73,42 @@ class RoutingAgent:
         )
 
     def process_query(
-        self, query: str, conversation_history: Optional[List[Dict[str, str]]] = None
-    ) -> Agent:
+        self,
+        query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        execute: bool = None,
+        workspace_root: Optional[str] = None,
+        **kwargs,
+    ):
         """
         Process query with optional conversation history from disambiguation rounds.
 
         Args:
             query: Original user query
             conversation_history: List of conversation turns [{"role": "user", "content": "..."}]
+            execute: If True, execute the routed agent and return result.
+                    If False, return the agent instance (CLI behavior).
+                    If None (default), uses api_mode (True for API, False for CLI).
+            workspace_root: Optional workspace directory for agent execution (API mode).
+            **kwargs: Additional kwargs passed to agent.process_query() when execute=True.
 
         Returns:
-            Configured agent instance ready to execute
+            If execute=False: Configured agent instance ready to execute
+            If execute=True: Execution result from agent.process_query()
 
-        Example:
+        Example (CLI mode - default):
             router = RoutingAgent()
             agent = router.process_query("Create Express API")
             result = agent.process_query("Create Express API")
+
+        Example (API mode with execute):
+            router = RoutingAgent(api_mode=True, output_handler=sse_handler)
+            result = router.process_query("Create Express API")  # auto-executes
         """
+        # Default execute based on api_mode: API mode auto-executes, CLI returns agent
+        if execute is None:
+            execute = self.api_mode
+
         if conversation_history is None:
             conversation_history = []
 
@@ -84,36 +116,56 @@ class RoutingAgent:
         if not conversation_history or conversation_history[-1].get("content") != query:
             conversation_history.append({"role": "user", "content": query})
 
-        logger.info(
+        logger.debug(
             f"Routing analysis for: '{query}' (conversation turns: {len(conversation_history)})"
         )
 
         # Analyze with LLM using conversation history
         analysis = self._analyze_with_llm(conversation_history)
 
-        logger.info(f"Analysis result: {analysis}")
+        logger.debug(f"Analysis result: {analysis}")
 
         # Check if we have all required parameters
         if self._has_unknowns(analysis):
-            # Generate clarification question
-            question = self._generate_clarification_question(analysis)
-            print(f"\n{question}")
-            user_response = input("> ").strip()
+            if self.api_mode:
+                # API mode: skip interactive questions, use defaults
+                logger.info("API mode: using defaults for unknown parameters")
+                agent = self._create_agent_with_defaults(analysis)
+            else:
+                # Interactive mode: ask user for clarification
+                question = self._generate_clarification_question(analysis)
+                print(f"\n{question}")
+                user_response = input("> ").strip()
 
-            if not user_response:
-                logger.warning("Empty user response, using defaults")
-                # Use defaults if user just hits enter
-                return self._create_agent_with_defaults(analysis)
+                if not user_response:
+                    logger.warning("Empty user response, using defaults")
+                    # Use defaults if user just hits enter
+                    agent = self._create_agent_with_defaults(analysis)
+                else:
+                    # Add assistant question and user response to conversation history
+                    conversation_history.append(
+                        {"role": "assistant", "content": question}
+                    )
+                    conversation_history.append(
+                        {"role": "user", "content": user_response}
+                    )
 
-            # Add assistant question and user response to conversation history
-            conversation_history.append({"role": "assistant", "content": question})
-            conversation_history.append({"role": "user", "content": user_response})
+                    # Recursive call with enriched conversation history
+                    return self.process_query(
+                        query,
+                        conversation_history,
+                        execute=execute,
+                        workspace_root=workspace_root,
+                        **kwargs,
+                    )
+        else:
+            # All parameters resolved, create agent
+            agent = self._create_agent(analysis)
 
-            # Recursive call with enriched conversation history
-            return self.process_query(query, conversation_history)
-
-        # All parameters resolved, create agent
-        return self._create_agent(analysis)
+        # Execute if requested (API mode), otherwise return agent (CLI mode)
+        if execute:
+            return agent.process_query(query, workspace_root=workspace_root, **kwargs)
+        return agent
 
     def _analyze_with_llm(
         self, conversation_history: List[Dict[str, str]]
@@ -390,13 +442,29 @@ Conversation:
             language = params.get("language", "python")
             project_type = params.get("project_type", "script")
 
-            logger.info(
+            logger.debug(
                 f"Creating CodeAgent with language={language}, project_type={project_type}"
             )
 
+            # Use passed output_handler or create AgentConsole (CLI default)
+            if self.output_handler:
+                console = self.output_handler
+            else:
+                from gaia.agents.base.console import AgentConsole
+
+                console = AgentConsole()
+
+            # Print agent selected message
+            console.print_agent_selected("CodeAgent", language, project_type)
+
+            # Build agent kwargs, including output_handler if provided
+            agent_init_kwargs = dict(self.agent_kwargs)
+            if self.output_handler:
+                agent_init_kwargs["output_handler"] = self.output_handler
+
             # Merge routing params with any additional kwargs
             return CodeAgent(
-                language=language, project_type=project_type, **self.agent_kwargs
+                language=language, project_type=project_type, **agent_init_kwargs
             )
         else:
             raise ValueError(f"Unknown agent type: {agent_type}")
@@ -434,6 +502,11 @@ Conversation:
 
         from gaia.agents.code.agent import CodeAgent
 
+        # Build agent kwargs, including output_handler if provided
+        agent_init_kwargs = dict(self.agent_kwargs)
+        if self.output_handler:
+            agent_init_kwargs["output_handler"] = self.output_handler
+
         return CodeAgent(
-            language=language, project_type=project_type, **self.agent_kwargs
+            language=language, project_type=project_type, **agent_init_kwargs
         )

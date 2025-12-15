@@ -14,8 +14,7 @@
   },
   "runArgs": [
     "--name=gaia-alpha",
-    "--cap-add=NET_ADMIN",
-    "--cap-add=NET_RAW"
+    "--add-host=host.docker.internal:host-gateway"
   ],
   "customizations": {
     "vscode": {
@@ -25,7 +24,15 @@
         "ms-python.black-formatter",
         "ms-python.isort",
         "ms-python.pylint",
-        "eamodio.gitlens"
+        "Anthropic.claude-code",
+        "bierner.markdown-mermaid",
+        "MermaidChart.vscode-mermaid-chart",
+        "ms-playwright.playwright",
+        "qcz.text-power-tools",
+        "redhat.vscode-yaml",
+        "github.vscode-github-actions",
+        "GitHub.remotehub",
+        "dbaeumer.vscode-eslint"
       ],
       "settings": {
         "editor.formatOnSave": true,
@@ -68,7 +75,7 @@
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
   "workspaceFolder": "/workspace",
-  "postCreateCommand": "pip install -e .[dev,mcp,eval,rag]",
-  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh",
-  "waitFor": "postStartCommand"
+  "postCreateCommand": "pip install -e \".[dev,mcp,eval,rag]\" && cp /workspace/.devcontainer/.mcp.json /workspace/.mcp.json"
+  // "postStartCommand": "sudo /usr/local/bin/init-firewall.sh",
+  // "waitFor": "postStartCommand"
 }

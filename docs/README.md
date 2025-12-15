@@ -23,15 +23,11 @@ Welcome to the GAIA documentation! This directory contains comprehensive guides 
 - **Web UI**: [Web UI Guide](ui.md)
 - **Document Summarization**: [Features - Summarization](features.md)
 - **Workflow Integration**: [n8n Documentation](n8n.md)
-
-### 🔌 I want to use GAIA via API
 - **API Server**: [API Server Documentation](api.md)
-- **Code Agent via API**: [Code Agent - API Usage](code.md#using-code-agent-via-api-server)
-- **OpenAI Compatibility**: Works with OpenAI Python client and compatible tools
-- **VSCode Integration**: [VSCode Extension](api.md#vscode-integration)
 
 ### 🛠️ I want to develop with GAIA
 - **Development Setup**: [Developer Guide](dev.md)
+- **Code Agent**: [Code Agent](code.md)
 - **Building Desktop Apps**: [App Development Guide](apps/dev.md)
 - **MCP Integration**: [MCP Documentation](mcp.md)
 - **Testing & Evaluation**: [Evaluation Framework](eval.md)

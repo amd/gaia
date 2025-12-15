@@ -4,6 +4,7 @@
 # This workflow runs code quality checks (linting) for the entire codebase
 # Provides fast feedback on code quality before running platform-specific tests
 # Platform: Linux/Ubuntu (cross-platform code analysis)
+# Uses util/lint.py for consistency with local development (util/lint.ps1)
 
 name: Code Quality (Lint)
 
@@ -43,42 +44,13 @@ jobs:
         run: |
           python util/header.py --check
 
-      - name: Install linting dependencies
+      - name: Install dependencies
         run: |
+          # Install linting tools
           uv pip install --system black pylint isort flake8 mypy bandit
-
-      - name: Check code formatting with Black
-        run: |
-          black --check --verbose --config pyproject.toml installer src tests
-
-      - name: Check import sorting with isort
-        run: |
-          isort --check-only --diff installer src tests
-
-      - name: Run Pylint (errors only)
-        run: |
-          # Install minimal dependencies needed for pylint to work
+          # Install project dependencies for pylint and import checks
           uv pip install --system -e .
-          # Run pylint matching the PowerShell script configuration
-          python -m pylint src/gaia --rcfile .pylintrc --disable C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718
 
-      - name: Run Flake8
+      - name: Run lint checks
         run: |
-          flake8 installer src tests --exclude=.git,__pycache__,venv,.venv,.mypy_cache,.tox,.eggs,_build,buck-out,node_modules --count --statistics --max-line-length=88 --extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722
-
-      - name: Run MyPy type checking (warning only)
-        run: |
-          mypy src/gaia --ignore-missing-imports || echo "MyPy warnings found (non-blocking)"
-        continue-on-error: true
-
-      - name: Test critical imports
-        run: |
-          python -c "import gaia.cli; print('OK: CLI module imports')"
-          python -c "import gaia.chat.sdk; print('OK: Chat SDK imports')"
-          python -c "import gaia.llm.llm_client; print('OK: LLM client imports')"
-          python -c "import gaia.agents.base.agent; print('OK: Base agent imports')"
-
-      - name: Run Bandit security check (warning only)
-        run: |
-          bandit -r src/gaia -ll --exclude .git,__pycache__,venv,.venv,.mypy_cache,.tox,.eggs,_build,buck-out,node_modules || echo "Bandit warnings found (non-blocking)"
-        continue-on-error: true
+          python util/lint.py --all

@@ -158,29 +158,94 @@ class ValidationAndParsingMixin:
 
         return {"warnings": warnings, "is_valid": True}  # Warnings don't invalidate
 
+    def _validate_css_content(self, content: str, file_path: Path) -> Dict[str, Any]:
+        """Validate CSS file content for type mismatches and syntax errors.
+
+        Detects TypeScript/JavaScript code in CSS files (Issue #1002).
+        This is a CRITICAL check - CSS files containing TS/JS code will break the app.
+
+        Args:
+            content: File content to validate
+            file_path: Path to the file being validated
+
+        Returns:
+            Dictionary with errors (blocking), warnings, and is_valid flag
+        """
+        errors = []
+        warnings = []
+
+        # CRITICAL: Detect TypeScript/JavaScript code in CSS files
+        # These patterns indicate wrong file content - always invalid
+        typescript_indicators = [
+            (r"^\s*import\s+.*from", "import statement"),
+            (r"^\s*export\s+(default|const|function|class|async)", "export statement"),
+            (r'"use client"|\'use client\'', "React client directive"),
+            (r"^\s*interface\s+\w+", "TypeScript interface"),
+            (r"^\s*type\s+\w+\s*=", "TypeScript type alias"),
+            (r"^\s*const\s+\w+\s*[=:]", "const declaration"),
+            (r"^\s*let\s+\w+\s*[=:]", "let declaration"),
+            (r"^\s*function\s+\w+", "function declaration"),
+            (r"^\s*async\s+function", "async function"),
+            (r"<[A-Z][a-zA-Z]*[\s/>]", "JSX component tag"),
+            (r"useState|useEffect|useRouter|usePathname", "React hook"),
+        ]
+
+        for pattern, description in typescript_indicators:
+            if re.search(pattern, content, re.MULTILINE):
+                errors.append(
+                    f"{file_path}: CRITICAL - CSS file contains {description}. "
+                    f"This file has TypeScript/JSX code instead of CSS."
+                )
+
+        # Check for balanced braces
+        if content.count("{") != content.count("}"):
+            errors.append(f"{file_path}: Mismatched braces in CSS")
+
+        # Check for Tailwind directives in globals.css
+        if "globals.css" in str(file_path):
+            has_tailwind = "@tailwind" in content or '@import "tailwindcss' in content
+            if not has_tailwind and len(content.strip()) > 50:
+                warnings.append(
+                    f"{file_path}: Missing Tailwind directives (@tailwind base/components/utilities)"
+                )
+
+        return {
+            "errors": errors,
+            "warnings": warnings,
+            "is_valid": len(errors) == 0,
+            "file_path": str(file_path),
+        }
+
     def _validate_css_files(self, css_files: List[Path]) -> Dict[str, Any]:
-        """Validate CSS files for basic issues.
+        """Validate CSS files for content type and syntax issues.
+
+        This is an enhanced validator that catches TypeScript code in CSS files
+        (Issue #1002) and returns is_valid: False when errors exist.
 
         Args:
             css_files: List of CSS file paths
 
         Returns:
-            Dictionary with validation results
+            Dictionary with validation results - errors are BLOCKING
         """
-        warnings = []
+        all_errors = []
+        all_warnings = []
 
         for css_file in css_files:
             try:
                 content = css_file.read_text()
-
-                # Check for duplicate selectors
-                if content.count("{") != content.count("}"):
-                    warnings.append(f"{css_file}: Mismatched braces")
-
+                result = self._validate_css_content(content, css_file)
+                all_errors.extend(result.get("errors", []))
+                all_warnings.extend(result.get("warnings", []))
             except Exception as e:
-                warnings.append(f"{css_file}: Failed to read - {e}")
+                all_errors.append(f"{css_file}: Failed to read - {e}")
 
-        return {"warnings": warnings, "is_valid": True}
+        # CRITICAL CHANGE: is_valid is False if there are errors
+        return {
+            "errors": all_errors,
+            "warnings": all_warnings,
+            "is_valid": len(all_errors) == 0,
+        }
 
     def _validate_html_files(self, html_files: List[Path]) -> Dict[str, Any]:
         """Validate HTML files for basic structure.

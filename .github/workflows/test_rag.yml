@@ -87,7 +87,7 @@ jobs:
             $serverJob = Start-Job -ScriptBlock {
                 # Workaround for Issue #612: Disable Vulkan cooperative matrix optimization
                 $env:GGML_VK_DISABLE_COOPMAT = "1"
-                & lemonade-server serve --host localhost --port 8000 --no-tray 2>&1
+                & lemonade-server serve --host localhost --port 8000 --ctx-size 8192 --no-tray 2>&1
             }
             Write-Host "Started Lemonade server job with ID: $($serverJob.Id)"
             $env:LEMONADE_JOB_ID = $serverJob.Id

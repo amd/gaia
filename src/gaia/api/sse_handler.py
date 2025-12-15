@@ -82,6 +82,10 @@ class SSEOutputHandler(OutputHandler):
             "success",  # Success messages for completed operations
             "diff",  # Code diff notifications
             "completion",
+            "checklist",  # Checklist progress from orchestrator
+            "checklist_reasoning",  # Checklist reasoning (debug info)
+            "message",  # Generic messages from print() calls
+            "agent_selected",  # Agent routing selection notification
         }
         return event_type in streamable_events
 
@@ -202,6 +206,57 @@ class SSEOutputHandler(OutputHandler):
         """Stop file preview display."""
         self._add_event("file_preview_complete", {})
 
+    def print_step_paused(self, description: str):
+        """Print step paused message."""
+        self._add_event("step_paused", {"description": description})
+
+    def print_command_executing(self, command: str):
+        """Print command executing message."""
+        self._add_event("command_executing", {"command": command})
+
+    def print_agent_selected(self, agent_name: str, language: str, project_type: str):
+        """Print agent selected message."""
+        self._add_event(
+            "agent_selected",
+            {
+                "agent_name": agent_name,
+                "language": language,
+                "project_type": project_type,
+            },
+        )
+
+    def print(self, *args, **_kwargs):
+        """
+        Handle generic print() calls - queue as message event.
+
+        This method captures print() calls from agent code and queues them
+        as SSE events so they can be streamed to the client.
+
+        Args:
+            *args: Values to print (will be joined with spaces)
+            **_kwargs: Ignored (for compatibility with built-in print)
+        """
+        # Join args with spaces, converting to strings
+        message = " ".join(str(arg) for arg in args)
+        if message.strip():
+            self._add_event("message", {"text": message})
+
+    # === Checklist Methods (Required for Code Agent Orchestration) ===
+
+    def print_checklist(self, items: List[Any], current_idx: int) -> None:
+        """Print checklist items with current progress."""
+        self._add_event(
+            "checklist",
+            {
+                "items": [str(item) for item in items],
+                "current_index": current_idx,
+            },
+        )
+
+    def print_checklist_reasoning(self, reasoning: str) -> None:
+        """Print checklist reasoning/planning."""
+        self._add_event("checklist_reasoning", {"reasoning": reasoning})
+
     def get_events(self) -> List[Dict[str, Any]]:
         """
         Get all queued events and clear the queue.
@@ -291,6 +346,25 @@ class SSEOutputHandler(OutputHandler):
         elif event_type == "completion":
             steps_taken = data.get("steps_taken", 0)
             return f"Completed in {steps_taken} steps\n"
+
+        elif event_type == "checklist":
+            items = data.get("items", [])
+            current_idx = data.get("current_index", 0)
+            return f"Progress: step {current_idx + 1} of {len(items)}\n"
+
+        elif event_type == "checklist_reasoning":
+            # Skip reasoning in non-debug mode (too verbose)
+            return ""
+
+        elif event_type == "message":
+            text = data.get("text", "")
+            return f"{text}\n" if text else ""
+
+        elif event_type == "agent_selected":
+            agent_name = data.get("agent_name", "unknown")
+            language = data.get("language", "")
+            project_type = data.get("project_type", "")
+            return f"Agent: {agent_name} ({language}/{project_type})\n"
 
         # For other events in normal mode, don't stream them
         return ""

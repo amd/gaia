@@ -385,8 +385,10 @@ async def create_sse_stream(
     # Process query in thread pool to avoid blocking event loop
     loop = asyncio.get_event_loop()
 
-    # Get the SSEOutputHandler from the agent
-    output_handler = agent.console
+    # Get the SSEOutputHandler from the agent (try output_handler first, fall back to console)
+    output_handler = getattr(agent, "output_handler", None) or getattr(
+        agent, "console", None
+    )
 
     try:
         # Start processing in background

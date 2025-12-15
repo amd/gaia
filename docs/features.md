@@ -12,6 +12,7 @@ Currently, the following capabilities are available, more will be added in the n
 | ------------------ | ---------------------------------------- | --------------------------------------------------------------- | ---------------- |
 | LLM Direct         | Direct LLM queries via CLI               | Direct model interaction using the new `gaia llm` command      | Windows, Linux   |
 | Chat Agent         | Interactive conversations with history   | Interactive chat sessions with conversation context and commands | Windows, Linux   |
+| Code Agent         | AI-powered code generation and analysis  | Autonomous workflow for code generation, project scaffolding, and error fixing | Windows, Linux   |
 | Blender Agent      | 3D content creation and manipulation     | Specialized agent for Blender automation and workflow          | Windows, Linux   |
 | Summarization      | Document and transcript summarization    | AI-powered summarization with multiple output formats          | Windows, Linux   |
 | Evaluation Suite   | Model evaluation and benchmarking       | Comprehensive evaluation framework with groundtruth generation  | Windows, Linux   |

@@ -3,6 +3,7 @@
     "allow": [
       "Bash(./util/lint.ps1:*)",
       "Bash(./util/lint.sh:*)",
+      "Bash(black:*)",
       "Bash(cat:*)",
       "Bash(dir:*)",
       "Bash(echo:*)",
@@ -24,6 +25,11 @@
       "Bash(git ls-tree:*)",
       "Bash(git show:*)",
       "Bash(grep:*)",
+      "Bash(isort:*)",
+      "Bash(npm run)",
+      "Bash(npm view:*)",
+      "Bash(npx --version:*)",
+      "Bash(python -m isort:*)",
       "Bash(python -m pytest:*)",
       "Bash(tree:*)",
       "Bash(while read file)",
@@ -35,8 +41,14 @@
       "mcp__github__get_pull_request_reviews",
       "mcp__github__get_pull_request_status",
       "mcp__github__get_pull_request",
+      "mcp__github__list_pull_requests",
       "mcp__github__search_issues",
       "mcp__ide__getDiagnostics",
+      "mcp__MCP_DOCKER__fetch",
+      "mcp__MCP_DOCKER__get-library-docs",
+      "mcp__MCP_DOCKER__perplexity_ask",
+      "mcp__MCP_DOCKER__perplexity_research",
+      "mcp__MCP_DOCKER__resolve-library-id",
       "mcp__memory__add_observations",
       "mcp__memory__create_entities",
       "mcp__memory__create_relations",
@@ -56,17 +68,5 @@
   "enabledMcpjsonServers": [
     "github"
   ],
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "powershell -ExecutionPolicy Bypass -File \"$CLAUDE_PROJECT_DIR/util/lint.ps1\""
-          }
-        ]
-      }
-    ]
-  }
+  "hooks": {}
 }

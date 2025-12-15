@@ -156,6 +156,7 @@ Examples:
                         query,
                         max_steps=args.max_steps,
                         trace=args.trace,
+                        step_through=args.step_through,
                     )
 
                     # Display result in interactive mode
@@ -181,6 +182,7 @@ Examples:
                 args.query,
                 max_steps=args.max_steps,
                 trace=args.trace,
+                step_through=args.step_through,
             )
 
             # Output result
@@ -224,6 +226,7 @@ Examples:
                         query,
                         max_steps=args.max_steps,
                         trace=args.trace,
+                        step_through=args.step_through,
                     )
 
                     # Display result in interactive mode
