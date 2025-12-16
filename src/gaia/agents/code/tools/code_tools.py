@@ -568,7 +568,7 @@ if __name__ == "__main__":
             except ImportError:
                 return {
                     "status": "error",
-                    "error": "pylint is not installed. Install with: pip install pylint",
+                    "error": "pylint is not installed. Install with: uv pip install pylint",
                 }
             except Exception as e:
                 return {"status": "error", "error": str(e)}

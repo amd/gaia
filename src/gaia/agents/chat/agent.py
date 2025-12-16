@@ -339,7 +339,7 @@ class ChatAgent(
         elif self.rag_documents and not self.rag:
             logger.warning(
                 "RAG dependencies not installed. Cannot index documents. "
-                "Install with: pip install gaia[rag]"
+                "Install with: uv pip install -e .[rag]"
             )
 
         # Start watching directories
@@ -847,9 +847,9 @@ When user asks to "index my data folder" or similar:
                 "\n❌ Error: Missing required package 'watchdog'\n\n"
                 "File watching requires the watchdog package.\n"
                 "Please install the required dependencies:\n"
-                "  pip install -e .[dev]\n\n"
+                "  uv pip install -e .[dev]\n\n"
                 "Or install watchdog directly:\n"
-                "  pip install watchdog>=2.1.0\n"
+                "  uv pip install watchdog>=2.1.0\n"
             )
             logger.error(error_msg)
             raise ImportError(error_msg)

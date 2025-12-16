@@ -330,6 +330,13 @@ def interactive_mode(agent: ChatAgent):
                         print("         /index /path/to/documents/")
                         continue
 
+                    # Check if RAG is available
+                    if agent.rag is None:
+                        print("\n❌ RAG (document indexing) is not available.")
+                        print("   Missing dependencies: pypdf, sentence-transformers, faiss-cpu")
+                        print("\n   Install with: uv pip install -e .[rag]")
+                        continue
+
                     # Check if it's a directory or file
                     path = Path(arg)
 
@@ -997,6 +1004,13 @@ def main():
             index_path = args.index
             if not os.path.exists(index_path):
                 print(f"❌ File not found: {index_path}")
+                return 1
+
+            # Check if RAG is available
+            if agent.rag is None:
+                print("❌ RAG (document indexing) is not available.")
+                print("   Missing dependencies: pypdf, sentence-transformers, faiss-cpu")
+                print("\n   Install with: uv pip install -e .[rag]")
                 return 1
 
             print(f"📄 Indexing: {Path(index_path).name}")

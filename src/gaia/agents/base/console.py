@@ -21,7 +21,7 @@ try:
 except ImportError:
     RICH_AVAILABLE = False
     print(
-        "Rich library not found. Install with 'pip install rich' for syntax highlighting."
+        "Rich library not found. Install with 'uv pip install rich' for syntax highlighting."
     )
 
 # Display configuration constants

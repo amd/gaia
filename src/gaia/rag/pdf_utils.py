@@ -129,7 +129,7 @@ def extract_images_from_page_pymupdf(pdf_path: str, page_num: int) -> List[dict]
         doc.close()
 
     except ImportError:
-        logger.error("PyMuPDF not installed. Install: pip install pymupdf")
+        logger.error("PyMuPDF not installed. Install: uv pip install pymupdf")
     except Exception as e:
         logger.error(f"Error extracting images from page {page_num}: {e}")
 

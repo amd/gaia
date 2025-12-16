@@ -142,7 +142,7 @@ class LLMClient:
             logger.debug(f"Using Claude API with model={self.default_model}")
         elif use_claude and not CLAUDE_AVAILABLE:
             raise ValueError(
-                "Claude support requested but anthropic library not available. Install with: pip install anthropic"
+                "Claude support requested but anthropic library not available. Install with: uv pip install anthropic"
             )
         elif use_openai:
             # Use OpenAI API
