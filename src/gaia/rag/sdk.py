@@ -374,8 +374,36 @@ class RAGSDK:
 
             # Extract embeddings from response
             # Expected format: {"data": [{"embedding": [...]}, ...]}
-            for item in response.get("data", []):
+            # Check for error response first
+            if "error" in response:
+                error_info = response.get("error", {})
+                error_msg = error_info.get("message", str(error_info))
+                error_type = error_info.get("type", "unknown")
+
+                if "connect" in error_msg.lower() or "network" in error_type.lower():
+                    raise ConnectionError(
+                        f"Cannot connect to embedding model '{self.config.embedding_model}'. "
+                        f"The model may not be loaded in Lemonade server.\n\n"
+                        f"To fix this, pull the embedding model:\n"
+                        f"  lemonade-server pull {self.config.embedding_model}\n\n"
+                        f"Original error: {error_msg}"
+                    )
+                else:
+                    raise RuntimeError(
+                        f"Embedding API error: {error_msg} (type: {error_type})"
+                    )
+
+            data = response.get("data", [])
+            if not data:
+                self.log.warning(
+                    f"   ⚠️  Batch {batch_num} returned empty data. Response: {response}"
+                )
+            for item in data:
                 embedding = item.get("embedding", [])
+                if not embedding:
+                    self.log.warning(
+                        f"   ⚠️  Empty embedding in batch {batch_num}. Item: {item}"
+                    )
                 all_embeddings.append(embedding)
 
         total_duration = time.time() - total_start
@@ -383,6 +411,12 @@ class RAGSDK:
             overall_rate = len(texts) / total_duration if total_duration > 0 else 0
             self.log.info(
                 f"   🎯 Total embedding time: {total_duration:.2f}s ({overall_rate:.1f} chunks/sec, {total_batches} batches)"
+            )
+
+        # Validate we got embeddings for all texts
+        if len(all_embeddings) != len(texts):
+            self.log.error(
+                f"   ❌ Embedding count mismatch: expected {len(texts)}, got {len(all_embeddings)}"
             )
 
         # Convert to numpy array
@@ -1271,6 +1305,17 @@ These positions indicate where to split the text."""
         embeddings = self._encode_texts(chunks, show_progress=self.config.show_stats)
         embed_duration = time_module.time() - embed_start
 
+        # Validate embeddings shape
+        if embeddings.size == 0:
+            raise ValueError(
+                "No embeddings generated. Check that the embedding model is loaded and responding."
+            )
+        if len(embeddings.shape) != 2:
+            raise ValueError(
+                f"Invalid embeddings shape {embeddings.shape}. Expected 2D array (num_chunks, embedding_dim). "
+                "This may indicate an issue with the embedding model response format."
+            )
+
         if self.config.show_stats:
             print(
                 f"\n  ✅ Generated {embeddings.shape[0]} embeddings ({embeddings.shape[1]} dimensions)"
@@ -1762,6 +1807,13 @@ These positions indicate where to split the text."""
             self._load_embedder()
             # Generate embeddings for this file's chunks only
             file_embeddings = self._encode_texts(new_chunks, show_progress=False)
+
+            # Validate per-file embeddings
+            if file_embeddings.size == 0 or len(file_embeddings.shape) != 2:
+                raise ValueError(
+                    f"Invalid per-file embeddings shape {file_embeddings.shape}. "
+                    "Check that the embedding model is loaded and responding correctly."
+                )
 
             # Create FAISS index for this file
             dimension = file_embeddings.shape[1]
