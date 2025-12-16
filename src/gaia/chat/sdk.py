@@ -12,7 +12,6 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from gaia.chat.prompts import Prompts
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.llm.llm_client import LLMClient
 from gaia.logger import get_logger
@@ -99,7 +98,7 @@ class ChatSDK:
             use_openai=self.config.use_chatgpt,
             claude_model=self.config.claude_model,
             base_url=self.config.base_url,
-            system_prompt=None,  # We handle system prompts through Prompts class
+            system_prompt=None,  # We handle system prompts in _history_to_messages()
         )
 
         # Store conversation history
@@ -111,15 +110,38 @@ class ChatSDK:
 
         self.log.debug("ChatSDK initialized")
 
-    def _format_history_for_context(self) -> str:
-        """Format chat history for inclusion in LLM context using model-specific formatting."""
+    def _history_to_messages(self, enhanced_last_message: Optional[str] = None) -> List[Dict[str, str]]:
+        """Convert internal chat_history to messages array for chat/completions endpoint.
+
+        Args:
+            enhanced_last_message: If provided, replace the last user message content
+                                  (used for RAG-enhanced queries)
+
+        Returns:
+            List of message dicts with 'role' and 'content' keys
+        """
+        messages = []
+
+        # Add system prompt if configured
+        if self.config.system_prompt:
+            messages.append({"role": "system", "content": self.config.system_prompt})
+
+        # Convert chat history entries to messages
+        assistant_prefix = f"{self.config.assistant_name}: "
         history_list = list(self.chat_history)
-        return Prompts.format_chat_history(
-            self.config.model,
-            history_list,
-            self.config.assistant_name,
-            self.config.system_prompt,
-        )
+
+        for i, entry in enumerate(history_list):
+            if entry.startswith("user: "):
+                content = entry[6:]
+                # Use enhanced message for last user message if provided
+                if enhanced_last_message and i == len(history_list) - 1:
+                    content = enhanced_last_message
+                messages.append({"role": "user", "content": content})
+            elif entry.startswith(assistant_prefix):
+                content = entry[len(assistant_prefix):]
+                messages.append({"role": "assistant", "content": content})
+
+        return messages
 
     def _normalize_message_content(self, content: Any) -> str:
         """
@@ -160,50 +182,38 @@ class ChatSDK:
             ChatResponse with the complete response
         """
         try:
-            # Convert messages to chat history format
-            chat_history = []
-
-            for msg in messages:
-                role = msg.get("role", "")
-                content = self._normalize_message_content(msg.get("content", ""))
-
-                if role == "user":
-                    chat_history.append(f"user: {content}")
-                elif role == "assistant":
-                    chat_history.append(f"assistant: {content}")
-                elif role == "tool":
-                    tool_name = msg.get("name", "tool")
-                    chat_history.append(f"assistant: [tool:{tool_name}] {content}")
-                # Skip system messages since they're passed separately
-
             # Use provided system prompt or fall back to config default
             effective_system_prompt = system_prompt or self.config.system_prompt
 
-            # Format according to model type
-            formatted_prompt = Prompts.format_chat_history(
-                model=self.config.model,
-                chat_history=chat_history,
-                assistant_name="assistant",
-                system_prompt=effective_system_prompt,
-            )
+            # Build messages list with system prompt prepended
+            chat_messages = []
+            if effective_system_prompt:
+                chat_messages.append(
+                    {"role": "system", "content": effective_system_prompt}
+                )
 
-            # Debug logging
-            self.log.debug(f"Formatted prompt length: {len(formatted_prompt)} chars")
-            self.log.debug(
-                f"System prompt used: {effective_system_prompt[:100] if effective_system_prompt else 'None'}..."
-            )
+            # Normalize and add all messages
+            for msg in messages:
+                role = msg.get("role", "")
+                content = self._normalize_message_content(msg.get("content", ""))
+                if role == "system" and effective_system_prompt:
+                    continue  # Skip if we already added system prompt
+                if role in ["user", "assistant", "system"]:
+                    chat_messages.append({"role": role, "content": content})
+                elif role == "tool":
+                    # Convert tool responses to assistant messages for compatibility
+                    tool_name = msg.get("name", "tool")
+                    chat_messages.append(
+                        {"role": "assistant", "content": f"[tool:{tool_name}] {content}"}
+                    )
 
-            # Set appropriate stop tokens based on model
-            model_lower = self.config.model.lower() if self.config.model else ""
-            if "qwen" in model_lower:
-                kwargs.setdefault("stop", ["<|im_end|>", "<|im_start|>"])
-            elif "llama" in model_lower:
-                kwargs.setdefault("stop", ["<|eot_id|>", "<|start_header_id|>"])
+            self.log.debug(f"Sending {len(chat_messages)} messages")
 
-            # Use generate with formatted prompt
+            # Pass messages directly - server handles chat templating
             response = self.llm_client.generate(
-                prompt=formatted_prompt,
+                prompt="",
                 model=self.config.model,
+                messages=chat_messages,
                 stream=False,
                 **kwargs,
             )
@@ -241,50 +251,41 @@ class ChatSDK:
             ChatResponse chunks as they arrive
         """
         try:
-            # Convert messages to chat history format
-            chat_history = []
-
-            for msg in messages:
-                role = msg.get("role", "")
-                content = self._normalize_message_content(msg.get("content", ""))
-
-                if role == "user":
-                    chat_history.append(f"user: {content}")
-                elif role == "assistant":
-                    chat_history.append(f"assistant: {content}")
-                elif role == "tool":
-                    tool_name = msg.get("name", "tool")
-                    chat_history.append(f"assistant: [tool:{tool_name}] {content}")
-                # Skip system messages since they're passed separately
-
             # Use provided system prompt or fall back to config default
             effective_system_prompt = system_prompt or self.config.system_prompt
 
-            # Format according to model type
-            formatted_prompt = Prompts.format_chat_history(
-                model=self.config.model,
-                chat_history=chat_history,
-                assistant_name="assistant",
-                system_prompt=effective_system_prompt,
-            )
+            # Build messages list with system prompt prepended
+            chat_messages = []
+            if effective_system_prompt:
+                chat_messages.append(
+                    {"role": "system", "content": effective_system_prompt}
+                )
 
-            # Debug logging
-            self.log.debug(f"Formatted prompt length: {len(formatted_prompt)} chars")
-            self.log.debug(
-                f"System prompt used: {effective_system_prompt[:100] if effective_system_prompt else 'None'}..."
-            )
+            # Normalize and add all messages
+            for msg in messages:
+                role = msg.get("role", "")
+                content = self._normalize_message_content(msg.get("content", ""))
+                if role == "system" and effective_system_prompt:
+                    continue  # Skip if we already added system prompt
+                if role in ["user", "assistant", "system"]:
+                    chat_messages.append({"role": role, "content": content})
+                elif role == "tool":
+                    # Convert tool responses to assistant messages for compatibility
+                    tool_name = msg.get("name", "tool")
+                    chat_messages.append(
+                        {"role": "assistant", "content": f"[tool:{tool_name}] {content}"}
+                    )
 
-            # Set appropriate stop tokens based on model
-            model_lower = self.config.model.lower() if self.config.model else ""
-            if "qwen" in model_lower:
-                kwargs.setdefault("stop", ["<|im_end|>", "<|im_start|>"])
-            elif "llama" in model_lower:
-                kwargs.setdefault("stop", ["<|eot_id|>", "<|start_header_id|>"])
+            self.log.debug(f"Streaming {len(chat_messages)} messages")
 
-            # Use generate with formatted prompt for streaming
+            # Pass messages directly - server handles chat templating
             full_response = ""
             for chunk in self.llm_client.generate(
-                prompt=formatted_prompt, model=self.config.model, stream=True, **kwargs
+                prompt="",
+                model=self.config.model,
+                messages=chat_messages,
+                stream=True,
+                **kwargs,
             ):
                 full_response += chunk
                 yield ChatResponse(text=chunk, is_complete=False)
@@ -324,40 +325,37 @@ class ChatSDK:
             # Enhance message with RAG context if enabled
             enhanced_message, _rag_metadata = self._enhance_with_rag(message.strip())
 
+            # Build messages for the request
             if no_history:
-                # Build a prompt using only the current enhanced message
-                full_prompt = Prompts.format_chat_history(
-                    model=self.config.model,
-                    chat_history=[f"user: {enhanced_message}"],
-                    assistant_name=self.config.assistant_name,
-                    system_prompt=self.config.system_prompt,
-                )
+                # Single message without history
+                chat_messages = []
+                if self.config.system_prompt:
+                    chat_messages.append(
+                        {"role": "system", "content": self.config.system_prompt}
+                    )
+                chat_messages.append({"role": "user", "content": enhanced_message})
             else:
                 # Add user message to history (use original message for history)
                 self.chat_history.append(f"user: {message.strip()}")
 
-                # Prepare prompt with conversation context (use enhanced message for LLM)
-                # Temporarily replace the last message with enhanced version for formatting
-                if self.rag_enabled and enhanced_message != message.strip():
-                    # Save original and replace with enhanced version
-                    original_last = self.chat_history.pop()
-                    self.chat_history.append(f"user: {enhanced_message}")
-                    full_prompt = self._format_history_for_context()
-                    # Restore original for history
-                    self.chat_history.pop()
-                    self.chat_history.append(original_last)
-                else:
-                    full_prompt = self._format_history_for_context()
+                # Build messages from history, using enhanced message for RAG
+                enhanced = (
+                    enhanced_message
+                    if self.rag_enabled and enhanced_message != message.strip()
+                    else None
+                )
+                chat_messages = self._history_to_messages(enhanced)
 
             # Generate response
             generate_kwargs = dict(kwargs)
             if "max_tokens" not in generate_kwargs:
                 generate_kwargs["max_tokens"] = self.config.max_tokens
 
-            # Note: Retry logic is now handled at the LLM client level
+            # Pass messages directly - server handles chat templating
             response = self.llm_client.generate(
-                full_prompt,
+                prompt="",
                 model=self.config.model,
+                messages=chat_messages,
                 **generate_kwargs,
             )
 
@@ -384,12 +382,13 @@ class ChatSDK:
             self.log.error(f"Error in send: {e}")
             raise
 
-    def send_stream(self, message: str, **kwargs):
+    def send_stream(self, message: str, *, no_history: bool = False, **kwargs):
         """
         Send a message and get a streaming response with conversation history.
 
         Args:
             message: The message to send
+            no_history: When True, bypass stored chat history and send only this prompt
             **kwargs: Additional arguments for LLM generation
 
         Yields:
@@ -402,36 +401,47 @@ class ChatSDK:
             # Enhance message with RAG context if enabled
             enhanced_message, _rag_metadata = self._enhance_with_rag(message.strip())
 
-            # Add user message to history (use original message for history)
-            self.chat_history.append(f"user: {message.strip()}")
-
-            # Prepare prompt with conversation context (use enhanced message for LLM)
-            # Temporarily replace the last message with enhanced version for formatting
-            if self.rag_enabled and enhanced_message != message.strip():
-                # Save original and replace with enhanced version
-                original_last = self.chat_history.pop()
-                self.chat_history.append(f"user: {enhanced_message}")
-                full_prompt = self._format_history_for_context()
-                # Restore original for history
-                self.chat_history.pop()
-                self.chat_history.append(original_last)
+            # Build messages for the request
+            if no_history:
+                # Single message without history
+                chat_messages = []
+                if self.config.system_prompt:
+                    chat_messages.append(
+                        {"role": "system", "content": self.config.system_prompt}
+                    )
+                chat_messages.append({"role": "user", "content": enhanced_message})
             else:
-                full_prompt = self._format_history_for_context()
+                # Add user message to history (use original message for history)
+                self.chat_history.append(f"user: {message.strip()}")
+
+                # Build messages from history, using enhanced message for RAG
+                enhanced = (
+                    enhanced_message
+                    if self.rag_enabled and enhanced_message != message.strip()
+                    else None
+                )
+                chat_messages = self._history_to_messages(enhanced)
 
             # Generate streaming response
             generate_kwargs = dict(kwargs)
             if "max_tokens" not in generate_kwargs:
                 generate_kwargs["max_tokens"] = self.config.max_tokens
 
+            # Pass messages directly - server handles chat templating
             full_response = ""
             for chunk in self.llm_client.generate(
-                full_prompt, model=self.config.model, stream=True, **generate_kwargs
+                prompt="",
+                model=self.config.model,
+                messages=chat_messages,
+                stream=True,
+                **generate_kwargs,
             ):
                 full_response += chunk
                 yield ChatResponse(text=chunk, is_complete=False)
 
-            # Add complete assistant message to history
-            self.chat_history.append(f"{self.config.assistant_name}: {full_response}")
+            # Add complete assistant message to history when tracking conversation
+            if not no_history:
+                self.chat_history.append(f"{self.config.assistant_name}: {full_response}")
 
             # Send final response with stats and history if requested
             stats = None
@@ -657,7 +667,7 @@ class ChatSDK:
             self.chat_history = deque(old_history, maxlen=new_maxlen)
 
         if "system_prompt" in kwargs:
-            # System prompt is handled through Prompts class, not directly
+            # System prompt is stored in config and read by _history_to_messages()
             pass
 
         if "assistant_name" in kwargs:

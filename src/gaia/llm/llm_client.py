@@ -126,10 +126,10 @@ class LLMClient:
                 ),
                 max_retries=0,  # Disable retries to fail fast on connection issues
             )
-            # Use completions endpoint for pre-formatted prompts (ChatSDK compatibility)
-            # Use chat endpoint when messages array is explicitly provided
-            self.endpoint = "completions"
-            logger.debug("Using Lemonade completions endpoint")
+            # Use chat/completions endpoint (OpenAI-compatible, works with all Lemonade backends)
+            # The legacy /completions endpoint is not available on all Lemonade configurations
+            self.endpoint = "chat"
+            logger.debug("Using Lemonade chat/completions endpoint")
             self.default_model = DEFAULT_MODEL_NAME
             self.claude_client = None
             logger.debug(f"Using local LLM with model={self.default_model}")
@@ -259,8 +259,28 @@ class LLMClient:
 
         if endpoint_to_use == "claude":
             # For Claude API, construct the prompt appropriately
-            if effective_system_prompt:
-                # Claude handles system prompts differently in messages format
+            if messages:
+                # Convert messages array to prompt string for Claude
+                prompt_parts = []
+                for msg in messages:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    if role == "system":
+                        prompt_parts.append(f"System: {content}")
+                    elif role == "user":
+                        prompt_parts.append(f"Human: {content}")
+                    elif role == "assistant":
+                        prompt_parts.append(f"Assistant: {content}")
+                    elif role == "tool":
+                        # Tool responses are observations/results from tool execution
+                        tool_name = msg.get("name", "tool")
+                        prompt_parts.append(f"Tool ({tool_name}): {content}")
+                    else:
+                        # Unknown role - include as observation to avoid silent drops
+                        prompt_parts.append(f"{role.title()}: {content}")
+                full_prompt = "\n\n".join(prompt_parts)
+            elif effective_system_prompt:
+                # Legacy: use prompt with system prefix
                 full_prompt = f"System: {effective_system_prompt}\n\nHuman: {prompt}"
             else:
                 full_prompt = prompt
@@ -463,18 +483,32 @@ class LLMClient:
                 raise
         elif endpoint_to_use == "openai":
             # For OpenAI API, use the messages format
-            messages = []
-            if effective_system_prompt:
-                messages.append({"role": "system", "content": effective_system_prompt})
-            messages.append({"role": "user", "content": prompt})
-            logger.debug(f"OpenAI API messages: {messages}")
+            if messages:
+                # Use provided messages directly
+                openai_messages = list(messages)
+                # Prepend system prompt if provided and not already in messages
+                if effective_system_prompt and (
+                    not openai_messages or openai_messages[0].get("role") != "system"
+                ):
+                    openai_messages.insert(
+                        0, {"role": "system", "content": effective_system_prompt}
+                    )
+            else:
+                # Build messages from prompt (legacy support)
+                openai_messages = []
+                if effective_system_prompt:
+                    openai_messages.append(
+                        {"role": "system", "content": effective_system_prompt}
+                    )
+                openai_messages.append({"role": "user", "content": prompt})
+            logger.debug(f"OpenAI API messages: {len(openai_messages)} messages")
 
             try:
                 # Use retry logic for the API call
                 response = self._retry_with_exponential_backoff(
                     self.client.chat.completions.create,
                     model=model,
-                    messages=messages,
+                    messages=openai_messages,
                     stream=stream,
                     **kwargs,
                 )
