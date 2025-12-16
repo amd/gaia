@@ -382,11 +382,13 @@ class RAGSDK:
 
                 if "connect" in error_msg.lower() or "network" in error_type.lower():
                     raise ConnectionError(
-                        f"Cannot connect to embedding model '{self.config.embedding_model}'. "
-                        f"The model may not be loaded in Lemonade server.\n\n"
-                        f"To fix this, pull the embedding model:\n"
-                        f"  lemonade-server pull {self.config.embedding_model}\n\n"
-                        f"Original error: {error_msg}"
+                        f"Lemonade server failed to load embedding model '{self.config.embedding_model}'.\n\n"
+                        f"The server returned: {error_msg}\n\n"
+                        f"Troubleshooting steps:\n"
+                        f"  1. Check if the model is downloaded: lemonade-server models\n"
+                        f"  2. If not downloaded, pull it: lemonade-server pull {self.config.embedding_model}\n"
+                        f"  3. Try restarting Lemonade server\n"
+                        f"  4. Check Lemonade server logs for detailed errors"
                     )
                 else:
                     raise RuntimeError(
