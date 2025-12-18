@@ -4996,7 +4996,7 @@ def handle_blender_command(args):
             max_steps=args.steps,
             output_dir=output_dir,
             streaming=args.stream,
-            show_stats=args.stats,
+            show_stats=args.show_stats,
             debug_prompts=args.debug_prompts,
         )
 
