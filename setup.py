@@ -78,8 +78,8 @@ setup(
             "uvicorn>=0.32.0",
         ],
         "audio": [
-            "torch>=2.0.0,<2.4",
-            "torchvision<0.19.0",
+            "torch>=2.0.0,<2.10",
+            "torchvision<0.25.0",
             "torchaudio",
         ],
         "blender": [
@@ -119,7 +119,7 @@ setup(
         "talk": [
             "pyaudio",
             "openai-whisper",
-            "numpy==1.26.4",
+            "numpy==2.2.6",
             "kokoro>=0.3.1",
             "soundfile",
             "sounddevice",
