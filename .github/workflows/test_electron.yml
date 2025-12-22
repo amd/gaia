@@ -24,7 +24,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Free disk space
         uses: ./.github/actions/free-disk-space
@@ -48,7 +48,7 @@ jobs:
 
       - name: Upload test coverage
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: electron-framework-coverage
           path: tests/electron/coverage/
@@ -60,7 +60,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Free disk space
         uses: ./.github/actions/free-disk-space
@@ -85,7 +85,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: apps-integration-test-results
           path: tests/electron/coverage/
@@ -98,7 +98,7 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Free disk space
         uses: ./.github/actions/free-disk-space
@@ -122,7 +122,7 @@ jobs:
 
       - name: Upload functional test results
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: apps-functional-test-results
           path: tests/electron/coverage/
@@ -142,7 +142,7 @@ jobs:
             path: src/gaia/apps/example/webui
     
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Free disk space
         uses: ./.github/actions/free-disk-space
@@ -215,7 +215,7 @@ jobs:
             path: src/gaia/apps/example/webui
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Free disk space
         uses: ./.github/actions/free-disk-space
@@ -234,7 +234,7 @@ jobs:
 
       - name: Upload audit results
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: audit-${{ matrix.package.name }}
           path: ${{ matrix.package.path }}/audit-results.json
