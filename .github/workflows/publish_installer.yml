@@ -30,7 +30,7 @@ jobs:
     needs: [build-installer, build-electron-apps]
     if: always() && needs.build-installer.result == 'success' && (needs.build-electron-apps.result == 'success' || needs.build-electron-apps.result == 'skipped')
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0  # Fetch all history for release notes generation
 
@@ -53,14 +53,14 @@ jobs:
           echo "EOF" >> $env:GITHUB_OUTPUT
 
       - name: Download GAIA Installer
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: gaia-windows-installer-${{ needs.build-installer.outputs.VERSION }}-${{ needs.build-installer.outputs.COMMIT_HASH }}
           path: release-assets
 
       - name: Download Electron App Artifacts (Windows)
         if: needs.build-electron-apps.outputs.has_apps == 'true'
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           pattern: "*-windows-${{ github.sha }}"
           path: release-assets
@@ -69,7 +69,7 @@ jobs:
 
       - name: Download Electron App Artifacts (Linux)
         if: needs.build-electron-apps.outputs.has_apps == 'true'
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           pattern: "*-linux-${{ github.sha }}"
           path: release-assets

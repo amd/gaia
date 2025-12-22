@@ -30,7 +30,7 @@ jobs:
       matrix: ${{ steps.discover.outputs.matrix }}
       has_apps: ${{ steps.discover.outputs.has_apps }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Free disk space
         uses: ./.github/actions/free-disk-space
@@ -88,7 +88,7 @@ jobs:
         app: ${{ fromJson(needs.discover-apps.outputs.matrix).app }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -154,7 +154,7 @@ jobs:
         if: |
           (runner.os == 'Windows' && steps.windows_artifacts.outputs.found == 'true') ||
           (runner.os == 'Linux' && steps.linux_artifacts.outputs.found == 'true')
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.app.name }}-${{ steps.platform.outputs.name }}-${{ github.event.pull_request.number || github.sha }}
           path: |
