@@ -148,7 +148,7 @@ class CodeFormattingMixin:
             except ImportError:
                 return {
                     "status": "error",
-                    "error": "black is not installed. Install with: pip install black",
+                    "error": "black is not installed. Install with: uv pip install black",
                 }
             except Exception as e:
                 return {"status": "error", "error": str(e)}

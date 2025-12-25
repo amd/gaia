@@ -56,9 +56,9 @@ class WhisperAsr(AudioRecorder):
             error_msg = (
                 f"\n❌ Error: Missing required talk dependencies: {', '.join(missing)}\n\n"
                 f"Please install the talk dependencies:\n"
-                f"  pip install -e .[talk]\n\n"
+                f"  uv pip install -e .[talk]\n\n"
                 f"Or install packages directly:\n"
-                f"  pip install {' '.join(missing)}\n"
+                f"  uv pip install {' '.join(missing)}\n"
             )
             raise ImportError(error_msg)
 

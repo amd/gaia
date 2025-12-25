@@ -129,6 +129,7 @@ setup(
         ],
         "rag": [
             "pypdf",
+            "pymupdf",
             "sentence-transformers",
             "faiss-cpu>=1.7.0",
         ],

@@ -76,6 +76,32 @@ jobs:
           Write-Host "Found gaia at: $($gaiaPath.Source)"
           python -m pip check
 
+      - name: Run Chat SDK Unit Tests (no server required)
+        shell: cmd
+        run: |
+          REM Activate conda environment
+          call "%GITHUB_WORKSPACE%\miniforge3\Scripts\activate.bat" gaiaenv
+
+          echo ================================================================
+          echo           CHAT SDK UNIT TESTS (NO SERVER REQUIRED)
+          echo ================================================================
+          echo Running unit tests before starting Lemonade server...
+          echo.
+
+          set PYTHONIOENCODING=utf-8
+          python tests\unit\test_chat_sdk_unit.py
+          set unit_exit=%ERRORLEVEL%
+
+          echo.
+          echo ----------------------------------------------------------------
+          if %unit_exit% equ 0 (
+              echo [SUCCESS] Chat SDK unit tests passed
+          ) else (
+              echo [FAILURE] Chat SDK unit tests failed with exit code %unit_exit%
+              exit /b 1
+          )
+          echo ----------------------------------------------------------------
+
       - name: Start Lemonade Server for Integration Tests
         timeout-minutes: 15
         env:

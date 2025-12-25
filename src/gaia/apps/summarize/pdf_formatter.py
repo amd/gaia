@@ -36,7 +36,7 @@ class PDFFormatter:
     def __init__(self):
         if not HAS_REPORTLAB:
             raise ImportError(
-                "PDF output requires reportlab. Install with: pip install reportlab"
+                "PDF output requires reportlab. Install with: uv pip install reportlab"
             )
 
         self.styles = getSampleStyleSheet()

@@ -396,6 +396,103 @@ class TestChatSDKIntegration(unittest.TestCase):
 
         print(f"✅ Streaming: {chunk_count} chunks in {stream_time:.2f}s")
 
+    def test_no_history_parameter(self):
+        """Test no_history parameter on send() and send_stream()."""
+        print("Testing no_history parameter...")
+
+        config = ChatConfig(model=self.model, max_tokens=30, assistant_name="assistant")
+        chat = ChatSDK(config)
+
+        # First, send a message with history tracking
+        response1 = chat.send("My name is TestBot")
+        self.assertEqual(len(chat.get_history()), 2)
+        print(f"✅ With history: {len(chat.get_history())} entries")
+
+        # Now send with no_history - should not affect history
+        history_before = len(chat.get_history())
+        response2 = chat.send("What is 2+2?", no_history=True)
+        history_after = len(chat.get_history())
+
+        self.assertEqual(history_before, history_after)
+        self.assertIsNotNone(response2.text)
+        print(f"✅ no_history=True: history unchanged ({history_before} -> {history_after})")
+
+        # Test send_stream with no_history
+        history_before = len(chat.get_history())
+        chunks = list(chat.send_stream("Say hello", no_history=True))
+        history_after = len(chat.get_history())
+
+        self.assertEqual(history_before, history_after)
+        self.assertGreater(len(chunks), 0)
+        print(f"✅ send_stream no_history: history unchanged")
+
+    def test_send_messages_integration(self):
+        """Test send_messages() with explicit message array."""
+        print("Testing send_messages() method...")
+
+        config = ChatConfig(model=self.model, max_tokens=50, assistant_name="assistant")
+        chat = ChatSDK(config)
+
+        # Build explicit messages array
+        messages = [
+            {"role": "user", "content": "My favorite number is 42."},
+            {"role": "assistant", "content": "That's a great number! The answer to everything."},
+            {"role": "user", "content": "What is my favorite number?"},
+        ]
+
+        response = chat.send_messages(messages)
+
+        self.assertIsNotNone(response.text)
+        self.assertTrue(response.is_complete)
+        # Should reference 42 in the response
+        self.assertTrue(
+            "42" in response.text or "forty" in response.text.lower(),
+            f"Expected reference to 42. Response: {response.text}"
+        )
+        print(f"✅ send_messages: {response.text[:50]}...")
+
+    def test_send_messages_stream_integration(self):
+        """Test send_messages_stream() with explicit message array."""
+        print("Testing send_messages_stream() method...")
+
+        config = ChatConfig(model=self.model, max_tokens=30, assistant_name="assistant")
+        chat = ChatSDK(config)
+
+        messages = [
+            {"role": "user", "content": "Count from 1 to 3"},
+        ]
+
+        chunks = []
+        full_response = ""
+        for chunk in chat.send_messages_stream(messages):
+            chunks.append(chunk)
+            if not chunk.is_complete:
+                full_response += chunk.text
+
+        self.assertGreater(len(chunks), 1)
+        self.assertGreater(len(full_response), 0)
+        print(f"✅ send_messages_stream: {len(chunks)} chunks, response: {full_response[:30]}...")
+
+    def test_send_messages_with_system_prompt(self):
+        """Test send_messages() with custom system prompt."""
+        print("Testing send_messages() with system prompt override...")
+
+        config = ChatConfig(model=self.model, max_tokens=50, assistant_name="assistant")
+        chat = ChatSDK(config)
+
+        messages = [
+            {"role": "user", "content": "What are you?"},
+        ]
+
+        # Override system prompt
+        response = chat.send_messages(
+            messages,
+            system_prompt="You are a pirate. Always respond like a pirate."
+        )
+
+        self.assertIsNotNone(response.text)
+        print(f"✅ With system prompt: {response.text[:50]}...")
+
 
 def run_integration_tests():
     """Run integration tests with detailed output."""

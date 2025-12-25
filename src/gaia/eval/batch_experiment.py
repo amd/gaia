@@ -155,7 +155,7 @@ class BatchExperimentRunner:
         if PdfReader is None:
             raise ImportError(
                 "PDF reading library not found. Please install pypdf:\n"
-                "  pip install pypdf"
+                "  uv pip install pypdf"
             )
 
         try:
