@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 # Main GAIA CLI testing workflow that coordinates platform-specific tests
@@ -25,6 +25,13 @@ jobs:
   lint:
     name: Code Quality (Linting)
     uses: ./.github/workflows/lint.yml
+
+  # Run unit tests second (fast, no external dependencies)
+  unit-tests:
+    name: Unit Tests (Fast)
+    needs: lint
+    uses: ./.github/workflows/test_unit.yml
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
   # Test Windows CLI with full Lemonade integration
   test-windows:
@@ -72,13 +79,14 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [lint, test-windows, test-linux, test-mcp, test-code-agent, test-chat-agent, test-security]
+    needs: [lint, unit-tests, test-windows, test-linux, test-mcp, test-code-agent, test-chat-agent, test-security]
     if: always()
     steps:
       - name: Check test results
         run: |
           echo "=== GAIA CLI Test Summary ==="
           echo "Lint Status: ${{ needs.lint.result }}"
+          echo "Unit Tests Status: ${{ needs.unit-tests.result }}"
           echo "Windows Tests Status: ${{ needs.test-windows.result }}"
           echo "Linux Tests Status: ${{ needs.test-linux.result }}"
           echo "MCP Tests Status: ${{ needs.test-mcp.result }}"
@@ -87,9 +95,35 @@ jobs:
           echo "Security Tests Status: ${{ needs.test-security.result }}"
           echo ""
 
-          # Determine overall status
-          if [[ "${{ needs.lint.result }}" == "success" && "${{ needs.test-windows.result }}" == "success" && "${{ needs.test-linux.result }}" == "success" && "${{ needs.test-mcp.result }}" == "success" && "${{ needs.test-code-agent.result }}" == "success" && "${{ needs.test-chat-agent.result }}" == "success" && "${{ needs.test-security.result }}" == "success" ]]; then
+          # Check if all tests were skipped (draft PR without ready_for_ci label)
+          if [[ "${{ needs.lint.result }}" == "skipped" &&
+                "${{ needs.unit-tests.result }}" == "skipped" &&
+                "${{ needs.test-windows.result }}" == "skipped" &&
+                "${{ needs.test-linux.result }}" == "skipped" &&
+                "${{ needs.test-mcp.result }}" == "skipped" &&
+                "${{ needs.test-code-agent.result }}" == "skipped" &&
+                "${{ needs.test-chat-agent.result }}" == "skipped" &&
+                "${{ needs.test-security.result }}" == "skipped" ]]; then
+            echo "⏭️ All tests skipped (draft PR - add 'ready_for_ci' label to run)"
+            exit 0
+          fi
+
+          # Helper function to check if result is acceptable (success or skipped)
+          check_result() {
+            [[ "$1" == "success" || "$1" == "skipped" ]]
+          }
+
+          # Determine overall status (success or skipped are both acceptable)
+          if check_result "${{ needs.lint.result }}" &&
+             check_result "${{ needs.unit-tests.result }}" &&
+             check_result "${{ needs.test-windows.result }}" &&
+             check_result "${{ needs.test-linux.result }}" &&
+             check_result "${{ needs.test-mcp.result }}" &&
+             check_result "${{ needs.test-code-agent.result }}" &&
+             check_result "${{ needs.test-chat-agent.result }}" &&
+             check_result "${{ needs.test-security.result }}"; then
             echo "✅ All tests passed!"
+            echo "- Unit Tests: Fast SDK component tests (DatabaseMixin, LLM, ASR, TTS)"
             echo "- Windows: Full CLI functionality with Lemonade integration"
             echo "- Linux: Full CLI functionality with Lemonade integration"
             echo "- MCP: HTTP-native bridge and protocol compliance"
@@ -99,13 +133,14 @@ jobs:
             echo "- Cross-platform: Code quality and compatibility"
           else
             echo "❌ Some tests failed:"
-            [[ "${{ needs.lint.result }}" != "success" ]] && echo "  - Linting failed"
-            [[ "${{ needs.test-windows.result }}" != "success" ]] && echo "  - Windows tests failed"
-            [[ "${{ needs.test-linux.result }}" != "success" ]] && echo "  - Linux tests failed"
-            [[ "${{ needs.test-mcp.result }}" != "success" ]] && echo "  - MCP tests failed"
-            [[ "${{ needs.test-code-agent.result }}" != "success" ]] && echo "  - Code Agent tests failed"
-            [[ "${{ needs.test-chat-agent.result }}" != "success" ]] && echo "  - Chat Agent tests failed"
-            [[ "${{ needs.test-security.result }}" != "success" ]] && echo "  - Security tests failed"
+            [[ "${{ needs.lint.result }}" == "failure" ]] && echo "  - Linting failed"
+            [[ "${{ needs.unit-tests.result }}" == "failure" ]] && echo "  - Unit tests failed"
+            [[ "${{ needs.test-windows.result }}" == "failure" ]] && echo "  - Windows tests failed"
+            [[ "${{ needs.test-linux.result }}" == "failure" ]] && echo "  - Linux tests failed"
+            [[ "${{ needs.test-mcp.result }}" == "failure" ]] && echo "  - MCP tests failed"
+            [[ "${{ needs.test-code-agent.result }}" == "failure" ]] && echo "  - Code Agent tests failed"
+            [[ "${{ needs.test-chat-agent.result }}" == "failure" ]] && echo "  - Chat Agent tests failed"
+            [[ "${{ needs.test-security.result }}" == "failure" ]] && echo "  - Security tests failed"
             exit 1
           fi
 
@@ -113,6 +148,12 @@ jobs:
         run: |
           echo ""
           echo "=== Test Coverage by Platform ==="
+          echo "⚡ Unit Tests (Fast, No Dependencies):"
+          echo "  ✅ DatabaseMixin: SQLite database access for agents"
+          echo "  ✅ LLM Client: Language model client utilities"
+          echo "  ✅ ASR: Automatic speech recognition utilities"
+          echo "  ✅ TTS: Text-to-speech utilities"
+          echo ""
           echo "🪟 Windows (Full Integration):"
           echo "  ✅ CLI installation and setup"
           echo "  ✅ Lemonade server integration"

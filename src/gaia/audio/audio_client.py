@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import asyncio
@@ -123,7 +123,7 @@ class AudioClient:
 
         except ImportError:
             self.log.error(
-                "WhisperAsr not found. Please install voice support with: pip install .[talk]"
+                'WhisperAsr not found. Please install voice support with: uv pip install ".[talk]"'
             )
             raise
         except Exception as e:
@@ -306,7 +306,7 @@ class AudioClient:
                 self.log.debug("TTS initialized successfully")
             except Exception as e:
                 raise RuntimeError(
-                    f"Failed to initialize TTS:\n{e}\nInstall talk dependencies with: pip install .[talk]\nYou can also use --no-tts option to disable TTS"
+                    f'Failed to initialize TTS:\n{e}\nInstall talk dependencies with: uv pip install ".[talk]"\nYou can also use --no-tts option to disable TTS'
                 )
 
     async def speak_text(self, text: str) -> None:

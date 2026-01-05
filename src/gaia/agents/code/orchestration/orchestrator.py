@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
 Orchestrator for LLM-driven workflow execution.
@@ -17,9 +17,11 @@ Features:
 
 import json
 import logging
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from gaia.agents.base.console import AgentConsole
@@ -28,6 +30,10 @@ from .steps.base import ToolExecutor, UserContext
 from .steps.error_handler import ErrorHandler
 
 logger = logging.getLogger(__name__)
+
+
+class ProjectDirectoryError(Exception):
+    """Raised when the project directory cannot be prepared safely."""
 
 
 def _estimate_token_count(text: str) -> int:
@@ -198,6 +204,30 @@ class Orchestrator:
         steps_failed = 0
         success = False
 
+        try:
+            context.project_dir = self._prepare_project_directory(context)
+        except ProjectDirectoryError as exc:
+            error_message = str(exc)
+            logger.error(error_message)
+            if self.console:
+                self.console.print_error(error_message)
+            return ExecutionResult(
+                success=False,
+                phases_completed=[],
+                phases_failed=["project_directory"],
+                total_steps=1,
+                steps_succeeded=0,
+                steps_failed=1,
+                steps_skipped=0,
+                errors=[error_message],
+                outputs={
+                    "iterations": [],
+                    "validation_logs": [],
+                    "fix_feedback": [],
+                    "project_dir": context.project_dir,
+                },
+            )
+
         for iteration in range(1, self.max_checklist_loops + 1):
             logger.debug("Starting checklist iteration %d", iteration)
 
@@ -367,6 +397,7 @@ class Orchestrator:
             "iterations": iteration_outputs,
             "validation_logs": [log.to_dict() for log in aggregated_validation_logs],
             "fix_feedback": fix_feedback,
+            "project_dir": context.project_dir,
         }
 
         if latest_execution:
@@ -445,7 +476,7 @@ class Orchestrator:
         )
 
         try:
-            response = self.llm_client.send(prompt, timeout=1200, no_history=True)
+            response = self.llm_client.send(prompt, timeout=1200)
             data = self._parse_checkpoint_response(response)
             return CheckpointAssessment(
                 status=data.get("status", "needs_fix"),
@@ -472,7 +503,9 @@ class Orchestrator:
         validation_history: List[Any],
     ) -> str:
         """Build the prompt for the checkpoint reviewer."""
-        validation_summary = self._format_validation_history(validation_history)
+        validation_summary = self._format_validation_history(
+            validation_history, getattr(execution_result, "validation_logs", None)
+        )
 
         outstanding = (
             "\n".join(f"- {item}" for item in context.fix_feedback)
@@ -530,52 +563,250 @@ class Orchestrator:
             logger.exception("Failed to summarize conversation history: %s", exc)
             return None
 
-    def _format_validation_history(self, validation_history: List[Any]) -> str:
-        """Format validation logs for the checkpoint prompt."""
+    def _prepare_project_directory(self, context: UserContext) -> str:
+        """
+        Ensure the project directory is ready for creation workflows.
+
+        If the provided path exists and is non-empty without an existing project,
+        pick a unique subdirectory via the LLM to avoid create-next-app failures.
+        """
+        base_path = Path(context.project_dir).expanduser()
+        if base_path.exists() and not base_path.is_dir():
+            raise ProjectDirectoryError(
+                f"Provided path is not a directory: {base_path}"
+            )
+
+        if not base_path.exists():
+            base_path.mkdir(parents=True, exist_ok=True)
+            logger.info("Created project directory: %s", base_path)
+            return str(base_path)
+
+        existing_entries = [p.name for p in base_path.iterdir()]
+        if not existing_entries:
+            return str(base_path)
+
+        if self.console:
+            self.console.print_warning(
+                f"Target directory {base_path} is not empty; selecting a new subdirectory."
+            )
+
+        suggested = self._choose_subdirectory_name(
+            base_path, existing_entries, context.user_request
+        )
+        if not suggested:
+            raise ProjectDirectoryError(
+                f"Unable to find an available project name under {base_path}. "
+                "Provide one explicitly with --path."
+            )
+
+        new_dir = base_path / suggested
+        new_dir.mkdir(parents=False, exist_ok=False)
+        logger.info("Using nested project directory: %s", new_dir)
+        # Align process cwd with the newly created project directory.
+        try:
+            os.chdir(new_dir)
+        except OSError as exc:
+            logger.warning("Failed to chdir to %s: %s", new_dir, exc)
+        if self.console:
+            self.console.print_info(f"Using project directory: {new_dir}")
+        return str(new_dir)
+
+    def _choose_subdirectory_name(
+        self, base_path: Path, existing_entries: List[str], user_request: str
+    ) -> Optional[str]:
+        """Ask the LLM for a unique subdirectory name, retrying on conflicts."""
+        existing_lower = {name.lower() for name in existing_entries}
+        prompt = self._build_directory_prompt(
+            base_path, existing_entries, user_request, None
+        )
+        last_reason = None
+
+        system_prompt = "You suggest concise folder names for new projects."
+
+        for attempt in range(1, 4):
+            try:
+                response = self._send_prompt_without_history(
+                    prompt, timeout=120, system_prompt=system_prompt
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                last_reason = f"LLM error on attempt {attempt}: {exc}"
+                logger.warning(last_reason)
+                prompt = self._build_directory_prompt(
+                    base_path, existing_entries, user_request, last_reason
+                )
+                continue
+
+            raw_response = self._extract_response_text(response)
+            candidate = self._sanitize_directory_name(raw_response)
+            if not candidate:
+                last_reason = "LLM returned an empty or invalid directory name."
+            elif candidate.lower() in existing_lower:
+                last_reason = f"Name '{candidate}' already exists in {base_path}."
+            elif "/" in candidate or "\\" in candidate or ".." in candidate:
+                last_reason = "Directory name contained path separators or traversal."
+            elif len(candidate) > 64:
+                last_reason = "Directory name exceeded 64 characters."
+            else:
+                candidate_path = base_path / candidate
+                if candidate_path.exists():
+                    last_reason = f"Directory '{candidate}' already exists."
+                else:
+                    return candidate
+
+            logger.warning(
+                "Directory name attempt %d rejected: %s", attempt, last_reason
+            )
+            prompt = self._build_directory_prompt(
+                base_path, existing_entries, user_request, last_reason
+            )
+
+        return None
+
+    @staticmethod
+    def _sanitize_directory_name(raw: str) -> str:
+        """Normalize LLM output to a filesystem-safe directory name."""
+        if not raw:
+            return ""
+        candidate = raw.strip().strip("`'\"")
+        candidate = candidate.splitlines()[0].strip()
+        candidate = re.sub(r"[^A-Za-z0-9_-]+", "-", candidate)
+        return candidate.strip("-_").lower()
+
+    def _send_prompt_without_history(
+        self, prompt: str, timeout: int = 120, system_prompt: Optional[str] = None
+    ) -> Any:
+        """
+        Send a prompt without reading from or writing to chat history.
+
+        Prefers the underlying LLM client's `generate` API when available,
+        falling back to `send(..., no_history=True)` for compatibility.
+        """
+        # If the ChatSDK exposes the underlying LLM client, use it directly with chat messages
+        # to avoid any stored history and ensure system prompts are applied cleanly.
+        llm_client = getattr(self.llm_client, "llm_client", None)
+        if llm_client and hasattr(llm_client, "generate"):
+            model = getattr(getattr(self.llm_client, "config", None), "model", None)
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+            return llm_client.generate(
+                prompt=prompt,
+                messages=messages,
+                model=model,
+                timeout=timeout,
+                endpoint="chat",
+            )
+
+        # Fallback: use send with no_history to avoid persisting messages.
+        if hasattr(self.llm_client, "send"):
+            return self.llm_client.send(
+                prompt, timeout=timeout, no_history=True, system_prompt=system_prompt
+            )
+
+        raise ValueError("LLM client does not support generate or send APIs")
+
+    @staticmethod
+    def _build_directory_prompt(
+        base_path: Path,
+        existing_entries: List[str],
+        user_request: Optional[str],
+        rejection_reason: Optional[str],
+    ) -> str:
+        """Construct the LLM prompt for picking a safe project subdirectory."""
+        entries = sorted(existing_entries)
+        max_list = 50
+        if len(entries) > max_list:
+            entries_display = "\n".join(f"- {name}" for name in entries[:max_list])
+            entries_display += f"\n- ...and {len(entries) - max_list} more"
+        else:
+            entries_display = "\n".join(f"- {name}" for name in entries)
+
+        prompt_sections = [
+            "You must choose a new folder name for a project because the target path is not empty.",
+            f"Base path: {base_path}",
+            "Existing files and folders you MUST avoid (do not reuse any of these names):",
+            entries_display or "- <empty>",
+            "User request driving this project:",
+            user_request or "<no request provided>",
+            "Rules:",
+            "- Return a single folder name only. Do NOT echo the instructions. No paths, quotes, JSON, or extra text.",
+            "- Use lowercase kebab-case or snake_case; ASCII letters, numbers, hyphens, and underscores only.",
+            "- Do not use any existing names above. Avoid dots, spaces, or slashes.",
+            "- Keep it under 40 characters.",
+        ]
+
+        if rejection_reason:
+            prompt_sections.append(
+                f"Previous suggestion was rejected: {rejection_reason}. Try a different unique name."
+            )
+
+        return "\n".join(prompt_sections)
+
+    def _format_validation_history(
+        self, validation_history: List[Any], latest_plan_logs: Optional[List[Any]]
+    ) -> str:
+        """Format validation logs, splitting latest plan from historical ones."""
+
         if not validation_history:
             return "No validation or test commands have been executed yet."
 
-        lines: List[str] = []
-        recent = validation_history[-5:]
-        for entry in recent:
+        latest_logs = latest_plan_logs or []
+        latest_count = len(latest_logs)
+        historical_logs = (
+            validation_history[:-latest_count] if latest_count else validation_history
+        )
+
+        def normalize(entry: Any) -> Dict[str, Any]:
             if hasattr(entry, "to_dict"):
-                entry_data = entry.to_dict()
-            elif isinstance(entry, dict):
-                entry_data = entry
-            else:
-                entry_data = {}
+                return entry.to_dict()
+            if isinstance(entry, dict):
+                return entry
+            return {}
 
-            template = getattr(entry, "template", None) or entry_data.get("template")
-            description = getattr(entry, "description", None) or entry_data.get(
-                "description", ""
-            )
-            success = getattr(entry, "success", None)
-            if success is None:
-                success = entry_data.get("success", True)
-            status = "PASS" if success else "FAIL"
-            error = getattr(entry, "error", None) or entry_data.get("error")
-            output = getattr(entry, "output", None) or entry_data.get("output", {})
+        def render(entries: List[Any], limit: Optional[int] = None) -> List[str]:
+            if not entries:
+                return ["None"]
 
-            lines.append(f"- [{status}] {template}: {description}")
-            if error:
-                lines.append(f"  Error: {error}")
+            selected = entries if limit is None else entries[-limit:]
+            lines: List[str] = []
+            for entry in selected:
+                data = normalize(entry)
+                template = data.get("template", "unknown")
+                description = data.get("description", "")
+                success = data.get("success", True)
+                status = "PASS" if success else "FAIL"
+                error = data.get("error")
+                output = data.get("output", {})
 
-            snippet = ""
-            if isinstance(output, dict):
-                for key in ("stdout", "stderr", "message", "log", "details"):
-                    if output.get(key):
-                        snippet = str(output[key])
-                        break
-                if not snippet and output:
-                    snippet = json.dumps(output)[:400]
-            elif output:
-                snippet = str(output)[:400]
+                lines.append(f"- [{status}] {template}: {description}")
+                if error:
+                    lines.append(f"  Error: {error}")
 
-            snippet = snippet.strip()
-            if snippet:
-                lines.append(f"  Output: {snippet[:400]}")
+                snippet = ""
+                if isinstance(output, dict):
+                    for key in ("stdout", "stderr", "message", "log", "details"):
+                        if output.get(key):
+                            snippet = str(output[key])
+                            break
+                    if not snippet and output:
+                        snippet = json.dumps(output)[:400]
+                elif output:
+                    snippet = str(output)[:400]
 
-        return "\n".join(lines)
+                snippet = snippet.strip()
+                if snippet:
+                    lines.append(f"  Output: {snippet[:400]}")
+            return lines
+
+        sections: List[str] = []
+        sections.append("### Latest Plan Results")
+        sections.extend(render(list(latest_logs)))
+        sections.append("")
+        sections.append("### Previous Plan History")
+        sections.extend(render(list(historical_logs), limit=5))
+
+        return "\n".join(sections).strip()
 
     def _parse_checkpoint_response(self, response: Any) -> Dict[str, Any]:
         """Parse JSON output from the checkpoint reviewer."""

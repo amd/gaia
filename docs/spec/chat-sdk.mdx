@@ -1,0 +1,418 @@
+---
+title: "Chat SDK"
+description: "SDK for conversation management with memory and multi-turn dialogue support"
+icon: "messages"
+---
+
+<Note>
+🔧 **You are viewing:** API Specification - Complete technical reference
+
+**See also:** [User Guide](/guides/chat) · [Quick Reference](/sdk/sdks/chat)
+</Note>
+
+<Note>
+- **Component:** ChatSDK - Unified text chat with conversation history
+- **Module:** `gaia.chat.sdk`
+- **Import:** `from gaia.chat.sdk import ChatSDK, ChatConfig, ChatResponse, SimpleChat, quick_chat`
+- **Source:** [`src/gaia/chat/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/chat/sdk.py)
+</Note>
+
+---
+
+## Overview
+
+ChatSDK provides a unified interface for text-based chat interactions with automatic conversation history management. It supports local LLMs (via Lemonade Server), Claude API, and ChatGPT/OpenAI API, with model-specific prompt formatting through the Prompts class.
+
+**Key Features:**
+- Automatic conversation history tracking
+- Multi-model support (14+ models via Prompts)
+- Streaming and non-streaming responses
+- RAG (Retrieval-Augmented Generation) integration
+- Session management
+- Performance statistics
+- Simple and advanced interfaces
+
+**Most Used SDK:** ChatSDK is the most frequently used SDK in GAIA, powering:
+- Interactive chat commands
+- Agent communication
+- Code generation
+- Document Q&A (with RAG)
+
+---
+
+## API Specification
+
+### ChatConfig
+
+```python
+@dataclass
+class ChatConfig:
+    """Configuration for ChatSDK."""
+
+    model: str = DEFAULT_MODEL_NAME
+    max_tokens: int = 512
+    system_prompt: Optional[str] = None
+    max_history_length: int = 4  # Number of conversation pairs to keep
+    show_stats: bool = False
+    logging_level: str = "INFO"
+    use_claude: bool = False  # Use Claude API
+    use_chatgpt: bool = False  # Use ChatGPT/OpenAI API
+    use_local_llm: bool = True  # Use local LLM (computed automatically)
+    claude_model: str = "claude-sonnet-4-20250514"
+    base_url: str = "http://localhost:8000/api/v1"  # Lemonade server base URL
+    assistant_name: str = "gaia"  # Name to use for assistant in conversations
+```
+
+### ChatResponse
+
+```python
+@dataclass
+class ChatResponse:
+    """Response from chat operations."""
+
+    text: str
+    history: Optional[List[str]] = None
+    stats: Optional[Dict[str, Any]] = None
+    is_complete: bool = True
+```
+
+### ChatSDK
+
+```python
+class ChatSDK:
+    """
+    Gaia Chat SDK - Unified text chat integration with conversation history.
+
+    Provides a simple interface for integrating GAIA's text chat
+    capabilities with conversation memory into applications.
+    """
+
+    def __init__(self, config: Optional[ChatConfig] = None):
+        """Initialize the ChatSDK."""
+        ...
+
+    def send(self, message: str, **kwargs) -> ChatResponse:
+        """
+        Send a message and get a complete response with conversation history.
+
+        Args:
+            message: The message to send
+            **kwargs: Additional arguments for LLM generation
+
+        Returns:
+            ChatResponse with the complete response and updated history
+        """
+        ...
+
+    def send_stream(self, message: str, **kwargs):
+        """
+        Send a message and get a streaming response with conversation history.
+
+        Args:
+            message: The message to send
+            **kwargs: Additional arguments for LLM generation
+
+        Yields:
+            ChatResponse chunks as they arrive
+        """
+        ...
+
+    def send_messages(
+        self,
+        messages: List[Dict[str, Any]],
+        system_prompt: Optional[str] = None,
+        **kwargs,
+    ) -> ChatResponse:
+        """
+        Send a full conversation history and get a response.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content' keys
+            system_prompt: Optional system prompt to use (overrides config)
+            **kwargs: Additional arguments for LLM generation
+
+        Returns:
+            ChatResponse with the complete response
+        """
+        ...
+
+    def send_messages_stream(
+        self,
+        messages: List[Dict[str, Any]],
+        system_prompt: Optional[str] = None,
+        **kwargs,
+    ):
+        """
+        Send a full conversation history and get a streaming response.
+
+        Yields:
+            ChatResponse chunks as they arrive
+        """
+        ...
+
+    def get_history(self) -> List[str]:
+        """
+        Get the current conversation history.
+
+        Returns:
+            List of conversation entries in "role: message" format
+        """
+        ...
+
+    def clear_history(self) -> None:
+        """Clear the conversation history."""
+        ...
+
+    def get_formatted_history(self) -> List[Dict[str, str]]:
+        """
+        Get conversation history in structured format.
+
+        Returns:
+            List of dictionaries with 'role' and 'message' keys
+        """
+        ...
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get performance statistics."""
+        ...
+
+    def set_system_prompt(self, system_prompt: Optional[str]) -> None:
+        """Set the system prompt for future conversations."""
+        ...
+
+    def enable_rag(self, documents: Optional[List[str]] = None, **rag_kwargs):
+        """
+        Enable RAG (Retrieval-Augmented Generation) for document-based chat.
+
+        Args:
+            documents: List of PDF file paths to index
+            **rag_kwargs: Additional RAG configuration options
+        """
+        ...
+
+    def disable_rag(self):
+        """Disable RAG functionality."""
+        ...
+
+    def add_document(self, document_path: str) -> bool:
+        """Add a document to the RAG index."""
+        ...
+
+    async def start_interactive_session(self) -> None:
+        """
+        Start an interactive chat session with conversation history.
+
+        Provides a full CLI-style interactive experience with commands
+        for managing conversation history and viewing statistics.
+        """
+        ...
+
+    @property
+    def history_length(self) -> int:
+        """Get the current number of conversation entries."""
+        ...
+
+    @property
+    def conversation_pairs(self) -> int:
+        """Get the number of conversation pairs (user + assistant)."""
+        ...
+```
+
+### SimpleChat
+
+```python
+class SimpleChat:
+    """
+    Ultra-simple interface for quick chat integration.
+
+    Example:
+        chat = SimpleChat()
+        response = chat.ask("What's the weather like?")
+        print(response)
+    """
+
+    def __init__(
+        self,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        assistant_name: Optional[str] = None,
+    ):
+        """Initialize SimpleChat with minimal configuration."""
+        ...
+
+    def ask(self, question: str) -> str:
+        """Ask a question and get a text response with conversation memory."""
+        ...
+
+    def ask_stream(self, question: str):
+        """Ask a question and get a streaming response with conversation memory."""
+        ...
+
+    def clear_memory(self) -> None:
+        """Clear the conversation memory."""
+        ...
+
+    def get_conversation(self) -> List[Dict[str, str]]:
+        """Get the conversation history in a readable format."""
+        ...
+```
+
+### Convenience Functions
+
+```python
+def quick_chat(
+    message: str,
+    system_prompt: Optional[str] = None,
+    model: Optional[str] = None,
+    assistant_name: Optional[str] = None,
+) -> str:
+    """Quick one-off text chat without conversation memory."""
+    ...
+
+def quick_chat_with_memory(
+    messages: List[str],
+    system_prompt: Optional[str] = None,
+    model: Optional[str] = None,
+    assistant_name: Optional[str] = None,
+) -> List[str]:
+    """Quick multi-turn chat with conversation memory."""
+    ...
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Basic Chat
+
+```python
+from gaia.chat.sdk import ChatSDK, ChatConfig
+
+# Create SDK instance
+config = ChatConfig(
+    model="Qwen2.5-0.5B-Instruct-CPU",
+    max_tokens=512,
+    show_stats=True
+)
+chat = ChatSDK(config)
+
+# Single message
+response = chat.send("Hello, how are you?")
+print(response.text)
+
+# View history
+history = chat.get_history()
+print(f"Conversation has {len(history)} entries")
+```
+
+### Example 2: Streaming Chat
+
+```python
+# Streaming response
+for chunk in chat.send_stream("Tell me a story"):
+    if not chunk.is_complete:
+        print(chunk.text, end="", flush=True)
+    else:
+        # Final chunk with stats
+        if chunk.stats:
+            print(f"\nTokens: {chunk.stats['total_tokens']}")
+```
+
+### Example 3: Chat with RAG
+
+```python
+# Enable RAG with documents
+chat.enable_rag(documents=["manual.pdf", "guide.pdf"])
+
+# Query with document context
+response = chat.send("What are the safety guidelines?")
+print(response.text)
+
+# Add more documents
+chat.add_document("updates.pdf")
+```
+
+---
+
+## Testing Requirements
+
+```python
+def test_chat_sdk_basic():
+    """Test basic chat functionality."""
+    config = ChatConfig(model="test-model")
+    chat = ChatSDK(config)
+
+    response = chat.send("Hello")
+    assert response.text
+    assert response.is_complete
+
+def test_conversation_history():
+    """Test conversation history tracking."""
+    chat = ChatSDK()
+
+    chat.send("My name is Alice")
+    chat.send("What's my name?")
+
+    history = chat.get_history()
+    assert len(history) >= 2
+    assert "Alice" in history[0]
+
+def test_rag_integration():
+    """Test RAG functionality."""
+    chat = ChatSDK()
+
+    # Enable RAG
+    result = chat.enable_rag(documents=["test.pdf"])
+    assert chat.rag_enabled
+
+    # Query with RAG
+    response = chat.send("Summarize the document")
+    assert response.text
+```
+
+---
+
+## Dependencies
+
+```toml
+[project]
+dependencies = [
+    "gaia.llm.llm_client",
+    "gaia.chat.prompts",
+]
+
+[project.optional-dependencies]
+rag = ["gaia.rag.sdk"]
+```
+
+---
+
+## Acceptance Criteria
+
+- [ ] ChatSDK class implemented
+- [ ] All methods with docstrings
+- [ ] Conversation history management works
+- [ ] Multi-model support via Prompts
+- [ ] Streaming works correctly
+- [ ] RAG integration functional
+- [ ] SimpleChat convenience class works
+- [ ] Session management works
+- [ ] All unit tests pass (10+ tests)
+- [ ] Exported from `gaia/__init__.py`
+- [ ] Example applications work
+
+---
+
+*ChatSDK Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

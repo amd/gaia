@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import logging
@@ -6,7 +6,7 @@ import os
 import subprocess
 from importlib.metadata import version as get_package_version_metadata
 
-__version__ = "0.14.1"
+__version__ = "0.15.0"
 
 # Lemonade version used across CI and installer
 LEMONADE_VERSION = "9.1.0"
@@ -19,7 +19,7 @@ def get_package_version() -> str:
         str: The package version string
     """
     try:
-        return get_package_version_metadata("gaia")
+        return get_package_version_metadata("amd-gaia")
     except Exception as e:
         logging.warning(f"Failed to get package version: {e}")
         return ""

@@ -360,7 +360,7 @@ class TalkSDK:
             return True
         except ImportError:
             self.log.warning(
-                "RAG dependencies not available. Install with: pip install -e .[rag]"
+                'RAG dependencies not available. Install with: uv pip install -e ".[rag]"'
             )
             return False
         except Exception as e:

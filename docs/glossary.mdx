@@ -1,0 +1,534 @@
+---
+title: 'Glossary'
+description: 'Technical terms and concepts used in GAIA'
+---
+
+{/*
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+SPDX-License-Identifier: MIT
+*/}
+
+# Glossary
+
+This glossary defines technical terms, acronyms, and concepts used throughout the GAIA documentation. Terms are organized alphabetically for easy reference.
+
+---
+
+## A
+
+### Activation Script
+A shell script that activates a Python virtual environment, making its packages available in the current terminal session.
+
+### Agent
+An AI system that can autonomously plan, reason, and use tools to accomplish tasks. In GAIA, agents extend the base `Agent` class and follow a Think-Act-Observe-Reason loop.
+
+### Agent Loop
+The cyclic process an agent follows: thinking about the task, acting by calling tools, observing the results, and reasoning about next steps.
+
+### Agent State
+The current phase of agent processing, such as planning, executing, error recovery, or completion.
+
+### AgentConsole
+GAIA's colorful command-line interface that provides formatted output for agent operations, making it easier to follow agent reasoning.
+
+### Agentic RAG
+Retrieval-Augmented Generation with multi-step reasoning capabilities, where the agent can iteratively refine queries and synthesize information from multiple sources.
+
+### ANTHROPIC_API_KEY
+Environment variable containing the API key for accessing Anthropic's Claude models via their API.
+
+### API Endpoint
+A specific URL path on a server that handles particular requests, such as `/v1/chat/completions` for chat interactions.
+
+### ASR (Automatic Speech Recognition)
+Technology that converts spoken audio into text. GAIA uses OpenAI's Whisper model for speech recognition.
+
+### Audio Chunk
+A segment of audio data processed at one time, typically measured in milliseconds or samples.
+
+### Audio Device Index
+A numerical identifier for microphone or speaker hardware used by audio processing libraries.
+
+### AWQ (Activation-Aware Weight Quantization)
+An advanced quantization technique that reduces model size while preserving accuracy by considering activation patterns.
+
+---
+
+## B
+
+### Base URL
+The root address of an API server (e.g., `http://localhost:8080`), used as the foundation for all API endpoint paths.
+
+### Batch Experiment
+Running evaluation tests on multiple inputs simultaneously to measure AI performance across diverse scenarios.
+
+---
+
+## C
+
+### Cache Directory
+A folder where processed documents, embeddings, or other computed data are stored for faster retrieval.
+
+### Chat Completions Endpoint
+An OpenAI-compatible API endpoint (`/v1/chat/completions`) that processes conversation history as a list of messages.
+
+### ChatAgent
+GAIA's agent implementation for conversational interactions, supporting text and voice-based conversations.
+
+### ChatSDK
+High-level interface for building chat applications in GAIA, providing conversation management, history, and memory features.
+
+### ChatSession
+A manager for multi-context conversations, allowing switching between different conversation topics while maintaining history.
+
+### Chunk Overlap
+The number of tokens that appear in both the end of one text chunk and the beginning of the next, providing context continuity.
+
+### Chunk Size
+The number of tokens in each piece when splitting text for processing, typically ranging from 500-2000 tokens.
+
+### CLI (Command Line Interface)
+A text-based interface for interacting with software through terminal commands, such as `gaia chat` or `gaia talk`.
+
+### CodeAgent
+GAIA's specialized agent for code generation, analysis, and debugging tasks.
+
+### Command-line Parameter
+Arguments passed to commands when executing them, such as `--model` or `--debug`.
+
+### Completions Endpoint
+An OpenAI-compatible API endpoint (`/v1/completions`) that processes pre-formatted prompt strings directly.
+
+### Configuration File
+A JSON or YAML file (like `settings.json`) containing application settings and preferences.
+
+### Connection Pooling
+Reusing network connections for multiple requests instead of creating new connections each time, improving performance.
+
+### Content Hashing
+Generating a unique identifier for document content to detect when files have changed and need reprocessing.
+
+### Context Preservation
+Maintaining important information when splitting text across chunks, ensuring coherent answers.
+
+### Context Window
+The maximum number of tokens an LLM can process at once, including both input and output. Modern models range from 4K to 1M+ tokens.
+
+### Conversation History
+The record of past user and assistant messages in a chat session, used for context in subsequent responses.
+
+### Conversation Pair
+A single exchange consisting of a user message and the corresponding assistant response.
+
+### Cosine Similarity
+A mathematical measure of similarity between two vectors, ranging from -1 to 1, commonly used in semantic search.
+
+### Cost Tracking
+Monitoring API usage and associated costs, especially important when using cloud-based LLMs.
+
+---
+
+## D
+
+### Debug Mode
+A verbose logging setting that provides detailed information about system operations for troubleshooting.
+
+### Document Chunking
+The process of splitting large documents into smaller, manageable pieces for processing by LLMs or embedding models.
+
+---
+
+## E
+
+### Editable Install
+Installing a Python package in development mode (`pip install -e .`) so code changes take effect immediately without reinstallation.
+
+### Editable Mode
+See Editable Install.
+
+### Embeddings
+Dense vector representations of text that capture semantic meaning, enabling similarity comparisons and search.
+
+### Environment Variable
+A system-level configuration setting, such as `LEMONADE_BASE_URL` or `ANTHROPIC_API_KEY`.
+
+### Error Recovery
+The ability of an agent to handle failures gracefully and continue operation, potentially retrying or using alternative approaches.
+
+### Evaluation Framework
+A system for systematically testing AI performance against known correct answers or expected behaviors.
+
+### Exponential Backoff
+A retry strategy that increases the wait time between retries exponentially (e.g., 1s, 2s, 4s, 8s).
+
+---
+
+## F
+
+### FAISS (Facebook AI Similarity Search)
+A library for efficient similarity search and clustering of dense vectors, commonly used for RAG systems.
+
+### Few-shot Learning
+Providing an LLM with a few example inputs and outputs to teach it how to perform a task.
+
+### FileToolsMixin
+A GAIA mixin providing file operation tools (read, write, edit, search) that agents can use.
+
+---
+
+## G
+
+### GEMM (General Matrix Multiply)
+A fundamental mathematical operation in neural networks, crucial for AI computations and often hardware-accelerated.
+
+### GGUF (GPT-Generated Unified Format)
+A file format for quantized LLM models, optimized for efficient loading and inference.
+
+### Ground Truth
+Known correct answers used to evaluate AI system performance during testing.
+
+### Grounding
+Anchoring LLM responses in factual data or retrieved documents to reduce hallucinations.
+
+---
+
+## H
+
+### Hallucination
+When an LLM generates plausible-sounding but factually incorrect or nonsensical information.
+
+### Hardware Acceleration
+Using specialized processors (NPU, GPU) instead of general-purpose CPUs for faster AI computations.
+
+### Hybrid Mode
+Using both NPU and iGPU together to maximize AI performance on AMD Ryzen AI processors.
+
+---
+
+## I
+
+### iGPU (Integrated GPU)
+A graphics processing unit built into the CPU chip, capable of accelerating AI workloads on AMD processors.
+
+### Image Extraction
+Extracting images embedded in documents like PDFs for processing by vision models.
+
+### Index Persistence
+Saving vector search indexes to disk so they can be loaded quickly without recomputing embeddings.
+
+### Inference
+The process of running an AI model to generate predictions or outputs from input data.
+
+### Installation Directory
+The folder where GAIA and its dependencies are installed on your system.
+
+---
+
+## J
+
+### JSON Schema
+A standard format for describing the structure and validation rules of JSON data, used for tool parameter definitions.
+
+---
+
+## L
+
+### Lemonade Server
+AMD's optimized LLM serving platform that provides hardware-accelerated inference on Ryzen AI processors with NPU support.
+
+### LEMONADE_BASE_URL
+Environment variable specifying the address of the Lemonade Server (e.g., `http://localhost:8080`).
+
+### LLM (Large Language Model)
+AI models trained on vast text corpora that can understand and generate human-like text (e.g., Qwen, Claude, GPT).
+
+### LRU Eviction (Least Recently Used)
+A memory management strategy that removes the least recently accessed items when space is needed.
+
+---
+
+## M
+
+### Max File Size
+A configured limit on the size of documents that can be processed, typically to prevent memory issues.
+
+### Max History Length
+The number of conversation pairs retained in chat history before older messages are removed.
+
+### Max Tokens
+The maximum length of an LLM response, measured in tokens.
+
+### MCP (Model Context Protocol)
+A standardized protocol for integrating AI agents with external tools and services.
+
+### MCP Server
+A service that exposes agent capabilities through the Model Context Protocol.
+
+### MCP Tools
+Functions and capabilities exposed through an MCP server that agents can call.
+
+### Mixin
+A reusable class that provides a set of related tools to agents, following Python's mixin pattern.
+
+### Model ID
+A unique identifier for a specific LLM, such as `Qwen2.5-0.5B-Instruct-CPU`.
+
+### Multi-step Reasoning
+An agent's ability to break complex tasks into steps and execute them sequentially or adaptively.
+
+---
+
+## N
+
+### NPU (Neural Processing Unit)
+A dedicated AI accelerator in AMD Ryzen AI processors, optimized for running neural networks efficiently.
+
+### NPU Offload
+Running AI workloads on the NPU instead of the CPU for better performance and energy efficiency.
+
+### NSIS (Nullsoft Scriptable Install System)
+An open-source system for creating Windows installers, used for GAIA's Windows installation package.
+
+---
+
+## O
+
+### OCR (Optical Character Recognition)
+Technology that converts images of text (like scanned documents) into machine-readable text.
+
+### OGA (ONNX Runtime GenAI)
+Microsoft's ONNX-based inference runtime for generative AI, optimized for AMD hardware.
+
+### ONNX (Open Neural Network Exchange)
+An open standard format for representing machine learning models, enabling cross-platform deployment.
+
+### OPENAI_API_KEY
+Environment variable containing the API key for accessing OpenAI's API services.
+
+### OpenAI-compatible API
+An API that follows OpenAI's endpoint structure and request/response format, allowing tool compatibility.
+
+---
+
+## P
+
+### Page Boundary
+The point where one PDF page ends and another begins, important for maintaining context in document processing.
+
+### PATH Environment Variable
+A system variable listing directories where the operating system searches for executable programs.
+
+### PDF Extraction
+The process of extracting text, images, and structure from PDF documents.
+
+### Per-file Indexing
+Creating separate vector search indexes for each document rather than one combined index.
+
+### Performance Metrics
+Quantitative measurements of system behavior, such as tokens per second or time to first token.
+
+### Prompt
+The input text provided to an LLM, including instructions, context, and the user's question or request.
+
+### Prompt Engineering
+The practice of crafting effective prompts to elicit desired behaviors from LLMs.
+
+### PyPI (Python Package Index)
+The official repository for distributing Python packages, accessible via `pip install`.
+
+---
+
+## Q
+
+### Quantization
+Reducing the precision of model weights (e.g., from float32 to int4) to decrease model size and increase inference speed.
+
+---
+
+## R
+
+### RAG (Retrieval-Augmented Generation)
+A technique combining document search with LLM generation, allowing models to answer questions using retrieved information.
+
+### RAGToolsMixin
+A GAIA mixin providing document Q&A capabilities to agents through RAG functionality.
+
+### RAGSDK
+GAIA's high-level interface for document question-answering with RAG.
+
+### Relevance Score
+A numerical measure of how well a retrieved document chunk matches a search query.
+
+### Resource Cleanup
+Properly freeing memory, closing connections, and releasing system resources when no longer needed.
+
+### Response Truncation
+Cutting off LLM output when it exceeds maximum token limits or becomes excessively long.
+
+### REST API
+An API following Representational State Transfer principles, using HTTP methods (GET, POST, etc.) for operations.
+
+### Retry Logic
+Automatic retry mechanisms when operations fail, often with exponential backoff.
+
+### RoutingAgent
+A GAIA agent that analyzes requests and delegates them to specialized agents best suited for the task.
+
+### Ryzen AI
+AMD's brand for processors featuring integrated NPU hardware for AI acceleration.
+
+### Ryzen AI Driver
+Software that enables NPU functionality on AMD Ryzen AI processors.
+
+---
+
+## S
+
+### Sample Rate
+The audio quality measurement (e.g., 16kHz, 24kHz) indicating how many samples per second are captured.
+
+### SDK (Software Development Kit)
+A collection of tools, libraries, and documentation for building applications with a platform.
+
+### Semantic Boundary
+Natural break points in text (like paragraph or section breaks) used for intelligent document chunking.
+
+### Semantic Chunking
+Splitting text while preserving semantic meaning, using sentence or paragraph boundaries rather than arbitrary character counts.
+
+### Semantic Search
+Finding information based on meaning rather than keyword matching, using embeddings and vector similarity.
+
+### Server-Sent Events (SSE)
+A protocol for servers to push real-time updates to clients, commonly used for streaming LLM responses.
+
+### Session Management
+Handling multiple concurrent conversations or user sessions, each with independent state and history.
+
+### ShellToolsMixin
+A GAIA mixin providing shell command execution capabilities to agents.
+
+### Show Stats
+A configuration option to display performance metrics like tokens per second and processing time.
+
+### Silent Installation
+Installing software without user interface prompts, using flags like `/S` in Windows installers.
+
+### Silent Mode
+Suppressing agent console output, useful for programmatic usage or when output is not needed.
+
+### Silence Threshold
+The audio level sensitivity setting for detecting when a user starts or stops speaking.
+
+### SimpleChat
+A lightweight chat wrapper in GAIA for basic conversational interactions without session management.
+
+### State Management
+Tracking and managing an agent's current progress, variables, and execution context.
+
+### Streaming
+Real-time token-by-token delivery of LLM responses as they're generated, rather than waiting for completion.
+
+### Synthetic Data
+Artificially generated test data used for evaluation when real-world data is unavailable or insufficient.
+
+### System Prompt
+Instructions that shape an LLM's behavior, persona, and response style, typically invisible to end users.
+
+---
+
+## T
+
+### Temperature
+A parameter (typically 0.0-2.0) controlling randomness in LLM output. Lower values produce more deterministic responses.
+
+### Time to First Token (TTFT)
+The latency between sending a request and receiving the first token of a response, measuring perceived responsiveness.
+
+### Timeout
+The maximum time to wait for an operation before considering it failed.
+
+### Token
+The basic unit of text processed by LLMs, roughly equivalent to 3/4 of an English word.
+
+### Tokens per Second
+A performance metric measuring how quickly an LLM generates text output.
+
+### Tool
+A Python function decorated with `@tool` that agents can call to perform actions like reading files or searching documents.
+
+### Tool Calling
+The LLM's ability to invoke predefined functions to take actions or retrieve information.
+
+### Tool Decorator (@tool)
+A Python decorator (`@tool`) that marks functions as callable by agents, automatically generating schemas.
+
+### Tool Execution
+The process of running a tool function with provided arguments and returning results to the agent.
+
+### Tool Schema
+A JSON description of a tool's parameters, types, and documentation used by LLMs to understand how to call it.
+
+### Transcription Queue
+A buffer that stores speech-to-text output as it's being processed, before delivery to the application.
+
+### TTS (Text-to-Speech)
+Technology that converts written text into spoken audio. GAIA uses the Kokoro TTS system.
+
+---
+
+## U
+
+### UV
+A modern Python package manager written in Rust, offering 10-100x faster installation compared to pip.
+
+---
+
+## V
+
+### Vector Search
+Finding similar items by comparing their vector embeddings using distance metrics like cosine similarity.
+
+### Virtual Environment (.venv)
+An isolated Python environment with its own packages, preventing conflicts between project dependencies.
+
+### VLM (Vision Language Model)
+AI models that can process both images and text, enabling tasks like image captioning or visual question answering.
+
+### VLM Enhancement
+Using vision models to extract text from images or scanned documents, improving OCR quality.
+
+### Voice Activity Detection (VAD)
+Technology that detects when a user is actively speaking versus silence or background noise.
+
+### Voice Chat
+Speech-based conversation where users speak instead of typing and receive spoken responses.
+
+### Voice Model Size
+The variant of an ASR model (base, small, medium, large), trading accuracy for speed and memory usage.
+
+---
+
+## W
+
+### Webhook
+An HTTP callback that sends real-time data to a specified URL when events occur.
+
+### Whisper
+OpenAI's open-source speech recognition model, used by GAIA for ASR functionality.
+
+---
+
+## Z
+
+### Zero-shot
+An LLM performing a task without any training examples, relying solely on its pre-training knowledge.
+
+---
+
+## Related Resources
+
+- [Getting Started](/quickstart) - Set up GAIA and run your first agent
+- [SDK Reference](/sdk/index) - Comprehensive SDK documentation
+- [FAQ](/reference/faq) - Frequently asked questions
+- [Development Guide](/reference/dev) - Building and extending GAIA

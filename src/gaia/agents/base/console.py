@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import json
@@ -21,7 +21,7 @@ try:
 except ImportError:
     RICH_AVAILABLE = False
     print(
-        "Rich library not found. Install with 'pip install rich' for syntax highlighting."
+        "Rich library not found. Install with 'uv pip install rich' for syntax highlighting."
     )
 
 # Display configuration constants
@@ -351,6 +351,28 @@ class AgentConsole(OutputHandler):
             data: Dictionary data to print
             title: Optional title for the panel
         """
+
+        def _safe_default(obj: Any) -> Any:
+            """
+            JSON serializer fallback that handles common non-serializable types like numpy scalars/arrays.
+            """
+            try:
+                import numpy as np  # Local import to avoid hard dependency at module import time
+
+                if isinstance(obj, np.generic):
+                    return obj.item()
+                if isinstance(obj, np.ndarray):
+                    return obj.tolist()
+            except Exception:
+                pass
+
+            for caster in (float, int, str):
+                try:
+                    return caster(obj)
+                except Exception:
+                    continue
+            return "<non-serializable>"
+
         if self.rich_available:
             # Check if this is a command execution result
             if "command" in data and "stdout" in data:
@@ -381,8 +403,13 @@ class AgentConsole(OutputHandler):
                 )
             else:
                 # Regular JSON output
-                # Convert to formatted JSON string
-                json_str = json.dumps(data, indent=2)
+                # Convert to formatted JSON string with safe fallback for non-serializable types (e.g., numpy.float32)
+                print(data)
+                try:
+                    json_str = json.dumps(data, indent=2)
+                except TypeError:
+                    json_str = json.dumps(data, indent=2, default=_safe_default)
+
                 # Create a syntax object with JSON highlighting
                 syntax = Syntax(json_str, "json", theme="monokai", line_numbers=False)
                 # Create a panel with a title if provided
@@ -403,7 +430,10 @@ class AgentConsole(OutputHandler):
                     if len(stdout) > 500:
                         print("... (output truncated)")
             else:
-                print(json.dumps(data, indent=2))
+                try:
+                    print(json.dumps(data, indent=2))
+                except TypeError:
+                    print(json.dumps(data, indent=2, default=_safe_default))
 
     def print_header(self, text: str) -> None:
         """
@@ -435,20 +465,20 @@ class AgentConsole(OutputHandler):
 
     def print_processing_start(self, query: str, max_steps: int) -> None:
         """
-        Print the initial processing message with max steps info.
+        Print the initial processing message.
 
         Args:
             query: The user query being processed
-            max_steps: Maximum number of steps allowed
+            max_steps: Maximum number of steps allowed (kept for API compatibility)
         """
         if self.rich_available:
             self.console.print(f"\n[bold blue]🤖 Processing:[/bold blue] '{query}'")
             self.console.print("=" * 50)
-            self.console.print(f"[dim]Max steps: {max_steps}[/dim]\n")
+            self.console.print()
         else:
             print(f"\n🤖 Processing: '{query}'")
             print("=" * 50)
-            print(f"Max steps: {max_steps}\n")
+            print()
 
     def print_separator(self, length: int = 50) -> None:
         """
@@ -824,11 +854,13 @@ class AgentConsole(OutputHandler):
             answer: The final answer to display
             streaming: Not used (kept for compatibility)
         """
-        # Use the "🧠 gaia:" prefix for consistency
         if self.rich_available:
-            self.console.print(f"\n[bold blue]🧠 gaia:[/bold blue] {answer}")
+            self.console.print()  # Add newline before
+            self.console.print(
+                Panel(answer, title="✅ Final Answer", border_style="green")
+            )
         else:
-            print(f"\n🧠 gaia: {answer}")
+            print(f"\n✅ FINAL ANSWER: {answer}\n")
 
     def print_completion(self, steps_taken: int, steps_limit: int) -> None:
         """
@@ -839,12 +871,18 @@ class AgentConsole(OutputHandler):
             steps_limit: Maximum number of steps allowed
         """
         self.print_separator()
-        if self.rich_available:
-            self.console.print(
-                f"[bold blue]✨ Processing complete![/bold blue] Steps taken: {steps_taken}/{steps_limit}"
-            )
+
+        if steps_taken < steps_limit:
+            # Completed successfully before hitting limit - clean message
+            message = "✨ Processing complete!"
         else:
-            print(f"✨ Processing complete! Steps taken: {steps_taken}/{steps_limit}")
+            # Hit the limit - show ratio to indicate incomplete
+            message = f"⚠️ Processing stopped after {steps_taken}/{steps_limit} steps"
+
+        if self.rich_available:
+            self.console.print(f"[bold blue]{message}[/bold blue]")
+        else:
+            print(message)
 
     def print_prompt(self, prompt: str, title: str = "Prompt") -> None:
         """
@@ -1082,6 +1120,302 @@ class AgentConsole(OutputHandler):
         else:
             print(f"\n📌 {name}({params_str})")
             print(f"   {description}")
+
+    # === File Watcher Output Methods ===
+
+    def print_file_created(
+        self, filename: str, size: int = 0, extension: str = ""
+    ) -> None:
+        """
+        Print file created notification with styling.
+
+        Args:
+            filename: Name of the file
+            size: Size in bytes
+            extension: File extension
+        """
+        if self.rich_available:
+            self.console.print(
+                f"\n[bold green]📄 New file detected:[/bold green] [cyan]{filename}[/cyan]"
+            )
+            size_str = self._format_file_size(size)
+            self.console.print(f"   [dim]Size:[/dim] {size_str}")
+            self.console.print(f"   [dim]Type:[/dim] {extension or 'unknown'}")
+        else:
+            print(f"\n📄 New file detected: {filename}")
+            print(f"   Size: {size} bytes")
+            print(f"   Type: {extension or 'unknown'}")
+
+    def print_file_modified(self, filename: str) -> None:
+        """
+        Print file modified notification.
+
+        Args:
+            filename: Name of the file
+        """
+        if self.rich_available:
+            self.console.print(
+                f"\n[bold yellow]✏️  File modified:[/bold yellow] [cyan]{filename}[/cyan]"
+            )
+        else:
+            print(f"\n✏️  File modified: {filename}")
+
+    def print_file_deleted(self, filename: str) -> None:
+        """
+        Print file deleted notification.
+
+        Args:
+            filename: Name of the file
+        """
+        if self.rich_available:
+            self.console.print(
+                f"\n[bold red]🗑️  File deleted:[/bold red] [cyan]{filename}[/cyan]"
+            )
+        else:
+            print(f"\n🗑️  File deleted: {filename}")
+
+    def print_file_moved(self, src_filename: str, dest_filename: str) -> None:
+        """
+        Print file moved notification.
+
+        Args:
+            src_filename: Original filename
+            dest_filename: New filename
+        """
+        if self.rich_available:
+            self.console.print(
+                f"\n[bold magenta]📦 File moved:[/bold magenta] "
+                f"[cyan]{src_filename}[/cyan] → [cyan]{dest_filename}[/cyan]"
+            )
+        else:
+            print(f"\n📦 File moved: {src_filename} → {dest_filename}")
+
+    def _format_file_size(self, size_bytes: int) -> str:
+        """Format file size in human-readable format."""
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        elif size_bytes < 1024 * 1024 * 1024:
+            return f"{size_bytes / (1024 * 1024):.1f} MB"
+        else:
+            return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+
+    # === VLM/Model Progress Output Methods ===
+
+    def print_model_loading(self, model_name: str) -> None:
+        """
+        Print model loading progress.
+
+        Args:
+            model_name: Name of the model being loaded
+        """
+        if self.rich_available:
+            self.console.print(
+                f"[bold blue]🔄 Loading model:[/bold blue] [cyan]{model_name}[/cyan]..."
+            )
+        else:
+            print(f"🔄 Loading model: {model_name}...")
+
+    def print_model_ready(self, model_name: str, already_loaded: bool = False) -> None:
+        """
+        Print model ready notification.
+
+        Args:
+            model_name: Name of the model
+            already_loaded: If True, model was already loaded
+        """
+        status = "ready" if already_loaded else "loaded"
+        if self.rich_available:
+            self.console.print(
+                f"[bold green]✅ Model {status}:[/bold green] [cyan]{model_name}[/cyan]"
+            )
+        else:
+            print(f"✅ Model {status}: {model_name}")
+
+    def print_extraction_start(
+        self, image_num: int, page_num: int, mime_type: str
+    ) -> None:
+        """
+        Print VLM extraction starting notification.
+
+        Args:
+            image_num: Image number being processed
+            page_num: Page number (for PDFs)
+            mime_type: MIME type of the image
+        """
+        if self.rich_available:
+            self.console.print(
+                f"   [dim]🔍 VLM extracting from image {image_num} "
+                f"on page {page_num} ({mime_type})...[/dim]"
+            )
+        else:
+            print(
+                f"   🔍 VLM extracting from image {image_num} "
+                f"on page {page_num} ({mime_type})..."
+            )
+
+    def print_extraction_complete(
+        self, chars: int, image_num: int, elapsed_seconds: float, size_kb: float
+    ) -> None:
+        """
+        Print VLM extraction complete notification.
+
+        Args:
+            chars: Number of characters extracted
+            image_num: Image number processed
+            elapsed_seconds: Time taken for extraction
+            size_kb: Image size in KB
+        """
+        if self.rich_available:
+            self.console.print(
+                f"   [green]✅ Extracted {chars} chars from image {image_num} "
+                f"in {elapsed_seconds:.2f}s ({size_kb:.0f}KB image)[/green]"
+            )
+        else:
+            print(
+                f"   ✅ Extracted {chars} chars from image {image_num} "
+                f"in {elapsed_seconds:.2f}s ({size_kb:.0f}KB image)"
+            )
+
+    def print_ready_for_input(self) -> None:
+        """
+        Print a visual separator indicating ready for user input.
+
+        Used after file processing completes to show the user
+        that the system is ready for commands.
+        """
+        if self.rich_available:
+            self.console.print()
+            self.console.print("─" * 80, style="dim")
+            self.console.print("> ", end="", style="bold green")
+        else:
+            print()
+            print("─" * 80)
+            print("> ", end="")
+
+    # === Processing Pipeline Progress Methods ===
+
+    def print_processing_step(
+        self,
+        step_num: int,
+        total_steps: int,
+        step_name: str,
+        status: str = "running",
+    ) -> None:
+        """
+        Print a processing step indicator with progress bar.
+
+        Args:
+            step_num: Current step number (1-based)
+            total_steps: Total number of steps
+            step_name: Human-readable name of the current step
+            status: Step status - 'running', 'complete', 'error'
+        """
+        # Create a simple progress bar
+        progress_width = 20
+        completed = int((step_num - 1) / total_steps * progress_width)
+        current = 1 if step_num <= total_steps else 0
+        remaining = progress_width - completed - current
+
+        if status == "complete":
+            bar = "█" * progress_width
+        elif status == "error":
+            bar = "█" * completed + "✗" + "░" * remaining
+        else:
+            bar = "█" * completed + "▶" * current + "░" * remaining
+
+        # Status icon
+        icons = {
+            "running": "⏳",
+            "complete": "✅",
+            "error": "❌",
+        }
+        icon = icons.get(status, "⏳")
+
+        if self.rich_available:
+            # Style based on status
+            if status == "complete":
+                style = "green"
+            elif status == "error":
+                style = "red"
+            else:
+                style = "cyan"
+
+            self.console.print(
+                f"   [{style}]{icon} [{step_num}/{total_steps}][/{style}] "
+                f"[dim]{bar}[/dim] [bold]{step_name}[/bold]"
+            )
+        else:
+            print(f"   {icon} [{step_num}/{total_steps}] {bar} {step_name}")
+
+    def print_processing_pipeline_start(self, filename: str, total_steps: int) -> None:
+        """
+        Print the start of a processing pipeline.
+
+        Args:
+            filename: Name of the file being processed
+            total_steps: Total number of processing steps
+        """
+        if self.rich_available:
+            self.console.print()
+            self.console.print(
+                f"[bold cyan]⚙️  Processing Pipeline[/bold cyan] "
+                f"[dim]({total_steps} steps)[/dim]"
+            )
+            self.console.print(f"   [dim]File:[/dim] [cyan]{filename}[/cyan]")
+        else:
+            print(f"\n⚙️  Processing Pipeline ({total_steps} steps)")
+            print(f"   File: {filename}")
+
+    def print_processing_pipeline_complete(
+        self,
+        filename: str,  # pylint: disable=unused-argument
+        success: bool,
+        elapsed_seconds: float,
+        patient_name: str = None,
+        is_duplicate: bool = False,
+    ) -> None:
+        """
+        Print the completion of a processing pipeline.
+
+        Args:
+            filename: Name of the file processed (kept for API consistency)
+            success: Whether processing was successful
+            elapsed_seconds: Total processing time
+            patient_name: Optional patient name for success message
+            is_duplicate: Whether this was a duplicate file (skipped)
+        """
+        if self.rich_available:
+            if is_duplicate:
+                msg = f"[bold yellow]⚡ Duplicate skipped[/bold yellow] in {elapsed_seconds:.1f}s"
+                if patient_name:
+                    msg += f" → [cyan]{patient_name}[/cyan] (already processed)"
+                self.console.print(msg)
+            elif success:
+                msg = f"[bold green]✅ Pipeline complete[/bold green] in {elapsed_seconds:.1f}s"
+                if patient_name:
+                    msg += f" → [cyan]{patient_name}[/cyan]"
+                self.console.print(msg)
+            else:
+                self.console.print(
+                    f"[bold red]❌ Pipeline failed[/bold red] after {elapsed_seconds:.1f}s"
+                )
+        else:
+            if is_duplicate:
+                msg = f"⚡ Duplicate skipped in {elapsed_seconds:.1f}s"
+                if patient_name:
+                    msg += f" → {patient_name} (already processed)"
+                print(msg)
+            elif success:
+                msg = f"✅ Pipeline complete in {elapsed_seconds:.1f}s"
+                if patient_name:
+                    msg += f" → {patient_name}"
+                print(msg)
+            else:
+                print(f"❌ Pipeline failed after {elapsed_seconds:.1f}s")
+
+    # === File Preview Methods ===
 
     def start_file_preview(
         self, filename: str, max_lines: int = 15, title_prefix: str = "📄"
@@ -1454,4 +1788,54 @@ class SilentConsole(OutputHandler):
         """No-op implementation."""
 
     def print_completion(self, steps_taken: int, steps_limit: int):
+        """No-op implementation."""
+
+    def print_success(self, message: str):
+        """No-op implementation."""
+
+    def print_file_created(self, filename: str, size: int = 0, extension: str = ""):
+        """No-op implementation."""
+
+    def print_file_modified(self, filename: str, size: int = 0):
+        """No-op implementation."""
+
+    def print_file_deleted(self, filename: str):
+        """No-op implementation."""
+
+    def print_file_moved(self, src_filename: str, dest_filename: str):
+        """No-op implementation."""
+
+    def print_model_loading(self, model_name: str):
+        """No-op implementation."""
+
+    def print_model_ready(self, model_name: str, already_loaded: bool = False):
+        """No-op implementation."""
+
+    def print_extraction_start(self, image_num: int, page_num: int, mime_type: str):
+        """No-op implementation."""
+
+    def print_extraction_complete(
+        self, chars: int, image_num: int, elapsed_seconds: float, size_kb: float
+    ):
+        """No-op implementation."""
+
+    def print_ready_for_input(self):
+        """No-op implementation."""
+
+    def print_processing_step(
+        self, step_num: int, total_steps: int, step_name: str, status: str = "running"
+    ):
+        """No-op implementation."""
+
+    def print_processing_pipeline_start(self, filename: str, total_steps: int):
+        """No-op implementation."""
+
+    def print_processing_pipeline_complete(
+        self,
+        filename: str,
+        success: bool,
+        elapsed_seconds: float,
+        patient_name: str = None,
+        is_duplicate: bool = False,
+    ):
         """No-op implementation."""

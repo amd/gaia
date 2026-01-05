@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """Code generation patterns for web applications.
 
@@ -394,6 +394,8 @@ def _map_type_to_zod(field_type: str) -> str:
 
 SERVER_COMPONENT_LIST = """import {{ prisma }} from "@/lib/prisma";
 import Link from "next/link";
+// EXTRA COMPONENT NOTE: Import any previously generated components/helpers as needed.
+// import {{ AdditionalComponent }} from "@/components/AdditionalComponent";
 
 async function get{Resource}s() {{
   const {resource_plural} = await prisma.{resource}.findMany({{
@@ -409,16 +411,25 @@ export default async function {Resource}sPage() {{
   return (
     <div className="min-h-screen">
       <div className="container mx-auto px-4 py-12 max-w-4xl">
-        {{/* Header */}}
-        <div className="mb-10">
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent mb-2">
-            {Resource}s
-          </h1>
-          <p className="text-slate-400">
-            {{{resource_plural}.length === 0
-              ? "No items yet. Create your first one!"
-              : `${{({resource_plural} as any[]).filter(t => !(t as any).completed).length}} pending items`}}
-          </p>
+        {{/* Header + Custom Components */}}
+        <div className="mb-10 flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent mb-2">
+              {Resource}s
+            </h1>
+            <p className="text-slate-400">
+              {{{resource_plural}.length === 0
+                ? "No items yet. Create your first one!"
+                : `${{({resource_plural} as any[]).filter(t => !(t as any).completed).length}} pending items`}}
+            </p>
+          </div>
+
+          {{/* EXTRA COMPONENT NOTE:
+              Check the plan for other generated components (timer, stats badge, etc.)
+              and render them here via their imports. Example:
+                <AdditionalComponent targetTimestamp={{...}} />
+              Remove this placeholder when no extra component is needed. */}}
+          {{/* <AdditionalComponent className="w-full md:w-60" /> */}}
         </div>
 
         {{/* Add Button */}}
@@ -458,13 +469,21 @@ export default async function {Resource}sPage() {{
           ) : (
             <div className="space-y-3">
               {{{resource_plural}.map((item) => (
-                <Link
-                  key={{item.id}}
-                  href={{`/{resource}s/${{item.id}}`}}
-                  className="block p-5 rounded-xl bg-slate-800/30 border border-slate-700/30 hover:bg-slate-800/50 hover:border-indigo-500/30 transition-all duration-300"
-                >
-                  {field_display}
-                </Link>
+              <Link
+                key={{item.id}}
+                href={{`/{resource}s/${{item.id}}`}}
+                className="block p-5 rounded-xl bg-slate-800/30 border border-slate-700/30 hover:bg-slate-800/50 hover:border-indigo-500/30 transition-all duration-300"
+              >
+                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                  <div className="flex-1">{field_display}</div>
+                  {{/* EXTRA COMPONENT NOTE:
+                      Check the plan for per-item components that were generated (countdown,
+                      status badge, etc.) and include them here. Example:
+                        <AdditionalComponent targetTimestamp={{item.missionTime}} />
+                      Remove this placeholder if no extra component is needed. */}}
+                  {{/* <AdditionalComponent {...item} className="w-full md:w-56" /> */}}
+                </div>
+              </Link>
               ))}}
             </div>
           )}}
@@ -603,6 +622,98 @@ export function {Resource}Form({{ initialData, mode = "create" }}: {Resource}For
     </form>
   );
 }}"""
+
+CLIENT_COMPONENT_TIMER = """"use client";
+
+import {{ useEffect, useMemo, useState }} from "react";
+
+interface {{ComponentName}}Props {{
+  targetTimestamp?: string; // ISO 8601 string that marks when the countdown ends
+  durationSeconds?: number; // Fallback duration (seconds) when no timestamp is provided
+  className?: string;
+}}
+
+const MS_IN_SECOND = 1000;
+const MS_IN_MINUTE = 60 * MS_IN_SECOND;
+const MS_IN_HOUR = 60 * MS_IN_MINUTE;
+const MS_IN_DAY = 24 * MS_IN_HOUR;
+
+export function {{ComponentName}}({{
+  targetTimestamp,
+  durationSeconds = 0,
+  className = "",
+}}: {{ComponentName}}Props) {{
+  const deadlineMs = useMemo(() => {{
+    if (targetTimestamp) {{
+      const parsed = Date.parse(targetTimestamp);
+      return Number.isNaN(parsed) ? null : parsed;
+    }}
+    if (durationSeconds > 0) {{
+      return Date.now() + durationSeconds * MS_IN_SECOND;
+    }}
+    return null;
+  }}, [targetTimestamp, durationSeconds]);
+
+  const [timeLeftMs, setTimeLeftMs] = useState(() => {{
+    if (!deadlineMs) return 0;
+    return Math.max(deadlineMs - Date.now(), 0);
+  }});
+
+  useEffect(() => {{
+    if (!deadlineMs) {{
+      setTimeLeftMs(0);
+      return;
+    }}
+
+    const update = () => {{
+      setTimeLeftMs(Math.max(deadlineMs - Date.now(), 0));
+    }};
+
+    update();
+
+    const intervalId = window.setInterval(() => {{
+      update();
+      if (deadlineMs <= Date.now()) {{
+        window.clearInterval(intervalId);
+      }}
+    }}, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }}, [deadlineMs]);
+
+  const isExpired = timeLeftMs <= 0;
+
+  // TIMER_NOTE: derive whichever granularity the feature demands (days, hours,
+  // minutes, seconds, milliseconds, etc.). Remove unused helpers so the final
+  // output matches the spec exactly.
+  const days = Math.floor(timeLeftMs / MS_IN_DAY);
+  const hours = Math.floor((timeLeftMs % MS_IN_DAY) / MS_IN_HOUR);
+  const minutes = Math.floor((timeLeftMs % MS_IN_HOUR) / MS_IN_MINUTE);
+  const seconds = Math.floor((timeLeftMs % MS_IN_MINUTE) / MS_IN_SECOND);
+
+  return (
+    <section
+      className={{`glass-card p-6 space-y-4 ${{className}}`.trim()}}
+      data-countdown-target={{targetTimestamp || ""}}
+    >
+      {{/* TIMER_NOTE: swap this placeholder layout for the requested display.
+          Emit only the units the user cares about (e.g., just minutes/seconds,
+          or a full days→hours→minutes breakdown). */}}
+      <div className="font-mono text-4xl text-slate-100">
+        {{seconds}}s
+      </div>
+
+      {{isExpired && (
+        <p className="text-sm text-slate-400">
+          {{/* TIMER_NOTE: replace this placeholder with the exact completion
+              copy or follow-up action the prompt describes. */}}
+          Countdown complete.
+        </p>
+      )}}
+    </section>
+  );
+}}"""
+
 
 CLIENT_COMPONENT_NEW_PAGE = """"use client";
 

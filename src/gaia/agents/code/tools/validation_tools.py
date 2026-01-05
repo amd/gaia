@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """Validation tools for Code Agent.
 
@@ -8,6 +8,7 @@ Uses curl-based testing to avoid temporary files and complex setup.
 
 import json
 import logging
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -433,8 +434,10 @@ class ValidationToolsMixin:
             try:
                 logger.debug(f"Validating TypeScript in {project_dir}")
 
+                npx_command = "npx.cmd" if os.name == "nt" else "npx"
+
                 result = subprocess.run(
-                    ["npx", "tsc", "--noEmit", "--skipLibCheck"],
+                    [npx_command, "tsc", "--noEmit", "--skipLibCheck"],
                     cwd=project_dir,
                     capture_output=True,
                     text=True,

@@ -1,0 +1,159 @@
+---
+title: "Talk SDK"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/talk/`](https://github.com/amd/gaia/blob/main/src/gaia/talk/)
+</Info>
+
+<Note>
+**Import:** `from gaia.talk.sdk import TalkSDK, TalkConfig, TalkResponse, TalkMode`
+</Note>
+---
+
+<Badge text="development" color="orange" />
+
+**Detailed Spec:** [spec/talk-sdk](/spec/talk-sdk)
+
+**Purpose:** Unified voice and text chat interface with RAG integration, combining ASR (Whisper) and TTS (Kokoro) with conversational AI.
+
+**When to use it:**
+- Building voice-enabled AI assistants
+- Creating hands-free interfaces
+- Adding speech capabilities to existing agents
+- Building document Q&A with voice interaction
+
+---
+
+## 10.1 Basic Voice & Text Chat
+
+```python
+from gaia.talk.sdk import TalkSDK, TalkConfig, TalkMode
+
+# Configure talk SDK
+config = TalkConfig(
+    mode=TalkMode.VOICE_AND_TEXT,  # or TEXT_ONLY, VOICE_ONLY
+    whisper_model_size="base",      # ASR model size
+    enable_tts=True,                # Text-to-speech
+    assistant_name="gaia",
+    system_prompt="You are a helpful AI assistant.",
+    max_history_length=10,          # Conversation memory
+    show_stats=True
+)
+
+# Create talk instance
+talk = TalkSDK(config)
+
+# Text chat (async)
+response = await talk.chat("What's the weather like?")
+print(response.text)
+if response.stats:
+    print(f"Tokens: {response.stats['total_tokens']}")
+
+# Streaming text chat
+async for chunk in talk.chat_stream("Tell me a story"):
+    print(chunk.text, end="", flush=True)
+
+# Voice chat session
+await talk.start_voice_session()
+# User speaks -> Whisper transcribes -> LLM responds -> TTS speaks answer
+```
+
+---
+
+## 10.2 Voice + RAG Integration
+
+```python
+from gaia.talk.sdk import TalkSDK, TalkConfig
+
+# Configure with RAG documents
+config = TalkConfig(
+    enable_tts=True,
+    rag_documents=["manual.pdf", "guide.pdf", "faq.pdf"]
+)
+
+talk = TalkSDK(config)
+
+# Now voice queries can search documents
+await talk.start_voice_session()
+# User: "What does the manual say about installation?"
+# Agent searches PDFs and speaks the answer
+
+# Add more documents dynamically
+talk.add_document("troubleshooting.pdf")
+
+# Text query with document context
+response = await talk.chat("How do I configure the system?")
+print(response.text)  # Answer based on indexed documents
+```
+
+---
+
+## 10.3 Simple Talk Interface
+
+```python
+from gaia.talk.sdk import SimpleTalk
+
+# Minimal setup for quick integration
+talk = SimpleTalk(
+    system_prompt="You are a cooking assistant.",
+    enable_tts=True,
+    assistant_name="chef"
+)
+
+# Ask questions
+answer = await talk.ask("How do I make pasta?")
+print(answer)
+
+# Streaming responses
+async for chunk in talk.ask_stream("Tell me about Italian cuisine"):
+    print(chunk, end="", flush=True)
+
+# Voice chat
+await talk.voice_chat()
+# Starts interactive voice session
+
+# Conversation management
+history = talk.get_conversation()
+print(history)
+talk.clear_memory()
+```
+
+---
+
+## 10.4 TalkResponse Object
+
+```python
+response = await talk.chat("Hello!")
+
+# Response attributes
+print(response.text)         # Generated response text
+print(response.is_complete)  # True for final response
+print(response.stats)        # Performance statistics
+
+# Stats include:
+# - total_tokens
+# - latency_ms
+# - model_name
+```
+
+---
+
+## Related Topics
+
+- [Chat SDK](../sdks/chat) - Text-only chat interface
+- [RAG SDK](../sdks/rag) - Document indexing and search
+- [Audio SDK](../sdks/audio) - Low-level audio components
+- [Specialized Agents](./specialized) - Pre-built agent implementations
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

@@ -1,0 +1,594 @@
+---
+title: 'MCP Server'
+description: 'HTTP-native bridge exposing GAIA AI agents through REST and JSON-RPC protocols'
+icon: 'network-wired'
+---
+
+<Info>
+  **Source Code:** [`src/gaia/mcp/`](https://github.com/amd/gaia/blob/main/src/gaia/mcp/)
+</Info>
+
+# GAIA MCP Server
+
+<Badge text="development" color="orange" />
+
+## Overview
+
+The GAIA MCP Server provides an HTTP-native bridge that exposes GAIA's AI agents to third-party applications through standard REST and JSON-RPC protocols. This enables external tools like n8n, Zapier, web applications, and custom integrations to leverage GAIA's AI capabilities without direct Python dependencies.
+
+## When to Use MCP
+
+<CardGroup cols={2}>
+  <Card title="Use MCP Server When" icon="check" color="#16a34a">
+    - Integrating GAIA with external applications (n8n, Zapier, web apps)
+    - Building non-Python applications that need GAIA's AI capabilities
+    - Creating workflow automations with tools that support HTTP/REST
+    - Accessing GAIA from browsers or mobile applications
+  </Card>
+
+  <Card title="You DON'T Need MCP When" icon="xmark" color="#dc2626">
+    - Using GAIA CLI directly (`gaia jira`, `gaia llm`, etc.)
+    - Building Python applications (use GAIA's Python API directly)
+    - Running GAIA agents locally from the command line
+    - Integrating with VSCode as a Language Model Provider (use the API Server instead)
+  </Card>
+</CardGroup>
+
+## Quick Start
+
+<Steps>
+  <Step title="Install GAIA">
+    MCP is included in base installation
+    ```bash
+    uv pip install -e .
+    ```
+  </Step>
+
+  <Step title="Start the MCP Server">
+    ```bash
+    gaia mcp start
+    ```
+  </Step>
+
+  <Step title="Test the Server">
+    ```bash
+    curl http://localhost:8765/health
+    ```
+  </Step>
+
+  <Step title="Make Your First API Call">
+    ```bash
+    curl -X POST http://localhost:8765/chat \
+      -H "Content-Type: application/json" \
+      -d '{"query":"Hello GAIA"}'
+    ```
+  </Step>
+</Steps>
+
+## Setup
+
+### Prerequisites
+
+<Steps>
+  <Step title="Install GAIA">
+    Follow the [Development Guide](/reference/dev) to install GAIA
+  </Step>
+
+  <Step title="Start Lemonade Server">
+    Ensure the LLM backend is running:
+    ```bash
+    lemonade-server serve --ctx-size 8192
+    ```
+  </Step>
+
+  <Step title="Install Docker (for Docker agent)">
+    Install Docker Engine or Desktop from [docker.com](https://www.docker.com/)
+  </Step>
+</Steps>
+
+### Verify Installation
+
+Check server status:
+```bash
+gaia mcp status
+```
+
+Test with a simple query:
+```bash
+gaia mcp test --query "Hello GAIA!"
+```
+
+## Starting the MCP Server
+
+<Tabs>
+  <Tab title="Foreground Mode">
+    Start in foreground to see logs:
+    ```bash
+    gaia mcp start
+    ```
+  </Tab>
+
+  <Tab title="Background Mode">
+    Start in background:
+    ```bash
+    gaia mcp start --background
+    ```
+  </Tab>
+
+  <Tab title="Custom Port">
+    Start with custom port:
+    ```bash
+    gaia mcp start --port 9000
+    ```
+  </Tab>
+
+  <Tab title="Verbose Logging">
+    Start with verbose logging (logs all HTTP requests):
+    ```bash
+    gaia mcp start --verbose
+    ```
+
+    <Info>
+    **Logging Behavior:**
+    - **Foreground mode**: Logs appear in the console
+    - **Background mode**: Logs are written to `gaia.mcp.log` (default)
+    - **With `--verbose`**: All HTTP requests/responses are logged (including health checks)
+    - **Main log**: All MCP logs also go to `gaia.log` regardless of mode
+    </Info>
+  </Tab>
+</Tabs>
+
+### Managing the Server
+
+Check if server is running:
+```bash
+gaia mcp status
+```
+
+Test with a simple query:
+```bash
+gaia mcp test --query "Hello, GAIA!"
+```
+
+Stop the server:
+```bash
+gaia mcp stop
+```
+
+## Architecture
+
+<Frame>
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+graph LR
+    A(["External Apps"]) -->|"HTTP Requests"| B(["GAIA MCP Server"])
+    B -->|"Python Bridge"| C(["GAIA Agents"])
+    C -->|"Python Native"| D(["Lemonade Server"])
+
+    style A fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
+    style B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style C fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style D fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+
+    linkStyle 0,1,2 stroke:#ED1C24,stroke-width:2px
+```
+</Frame>
+
+The MCP Server acts as an HTTP bridge between external applications and GAIA's native Python agents.
+
+## API Endpoints
+
+### REST Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Server health check |
+| `/tools` | GET | List available tools |
+| `/chat` | POST | Conversational chat (with context) |
+| `/llm` | POST | Direct LLM queries (no context) |
+| `/jira` | POST | Jira operations |
+| `/` | POST | JSON-RPC 2.0 endpoint |
+
+<Note>Docker uses a newer framework using FastMCP-powered server. See examples in [Docker section](#docker-operations-fastmcp-framework) below.</Note>
+
+### Example API Calls
+
+<Tabs>
+  <Tab title="Health Check">
+    ```bash
+    curl http://localhost:8765/health
+    ```
+
+    Response:
+    ```json
+    {
+      "status": "healthy",
+      "agents": 4,
+      "tools": 8
+    }
+    ```
+  </Tab>
+
+  <Tab title="Chat (Conversational)">
+    First message:
+    ```bash
+    curl -X POST http://localhost:8765/chat \
+      -H "Content-Type: application/json" \
+      -d '{"query": "Hello! My name is Alice."}'
+    ```
+
+    Follow-up (remembers context):
+    ```bash
+    curl -X POST http://localhost:8765/chat \
+      -H "Content-Type: application/json" \
+      -d '{"query": "What is my name?"}'
+    ```
+  </Tab>
+
+  <Tab title="LLM Query (No Context)">
+    ```bash
+    curl -X POST http://localhost:8765/llm \
+      -H "Content-Type: application/json" \
+      -d '{"query": "What is artificial intelligence?"}'
+    ```
+  </Tab>
+
+  <Tab title="Jira Operations">
+    ```bash
+    curl -X POST http://localhost:8765/jira \
+      -H "Content-Type: application/json" \
+      -d '{"query": "show my open issues"}'
+    ```
+  </Tab>
+
+  <Tab title="Docker Operations">
+    Start Docker MCP server:
+    ```bash
+    gaia mcp docker --port 8080
+    ```
+
+    Containerize application via JSON-RPC:
+    ```bash
+    curl -X POST http://localhost:8080/ \
+      -H "Content-Type: application/json" \
+      -d '{
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "tools/call",
+        "params": {
+          "name": "dockerize",
+          "arguments": {
+            "appPath": "/absolute/path/to/app",
+            "port": 5000
+          }
+        }
+      }'
+    ```
+  </Tab>
+
+  <Tab title="JSON-RPC Protocol">
+    ```bash
+    curl -X POST http://localhost:8765/ \
+      -H "Content-Type: application/json" \
+      -d '{
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "tools/call",
+        "params": {
+          "name": "gaia.chat",
+          "arguments": {"query": "Hello GAIA"}
+        }
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+## Integration Examples
+
+<Tabs>
+  <Tab title="Python">
+    ```python
+    import requests
+    import json
+
+    def chat_with_gaia(query):
+        """Chat with GAIA via MCP server (maintains context)"""
+        response = requests.post(
+            'http://localhost:8765/chat',
+            json={'query': query}
+        )
+        return response.json()
+    ```
+
+    Example usage:
+    ```python
+    result = chat_with_gaia("What is machine learning?")
+    print(result['result'])
+    ```
+  </Tab>
+
+  <Tab title="JavaScript/Node.js">
+    ```javascript
+    const axios = require('axios');
+
+    async function chatWithGAIA(query) {
+        const response = await axios.post(
+            'http://localhost:8765/chat',
+            { query: query }
+        );
+        return response.data;
+    }
+    ```
+
+    Example usage:
+    ```javascript
+    const result = await chatWithGAIA('What is AI?');
+    console.log(result.result);
+    ```
+  </Tab>
+
+  <Tab title="cURL">
+    Chat query (maintains conversation context):
+    ```bash
+    curl -X POST http://localhost:8765/chat \
+      -H "Content-Type: application/json" \
+      -d '{"query": "Explain neural networks"}'
+    ```
+
+    Direct LLM query (no context):
+    ```bash
+    curl -X POST http://localhost:8765/llm \
+      -H "Content-Type: application/json" \
+      -d '{"query": "What is quantum computing?"}'
+    ```
+
+    Jira operations:
+    ```bash
+    curl -X POST http://localhost:8765/jira \
+      -H "Content-Type: application/json" \
+      -d '{"query": "create idea: Add dark mode feature"}'
+    ```
+  </Tab>
+</Tabs>
+
+## n8n Integration
+
+For detailed n8n workflow automation examples, see the [n8n Integration Guide](/integrations/n8n).
+
+### Quick n8n Setup
+
+<Steps>
+  <Step title="Start the MCP Server">
+    ```bash
+    gaia mcp start
+    ```
+  </Step>
+
+  <Step title="Configure HTTP Request Node in n8n">
+    - **Method**: POST
+    - **URL**: `http://localhost:8765/chat`
+    - **Body**: JSON with your query
+  </Step>
+
+  <Step title="Import Example Workflow">
+    - Go to **Workflows** → **Import**
+    - Import `src/gaia/mcp/n8n.json`
+  </Step>
+</Steps>
+
+## Available Tools
+
+The MCP server exposes the following GAIA agents as tools:
+
+### Standard Tools (Port 8765)
+
+| Tool | Description | Example Arguments |
+|------|-------------|-------------------|
+| `gaia.chat` | Conversational chat with context | `{"query": "Hello GAIA"}` |
+| `gaia.query` | Direct LLM queries (no context) | `{"query": "What is AI?"}` |
+| `gaia.jira` | Natural language Jira operations | `{"query": "show my issues"}` |
+| `gaia.blender.create` | 3D content creation | `{"command": "create_cube", "parameters": {}}` |
+
+### Docker Tool (FastMCP framework on port 8080)
+
+| Tool | Description | Example Arguments |
+|------|-------------|-------------------|
+| `dockerize` | Containerize application (analyze → create Dockerfile → build → run) | `{"appPath": "/absolute/path/to/app", "port": 5000}` |
+
+<Info>To use the Docker tool, start the Docker MCP server: `gaia mcp docker --port 8080`</Info>
+
+<Note>The Docker agent is GAIA's first to use the new FastMCP framework. See [Docker Agent Documentation](/guides/docker).</Note>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Connection Refused">
+    **Symptoms**: Cannot connect to MCP server
+
+    **Solutions**:
+    - Ensure the GAIA MCP Bridge is running
+    - Check firewall settings
+    - Verify the correct port (default: 8765)
+  </Accordion>
+
+  <Accordion title="LLM Server Not Responding">
+    **Symptoms**: Queries time out or fail
+
+    **Solutions**:
+    - Start the Lemonade server: `lemonade-server serve`
+    - Check GAIA_BASE_URL is correct
+    - Verify models are loaded
+  </Accordion>
+
+  <Accordion title="Server Won't Start">
+    **Symptoms**: Server fails to start
+
+    **Solutions**:
+    - Check if port 8765 is already in use: `netstat -an | findstr 8765`
+    - Stop existing MCP server: `gaia mcp stop`
+    - Try different port: `gaia mcp start --port 8766`
+  </Accordion>
+
+  <Accordion title="No Tools Available">
+    **Symptoms**: Empty tools list or specific tools missing
+
+    **Solutions**:
+    - Check server logs: `gaia mcp start --verbose`
+    - Verify GAIA installation: `pip show gaia`
+    - Reinstall MCP dependencies: `uv pip install -e ".[mcp]"`
+  </Accordion>
+</AccordionGroup>
+
+### CLI Testing & Debugging
+
+Use GAIA's built-in MCP commands:
+
+Check server status:
+```bash
+gaia mcp status
+```
+
+Test with a query:
+```bash
+gaia mcp test --query "What is artificial intelligence?"
+```
+
+Start with verbose logging:
+```bash
+gaia mcp start --verbose
+```
+
+Test specific host/port:
+```bash
+gaia mcp test --host localhost --port 8765
+```
+
+### Validation Scripts
+
+GAIA provides test scripts in the `tests/mcp/` directory to validate the MCP bridge. Run from the project root directory:
+
+Simple validation test:
+```bash
+python tests/mcp/test_mcp_simple.py
+```
+
+Comprehensive HTTP validation test:
+```bash
+python tests/mcp/test_mcp_http_validation.py
+```
+
+Jira-specific MCP tests:
+```bash
+python tests/mcp/test_mcp_jira.py
+```
+
+Docker-specific MCP tests:
+```bash
+python tests/mcp/test_mcp_docker.py
+```
+
+Integration tests:
+```bash
+python tests/mcp/test_mcp_integration.py
+```
+
+<Info>
+The tests validate:
+- Health checks and tool listing
+- Direct endpoints (/chat, /jira, /docker, /llm)
+- JSON-RPC protocol compliance
+- Error handling and CORS headers
+</Info>
+
+## Security Considerations
+
+<Warning>
+For production deployments, always implement these security measures:
+</Warning>
+
+1. **Authentication**: Always use authentication tokens in production
+2. **SSL/TLS**: Use encrypted connections for sensitive data
+3. **Rate Limiting**: Implement rate limits to prevent abuse
+4. **Access Control**: Restrict access to specific IP addresses or networks
+5. **Audit Logging**: Enable logging for compliance and debugging
+
+## Architecture Notes
+
+<CardGroup cols={2}>
+  <Card title="HTTP-Native" icon="globe">
+    Pure REST/JSON-RPC, no WebSocket dependencies
+  </Card>
+  <Card title="Stateless" icon="server">
+    Each request is independent for better scalability
+  </Card>
+  <Card title="Agent Access" icon="robot">
+    Direct access to all GAIA agents
+  </Card>
+  <Card title="CORS Enabled" icon="browser">
+    Works with browser-based applications
+  </Card>
+</CardGroup>
+
+## Applications
+
+GAIA provides applications that connect to the MCP server. For using existing apps or building new ones, see the [Apps Documentation](./apps/).
+
+## VSCode Integration
+
+GAIA MCP Server can be integrated with VSCode using MCP client capabilities. This provides an alternative integration approach to the VSCode Language Model Provider extension.
+
+For complete VSCode integration documentation, see [VSCode Integration Documentation](./vscode.md#mcp-client-integration).
+
+**Quick Setup:**
+<Steps>
+  <Step title="Start MCP Server">
+    ```bash
+    gaia mcp start
+    ```
+  </Step>
+
+  <Step title="Configure VSCode MCP Client">
+    Configure MCP client in VSCode to connect to `http://localhost:8765`
+  </Step>
+
+  <Step title="Access GAIA Tools">
+    Access GAIA tools via MCP client
+  </Step>
+</Steps>
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="VSCode Integration" icon="code" href="./vscode.md">
+    VSCode extension and MCP integration
+  </Card>
+  <Card title="GAIA API Server" icon="server" href="./api.md">
+    OpenAI-compatible API for VSCode extension
+  </Card>
+  <Card title="n8n Integration" icon="workflow" href="./n8n.md">
+    Detailed workflow automation examples
+  </Card>
+  <Card title="Jira Agent" icon="ticket" href="./jira.md">
+    Natural language Jira operations
+  </Card>
+  <Card title="Docker Agent" icon="docker" href="./docker.md">
+    Natural language Docker containerization
+  </Card>
+  <Card title="GAIA CLI" icon="terminal" href="./cli.md">
+    Command line interface reference
+  </Card>
+</CardGroup>
+
+- [Development Guide](/reference/dev) - Setup and contribution guidelines
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

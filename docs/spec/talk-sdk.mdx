@@ -1,0 +1,772 @@
+---
+title: "Talk SDK"
+description: "Voice and text chat integration with conversation management"
+icon: "microphone"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/talk/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/talk/sdk.py)
+</Info>
+
+<Note>
+**Component:** TalkSDK - Unified voice and text chat integration
+**Module:** `gaia.talk.sdk`
+**Import:** `from gaia.talk.sdk import TalkSDK, TalkConfig, TalkMode, TalkResponse`
+</Note>
+
+---
+
+## Overview
+
+TalkSDK provides a unified interface for integrating GAIA's voice and text chat capabilities into applications. It combines ChatSDK for text generation with AudioClient for voice input/output, providing seamless voice and text interaction with conversation history management.
+
+**Key Features:**
+- Unified voice and text chat interface
+- Conversation history management (via ChatSDK)
+- Text-to-speech (TTS) output
+- Speech-to-text (STT) input via Whisper
+- RAG (Retrieval-Augmented Generation) support
+- Multiple modes: text-only, voice-only, voice-and-text
+- Support for local models and cloud APIs (Claude, ChatGPT)
+
+---
+
+## Requirements
+
+### Functional Requirements
+
+1. **Text Chat**
+   - Send text messages and receive complete responses
+   - Streaming text generation support
+   - Conversation history tracking (via ChatSDK)
+   - Configurable max history length
+
+2. **Voice Chat**
+   - Voice input via Whisper ASR
+   - Voice output via TTS
+   - Interactive voice sessions
+   - Voice session lifecycle management
+   - Callback support for voice input events
+
+3. **Conversation Management**
+   - Automatic history tracking
+   - History retrieval and formatting
+   - History clearing
+   - Max history length enforcement
+
+4. **RAG Integration**
+   - Enable/disable RAG dynamically
+   - Add documents to RAG index
+   - Query documents during conversation
+   - Support for PDF and text documents
+
+5. **Configuration**
+   - Dynamic configuration updates
+   - Model selection (local/Claude/ChatGPT)
+   - Audio device configuration
+   - TTS enable/disable
+   - System prompt customization
+
+### Non-Functional Requirements
+
+1. **Performance**
+   - Low latency for text responses
+   - Efficient audio processing
+   - Minimal overhead for history management
+
+2. **Reliability**
+   - Graceful error handling
+   - Automatic cleanup on shutdown
+   - Session state management
+
+3. **Usability**
+   - Simple API for common use cases
+   - Convenience classes (SimpleTalk)
+   - Clear error messages
+   - Good logging support
+
+---
+
+## API Specification
+
+### File Location
+
+```
+src/gaia/talk/sdk.py
+```
+
+### Public Interface
+
+```python
+from enum import Enum
+from dataclasses import dataclass
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
+
+from gaia.audio.audio_client import AudioClient
+from gaia.chat.sdk import ChatConfig, ChatSDK
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+class TalkMode(Enum):
+    """Talk mode options."""
+    TEXT_ONLY = "text_only"
+    VOICE_ONLY = "voice_only"
+    VOICE_AND_TEXT = "voice_and_text"
+
+@dataclass
+class TalkConfig:
+    """Configuration for TalkSDK."""
+
+    # Voice-specific settings
+    whisper_model_size: str = "base"
+    audio_device_index: Optional[int] = None
+    silence_threshold: float = 0.5
+    enable_tts: bool = True
+    mode: TalkMode = TalkMode.VOICE_AND_TEXT
+
+    # Chat settings (from ChatConfig)
+    model: str = DEFAULT_MODEL_NAME
+    max_tokens: int = 512
+    system_prompt: Optional[str] = None
+    max_history_length: int = 4
+    assistant_name: str = "gaia"
+
+    # General settings
+    use_claude: bool = False
+    use_chatgpt: bool = False
+    show_stats: bool = False
+    logging_level: str = "INFO"
+
+    # RAG settings (optional)
+    rag_documents: Optional[list] = None
+
+@dataclass
+class TalkResponse:
+    """Response from talk operations."""
+    text: str
+    stats: Optional[Dict[str, Any]] = None
+    is_complete: bool = True
+
+class TalkSDK:
+    """
+    Gaia Talk SDK - Unified voice and text chat integration.
+
+    This SDK provides a simple interface for integrating Gaia's voice and text
+    chat capabilities into applications.
+    """
+
+    def __init__(self, config: Optional[TalkConfig] = None):
+        """
+        Initialize the TalkSDK.
+
+        Args:
+            config: Configuration options. If None, uses defaults.
+        """
+        pass
+
+    async def chat(self, message: str) -> TalkResponse:
+        """
+        Send a text message and get a complete response.
+
+        Args:
+            message: The message to send
+
+        Returns:
+            TalkResponse with the complete response
+        """
+        pass
+
+    async def chat_stream(self, message: str) -> AsyncGenerator[TalkResponse, None]:
+        """
+        Send a text message and get a streaming response.
+
+        Args:
+            message: The message to send
+
+        Yields:
+            TalkResponse chunks as they arrive
+        """
+        pass
+
+    async def process_voice_input(self, text: str) -> TalkResponse:
+        """
+        Process voice input text through the complete voice pipeline.
+
+        This includes TTS output if enabled.
+
+        Args:
+            text: The transcribed voice input
+
+        Returns:
+            TalkResponse with the processed response
+        """
+        pass
+
+    async def start_voice_session(
+        self,
+        on_voice_input: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        """
+        Start an interactive voice session.
+
+        Args:
+            on_voice_input: Optional callback called when voice input is detected
+        """
+        pass
+
+    async def halt_generation(self) -> None:
+        """Halt the current LLM generation."""
+        pass
+
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Get performance statistics.
+
+        Returns:
+            Dictionary of performance stats
+        """
+        pass
+
+    def update_config(self, **kwargs) -> None:
+        """
+        Update configuration dynamically.
+
+        Args:
+            **kwargs: Configuration parameters to update
+        """
+        pass
+
+    def clear_history(self) -> None:
+        """Clear the conversation history."""
+        pass
+
+    def get_history(self) -> list:
+        """Get the current conversation history."""
+        pass
+
+    def get_formatted_history(self) -> list:
+        """Get the conversation history in structured format."""
+        pass
+
+    def enable_rag(self, documents: Optional[list] = None, **rag_kwargs) -> bool:
+        """
+        Enable RAG (Retrieval-Augmented Generation) for document-based chat.
+
+        Args:
+            documents: List of PDF file paths to index
+            **rag_kwargs: Additional RAG configuration options
+
+        Returns:
+            True if RAG was successfully enabled
+        """
+        pass
+
+    def disable_rag(self) -> None:
+        """Disable RAG functionality."""
+        pass
+
+    def add_document(self, document_path: str) -> bool:
+        """
+        Add a document to the RAG index.
+
+        Args:
+            document_path: Path to PDF file to index
+
+        Returns:
+            True if document was successfully added
+        """
+        pass
+
+    @property
+    def is_voice_session_active(self) -> bool:
+        """Check if a voice session is currently active."""
+        pass
+
+    @property
+    def audio_devices(self) -> list:
+        """Get list of available audio input devices."""
+        pass
+
+class SimpleTalk:
+    """
+    Ultra-simple interface for quick integration.
+
+    Example usage:
+        ```python
+        from gaia.talk.sdk import SimpleTalk
+
+        talk = SimpleTalk()
+
+        # Simple text chat
+        response = await talk.ask("What's the weather like?")
+        print(response)
+
+        # Simple voice chat
+        await talk.voice_chat()  # Starts interactive session
+        ```
+    """
+
+    def __init__(
+        self,
+        system_prompt: Optional[str] = None,
+        enable_tts: bool = True,
+        assistant_name: str = "gaia",
+    ):
+        """
+        Initialize SimpleTalk with minimal configuration.
+
+        Args:
+            system_prompt: Optional system prompt for the AI
+            enable_tts: Whether to enable text-to-speech
+            assistant_name: Name to use for the assistant
+        """
+        pass
+
+    async def ask(self, question: str) -> str:
+        """
+        Ask a question and get a text response.
+
+        Args:
+            question: The question to ask
+
+        Returns:
+            The AI's response as a string
+        """
+        pass
+
+    async def ask_stream(self, question: str):
+        """
+        Ask a question and get a streaming response.
+
+        Args:
+            question: The question to ask
+
+        Yields:
+            Response chunks as they arrive
+        """
+        pass
+
+    async def voice_chat(self) -> None:
+        """Start an interactive voice chat session."""
+        pass
+
+    def clear_memory(self) -> None:
+        """Clear the conversation memory."""
+        pass
+
+    def get_conversation(self) -> list:
+        """Get the conversation history in a readable format."""
+        pass
+
+# Convenience functions for one-off usage
+async def quick_chat(
+    message: str,
+    system_prompt: Optional[str] = None,
+    assistant_name: str = "gaia"
+) -> str:
+    """
+    Quick one-off text chat with conversation memory.
+
+    Args:
+        message: Message to send
+        system_prompt: Optional system prompt
+        assistant_name: Name to use for the assistant
+
+    Returns:
+        AI response
+    """
+    pass
+
+async def quick_voice_chat(
+    system_prompt: Optional[str] = None,
+    assistant_name: str = "gaia"
+) -> None:
+    """
+    Quick one-off voice chat session with conversation memory.
+
+    Args:
+        system_prompt: Optional system prompt
+        assistant_name: Name to use for the assistant
+    """
+    pass
+```
+
+---
+
+## Implementation Details
+
+### Initialization
+
+```python
+def __init__(self, config: Optional[TalkConfig] = None):
+    self.config = config or TalkConfig()
+    self.log = get_logger(__name__)
+    self.log.setLevel(getattr(logging, self.config.logging_level))
+
+    # Initialize ChatSDK for text generation with conversation history
+    chat_config = ChatConfig(
+        model=self.config.model,
+        max_tokens=self.config.max_tokens,
+        system_prompt=self.config.system_prompt,
+        max_history_length=self.config.max_history_length,
+        assistant_name=self.config.assistant_name,
+        show_stats=self.config.show_stats,
+        logging_level=self.config.logging_level,
+        use_claude=self.config.use_claude,
+        use_chatgpt=self.config.use_chatgpt,
+    )
+    self.chat_sdk = ChatSDK(chat_config)
+
+    # Initialize AudioClient for voice features
+    self.audio_client = AudioClient(
+        whisper_model_size=self.config.whisper_model_size,
+        audio_device_index=self.config.audio_device_index,
+        silence_threshold=self.config.silence_threshold,
+        enable_tts=self.config.enable_tts,
+        logging_level=self.config.logging_level,
+        use_claude=self.config.use_claude,
+        use_chatgpt=self.config.use_chatgpt,
+        system_prompt=self.config.system_prompt,
+    )
+
+    self.show_stats = self.config.show_stats
+    self._voice_session_active = False
+
+    # Enable RAG if documents are provided
+    if self.config.rag_documents:
+        self.enable_rag(documents=self.config.rag_documents)
+```
+
+### Text Chat
+
+```python
+async def chat(self, message: str) -> TalkResponse:
+    try:
+        # Use ChatSDK for text generation (with conversation history)
+        chat_response = self.chat_sdk.send(message)
+
+        stats = None
+        if self.show_stats:
+            stats = chat_response.stats or self.get_stats()
+
+        return TalkResponse(text=chat_response.text, stats=stats, is_complete=True)
+
+    except Exception as e:
+        self.log.error(f"Error in chat: {e}")
+        raise
+```
+
+### Voice Session
+
+```python
+async def start_voice_session(
+    self,
+    on_voice_input: Optional[Callable[[str], None]] = None,
+) -> None:
+    try:
+        self._voice_session_active = True
+
+        # Initialize TTS if enabled
+        self.audio_client.initialize_tts()
+
+        # Create voice processor that uses ChatSDK for responses
+        async def voice_processor(text: str):
+            # Call user callback if provided
+            if on_voice_input:
+                on_voice_input(text)
+
+            # Use ChatSDK to generate response (with conversation history)
+            chat_response = self.chat_sdk.send(text)
+
+            # If TTS is enabled, speak the response
+            if self.config.enable_tts and getattr(self.audio_client, "tts", None):
+                await self.audio_client.speak_text(chat_response.text)
+
+            # Print the response for user feedback
+            print(f"{self.config.assistant_name.title()}: {chat_response.text}")
+
+            # Show stats if enabled
+            if self.show_stats and chat_response.stats:
+                print(f"Stats: {chat_response.stats}")
+
+        # Start voice chat session with our processor
+        await self.audio_client.start_voice_chat(voice_processor)
+
+    except KeyboardInterrupt:
+        self.log.info("Voice session interrupted by user")
+    except Exception as e:
+        self.log.error(f"Error in voice session: {e}")
+        raise
+    finally:
+        self._voice_session_active = False
+        self.log.info("Voice chat session ended")
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Simple Text Chat
+
+```python
+from gaia.talk.sdk import TalkSDK, TalkConfig
+
+# Create SDK instance
+config = TalkConfig(
+    model="Qwen2.5-0.5B-Instruct-CPU",
+    max_tokens=512,
+    show_stats=True
+)
+talk = TalkSDK(config)
+
+# Text chat
+response = await talk.chat("Hello, how are you?")
+print(response.text)
+
+# Streaming chat
+async for chunk in talk.chat_stream("Tell me a story"):
+    print(chunk.text, end="", flush=True)
+```
+
+### Example 2: Voice Chat with RAG
+
+```python
+from gaia.talk.sdk import TalkSDK, TalkConfig
+
+# Create SDK with RAG documents
+config = TalkConfig(
+    enable_tts=True,
+    rag_documents=["manual.pdf", "guide.pdf"]
+)
+talk = TalkSDK(config)
+
+# Start interactive voice session
+await talk.start_voice_session()
+```
+
+### Example 3: SimpleTalk Interface
+
+```python
+from gaia.talk.sdk import SimpleTalk
+
+talk = SimpleTalk()
+
+# Simple text chat
+response = await talk.ask("What's the weather like?")
+print(response)
+
+# Simple voice chat
+await talk.voice_chat()  # Starts interactive session
+```
+
+---
+
+## Testing Requirements
+
+### Unit Tests
+
+**File:** `tests/sdk/test_talk_sdk.py`
+
+```python
+import pytest
+from gaia.talk.sdk import TalkSDK, TalkConfig, SimpleTalk, TalkMode
+
+@pytest.fixture
+def talk_sdk():
+    """Create TalkSDK instance for testing."""
+    config = TalkConfig(
+        enable_tts=False,  # Disable TTS for testing
+        logging_level="WARNING"
+    )
+    return TalkSDK(config)
+
+def test_talk_sdk_can_be_imported():
+    """Verify TalkSDK can be imported."""
+    from gaia.talk.sdk import TalkSDK
+    assert TalkSDK is not None
+
+@pytest.mark.asyncio
+async def test_chat_basic(talk_sdk):
+    """Test basic text chat."""
+    response = await talk_sdk.chat("Hello")
+    assert response.text
+    assert response.is_complete
+    assert isinstance(response.text, str)
+
+@pytest.mark.asyncio
+async def test_chat_stream(talk_sdk):
+    """Test streaming chat."""
+    chunks = []
+    async for chunk in talk_sdk.chat_stream("Tell me a joke"):
+        chunks.append(chunk)
+
+    assert len(chunks) > 0
+    # Last chunk should be complete
+    assert chunks[-1].is_complete
+
+def test_history_management(talk_sdk):
+    """Test conversation history management."""
+    # Initially empty
+    assert len(talk_sdk.get_history()) == 0
+
+    # Add messages
+    talk_sdk.chat_sdk.send("Hello")
+    talk_sdk.chat_sdk.send("How are you?")
+
+    history = talk_sdk.get_history()
+    assert len(history) > 0
+
+    # Clear history
+    talk_sdk.clear_history()
+    assert len(talk_sdk.get_history()) == 0
+
+def test_config_update(talk_sdk):
+    """Test dynamic configuration updates."""
+    original_max_tokens = talk_sdk.config.max_tokens
+
+    talk_sdk.update_config(max_tokens=1024)
+    assert talk_sdk.config.max_tokens == 1024
+    assert talk_sdk.config.max_tokens != original_max_tokens
+
+@pytest.mark.asyncio
+async def test_simple_talk():
+    """Test SimpleTalk interface."""
+    talk = SimpleTalk(enable_tts=False)
+    response = await talk.ask("What is 2+2?")
+    assert response
+    assert isinstance(response, str)
+```
+
+---
+
+## Dependencies
+
+### Required Packages
+
+```toml
+# pyproject.toml
+[project]
+dependencies = [
+    "gaia.chat.sdk",
+    "gaia.audio.audio_client",
+    "gaia.llm.lemonade_client",
+]
+
+[project.optional-dependencies]
+rag = ["gaia.rag.sdk"]
+```
+
+### Import Dependencies
+
+```python
+import logging
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, AsyncGenerator, Callable, Dict, Optional
+
+from gaia.audio.audio_client import AudioClient
+from gaia.chat.sdk import ChatConfig, ChatSDK
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+from gaia.logger import get_logger
+```
+
+---
+
+## Error Handling
+
+### Common Errors and Responses
+
+```python
+# Voice session errors
+async def start_voice_session(...):
+    try:
+        # Start session
+        pass
+    except KeyboardInterrupt:
+        self.log.info("Voice session interrupted by user")
+    except Exception as e:
+        self.log.error(f"Error in voice session: {e}")
+        raise
+    finally:
+        self._voice_session_active = False
+
+# Chat errors
+async def chat(self, message: str):
+    try:
+        # Send message
+        pass
+    except Exception as e:
+        self.log.error(f"Error in chat: {e}")
+        raise
+
+# RAG errors
+def enable_rag(self, documents: Optional[list] = None):
+    try:
+        # Enable RAG
+        pass
+    except ImportError:
+        self.log.warning(
+            "RAG dependencies not available. "
+            'Install with: uv pip install -e ".[rag]"'
+        )
+        return False
+    except Exception as e:
+        self.log.error(f"Failed to enable RAG: {e}")
+        return False
+```
+
+---
+
+## Documentation Updates Required
+
+### docs/talk.md
+
+Add comprehensive TalkSDK documentation:
+
+```markdown
+### TalkSDK
+
+**Import:** `from gaia.talk.sdk import TalkSDK, TalkConfig`
+
+**Purpose:** Unified voice and text chat interface for applications.
+
+**Key Features:**
+- Text chat with conversation history
+- Voice chat with TTS/STT
+- RAG support for document Q&A
+- Simple and full-featured APIs
+
+[Full documentation with examples]
+```
+
+---
+
+## Acceptance Criteria
+
+- [ ] TalkSDK class implemented in `src/gaia/talk/sdk.py`
+- [ ] All methods implemented with docstrings
+- [ ] Chat methods support both sync and async
+- [ ] Voice session management works correctly
+- [ ] Conversation history tracking via ChatSDK
+- [ ] RAG integration works
+- [ ] SimpleTalk convenience class works
+- [ ] All unit tests pass (8+ tests)
+- [ ] Exported from `gaia/__init__.py`
+- [ ] Can import: `from gaia.talk.sdk import TalkSDK`
+- [ ] Documented in docs/talk.md
+- [ ] Example applications work
+
+---
+
+*TalkSDK Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

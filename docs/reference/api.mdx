@@ -1,0 +1,433 @@
+---
+title: API Server
+description: OpenAI-compatible REST API for VSCode and IDE integrations
+---
+
+<Info>
+  **Source Code:** [`src/gaia/api/`](https://github.com/amd/gaia/tree/main/src/gaia/api)
+</Info>
+
+<Badge text="development" color="orange" />
+
+<Info>
+The GAIA API Server exposes GAIA agents as "models" through an OpenAI-compatible REST API, enabling integration with VSCode extensions and other OpenAI-compatible clients.
+</Info>
+
+**Technical Specifications:** [API Server Specification](/reference/api-spec)
+
+---
+
+## Quick Start
+
+<Steps>
+  <Step title="Start Lemonade Server">
+    Start with extended context for Code agent:
+
+    ```bash
+    lemonade-server serve --ctx-size 32768
+    ```
+  </Step>
+
+  <Step title="Start GAIA API Server">
+    ```bash
+    gaia api start
+    ```
+  </Step>
+
+  <Step title="Test the Server">
+    <CodeGroup>
+    ```bash Health Check
+    curl http://localhost:8080/health
+    ```
+
+    ```bash List Models
+    curl http://localhost:8080/v1/models
+    ```
+
+    ```bash Make Request
+    curl -X POST http://localhost:8080/v1/chat/completions \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "gaia-code",
+        "messages": [{"role": "user", "content": "Write a hello world function"}]
+      }'
+    ```
+    </CodeGroup>
+  </Step>
+</Steps>
+
+---
+
+## Prerequisites
+
+<CardGroup cols={2}>
+  <Card title="GAIA Installation" icon="download">
+    Install GAIA with API support:
+
+    ```bash
+    uv pip install -e ".[api]"
+    ```
+
+    Installs FastAPI and Uvicorn required for the API server.
+  </Card>
+
+  <Card title="Lemonade Server" icon="server">
+    Must be running with sufficient context:
+
+    ```bash
+    lemonade-server serve --ctx-size 32768
+    ```
+  </Card>
+</CardGroup>
+
+<Note>
+**Required Models:** Download `Qwen3-Coder-30B-A3B-Instruct-GGUF` via Lemonade's model manager
+</Note>
+
+---
+
+## Server Management
+
+### Start Server
+
+<Tabs>
+  <Tab title="Basic">
+    Start in foreground:
+
+    ```bash
+    gaia api start
+    ```
+  </Tab>
+
+  <Tab title="Background">
+    Start in background:
+
+    ```bash
+    gaia api start --background
+    ```
+  </Tab>
+
+  <Tab title="Debug">
+    Start with debug logging:
+
+    ```bash
+    gaia api start --debug
+    ```
+  </Tab>
+
+  <Tab title="Custom">
+    Custom host/port:
+
+    ```bash
+    gaia api start --host 0.0.0.0 --port 8888
+    ```
+  </Tab>
+</Tabs>
+
+### Check Status
+
+```bash
+gaia api status
+```
+
+### Stop Server
+
+```bash
+gaia api stop
+```
+
+---
+
+## Usage Examples
+
+### Python (OpenAI Client)
+
+<CodeGroup>
+```python Basic Usage
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="not-needed"
+)
+
+response = client.chat.completions.create(
+    model="gaia-code",
+    messages=[{"role": "user", "content": "Create a REST API with Express and SQLite"}]
+)
+
+print(response.choices[0].message.content)
+```
+
+TypeScript/Express backend (routing detects "Express" → TypeScript)
+
+```python Python Backend
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="not-needed"
+)
+
+response = client.chat.completions.create(
+    model="gaia-code",
+    messages=[{"role": "user", "content": "Create a Django REST API with authentication"}]
+)
+
+print(response.choices[0].message.content)
+```
+
+Python backend (routing detects "Django" → Python)
+
+```python Streaming
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="not-needed"
+)
+
+stream = client.chat.completions.create(
+    model="gaia-code",
+    messages=[{"role": "user", "content": "Write a calculator class"}],
+    stream=True
+)
+
+for chunk in stream:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+```
+</CodeGroup>
+
+---
+
+### JavaScript/Node.js
+
+<CodeGroup>
+```javascript Axios
+const axios = require('axios');
+
+async function chat(message) {
+    const response = await axios.post(
+        'http://localhost:8080/v1/chat/completions',
+        {
+            model: 'gaia-code',
+            messages: [{ role: 'user', content: message }]
+        }
+    );
+    return response.data.choices[0].message.content;
+}
+
+chat('Build me a todo app using nextjs').then(console.log);
+
+chat('Write a Python function to calculate factorial').then(console.log);
+```
+
+TypeScript/React frontend (routing detects "React" → TypeScript frontend)
+
+Python script (routing detects Python for generic functions)
+
+```javascript Fetch
+async function chat(message) {
+    const response = await fetch('http://localhost:8080/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            model: 'gaia-code',
+            messages: [{ role: 'user', content: message }]
+        })
+    });
+    const data = await response.json();
+    return data.choices[0].message.content;
+}
+```
+</CodeGroup>
+
+---
+
+### cURL
+
+<Tabs>
+  <Tab title="Non-Streaming">
+    ```bash
+    curl -X POST http://localhost:8080/v1/chat/completions \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "gaia-code",
+        "messages": [{"role": "user", "content": "Write a function"}]
+      }'
+    ```
+  </Tab>
+
+  <Tab title="Streaming">
+    ```bash
+    curl -X POST http://localhost:8080/v1/chat/completions \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "gaia-code",
+        "messages": [{"role": "user", "content": "Write a function"}],
+        "stream": true
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Available Models
+
+<Card title="gaia-code" icon="code">
+  Autonomous Python/TypeScript development agent with intelligent routing
+</Card>
+
+| Property | Value |
+|----------|-------|
+| **Model ID** | `gaia-code` |
+| **Context** | 32K input / 8K output |
+| **Requirements** | Lemonade with `--ctx-size 32768` |
+| **Description** | Autonomous development agent with planning, generation, and testing |
+
+<Tip>
+**Intelligent Routing:** The `gaia-code` model uses GAIA's Routing Agent to automatically detect your target programming language (Python or TypeScript) and project type based on framework mentions.
+
+[→ Learn about Routing](/guides/routing)
+</Tip>
+
+**Full specifications:** [API Server Specification](/reference/api-spec#available-models)
+
+---
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Server Won't Start" icon="circle-xmark">
+    **Check if port is in use:**
+
+    <Tabs>
+      <Tab title="Mac/Linux">
+        ```bash
+        lsof -i :8080
+        ```
+      </Tab>
+      <Tab title="Windows">
+        ```bash
+        netstat -ano | findstr :8080
+        ```
+      </Tab>
+    </Tabs>
+
+    **Try different port:**
+    ```bash
+    gaia api start --port 8888
+    ```
+  </Accordion>
+
+  <Accordion title="Connection Refused" icon="link-slash">
+    **Verify server is running:**
+    ```bash
+    gaia api status
+    ```
+
+    **Check health endpoint:**
+    ```bash
+    curl http://localhost:8080/health
+    ```
+  </Accordion>
+
+  <Accordion title="Agent Errors" icon="triangle-exclamation">
+    **Check Lemonade is running:**
+    ```bash
+    curl http://localhost:8000/health
+    ```
+
+    **Verify context size:**
+    ```bash
+    lemonade-server serve --ctx-size 32768
+    ```
+
+    **Enable debug mode:**
+    ```bash
+    gaia api start --debug
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Common Issues
+
+| Issue | Solution |
+|-------|----------|
+| "Model not found" | Use correct model ID: `gaia-code` |
+| "Agent processing failed" | Ensure Lemonade is running with `--ctx-size 32768` |
+| "Port already in use" | Stop existing server or use `--port` flag |
+| Streaming not working | Ensure `"stream": true` in request |
+
+**More help:** [FAQ](/reference/faq)
+
+---
+
+## VSCode Integration
+
+<Card title="VSCode Extension" icon="code" href="/integrations/vscode">
+  Use GAIA Code directly in Visual Studio Code with the Language Model Provider extension
+</Card>
+
+**Quick Setup:**
+
+<Steps>
+  <Step title="Start Servers">
+    Start Lemonade server with extended context:
+
+    ```bash
+    lemonade-server serve --ctx-size 32768
+    ```
+
+    Start GAIA API server:
+
+    ```bash
+    gaia api start
+    ```
+  </Step>
+
+  <Step title="Install Extension">
+    Build and install the GAIA VSCode extension
+
+    [→ VSCode Integration Guide](/integrations/vscode)
+  </Step>
+
+  <Step title="Select Model">
+    Select GAIA models from VSCode's model picker
+  </Step>
+</Steps>
+
+---
+
+## Technical Documentation
+
+<CardGroup cols={2}>
+  <Card title="API Specification" icon="book" href="/reference/api-spec">
+    Complete API reference with request/response formats
+  </Card>
+  <Card title="Routing Guide" icon="route" href="/guides/routing">
+    Intelligent language/framework detection
+  </Card>
+  <Card title="Code Agent" icon="code" href="/guides/code">
+    Code agent capabilities and usage
+  </Card>
+  <Card title="Development Guide" icon="wrench" href="/reference/dev">
+    Development and contribution guidelines
+  </Card>
+</CardGroup>
+
+---
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

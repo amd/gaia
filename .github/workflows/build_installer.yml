@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 # This workflow builds the Windows installer for GAIA using NSIS
@@ -37,7 +37,7 @@ jobs:
       INSTALLER_HASH: ${{ steps.calculate_hash.outputs.INSTALLER_HASH }}
       COMMIT_HASH: ${{ steps.get_commit.outputs.COMMIT_HASH }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Print Git History and Version Info
         run: |

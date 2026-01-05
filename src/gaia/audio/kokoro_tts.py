@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import queue
@@ -43,9 +43,9 @@ class KokoroTTS:
             error_msg = (
                 f"\n❌ Error: Missing required talk dependencies: {', '.join(missing)}\n\n"
                 f"Please install the talk dependencies:\n"
-                f"  pip install -e .[talk]\n\n"
+                f'  uv pip install -e ".[talk]"\n\n'
                 f"Or install packages directly:\n"
-                f"  pip install {' '.join(missing)}\n"
+                f"  uv pip install {' '.join(missing)}\n"
             )
             raise ImportError(error_msg)
 

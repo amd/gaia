@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
 Generic Agent class for building domain-specific agents.
@@ -17,6 +17,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
+from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
 # First-party imports
@@ -81,6 +82,8 @@ class Agent(abc.ABC):
         debug: bool = False,
         output_handler=None,
         max_plan_iterations: int = 3,
+        min_context_size: int = 32768,
+        skip_lemonade: bool = False,
     ):
         """
         Initialize the Agent with LLM client.
@@ -101,6 +104,9 @@ class Agent(abc.ABC):
             debug: If True, enables debug output for troubleshooting (default: False)
             output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
             max_plan_iterations: Maximum number of plan-execute-replan cycles (default: 3, 0 = unlimited)
+            min_context_size: Minimum context size required for this agent (default: 32768).
+            skip_lemonade: If True, skip Lemonade server initialization (default: False).
+                          Use this when connecting to a different OpenAI-compatible backend.
 
         Note: Uses local LLM server by default unless use_claude or use_chatgpt is True.
         """
@@ -118,10 +124,24 @@ class Agent(abc.ABC):
         self.debug = debug
         self.last_result = None  # Store the most recent result
         self.max_plan_iterations = max_plan_iterations
+        self._current_query: Optional[str] = (
+            None  # Store current query for error context
+        )
 
         # Read base_url from environment if not provided
         if base_url is None:
             base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+
+        # Lazy Lemonade initialization for local LLM users
+        # This ensures Lemonade server is running before we try to use it
+        if not (use_claude or use_chatgpt or skip_lemonade):
+            from gaia.llm.lemonade_manager import LemonadeManager
+
+            LemonadeManager.ensure_ready(
+                min_context_size=min_context_size,
+                quiet=silent_mode,
+                base_url=base_url,
+            )
 
         # Initialize state management
         self.execution_state = self.STATE_PLANNING
@@ -143,9 +163,38 @@ class Agent(abc.ABC):
         # Register tools for this agent
         self._register_tools()
 
-        # Update system prompt with available tools
+        # Update system prompt with available tools and response format
         tools_description = self._format_tools_for_prompt()
-        self.system_prompt += f"\n\n==== AVAILABLE TOOLS ====\n{tools_description}\n\n"
+        self.system_prompt += f"\n\n==== AVAILABLE TOOLS ====\n{tools_description}\n"
+
+        # Add JSON response format instructions (shared across all agents)
+        self.system_prompt += """
+==== RESPONSE FORMAT ====
+You must respond ONLY in valid JSON. No text before { or after }.
+
+**To call a tool:**
+{"thought": "reasoning", "goal": "objective", "tool": "tool_name", "tool_args": {"arg1": "value1"}}
+
+**To create a multi-step plan:**
+{
+  "thought": "reasoning",
+  "goal": "objective",
+  "plan": [
+    {"tool": "tool1", "tool_args": {"arg": "val"}},
+    {"tool": "tool2", "tool_args": {"arg": "val"}}
+  ],
+  "tool": "tool1",
+  "tool_args": {"arg": "val"}
+}
+
+**To provide a final answer:**
+{"thought": "reasoning", "goal": "achieved", "answer": "response to user"}
+
+**RULES:**
+1. ALWAYS use tools for real data - NEVER hallucinate
+2. Plan steps MUST be objects like {"tool": "x", "tool_args": {}}, NOT strings
+3. After tool results, provide an "answer" summarizing them
+"""
 
         # Initialize ChatSDK with proper configuration
         # Note: We don't set system_prompt in config, we pass it per request
@@ -183,12 +232,11 @@ class Agent(abc.ABC):
         """
         raise NotImplementedError("Subclasses must implement _get_system_prompt")
 
-    @abc.abstractmethod
     def _create_console(self):
         """
         Create and return a console output handler.
         Returns SilentConsole if in silent_mode, otherwise AgentConsole.
-        Subclasses should override this to provide domain-specific console output.
+        Subclasses can override this to provide domain-specific console output.
         """
         if self.silent_mode:
             # Check if we should completely silence everything (including final answer)
@@ -742,9 +790,29 @@ class Agent(abc.ABC):
             self.error_history.append(error_msg)
             return {"status": "error", "error": error_msg, "timeout": True}
         except Exception as e:
-            logger.error(f"Error executing tool {tool_name}: {str(e)}")
-            self.error_history.append(str(e))
-            return {"status": "error", "error": str(e)}
+            # Format error with full execution trace for debugging
+            formatted_error = format_execution_trace(
+                exception=e,
+                query=getattr(self, "_current_query", None),
+                plan_step=self.current_step + 1 if self.current_plan else None,
+                total_steps=self.total_plan_steps if self.current_plan else None,
+                tool_name=tool_name,
+                tool_args=tool_args,
+            )
+            logger.error(f"Error executing tool {tool_name}: {e}")
+            self.error_history.append(str(e))  # Store brief error, not formatted
+
+            # Print to console immediately so user sees it
+            self.console.print_error(formatted_error)
+
+            return {
+                "status": "error",
+                "error_brief": str(e),  # Brief error message for quick reference
+                "error_displayed": True,  # Flag to prevent duplicate display
+                "tool_name": tool_name,
+                "tool_args": tool_args,
+                "plan_step": self.current_step + 1 if self.current_plan else None,
+            }
 
     def _generate_max_steps_message(
         self, conversation: List[Dict], steps_taken: int, steps_limit: int
@@ -842,7 +910,8 @@ class Agent(abc.ABC):
         """
         truncated_result = tool_result
         if isinstance(tool_result, (dict, list)):
-            result_str = json.dumps(tool_result)
+            # Use custom encoder to handle bytes and other non-serializable types
+            result_str = json.dumps(tool_result, default=self._json_serialize_fallback)
             if (
                 len(result_str) > 30000
             ):  # Threshold for truncation (appropriate for 32K context)
@@ -883,7 +952,9 @@ class Agent(abc.ABC):
             text_content = self._truncate_large_content(tool_output, max_chars=2000)
 
         if not isinstance(text_content, str):
-            text_content = json.dumps(tool_output)
+            text_content = json.dumps(
+                tool_output, default=self._json_serialize_fallback
+            )
 
         return {
             "role": "tool",
@@ -891,6 +962,40 @@ class Agent(abc.ABC):
             "tool_call_id": uuid.uuid4().hex,
             "content": [{"type": "text", "text": text_content}],
         }
+
+    def _json_serialize_fallback(self, obj: Any) -> Any:
+        """
+        Fallback serializer for JSON encoding non-standard types.
+
+        Handles bytes, datetime, and other common non-serializable types.
+        """
+        try:
+            import numpy as np  # Local import to avoid hard dependency at module import time
+
+            if isinstance(obj, np.generic):
+                return obj.item()
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+        except Exception:
+            pass
+
+        if isinstance(obj, bytes):
+            # For binary data, return a placeholder (don't expose raw bytes to LLM)
+            return f"<binary data: {len(obj)} bytes>"
+        if hasattr(obj, "isoformat"):
+            # Handle datetime objects
+            return obj.isoformat()
+        if hasattr(obj, "__dict__"):
+            # Handle objects with __dict__
+            return obj.__dict__
+
+        for caster in (float, int, str):
+            try:
+                return caster(obj)
+            except Exception:
+                continue
+
+        return "<non-serializable>"
 
     def _truncate_large_content(self, content: Any, max_chars: int = 2000) -> str:
         """
@@ -904,14 +1009,14 @@ class Agent(abc.ABC):
         if isinstance(content, dict) and (
             "test_results" in content or "run_tests" in content
         ):
-            return json.dumps(content)
+            return json.dumps(content, default=self._json_serialize_fallback)
 
         # Convert to string (use compact JSON first to check size)
         if isinstance(content, (dict, list)):
-            compact_str = json.dumps(content)
+            compact_str = json.dumps(content, default=self._json_serialize_fallback)
             # Only use indented format if we need to truncate anyway
             content_str = (
-                json.dumps(content, indent=2)
+                json.dumps(content, indent=2, default=self._json_serialize_fallback)
                 if len(compact_str) > max_chars
                 else compact_str
             )
@@ -943,13 +1048,17 @@ class Agent(abc.ABC):
                                 + chunk["content"][-CHUNK_TRUNCATION_SIZE:]
                             )
 
-            result_str = json.dumps(truncated, indent=2)
+            result_str = json.dumps(
+                truncated, indent=2, default=self._json_serialize_fallback
+            )
             # Use larger limit for chunked responses since chunks are the actual data
             if len(result_str) <= max_chars * 3:  # Allow up to 60KB for chunked data
                 return result_str
             # If still too large, keep first 3 chunks only
             truncated["chunks"] = truncated["chunks"][:3]
-            return json.dumps(truncated, indent=2)
+            return json.dumps(
+                truncated, indent=2, default=self._json_serialize_fallback
+            )
 
         # For Jira responses, keep first 3 issues
         if (
@@ -963,7 +1072,9 @@ class Agent(abc.ABC):
                 "truncated": True,
                 "total": len(content["issues"]),
             }
-            return json.dumps(truncated, indent=2)[:max_chars]
+            return json.dumps(
+                truncated, indent=2, default=self._json_serialize_fallback
+            )[:max_chars]
 
         # For lists, keep first 3 items
         if isinstance(content, list):
@@ -972,7 +1083,9 @@ class Agent(abc.ABC):
                 if len(content) > 3
                 else content
             )
-            return json.dumps(truncated, indent=2)[:max_chars]
+            return json.dumps(
+                truncated, indent=2, default=self._json_serialize_fallback
+            )[:max_chars]
 
         # Simple truncation
         half = max_chars // 2 - 20
@@ -1001,6 +1114,9 @@ class Agent(abc.ABC):
         import time
 
         start_time = time.time()  # Track query processing start time
+
+        # Store query for error context (used in _execute_tool for error formatting)
+        self._current_query = user_input
 
         logger.debug(f"Processing query: {user_input}")
         conversation = []
@@ -1168,11 +1284,6 @@ class Agent(abc.ABC):
                         tool_name, tool_result, conversation, tool_args
                     )
 
-                    # Add tool result to messages array so LLM can see it in next turn
-                    # Format as user message for proper chat flow (user → assistant → user → assistant)
-                    tool_result_content = f"Tool result: {json.dumps(truncated_result) if isinstance(truncated_result, dict) else truncated_result}"
-                    messages.append({"role": "user", "content": tool_result_content})
-
                     # Display the tool result in real-time (show full result to user)
                     self.console.print_tool_complete()
 
@@ -1204,8 +1315,10 @@ class Agent(abc.ABC):
                     if is_error:
                         error_count += 1
                         # Extract error message from various formats
+                        # Prefer error_brief for logging (avoids duplicate formatted output)
                         last_error = (
-                            tool_result.get("error")
+                            tool_result.get("error_brief")
+                            or tool_result.get("error")
                             or tool_result.get("stderr")
                             or tool_result.get("hint")  # Many tools provide hints
                             or tool_result.get(
@@ -1216,7 +1329,9 @@ class Agent(abc.ABC):
                         logger.warning(
                             f"Tool execution error in plan (count: {error_count}): {last_error}"
                         )
-                        self.console.print_error(last_error)
+                        # Only print if error wasn't already displayed by _execute_tool
+                        if not tool_result.get("error_displayed"):
+                            self.console.print_error(last_error)
 
                         # Switch to error recovery state
                         self.execution_state = self.STATE_ERROR_RECOVERY
@@ -1255,7 +1370,9 @@ class Agent(abc.ABC):
                                 "completed_plan": self.current_plan,
                                 "total_steps": self.total_plan_steps,
                             }
-                            plan_context_raw = json.dumps(plan_context)
+                            plan_context_raw = json.dumps(
+                                plan_context, default=self._json_serialize_fallback
+                            )
                             if len(plan_context_raw) > 20000:
                                 plan_context_str = self._truncate_large_content(
                                     plan_context, max_chars=20000
@@ -1301,7 +1418,6 @@ class Agent(abc.ABC):
                             )
 
                             # Send the completion prompt to get final answer
-                            self.console.print_step_header(steps_taken, steps_limit)
                             self.console.print_state_info(
                                 "COMPLETION: Requesting final answer"
                             )
@@ -1569,7 +1685,7 @@ class Agent(abc.ABC):
                 if deferred_tool:
                     plan_prompt += (
                         f"You initially wanted to use the {deferred_tool} tool with these arguments:\n"
-                        f"{json.dumps(deferred_args, indent=2)}\n\n"
+                        f"{json.dumps(deferred_args, indent=2, default=self._json_serialize_fallback)}\n\n"
                         "However, you MUST first create a plan. Please create a plan that includes this tool usage as a step.\n\n"
                     )
 
@@ -1665,16 +1781,17 @@ class Agent(abc.ABC):
 
                 # Set the parsed response to the new plan for further processing
                 parsed = parsed_plan
+            else:
+                # Display the agent's reasoning in real-time (only if provided)
+                # Skip if we just displayed thought/goal for a plan request above
+                thought = parsed.get("thought", "").strip()
+                goal = parsed.get("goal", "").strip()
 
-            # Display the agent's reasoning in real-time (only if provided)
-            thought = parsed.get("thought", "").strip()
-            goal = parsed.get("goal", "").strip()
+                if thought and thought != "No explicit reasoning provided":
+                    self.console.print_thought(thought)
 
-            if thought and thought != "No explicit reasoning provided":
-                self.console.print_thought(thought)
-
-            if goal and goal != "No explicit goal provided":
-                self.console.print_goal(goal)
+                if goal and goal != "No explicit goal provided":
+                    self.console.print_goal(goal)
 
             # Process plan if available
             if "plan" in parsed:
@@ -1851,8 +1968,10 @@ class Agent(abc.ABC):
                 )
                 if is_error:
                     error_count += 1
+                    # Prefer error_brief for logging (avoids duplicate formatted output)
                     last_error = (
-                        tool_result.get("error")
+                        tool_result.get("error_brief")
+                        or tool_result.get("error")
                         or tool_result.get("stderr")
                         or tool_result.get("hint")
                         or tool_result.get("suggested_fix")
@@ -1861,7 +1980,9 @@ class Agent(abc.ABC):
                     logger.warning(
                         f"Tool execution error in plan (count: {error_count}): {last_error}"
                     )
-                    self.console.print_error(last_error)
+                    # Only print if error wasn't already displayed by _execute_tool
+                    if not tool_result.get("error_displayed"):
+                        self.console.print_error(last_error)
 
                     # Switch to error recovery state
                     self.execution_state = self.STATE_ERROR_RECOVERY

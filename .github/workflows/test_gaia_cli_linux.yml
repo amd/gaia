@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 # This workflow tests the GAIA CLI on Linux (Ubuntu) with Lemonade server support
@@ -28,7 +28,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Free disk space
         uses: ./.github/actions/free-disk-space
@@ -38,6 +38,7 @@ jobs:
         with:
           python-version: '3.12'
           install-package: '.[dev,eval,rag]'
+          extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
       - name: Install system dependencies
         run: |

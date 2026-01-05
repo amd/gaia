@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """Consolidated code tools mixin combining generation, analysis, and helper methods."""
 
@@ -568,7 +568,7 @@ if __name__ == "__main__":
             except ImportError:
                 return {
                     "status": "error",
-                    "error": "pylint is not installed. Install with: pip install pylint",
+                    "error": "pylint is not installed. Install with: uv pip install pylint",
                 }
             except Exception as e:
                 return {"status": "error", "error": str(e)}

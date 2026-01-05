@@ -1,0 +1,95 @@
+# API Reference Summary
+
+<Badge text="development" color="orange" />
+
+## Core Classes
+
+| Class | Import Path | Purpose |
+|-------|-------------|---------|
+| `Agent` | `gaia.agents.base.agent` | Base class for all agents |
+| `ApiAgent` | `gaia.agents.base.api_agent` | Mixin for API exposure |
+| `MCPAgent` | `gaia.agents.base.mcp_agent` | Mixin for MCP protocol |
+| `@tool` | `gaia.agents.base.tools` | Decorator for tool registration |
+
+---
+
+## Console/Output
+
+| Class | Import Path | Purpose |
+|-------|-------------|---------|
+| `AgentConsole` | `gaia.agents.base.console` | Rich CLI output |
+| `SilentConsole` | `gaia.agents.base.console` | No output (testing) |
+| `SSEOutputHandler` | `gaia.api.sse_handler` | Streaming API output |
+
+---
+
+## Chat & LLM
+
+| Class | Import Path | Purpose |
+|-------|-------------|---------|
+| `ChatSDK` | `gaia.chat.sdk` | Chat with memory |
+| `ChatConfig` | `gaia.chat.sdk` | Chat configuration |
+| `quick_chat` | `gaia.chat.sdk` | One-off chat function |
+| `LLMClient` | `gaia.llm.llm_client` | LLM client (local/cloud) |
+| `VLMClient` | `gaia.llm.vlm_client` | Vision-language model |
+
+---
+
+## RAG
+
+| Class | Import Path | Purpose |
+|-------|-------------|---------|
+| `RAGSDK` | `gaia.rag.sdk` | Document indexing & Q&A |
+| `RAGConfig` | `gaia.rag.sdk` | RAG configuration |
+| `quick_rag` | `gaia.rag.sdk` | One-off document query |
+
+---
+
+## Audio
+
+| Class | Import Path | Purpose |
+|-------|-------------|---------|
+| `AudioClient` | `gaia.audio.audio_client` | Voice interaction |
+| `WhisperAsr` | `gaia.audio.whisper_asr` | Speech-to-text |
+| `KokoroTTS` | `gaia.audio.kokoro_tts` | Text-to-speech |
+
+---
+
+## Tool Mixins
+
+| Mixin | Import Path | Provides |
+|-------|-------------|----------|
+| `FileToolsMixin` | `gaia.agents.chat.tools.file_tools` | File read/write |
+| `RAGToolsMixin` | `gaia.agents.chat.tools.rag_tools` | Document search |
+| `ShellToolsMixin` | `gaia.agents.chat.tools.shell_tools` | Shell commands |
+| `FileSearchToolsMixin` | `gaia.agents.tools.file_search` | File search |
+
+---
+
+## Utilities
+
+| Class/Function | Import Path | Purpose |
+|----------------|-------------|---------|
+| `get_logger` | `gaia.logger` | Get colored logger |
+| `PathValidator` | `gaia.security` | Path security |
+
+---
+
+## Related Topics
+
+- [Core Agent System](./core/agent-system) - Agent architecture details
+- [Chat SDK](./core/chat-sdk) - Chat interface documentation
+- [RAG SDK](./core/rag-sdk) - Document Q&A documentation
+- [Tool Mixins](./mixins/tool-mixins) - Reusable tool collections
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

@@ -27,11 +27,12 @@ import sys
 from pathlib import Path
 
 # Fix Windows console encoding for emoji support
+# Use reconfigure() instead of TextIOWrapper to avoid closing underlying buffer on exit
 if sys.platform == "win32":
-    import io
-
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 # Add path for imports (tests directory is already in Python path)
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))

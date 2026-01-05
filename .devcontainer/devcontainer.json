@@ -75,7 +75,7 @@
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
   "workspaceFolder": "/workspace",
-  "postCreateCommand": "pip install -e \".[dev,mcp,eval,rag]\" && cp /workspace/.devcontainer/.mcp.json /workspace/.mcp.json"
-  // "postStartCommand": "sudo /usr/local/bin/init-firewall.sh",
+  "postCreateCommand": "pip install -e \".[dev,mcp,eval,rag]\" && cp /workspace/.devcontainer/.mcp.json /workspace/.mcp.json",
+  "postStartCommand": "bash -c 'if [ ! -f ~/.local/bin/claude ]; then curl -fsSL https://claude.ai/install.sh | bash; fi'"
   // "waitFor": "postStartCommand"
 }

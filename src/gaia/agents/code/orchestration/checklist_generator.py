@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """Checklist Generator for LLM-Driven Code Generation.
 
@@ -137,6 +137,8 @@ CHECKLIST_SYSTEM_PROMPT = """You are a code generation planner. Your task is to 
 5. Ensure dependencies are satisfied (run setup before data, data before API, API before UI)
 6. Generate a complete checklist that creates a working application
 7. When follow-up fixes are requested, use `fix_code` to repair the specific files called out by validation/test logs. Extract the precise file paths and line numbers from the errors (see the Raw Validation Logs) and pass those line numbers inside the error description so the fixer knows exactly where to focus. Always reference the latest findings to decide which fixes to schedule before running validations again.
+8. If the user explicitly requests an additional UI artifact (countdown display, stats badge, etc.), schedule a `generate_react_component` step with the appropriate `artifact-*` variant (e.g., `"artifact-timer"`) and a descriptive `component_name`. Keep the artifact's logic inside that client component—server components like `page.tsx` should only render the artifact and pass any required props.
+9. **Route pairing requirement:** Whenever you schedule `{{"template": "generate_api_route", "params": {{"type": "collection", ...}}}}`, you MUST also include a matching `generate_api_route` item with `"type": "item"` for the same resource so detail pages can call `/api/<resource>/[id]`.
 
 This workflow repeats until all validations pass, so each checklist should either advance new functionality or explicitly repair the failures reported in the latest validation logs.
 
@@ -144,12 +146,13 @@ This workflow repeats until all validations pass, so each checklist should eithe
 
 For any app that manages resources (todos, posts, users, etc.), you MUST generate ALL of these UI components:
 
-1. **List page** (variant: "list") - Main page showing all items at /resources
-2. **Form component** (variant: "form") - Reusable form for create
+1. **Form component** (variant: "form") - Reusable form for create (generate this first so other pages can import it)
+2. **Artifact components** (variant: "artifact-*") - Any additional UI artifacts requested by the user (e.g., countdown display, stats badge). Generate these before any page that consumes them.
 3. **New page** (variant: "new") - Create new item at /resources/new
 4. **Edit page** (variant: "detail") - Edit single item at /resources/[id] with pre-populated form
+5. **List page** (variant: "list") - Main page showing all items at /resources
 
-Missing any of these will result in broken navigation! Always include all 4 variants.
+Missing any of the required components (form, new, detail, list) will result in broken navigation! When artifacts are requested, they must also be generated or the UI will be incomplete.
 
 ## REQUIRED: Setup and Validation Commands
 
@@ -181,6 +184,7 @@ Important:
 - Use exact template names from the catalog
 - Provide all required parameters
 - Order items by dependency (setup first, then data, then API, then UI)
+- REQUIRED ordering for `generate_react_component`: emit all non-`list` variants (form, new, detail, actions, artifact-*) before the `variant: "list"` call so the list can import previously generated components
 - Add semantic enhancements that make the app intuitive (e.g., checkboxes for todos)
 - For CRUD apps, ALWAYS include all 4 UI variants: list, form, new, detail
 - REQUIRED: Include `setup_app_styling` after `create_next_app`

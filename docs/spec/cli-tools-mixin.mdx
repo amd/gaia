@@ -1,0 +1,670 @@
+---
+title: "CLIToolsMixin"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/code/tools/cli_tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code/tools/cli_tools.py)
+</Info>
+
+<Note>
+**Component:** CLIToolsMixin
+**Module:** `gaia.agents.code.tools.cli_tools`
+**Import:** `from gaia.agents.code.tools.cli_tools import CLIToolsMixin`
+</Note>
+---
+
+## Overview
+
+CLIToolsMixin provides universal CLI command execution with background process management, error detection, and graceful shutdown capabilities. It enables agents to run any command-line tool (npm, python, docker, gh, etc.) with support for long-running processes like development servers.
+
+**Key Features:**
+- Universal CLI command execution without restrictions
+- Background process management with PID tracking
+- Automatic startup error detection
+- Port conflict management
+- Graceful process shutdown (SIGINT/Ctrl+C)
+- Real-time output streaming
+- Cross-platform support (Windows, Unix-like systems)
+
+---
+
+## Requirements
+
+### Functional Requirements
+
+1. **Universal Command Execution**
+   - Execute any CLI command without security restrictions
+   - Support for both foreground and background execution
+   - Configurable timeouts for long-running commands
+   - Auto-response for interactive prompts
+
+2. **Background Process Management**
+   - Start processes in background with PID tracking
+   - Monitor process startup for errors
+   - Manage multiple background processes
+   - Stop processes gracefully or forcefully
+   - Retrieve process logs and status
+
+3. **Error Detection**
+   - Scan output for common error patterns:
+     - Port conflicts
+     - Missing dependencies
+     - Compilation errors
+     - Permission issues
+     - Resource exhaustion
+     - Network errors
+   - Report errors with context and line numbers
+   - Detect process crashes during startup
+
+4. **Port Management**
+   - Detect ports from command arguments
+   - Check port availability before starting
+   - Find available ports in a range
+   - Kill processes using specific ports
+   - Track port-to-PID mappings
+
+5. **Process Lifecycle**
+   - Start processes with proper isolation (process groups/sessions)
+   - Monitor startup with configurable timeout
+   - Graceful shutdown with escalating signals:
+     1. SIGINT (Ctrl+C)
+     2. SIGTERM
+     3. SIGKILL (force)
+   - Cleanup on agent destruction
+
+### Non-Functional Requirements
+
+1. **Platform Compatibility**
+   - Windows (CREATE_NEW_PROCESS_GROUP)
+   - Unix-like systems (start_new_session)
+   - Handle platform-specific signal handling
+
+2. **Performance**
+   - Real-time output streaming
+   - Efficient log file management
+   - Minimal overhead for monitoring
+
+3. **Reliability**
+   - Automatic cleanup of background processes
+   - Safe handling of process crashes
+   - Robust error recovery
+
+---
+
+## API Specification
+
+### File Location
+
+```
+src/gaia/agents/code/tools/cli_tools.py
+```
+
+### Public Interface
+
+```python
+from typing import Any, Dict, List, Optional
+from pathlib import Path
+
+class CLIToolsMixin:
+    """
+    Mixin providing universal CLI command execution with process management.
+
+    Designed for trusted developer tools - no security restrictions.
+    Provides background process support with error detection and graceful shutdown.
+    """
+
+    background_processes: Dict[int, ProcessInfo]
+    port_registry: Dict[int, int]
+    platform: str
+    is_windows: bool
+
+    def register_cli_tools(self) -> None:
+        """
+        Register CLI command execution tools.
+
+        Registers:
+            - run_cli_command: Execute CLI commands
+            - stop_process: Stop background processes
+            - list_processes: List managed processes
+            - get_process_logs: Retrieve process output
+            - cleanup_all_processes: Stop all processes
+        """
+        pass
+
+    def _run_foreground_command(
+        self,
+        command: str,
+        work_path: Path,
+        timeout: int,
+        auto_respond: str,
+    ) -> Dict[str, Any]:
+        """
+        Execute a command in foreground mode.
+
+        Args:
+            command: Command to execute
+            work_path: Working directory
+            timeout: Command timeout in seconds
+            auto_respond: Auto-response for interactive prompts
+
+        Returns:
+            {
+                "status": "success" | "error",
+                "success": bool,
+                "command": str,
+                "stdout": str,
+                "stderr": str,
+                "return_code": int,
+                "has_errors": bool,
+                "errors": List[Dict],
+                "output_truncated": bool,
+                "working_dir": str
+            }
+        """
+        pass
+
+    def _run_background_command(
+        self,
+        command: str,
+        work_path: Path,
+        startup_timeout: int,
+        expected_port: Optional[int],
+        auto_respond: str,
+    ) -> Dict[str, Any]:
+        """
+        Execute a command in background mode with error detection.
+
+        Args:
+            command: Command to execute
+            work_path: Working directory
+            startup_timeout: Time to monitor for errors (seconds)
+            expected_port: Expected port for the process
+            auto_respond: Auto-response for interactive prompts
+
+        Returns:
+            On success:
+            {
+                "success": True,
+                "pid": int,
+                "command": str,
+                "port": int,
+                "log_file": str,
+                "background": True,
+                "message": str
+            }
+
+            On error:
+            {
+                "success": False,
+                "error": str,
+                "output": str,
+                "errors": List[Dict],
+                "has_errors": True,
+                "log_file": str
+            }
+        """
+        pass
+```
+
+---
+
+## Tool Specifications
+
+### 1. run_cli_command
+
+Execute any CLI command with optional background execution.
+
+**Parameters:**
+- `command` (str, required): Command to execute
+- `working_dir` (str, optional): Directory to execute in
+- `background` (bool, optional): Run as background process
+- `timeout` (int, optional): Timeout for foreground commands (default: 120s)
+- `startup_timeout` (int, optional): Timeout for startup error detection (default: 5s)
+- `expected_port` (int, optional): Port the process should bind to
+- `auto_respond` (str, optional): Response for interactive prompts (default: "y\n")
+
+**Returns:**
+```python
+{
+    "status": "success" | "error",
+    "success": bool,
+    "command": str,
+    "stdout": str,  # For foreground
+    "stderr": str,  # For foreground
+    "return_code": int,  # For foreground
+    "pid": int,  # For background
+    "port": int,  # For background
+    "log_file": str,  # For background
+    "has_errors": bool,
+    "errors": List[Dict],
+    "working_dir": str
+}
+```
+
+**Example:**
+```python
+# Foreground command
+result = run_cli_command(
+    command="npm install",
+    working_dir="/path/to/project"
+)
+
+# Background server
+result = run_cli_command(
+    command="npm run dev",
+    working_dir="/path/to/project",
+    background=True,
+    expected_port=3000
+)
+```
+
+### 2. stop_process
+
+Stop a background process gracefully or forcefully.
+
+**Parameters:**
+- `pid` (int, required): Process ID to stop
+- `force` (bool, optional): Force kill without graceful shutdown
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "pid": int,
+    "method": "graceful" | "forced",
+    "message": str
+}
+```
+
+### 3. list_processes
+
+List all managed background processes.
+
+**Returns:**
+```python
+{
+    "success": True,
+    "count": int,
+    "processes": [
+        {
+            "pid": int,
+            "command": str,
+            "working_dir": str,
+            "port": int,
+            "running": bool,
+            "runtime_seconds": float,
+            "log_file": str
+        }
+    ]
+}
+```
+
+### 4. get_process_logs
+
+Get output logs from a background process.
+
+**Parameters:**
+- `pid` (int, required): Process ID
+- `lines` (int, optional): Number of lines to return (default: 50)
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "pid": int,
+    "lines": int,
+    "output": str,
+    "log_file": str
+}
+```
+
+### 5. cleanup_all_processes
+
+Stop all managed background processes.
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "stopped": List[int],
+    "failed": List[int],
+    "message": str
+}
+```
+
+---
+
+## Error Detection Patterns
+
+### Port Conflicts
+```python
+[
+    r"Port (\d+) is (?:already )?in use",
+    r"EADDRINUSE.*:(\d+)",
+    r"address already in use.*:(\d+)",
+]
+```
+
+### Missing Dependencies
+```python
+[
+    r"Cannot find module ['\"]([^'\"]+)['\"]",
+    r"Module not found: Error: Can't resolve ['\"]([^'\"]+)['\"]",
+    r"command not found: (npm|node|yarn|pnpm|python|pip)",
+]
+```
+
+### Compilation Errors
+```python
+[
+    r"SyntaxError:",
+    r"TypeError:",
+    r"(\d+) error(?:s)?",
+    r"Failed to compile",
+    r"TS\d+:",
+]
+```
+
+### Permission Issues
+```python
+[
+    r"EACCES: permission denied",
+    r"Permission denied",
+    r"Access is denied",
+]
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Start Development Server
+
+```python
+from gaia import CodeAgent
+
+agent = CodeAgent()
+
+# Start Next.js dev server in background
+result = agent.run_cli_command(
+    command="npm run dev",
+    working_dir="/path/to/nextjs-app",
+    background=True,
+    expected_port=3000
+)
+
+if result["success"]:
+    print(f"Server started with PID {result['pid']}")
+    print(f"Logs: {result['log_file']}")
+else:
+    print(f"Server failed to start: {result['error']}")
+    for error in result.get("errors", []):
+        print(f"  - {error['type']}: {error['message']}")
+```
+
+### Example 2: Run Build Command
+
+```python
+# Run build with timeout
+result = agent.run_cli_command(
+    command="npm run build",
+    working_dir="/path/to/project",
+    timeout=300  # 5 minutes
+)
+
+if result["success"]:
+    print("Build succeeded!")
+    print(result["stdout"])
+else:
+    print("Build failed!")
+    print(result["stderr"])
+```
+
+### Example 3: Manage Background Processes
+
+```python
+# List all running processes
+processes = agent.list_processes()
+print(f"Running {processes['count']} processes:")
+for proc in processes["processes"]:
+    print(f"  PID {proc['pid']}: {proc['command']}")
+
+# Get logs from a specific process
+logs = agent.get_process_logs(pid=12345, lines=100)
+print(logs["output"])
+
+# Stop a process gracefully
+result = agent.stop_process(pid=12345, force=False)
+
+# Stop all processes
+agent.cleanup_all_processes()
+```
+
+### Example 4: Port Conflict Handling
+
+```python
+# Try to start server
+result = agent.run_cli_command(
+    command="npm run dev",
+    working_dir="/path/to/project",
+    background=True,
+    expected_port=3000
+)
+
+if not result["success"] and "port" in result:
+    # Port conflict detected
+    print(f"Port {result['port']} is in use by PID {result['blocking_pid']}")
+
+    # Kill the blocking process
+    from gaia.agents.code.tools.cli_tools import kill_process_on_port
+    if kill_process_on_port(result['port']):
+        print("Killed blocking process, retrying...")
+        result = agent.run_cli_command(...)
+```
+
+---
+
+## Testing Requirements
+
+### Unit Tests
+
+**File:** `tests/agents/code/test_cli_tools.py`
+
+```python
+import pytest
+from gaia.agents.code.tools.cli_tools import (
+    CLIToolsMixin,
+    is_port_available,
+    find_available_port,
+    find_process_on_port,
+)
+
+def test_run_foreground_command():
+    """Test basic foreground command execution."""
+    mixin = CLIToolsMixin()
+    result = mixin.run_cli_command(
+        command="echo 'Hello World'",
+        background=False
+    )
+
+    assert result["success"]
+    assert "Hello World" in result["stdout"]
+    assert result["return_code"] == 0
+
+def test_run_background_command():
+    """Test background command execution."""
+    mixin = CLIToolsMixin()
+    result = mixin.run_cli_command(
+        command="python -m http.server 8888",
+        background=True,
+        expected_port=8888
+    )
+
+    assert result["success"]
+    assert "pid" in result
+    assert result["port"] == 8888
+
+    # Cleanup
+    mixin.stop_process(result["pid"])
+
+def test_port_availability():
+    """Test port availability checking."""
+    # Find an available port
+    port = find_available_port(start=8000, end=9000)
+    assert is_port_available(port)
+
+    # Start process on that port
+    # Verify port is no longer available
+    assert not is_port_available(port)
+
+def test_error_detection():
+    """Test error pattern detection."""
+    mixin = CLIToolsMixin()
+    result = mixin.run_cli_command(
+        command="npm start",  # Will fail if no package.json
+        background=False
+    )
+
+    assert not result["success"]
+    assert len(result["errors"]) > 0
+
+def test_process_cleanup():
+    """Test process cleanup on deletion."""
+    mixin = CLIToolsMixin()
+
+    # Start multiple background processes
+    pids = []
+    for i in range(3):
+        result = mixin.run_cli_command(
+            command=f"sleep 60",
+            background=True
+        )
+        pids.append(result["pid"])
+
+    # Cleanup all
+    result = mixin.cleanup_all_processes()
+    assert result["success"]
+    assert len(result["stopped"]) == 3
+```
+
+---
+
+## Dependencies
+
+### Required Packages
+
+```toml
+# pyproject.toml
+[project]
+dependencies = [
+    "psutil>=5.9.0",
+]
+```
+
+### Import Dependencies
+
+```python
+import logging
+import os
+import platform
+import re
+import signal
+import socket
+import subprocess
+import tempfile
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from threading import Thread
+from typing import Any, Dict, List, Optional
+
+import psutil
+```
+
+---
+
+## Platform-Specific Implementation
+
+### Windows Process Management
+
+```python
+if self.is_windows:
+    process = subprocess.Popen(
+        command,
+        cwd=str(work_path),
+        shell=True,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+    )
+
+    # Graceful termination
+    proc.send_signal(signal.CTRL_C_EVENT)
+```
+
+### Unix Process Management
+
+```python
+else:
+    process = subprocess.Popen(
+        command,
+        cwd=str(work_path),
+        shell=True,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+
+    # Graceful termination
+    os.kill(pid, signal.SIGINT)
+    os.killpg(os.getpgid(pid), signal.SIGTERM)
+    os.killpg(os.getpgid(pid), signal.SIGKILL)
+```
+
+---
+
+## Performance Characteristics
+
+- **Command Execution:** ~100ms overhead
+- **Background Startup:** 5s default monitoring period
+- **Process Cleanup:** 5s graceful, immediate for force
+- **Log Reading:** O(n) for n lines
+- **Output Truncation:** 10,000 characters max per stream
+
+---
+
+## Security Considerations
+
+**Warning:** This mixin provides unrestricted command execution.
+
+- Designed for trusted developer tools only
+- No sandboxing or command validation
+- Full shell access with `shell=True`
+- Can modify filesystem and network
+- Can spawn additional processes
+
+**Use Cases:**
+- Local development environments
+- Trusted CI/CD pipelines
+- Developer productivity tools
+
+**Not Suitable For:**
+- User-facing applications
+- Untrusted input
+- Production services
+
+---
+
+*CLIToolsMixin Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

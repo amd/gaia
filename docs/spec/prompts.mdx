@@ -1,0 +1,302 @@
+---
+title: "Prompts Class"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/chat/prompts.py`](https://github.com/amd/gaia/blob/main/src/gaia/chat/prompts.py)
+</Info>
+
+<Note>
+**Component:** Prompts - Multi-model prompt formatting
+**Module:** `gaia.chat.prompts`
+**Import:** `from gaia.chat.prompts import Prompts`
+</Note>
+---
+
+## Overview
+
+Prompts class provides model-specific prompt formatting for 14+ LLM families. Each model has unique conversation format requirements (chat templates), and Prompts handles the conversion automatically.
+
+**Supported Models:**
+- Llama 3 / 3.2
+- Llama 2
+- Qwen / Qwen2.5 / Qwen3
+- Mistral
+- Phi-3
+- Gemma
+- ChatGLM
+- DeepSeek R1
+- GPT-OSS
+- LFM2 (Liquid AI)
+- Default (generic format)
+
+---
+
+## API Specification
+
+### Prompts Class
+
+```python
+class Prompts:
+    """
+    Multi-model prompt formatting.
+
+    Provides model-specific chat template formatting to ensure
+    proper conversation structure for each LLM family.
+    """
+
+    # Model-specific formatting templates
+    prompt_formats: Dict[str, Dict[str, str]] = {
+        "llama3": {
+            "system": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n{system_message}<|eot_id|>",
+            "user": "<|start_header_id|>user<|end_header_id|>\n{content}<|eot_id|>",
+            "assistant": "<|start_header_id|>assistant<|end_header_id|>\n{content}",
+        },
+        "qwen": {
+            "system": "<|im_start|>system\n{system_message}<|im_end|>",
+            "user": "<|im_start|>user\n{content}<|im_end|>",
+            "assistant": "<|im_start|>assistant\n{content}<|im_end|>",
+        },
+        # ... other models
+    }
+
+    # Default system messages per model
+    system_messages: Dict[str, str] = {
+        "llama3": "You are a helpful AI assistant...",
+        "qwen": "You are Qwen, a helpful AI assistant...",
+        # ... other models
+    }
+
+    @staticmethod
+    def format_chat_history(
+        model: str,
+        chat_history: list,
+        assistant_name: str = "assistant",
+        system_prompt: str = None,
+    ) -> str:
+        """
+        Format the chat history according to the model's requirements.
+
+        Args:
+            model: Model name or path
+            chat_history: List of "role: message" strings
+            assistant_name: Name to use for assistant
+            system_prompt: Custom system prompt (overrides default)
+
+        Returns:
+            Formatted prompt string ready for LLM
+        """
+        ...
+
+    @staticmethod
+    def match_model_name(model: str) -> str:
+        """
+        Match a model path/name to its corresponding prompt type.
+
+        Args:
+            model: Model name or path (e.g., "Qwen2.5-0.5B-Instruct")
+
+        Returns:
+            Matched model type (e.g., "qwen")
+        """
+        ...
+
+    @classmethod
+    def get_system_prompt(
+        cls,
+        model: str,
+        chat_history: list[str],
+        assistant_name: str = "assistant",
+        system_prompt: str = None,
+    ) -> str:
+        """
+        Get the formatted system prompt for the given model and chat history.
+
+        Convenience method that calls format_chat_history.
+        """
+        ...
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Format Conversation
+
+```python
+from gaia.chat.prompts import Prompts
+
+# Conversation history
+chat_history = [
+    "user: Hello, how are you?",
+    "assistant: I'm doing well! How can I help?",
+    "user: What's the weather like?",
+]
+
+# Format for Qwen
+model = "Qwen2.5-0.5B-Instruct-CPU"
+formatted = Prompts.format_chat_history(
+    model=model,
+    chat_history=chat_history,
+    assistant_name="gaia"
+)
+
+print(formatted)
+# Output:
+# <|im_start|>system
+# You are gaia (Qwen), a helpful AI assistant...
+# <|im_end|>
+# <|im_start|>user
+# Hello, how are you?
+# <|im_end|>
+# <|im_start|>assistant
+# I'm doing well! How can I help?
+# <|im_end|>
+# <|im_start|>user
+# What's the weather like?
+# <|im_end|>
+# <|im_start|>assistant
+```
+
+### Example 2: Custom System Prompt
+
+```python
+# Use custom system prompt
+custom_prompt = "You are a Python coding expert. Help users write clean code."
+
+formatted = Prompts.format_chat_history(
+    model="Llama-3-8B",
+    chat_history=chat_history,
+    system_prompt=custom_prompt
+)
+# Uses custom prompt instead of default
+```
+
+### Example 3: Model Name Matching
+
+```python
+# Automatic model detection
+model_path = "amd/Qwen2.5-0.5B-Instruct-GGUF-INT4"
+matched = Prompts.match_model_name(model_path)
+print(matched)  # Output: "qwen"
+
+# Works with various naming conventions
+Prompts.match_model_name("meta-llama/Llama-3.2-3B")  # -> "llama3"
+Prompts.match_model_name("Phi-3-mini-4k")  # -> "phi3"
+Prompts.match_model_name("mistral-7b-v0.3")  # -> "mistral"
+```
+
+---
+
+## Model-Specific Formats
+
+### Llama 3 Format
+
+```
+<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+{system_message}<|eot_id|>
+<|start_header_id|>user<|end_header_id|>
+{user_message}<|eot_id|>
+<|start_header_id|>assistant<|end_header_id|>
+{assistant_response}<|eot_id|>
+```
+
+### Qwen Format
+
+```
+<|im_start|>system
+{system_message}<|im_end|>
+<|im_start|>user
+{user_message}<|im_end|>
+<|im_start|>assistant
+{assistant_response}<|im_end|>
+```
+
+### Mistral Format
+
+```
+<s>[INST] {system_message}
+
+{user_message} [/INST] {assistant_response}</s>
+<s>[INST] {next_user_message} [/INST]
+```
+
+---
+
+## Testing Requirements
+
+```python
+def test_model_name_matching():
+    """Test model name detection."""
+    assert Prompts.match_model_name("Qwen2.5-0.5B") == "qwen"
+    assert Prompts.match_model_name("Llama-3-8B") == "llama3"
+    assert Prompts.match_model_name("Phi-3-mini") == "phi3"
+    assert Prompts.match_model_name("unknown-model") == "default"
+
+def test_chat_history_formatting():
+    """Test conversation formatting."""
+    history = [
+        "user: Hello",
+        "assistant: Hi there!",
+    ]
+
+    # Test Qwen format
+    formatted = Prompts.format_chat_history("Qwen2.5", history)
+    assert "<|im_start|>system" in formatted
+    assert "<|im_start|>user\nHello<|im_end|>" in formatted
+
+def test_custom_system_prompt():
+    """Test custom system prompt."""
+    history = ["user: Test"]
+    custom = "Custom instructions"
+
+    formatted = Prompts.format_chat_history(
+        "Qwen2.5",
+        history,
+        system_prompt=custom
+    )
+
+    assert custom in formatted
+    assert "You are Qwen" not in formatted  # Default replaced
+```
+
+---
+
+## Dependencies
+
+```toml
+[project]
+dependencies = [
+    "gaia.logger",
+]
+```
+
+---
+
+## Acceptance Criteria
+
+- [ ] Prompts class implemented
+- [ ] All 14+ model formats defined
+- [ ] Model name matching works
+- [ ] Custom system prompts work
+- [ ] Assistant name customization works
+- [ ] Format detection handles edge cases
+- [ ] All unit tests pass (8+ tests)
+- [ ] Integration with ChatSDK works
+- [ ] Documentation complete
+
+---
+
+*Prompts Class Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

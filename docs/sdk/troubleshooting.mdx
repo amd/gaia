@@ -1,0 +1,78 @@
+# Troubleshooting
+
+<Badge text="development" color="orange" />
+
+## Common Issues
+
+### Issue: "Agent not found" after install
+
+```bash
+# Verify entry point registration
+pip show my-gaia-agent
+# Check entry_points.txt in package
+
+# Reinstall
+pip uninstall my-gaia-agent -y
+uv pip install -e .
+```
+
+---
+
+### Issue: "Module not found" errors
+
+```python
+# Check imports use installed package paths
+from gaia.agents.base.agent import Agent  # ✅ Correct
+from gaia import Agent  # ❌ Won't work unless exported in __init__.py
+```
+
+---
+
+### Issue: Tools not registering
+
+```python
+# Ensure @tool is inside _register_tools()
+def _register_tools(self):
+    @tool  # ✅ Correct
+    def my_tool():
+        pass
+
+# Not at class level
+@tool  # ❌ Wrong - won't be registered
+def my_tool():
+    pass
+```
+
+---
+
+### Issue: LLM not responding
+
+```bash
+# Check Lemonade server is running
+curl http://localhost:8000/api/v1/models
+# Should return available models
+
+# Or start it
+lemonade-server serve
+```
+
+---
+
+## Related Topics
+
+- [Core Agent System](./core/agent-system) - Agent architecture
+- [Configuration](./configuration) - Environment setup
+- [Testing](./testing) - Debug with tests
+- [FAQ](/reference/faq) - Frequently asked questions
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

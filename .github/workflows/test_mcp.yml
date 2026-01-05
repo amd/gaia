@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 # This workflow tests the MCP (Model Context Protocol) bridge functionality
@@ -27,7 +27,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -133,7 +133,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Free disk space
         uses: ./.github/actions/free-disk-space
@@ -221,9 +221,22 @@ jobs:
           echo "Windows Tests: ${{ needs.test-mcp-windows.result }}"
           echo "Linux Tests: ${{ needs.test-mcp-linux.result }}"
           echo ""
-          
-          if [[ "${{ needs.test-mcp-windows.result }}" == "success" && 
-                "${{ needs.test-mcp-linux.result }}" == "success" ]]; then
+
+          # Check if all tests were skipped (draft PR without ready_for_ci label)
+          if [[ "${{ needs.test-mcp-windows.result }}" == "skipped" &&
+                "${{ needs.test-mcp-linux.result }}" == "skipped" ]]; then
+            echo "⏭️ All MCP tests skipped (draft PR - add 'ready_for_ci' label to run)"
+            exit 0
+          fi
+
+          # Helper function to check if result is acceptable (success or skipped)
+          check_result() {
+            [[ "$1" == "success" || "$1" == "skipped" ]]
+          }
+
+          # Check if all results are acceptable (success or skipped)
+          if check_result "${{ needs.test-mcp-windows.result }}" &&
+             check_result "${{ needs.test-mcp-linux.result }}"; then
             echo "✅ All MCP tests passed!"
             echo "Coverage:"
             echo "  ✅ HTTP-native bridge functionality"

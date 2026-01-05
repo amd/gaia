@@ -1,0 +1,143 @@
+---
+title: "Vision-Language Models"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/vlm/`](https://github.com/amd/gaia/blob/main/src/gaia/vlm/)
+</Info>
+
+<Note>
+**Import:** `from gaia.llm.vlm_client import VLMClient`
+</Note>
+---
+
+<Badge text="development" color="orange" />
+
+**Detailed Spec:** [spec/vlm-client](/spec/vlm-client)
+
+**Note:** Status is Beta because VLM model availability depends on Lemonade Server configuration.
+
+**Purpose:** Extract text from images and documents using vision-language models.
+
+---
+
+## Basic VLM Usage
+
+```python
+from gaia.llm.vlm_client import VLMClient
+from pathlib import Path
+
+# Initialize VLM
+vlm = VLMClient()
+
+# Check if VLM is available
+if vlm.check_availability():
+    # Extract from image
+    image_path = Path("invoice.png")
+    image_bytes = image_path.read_bytes()
+
+    # Extract text
+    extracted_text = vlm.extract_from_image(
+        image_bytes=image_bytes,
+        prompt="Extract all text from this invoice image."
+    )
+    print(extracted_text)
+```
+
+---
+
+## Structured Extraction
+
+```python
+from gaia.llm.vlm_client import VLMClient
+from pathlib import Path
+import json
+
+vlm = VLMClient()
+
+# Structured extraction with JSON
+image_bytes = Path("medical_form.png").read_bytes()
+
+prompt = """Extract patient information from this medical form.
+Return a JSON object with these fields:
+{
+    "first_name": "",
+    "last_name": "",
+    "date_of_birth": "YYYY-MM-DD",
+    "phone": "",
+    "email": "",
+    "allergies": [],
+    "medications": []
+}"""
+
+result = vlm.extract_from_image(image_bytes, prompt)
+
+# Parse JSON from result
+try:
+    if "```json" in result:
+        json_str = result.split("```json")[1].split("```")[0]
+    else:
+        json_str = result
+
+    data = json.loads(json_str.strip())
+    print(f"Patient: {data['first_name']} {data['last_name']}")
+    print(f"Allergies: {', '.join(data['allergies'])}")
+except json.JSONDecodeError:
+    print("Failed to parse JSON")
+```
+
+---
+
+## VLM in Agent
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.tools import tool
+from gaia.llm.vlm_client import VLMClient
+from pathlib import Path
+
+class FormProcessingAgent(Agent):
+    """Agent that processes scanned forms."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.vlm = VLMClient()
+
+    def _register_tools(self):
+        @tool
+        def extract_form(image_path: str) -> dict:
+            """Extract data from a scanned form image."""
+            path = Path(image_path)
+            if not path.exists():
+                return {"error": f"Image not found: {image_path}"}
+
+            image_bytes = path.read_bytes()
+
+            # Extract text with structured prompt
+            prompt = "Extract all form fields as JSON: {field_name: value, ...}"
+            extracted = self.vlm.extract_from_image(image_bytes, prompt)
+
+            return {
+                "status": "success",
+                "image": str(path),
+                "extracted_data": extracted
+            }
+```
+
+---
+
+## Related Topics
+
+- **[Agent System](../core/agent-system)** - Building agents with VLM
+- **[Complete Examples](../examples)** - Receipt processing example
+- **[LLM Integration](./llm)** - Working with language models
+
+---
+
+<small style="color: #666;">
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

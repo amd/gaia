@@ -142,6 +142,27 @@ class ChatSDK:
             return json.dumps(content)
         return str(content)
 
+    def _prepare_messages_for_llm(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Ensure messages are safe to send to the LLM by appending a continuation
+        prompt when the last entry is a tool_result, which some models ignore.
+        """
+        if not messages:
+            return []
+
+        prepared = list(messages)
+        try:
+            last_role = prepared[-1].get("role")
+        except Exception:
+            return prepared
+
+        if last_role == "tool":
+            prepared.append({"role": "user", "content": "continue"})
+
+        return prepared
+
     def send_messages(
         self,
         messages: List[Dict[str, Any]],
@@ -160,6 +181,8 @@ class ChatSDK:
             ChatResponse with the complete response
         """
         try:
+            messages = self._prepare_messages_for_llm(messages)
+
             # Convert messages to chat history format
             chat_history = []
 
@@ -241,6 +264,8 @@ class ChatSDK:
             ChatResponse chunks as they arrive
         """
         try:
+            messages = self._prepare_messages_for_llm(messages)
+
             # Convert messages to chat history format
             chat_history = []
 
@@ -687,7 +712,7 @@ class ChatSDK:
             from gaia.rag.sdk import RAGSDK, RAGConfig
         except ImportError:
             raise ImportError(
-                "RAG dependencies not installed. Install with: pip install .[rag]"
+                'RAG dependencies not installed. Install with: uv pip install -e ".[rag]"'
             )
 
         # Create RAG config matching chat config

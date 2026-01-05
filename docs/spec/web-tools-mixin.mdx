@@ -1,0 +1,664 @@
+---
+title: "WebToolsMixin"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/code/tools/web_dev_tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code/tools/web_dev_tools.py)
+</Info>
+
+<Note>
+**Component:** WebToolsMixin
+**Module:** `gaia.agents.code.tools.web_dev_tools`
+**Import:** `from gaia.agents.code.tools.web_dev_tools import WebToolsMixin`
+</Note>
+---
+
+## Overview
+
+WebToolsMixin provides comprehensive web development tools for building full-stack applications with Next.js, Prisma, and React. It offers framework-agnostic patterns with schema-aware code generation, modern design systems, and complete CRUD scaffolding.
+
+**Key Features:**
+- Prisma data model management
+- Next.js API endpoint generation
+- React component generation (server & client)
+- Schema-aware payload generation
+- Modern dark-theme design system
+- Complete CRUD scaffolding
+- Testing infrastructure setup
+- Configuration management
+
+---
+
+## Core Tool Specifications
+
+### 1. manage_data_model
+
+Manage database models with Prisma ORM.
+
+**Parameters:**
+- `project_dir` (str, required): Project directory
+- `model_name` (str, required): Model name (PascalCase, e.g., "User")
+- `fields` (Dict[str, str], required): Field name to type mapping
+- `relationships` (List[Dict], optional): Model relationships
+
+**Field Types:**
+```python
+{
+    "string": "String",
+    "text": "String",
+    "number": "Int",
+    "float": "Float",
+    "boolean": "Boolean",
+    "date": "DateTime",
+    "datetime": "DateTime",
+    "timestamp": "DateTime",
+    "email": "String",
+    "url": "String"
+}
+```
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "model_name": str,
+    "schema_file": str,
+    "schema_updated": bool,
+    "prisma_generated": bool,
+    "note": str,
+
+    # On error
+    "error": str,
+    "error_type": "duplicate_model" | "schema_validation_error" | "data_model_error",
+    "hint": str,
+    "suggested_fix": str
+}
+```
+
+**Auto-Operations:**
+1. Validates schema doesn't have forbidden output field
+2. Adds model to schema.prisma
+3. Runs `npx prisma format`
+4. Runs `npx prisma generate`
+5. Verifies Prisma client generation
+6. Runs `npx prisma db push`
+
+**Reserved Fields (auto-generated):**
+- `id`: Int @id @default(autoincrement())
+- `createdAt`: DateTime @default(now())
+- `updatedAt`: DateTime @updatedAt
+
+### 2. manage_api_endpoint
+
+Manage API endpoints with actual Prisma operations.
+
+**Parameters:**
+- `project_dir` (str, required): Project directory
+- `resource_name` (str, required): Resource name (e.g., "todo")
+- `operations` (List[str], optional): HTTP methods (default: ["GET", "POST"])
+- `fields` (Dict[str, str], optional): Field definitions (auto-read from schema)
+- `enable_pagination` (bool, optional): Add pagination (default: False)
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "resource": str,
+    "operations": List[str],
+    "files": List[str],
+
+    # On error
+    "error": str,
+    "error_type": "api_endpoint_error",
+    "hint": str
+}
+```
+
+**Generated Files:**
+- Collection route: `src/app/api/{resource_plural}/route.ts`
+- Item route: `src/app/api/{resource_plural}/[id]/route.ts` (for PATCH/DELETE)
+
+**Auto-Generated Features:**
+- NextResponse imports
+- Prisma client singleton import
+- Zod validation schemas (for POST/PATCH)
+- Try-catch error handling
+- Appropriate status codes (200, 201, 400, 500)
+
+### 3. manage_react_component
+
+Manage React components with functional implementations.
+
+**Parameters:**
+- `project_dir` (str, required): Project directory
+- `component_name` (str, required): Component name
+- `component_type` (str, optional): "server" | "client"
+- `resource_name` (str, optional): Associated resource
+- `fields` (Dict[str, str], optional): Field definitions (auto-read from schema)
+- `variant` (str, optional): Component variant
+
+**Variants:**
+- `"list"`: Server component showing all items
+- `"form"`: Client component for create/edit
+- `"new"`: Client page using form component
+- `"detail"`: Client page for view/edit/delete
+- `"actions"`: Client component for edit/delete buttons
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "component": str,
+    "type": str,
+    "file_path": str,
+    "files": List[str],  # Includes generated tests
+
+    # On error
+    "error": str,
+    "error_type": "component_error",
+    "hint": str
+}
+```
+
+**Auto-Generated Tests:**
+- Form component: `src/components/__tests__/{Resource}Form.test.tsx`
+- Actions component: `src/components/__tests__/{Resource}Actions.test.tsx`
+
+---
+
+## Design System Tools
+
+### 4. setup_app_styling
+
+Set up app-wide styling with modern dark theme.
+
+**Parameters:**
+- `project_dir` (str, required): Project directory
+- `app_title` (str, optional): App title (default: "My App")
+- `app_description` (str, optional): App description
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "message": str,
+    "files": List[str],
+    "design_system": List[str]
+}
+```
+
+**Generated Files:**
+- `src/app/layout.tsx`: Root layout with dark theme
+- `src/app/globals.css`: Global styles with design system
+
+**Design System Classes:**
+- `.glass-card`: Glass morphism card effect
+- `.btn-primary`: Primary gradient button
+- `.btn-secondary`: Secondary button
+- `.btn-danger`: Danger/delete button
+- `.input-field`: Styled form input
+- `.checkbox-modern`: Modern checkbox
+- `.page-title`: Gradient title text
+- `.link-back`: Back navigation link
+- Custom scrollbar styling
+
+### 5. update_landing_page
+
+Update landing page with resource links.
+
+**Parameters:**
+- `project_dir` (str, required): Project directory
+- `resource_name` (str, required): Resource name
+- `description` (str, optional): Link description
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "message": str,
+    "file_path": str,
+    "resource": str,
+    "link_path": str,
+    "already_exists": bool
+}
+```
+
+---
+
+## High-Level Scaffolding
+
+### 6. generate_crud_scaffold
+
+Generate complete CRUD scaffold with all files.
+
+**Parameters:**
+- `project_dir` (str, required): Project directory
+- `resource_name` (str, required): Resource name
+- `fields` (Dict[str, str], required): Field definitions
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "resource": str,
+    "generated": {
+        "api_routes": List[str],
+        "pages": List[str],
+        "components": List[str],
+        "errors": List[str]
+    },
+    "validation": Dict  # From validate_crud_completeness
+}
+```
+
+**Generated Structure:**
+```
+src/
+├── app/
+│   ├── api/
+│   │   └── {resource_plural}/
+│   │       ├── route.ts (GET list, POST create)
+│   │       └── [id]/
+│   │           └── route.ts (GET single, PATCH update, DELETE)
+│   └── {resource_plural}/
+│       ├── page.tsx (List page)
+│       ├── new/
+│       │   └── page.tsx (Create page)
+│       └── [id]/
+│           └── page.tsx (Detail/edit page)
+└── components/
+    ├── {Resource}Form.tsx (Reusable form)
+    ├── {Resource}Actions.tsx (Edit/delete buttons)
+    └── __tests__/
+        ├── {Resource}Form.test.tsx
+        └── {Resource}Actions.test.tsx
+```
+
+### 7. validate_crud_completeness
+
+Validate complete CRUD structure exists.
+
+**Parameters:**
+- `project_dir` (str, required): Project directory
+- `resource_name` (str, required): Resource name
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "complete": bool,
+    "resource": str,
+    "model_exists": bool,
+    "existing_files": Dict[str, List],
+    "missing_files": Dict[str, List],
+    "stats": {
+        "total": int,
+        "existing": int,
+        "missing": int
+    }
+}
+```
+
+---
+
+## Testing & Validation Tools
+
+### 8. setup_nextjs_testing
+
+Set up Vitest testing infrastructure.
+
+**Parameters:**
+- `project_dir` (str, required): Project directory
+- `resource_name` (str, optional): Resource for Prisma mocks
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "message": str,
+    "files": List[str],
+    "dependencies_installed": List[str],
+    "scripts_added": Dict[str, str]
+}
+```
+
+**Installed Dependencies:**
+- vitest
+- @vitejs/plugin-react
+- jsdom
+- @testing-library/react
+- @testing-library/jest-dom
+- @testing-library/user-event
+
+**Generated Files:**
+- `vitest.config.ts`: Vitest configuration
+- `tests/setup.ts`: Test setup with mocks
+
+### 9. generate_style_tests
+
+Generate CSS and styling validation tests.
+
+**Parameters:**
+- `project_dir` (str, required): Project directory
+- `resource_name` (str, optional): Resource name
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "files": List[str],
+    "message": str,
+    "tests_description": List[str]
+}
+```
+
+**Generated Tests:**
+- `tests/styles.test.ts`: CSS integrity tests
+- `tests/styling/routes.test.ts`: App router structure tests
+
+---
+
+## Configuration Tools
+
+### 10. manage_web_config
+
+Manage configuration files.
+
+**Parameters:**
+- `project_dir` (str, required): Project directory
+- `config_type` (str, required): "env" | "nextjs" | "tailwind"
+- `updates` (Dict[str, Any], required): Configuration updates
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "config_type": str,
+    "file": str,
+    "updates": Dict
+}
+```
+
+---
+
+## Helper Functions
+
+### read_prisma_model
+
+Read model definition from Prisma schema (Phase 1 Fix - Issue #885).
+
+**Parameters:**
+- `project_dir` (str): Project directory
+- `model_name` (str): Model name
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "model_name": str,
+    "fields": Dict[str, str],
+    "has_timestamps": bool,
+
+    # On error
+    "error": str
+}
+```
+
+**Usage:**
+```python
+model_info = read_prisma_model(project_dir, "Todo")
+if model_info["success"]:
+    fields = model_info["fields"]
+    # {"title": "String", "completed": "Boolean", ...}
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Build Complete CRUD App
+
+```python
+from gaia import CodeAgent
+
+agent = CodeAgent()
+
+# 1. Create data model
+model_result = agent.manage_data_model(
+    project_dir="/path/to/nextjs-app",
+    model_name="Todo",
+    fields={
+        "title": "string",
+        "description": "text",
+        "completed": "boolean"
+    }
+)
+
+# 2. Generate complete CRUD scaffold
+scaffold_result = agent.generate_crud_scaffold(
+    project_dir="/path/to/nextjs-app",
+    resource_name="todo",
+    fields=model_result["fields"]  # Auto-read from schema
+)
+
+# 3. Set up styling
+style_result = agent.setup_app_styling(
+    project_dir="/path/to/nextjs-app",
+    app_title="Todo App",
+    app_description="Manage your tasks"
+)
+
+# 4. Update landing page
+landing_result = agent.update_landing_page(
+    project_dir="/path/to/nextjs-app",
+    resource_name="todo",
+    description="Manage your todos"
+)
+
+# 5. Set up testing
+test_result = agent.setup_nextjs_testing(
+    project_dir="/path/to/nextjs-app",
+    resource_name="todo"
+)
+
+print("✓ Complete CRUD application created!")
+```
+
+### Example 2: Incremental Component Development
+
+```python
+# Create data model first
+agent.manage_data_model(
+    project_dir="/path/to/app",
+    model_name="Product",
+    fields={
+        "name": "string",
+        "price": "float",
+        "inStock": "boolean"
+    }
+)
+
+# Create API endpoints
+agent.manage_api_endpoint(
+    project_dir="/path/to/app",
+    resource_name="product",
+    operations=["GET", "POST", "PATCH", "DELETE"]
+)
+
+# Create components individually
+agent.manage_react_component(
+    project_dir="/path/to/app",
+    component_name="ProductList",
+    resource_name="product",
+    variant="list"
+)
+
+agent.manage_react_component(
+    project_dir="/path/to/app",
+    component_name="ProductForm",
+    resource_name="product",
+    variant="form"
+)
+
+# Validate completeness
+validation = agent.validate_crud_completeness(
+    project_dir="/path/to/app",
+    resource_name="product"
+)
+
+if not validation["complete"]:
+    print("Missing files:")
+    for missing in validation["missing_files"]["pages"]:
+        print(f"  - {missing['path']}")
+```
+
+### Example 3: Schema-Aware Development
+
+```python
+# Models automatically infer fields from schema
+# No need to manually specify fields!
+
+# Create model
+agent.manage_data_model(
+    project_dir="/path/to/app",
+    model_name="Post",
+    fields={
+        "title": "string",
+        "content": "text",
+        "published": "boolean"
+    }
+)
+
+# API endpoint auto-reads fields from schema
+api_result = agent.manage_api_endpoint(
+    project_dir="/path/to/app",
+    resource_name="post",
+    operations=["GET", "POST", "PATCH", "DELETE"]
+    # fields parameter is optional - auto-read from schema!
+)
+
+# Components also auto-read fields
+form_result = agent.manage_react_component(
+    project_dir="/path/to/app",
+    component_name="PostForm",
+    resource_name="post",
+    variant="form"
+    # fields parameter is optional - auto-read from schema!
+)
+
+print("✓ All components generated with schema-inferred fields")
+```
+
+---
+
+## Dependencies
+
+```python
+import logging
+import re
+import subprocess
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from gaia.agents.base.tools import tool
+from gaia.agents.code.prompts.code_patterns import (
+    # API patterns
+    API_ROUTE_GET,
+    API_ROUTE_POST,
+    API_ROUTE_DYNAMIC_GET,
+    API_ROUTE_DYNAMIC_PATCH,
+    API_ROUTE_DYNAMIC_DELETE,
+    # Component patterns
+    SERVER_COMPONENT_LIST,
+    CLIENT_COMPONENT_FORM,
+    # Design system
+    APP_LAYOUT,
+    APP_GLOBALS_CSS,
+    # Helper functions
+    pluralize,
+    generate_zod_schema,
+    generate_form_field,
+    generate_field_display,
+)
+```
+
+---
+
+## Testing Requirements
+
+**File:** `tests/agents/code/test_web_tools.py`
+
+```python
+def test_manage_data_model(tmp_project):
+    """Test Prisma model creation."""
+    result = manage_data_model(
+        tmp_project,
+        "Todo",
+        {"title": "string", "completed": "boolean"}
+    )
+
+    assert result["success"]
+    assert result["prisma_generated"]
+
+    # Verify schema file
+    schema = Path(tmp_project) / "prisma" / "schema.prisma"
+    content = schema.read_text()
+    assert "model Todo" in content
+
+def test_manage_api_endpoint(tmp_project):
+    """Test API endpoint generation."""
+    # Create model first
+    manage_data_model(tmp_project, "Todo", {"title": "string"})
+
+    # Create API endpoint
+    result = manage_api_endpoint(
+        tmp_project,
+        "todo",
+        ["GET", "POST", "PATCH", "DELETE"]
+    )
+
+    assert result["success"]
+    assert len(result["files"]) == 2  # Collection and item routes
+
+def test_schema_aware_generation(tmp_project):
+    """Test schema-aware field inference."""
+    # Create model
+    manage_data_model(
+        tmp_project,
+        "Product",
+        {"name": "string", "price": "float"}
+    )
+
+    # Generate API without specifying fields
+    result = manage_api_endpoint(
+        tmp_project,
+        "product",
+        ["POST"]
+        # fields not specified - should auto-read
+    )
+
+    assert result["success"]
+
+    # Verify validation schema was generated
+    route_file = Path(tmp_project) / "src/app/api/products/route.ts"
+    content = route_file.read_text()
+    assert "z.object" in content
+    assert "name" in content
+    assert "price" in content
+```
+
+---
+
+*WebToolsMixin Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

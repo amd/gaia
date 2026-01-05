@@ -23,20 +23,54 @@ DEFAULT_LEMONADE_URL = "http://localhost:8000/api/v1"
 
 logger = logging.getLogger(__name__)
 
+# Magic bytes for common image formats
+IMAGE_SIGNATURES = {
+    b"\x89PNG\r\n\x1a\n": "image/png",
+    b"\xff\xd8\xff": "image/jpeg",
+    b"GIF87a": "image/gif",
+    b"GIF89a": "image/gif",
+    b"RIFF": "image/webp",  # WebP starts with RIFF...WEBP
+    b"BM": "image/bmp",
+}
+
+
+def detect_image_mime_type(image_bytes: bytes) -> str:
+    """
+    Detect MIME type from image bytes using magic number signatures.
+
+    Args:
+        image_bytes: Raw image bytes
+
+    Returns:
+        MIME type string (e.g., "image/jpeg", "image/png")
+        Defaults to "image/png" if format not detected.
+    """
+    for signature, mime_type in IMAGE_SIGNATURES.items():
+        if image_bytes.startswith(signature):
+            # Special case: WebP needs additional check for WEBP marker
+            if signature == b"RIFF" and len(image_bytes) >= 12:
+                if image_bytes[8:12] != b"WEBP":
+                    continue
+            return mime_type
+
+    # Default to PNG if format not detected
+    logger.debug("Could not detect image format, defaulting to image/png")
+    return "image/png"
+
 
 class VLMClient:
     """
     VLM client for extracting text from images using Lemonade server.
 
     Handles:
-    - Model loading (Qwen2.5-VL-7B-Instruct-GGUF)
+    - Model loading (default: Qwen3-VL-4B-Instruct-GGUF)
     - Image-to-markdown conversion
     - State tracking for VLM processing
     """
 
     def __init__(
         self,
-        vlm_model: str = "Qwen2.5-VL-7B-Instruct-GGUF",
+        vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF",
         base_url: Optional[str] = None,
         auto_load: bool = True,
     ):
@@ -70,7 +104,7 @@ class VLMClient:
         self.auto_load = auto_load
         self.vlm_loaded = False
 
-        logger.info(f"VLM Client initialized: {self.vlm_model} at {self.server_url}")
+        logger.debug(f"VLM Client initialized: {self.vlm_model} at {self.server_url}")
 
     def check_availability(self) -> bool:
         """
@@ -86,7 +120,7 @@ class VLMClient:
             ]
 
             if self.vlm_model in available_models:
-                logger.info(f"✅ VLM model available: {self.vlm_model}")
+                logger.debug(f"VLM model available: {self.vlm_model}")
                 return True
             else:
                 logger.warning(f"❌ VLM model not found: {self.vlm_model}")
@@ -126,11 +160,11 @@ class VLMClient:
             return False
 
         try:
-            logger.info(f"📥 Loading VLM model: {self.vlm_model}")
+            logger.debug(f"Loading VLM model: {self.vlm_model}")
             # Load model (auto-download handled by lemonade_client, may take hours)
             self.client.load_model(self.vlm_model, timeout=60, auto_download=True)
             self.vlm_loaded = True
-            logger.info(f"✅ VLM model loaded: {self.vlm_model}")
+            logger.debug(f"VLM model loaded: {self.vlm_model}")
             return True
 
         except Exception as e:
@@ -165,10 +199,10 @@ class VLMClient:
             logger.error(error_msg)
             return f"[VLM extraction failed: {error_msg}]"
 
-        # Encode image as base64
+        # Encode image as base64 and detect MIME type
         # Note: Image size optimization happens in pdf_utils.py during extraction
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        _image_size_kb = len(image_bytes) / 1024
+        mime_type = detect_image_mime_type(image_bytes)
 
         # Default prompt for text extraction
         if not prompt:
@@ -192,7 +226,7 @@ Output format: Clean markdown with the ACTUAL text from the image."""
                     {"type": "text", "text": prompt},
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                        "image_url": {"url": f"data:{mime_type};base64,{image_b64}"},
                     },
                 ],
             }
@@ -203,11 +237,11 @@ Output format: Clean markdown with the ACTUAL text from the image."""
 
             start_time = time.time()
 
-            logger.info(
-                f"   🔍 VLM extracting from image {image_num} on page {page_num}..."
+            logger.debug(
+                f"VLM extracting from image {image_num} on page {page_num} ({mime_type})..."
             )
             logger.debug(
-                f"   Image size: {len(image_b64)} chars base64 ({len(image_bytes)} bytes raw)"
+                f"   Image: {mime_type}, {len(image_b64)} chars base64 ({len(image_bytes)} bytes raw)"
             )
 
             # Call VLM using chat completions endpoint
@@ -216,7 +250,7 @@ Output format: Clean markdown with the ACTUAL text from the image."""
                 messages=messages,
                 temperature=0.1,  # Low temp for accurate extraction
                 max_completion_tokens=2048,  # Allow detailed extraction
-                timeout=60,  # VLM may be slower than text models
+                timeout=300,  # VLM needs more time for complex forms (5 min)
             )
 
             elapsed = time.time() - start_time
@@ -228,14 +262,17 @@ Output format: Clean markdown with the ACTUAL text from the image."""
                 and len(response["choices"]) > 0
             ):
                 extracted_text = response["choices"][0]["message"]["content"]
-                logger.info(
-                    f"   ✅ Extracted {len(extracted_text)} chars from image {image_num} "
-                    f"in {elapsed:.2f}s ({len(image_bytes)/1024:.0f}KB image)"
+                size_kb = len(image_bytes) / 1024
+                logger.debug(
+                    f"Extracted {len(extracted_text)} chars from image {image_num} "
+                    f"in {elapsed:.2f}s ({size_kb:.0f}KB image)"
                 )
                 return extracted_text
             else:
-                logger.error(f"Unexpected VLM response format: {response}")
-                return "[VLM extraction failed: unexpected response format]"
+                # Check for specific error types and provide helpful messages
+                error_msg = self._parse_vlm_error(response)
+                logger.error(error_msg)
+                return f"[VLM extraction failed: {error_msg}]"
 
         except Exception as e:
             logger.error(
@@ -245,6 +282,44 @@ Output format: Clean markdown with the ACTUAL text from the image."""
 
             logger.debug(traceback.format_exc())
             return f"[VLM extraction failed: {str(e)}]"
+
+    def _parse_vlm_error(self, response: dict) -> str:
+        """Parse VLM error response and return a helpful error message."""
+        if not isinstance(response, dict):
+            return f"Unexpected response type: {type(response)}"
+
+        # Check for nested error structure from Lemonade
+        error = response.get("error", {})
+        if isinstance(error, dict):
+            details = error.get("details", {})
+            inner_response = (
+                details.get("response", {}) if isinstance(details, dict) else {}
+            )
+            inner_error = (
+                inner_response.get("error", {})
+                if isinstance(inner_response, dict)
+                else {}
+            )
+
+            # Context size error
+            if inner_error.get("type") == "exceed_context_size_error":
+                n_ctx = inner_error.get("n_ctx", "unknown")
+                n_prompt = inner_error.get("n_prompt_tokens", "unknown")
+                return (
+                    f"Context size too small! Image requires {n_prompt} tokens "
+                    f"but model context is only {n_ctx}. "
+                    f"To fix: Right-click Lemonade tray icon → Settings → "
+                    f"set Context Size to 32768, then restart the model."
+                )
+
+            # Other backend errors
+            if error.get("type") == "backend_error":
+                msg = inner_error.get(
+                    "message", error.get("message", "Unknown backend error")
+                )
+                return f"Backend error: {msg}"
+
+        return f"Unexpected response format: {response}"
 
     def extract_from_page_images(self, images: list, page_num: int) -> list:
         """

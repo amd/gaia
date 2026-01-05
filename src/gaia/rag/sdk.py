@@ -175,9 +175,9 @@ class RAGSDK:
             error_msg = (
                 f"\n❌ Error: Missing required RAG dependencies: {', '.join(missing)}\n\n"
                 f"Please install the RAG dependencies:\n"
-                f"  pip install -e .[rag]\n\n"
+                f'  uv pip install -e ".[rag]"\n\n'
                 f"Or install packages directly:\n"
-                f"  pip install {' '.join(missing)}\n"
+                f"  uv pip install {' '.join(missing)}\n"
             )
             raise ImportError(error_msg)
 
@@ -290,24 +290,41 @@ class RAGSDK:
             return os.path.join(self.config.cache_dir, f"{file_hash}_notfound.pkl")
 
     def _load_embedder(self):
-        """Load embedding model via Lemonade server for hardware acceleration."""
+        """Load embedding model via Lemonade server for hardware acceleration.
+
+        Forces a fresh load with --ubatch-size 2048 to prevent llama.cpp issues
+        after VLM processing. Must unload first since Lemonade skips reload
+        if model already loaded.
+        """
         if self.embedder is None:
             self.log.info(
                 f"Loading embedding model via Lemonade: {self.config.embedding_model}"
             )
 
-            # Use Lemonade server for embeddings (NPU/GPU accelerated)
             from gaia.llm.lemonade_client import LemonadeClient
 
             if not hasattr(self, "llm_client") or self.llm_client is None:
                 self.llm_client = LemonadeClient()
 
+            # Force fresh load - must unload first
+            try:
+                self.llm_client.unload_model()
+            except Exception:
+                pass  # Ignore if nothing to unload
+
+            try:
+                self.llm_client.load_model(
+                    self.config.embedding_model,
+                    llamacpp_args="--ubatch-size 2048",
+                )
+                self.log.info("Loaded embedding model with ubatch-size=2048")
+            except Exception as e:
+                self.log.warning(f"Could not pre-load embedding model: {e}")
+
             self.embedder = self.llm_client
             self.use_lemonade_embeddings = True
 
-            self.log.info(
-                "✅ Using Lemonade server for hardware-accelerated embeddings"
-            )
+            self.log.info("Using Lemonade server for hardware-accelerated embeddings")
 
     def _encode_texts(
         self, texts: List[str], show_progress: bool = False

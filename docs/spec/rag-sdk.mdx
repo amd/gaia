@@ -1,0 +1,368 @@
+---
+title: "RAG SDK"
+description: "Retrieval-Augmented Generation for document Q&A with PDF support and semantic search"
+icon: "book-open"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
+</Info>
+
+<Note>
+**Component:** RAGSDK - Document Q&A with RAG
+**Module:** `gaia.rag.sdk`
+**Import:** `from gaia.rag.sdk import RAGSDK, RAGConfig, RAGResponse, quick_rag`
+</Note>
+
+---
+
+## Overview
+
+RAGSDK provides document retrieval and Q&A capabilities using Retrieval-Augmented Generation (RAG). It supports PDF, text, CSV, JSON, and code files with intelligent chunking, VLM-enhanced image extraction, and vector search via FAISS.
+
+**Key Features:**
+- Multi-format support (PDF, TXT, MD, CSV, JSON, code files)
+- VLM-based image text extraction from PDFs
+- Intelligent semantic chunking
+- Hardware-accelerated embeddings (NPU/GPU via Lemonade)
+- Per-file search optimization
+- Automatic caching with content hashing
+- LRU memory management
+
+---
+
+## API Specification
+
+### RAGConfig
+
+```python
+@dataclass
+class RAGConfig:
+    """Configuration for RAG SDK."""
+
+    model: str = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+    max_tokens: int = 1024
+    chunk_size: int = 500
+    chunk_overlap: int = 100
+    max_chunks: int = 5
+    embedding_model: str = "nomic-embed-text-v2-moe-GGUF"
+    cache_dir: str = ".gaia"
+    show_stats: bool = False
+    use_local_llm: bool = True
+    base_url: str = "http://localhost:8000/api/v1"
+
+    # Memory management
+    max_indexed_files: int = 100
+    max_total_chunks: int = 10000
+    enable_lru_eviction: bool = True
+
+    # File size limits
+    max_file_size_mb: int = 100
+    warn_file_size_mb: int = 50
+
+    # VLM settings
+    vlm_model: str = "Qwen2.5-VL-7B-Instruct-GGUF"
+
+    # Security
+    allowed_paths: Optional[List[str]] = None
+```
+
+### RAGResponse
+
+```python
+@dataclass
+class RAGResponse:
+    """Response from RAG operations with enhanced metadata."""
+
+    text: str
+    chunks: Optional[List[str]] = None
+    chunk_scores: Optional[List[float]] = None
+    stats: Optional[Dict[str, Any]] = None
+    source_files: Optional[List[str]] = None
+    chunk_metadata: Optional[List[Dict[str, Any]]] = None
+    query_metadata: Optional[Dict[str, Any]] = None
+```
+
+### RAGSDK
+
+```python
+class RAGSDK:
+    """
+    Simple RAG SDK for PDF document Q&A following GAIA patterns.
+
+    Supports:
+    - Documents: PDF, TXT, MD, CSV, JSON
+    - Backend Code: Python, Java, C/C++, Go, Rust, Ruby, PHP, Swift, Kotlin, Scala
+    - Web Code: JavaScript/TypeScript, HTML, CSS/SCSS/SASS/LESS, Vue, Svelte, Astro
+    - Config: YAML, XML, TOML, INI, ENV, Properties
+    - Build: Gradle, CMake, Makefiles
+    - Database: SQL
+    """
+
+    def __init__(self, config: Optional[RAGConfig] = None):
+        """Initialize RAG SDK."""
+        ...
+
+    def index_document(self, file_path: str) -> Dict[str, Any]:
+        """
+        Index a document for retrieval.
+
+        Args:
+            file_path: Path to document or code file
+
+        Returns:
+            Dict with indexing results and statistics:
+            {
+                "success": bool,
+                "file_name": str,
+                "file_type": str,
+                "file_size_mb": float,
+                "num_pages": int (for PDFs),
+                "num_chunks": int,
+                "total_indexed_files": int,
+                "total_chunks": int,
+                "vlm_pages": int (pages enhanced with VLM),
+                "total_images": int (images processed),
+                "error": str (if failed)
+            }
+        """
+        ...
+
+    def remove_document(self, file_path: str) -> bool:
+        """Remove a document from the index."""
+        ...
+
+    def reindex_document(self, file_path: str) -> Dict[str, Any]:
+        """Reindex a document (remove old chunks and add new ones)."""
+        ...
+
+    def query(self, question: str, include_metadata: bool = True) -> RAGResponse:
+        """
+        Query the indexed documents with enhanced metadata tracking.
+
+        Args:
+            question: Question to ask about the documents
+            include_metadata: Whether to include detailed metadata in response
+
+        Returns:
+            RAGResponse with answer, retrieved chunks, and metadata
+        """
+        ...
+
+    def clear_cache(self):
+        """Clear the RAG cache."""
+        ...
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get RAG system status."""
+        ...
+
+    # Private methods for internal use
+
+    def _extract_text_from_pdf(self, pdf_path: str) -> tuple:
+        """
+        Extract text from PDF file with VLM for images.
+
+        Returns:
+            (text, num_pages, metadata) tuple
+        """
+        ...
+
+    def _split_text_into_chunks(self, text: str) -> List[str]:
+        """
+        Split text into semantic chunks.
+
+        Uses intelligent splitting that:
+        - Respects natural document boundaries
+        - Keeps semantic units together
+        - Maintains context with overlap
+        - Protects VLM content blocks
+        """
+        ...
+
+    def _create_vector_index(self, chunks: List[str]) -> tuple:
+        """Create FAISS vector index from chunks."""
+        ...
+
+    def _retrieve_chunks(self, query: str) -> tuple:
+        """Retrieve relevant chunks for query."""
+        ...
+
+    def _retrieve_chunks_from_file(self, query: str, file_path: str) -> tuple:
+        """
+        Retrieve relevant chunks from a specific file using cached per-file index.
+
+        Much faster than global search because:
+        1. Uses pre-computed embeddings
+        2. Searches smaller, file-specific FAISS index
+        3. No need to rebuild index on each query
+        """
+        ...
+```
+
+### Quick Function
+
+```python
+def quick_rag(pdf_path: str, question: str, **kwargs) -> str:
+    """
+    Convenience function for quick RAG query.
+
+    Args:
+        pdf_path: Path to PDF file
+        question: Question to ask
+        **kwargs: Additional config parameters
+
+    Returns:
+        Answer text
+    """
+    ...
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Basic Document Q&A
+
+```python
+from gaia.rag.sdk import RAGSDK, RAGConfig
+
+# Initialize
+config = RAGConfig(show_stats=True)
+rag = RAGSDK(config)
+
+# Index document
+result = rag.index_document("manual.pdf")
+print(f"Indexed {result['num_chunks']} chunks from {result['file_name']}")
+
+# Query
+response = rag.query("What are the key features?")
+print(response.text)
+
+# View sources
+if response.chunk_metadata:
+    for meta in response.chunk_metadata:
+        print(f"Source: {meta['source_file']} (score: {meta['relevance_score']:.2f})")
+```
+
+### Example 2: Multi-Document Search
+
+```python
+# Index multiple documents
+for doc in ["manual.pdf", "guide.pdf", "faq.pdf"]:
+    rag.index_document(doc)
+
+# Query across all documents
+response = rag.query("How do I troubleshoot errors?", include_metadata=True)
+
+# Show which documents were used
+print(f"Retrieved from {len(set(response.source_files))} documents")
+print(f"Total chunks: {response.query_metadata['num_chunks_retrieved']}")
+```
+
+### Example 3: Code Documentation
+
+```python
+# Index code files
+rag.index_document("src/main.py")
+rag.index_document("src/utils.py")
+rag.index_document("README.md")
+
+# Ask coding questions
+response = rag.query("How does the authentication system work?")
+print(response.text)
+
+# View code chunks that were referenced
+for i, chunk in enumerate(response.chunks, 1):
+    print(f"\n--- Context {i} ---")
+    print(chunk[:200] + "...")
+```
+
+---
+
+## Testing Requirements
+
+```python
+def test_rag_initialization():
+    """Test RAG SDK initialization."""
+    config = RAGConfig(cache_dir=".test_cache")
+    rag = RAGSDK(config)
+    assert rag is not None
+
+def test_document_indexing():
+    """Test document indexing."""
+    rag = RAGSDK()
+    result = rag.index_document("test.pdf")
+
+    assert result["success"]
+    assert result["num_chunks"] > 0
+    assert result["file_name"] == "test.pdf"
+
+def test_query_functionality():
+    """Test query with indexed documents."""
+    rag = RAGSDK()
+    rag.index_document("test.pdf")
+
+    response = rag.query("What is the main topic?")
+
+    assert response.text
+    assert response.chunks
+    assert len(response.chunks) <= rag.config.max_chunks
+
+def test_remove_document():
+    """Test document removal."""
+    rag = RAGSDK()
+    rag.index_document("test.pdf")
+
+    success = rag.remove_document("test.pdf")
+    assert success
+    assert len(rag.indexed_files) == 0
+```
+
+---
+
+## Dependencies
+
+```toml
+[project]
+dependencies = [
+    "pypdf>=3.0",
+    "sentence-transformers",  # For embeddings
+    "faiss-cpu",  # Vector search
+    "numpy",
+    "gaia.chat.sdk",
+    "gaia.llm.vlm_client",  # For VLM image extraction
+]
+```
+
+---
+
+## Acceptance Criteria
+
+- [ ] RAGSDK class implemented
+- [ ] Multi-format file support working
+- [ ] VLM image extraction functional
+- [ ] Vector indexing with FAISS works
+- [ ] Semantic chunking preserves context
+- [ ] Per-file search optimization working
+- [ ] Cache system with content hashing
+- [ ] LRU memory management functional
+- [ ] All unit tests pass (8+ tests)
+- [ ] Performance acceptable (less than 3s per page)
+- [ ] Documentation complete
+
+---
+
+*RAGSDK Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

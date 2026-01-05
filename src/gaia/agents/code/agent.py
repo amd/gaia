@@ -332,7 +332,9 @@ class CodeAgent(
                     logger.error(f"Failed to write trace file: {e}")
 
             # Return dict matching app.py's expected format
-            project_dir = workspace_root or os.getcwd()
+            project_dir = execution_result.outputs.get(
+                "project_dir", workspace_root or os.getcwd()
+            )
             return {
                 "status": "success" if execution_result.success else "error",
                 "result": execution_result.summary,

@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """Checklist Executor for LLM-Driven Code Generation.
 
@@ -106,6 +106,12 @@ TEMPLATE_METADATA: Dict[str, Dict[str, Any]] = {
                 "btn-danger",
             ],
             "file_pattern": "src/app/{resource}s/[id]/page.tsx",
+        },
+        "artifact-timer": {
+            "requires_client": True,
+            "expected_classes": [
+                "glass-card",
+            ],
         },
     },
     "generate_api_route": {
@@ -891,6 +897,7 @@ Return raw CSS starting with @tailwind base;"""
                 APP_GLOBALS_CSS,
                 CLIENT_COMPONENT_FORM,
                 CLIENT_COMPONENT_NEW_PAGE,
+                CLIENT_COMPONENT_TIMER,
                 SERVER_COMPONENT_DETAIL,
                 SERVER_COMPONENT_LIST,
             )
@@ -975,6 +982,7 @@ export default function Home() {
                 "form": CLIENT_COMPONENT_FORM,
                 "new": CLIENT_COMPONENT_NEW_PAGE,
                 "detail": SERVER_COMPONENT_DETAIL,
+                "artifact-timer": CLIENT_COMPONENT_TIMER,
             },
             "generate_api_route": {
                 "collection": api_route_collection,
@@ -1030,6 +1038,12 @@ export default function Home() {
 
         if template == "generate_react_component":
             variant = params.get("variant", "list")
+            component_name = params.get("component_name")
+            if component_name:
+                safe_name = "".join(
+                    ch for ch in component_name if ch.isalnum() or ch == "_"
+                )
+                component_name = safe_name or component_name
 
             if variant == "list":
                 return f"src/app/{resource}s/page.tsx"
@@ -1039,7 +1053,12 @@ export default function Home() {
                 return f"src/app/{resource}s/new/page.tsx"
             elif variant == "detail":
                 return f"src/app/{resource}s/[id]/page.tsx"
+            elif variant == "artifact-timer":
+                file_component = component_name or f"{resource_cap}Timer"
+                return f"src/components/{file_component}.tsx"
             else:
+                if component_name:
+                    return f"src/components/{component_name}.tsx"
                 return f"src/components/{resource_cap}{variant.capitalize()}.tsx"
 
         elif template == "generate_api_route":
@@ -1604,12 +1623,15 @@ if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
         variant = template_params.get("variant", "list")
 
         # Generate component_name from resource + variant
-        # e.g., "todo" + "list" -> "TodoList"
+        # Allow caller to provide an explicit component_name (used for timers)
         resource_capitalized = resource.capitalize() if resource else "Item"
         variant_capitalized = variant.capitalize() if variant else "List"
+        explicit_component = template_params.get("component_name")
 
         # Build component name based on variant
-        if variant == "list":
+        if explicit_component:
+            component_name = explicit_component
+        elif variant == "list":
             component_name = f"{resource_capitalized}List"
         elif variant == "form":
             component_name = f"{resource_capitalized}Form"
@@ -1619,6 +1641,8 @@ if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
             component_name = f"{resource_capitalized}Detail"
         elif variant == "actions":
             component_name = f"{resource_capitalized}Actions"
+        elif variant == "artifact-timer":
+            component_name = f"{resource_capitalized}Timer"
         else:
             component_name = f"{resource_capitalized}{variant_capitalized}"
 
