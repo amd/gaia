@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import base64
@@ -41,9 +41,9 @@ class ClaudeClient:
             error_msg = (
                 "\n❌ Error: Missing required package 'anthropic'\n\n"
                 "Please install the eval dependencies:\n"
-                "  pip install -e .[eval]\n\n"
+                '  uv pip install -e ".[eval]"\n\n'
                 "Or install anthropic directly:\n"
-                "  pip install anthropic\n"
+                "  uv pip install anthropic\n"
             )
             raise ImportError(error_msg)
 
@@ -51,9 +51,9 @@ class ClaudeClient:
             error_msg = (
                 "\n❌ Error: Missing required package 'bs4' (BeautifulSoup4)\n\n"
                 "Please install the eval dependencies:\n"
-                "  pip install -e .[eval]\n\n"
+                '  uv pip install -e ".[eval]"\n\n'
                 "Or install beautifulsoup4 directly:\n"
-                "  pip install beautifulsoup4\n"
+                "  uv pip install beautifulsoup4\n"
             )
             raise ImportError(error_msg)
 

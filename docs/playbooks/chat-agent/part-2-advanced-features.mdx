@@ -1,0 +1,819 @@
+---
+title: "Part 2: Advanced Features & Customization"
+description: "Add tool mixins, file monitoring, sessions, and extend your agent"
+icon: "wrench"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/chat/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/chat/sdk.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
+</Info>
+
+<Badge text="development" color="orange" />
+
+<Note>
+**This is Part 2 of 3.** If you haven't completed Part 1, start there: [Part 1: Getting Started](./part-1-getting-started)
+</Note>
+
+- **Time to complete:** 15-20 minutes
+- **What you'll build:** Agent with monitoring, sessions, and custom capabilities
+- **What you'll learn:** Tool mixins, file watching, persistence, and extensibility patterns
+
+---
+
+## Building It: The Step-by-Step Journey (Continued)
+
+### Step 4: Add Tool Mixins
+
+Use GAIA's built-in mixins instead of implementing tools from scratch.
+
+<CodeGroup>
+```python step4_with_mixins.py
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.console import AgentConsole
+from gaia.agents.chat.tools import RAGToolsMixin, FileToolsMixin
+from gaia.agents.tools import FileSearchToolsMixin
+from gaia.rag.sdk import RAGSDK, RAGConfig
+
+class FullFeaturedAgent(
+    Agent,
+    RAGToolsMixin,      # Document Q&A tools
+    FileSearchToolsMixin,  # File discovery tools
+    FileToolsMixin      # Directory monitoring
+):
+    """Chat agent with all tool mixins."""
+
+    def __init__(self, documents=None, **kwargs):
+        # Initialize RAG
+        rag_config = RAGConfig()
+        self.rag = RAGSDK(rag_config)
+        self.indexed_files = set()
+
+        # For FileToolsMixin (directory monitoring)
+        self.watch_directories = []
+        self.observers = []
+
+        super().__init__(**kwargs)
+
+        # Index initial documents
+        if documents:
+            for doc in documents:
+                self.rag.index_document(doc)
+                self.indexed_files.add(doc)
+
+    def _get_system_prompt(self) -> str:
+        indexed = "\n".join(Path(f).name for f in self.indexed_files)
+        return f"""You are an intelligent document assistant.
+
+Indexed: {len(self.indexed_files)} document(s)
+{indexed}
+
+You can:
+- Search files across drives (search_file)
+- Index documents (index_document)
+- Query documents (query_documents)
+- Monitor directories (add_watch_directory)"""
+
+    def _create_console(self):
+        return AgentConsole()
+
+    def _register_tools(self):
+        # Register tools from mixins
+        self.register_rag_tools()         # query_documents, index_document, etc.
+        self.register_file_search_tools() # search_file, search_directory
+        self.register_file_tools()        # add_watch_directory
+
+# Use it
+agent = FullFeaturedAgent()
+
+# The agent now has all mixin tools registered
+agent.process_query("Find research papers in my Documents folder, index them, and summarize key findings")
+```
+</CodeGroup>
+
+<Accordion title="Mixin Tool Reference">
+<Tabs>
+  <Tab title="RAGToolsMixin">
+    **Document operations:**
+    - `query_documents(query)` - Semantic search across all indexed docs
+    - `query_specific_file(file_path, query)` - Search specific document
+    - `index_document(file_path)` - Add document to index
+    - `index_directory(directory_path)` - Index all files in directory
+    - `list_indexed_documents()` - List currently indexed files
+    - `rag_status()` - Get index statistics
+
+    **Import:** `from gaia.agents.chat.tools import RAGToolsMixin`
+  </Tab>
+
+  <Tab title="FileSearchToolsMixin">
+    **File discovery:**
+    - `search_file(file_pattern)` - Multi-phase file search (fast → deep)
+    - `search_directory(directory_name)` - Find directories by name
+    - `search_file_content(pattern, path)` - Content grep search
+
+    **Import:** `from gaia.agents.tools import FileSearchToolsMixin`
+  </Tab>
+
+  <Tab title="FileToolsMixin">
+    **Directory monitoring:**
+    - `add_watch_directory(directory)` - Monitor and auto-index changes
+
+    **Import:** `from gaia.agents.chat.tools import FileToolsMixin`
+  </Tab>
+
+  <Tab title="Registration">
+    ```python
+    def _register_tools(self):
+        self.register_rag_tools()
+        self.register_file_search_tools()
+        self.register_file_tools()
+        # All mixin tools now available to LLM
+    ```
+  </Tab>
+</Tabs>
+</Accordion>
+
+**What you have:** An agent using GAIA's built-in mixins. This reduces code duplication and provides tested tool implementations.
+
+---
+
+### Step 5: Add File Monitoring (Auto-Indexing)
+
+Add file system monitoring to automatically reindex documents when they change.
+
+<CodeGroup>
+```python step5_with_monitoring.py
+from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+# The full ChatAgent includes file monitoring!
+config = ChatAgentConfig(
+    rag_documents=["./manual.pdf"],
+    watch_directories=["./documents"],  # Monitor this folder
+    chunk_size=500,
+    max_chunks=5
+)
+
+agent = ChatAgent(config)
+
+# Now:
+# 1. Manual.pdf is indexed
+# 2. ./documents folder is being watched
+# 3. If you add a new PDF to documents/ → Auto-indexed!
+# 4. If you modify an existing PDF → Auto-reindexed!
+
+agent.process_query("What's in the manual?")
+# Add a new file to ./documents/new_report.pdf
+# Agent automatically indexes it in the background!
+```
+</CodeGroup>
+
+<Accordion title="Under the Hood: File Watching">
+**Watchdog library implementation:**
+
+```python
+# Simplified file monitoring logic
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+class FileChangeHandler(FileSystemEventHandler):
+    def on_created(self, event):
+        if event.src_path.endswith('.pdf'):
+            agent.rag.index_document(event.src_path)
+
+    def on_modified(self, event):
+        if event.src_path.endswith('.pdf'):
+            agent.rag.reindex_document(event.src_path)
+
+# Observer runs in separate thread
+observer = Observer()
+observer.schedule(handler, "./documents", recursive=True)
+observer.start()
+```
+
+**Implementation details:**
+- File events are async (non-blocking)
+- Detection latency: ~1 second
+- Runs in dedicated thread
+- Debouncing: 2-second window per file
+- Memory: LRU eviction at 1000 tracked files
+- Supported types: .pdf, .txt, .md, .py, .json, etc.
+</Accordion>
+
+<Check>
+**What you have:** Reactive file monitoring. The index automatically updates when documents are created or modified.
+</Check>
+
+---
+
+### Step 6: Add Session Persistence
+
+Implement session persistence to avoid re-indexing on every restart.
+
+<CodeGroup>
+```python step6_create_session.py
+from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+config = ChatAgentConfig(
+    rag_documents=["./manual.pdf"]
+)
+agent = ChatAgent(config)
+
+# Use the agent
+result = agent.process_query("What does the manual say about installation?")
+print(result)
+
+# Save session (includes indexed documents, conversation history)
+if agent.save_current_session():
+    print(f"✓ Session saved! ID: {agent.current_session.session_id}")
+```
+
+```python step6_load_session.py
+from gaia.agents.chat.agent import ChatAgent
+
+agent = ChatAgent()
+
+# Replace with the session ID you want to load
+agent.load_session("session_20241211_143000")
+# All indexed documents and conversation history are restored!
+agent.process_query("What are the current indexed files")
+# Agent knows the context!
+```
+</CodeGroup>
+
+<Accordion title="Under the Hood: Session Persistence">
+**Data structure:**
+```python
+@dataclass
+class ChatSession:
+    session_id: str
+    created_at: str
+    indexed_documents: List[str]
+    watched_directories: List[str]
+    chat_history: List[Dict]
+```
+
+**Save process:**
+```python
+save_current_session()
+  → Serialize to JSON
+  → Write to ~/.gaia/sessions/{id}.json
+  → Include metadata (timestamp, version)
+```
+
+**Load process:**
+```python
+load_session(session_id)
+  → Read JSON from disk
+  → Restore indexed documents (call rag.index_document() for each)
+  → Restore watched directories (start observers)
+  → Restore conversation history
+```
+
+**Use cases:**
+- Avoid re-indexing large document collections
+- Maintain conversation context across restarts
+- Share pre-indexed state with team (requires file permissions)
+- Support long-running research sessions
+</Accordion>
+
+<Check>
+**What you have:** Persistent sessions via JSON serialization. State (indexed docs, conversation) survives restarts.
+</Check>
+
+---
+
+## The Complete Agent
+
+The `ChatAgent` class combines all components. Here's how to configure and use it:
+
+<Tabs>
+  <Tab title="Full Configuration">
+    ```python title="complete_agent.py"
+    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+    from pathlib import Path
+
+    # Complete configuration
+    config = ChatAgentConfig(
+    # Documents to index on startup
+        rag_documents=[
+            "./manuals/user_guide.pdf",
+            "./manuals/technical_spec.pdf"
+        ],
+
+        # Directories to monitor
+        watch_directories=["./documents"],
+
+        # RAG configuration
+        chunk_size=500,
+        chunk_overlap=100,
+        max_chunks=5,
+        use_llm_chunking=False,
+
+        # LLM settings (AMD-optimized models)
+        model_id="Qwen3-Coder-30B-A3B-Instruct-GGUF",  # Runs on Ryzen AI
+        max_steps=10,
+
+        # Output
+        show_stats=True,
+        debug=True,
+        silent_mode=False,
+
+        # Security
+        allowed_paths=[
+            str(Path.home() / "Documents"),
+            str(Path.home() / "Work"),
+            str(Path.cwd())
+        ]
+    )
+
+    agent = ChatAgent(config)
+    agent.save_current_session()
+    ```
+  </Tab>
+
+  <Tab title="Usage">
+    ```python
+    # Query examples
+    examples = [
+        "What documents are indexed?",
+        "Find the safety manual and tell me about emergency procedures",
+        "What are the system requirements?",
+        "Index all PDFs in my Downloads folder",
+    ]
+
+    for question in examples:
+        result = agent.process_query(question)
+        print(f"Q: {question}")
+        print(f"A: {result.get('answer')}\n")
+    ```
+  </Tab>
+
+  <Tab title="Configuration Reference">
+    | Parameter | Default | Purpose |
+    |-----------|---------|---------|
+    | `chunk_size` | 500 | Tokens per chunk |
+    | `chunk_overlap` | 100 | Boundary context |
+    | `max_chunks` | 5 | Top-k retrieval |
+    | `use_llm_chunking` | False | Semantic vs structural |
+    | `max_steps` | 10 | Reasoning iterations |
+    | `show_stats` | False | Token usage display |
+    | `debug` | False | Retrieval details |
+  </Tab>
+</Tabs>
+
+**Run it:**
+```bash
+python complete_agent.py
+```
+
+<Accordion title="Under the Hood: Complete System Flow">
+**Full execution sequence:**
+
+1. **Initialization (Startup):**
+   ```
+   Load config
+   → Create RAG SDK (FAISS vector index)
+   → Index initial documents (extract, chunk, embed)
+   → Start file watchers on ./documents
+   → Create session for persistence
+   → Agent ready!
+   ```
+
+2. **First Query: "What documents are indexed?"**
+   ```
+   User input
+   → Agent analyzes
+   → Calls list_indexed_documents tool
+   → Returns: ["user_guide.pdf", "technical_spec.pdf"]
+   → Agent formats answer
+   → User sees list
+   ```
+
+3. **Second Query: "Find safety manual..."**
+   ```
+   User input
+   → Agent thinks: "Need to find + search file"
+   → Call search_file("safety manual")
+     ├─ Search Documents folder
+     ├─ Search Downloads folder
+     └─ Returns: ["Safety-Manual.pdf"]
+   → Call index_document("Safety-Manual.pdf")
+     ├─ Extract text from PDF
+     ├─ Split into chunks
+     ├─ Generate embeddings
+     └─ Add to vector index
+   → Call query_documents("emergency procedures")
+     ├─ Generate query embedding
+     ├─ Search vector index (cosine similarity)
+     ├─ Retrieve top 5 chunks
+     └─ Return chunks
+   → Agent reads chunks
+   → Agent formulates answer
+   → User sees: "According to Safety-Manual.pdf, emergency procedures are..."
+   ```
+
+4. **Background: File Added to ./documents/**
+   ```
+   File watcher detects new PDF
+   → Check if .pdf extension
+   → Debounce (wait 2 seconds for more changes)
+   → Auto-index the file
+   → Update agent's system prompt
+   → Ready for queries on new file!
+   ```
+
+The file watcher handles this automatically. Note that initial indexing still requires manual setup.
+</Accordion>
+
+---
+
+## Making It Your Own (Extensibility)
+
+The agent uses Python class inheritance, so you can override methods or add new tools.
+
+### Add Custom Tools
+
+Extend the agent by adding domain-specific tools.
+
+<Tabs>
+  <Tab title="Custom Tools">
+    ```python title="custom_tools.py"
+    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+    from gaia.agents.base.tools import tool
+
+    class CustomDocAgent(ChatAgent):
+        """Chat agent with custom domain tools."""
+
+        def _register_tools(self):
+            # Register all standard tools first
+            super()._register_tools()
+
+            # Add custom tools
+            @tool
+            def analyze_sentiment(document_name: str) -> dict:
+                """Analyze document sentiment."""
+                # Your implementation
+                return {
+                    "sentiment": "positive",
+                    "confidence": 0.85,
+                    "document": document_name
+                }
+
+            @tool
+            def compare_documents(doc1: str, doc2: str) -> dict:
+                """Compare two documents."""
+                # Your implementation
+                return {
+                    "differences": ["Section 2 differs"],
+                    "similarity_score": 0.72
+                }
+    ```
+  </Tab>
+
+  <Tab title="Usage">
+    ```python
+    agent = CustomDocAgent()
+
+    # LLM can now use your custom tools
+    result = agent.process_query(
+        "Analyze sentiment of annual report and compare with last year's"
+    )
+
+    # Agent automatically:
+    # 1. Calls analyze_sentiment("annual-report.pdf")
+    # 2. Calls compare_documents("2024-report.pdf", "2023-report.pdf")
+    # 3. Synthesizes comparison
+    ```
+  </Tab>
+
+  <Tab title="Tool Registry">
+    ```python
+    # Check what tools are available
+    agent.list_tools(verbose=True)
+
+    # Output shows:
+    # - Standard RAG tools (query_documents, index_document, ...)
+    # - Standard file tools (search_file, add_watch_directory, ...)
+    # - YOUR custom tools (analyze_sentiment, compare_documents)
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+### Customize RAG Behavior
+
+<Tabs>
+  <Tab title="By Document Type">
+    | Use Case | chunk_size | max_chunks | use_llm_chunking |
+    |----------|-----------|------------|------------------|
+    | Quick FAQs | 300 | 3 | False |
+    | Technical docs | 600 | 5 | False |
+    | Research papers | 800 | 7 | True |
+    | Legal documents | 1000 | 10 | True |
+
+    ```python
+    # Technical documentation
+    config = ChatAgentConfig(
+        chunk_size=600,
+        max_chunks=5,
+        use_llm_chunking=False  # Fast structural chunking
+    )
+    ```
+  </Tab>
+
+  <Tab title="Advanced Config">
+    ```python title="advanced_config.py"
+    config = ChatAgentConfig(
+        # Chunking strategy
+        chunk_size=800,
+        chunk_overlap=150,
+        max_chunks=7,
+        use_llm_chunking=True,  # Semantic boundaries
+
+        # Security
+        allowed_paths=[
+            "/home/user/work",
+            "/home/user/research"
+        ],
+
+        # Embedding model
+        embedding_model="nomic-embed-text-v2-moe-GGUF"
+    )
+
+    agent = ChatAgent(config)
+    ```
+  </Tab>
+
+  <Tab title="Trade-offs">
+    **`use_llm_chunking`:**
+    - `True` - Semantic boundaries, more accurate, slower
+    - `False` - Structural boundaries (paragraphs), faster
+
+    **`chunk_size`:**
+    - Smaller (300) - Precise matching, less context
+    - Larger (800) - More context, may dilute relevance
+
+    **`max_chunks`:**
+    - Fewer (3) - Faster, focused
+    - More (10) - Comprehensive, slower
+  </Tab>
+</Tabs>
+
+---
+
+### Create Specialized Agents
+
+Override system prompts to create domain-specific behavior.
+
+<Tabs>
+  <Tab title="Research Agent">
+    ```python title="research_agent.py"
+    from gaia.agents.chat.agent import ChatAgent
+
+    class ResearchAgent(ChatAgent):
+        """Academic research specialist."""
+
+        def _get_system_prompt(self) -> str:
+            base = super()._get_system_prompt()
+            return base + """
+
+    **Research Mode:**
+    - Cite sources with page numbers
+    - Provide direct quotations
+    - Compare findings across papers
+    - Note contradictions or consensus"""
+
+    # Usage
+    agent = ResearchAgent()
+    agent.process_query("What do papers say about attention mechanisms?")
+    ```
+  </Tab>
+
+  <Tab title="Support Agent">
+    ```python title="support_agent.py"
+    from gaia.agents.chat.agent import ChatAgent
+
+    class CustomerSupportAgent(ChatAgent):
+        """Customer support specialist."""
+
+        def _get_system_prompt(self) -> str:
+            base = super()._get_system_prompt()
+            return base + """
+
+    **Support Mode:**
+    - Search product manuals first
+    - Provide step-by-step instructions
+    - Include troubleshooting steps
+    - Link to related documentation"""
+
+    # Usage
+    agent = CustomerSupportAgent()
+    agent.process_query("How do I install the software?")
+    ```
+  </Tab>
+
+  <Tab title="Pattern">
+    **Specialization via prompt engineering:**
+    - Inherit from `ChatAgent` (gets all tools)
+    - Override `_get_system_prompt()` only
+    - Add domain-specific instructions
+    - No need to reimplement tools
+
+    **When to use:**
+    - Consistent response formatting needed
+    - Domain-specific constraints (legal, medical)
+    - Specialized workflows (research, support)
+  </Tab>
+</Tabs>
+
+---
+
+## Real-World Examples
+
+### Example 1: Research Assistant
+
+**Use case:** Searching across multiple academic papers for common themes.
+
+<Tabs>
+  <Tab title="Implementation">
+    ```python title="research_assistant.py"
+    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+    from pathlib import Path
+
+    research_folder = Path.home() / "Research" / "AI-Papers"
+
+    config = ChatAgentConfig(
+        watch_directories=[str(research_folder)],
+        chunk_size=700,    # Larger chunks for academic context
+        max_chunks=7,      # More chunks for comprehensive synthesis
+        show_stats=True
+    )
+
+    agent = ChatAgent(config)
+
+    # Example queries
+    queries = [
+        "What papers discuss transformer architectures?",
+        "Compare attention mechanism approaches across papers",
+        "What are common limitations mentioned?",
+        "Find papers citing 'Attention Is All You Need'"
+    ]
+
+    for query in queries:
+        result = agent.process_query(query)
+        print(f"Q: {query}")
+        print(f"A: {result.get('answer')}\n")
+    ```
+  </Tab>
+
+  <Tab title="Configuration Rationale">
+    | Setting | Value | Reason |
+    |---------|-------|--------|
+    | `chunk_size` | 700 | Academic papers need more context per chunk |
+    | `max_chunks` | 7 | Multi-document synthesis requires more retrieved text |
+    | `watch_directories` | Research folder | Auto-index new papers as they're added |
+  </Tab>
+</Tabs>
+
+---
+
+### Example 2: Company Knowledge Base
+
+**Use case:** Shared document search across organizational documentation.
+
+<Tabs>
+  <Tab title="Setup">
+    ```python title="knowledge_base.py"
+    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+    import os
+
+    docs_root = "/company/shared/documentation"
+
+    config = ChatAgentConfig(
+        watch_directories=[
+            f"{docs_root}/policies",
+            f"{docs_root}/procedures",
+            f"{docs_root}/guides"
+        ],
+        show_stats=False,
+        silent_mode=False,
+        allowed_paths=[docs_root]  # Restrict to company docs
+    )
+
+    agent = ChatAgent(config)
+    agent.save_current_session()
+
+    print(f"Session ID: {agent.current_session.session_id}")
+    ```
+  </Tab>
+
+  <Tab title="Team Usage">
+    ```python title="load_shared_session.py"
+    from gaia.agents.chat.agent import ChatAgent
+
+    # Team member loads shared session
+    agent = ChatAgent()
+    agent.load_session("session-2024-12-11-abc123")
+
+    # Indexed documents are restored
+    # No re-indexing required
+    result = agent.process_query("What's our remote work policy?")
+    ```
+  </Tab>
+
+  <Tab title="Security Note">
+    **Path restrictions:**
+    - `allowed_paths` limits file access
+    - Prevents access outside company docs
+    - Validates on every file operation
+    - Session sharing requires appropriate file permissions
+  </Tab>
+</Tabs>
+
+---
+
+### Example 3: Personal Document Assistant
+
+**Use case:** Interactive CLI for querying personal documents.
+
+<Tabs>
+  <Tab title="Implementation">
+    ```python title="personal_assistant.py"
+    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+    from pathlib import Path
+
+    config = ChatAgentConfig(
+        watch_directories=[
+            str(Path.home() / "Documents"),
+            str(Path.home() / "Downloads"),
+        ],
+        chunk_size=400,
+        max_chunks=4,
+        debug=False,
+        show_stats=True
+    )
+
+    agent = ChatAgent(config)
+
+    print("Document Q&A Agent")
+    print("Type 'quit' to exit\n")
+
+    while True:
+        question = input("You: ")
+        if question.lower() in ['quit', 'exit']:
+            agent.save_current_session()
+            print(f"Session saved: {agent.current_session.session_id}")
+            break
+
+        result = agent.process_query(question)
+        print(f"Agent: {result.get('answer', result)}\n")
+    ```
+  </Tab>
+
+  <Tab title="Usage">
+    ```bash
+    python personal_assistant.py
+    ```
+
+    **Example interaction:**
+    ```
+    You: What documents are indexed?
+    Agent: Currently monitoring Documents and Downloads folders.
+           Found 15 PDFs. Type questions to search them.
+
+    You: What does my tax return say about deductions?
+    Agent: According to 2024-Tax-Return.pdf, your deductions
+           include...
+    ```
+  </Tab>
+
+  <Tab title="Configuration">
+    **Why these settings:**
+    - `chunk_size=400` - Balanced for mixed document types
+    - `max_chunks=4` - Faster responses, good for personal use
+    - `watch_directories` - Monitors common locations
+    - `show_stats=True` - Track token usage
+  </Tab>
+</Tabs>
+
+---
+
+## Next Steps
+
+You've built an agent with monitoring, sessions, and customization! Continue with Part 3 to learn deployment and optimization:
+
+<Card title="Part 3: Deployment & Optimization" icon="graduation-cap" href="./part-3-deployment">
+  Master the agent's intelligence, learn advanced patterns, deploy as API/CLI, and optimize performance.
+</Card>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

@@ -1,0 +1,472 @@
+---
+title: "MCP Server"
+description: "Server implementation for Model Context Protocol with FastMCP and SSE streaming"
+icon: "network-wired"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/mcp/agent_mcp_server.py`](https://github.com/amd/gaia/blob/main/src/gaia/mcp/agent_mcp_server.py)
+</Info>
+
+<Note>
+**Component:** AgentMCPServer - Generic MCP Server for MCPAgent Subclasses
+**Module:** `gaia.mcp.agent_mcp_server`
+**Protocol:** Model Context Protocol (MCP) via FastMCP
+**Transport:** Streamable HTTP (SSE)
+</Note>
+
+---
+
+## Overview
+
+AgentMCPServer is a generic wrapper that exposes any MCPAgent subclass as an MCP server using the MCP Python SDK (FastMCP). It dynamically registers tools from the agent and handles parameter mapping between MCP clients (like VSCode) and agent implementations.
+
+**Key Features:**
+- Generic wrapper for any MCPAgent
+- Dynamic tool registration from agent
+- Parameter mapping (VSCode ↔ Agent)
+- Streamable HTTP transport (SSE)
+- Verbose logging for debugging
+- Zero-config for agents
+
+---
+
+## Requirements
+
+### Functional Requirements
+
+1. **Agent Wrapping**
+   - Accept any MCPAgent subclass
+   - Initialize agent with custom parameters
+   - Validate agent inheritance
+
+2. **Tool Registration**
+   - Dynamically register tools from `get_mcp_tool_definitions()`
+   - Create async wrapper functions
+   - Map MCP schemas to Python functions
+   - Handle **kwargs for flexible parameter passing
+
+3. **Parameter Mapping**
+   - Handle VSCode's nested `kwargs` wrapper
+   - Parse stringified JSON
+   - Map parameter name variations (app_dir → appPath)
+   - Log parameter transformations
+
+4. **Server Management**
+   - Start FastMCP server with streamable-http
+   - Configure host/port
+   - Display startup banner
+   - Handle graceful shutdown
+
+---
+
+## API Specification
+
+### AgentMCPServer Class
+
+```python
+class AgentMCPServer:
+    """Generic MCP server that wraps any MCPAgent subclass."""
+
+    def __init__(
+        self,
+        agent_class: Type[MCPAgent],
+        name: str = None,
+        port: int = None,
+        host: str = None,
+        verbose: bool = False,
+        agent_params: Dict[str, Any] = None,
+    ):
+        """
+        Initialize MCP server for an agent.
+
+        Args:
+            agent_class: MCPAgent subclass to wrap
+            name: Display name (default: "GAIA {AgentName} MCP")
+            port: Port to listen on (default: 8080)
+            host: Host to bind to (default: localhost)
+            verbose: Enable verbose logging
+            agent_params: Parameters for agent __init__
+
+        Raises:
+            TypeError: If agent_class doesn't inherit MCPAgent
+        """
+        pass
+
+    def start(self):
+        """
+        Start MCP server with streamable-http transport.
+
+        Prints startup banner and blocks until Ctrl+C.
+        """
+        pass
+
+    def stop(self):
+        """Stop server (handled by KeyboardInterrupt with uvicorn)."""
+        pass
+
+    def _register_agent_tools(self):
+        """Dynamically register agent tools with FastMCP."""
+        pass
+
+    def _print_startup_info(self):
+        """Print startup banner with server info."""
+        pass
+```
+
+### MCP Transport
+
+**Protocol:** Streamable HTTP (industry standard)
+
+**Endpoint:** `http://{host}:{port}/mcp`
+
+**Methods:**
+- HTTP POST: Request/response
+- SSE: Server-sent events for streaming
+
+**Configuration:**
+```python
+# Set via mcp.settings
+self.mcp.settings.host = "localhost"
+self.mcp.settings.port = 8080
+```
+
+---
+
+## Implementation Details
+
+### Dynamic Tool Registration
+
+```python
+def _register_agent_tools(self):
+    """Dynamically register agent tools with FastMCP."""
+
+    tools = self.agent.get_mcp_tool_definitions()
+
+    for tool_def in tools:
+        tool_name = tool_def["name"]
+        tool_description = tool_def.get("description", "")
+
+        # Create wrapper function (captures tool_name in closure)
+        def create_tool_wrapper(name: str, description: str, verbose: bool):
+            async def tool_wrapper(**kwargs) -> Dict[str, Any]:
+                """Dynamically generated tool wrapper."""
+
+                if verbose:
+                    logger.info(f"[MCP TOOL] Tool call: {name}")
+                    logger.info(f"[MCP TOOL] Raw kwargs: {kwargs}")
+
+                try:
+                    # Handle VSCode kwargs wrapper
+                    if "kwargs" in kwargs:
+                        kwargs_value = kwargs["kwargs"]
+
+                        if isinstance(kwargs_value, dict):
+                            # Already dict, unwrap
+                            kwargs = kwargs_value
+                        elif isinstance(kwargs_value, str):
+                            # Stringified JSON, parse
+                            kwargs = json.loads(kwargs_value)
+
+                    # Map parameter variations
+                    if "app_dir" in kwargs and "appPath" not in kwargs:
+                        kwargs["appPath"] = kwargs.pop("app_dir")
+
+                    if "directory" in kwargs and "appPath" not in kwargs:
+                        kwargs["appPath"] = kwargs.pop("directory")
+
+                    if verbose:
+                        logger.info(f"[MCP TOOL] Final args: {kwargs}")
+
+                    # Execute tool
+                    result = self.agent.execute_mcp_tool(name, kwargs)
+                    return result
+
+                except Exception as e:
+                    logger.error(f"[MCP] Error executing tool {name}: {e}")
+                    return {"error": str(e), "success": False}
+
+            # Set metadata
+            tool_wrapper.__name__ = name
+            tool_wrapper.__doc__ = description
+            return tool_wrapper
+
+        # Create and register tool
+        tool_func = create_tool_wrapper(tool_name, tool_description, self.verbose)
+        self.mcp.tool()(tool_func)
+
+        if self.verbose:
+            logger.info(f"Registered tool: {tool_name}")
+```
+
+### Parameter Mapping
+
+**Problem:** VSCode/Copilot wraps parameters differently than agents expect.
+
+**Solutions:**
+
+1. **Nested kwargs wrapper:**
+```python
+# VSCode sends: {"kwargs": {"appPath": "C:/path"}}
+# or: {"kwargs": "{\"appPath\": \"C:/path\"}"}
+
+if "kwargs" in kwargs:
+    kwargs_value = kwargs["kwargs"]
+
+    if isinstance(kwargs_value, dict):
+        kwargs = kwargs_value  # Unwrap
+    elif isinstance(kwargs_value, str):
+        kwargs = json.loads(kwargs_value)  # Parse JSON string
+```
+
+2. **Parameter name variations:**
+```python
+# Map common variations
+if "app_dir" in kwargs:
+    kwargs["appPath"] = kwargs.pop("app_dir")
+
+if "directory" in kwargs:
+    kwargs["appPath"] = kwargs.pop("directory")
+
+if "project_path" in kwargs:
+    kwargs["appPath"] = kwargs.pop("project_path")
+```
+
+### Startup Banner
+
+```python
+def _print_startup_info(self):
+    """Print startup banner."""
+
+    # Fix Windows Unicode
+    if sys.platform == "win32":
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+
+    tools = self.agent.get_mcp_tool_definitions()
+
+    print("=" * 60)
+    print(f"🚀 {self.name}")
+    print("=" * 60)
+    print(f"Server: http://{self.host}:{self.port}")
+    print(f"Agent: {self.agent_class.__name__}")
+    print(f"Tools: {len(tools)}")
+    for tool in tools:
+        print(f"  - {tool['name']}: {tool.get('description', 'No description')}")
+    if self.verbose:
+        print(f"\n🔍 Verbose Mode: ENABLED")
+    print("\n📍 MCP Endpoint:")
+    print(f"  http://{self.host}:{self.port}/mcp")
+    print("\n  Supports:")
+    print("    - HTTP POST for requests")
+    print("    - SSE streaming for real-time responses")
+    print("=" * 60)
+    print("\nPress Ctrl+C to stop\n")
+```
+
+---
+
+## Testing Requirements
+
+### Unit Tests
+
+```python
+# tests/mcp/test_agent_mcp_server.py
+
+def test_server_initialization():
+    """Test AgentMCPServer initializes."""
+    from gaia.agents.docker.agent import DockerAgent
+
+    server = AgentMCPServer(
+        agent_class=DockerAgent,
+        port=9999,
+        agent_params={"silent_mode": True}
+    )
+
+    assert server.agent_class == DockerAgent
+    assert server.port == 9999
+
+def test_server_rejects_non_mcp_agent():
+    """Test server rejects non-MCPAgent classes."""
+    from gaia.agents.base.agent import Agent
+
+    with pytest.raises(TypeError, match="must inherit from MCPAgent"):
+        AgentMCPServer(agent_class=Agent)
+
+def test_tool_registration():
+    """Test tools are registered from agent."""
+    from gaia.agents.docker.agent import DockerAgent
+
+    server = AgentMCPServer(
+        agent_class=DockerAgent,
+        agent_params={"silent_mode": True}
+    )
+
+    # Check tool was registered
+    # FastMCP stores tools in internal registry
+    tools = server.agent.get_mcp_tool_definitions()
+    assert len(tools) > 0
+    assert tools[0]["name"] == "dockerize"
+
+@pytest.mark.asyncio
+async def test_parameter_mapping():
+    """Test VSCode parameter unwrapping."""
+    from gaia.agents.docker.agent import DockerAgent
+
+    server = AgentMCPServer(
+        agent_class=DockerAgent,
+        agent_params={"silent_mode": True}
+    )
+
+    # Simulate VSCode kwargs wrapper
+    vscode_kwargs = {
+        "kwargs": {"app_dir": "C:/myapp", "port": 5000}
+    }
+
+    # Tool wrapper should unwrap and map app_dir → appPath
+    # (Testing internal logic, actual test would mock tool execution)
+```
+
+### Integration Tests
+
+```bash
+# Start server
+python -m gaia.mcp.start_docker_mcp --port 8080 --verbose
+
+# Test with MCP client
+curl -X POST http://localhost:8080/mcp/tools/dockerize \
+  -H "Content-Type: application/json" \
+  -d '{"appPath": "C:/Users/test/myapp", "port": 5000}'
+
+# Verify response
+{
+  "success": true,
+  "status": "completed",
+  "result": "Successfully containerized application...",
+  "steps_taken": 4
+}
+```
+
+---
+
+## Dependencies
+
+```python
+# FastMCP (MCP Python SDK)
+from mcp.server.fastmcp import FastMCP
+
+# GAIA
+from gaia.agents.base.mcp_agent import MCPAgent
+from gaia.logger import get_logger
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Start Docker MCP Server
+
+```python
+from gaia.mcp.agent_mcp_server import AgentMCPServer
+from gaia.agents.docker.agent import DockerAgent
+
+# Create server
+server = AgentMCPServer(
+    agent_class=DockerAgent,
+    name="GAIA Docker MCP",
+    port=8080,
+    verbose=True,
+    agent_params={
+        "allowed_paths": ["/home/user/projects"],
+        "silent_mode": False
+    }
+)
+
+# Start (blocks until Ctrl+C)
+server.start()
+```
+
+### Example 2: Start Jira MCP Server
+
+```python
+from gaia.agents.jira.agent import JiraAgent
+
+server = AgentMCPServer(
+    agent_class=JiraAgent,
+    port=8081,
+    verbose=False,
+    agent_params={
+        "jira_config": discovered_config,  # Pre-discovered config
+        "silent_mode": True
+    }
+)
+
+server.start()
+```
+
+### Example 3: CLI Wrapper
+
+```bash
+# src/gaia/mcp/start_docker_mcp.py
+import argparse
+from gaia.mcp.agent_mcp_server import AgentMCPServer
+from gaia.agents.docker.agent import DockerAgent
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--port", type=int, default=8080)
+parser.add_argument("--verbose", action="store_true")
+args = parser.parse_args()
+
+server = AgentMCPServer(
+    agent_class=DockerAgent,
+    port=args.port,
+    verbose=args.verbose
+)
+
+server.start()
+```
+
+**Usage:**
+```bash
+python -m gaia.mcp.start_docker_mcp --port 8080 --verbose
+```
+
+---
+
+## Acceptance Criteria
+
+- [ ] AgentMCPServer wraps any MCPAgent subclass
+- [ ] Tools registered dynamically from agent
+- [ ] Streamable HTTP transport works (POST + SSE)
+- [ ] VSCode kwargs wrapper handled correctly
+- [ ] Parameter name variations mapped (app_dir → appPath)
+- [ ] Verbose logging shows all transformations
+- [ ] Startup banner displays correctly
+- [ ] Server stops gracefully on Ctrl+C
+- [ ] Multiple agents can run on different ports
+- [ ] Error handling returns structured responses
+- [ ] Tests pass
+
+---
+
+## Related Specifications
+
+- [agent-base](/spec/agent-base) - MCPAgent interface
+- [docker-agent](/spec/docker-agent) - Example agent using MCP
+- [jira-agent](/spec/jira-agent) - Another MCP-enabled agent
+- [electron-integration](/spec/electron-integration) - Electron MCP client
+
+---
+
+*AgentMCPServer Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

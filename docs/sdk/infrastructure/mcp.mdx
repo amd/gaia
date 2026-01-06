@@ -1,0 +1,135 @@
+---
+title: "MCP Integration"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/mcp/`](https://github.com/amd/gaia/blob/main/src/gaia/mcp/)
+</Info>
+
+<Note>
+**Import:** `from gaia.agents.base.mcp_agent import MCPAgent`
+</Note>
+---
+
+<Badge text="development" color="orange" />
+
+**Detailed Spec:** [spec/mcp-server](/spec/mcp-server)
+
+## 8.1 MCP Agent Base
+
+**Purpose:** Base class for Model Context Protocol compatible agents.
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.mcp_agent import MCPAgent
+from gaia.agents.base.tools import tool
+from typing import List, Dict
+
+class MyMCPAgent(MCPAgent, Agent):
+    """Agent compatible with MCP protocol."""
+
+    def get_mcp_tool_definitions(self) -> List[Dict]:
+        """Return MCP-formatted tool definitions."""
+        return [
+            {
+                "name": "search_database",
+                "description": "Search the database for records",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max results",
+                            "default": 10
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        ]
+
+    def execute_mcp_tool(self, tool_name: str, arguments: Dict) -> Dict:
+        """Execute an MCP tool call."""
+        if tool_name == "search_database":
+            query = arguments["query"]
+            limit = arguments.get("limit", 10)
+            # Your implementation
+            return {"results": [...], "count": 5}
+
+        return {"error": f"Unknown tool: {tool_name}"}
+
+    # Optional: Provide prompts
+    def get_mcp_prompts(self) -> List[Dict]:
+        return [
+            {
+                "name": "search_help",
+                "description": "Help with database searches",
+                "arguments": [
+                    {"name": "topic", "description": "What to search for"}
+                ]
+            }
+        ]
+
+    # Optional: Expose resources
+    def get_mcp_resources(self) -> List[Dict]:
+        return [
+            {
+                "uri": "database://schema",
+                "name": "Database Schema",
+                "description": "Current database schema",
+                "mimeType": "application/json"
+            }
+        ]
+```
+
+---
+
+## 8.2 MCP Server
+
+**Import:** `from gaia.mcp.agent_mcp_server import AgentMCPServer`
+
+```python
+from gaia.mcp.agent_mcp_server import AgentMCPServer
+from my_package.agent import MyMCPAgent
+
+# Create MCP server for your agent
+server = AgentMCPServer(
+    agent_class=MyMCPAgent,
+    name="my-mcp-agent",
+    port=8080,
+    host="localhost",
+    verbose=True,
+    agent_params={"custom_param": "value"}
+)
+
+# Start server
+server.start()
+
+# Now accessible via MCP protocol
+# VSCode, Claude Desktop, etc. can connect
+```
+
+---
+
+## Related Topics
+
+- [Core Agent System](../core/agent-system) - Learn about the base Agent class
+- [API Server](./api-server) - OpenAI-compatible API
+- [Specialized Agents](../agents/specialized) - Pre-built agent implementations
+- [MCP Documentation](/integrations/mcp) - Full MCP integration guide
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

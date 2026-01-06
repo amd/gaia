@@ -1,0 +1,82 @@
+# Security
+
+<Badge text="development" color="orange" />
+
+## 18.1 Path Validation
+
+**Import:** `from gaia.security import PathValidator`
+
+```python
+from gaia.security import PathValidator
+
+# Initialize validator
+validator = PathValidator()
+
+# Check if path is allowed
+if validator.is_path_allowed("/home/user/documents/file.txt"):
+    # Safe to access
+    process_file("/home/user/documents/file.txt")
+
+# Add allowed path
+validator.add_allowed_path("/home/user/work")
+
+# Paths are persisted in ~/.gaia/cache/
+```
+
+---
+
+## 18.2 Symlink Detection
+
+```python
+from gaia.rag.sdk import RAGSDK, RAGConfig
+
+# RAG automatically detects and blocks symlinks
+rag = RAGSDK(RAGConfig())
+
+# This is blocked if it's a symlink
+try:
+    rag.index_document("/suspicious/symlink.pdf")
+except SecurityError as e:
+    print(f"Security error: {e}")
+```
+
+---
+
+## 18.3 File Size Limits
+
+```python
+from gaia.rag.sdk import RAGConfig, RAGSDK
+
+config = RAGConfig(
+    max_file_size_mb=50  # Reject files > 50MB
+)
+
+rag = RAGSDK(config)
+
+# Automatically rejects large files
+try:
+    rag.index_document("huge_file.pdf")  # 100MB
+except ValueError as e:
+    print(f"File too large: {e}")
+```
+
+---
+
+## Related Topics
+
+- [Core Agent System](./core/agent-system) - Agent security configuration
+- [RAG SDK](./core/rag-sdk) - Document security
+- [File Operations](./mixins/tool-mixins#file-operations-mixin) - File tool security
+- [Best Practices](./best-practices) - Security best practices
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

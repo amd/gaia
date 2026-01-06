@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """Template Catalog for LLM-Driven Checklist Generation.
 
@@ -257,8 +257,13 @@ TEMPLATE_CATALOG: Dict[str, TemplateDefinition] = {
             ),
             "variant": ParameterSpec(
                 type=ParameterType.STRING,
-                description="Component variant: list|form|new|detail|actions",
+                description="Component variant: list|form|new|detail|actions|artifact-timer",
                 example="list",
+            ),
+            "component_name": ParameterSpec(
+                type=ParameterType.STRING,
+                description="Optional explicit component name (e.g., CountdownTimer)",
+                required=False,
             ),
             "with_checkboxes": ParameterSpec(
                 type=ParameterType.BOOLEAN,
@@ -275,6 +280,7 @@ TEMPLATE_CATALOG: Dict[str, TemplateDefinition] = {
             "Use 'form' for reusable create/edit form component",
             "Use 'new' for /resource/new page",
             "Use 'detail' for /resource/[id] EDIT page with pre-populated form",
+            "Use 'artifact-timer' when the user requests a countdown; supply component_name (e.g., CountdownTimer) so pages can import the client-side timer widget",
             "Add with_checkboxes=true for todo apps",
         ],
     ),

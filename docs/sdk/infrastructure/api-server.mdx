@@ -1,0 +1,127 @@
+---
+title: "API Server"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/api/`](https://github.com/amd/gaia/blob/main/src/gaia/api/)
+</Info>
+
+<Note>
+**Import:** `from gaia.api.openai_server import create_app`
+</Note>
+---
+
+<Badge text="development" color="orange" />
+
+**Detailed Spec:** [spec/api-server](/spec/api-server)
+
+## 7.1 OpenAI-Compatible API
+
+**Purpose:** Expose GAIA agents as OpenAI-compatible REST API.
+
+```python
+from gaia.api.openai_server import create_app
+import uvicorn
+
+# Create FastAPI app
+app = create_app()
+
+# Run server
+uvicorn.run(app, host="0.0.0.0", port=8080)
+
+# Now accessible via OpenAI SDK:
+# from openai import OpenAI
+# client = OpenAI(base_url="http://localhost:8080/v1", api_key="dummy")
+# response = client.chat.completions.create(
+#     model="gaia-code",
+#     messages=[{"role": "user", "content": "Write Python code"}]
+# )
+```
+
+---
+
+## 7.2 Custom API Agent
+
+**Import:** `from gaia.agents.base.api_agent import ApiAgent`
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.api_agent import ApiAgent
+from gaia.agents.base.tools import tool
+
+class MyAPIAgent(ApiAgent, Agent):
+    """Agent exposed via OpenAI-compatible API."""
+
+    def get_model_id(self) -> str:
+        # Model ID shown in /v1/models
+        return "my-custom-agent"
+
+    def get_model_info(self) -> dict:
+        return {
+            "max_input_tokens": 4096,
+            "max_output_tokens": 2048,
+            "description": "Custom agent for data analysis",
+            "capabilities": ["data_analysis", "visualization"]
+        }
+
+    def _get_system_prompt(self) -> str:
+        return "You are a data analysis assistant."
+
+    def _register_tools(self):
+        @tool
+        def analyze(data: str) -> dict:
+            """Analyze data."""
+            return {"analysis": "Data is valid"}
+
+# Register with API server
+from gaia.api.agent_registry import registry
+registry.register("my-agent", MyAPIAgent)
+
+# Now available via API:
+# POST /v1/chat/completions with model="my-agent"
+```
+
+---
+
+## 7.3 SSE Streaming
+
+**Import:** `from gaia.api.sse_handler import SSEOutputHandler`
+
+```python
+from gaia.api.sse_handler import SSEOutputHandler
+
+# Create SSE handler
+sse = SSEOutputHandler()
+
+# Use with agent
+agent = MyAgent(console=sse)
+
+# Process query
+result = agent.process_query("Generate code")
+
+# SSE events are emitted during processing:
+# data: {"type": "thought", "content": "I need to..."}
+# data: {"type": "tool_call", "content": {"name": "generate_code", ...}}
+# data: {"type": "result", "content": {"answer": "Here's the code..."}}
+```
+
+---
+
+## Related Topics
+
+- [Core Agent System](../core/agent-system) - Learn about the base Agent class
+- [MCP Integration](./mcp) - Model Context Protocol support
+- [Specialized Agents](../agents/specialized) - Pre-built agent implementations
+- [Application Packaging](../packaging) - Package agents for distribution
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

@@ -1,0 +1,431 @@
+---
+title: "TypeScriptToolsMixin"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/code/tools/typescript_tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code/tools/typescript_tools.py)
+</Info>
+
+<Note>
+**Component:** TypeScriptToolsMixin
+**Module:** `gaia.agents.code.tools.typescript_tools`
+**Import:** `from gaia.agents.code.tools.typescript_tools import TypeScriptToolsMixin`
+</Note>
+---
+
+## Overview
+
+TypeScriptToolsMixin provides TypeScript development tools including compilation validation and linting. It focuses on type-checking without generating output files, making it suitable for continuous validation during development.
+
+**Key Features:**
+- TypeScript compilation validation (no-emit mode)
+- ESLint integration
+- Configuration validation
+- Comprehensive error reporting
+- JSON-formatted lint output
+
+---
+
+## Tool Specifications
+
+### 1. validate_typescript
+
+Validate TypeScript code compilation and linting.
+
+**Parameters:**
+- `project_path` (str, required): Path to TypeScript project
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "typescript_valid": bool,
+    "typescript_errors": List[str],
+    "eslint_valid": bool,
+    "eslint_errors": List[Dict] | List[str],
+
+    # On error
+    "error": str
+}
+```
+
+**TypeScript Validation:**
+- Runs `npx tsc --noEmit`
+- Checks compilation without generating files
+- Returns all compiler errors
+
+**ESLint Validation:**
+- Detects ESLint configuration automatically
+- Runs on `src/**/*.{ts,tsx}` files
+- Returns JSON-formatted results
+
+**Supported ESLint Configs:**
+- `.eslintrc`
+- `.eslintrc.js`
+- `.eslintrc.json`
+- `eslint.config.js`
+
+---
+
+## Usage Examples
+
+### Example 1: Basic Validation
+
+```python
+from gaia import CodeAgent
+
+agent = CodeAgent()
+
+result = agent.validate_typescript(
+    project_path="/path/to/nextjs-app"
+)
+
+if result["success"]:
+    print("✓ TypeScript and ESLint validation passed")
+else:
+    print("✗ Validation failed")
+
+    if not result["typescript_valid"]:
+        print("\nTypeScript Errors:")
+        for error in result["typescript_errors"]:
+            print(f"  {error}")
+
+    if not result["eslint_valid"]:
+        print("\nESLint Errors:")
+        for error in result["eslint_errors"]:
+            if isinstance(error, dict):
+                print(f"  {error.get('filePath')}: {error.get('messages', [])}")
+            else:
+                print(f"  {error}")
+```
+
+### Example 2: Pre-Commit Validation
+
+```python
+# Validate TypeScript before committing
+result = agent.validate_typescript(project_path=".")
+
+if not result["success"]:
+    print("Cannot commit: TypeScript validation failed")
+    print("\nFix the following errors:")
+
+    # Show TypeScript errors
+    if result.get("typescript_errors"):
+        for error in result["typescript_errors"][:10]:  # First 10
+            print(f"  - {error}")
+
+    # Count total issues
+    ts_count = len(result.get("typescript_errors", []))
+    lint_count = len(result.get("eslint_errors", []))
+    print(f"\nTotal: {ts_count} TypeScript errors, {lint_count} ESLint errors")
+
+    exit(1)
+
+print("✓ Validation passed, ready to commit")
+```
+
+### Example 3: CI/CD Integration
+
+```python
+import sys
+
+# Run in CI pipeline
+result = agent.validate_typescript(project_path="/app")
+
+# Exit with error code if validation fails
+if not result["success"]:
+    print("::error::TypeScript validation failed")
+
+    # GitHub Actions annotations
+    for error in result.get("typescript_errors", []):
+        if "error TS" in error:
+            # Parse error format: file.ts(line,col): error TSxxxx: message
+            print(f"::error file={error.split('(')[0]}::{error}")
+
+    sys.exit(1)
+
+print("::notice::TypeScript validation passed")
+```
+
+### Example 4: Watch Mode Integration
+
+```python
+import time
+
+while True:
+    result = agent.validate_typescript(project_path=".")
+
+    if result["success"]:
+        print(f"[{time.strftime('%H:%M:%S')}] ✓ Valid")
+    else:
+        print(f"[{time.strftime('%H:%M:%S')}] ✗ Errors detected")
+        print(f"  TS: {len(result.get('typescript_errors', []))}")
+        print(f"  ESLint: {len(result.get('eslint_errors', []))}")
+
+    time.sleep(5)  # Check every 5 seconds
+```
+
+### Example 5: Error-Specific Handling
+
+```python
+result = agent.validate_typescript(project_path=".")
+
+if not result["typescript_valid"]:
+    errors = result["typescript_errors"]
+
+    # Group by error type
+    syntax_errors = [e for e in errors if "Syntax error" in e]
+    type_errors = [e for e in errors if "error TS2" in e]
+    import_errors = [e for e in errors if "Cannot find module" in e]
+
+    print(f"Syntax errors: {len(syntax_errors)}")
+    print(f"Type errors: {len(type_errors)}")
+    print(f"Import errors: {len(import_errors)}")
+
+    # Handle import errors first
+    if import_errors:
+        print("\nFix import errors first:")
+        for error in import_errors:
+            print(f"  {error}")
+```
+
+---
+
+## Configuration Requirements
+
+### tsconfig.json
+
+Must exist in project root:
+
+```json
+{
+  "compilerOptions": {
+    "target": "es5",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
+  "exclude": ["node_modules"]
+}
+```
+
+### ESLint Configuration
+
+Optional, but recommended:
+
+```json
+{
+  "extends": ["next/core-web-vitals"],
+  "rules": {
+    "@typescript-eslint/no-unused-vars": "error",
+    "@typescript-eslint/no-explicit-any": "warn"
+  }
+}
+```
+
+---
+
+## Error Handling
+
+### Missing Configuration
+
+```python
+if not tsconfig.exists():
+    return {
+        "success": False,
+        "error": "tsconfig.json not found in project"
+    }
+```
+
+### Timeout
+
+```python
+try:
+    result = subprocess.run(
+        ["npx", "tsc", "--noEmit"],
+        timeout=120,
+        ...
+    )
+except subprocess.TimeoutExpired:
+    return {
+        "success": False,
+        "error": "Validation timed out"
+    }
+```
+
+### Command Not Found
+
+```python
+except FileNotFoundError:
+    return {
+        "success": False,
+        "error": "TypeScript compiler (tsc) not found"
+    }
+```
+
+---
+
+## Testing Requirements
+
+**File:** `tests/agents/code/test_typescript_tools.py`
+
+```python
+import pytest
+from pathlib import Path
+from gaia.agents.code.tools.typescript_tools import TypeScriptToolsMixin
+
+def test_validate_typescript(tmp_path):
+    """Test TypeScript validation."""
+    # Create minimal Next.js project
+    tsconfig = tmp_path / "tsconfig.json"
+    tsconfig.write_text('{"compilerOptions": {"noEmit": true}}')
+
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+
+    # Valid TypeScript file
+    valid_file = src_dir / "valid.ts"
+    valid_file.write_text("""
+export function add(a: number, b: number): number {
+    return a + b;
+}
+""")
+
+    mixin = TypeScriptToolsMixin()
+    result = mixin.validate_typescript(str(tmp_path))
+
+    assert result["success"]
+    assert result["typescript_valid"]
+
+def test_typescript_errors(tmp_path):
+    """Test error detection."""
+    tsconfig = tmp_path / "tsconfig.json"
+    tsconfig.write_text('{"compilerOptions": {"noEmit": true}}')
+
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+
+    # Invalid TypeScript
+    invalid_file = src_dir / "invalid.ts"
+    invalid_file.write_text("""
+const x: number = "string";  // Type error
+""")
+
+    result = validate_typescript(str(tmp_path))
+
+    assert not result["success"]
+    assert not result["typescript_valid"]
+    assert len(result["typescript_errors"]) > 0
+
+def test_eslint_integration(tmp_path):
+    """Test ESLint integration."""
+    # Create ESLint config
+    eslintrc = tmp_path / ".eslintrc.json"
+    eslintrc.write_text('{"rules": {"no-unused-vars": "error"}}')
+
+    tsconfig = tmp_path / "tsconfig.json"
+    tsconfig.write_text('{"compilerOptions": {"noEmit": true}}')
+
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+
+    file_with_warning = src_dir / "test.ts"
+    file_with_warning.write_text("""
+const unused = 42;  // Unused variable
+export function test() {}
+""")
+
+    result = validate_typescript(str(tmp_path))
+
+    assert not result.get("eslint_valid")
+    assert len(result.get("eslint_errors", [])) > 0
+```
+
+---
+
+## Performance Characteristics
+
+- **TypeScript Check:** 2-10s depending on project size
+- **ESLint Check:** 1-5s depending on file count
+- **Total Validation:** ~3-15s for typical projects
+- **Memory Usage:** ~100-500MB for tsc
+
+---
+
+## Dependencies
+
+```python
+import json
+import logging
+import subprocess
+from pathlib import Path
+from typing import Any, Dict
+
+from gaia.agents.base.tools import tool
+
+logger = logging.getLogger(__name__)
+```
+
+---
+
+## Integration with Other Tools
+
+### Works with ValidationToolsMixin
+
+```python
+# TypeScript validation is also available in ValidationToolsMixin
+# with additional Tier 4 error messaging
+
+from gaia.agents.code.tools.validation_tools import ValidationToolsMixin
+
+result = validation_mixin.validate_typescript(project_dir)
+# Returns enhanced error messages with rule citations
+```
+
+### CI/CD Integration
+
+```yaml
+# .github/workflows/validate.yml
+name: Validate TypeScript
+
+on: [push, pull_request]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v2
+      - run: npm install
+      - run: npx tsc --noEmit
+      - run: npx eslint "src/**/*.{ts,tsx}"
+```
+
+---
+
+*TypeScriptToolsMixin Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

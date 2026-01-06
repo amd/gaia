@@ -1,0 +1,661 @@
+---
+title: "Tool Decorator"
+description: "Python decorator for registering functions as agent tools with automatic schema generation"
+icon: "wrench"
+---
+
+<Note>
+🔧 **You are viewing:** API Specification - Complete technical reference for the @tool decorator
+
+**See also:** [Conceptual Guide](/sdk/core/tools)
+</Note>
+
+<Note>
+- **Component:** Tool Decorator
+- **Module:** `gaia.agents.base.tools`
+- **Import:** `from gaia.agents.base.tools import tool`
+- **Source:** [`src/gaia/agents/base/tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tools.py)
+</Note>
+
+---
+
+## Overview
+
+The `@tool` decorator is a simple, powerful mechanism for registering Python functions as agent tools. It automatically extracts function signatures, type annotations, and docstrings to create tool definitions that LLMs can understand and use.
+
+**What it does:**
+- Registers functions in the global tool registry
+- Extracts function signature and parameters
+- Infers parameter types from type annotations
+- Captures docstrings for tool descriptions
+- Generates JSON schema for LLM function calling
+- Supports both `@tool` and `@tool()` syntax
+
+**Why use it:**
+- Minimal boilerplate (single decorator)
+- Automatic type inference from Python annotations
+- Clear separation between tool definition and implementation
+- Compatible with standard Python typing
+
+---
+
+## Purpose and Use Cases
+
+### When to Use
+
+1. **Registering Agent Tools**
+   - Every function you want the agent to call
+   - Tools that perform actions (database queries, file operations, API calls)
+   - Tools that retrieve information (search, list, get status)
+
+2. **Simple Tool Definition**
+   - Quick tool prototyping
+   - Small to medium agents with 3-20 tools
+   - Standard Python function signatures
+
+3. **Type-Safe Tools**
+   - Tools with clear parameter types
+   - Tools requiring type validation
+   - Tools used by multiple agents
+
+### When NOT to Use
+
+- Functions not meant to be called by the agent
+- Internal helper methods
+- Methods that require agent instance state (use instance methods in `_register_tools()` instead)
+
+---
+
+## API Specification
+
+### Decorator Definition
+
+```python
+from typing import Callable
+
+def tool(
+    func: Callable = None,
+    **kwargs  # Ignored, for backward compatibility
+) -> Callable:
+    """
+    Decorator to register a function as an agent tool.
+
+    Supports both @tool and @tool(...) syntax.
+    Automatically extracts:
+    - Function name
+    - Parameter names, types, and defaults
+    - Docstring for description
+
+    Args:
+        func: Function to register (when used as @tool)
+        **kwargs: Optional arguments (ignored)
+
+    Returns:
+        Original function, unchanged
+
+    Example:
+        @tool
+        def search(query: str, limit: int = 10) -> dict:
+            '''Search for items.
+
+            Args:
+                query: Search query string
+                limit: Max results to return
+
+            Returns:
+                Search results
+            '''
+            return {"results": [...]}
+    """
+```
+
+### Tool Registry
+
+```python
+# Global tool registry (internal use)
+_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {}
+
+# Registry structure:
+{
+    "tool_name": {
+        "name": str,              # Function name
+        "description": str,       # From docstring
+        "parameters": {
+            "param_name": {
+                "type": str,      # "string", "integer", "number", "boolean", "array", "object", "unknown"
+                "required": bool, # True if no default value
+            }
+        },
+        "function": Callable      # Original function
+    }
+}
+```
+
+### Type Mapping
+
+```python
+# Python type → JSON schema type
+str → "string"
+int → "integer"
+float → "number"
+bool → "boolean"
+tuple → "array"
+dict → "object"
+Dict → "object"
+(no annotation) → "unknown"
+```
+
+---
+
+## Code Examples
+
+### Example 1: Basic Tool
+
+```python
+from gaia.agents.base.tools import tool
+
+@tool
+def calculate(expression: str) -> float:
+    """
+    Calculate a mathematical expression.
+
+    Args:
+        expression: Math expression to evaluate (e.g., "2 + 2")
+
+    Returns:
+        Calculated result
+    """
+    import math
+    # Safe evaluation in production
+    return eval(expression, {"__builtins__": {}}, math.__dict__)
+
+# Registry entry created:
+{
+    "calculate": {
+        "name": "calculate",
+        "description": "Calculate a mathematical expression...",
+        "parameters": {
+            "expression": {
+                "type": "string",
+                "required": True
+            }
+        },
+        "function": <function calculate>
+    }
+}
+```
+
+### Example 2: Tool with Optional Parameters
+
+```python
+@tool
+def search_users(
+    query: str,
+    limit: int = 10,
+    include_inactive: bool = False
+) -> dict:
+    """
+    Search for users in the database.
+
+    Args:
+        query: Search query string
+        limit: Maximum number of results (default: 10)
+        include_inactive: Include inactive users (default: False)
+
+    Returns:
+        Dictionary with users and count
+    """
+    # Implementation
+    return {"users": [], "count": 0}
+
+# Registry entry:
+{
+    "search_users": {
+        "name": "search_users",
+        "description": "Search for users in the database...",
+        "parameters": {
+            "query": {"type": "string", "required": True},
+            "limit": {"type": "integer", "required": False},
+            "include_inactive": {"type": "boolean", "required": False}
+        },
+        "function": <function search_users>
+    }
+}
+```
+
+### Example 3: Tool with Complex Types
+
+```python
+from typing import Dict, List
+
+@tool
+def batch_process(
+    items: tuple,
+    config: dict,
+    dry_run: bool = False
+) -> dict:
+    """
+    Process multiple items with configuration.
+
+    Args:
+        items: List of items to process
+        config: Configuration dictionary
+        dry_run: Run without making changes
+
+    Returns:
+        Processing results
+    """
+    return {"processed": len(items), "dry_run": dry_run}
+
+# Registry entry:
+{
+    "batch_process": {
+        "name": "batch_process",
+        "description": "Process multiple items...",
+        "parameters": {
+            "items": {"type": "array", "required": True},
+            "config": {"type": "object", "required": True},
+            "dry_run": {"type": "boolean", "required": False}
+        },
+        "function": <function batch_process>
+    }
+}
+```
+
+### Example 4: Tool in Agent Context
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.tools import tool
+
+class MyAgent(Agent):
+    def __init__(self, db_path: str, **kwargs):
+        self.db_path = db_path
+        super().__init__(**kwargs)
+
+    def _register_tools(self):
+        # Tool with access to instance state
+        @tool
+        def query_db(sql: str) -> dict:
+            """Execute SQL query on database.
+
+            Args:
+                sql: SQL query string
+
+            Returns:
+                Query results
+            """
+            # Can access self.db_path here
+            import sqlite3
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.execute(sql)
+            results = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+            return {"results": results, "count": len(results)}
+
+        @tool
+        def list_tables() -> dict:
+            """List all tables in the database.
+
+            Returns:
+                List of table names
+            """
+            import sqlite3
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+            tables = [row[0] for row in cursor.fetchall()]
+            conn.close()
+            return {"tables": tables}
+```
+
+### Example 5: Both Decorator Syntaxes
+
+```python
+# Syntax 1: No parentheses (recommended)
+@tool
+def simple_tool(param: str) -> dict:
+    """Simple tool."""
+    return {"result": param}
+
+# Syntax 2: With parentheses (backward compatibility)
+@tool()
+def another_tool(param: str) -> dict:
+    """Another tool."""
+    return {"result": param}
+
+# Both work identically
+```
+
+---
+
+## Implementation Details
+
+### Type Inference
+
+```python
+def decorator(f: Callable) -> Callable:
+    sig = inspect.signature(f)
+    params = {}
+
+    for name, param in sig.parameters.items():
+        param_info = {
+            "type": "unknown",
+            "required": param.default == inspect.Parameter.empty
+        }
+
+        # Infer type from annotation
+        if param.annotation != inspect.Parameter.empty:
+            if param.annotation == str:
+                param_info["type"] = "string"
+            elif param.annotation == int:
+                param_info["type"] = "integer"
+            elif param.annotation == float:
+                param_info["type"] = "number"
+            elif param.annotation == bool:
+                param_info["type"] = "boolean"
+            elif param.annotation == tuple:
+                param_info["type"] = "array"
+            elif param.annotation == dict or param.annotation == Dict:
+                param_info["type"] = "object"
+
+        params[name] = param_info
+
+    return params
+```
+
+### Docstring Parsing
+
+```python
+# Extracts entire docstring as-is
+description = f.__doc__ or ""
+
+# No special parsing of Args/Returns sections
+# LLM reads the full docstring
+```
+
+### Registry Management
+
+```python
+# Global registry (cleared when agent reinitializes)
+_TOOL_REGISTRY = {}
+
+# Tools registered at decoration time
+_TOOL_REGISTRY[tool_name] = {
+    "name": tool_name,
+    "description": f.__doc__ or "",
+    "parameters": params,
+    "function": f
+}
+```
+
+---
+
+## Testing Requirements
+
+### Unit Tests
+
+**File:** `tests/agents/base/test_tools.py`
+
+```python
+import pytest
+from gaia.agents.base.tools import tool, _TOOL_REGISTRY
+
+def test_tool_decorator_basic():
+    """Test basic tool registration."""
+    # Clear registry
+    _TOOL_REGISTRY.clear()
+
+    @tool
+    def test_func(param: str) -> dict:
+        """Test function."""
+        return {"result": param}
+
+    assert "test_func" in _TOOL_REGISTRY
+    assert _TOOL_REGISTRY["test_func"]["name"] == "test_func"
+    assert _TOOL_REGISTRY["test_func"]["description"] == "Test function."
+
+def test_tool_parameter_types():
+    """Test type inference."""
+    _TOOL_REGISTRY.clear()
+
+    @tool
+    def typed_func(
+        s: str,
+        i: int,
+        f: float,
+        b: bool,
+        t: tuple,
+        d: dict
+    ) -> dict:
+        """Function with types."""
+        return {}
+
+    params = _TOOL_REGISTRY["typed_func"]["parameters"]
+    assert params["s"]["type"] == "string"
+    assert params["i"]["type"] == "integer"
+    assert params["f"]["type"] == "number"
+    assert params["b"]["type"] == "boolean"
+    assert params["t"]["type"] == "array"
+    assert params["d"]["type"] == "object"
+
+def test_tool_optional_parameters():
+    """Test required vs optional parameters."""
+    _TOOL_REGISTRY.clear()
+
+    @tool
+    def optional_func(required: str, optional: int = 10) -> dict:
+        """Function with optional param."""
+        return {}
+
+    params = _TOOL_REGISTRY["optional_func"]["parameters"]
+    assert params["required"]["required"] is True
+    assert params["optional"]["required"] is False
+
+def test_tool_with_parentheses():
+    """Test @tool() syntax."""
+    _TOOL_REGISTRY.clear()
+
+    @tool()
+    def paren_func(param: str) -> dict:
+        """Parentheses syntax."""
+        return {}
+
+    assert "paren_func" in _TOOL_REGISTRY
+
+def test_tool_function_unchanged():
+    """Test decorated function still works."""
+    @tool
+    def add(a: int, b: int) -> int:
+        """Add two numbers."""
+        return a + b
+
+    # Function still callable
+    result = add(2, 3)
+    assert result == 5
+
+def test_tool_no_annotations():
+    """Test tool without type annotations."""
+    _TOOL_REGISTRY.clear()
+
+    @tool
+    def no_types(param):
+        """No type annotations."""
+        return {"result": param}
+
+    params = _TOOL_REGISTRY["no_types"]["parameters"]
+    assert params["param"]["type"] == "unknown"
+    assert params["param"]["required"] is True
+
+def test_tool_no_docstring():
+    """Test tool without docstring."""
+    _TOOL_REGISTRY.clear()
+
+    @tool
+    def no_doc(param: str) -> dict:
+        return {"result": param}
+
+    assert _TOOL_REGISTRY["no_doc"]["description"] == ""
+```
+
+---
+
+## Dependencies
+
+### Required Packages
+
+```python
+import inspect
+import logging
+from typing import Callable, Dict
+```
+
+### No External Dependencies
+
+The tool decorator uses only Python standard library.
+
+---
+
+## Acceptance Criteria
+
+- [ ] `@tool` decorator implemented
+- [ ] Type inference working for all Python basic types
+- [ ] Required vs optional parameter detection working
+- [ ] Docstring extraction working
+- [ ] Both `@tool` and `@tool()` syntax working
+- [ ] Decorated functions remain callable
+- [ ] Registry properly populated
+- [ ] All unit tests pass
+- [ ] Works with instance methods in `_register_tools()`
+- [ ] Documented in SDK.md
+
+---
+
+## Best Practices
+
+### Good Tool Docstrings
+
+```python
+@tool
+def process_data(data_id: str, operation: str = "validate") -> dict:
+    """
+    Process a data item with specified operation.
+
+    Performs validation, transformation, or analysis on data items.
+    Default operation is validation.
+
+    Args:
+        data_id: Unique identifier of the data item
+        operation: Type of processing ("validate", "transform", "analyze")
+
+    Returns:
+        dict: {
+            "status": "success" or "error",
+            "data_id": str,
+            "result": Any,
+            "error": str (if status is "error")
+        }
+
+    Example:
+        result = process_data("item-123", "validate")
+        # Returns: {"status": "success", "data_id": "item-123", "result": {...}}
+    """
+```
+
+### Clear Parameter Names
+
+```python
+# Good: Clear intent
+@tool
+def search_customer(name_query: str, max_results: int = 10) -> dict:
+    """Search customers by name."""
+
+# Bad: Unclear names
+@tool
+def search_customer(q: str, n: int = 10) -> dict:
+    """Search customers."""
+```
+
+### Consistent Return Types
+
+```python
+# Good: Always return dict
+@tool
+def get_user(user_id: int) -> dict:
+    """Get user by ID."""
+    return {"user": {...}, "found": True}
+
+# Good: Consistent structure
+@tool
+def create_user(name: str) -> dict:
+    """Create new user."""
+    return {"user_id": 123, "status": "created"}
+```
+
+---
+
+## Limitations
+
+### No Advanced Type Hints
+
+```python
+# Not supported: Union types
+def process(data: Union[str, int]) -> dict:  # type becomes "unknown"
+
+# Not supported: Optional
+def process(data: Optional[str]) -> dict:  # type becomes "unknown"
+
+# Not supported: List[str]
+def process(items: List[str]) -> dict:  # type is "array" but not List[str]
+
+# Workaround: Use simpler types
+def process(data: str) -> dict:  # Documented in docstring
+```
+
+### No Parameter Validation
+
+```python
+# Decorator doesn't validate arguments
+@tool
+def divide(a: int, b: int) -> float:
+    """Divide a by b."""
+    return a / b  # No check for b == 0
+
+# Add validation in function body
+@tool
+def divide(a: int, b: int) -> dict:
+    """Divide a by b."""
+    if b == 0:
+        return {"error": "Division by zero"}
+    return {"result": a / b}
+```
+
+---
+
+## Future Enhancements
+
+- [ ] Support for Union types
+- [ ] Support for Optional types
+- [ ] Support for List[Type], Dict[Key, Value]
+- [ ] Pydantic model integration
+- [ ] Parameter validation decorators
+- [ ] Tool categories/tags
+- [ ] Tool versioning
+- [ ] Automatic example generation from docstring
+
+---
+
+*@tool Decorator Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

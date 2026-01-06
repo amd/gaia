@@ -1,0 +1,208 @@
+---
+title: "Dependency Management"
+---
+
+<Badge text="development" color="orange" />
+
+## What is Dependabot?
+
+Dependabot automatically monitors dependencies and can create pull requests for security updates and version upgrades. This keeps GAIA's Python and JavaScript dependencies current and secure.
+
+## Understanding Dependabot Modes
+
+### Mode 1: Auto-PR Mode (`open-pull-requests-limit: 1` or higher)
+- ✅ **Monitors** dependencies for updates
+- ✅ **Creates pull requests** automatically when updates are available
+- ✅ **Runs CI tests** to validate the update
+- Best for: Critical dependencies where you want automatic updates with testing
+
+### Mode 2: Monitor-Only Mode (`open-pull-requests-limit: 0`)
+- ✅ **Monitors** dependencies for updates
+- ✅ **Shows alerts** in GitHub Security tab for vulnerabilities
+- ❌ **Does NOT create** pull requests automatically
+- Best for: Dependencies you want to update manually or on your own schedule
+
+## Current Configuration
+
+### Root NPM Workspace (Auto-PR Mode)
+The root `package.json` uses npm workspaces and includes:
+- `src/gaia/electron` - Electron framework
+- `src/gaia/apps/*/webui` - All app subdirectories
+
+**Configuration:**
+```yaml
+directory: "/"
+open-pull-requests-limit: 1
+```
+
+**What this means:**
+- ✅ Dependabot **creates PRs** for Electron framework dependencies
+- ✅ Dependabot **creates PRs** for all workspace packages
+- ✅ PRs are grouped together to reduce noise
+- ✅ Automated tests run on these PRs via GitHub Actions
+
+**Example:** [PR #853](https://github.com/aigdat/gaia/pull/853) was automatically created by Dependabot for electron framework updates.
+
+### Individual Apps (Monitor-Only Mode) - OPTIONAL
+
+**Note:** These individual app configurations are **optional** because the root NPM workspace already scans all apps. They are included to allow fine-grained control if needed in the future.
+
+Each app *can* have its own configuration for specific control:
+- `src/gaia/apps/example/webui`
+- `src/gaia/apps/jira/webui`
+- `src/gaia/eval/webapp`
+
+**Configuration:**
+```yaml
+directory: "/src/gaia/apps/[app-name]/webui"
+open-pull-requests-limit: 0
+```
+
+**What this provides (optional):**
+- Different update schedules per app (monthly vs weekly)
+- Different labels for organization and filtering
+- Ability to enable/disable PRs per app independently
+- Currently all set to `0` (monitoring only) since root workspace handles PRs
+
+**Recommendation:** The individual app entries can be **removed** if you don't need app-specific schedules or labels, since the root workspace configuration already handles dependency updates for all apps via npm workspaces.
+
+## When to Add Your App
+
+**Important:** If your app is part of the npm workspaces (listed in root `package.json`), it's **already being monitored** by the root NPM configuration. You only need to add a separate configuration if you want:
+- App-specific labels for GitHub organization
+- Different update schedule (e.g., monthly instead of weekly)
+- Ability to enable/disable PRs for this app independently
+
+Add your app to `.github/dependabot.yml` if:
+
+- ✅ It has a `package.json` file (JavaScript/npm dependencies)
+- ✅ It's located in `src/gaia/apps/`
+- ✅ You want app-specific configuration (otherwise root workspace handles it)
+
+**Current Status:** All apps in `src/gaia/apps/*/webui` are already scanned via the root workspace configuration. Individual app entries exist for organizational purposes but can be removed if not needed.
+
+## How to Add Your App
+
+### 1. Edit `.github/dependabot.yml`
+
+Add this configuration for your app:
+
+```yaml
+  # JavaScript - [Your App Name] (monitor only, no PRs)
+  - package-ecosystem: "npm"
+    directory: "/src/gaia/apps/[your-app-name]/webui"
+    schedule:
+      interval: "monthly"
+    labels:
+      - "dependencies"
+      - "javascript"
+      - "[your-app-name]-app"
+    open-pull-requests-limit: 0
+    groups:
+      [your-app-name]-app-dependencies:
+        patterns:
+          - "*"
+```
+
+### 2. Real Example
+
+Here's how the Jira app is configured:
+
+```yaml
+  # JavaScript - Jira app (monitor only, no PRs)
+  - package-ecosystem: "npm"
+    directory: "/src/gaia/apps/jira/webui"
+    schedule:
+      interval: "monthly"
+    labels:
+      - "dependencies"
+      - "javascript"
+      - "jira-app"
+    open-pull-requests-limit: 0
+    groups:
+      jira-app-dependencies:
+        patterns:
+          - "*"
+```
+
+### 3. Important Notes
+
+- **Directory path**: Must exactly match your app's webui folder (e.g., `/src/gaia/apps/example/webui`)
+- **App name**: Use consistent naming in labels and group name
+- **Schedule**: Use `monthly` for most apps
+- **PR Limit**: Apps use `open-pull-requests-limit: 0` (monitoring only). Root Python dependencies use `open-pull-requests-limit: 1` (one PR at a time for core updates)
+
+## Configuration Reference
+
+### Update Schedules
+
+- `weekly` - Python core, GitHub Actions (with `open-pull-requests-limit: 1`)
+- `monthly` - Apps and POC examples (with `open-pull-requests-limit: 0`)
+
+### PR Limits Strategy
+
+| Component | Limit | Behavior | Notes |
+|-----------|-------|----------|-------|
+| Python core dependencies | 1 | Creates PRs automatically | One PR at a time for critical updates |
+| GitHub Actions | 1 | Creates PRs automatically | One PR at a time |
+| Root NPM workspace | 1 | Creates PRs automatically | Includes Electron framework + all apps via workspaces |
+| Individual apps | 0 | Monitor only - alerts without PRs | Fine-grained control per app |
+
+**Important:** The root NPM configuration (`directory: "/"`) uses npm workspaces, which means it automatically includes:
+- Electron framework (`src/gaia/electron`)
+- All apps (`src/gaia/apps/*/webui`)
+
+This is why you see PRs like [#853](https://github.com/aigdat/gaia/pull/853) for Electron framework updates - they come from the root workspace configuration.
+
+**Auto-PR Mode (`limit: 1`):** Dependabot creates pull requests automatically, runs tests, and you can review/merge them.
+
+**Monitor-Only Mode (`limit: 0`):** Dependabot only shows security alerts in GitHub's Security tab without creating PRs. This prevents PR noise while maintaining visibility.
+
+**Automated Testing:** When dependencies are updated, automated tests run via GitHub Actions to ensure compatibility. See the [Electron Testing Guide](/deployment/testing-electron) for details.
+
+### Dependency Grouping
+
+The `groups` section combines all dependency updates into a single PR instead of creating dozens of separate PRs. This reduces noise and makes reviews easier.
+
+### Configuration Fields
+
+- `package-ecosystem`: Package manager type (`npm`, `pip`, `github-actions`)
+- `directory`: Path to folder containing `package.json`
+- `schedule.interval`: How often to check (`weekly` or `monthly`)
+- `labels`: Tags added to PRs for filtering
+- `open-pull-requests-limit`: Max concurrent PRs (`0` = monitor only, `1+` = create PRs)
+- `groups`: Combine related updates into single PR
+
+## Automated Testing
+
+All Electron framework and app dependencies are automatically tested when updated. The test suite includes:
+
+- **Unit Tests**: Core Electron modules (AppController, WindowManager, MCPClient)
+- **Integration Tests**: App configuration, structure, and dependencies
+- **Build Tests**: Package and distribution verification
+- **Security Audits**: Dependency vulnerability scanning
+
+Tests run automatically on:
+- Dependabot PRs for dependency updates
+- Pull requests modifying Electron or app code
+- Manual workflow dispatch
+
+See [Electron Testing Guide](/deployment/testing-electron) for details on running tests locally.
+
+## See Also
+
+- [App Development Guide](/sdk/applications) - Building GAIA applications
+- [Development Setup](/reference/dev) - Getting started with development
+- [Dependabot Documentation](https://docs.github.com/en/code-security/dependabot) - Official GitHub docs
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

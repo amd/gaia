@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import os
@@ -6,6 +6,8 @@ import shutil
 import subprocess
 import sys
 import unittest
+from io import StringIO
+from unittest.mock import patch
 
 import requests
 
@@ -75,7 +77,7 @@ class TestLlmCli(unittest.TestCase):
         """Check if gaia command is available."""
         gaia_path = shutil.which("gaia")
 
-        print(f"Command availability check:")
+        print("Command availability check:")
         print(f"  gaia path: {gaia_path}")
         print(f"  Current PATH: {os.environ.get('PATH', 'NOT_SET')}")
         print(f"  Current Python: {sys.executable}")
@@ -108,13 +110,11 @@ class TestLlmCli(unittest.TestCase):
 
         # Check command availability first
         if not self._check_command_availability():
-            self.fail("gaia command is not available. Cannot run LLM tests.")
+            self.skipTest("gaia command is not available")
 
         # Check if server is accessible
         if not self._check_lemonade_server_health():
-            self.fail(
-                "Lemonade server is not running or not accessible. Cannot run LLM tests."
-            )
+            self.skipTest("Lemonade server is not running")
 
         try:
             # Test with explicit --base-url (without /api/v1 to test normalization)
@@ -239,6 +239,219 @@ class TestLlmCli(unittest.TestCase):
             self.fail(
                 f"Unexpected exception running LLM command: {type(e).__name__}: {e}"
             )
+
+
+class TestVLMMimeTypeDetection(unittest.TestCase):
+    """Test MIME type detection for image formats in VLM client."""
+
+    def test_detect_jpeg_from_bytes(self):
+        """Test JPEG detection from magic bytes."""
+        from gaia.llm.vlm_client import detect_image_mime_type
+
+        # JPEG magic bytes: FF D8 FF
+        jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00" + b"\x00" * 100
+        self.assertEqual(detect_image_mime_type(jpeg_bytes), "image/jpeg")
+
+    def test_detect_png_from_bytes(self):
+        """Test PNG detection from magic bytes."""
+        from gaia.llm.vlm_client import detect_image_mime_type
+
+        # PNG magic bytes: 89 50 4E 47 0D 0A 1A 0A
+        png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+        self.assertEqual(detect_image_mime_type(png_bytes), "image/png")
+
+    def test_detect_gif87a_from_bytes(self):
+        """Test GIF87a detection from magic bytes."""
+        from gaia.llm.vlm_client import detect_image_mime_type
+
+        gif_bytes = b"GIF87a" + b"\x00" * 100
+        self.assertEqual(detect_image_mime_type(gif_bytes), "image/gif")
+
+    def test_detect_gif89a_from_bytes(self):
+        """Test GIF89a detection from magic bytes."""
+        from gaia.llm.vlm_client import detect_image_mime_type
+
+        gif_bytes = b"GIF89a" + b"\x00" * 100
+        self.assertEqual(detect_image_mime_type(gif_bytes), "image/gif")
+
+    def test_detect_bmp_from_bytes(self):
+        """Test BMP detection from magic bytes."""
+        from gaia.llm.vlm_client import detect_image_mime_type
+
+        bmp_bytes = b"BM" + b"\x00" * 100
+        self.assertEqual(detect_image_mime_type(bmp_bytes), "image/bmp")
+
+    def test_detect_webp_from_bytes(self):
+        """Test WebP detection from magic bytes (RIFF...WEBP)."""
+        from gaia.llm.vlm_client import detect_image_mime_type
+
+        # WebP: RIFF [4 bytes size] WEBP
+        webp_bytes = b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 100
+        self.assertEqual(detect_image_mime_type(webp_bytes), "image/webp")
+
+    def test_unknown_format_defaults_to_png(self):
+        """Test that unknown format defaults to PNG."""
+        from gaia.llm.vlm_client import detect_image_mime_type
+
+        unknown_bytes = b"\x00\x01\x02\x03\x04\x05" + b"\x00" * 100
+        self.assertEqual(detect_image_mime_type(unknown_bytes), "image/png")
+
+    def test_empty_bytes_defaults_to_png(self):
+        """Test that empty bytes default to PNG."""
+        from gaia.llm.vlm_client import detect_image_mime_type
+
+        self.assertEqual(detect_image_mime_type(b""), "image/png")
+
+    def test_riff_without_webp_marker(self):
+        """Test that RIFF without WEBP marker is not detected as WebP."""
+        from gaia.llm.vlm_client import detect_image_mime_type
+
+        # RIFF file that's not WebP (e.g., WAV audio)
+        riff_not_webp = b"RIFF\x00\x00\x00\x00WAVE" + b"\x00" * 100
+        # Should default to PNG since it's not a recognized image format
+        self.assertEqual(detect_image_mime_type(riff_not_webp), "image/png")
+
+
+class TestLemonadeManagerContextMessage(unittest.TestCase):
+    """Test cases for LemonadeManager context message formatting."""
+
+    def setUp(self):
+        """Reset LemonadeManager state before each test."""
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        LemonadeManager.reset()
+
+    def tearDown(self):
+        """Reset LemonadeManager state after each test."""
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        LemonadeManager.reset()
+
+    def test_print_context_message_warning(self):
+        """Test print_context_message outputs warning format."""
+        from gaia.llm.lemonade_manager import LemonadeManager, MessageType
+
+        stderr_capture = StringIO()
+        with patch("sys.stderr", stderr_capture):
+            LemonadeManager.print_context_message(4096, 32768, MessageType.WARNING)
+
+        output = stderr_capture.getvalue()
+        self.assertIn("⚠️", output)
+        self.assertIn("Context size below recommended", output)
+        self.assertIn("4096", output)
+        self.assertIn("32768", output)
+        self.assertNotIn("❌", output)
+
+    def test_print_context_message_error(self):
+        """Test print_context_message outputs error format."""
+        from gaia.llm.lemonade_manager import LemonadeManager, MessageType
+
+        stderr_capture = StringIO()
+        with patch("sys.stderr", stderr_capture):
+            LemonadeManager.print_context_message(4096, 32768, MessageType.ERROR)
+
+        output = stderr_capture.getvalue()
+        self.assertIn("❌", output)
+        self.assertIn("Insufficient context size", output)
+        self.assertIn("4096", output)
+        self.assertIn("32768", output)
+        self.assertNotIn("⚠️", output)
+
+    def test_ensure_ready_returns_true_on_insufficient_context_initial(self):
+        """Test ensure_ready returns True with insufficient context."""
+        from unittest.mock import MagicMock
+
+        from gaia.llm.lemonade_manager import (
+            LemonadeManager,
+            MessageType,
+        )
+
+        mock_client = MagicMock()
+        mock_status = MagicMock()
+        mock_status.running = True
+        mock_status.context_size = 4096
+        mock_client.get_status.return_value = mock_status
+        mock_client.base_url = "http://localhost:8000/api/v1"
+
+        with patch(
+            "gaia.llm.lemonade_manager.LemonadeClient",
+            return_value=mock_client,
+        ):
+            with patch.object(
+                LemonadeManager, "print_context_message"
+            ) as mock_print_context:
+                result = LemonadeManager.ensure_ready(
+                    min_context_size=32768, quiet=False
+                )
+
+                self.assertTrue(result)
+                mock_print_context.assert_called_once_with(
+                    4096, 32768, MessageType.WARNING
+                )
+
+    def test_ensure_ready_insufficient_context_already_initialized(self):
+        """Test ensure_ready returns True on subsequent calls."""
+        from unittest.mock import MagicMock
+
+        from gaia.llm.lemonade_manager import (
+            LemonadeManager,
+            MessageType,
+        )
+
+        mock_client = MagicMock()
+        mock_status = MagicMock()
+        mock_status.running = True
+        mock_status.context_size = 4096
+        mock_client.get_status.return_value = mock_status
+        mock_client.base_url = "http://localhost:8000/api/v1"
+
+        with patch(
+            "gaia.llm.lemonade_manager.LemonadeClient",
+            return_value=mock_client,
+        ):
+            first_result = LemonadeManager.ensure_ready(
+                min_context_size=4096, quiet=True
+            )
+            self.assertTrue(first_result)
+
+            with patch.object(
+                LemonadeManager, "print_context_message"
+            ) as mock_print_context:
+                second_result = LemonadeManager.ensure_ready(
+                    min_context_size=32768, quiet=False
+                )
+
+                self.assertTrue(second_result)
+                mock_print_context.assert_called_once_with(
+                    4096, 32768, MessageType.WARNING
+                )
+
+    def test_ensure_ready_quiet_mode_suppresses_context_warning(self):
+        """Test ensure_ready does not print warning when quiet=True."""
+        from unittest.mock import MagicMock
+
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        mock_client = MagicMock()
+        mock_status = MagicMock()
+        mock_status.running = True
+        mock_status.context_size = 4096
+        mock_client.get_status.return_value = mock_status
+        mock_client.base_url = "http://localhost:8000/api/v1"
+
+        with patch(
+            "gaia.llm.lemonade_manager.LemonadeClient",
+            return_value=mock_client,
+        ):
+            with patch.object(
+                LemonadeManager, "print_context_message"
+            ) as mock_print_context:
+                result = LemonadeManager.ensure_ready(
+                    min_context_size=32768, quiet=True
+                )
+
+                self.assertTrue(result)
+                mock_print_context.assert_not_called()
 
 
 if __name__ == "__main__":

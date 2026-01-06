@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
 Three-tier error recovery for orchestration workflows.
@@ -72,7 +72,7 @@ ERROR_PATTERNS: List[ErrorPattern] = [
         pattern=r"ModuleNotFoundError:\s+No module named '([^']+)'",
         category=ErrorCategory.DEPENDENCY,
         action=RecoveryAction.FIX_AND_RETRY,
-        fix_command="pip install {module}",
+        fix_command="uv pip install {module}",
         max_retries=2,
     ),
     # TypeScript compilation - escalate to LLM

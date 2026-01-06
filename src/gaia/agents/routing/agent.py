@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """RoutingAgent - Intelligently routes requests and disambiguates parameters."""
 
@@ -124,6 +124,9 @@ class RoutingAgent:
         analysis = self._analyze_with_llm(conversation_history)
 
         logger.debug(f"Analysis result: {analysis}")
+
+        # If language could not be determined, default to TypeScript/Next.js
+        analysis = self._default_unknown_language_to_typescript(analysis)
 
         # Check if we have all required parameters
         if self._has_unknowns(analysis):
@@ -423,6 +426,58 @@ Conversation:
 
         return "Please provide more details about your project."
 
+    def _get_console(self):
+        """Return the configured output handler or a default console."""
+        if self.output_handler:
+            return self.output_handler
+
+        from gaia.agents.base.console import AgentConsole
+
+        return AgentConsole()
+
+    def _enforce_typescript_only(
+        self, language: str, project_type: str, console
+    ) -> tuple[str, str]:
+        """Warn and normalize when routing to unsupported languages."""
+        is_nextjs = language == "typescript" and project_type == "fullstack"
+
+        if not is_nextjs:
+            console.print_error(
+                "Only TypeScript (Next.js) is currently supported. "
+                "Please try a Next.js/TypeScript request."
+            )
+            raise SystemExit(1)
+
+        return language, project_type
+
+    def _default_unknown_language_to_typescript(
+        self, analysis: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Default unknown language/project type to TypeScript/Next.js."""
+        params = analysis.get("parameters", {})
+        language = params.get("language")
+
+        if language != "unknown":
+            return analysis
+
+        console = self._get_console()
+        console.print_info(
+            "Defaulting to TypeScript (Next.js) because the language could not be determined."
+        )
+
+        params["language"] = "typescript"
+        if params.get("project_type") == "unknown":
+            params["project_type"] = "fullstack"
+
+        analysis["parameters"] = params
+        analysis["confidence"] = 1.0
+        analysis["reasoning"] = (
+            analysis.get("reasoning", "")
+            + " Defaulted to TypeScript/Next.js due to unknown language."
+        ).strip()
+
+        return analysis
+
     def _create_agent(self, analysis: Dict[str, Any]) -> Agent:
         """
         Create configured agent based on analysis.
@@ -447,12 +502,10 @@ Conversation:
             )
 
             # Use passed output_handler or create AgentConsole (CLI default)
-            if self.output_handler:
-                console = self.output_handler
-            else:
-                from gaia.agents.base.console import AgentConsole
-
-                console = AgentConsole()
+            console = self._get_console()
+            language, project_type = self._enforce_typescript_only(
+                language, project_type, console
+            )
 
             # Print agent selected message
             console.print_agent_selected("CodeAgent", language, project_type)
@@ -501,6 +554,11 @@ Conversation:
                 logger.info("Defaulting to script for Python")
 
         from gaia.agents.code.agent import CodeAgent
+
+        console = self._get_console()
+        language, project_type = self._enforce_typescript_only(
+            language, project_type, console
+        )
 
         # Build agent kwargs, including output_handler if provided
         agent_init_kwargs = dict(self.agent_kwargs)

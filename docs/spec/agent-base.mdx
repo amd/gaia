@@ -1,0 +1,744 @@
+---
+title: "Agent Base Class"
+description: "Foundational base class for all GAIA agents with reasoning loop, tool execution, and state management"
+icon: "robot"
+---
+
+<Note>
+🔧 **You are viewing:** API Specification - Complete technical reference for the Agent class
+
+**See also:** [Conceptual Guide](/sdk/core/agent-system) · [Quickstart Tutorial](/quickstart)
+</Note>
+
+<Note>
+- **Component:** Agent Base Class
+- **Module:** `gaia.agents.base.agent`
+- **Import:** `from gaia.agents.base.agent import Agent`
+- **Source:** [`src/gaia/agents/base/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py)
+</Note>
+
+---
+
+## Overview
+
+The `Agent` class is the foundational base class for all GAIA agents. It provides a complete reasoning loop that connects LLMs with executable tools, manages conversation state, handles error recovery, and orchestrates multi-step planning and execution.
+
+**What it does:**
+- Manages LLM conversation and reasoning loop
+- Registers and executes tools
+- Parses and validates JSON responses from LLMs
+- Handles multi-step plan execution
+- Provides error recovery and retry logic
+- Manages conversation history and state
+- Supports streaming and non-streaming responses
+- Integrates with ChatSDK for LLM communication
+
+**Why use it:**
+- Foundation for building any AI agent
+- Handles complex reasoning patterns (planning, execution, error recovery)
+- Provides tool registration and execution framework
+- Supports multiple LLM backends (local, Claude, ChatGPT)
+- Built-in debugging and tracing capabilities
+
+---
+
+## Purpose and Use Cases
+
+### When to Use
+
+1. **Building Custom Agents**
+   - Domain-specific assistants (customer service, data analysis, etc.)
+   - Task automation agents
+   - Multi-step workflow orchestrators
+
+2. **Tool-Based Applications**
+   - Agents that need to interact with APIs, databases, or file systems
+   - Applications requiring LLM decision-making with concrete actions
+
+3. **Research and Experimentation**
+   - Testing different prompting strategies
+   - Evaluating LLM performance on multi-step tasks
+   - Building agent benchmarks
+
+### When NOT to Use
+
+- Simple single-turn LLM queries (use `ChatSDK` directly)
+- Applications without tools (use `LLMClient` directly)
+- Stateless request/response patterns (use `quick_chat()`)
+
+---
+
+## API Specification
+
+### Class Definition
+
+```python
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional
+
+class Agent(ABC):
+    """Base class for all GAIA agents."""
+
+    # State constants
+    STATE_PLANNING = "PLANNING"
+    STATE_EXECUTING_PLAN = "EXECUTING_PLAN"
+    STATE_DIRECT_EXECUTION = "DIRECT_EXECUTION"
+    STATE_ERROR_RECOVERY = "ERROR_RECOVERY"
+    STATE_COMPLETION = "COMPLETION"
+
+    # Simple tools that can execute without planning
+    SIMPLE_TOOLS: List[str] = []
+```
+
+### Constructor
+
+```python
+def __init__(
+    self,
+    use_claude: bool = False,
+    use_chatgpt: bool = False,
+    claude_model: str = "claude-sonnet-4-20250514",
+    base_url: Optional[str] = None,
+    model_id: str = None,
+    max_steps: int = 5,
+    debug_prompts: bool = False,
+    show_prompts: bool = False,
+    output_dir: str = None,
+    streaming: bool = False,
+    show_stats: bool = False,
+    silent_mode: bool = False,
+    debug: bool = False,
+    output_handler = None,
+    max_plan_iterations: int = 3,
+) -> None:
+    """
+    Initialize the Agent.
+
+    Args:
+        use_claude: Use Claude API instead of local LLM
+        use_chatgpt: Use ChatGPT/OpenAI API instead of local LLM
+        claude_model: Model to use when use_claude=True
+        base_url: Local LLM server URL (default: from LEMONADE_BASE_URL or http://localhost:8000/api/v1)
+        model_id: Model ID for local LLM (default: Qwen3-Coder-30B-A3B-Instruct-GGUF)
+        max_steps: Maximum reasoning iterations (default: 5)
+        debug_prompts: Include prompts in conversation history (default: False)
+        show_prompts: Display prompts sent to LLM (default: False)
+        output_dir: Directory for JSON output files (default: current directory)
+        streaming: Enable streaming responses (default: False)
+        show_stats: Display LLM performance stats (default: False)
+        silent_mode: Suppress all console output (default: False)
+        debug: Enable debug logging (default: False)
+        output_handler: Custom output handler (default: creates AgentConsole or SilentConsole)
+        max_plan_iterations: Max plan-execute-replan cycles (default: 3, 0=unlimited)
+    """
+```
+
+### Abstract Methods (Must Implement)
+
+```python
+@abstractmethod
+def _get_system_prompt(self) -> str:
+    """
+    Return the system prompt for the agent.
+
+    This defines the agent's role, capabilities, and behavior.
+    Must be implemented by all subclasses.
+
+    Returns:
+        System prompt string
+    """
+    pass
+
+@abstractmethod
+def _create_console(self):
+    """
+    Create and return the console output handler.
+
+    Returns:
+        AgentConsole, SilentConsole, or custom output handler
+    """
+    pass
+
+@abstractmethod
+def _register_tools(self) -> None:
+    """
+    Register all agent-specific tools.
+
+    Use the @tool decorator to register functions within this method.
+    """
+    pass
+```
+
+### Core Methods
+
+```python
+def process_query(
+    self,
+    user_input: str,
+    max_steps: int = None,
+    trace: bool = False,
+    filename: str = None
+) -> Dict[str, Any]:
+    """
+    Process a user query through the agent reasoning loop.
+
+    Args:
+        user_input: User's question or command
+        max_steps: Override default max_steps (optional)
+        trace: Enable detailed execution tracing (default: False)
+        filename: File to write trace output (optional)
+
+    Returns:
+        dict: {
+            "answer": str,           # Final answer from agent
+            "steps": int,            # Number of reasoning steps taken
+            "tools_used": List[str], # Tools called during execution
+            "success": bool,         # Whether query completed successfully
+            "error": str             # Error message if success=False
+        }
+    """
+    pass
+
+def execute_tool(self, tool_name: str, tool_args: dict) -> Any:
+    """
+    Execute a registered tool by name.
+
+    Args:
+        tool_name: Name of the tool to execute
+        tool_args: Dictionary of arguments for the tool
+
+    Returns:
+        Tool execution result
+
+    Raises:
+        ValueError: If tool_name not registered
+    """
+    pass
+
+def list_tools(self, verbose: bool = True) -> None:
+    """
+    Display all registered tools.
+
+    Args:
+        verbose: Show full descriptions (default: True)
+    """
+    pass
+```
+
+### Helper Methods
+
+```python
+def validate_json_response(self, response_text: str) -> Dict[str, Any]:
+    """
+    Validate and fix JSON responses from LLM.
+
+    Applies multiple strategies to extract valid JSON:
+    1. Parse as-is if valid
+    2. Extract from code blocks (```json)
+    3. Bracket-matching extraction
+    4. Fix common syntax errors
+
+    Args:
+        response_text: Raw LLM response
+
+    Returns:
+        Parsed JSON dictionary
+
+    Raises:
+        ValueError: If JSON cannot be extracted
+    """
+    pass
+
+def _format_tools_for_prompt(self) -> str:
+    """
+    Format registered tools for system prompt.
+
+    Returns:
+        Formatted string describing all tools
+    """
+    pass
+```
+
+### State Management Properties
+
+```python
+# Current execution state
+self.execution_state: str  # One of STATE_* constants
+
+# Current plan being executed
+self.current_plan: Optional[Dict]
+
+# Current step in plan
+self.current_step: int
+
+# Total steps in current plan
+self.total_plan_steps: int
+
+# Number of plan iterations
+self.plan_iterations: int
+
+# Conversation history
+self.conversation_history: List[Dict]
+
+# Error history for learning
+self.error_history: List[Dict]
+
+# Last execution result
+self.last_result: Any
+```
+
+---
+
+## Implementation Details
+
+### Reasoning Loop
+
+The agent implements a sophisticated reasoning loop:
+
+1. **Planning State** - LLM creates a multi-step plan
+2. **Execution State** - Execute plan steps sequentially
+3. **Error Recovery State** - Handle failures and retry
+4. **Completion State** - Generate final answer
+
+**State Transitions:**
+
+```
+PLANNING → EXECUTING_PLAN → COMPLETION
+                ↓
+         ERROR_RECOVERY → PLANNING (replan)
+                ↓
+         DIRECT_EXECUTION (simple tools)
+```
+
+### Tool Execution
+
+Tools are registered using the `@tool` decorator in `_register_tools()`:
+
+```python
+def _register_tools(self):
+    from gaia.agents.base.tools import tool
+
+    @tool
+    def my_tool(param: str) -> dict:
+        """Tool description."""
+        # Implementation
+        return {"result": "value"}
+```
+
+### JSON Response Format
+
+The LLM must respond with JSON in one of these formats:
+
+**Thought + Tool:**
+```json
+{
+    "thought": "I need to search for information",
+    "tool": "search_database",
+    "tool_args": {"query": "user data"}
+}
+```
+
+**Answer:**
+```json
+{
+    "thought": "I have all the information needed",
+    "answer": "Here is the complete answer..."
+}
+```
+
+**Plan:**
+```json
+{
+    "thought": "This requires multiple steps",
+    "plan": [
+        {"step": 1, "tool": "search", "args": {...}},
+        {"step": 2, "tool": "analyze", "args": {...}}
+    ]
+}
+```
+
+### Error Handling
+
+The agent automatically handles:
+- Invalid JSON responses (with repair attempts)
+- Tool execution failures (with retry logic)
+- Missing required fields (prompts LLM for correction)
+- Max steps exceeded (graceful termination)
+
+---
+
+## Code Examples
+
+### Example 1: Minimal Agent
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.tools import tool
+from gaia.agents.base.console import AgentConsole
+
+class WeatherAgent(Agent):
+    """Simple weather information agent."""
+
+    def _get_system_prompt(self) -> str:
+        return """You are a weather assistant.
+        Use get_weather to fetch current conditions.
+        Always include temperature and conditions in your response."""
+
+    def _create_console(self):
+        return AgentConsole()
+
+    def _register_tools(self):
+        @tool
+        def get_weather(city: str) -> dict:
+            """Get current weather for a city.
+
+            Args:
+                city: Name of the city
+
+            Returns:
+                Weather data dictionary
+            """
+            # Simulate API call
+            return {
+                "city": city,
+                "temperature": 72,
+                "conditions": "Sunny",
+                "humidity": 45
+            }
+
+# Usage
+agent = WeatherAgent()
+result = agent.process_query("What's the weather in Austin?")
+print(result["answer"])
+```
+
+### Example 2: Database Agent with Multiple Tools
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.tools import tool
+import sqlite3
+
+class CustomerAgent(Agent):
+    """Agent for customer relationship management."""
+
+    def __init__(self, db_path: str = "customers.db", **kwargs):
+        self.db_path = db_path
+        self.conn = sqlite3.connect(db_path)
+        super().__init__(**kwargs)
+
+    def _get_system_prompt(self) -> str:
+        return """You are a customer service assistant.
+        You can search for customers, create new records, and update information.
+        Always confirm actions with the user before executing."""
+
+    def _create_console(self):
+        from gaia.agents.base.console import AgentConsole
+        return AgentConsole()
+
+    def _register_tools(self):
+        @tool
+        def search_customer(name: str) -> dict:
+            """Search for customers by name."""
+            cursor = self.conn.execute(
+                "SELECT * FROM customers WHERE name LIKE ?",
+                (f"%{name}%",)
+            )
+            customers = [dict(row) for row in cursor.fetchall()]
+            return {"customers": customers, "count": len(customers)}
+
+        @tool
+        def create_customer(name: str, email: str, phone: str = "") -> dict:
+            """Create a new customer record."""
+            cursor = self.conn.execute(
+                "INSERT INTO customers (name, email, phone) VALUES (?, ?, ?)",
+                (name, email, phone)
+            )
+            self.conn.commit()
+            return {"status": "created", "id": cursor.lastrowid}
+
+        @tool
+        def update_notes(customer_id: int, notes: str) -> dict:
+            """Add notes to a customer record."""
+            self.conn.execute(
+                "UPDATE customers SET notes = ? WHERE id = ?",
+                (notes, customer_id)
+            )
+            self.conn.commit()
+            return {"status": "updated"}
+
+# Usage
+agent = CustomerAgent()
+result = agent.process_query(
+    "Find customer John Smith and add a note that he called today"
+)
+```
+
+### Example 3: Silent Mode for API
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.console import SilentConsole
+
+class APIAgent(Agent):
+    """Agent for JSON-only API usage."""
+
+    def __init__(self, **kwargs):
+        # Enable silent mode
+        super().__init__(silent_mode=True, **kwargs)
+
+    def _get_system_prompt(self) -> str:
+        return "You are a helpful assistant."
+
+    def _create_console(self):
+        return SilentConsole()
+
+    def _register_tools(self):
+        # Register tools...
+        pass
+
+# Usage in API endpoint
+agent = APIAgent()
+result = agent.process_query("Process this request")
+# No console output, only JSON result
+return result
+```
+
+---
+
+## Testing Requirements
+
+### Unit Tests
+
+**File:** `tests/agents/base/test_agent.py`
+
+```python
+import pytest
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.tools import tool
+from gaia.agents.base.console import SilentConsole
+
+class TestAgent(Agent):
+    """Test agent implementation."""
+
+    def _get_system_prompt(self):
+        return "You are a test assistant."
+
+    def _create_console(self):
+        return SilentConsole()
+
+    def _register_tools(self):
+        @tool
+        def test_tool(param: str) -> dict:
+            """Test tool."""
+            return {"result": param}
+
+def test_agent_creation():
+    """Test agent can be created."""
+    agent = TestAgent(silent_mode=True)
+    assert agent is not None
+    assert agent.system_prompt is not None
+
+def test_tool_registration():
+    """Test tools are registered correctly."""
+    agent = TestAgent(silent_mode=True)
+    agent.list_tools()  # Should not raise
+
+def test_tool_execution():
+    """Test tool execution."""
+    agent = TestAgent(silent_mode=True)
+    result = agent.execute_tool("test_tool", {"param": "value"})
+    assert result["result"] == "value"
+
+def test_json_validation():
+    """Test JSON response validation."""
+    agent = TestAgent(silent_mode=True)
+
+    # Valid JSON
+    json_str = '{"thought": "test", "answer": "response"}'
+    result = agent.validate_json_response(json_str)
+    assert result["answer"] == "response"
+
+    # JSON in code block
+    json_str = '```json\n{"thought": "test", "answer": "response"}\n```'
+    result = agent.validate_json_response(json_str)
+    assert result["answer"] == "response"
+
+def test_state_management():
+    """Test state transitions."""
+    agent = TestAgent(silent_mode=True)
+    assert agent.execution_state == Agent.STATE_PLANNING
+
+def test_conversation_history():
+    """Test conversation history tracking."""
+    agent = TestAgent(silent_mode=True)
+    assert isinstance(agent.conversation_history, list)
+    assert len(agent.conversation_history) == 0
+
+def test_max_steps():
+    """Test max steps configuration."""
+    agent = TestAgent(max_steps=10, silent_mode=True)
+    assert agent.max_steps == 10
+```
+
+### Integration Tests
+
+```python
+def test_end_to_end_query():
+    """Test complete query processing."""
+    agent = TestAgent(silent_mode=True)
+    result = agent.process_query("Test query")
+
+    assert "answer" in result
+    assert "steps" in result
+    assert "tools_used" in result
+    assert "success" in result
+
+def test_multiple_tools():
+    """Test agent using multiple tools."""
+    # Implementation depends on specific tools
+    pass
+
+def test_error_recovery():
+    """Test error recovery behavior."""
+    # Implementation testing error handling
+    pass
+```
+
+---
+
+## Dependencies
+
+### Required Packages
+
+```python
+# Standard library
+import abc
+import datetime
+import inspect
+import json
+import logging
+import os
+import re
+import subprocess
+import uuid
+from typing import Any, Dict, List, Optional
+
+# GAIA packages
+from gaia.agents.base.console import AgentConsole, SilentConsole
+from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.chat.sdk import ChatConfig, ChatSDK
+```
+
+### External Dependencies
+
+```toml
+[project]
+dependencies = [
+    # Required by ChatSDK
+]
+```
+
+---
+
+## Acceptance Criteria
+
+- [ ] Agent class implemented with all abstract methods
+- [ ] State management working (all 5 states)
+- [ ] Tool registration and execution working
+- [ ] JSON validation and repair working
+- [ ] Conversation history tracking working
+- [ ] Error recovery and retry logic working
+- [ ] Max steps enforcement working
+- [ ] Silent mode working (no console output)
+- [ ] Streaming mode working
+- [ ] All configuration parameters working
+- [ ] Unit tests pass (100% coverage of public methods)
+- [ ] Integration tests pass
+- [ ] Documentation complete in SDK.md
+- [ ] Example agents work
+
+---
+
+## Performance Considerations
+
+### Memory Management
+
+- Conversation history limited by `max_history_length` in ChatConfig
+- Error history stored but not automatically pruned
+- Consider clearing history for long-running agents
+
+### Token Usage
+
+- Default context window: 4096 tokens
+- Tool descriptions consume ~100-500 tokens
+- Monitor token usage with `show_stats=True`
+- Use smaller models for simple tasks (Qwen2.5-0.5B)
+- Use larger models for complex reasoning (Qwen3-Coder-30B)
+
+### Latency
+
+- Streaming mode reduces perceived latency
+- Tool execution time depends on tool implementation
+- Local LLM faster than cloud APIs but lower quality
+- Plan-execute cycles add latency vs direct execution
+
+---
+
+## Migration Notes
+
+### From Direct LLM Calls
+
+**Before:**
+```python
+from gaia.chat.sdk import quick_chat
+response = quick_chat("Do something")
+```
+
+**After:**
+```python
+from my_agent import MyAgent
+agent = MyAgent()
+result = agent.process_query("Do something")
+```
+
+### Adding Tools to Existing Agent
+
+```python
+# In _register_tools()
+@tool
+def new_capability(param: str) -> dict:
+    """Description of new capability."""
+    return {"result": "value"}
+```
+
+---
+
+## Future Enhancements
+
+- [ ] Parallel tool execution for independent operations
+- [ ] Tool dependency graph for optimal ordering
+- [ ] Automatic tool discovery from modules
+- [ ] Tool result caching
+- [ ] Multi-agent collaboration patterns
+- [ ] Enhanced planning with A* or beam search
+- [ ] Learning from error history
+- [ ] Dynamic system prompt adjustment
+
+---
+
+**Status:** ✅ Implemented and tested
+**Last Updated:** December 10, 2025
+**Specification Version:** 1.0.0
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

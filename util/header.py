@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import argparse
@@ -18,6 +18,7 @@ IGNORE_DIRS = {
     "build",
     ".venv",
     "venv",
+    ".serena",
 }
 
 # Supported file extensions (excluding .md and .txt as they don't require headers)
@@ -174,8 +175,16 @@ def update_headers(files, check_mode=False):
 
             # Check if update is needed
             if copyright_line_idx is not None:
-                # Check if already up to date
-                if (
+                # For block comments (CSS files using /* */), check content rather than exact format
+                is_block_comment = comment_marker == "/*"
+                if is_block_comment:
+                    # For block comments, just verify the year is correct and SPDX exists
+                    copyright_has_correct_year = years in lines[copyright_line_idx]
+                    spdx_exists = spdx_line_idx is not None
+                    if copyright_has_correct_year and spdx_exists:
+                        continue  # Already up to date, skip
+                # Check if already up to date (standard single-line comments)
+                elif (
                     lines[copyright_line_idx].strip() == new_copyright
                     and spdx_line_idx is not None
                     and lines[spdx_line_idx].strip() == new_spdx
@@ -352,12 +361,12 @@ if __name__ == "__main__":
         if files_added > 0 or files_updated > 0:
             print(f"Files needing updates: {files_added + files_updated}")
             print(f"{'=' * 80}")
-            print("❌ Copyright headers are missing or outdated")
+            print("[FAIL] Copyright headers are missing or outdated")
             print("Please run: python util/header.py")
             sys.exit(1)
         else:
             print(f"{'=' * 80}")
-            print("✅ All copyright headers are up to date")
+            print("[OK] All copyright headers are up to date")
             sys.exit(0)
     else:
         print(f"Headers added: {files_added}")

@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import asyncio
@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -113,89 +114,23 @@ def check_lemonade_health(host=None, port=None):
         return False
 
 
-def is_lemonade_installed() -> bool:
-    """Check if Lemonade server is installed by attempting to get its version.
-
-    Uses LemonadeClient.get_lemonade_version() which runs 'lemonade-server --version'.
-    Returns True if the version can be retrieved, False otherwise.
-    """
-    # Create a minimal client instance just to check version
-    client = LemonadeClient(verbose=False)
-    return client.get_lemonade_version() is not None
-
-
-def print_lemonade_error(for_code_agent=False):
-    """Print informative error message when Lemonade is not running.
-
-    Args:
-        for_code_agent: If True, includes instructions for --ctx-size parameter
-    """
-    print(
-        "❌ Error: Lemonade server is not running or not accessible.", file=sys.stderr
-    )
-    print("", file=sys.stderr)
-
-    # Check if lemonade-server is installed
-    if not is_lemonade_installed():
-        print("📥 Lemonade server is not installed on your system.", file=sys.stderr)
-        print("", file=sys.stderr)
-        print("To install Lemonade server:", file=sys.stderr)
-        print("  1. Visit: https://lemonade-server.ai", file=sys.stderr)
-        print("  2. Download the installer for your platform", file=sys.stderr)
-        print("  3. Run the installer and follow prompts", file=sys.stderr)
-        print("", file=sys.stderr)
-        print("After installation, try your command again.", file=sys.stderr)
-    else:
-        print("Lemonade server is installed but not running.", file=sys.stderr)
-        print("", file=sys.stderr)
-        print(
-            "GAIA will automatically start Lemonade Server if installed.",
-            file=sys.stderr,
-        )
-        print("If auto-start fails, you can start it manually by:", file=sys.stderr)
-        print("  • Double-clicking the desktop shortcut, or", file=sys.stderr)
-        if for_code_agent:
-            print(
-                "  • Running: lemonade-server serve --ctx-size 32768",
-                file=sys.stderr,
-            )
-        else:
-            print("  • Running: lemonade-server serve", file=sys.stderr)
-        print("", file=sys.stderr)
-        if for_code_agent:
-            print(
-                "Note: GAIA requires larger context size (32768 tokens)",
-                file=sys.stderr,
-            )
-            print("", file=sys.stderr)
-        base_url = os.getenv("LEMONADE_BASE_URL", f"{DEFAULT_LEMONADE_URL}/api/v1")
-        print(
-            f"The server should be accessible at {base_url}/health",
-            file=sys.stderr,
-        )
-        print("Then try your command again.", file=sys.stderr)
-
-
 def initialize_lemonade_for_agent(
     agent: str,
-    auto_start: bool = True,
     quiet: bool = False,
     skip_if_external: bool = False,
     use_claude: bool = False,
     use_chatgpt: bool = False,
-    host: str = None,
-    port: int = None,
+    host: Optional[str] = None,
+    port: Optional[int] = None,
 ):
     """
     Initialize Lemonade Server for a specific GAIA agent.
 
-    This function uses agent-specific profiles to ensure the correct context size
-    and model requirements are met. It provides consistent initialization across
-    all GAIA CLI commands.
+    Uses LemonadeManager singleton shared by CLI and SDK for consistent
+    initialization and error handling.
 
     Args:
         agent: Agent name (chat, code, talk, rag, blender, jira, docker, vlm, minimal, mcp)
-        auto_start: Automatically start server if not running
         quiet: Suppress output (only errors)
         skip_if_external: If True, skip initialization when using Claude/ChatGPT
         use_claude: Whether Claude API is being used
@@ -204,17 +139,17 @@ def initialize_lemonade_for_agent(
         port: Port number of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
 
     Returns:
-        Tuple of (success: bool, base_url: str, version: str)
+        Tuple of (success: bool, base_url: str | None)
 
     Note:
         Host and port can be configured via LEMONADE_BASE_URL environment variable.
 
     Example:
-        success, base_url, version = initialize_lemonade_for_agent("chat")
+        success, base_url = initialize_lemonade_for_agent("chat")
         if not success:
             sys.exit(1)
     """
-    log = get_logger(__name__)
+    from gaia.llm.lemonade_manager import LemonadeManager
 
     # Use provided host/port, or get from env var, or use defaults
     env_host, env_port, env_base_url = _get_lemonade_config()
@@ -223,62 +158,38 @@ def initialize_lemonade_for_agent(
 
     # Skip initialization if using external API
     if skip_if_external and (use_claude or use_chatgpt):
-        return True, env_base_url, None
+        return True, env_base_url
 
-    try:
-        client = LemonadeClient(host=host, port=port, keep_alive=True, verbose=False)
-        status = client.initialize(
-            agent=agent,
-            auto_start=auto_start,
-            quiet=quiet,
-        )
+    # Map agent names to context size requirements
+    # Complex agents need 32768+, simple ones can use default 4096
+    agent_context_sizes = {
+        "code": 32768,
+        "chat": 32768,
+        "jira": 32768,
+        "blender": 32768,
+        "docker": 32768,
+        "talk": 32768,
+        "rag": 32768,
+        "mcp": 4096,
+        "minimal": 4096,
+        "vlm": 8192,
+    }
+    required_ctx = agent_context_sizes.get(agent.lower(), 32768)
 
-        if not status.running:
-            if not quiet:
-                print_lemonade_error(for_code_agent=(agent in ["code", "chat"]))
-            return False, None, None
+    # LemonadeManager handles all validation and error printing
+    success = LemonadeManager.ensure_ready(
+        min_context_size=required_ctx,
+        quiet=quiet,
+        host=host,
+        port=port,
+    )
 
-        # For chat and code agents, check if context size is sufficient
-        # These agents require 32768 tokens and will fail mid-execution with
-        # cryptic errors if context is insufficient
-        required_ctx = 32768
-        if agent in ["code", "chat"] and status.context_size < required_ctx:
-            if not quiet:
-                print("")
-                print(
-                    f"❌ Insufficient context size for {agent} agent.", file=sys.stderr
-                )
-                print(
-                    f"   Current: {status.context_size} tokens, "
-                    f"Required: {required_ctx} tokens",
-                    file=sys.stderr,
-                )
-                print("", file=sys.stderr)
-                print("   To fix this issue:", file=sys.stderr)
-                print(
-                    "   1. Stop the Lemonade server (if running)",
-                    file=sys.stderr,
-                )
-                print(
-                    f"   2. Restart with: lemonade-server serve --ctx-size {required_ctx}",
-                    file=sys.stderr,
-                )
-                print("", file=sys.stderr)
-            return False, None, None
+    if not success:
+        return False, None
 
-        # Get server version for logging/debugging
-        server_version = client.get_lemonade_version()
-
-        # Use the client's base_url which is configured for the correct API version
-        base_url = client.base_url
-
-        return True, base_url, server_version
-
-    except Exception as e:
-        log.error(f"Lemonade initialization failed: {e}")
-        if not quiet:
-            print(f"❌ Lemonade initialization failed: {e}", file=sys.stderr)
-        return False, None, None
+    # Get base_url from LemonadeManager
+    base_url = LemonadeManager.get_base_url() or f"http://{host}:{port}/api/v1"
+    return True, base_url
 
 
 def ensure_agent_models(
@@ -603,9 +514,8 @@ async def async_main(action, **kwargs):
         use_claude = kwargs.get("use_claude", False)
         use_chatgpt = kwargs.get("use_chatgpt", False)
 
-        success, detected_base_url, _server_version = initialize_lemonade_for_agent(
+        success, detected_base_url = initialize_lemonade_for_agent(
             agent=agent_profile,
-            auto_start=True,
             skip_if_external=True,
             use_claude=use_claude,
             use_chatgpt=use_chatgpt,
@@ -2200,7 +2110,7 @@ Examples:
             print("The evaluation dependencies are not installed.")
             print("")
             print("To fix this, install the evaluation dependencies:")
-            print("  pip install -e .[eval]")
+            print('  uv pip install -e ".[eval]"')
             print("")
             print("This will install required packages including:")
             print("  - anthropic (for Claude AI)")
@@ -2555,7 +2465,7 @@ Examples:
 
                         if not HAS_REPORTLAB:
                             print(
-                                "❌ Error: PDF output requires reportlab. Install with: pip install reportlab"
+                                "❌ Error: PDF output requires reportlab. Install with: uv pip install reportlab"
                             )
                             if args.format == "both":
                                 print(
@@ -2633,7 +2543,7 @@ Examples:
                             pdf_formatter = PDFFormatter()
                         else:
                             print(
-                                "⚠️  Warning: PDF output requires reportlab. Install with: pip install reportlab"
+                                "⚠️  Warning: PDF output requires reportlab. Install with: uv pip install reportlab"
                             )
                             if args.format == "pdf":
                                 print("❌ Cannot generate PDF files without reportlab.")
@@ -2751,7 +2661,7 @@ Let me know your answer!
                 log.debug("ASR initialized successfully")
             except ImportError:
                 log.error(
-                    "WhisperAsr not found. Please install voice support with: pip install -e .[talk]"
+                    'WhisperAsr not found. Please install voice support with: uv pip install -e ".[talk]"'
                 )
                 raise
             except Exception as e:
@@ -2837,7 +2747,7 @@ Let me know your answer!
                     "❌ Error: YouTube transcript functionality requires additional dependencies."
                 )
                 print(
-                    "Please install: pip install llama-index-readers-youtube-transcript"
+                    "Please install: uv pip install llama-index-readers-youtube-transcript"
                 )
                 print(f"Import error: {e}")
                 sys.exit(1)
@@ -2853,6 +2763,9 @@ Let me know your answer!
             print(f"❌ {result['message']}")
         return
 
+    # Import LemonadeManager for model commands error handling
+    from gaia.llm.lemonade_manager import LemonadeManager
+
     # Handle model pull command
     if args.action == "pull":
         log.info(f"Pulling model: {args.model_name}")
@@ -2862,7 +2775,7 @@ Let me know your answer!
 
             # Check if Lemonade server is running
             if not check_lemonade_health(args.host, args.port):
-                print_lemonade_error()
+                LemonadeManager.print_server_error()
                 return
 
             print(f"📥 Pulling model: {args.model_name}")
@@ -2936,7 +2849,7 @@ Let me know your answer!
         except Exception as e:
             error_msg = str(e).lower()
             if "connection" in error_msg or "refused" in error_msg:
-                print_lemonade_error()
+                LemonadeManager.print_server_error()
             else:
                 print(f"❌ Error: {e}")
             sys.exit(1)
@@ -2955,7 +2868,7 @@ Let me know your answer!
             if args.clear_cache:
                 # Check if Lemonade server is running
                 if not check_lemonade_health(args.host, args.port):
-                    print_lemonade_error()
+                    LemonadeManager.print_server_error()
                     return
 
                 model_ids = client.get_required_models("all")
@@ -3060,7 +2973,7 @@ Let me know your answer!
 
             # Check if Lemonade server is running
             if not check_lemonade_health(args.host, args.port):
-                print_lemonade_error()
+                LemonadeManager.print_server_error()
                 return
 
             agent_name = args.agent.lower()
@@ -3179,7 +3092,7 @@ Let me know your answer!
         except Exception as e:
             error_msg = str(e).lower()
             if "connection" in error_msg or "refused" in error_msg:
-                print_lemonade_error()
+                LemonadeManager.print_server_error()
             else:
                 print(f"❌ Error: {e}")
             sys.exit(1)
@@ -3188,9 +3101,8 @@ Let me know your answer!
     # Handle LLM command
     if args.action == "llm":
         # Initialize Lemonade with minimal profile for direct LLM queries
-        success, _, _ = initialize_lemonade_for_agent(
+        success, _ = initialize_lemonade_for_agent(
             agent="minimal",
-            auto_start=False,
             quiet=False,
         )
         if not success:
@@ -3223,9 +3135,19 @@ Let me know your answer!
                 or "refused" in error_msg
                 or "timeout" in error_msg
             ):
-                print_lemonade_error()
+                LemonadeManager.print_server_error()
             else:
                 print(f"❌ Error: {str(e)}")
+                # Check for model loading related errors
+                if (
+                    "404" in error_msg
+                    or "not found" in error_msg
+                    or "not loaded" in error_msg
+                ):
+                    print(
+                        "\nMake sure that the model is loaded. You can load it using:"
+                    )
+                    print(f"  gaia pull {DEFAULT_MODEL_NAME}")
             return
 
     # Handle groundtruth generation
@@ -3239,7 +3161,7 @@ Let me know your answer!
             print("The evaluation dependencies are not installed.")
             print("")
             print("To fix this, install the evaluation dependencies:")
-            print("  pip install -e .[eval]")
+            print('  uv pip install -e ".[eval]"')
             print("")
             print("This will install required packages including:")
             print("  - anthropic (for Claude AI)")
@@ -3412,7 +3334,7 @@ Let me know your answer!
             print("The evaluation dependencies are not installed.")
             print("")
             print("To fix this, install the evaluation dependencies:")
-            print("  pip install -e .[eval]")
+            print('  uv pip install -e ".[eval]"')
             print("")
             print("This will install required packages including:")
             print("  - anthropic (for Claude AI)")
@@ -3452,7 +3374,7 @@ Let me know your answer!
             print("The evaluation dependencies are not installed.")
             print("")
             print("To fix this, install the evaluation dependencies:")
-            print("  pip install -e .[eval]")
+            print('  uv pip install -e ".[eval]"')
             print("")
             print("This will install required packages including:")
             print("  - anthropic (for Claude AI)")
@@ -3816,7 +3738,7 @@ Let me know your answer!
                 print("The evaluation dependencies are not installed.")
                 print("")
                 print("To fix this, install the evaluation dependencies:")
-                print("  pip install -e .[eval]")
+                print('  uv pip install -e ".[eval]"')
                 print("")
                 print("This will install required packages including:")
                 print("  - anthropic (for Claude AI)")
@@ -3891,7 +3813,7 @@ Let me know your answer!
                 print("The evaluation dependencies are not installed.")
                 print("")
                 print("To fix this, install the evaluation dependencies:")
-                print("  pip install -e .[eval]")
+                print('  uv pip install -e ".[eval]"')
                 print("")
                 print("This will install required packages including:")
                 print("  - anthropic (for Claude AI)")
@@ -3967,7 +3889,7 @@ Let me know your answer!
             print("The evaluation dependencies are not installed.")
             print("")
             print("To fix this, install the evaluation dependencies:")
-            print("  pip install -e .[eval]")
+            print('  uv pip install -e ".[eval]"')
             print("")
             print("This will install required packages including:")
             print("  - anthropic (for Claude AI)")
@@ -4343,12 +4265,12 @@ def handle_code_command(args):
         base_url = os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
 
     # Initialize Lemonade with code agent profile (32768 context)
-    # Skip for remote servers (e.g., devtunnel URLs) or external APIs
+    # Skip for remote servers (e.g., devtunnel URLs), external APIs, or --no-lemonade-check
     is_local = "localhost" in base_url or "127.0.0.1" in base_url
-    if is_local:
-        success, _, _ = initialize_lemonade_for_agent(
+    skip_lemonade = getattr(args, "no_lemonade_check", False)
+    if is_local and not skip_lemonade:
+        success, _ = initialize_lemonade_for_agent(
             agent="code",
-            auto_start=True,
             skip_if_external=True,
             use_claude=getattr(args, "use_claude", False),
             use_chatgpt=getattr(args, "use_chatgpt", False),
@@ -4384,6 +4306,7 @@ def handle_code_command(args):
                 "use_chatgpt": getattr(args, "use_chatgpt", False),
                 "streaming": getattr(args, "streaming", False),
                 "base_url": getattr(args, "base_url", None),
+                "skip_lemonade": getattr(args, "no_lemonade_check", False),
             }
 
             # Single query mode - use routing with configuration
@@ -4401,6 +4324,7 @@ def handle_code_command(args):
                 use_chatgpt=getattr(args, "use_chatgpt", False),
                 streaming=getattr(args, "streaming", False),
                 base_url=getattr(args, "base_url", None),
+                skip_lemonade=getattr(args, "no_lemonade_check", False),
             )
 
         # Handle list tools option
@@ -4551,15 +4475,16 @@ def handle_jira_command(args):
     log = get_logger(__name__)
 
     # Initialize Lemonade with jira agent profile (32768 context)
-    success, _, _ = initialize_lemonade_for_agent(
-        agent="jira",
-        auto_start=True,
-        skip_if_external=True,
-        use_claude=getattr(args, "use_claude", False),
-        use_chatgpt=getattr(args, "use_chatgpt", False),
-    )
-    if not success:
-        sys.exit(1)
+    # Skip if --no-lemonade-check is specified
+    if not getattr(args, "no_lemonade_check", False):
+        success, _ = initialize_lemonade_for_agent(
+            agent="jira",
+            skip_if_external=True,
+            use_claude=getattr(args, "use_claude", False),
+            use_chatgpt=getattr(args, "use_chatgpt", False),
+        )
+        if not success:
+            sys.exit(1)
 
     try:
         # Import and use JiraApp directly (no MCP needed)
@@ -4581,7 +4506,7 @@ def handle_jira_command(args):
     except ImportError as e:
         log.error(f"Failed to import Jira app: {e}")
         print("❌ Error: Jira app components are not available")
-        print("Make sure GAIA is installed properly: pip install -e .")
+        print("Make sure GAIA is installed properly: uv pip install -e .")
         sys.exit(1)
     except Exception as e:
         log.error(f"Error running Jira app: {e}")
@@ -4599,15 +4524,16 @@ def handle_docker_command(args):
     log = get_logger(__name__)
 
     # Initialize Lemonade with docker agent profile (32768 context)
-    success, _, _ = initialize_lemonade_for_agent(
-        agent="docker",
-        auto_start=True,
-        skip_if_external=True,
-        use_claude=getattr(args, "use_claude", False),
-        use_chatgpt=getattr(args, "use_chatgpt", False),
-    )
-    if not success:
-        sys.exit(1)
+    # Skip if --no-lemonade-check is specified
+    if not getattr(args, "no_lemonade_check", False):
+        success, _ = initialize_lemonade_for_agent(
+            agent="docker",
+            skip_if_external=True,
+            use_claude=getattr(args, "use_claude", False),
+            use_chatgpt=getattr(args, "use_chatgpt", False),
+        )
+        if not success:
+            sys.exit(1)
 
     try:
         # Import and use DockerApp directly
@@ -4631,7 +4557,7 @@ def handle_docker_command(args):
     except ImportError as e:
         log.error(f"Failed to import Docker app: {e}")
         print("❌ Error: Docker app components are not available")
-        print("Make sure GAIA is installed properly: pip install -e .")
+        print("Make sure GAIA is installed properly: uv pip install -e .")
         sys.exit(1)
     except Exception as e:
         log.error(f"Error running Docker app: {e}")
@@ -4651,9 +4577,8 @@ def handle_api_command(args):
     if args.subcommand == "start":
         # Initialize Lemonade with mcp profile (unless --no-lemonade-check)
         if not getattr(args, "no_lemonade_check", False):
-            success, _, _ = initialize_lemonade_for_agent(
+            success, _ = initialize_lemonade_for_agent(
                 agent="mcp",
-                auto_start=False,
                 quiet=False,
             )
             if not success:
@@ -4710,7 +4635,7 @@ def handle_api_command(args):
         except ImportError as e:
             log.error(f"Failed to import API server: {e}")
             print("❌ Error: API server components are not available")
-            print("Make sure uvicorn is installed: pip install uvicorn")
+            print("Make sure uvicorn is installed: uv pip install uvicorn")
             sys.exit(1)
         except KeyboardInterrupt:
             print("\n✅ API server stopped")
@@ -4952,20 +4877,21 @@ def handle_blender_command(args):
     # Check if Blender components are available
     if not BLENDER_AVAILABLE:
         print("❌ Error: Blender agent components are not available")
-        print("Install blender dependencies with: pip install -e .[blender]")
+        print('Install blender dependencies with: uv pip install -e ".[blender]"')
         sys.exit(1)
 
     # Initialize Lemonade with blender agent profile (32768 context)
-    log.info("Initializing Lemonade for Blender agent...")
-    success, _, _ = initialize_lemonade_for_agent(
-        agent="blender",
-        auto_start=True,
-        skip_if_external=True,
-        use_claude=getattr(args, "use_claude", False),
-        use_chatgpt=getattr(args, "use_chatgpt", False),
-    )
-    if not success:
-        sys.exit(1)
+    # Skip if --no-lemonade-check is specified
+    if not getattr(args, "no_lemonade_check", False):
+        log.info("Initializing Lemonade for Blender agent...")
+        success, _ = initialize_lemonade_for_agent(
+            agent="blender",
+            skip_if_external=True,
+            use_claude=getattr(args, "use_claude", False),
+            use_chatgpt=getattr(args, "use_chatgpt", False),
+        )
+        if not success:
+            sys.exit(1)
 
     # Check if Blender MCP server is running
     mcp_port = getattr(args, "mcp_port", 9876)
@@ -5148,7 +5074,7 @@ def handle_mcp_start(args):
             print("❌ Error: MCP dependencies not installed.")
             print("")
             print("To fix this, install the MCP dependencies:")
-            print("  pip install -e .[mcp]")
+            print('  uv pip install -e ".[mcp]"')
             return
 
         # Import and start the HTTP-native MCP bridge
@@ -5156,9 +5082,8 @@ def handle_mcp_start(args):
 
         # Initialize Lemonade with mcp agent profile (unless --no-lemonade-check)
         if not getattr(args, "no_lemonade_check", False):
-            success, _, _ = initialize_lemonade_for_agent(
+            success, _ = initialize_lemonade_for_agent(
                 agent="mcp",
-                auto_start=False,  # MCP doesn't auto-start, just check
                 quiet=False,
             )
             if not success:

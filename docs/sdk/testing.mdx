@@ -1,0 +1,87 @@
+# Testing
+
+<Badge text="development" color="orange" />
+
+## 17.1 Testing Agents
+
+```python
+import pytest
+from my_package.agent import MyAgent
+
+def test_agent_creation():
+    """Test agent can be created."""
+    agent = MyAgent()
+    assert agent is not None
+
+def test_tool_execution():
+    """Test specific tool."""
+    agent = MyAgent()
+    result = agent.execute_tool("my_tool", {"param": "value"})
+    assert result["status"] == "success"
+
+def test_query_processing():
+    """Test full query processing."""
+    agent = MyAgent()
+    result = agent.process_query("Do something")
+    assert "answer" in result
+```
+
+---
+
+## 17.2 Silent Mode for Testing
+
+```python
+from my_package.agent import MyAgent
+
+def test_silent_mode():
+    """Test with no console output."""
+    agent = MyAgent(silent_mode=True)
+    result = agent.process_query("Test query")
+    # No console output, just results
+    assert result is not None
+```
+
+---
+
+## 17.3 Mocking LLM Responses
+
+```python
+from unittest.mock import Mock, patch
+
+def test_with_mocked_llm():
+    """Test agent with mocked LLM."""
+    with patch('gaia.chat.sdk.ChatSDK') as mock_chat:
+        # Configure mock
+        mock_chat.return_value.complete.return_value = {
+            "tool": "my_tool",
+            "args": {"param": "value"}
+        }
+
+        # Test agent
+        agent = MyAgent()
+        result = agent.process_query("Test")
+
+        # Verify LLM was called
+        assert mock_chat.return_value.complete.called
+```
+
+---
+
+## Related Topics
+
+- [Core Agent System](./core/agent-system) - Learn about the base Agent class
+- [Best Practices](./best-practices) - Testing best practices
+- [Developer Guide](/reference/dev) - Test setup and running
+- [Evaluation Framework](/reference/eval) - Batch testing and ground truth
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

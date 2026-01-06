@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 # Standard library imports
@@ -142,7 +142,7 @@ class LLMClient:
             logger.debug(f"Using Claude API with model={self.default_model}")
         elif use_claude and not CLAUDE_AVAILABLE:
             raise ValueError(
-                "Claude support requested but anthropic library not available. Install with: pip install anthropic"
+                "Claude support requested but anthropic library not available. Install with: uv pip install anthropic"
             )
         elif use_openai:
             # Use OpenAI API
@@ -368,10 +368,7 @@ class LLMClient:
                             f"API endpoint error: {error_str}\n\n"
                             f"This may indicate:\n"
                             f"  1. Lemonade Server version mismatch (try updating to {LEMONADE_VERSION})\n"
-                            f"  2. Model not properly loaded or corrupted\n\n"
-                            f"To fix model issues, try:\n"
-                            f"  lemonade model remove <model-name>\n"
-                            f"  lemonade model download <model-name>\n"
+                            f"  2. Model not properly loaded or corrupted\n"
                         ) from e
 
                 if "network" in error_str.lower() or "connection" in error_str.lower():
@@ -452,10 +449,7 @@ class LLMClient:
                             f"API endpoint error: {error_str}\n\n"
                             f"This may indicate:\n"
                             f"  1. Lemonade Server version mismatch (try updating to {LEMONADE_VERSION})\n"
-                            f"  2. Model not properly loaded or corrupted\n\n"
-                            f"To fix model issues, try:\n"
-                            f"  lemonade model remove <model-name>\n"
-                            f"  lemonade model download <model-name>\n"
+                            f"  2. Model not properly loaded or corrupted\n"
                         ) from e
 
                 if "network" in error_str.lower() or "connection" in error_str.lower():

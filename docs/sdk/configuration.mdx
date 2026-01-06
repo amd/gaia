@@ -1,0 +1,58 @@
+# Configuration
+
+<Badge text="development" color="orange" />
+
+## 16.1 Environment Variables
+
+```bash
+# LLM Configuration
+export LEMONADE_BASE_URL="http://localhost:8000/api/v1"
+export GAIA_API_DEBUG="true"
+export GAIA_API_STREAMING="true"
+
+# API Keys (for cloud providers)
+export ANTHROPIC_API_KEY="sk-ant-..."
+export OPENAI_API_KEY="sk-..."
+
+# Logging
+export GAIA_LOG_LEVEL="INFO"
+```
+
+---
+
+## 16.2 Configuration in Code
+
+```python
+import os
+
+# Read configuration
+base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+debug = os.getenv("GAIA_API_DEBUG", "false").lower() == "true"
+
+# Use in agent
+agent = MyAgent(
+    base_url=base_url,
+    debug_prompts=debug
+)
+```
+
+---
+
+## Related Topics
+
+- [Core Agent System](./core/agent-system) - Agent configuration parameters
+- [LLM Integration](./core/llm-integration) - Model and provider settings
+- [Security](./security) - Secure configuration practices
+- [Developer Guide](/reference/dev) - Development environment setup
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

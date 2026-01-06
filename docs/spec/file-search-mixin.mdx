@@ -1,0 +1,332 @@
+---
+title: "FileSearchToolsMixin"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/tools/file_tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/file_tools.py)
+</Info>
+
+<Note>
+**Component:** FileSearchToolsMixin
+**Module:** `gaia.agents.tools.file_tools`
+**Import:** `from gaia.agents.tools.file_tools import FileSearchToolsMixin`
+</Note>
+---
+
+## Overview
+
+FileSearchToolsMixin provides agent-agnostic file search and management operations shared across multiple agents (Chat, Code). Features intelligent multi-phase search, type-based file analysis, and grep-like content searching.
+
+**Key Features:**
+- 3-phase intelligent file search (CWD → common locations → deep scan)
+- Type-aware file reading (Python AST, Markdown structure, binary detection)
+- Grep-like content search across file systems
+- Directory search with depth control
+- Generic file writing with directory creation
+
+**Search Strategy:**
+- Phase 0: Deep search current working directory (unlimited depth)
+- Phase 1: Search common locations (Documents, Downloads, Desktop) with depth limit
+- Phase 2: Deep drive/root search if still not found
+- Early termination on first match for speed
+
+---
+
+## API Specification
+
+```python
+class FileSearchToolsMixin:
+    """
+    Mixin providing shared file search and read operations.
+
+    Tools provided:
+    - search_file: Multi-phase intelligent file search
+    - search_directory: Directory search by name
+    - read_file: Type-aware file reading with analysis
+    - search_file_content: Grep-like content search
+    - write_file: Generic file writer
+    """
+
+    @tool
+    def search_file(
+        file_pattern: str,
+        search_all_drives: bool = True,
+        file_types: str = None
+    ) -> Dict[str, Any]:
+        """
+        Search for files with intelligent 3-phase strategy.
+
+        Phase 0: Current working directory (deep, unlimited)
+        Phase 1: Common document locations (Documents, Downloads, Desktop)
+        Phase 2: All drives (Windows) or root (Unix)
+
+        Args:
+            file_pattern: Pattern to search (e.g., 'oil', '*.pdf')
+            search_all_drives: Search all drives on Windows (default: True)
+            file_types: Filter by extensions (e.g., 'pdf,docx')
+
+        Returns:
+            {
+                "status": "success",
+                "files": List[str],  # Paths (max 10)
+                "file_list": List[{  # Formatted for display
+                    "number": int,
+                    "name": str,
+                    "path": str,
+                    "directory": str
+                }],
+                "count": int,
+                "search_context": "current_directory" | "common_locations" | "deep_search",
+                "display_message": str,
+                "user_instruction": str  # If multiple found
+            }
+        """
+        pass
+
+    @tool
+    def search_directory(
+        directory_name: str,
+        search_root: str = None,
+        max_depth: int = 4
+    ) -> Dict[str, Any]:
+        """
+        Search for directories by name.
+
+        Args:
+            directory_name: Directory name pattern
+            search_root: Root to start from (default: home)
+            max_depth: Max recursion depth (default: 4)
+
+        Returns:
+            {
+                "status": "success",
+                "directories": List[str],  # Max 10
+                "count": int,
+                "message": str
+            }
+        """
+        pass
+
+    @tool
+    def read_file(file_path: str) -> Dict[str, Any]:
+        """
+        Read file with intelligent type-based analysis.
+
+        File Type Support:
+        - Python (.py): AST validation + symbol extraction (functions/classes)
+        - Markdown (.md): Headers + code blocks + links extraction
+        - Binary: Detection with size reporting
+        - Text: Raw content with line count
+
+        Args:
+            file_path: Path to file
+
+        Returns:
+            {
+                "status": "success",
+                "file_path": str,
+                "file_type": "python" | "markdown" | "binary" | str,
+                "content": str,
+                "line_count": int,
+                "size_bytes": int,
+
+                # Python-specific
+                "is_valid": bool,
+                "errors": List[str],
+                "symbols": List[{
+                    "name": str,
+                    "type": "function" | "class",
+                    "line": int
+                }],
+
+                # Markdown-specific
+                "headers": List[str],
+                "code_blocks": List[{
+                    "language": str,
+                    "code": str
+                }],
+                "links": List[{
+                    "text": str,
+                    "url": str
+                }],
+
+                # Binary-specific
+                "is_binary": bool
+            }
+        """
+        pass
+
+    @tool
+    def search_file_content(
+        pattern: str,
+        directory: str = ".",
+        file_pattern: str = None,
+        case_sensitive: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Grep-like file content search.
+
+        Args:
+            pattern: Text pattern to find
+            directory: Where to search (default: current)
+            file_pattern: File glob filter (e.g., '*.py')
+            case_sensitive: Case sensitivity (default: False)
+
+        Returns:
+            {
+                "status": "success",
+                "pattern": str,
+                "matches": List[{
+                    "file": str,
+                    "line": int,
+                    "content": str  # Max 200 chars
+                }],
+                "total_matches": int,  # Max 100
+                "files_searched": int,
+                "message": str
+            }
+        """
+        pass
+
+    @tool
+    def write_file(
+        file_path: str,
+        content: str,
+        create_dirs: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Write content to file.
+
+        Args:
+            file_path: Target path
+            content: File content
+            create_dirs: Create parent dirs (default: True)
+
+        Returns:
+            {
+                "status": "success",
+                "file_path": str,
+                "bytes_written": int,
+                "line_count": int
+            }
+        """
+        pass
+```
+
+---
+
+## Implementation Highlights
+
+### 3-Phase Search
+
+```python
+# Phase 0: Current directory (deep)
+cwd = Path.cwd()
+self.console.start_progress(f"Searching {cwd.name}...")
+search_location(cwd, max_depth=999)
+if matching_files:
+    return {"search_context": "current_directory", ...}
+
+# Phase 1: Common locations
+for location in [home/"Documents", home/"Downloads", home/"Desktop"]:
+    search_location(location, max_depth=5)
+if matching_files:
+    return {"search_context": "common_locations", ...}
+
+# Phase 2: Deep drive search
+if platform.system() == "Windows":
+    for drive in ["C:/", "D:/", ...]:
+        search_location(drive, max_depth=999)
+else:
+    search_location(Path("/"), max_depth=999)
+```
+
+### Python File Analysis
+
+```python
+if ext == ".py":
+    tree = ast.parse(content)
+    symbols = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            symbols.append({
+                "name": node.name,
+                "type": "function",
+                "line": node.lineno
+            })
+        elif isinstance(node, ast.ClassDef):
+            symbols.append({
+                "name": node.name,
+                "type": "class",
+                "line": node.lineno
+            })
+    result["symbols"] = symbols
+```
+
+---
+
+## Testing Requirements
+
+**File:** `tests/agents/tools/test_file_search_mixin.py`
+
+Key tests:
+- 3-phase search progression
+- File type detection and analysis
+- Python AST symbol extraction
+- Markdown structure parsing
+- Binary file detection
+- Grep content search
+- Directory creation on write
+- Large file handling
+
+---
+
+## Usage Examples
+
+```python
+# Multi-phase file search
+result = agent.search_file("manual", file_types="pdf")
+print(f"Found {result['count']} files in {result['search_context']}")
+
+# Python file analysis
+result = agent.read_file("src/main.py")
+for symbol in result['symbols']:
+    print(f"{symbol['type']}: {symbol['name']} (line {symbol['line']})")
+
+# Content search
+result = agent.search_file_content("TODO", directory="src", file_pattern="*.py")
+for match in result['matches']:
+    print(f"{match['file']}:{match['line']}: {match['content']}")
+
+# Write file
+result = agent.write_file("output/report.txt", "Report content", create_dirs=True)
+```
+
+---
+
+## Acceptance Criteria
+
+- [x] 3-phase intelligent search implemented
+- [x] Type-aware file reading (Python, Markdown, binary)
+- [x] AST-based symbol extraction for Python
+- [x] Grep-like content search
+- [x] Progress indicators for long searches
+- [x] Early termination on match
+- [x] Formatted file lists for user selection
+- [x] All file types handled gracefully
+
+---
+
+*FileSearchToolsMixin Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

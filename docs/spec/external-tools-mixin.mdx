@@ -1,0 +1,413 @@
+---
+title: "ExternalToolsMixin"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/code/tools/external_tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code/tools/external_tools.py)
+</Info>
+
+<Note>
+**Component:** ExternalToolsMixin
+**Module:** `gaia.agents.code.tools.external_tools`
+**Import:** `from gaia.agents.code.tools.external_tools import ExternalToolsMixin`
+</Note>
+---
+
+## Overview
+
+ExternalToolsMixin provides integration with external MCP (Model Context Protocol) services for the Code Agent, enabling documentation lookup and web search capabilities with graceful fallback when services are unavailable.
+
+**Key Features:**
+- Context7 integration for library documentation search
+- Perplexity AI integration for web search
+- Graceful degradation when services unavailable
+- Clear guidance to LLM on fallback behavior
+- Optional tools (don't block agent if unavailable)
+
+**Design Philosophy:**
+- **OPTIONAL TOOLS**: Services may not be available, agent uses embedded knowledge
+- **GRACEFUL FALLBACK**: Clear instructions to LLM when service unavailable
+- **ESCALATION STRATEGY**: Try embedded knowledge first, escalate to user after 2 attempts
+
+---
+
+## API Specification
+
+```python
+class ExternalToolsMixin:
+    """
+    Mixin providing external MCP service tools.
+
+    Tools provided:
+    - search_documentation: Search library docs via Context7
+    - search_web: Search web via Perplexity AI
+    """
+
+    @tool
+    def search_documentation(
+        query: str,
+        library: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Search library documentation using Context7.
+
+        IMPORTANT: This is an OPTIONAL tool. If unavailable, use embedded
+        knowledge from training data.
+
+        Use this when you need:
+        - Library API documentation
+        - Code examples and usage patterns
+        - Best practices for specific libraries
+        - Function/class signatures
+
+        Args:
+            query: Search query (e.g., "useState hook", "async/await")
+            library: Optional library name (e.g., "react", "tensorflow")
+
+        Returns:
+            {
+                "success": bool,
+                "documentation": str,  # Retrieved docs with examples
+                "error": str,  # If failed
+                "guidance": str,  # Fallback instructions
+                "unavailable": bool  # If Context7 not available
+            }
+
+        Example:
+            result = search_documentation("useState hook", library="react")
+            if result["success"]:
+                print(result["documentation"])
+            else:
+                # Use embedded knowledge instead
+                print(result["guidance"])
+        """
+        pass
+
+    @tool
+    def search_web(query: str) -> Dict[str, Any]:
+        """
+        Search web for current information using Perplexity AI.
+
+        Use this when you need:
+        - Current best practices or trends
+        - Recent library updates
+        - Solutions to specific problems
+        - Comparisons between approaches
+
+        Args:
+            query: Search query (e.g., "Python async best practices 2025")
+
+        Returns:
+            {
+                "success": bool,
+                "answer": str,  # Concise answer with info
+                "error": str  # If failed
+            }
+
+        Requires:
+            PERPLEXITY_API_KEY environment variable
+
+        Example:
+            result = search_web("FastAPI CORS setup 2025")
+            if result["success"]:
+                print(result["answer"])
+        """
+        pass
+```
+
+---
+
+## Implementation Details
+
+### Context7 Integration with Graceful Fallback
+
+```python
+def search_documentation(query: str, library: Optional[str] = None):
+    try:
+        service = get_context7_service()
+        result = service.search_documentation(query, library)
+
+        # Service unavailable - provide guidance
+        if result.get("unavailable"):
+            logger.info("Context7 not available - guiding LLM to use embedded knowledge")
+            return {
+                "success": False,
+                "documentation": "",
+                "error": "Context7 not available. Use your embedded knowledge for this pattern.",
+                "guidance": (
+                    "Most common library patterns are in your training data. "
+                    "Try the standard approach first. "
+                    "If you encounter errors after 2 attempts, escalate to the user."
+                ),
+                "unavailable": True
+            }
+
+        # Service available and successful
+        if result.get("success"):
+            logger.info("Documentation search successful")
+            return {
+                "success": True,
+                "documentation": result.get("documentation", "")
+            }
+
+        # Service available but search failed
+        error_msg = result.get("error", "Unknown error")
+        logger.warning(f"Documentation search failed: {error_msg}")
+        return {
+            "success": False,
+            "documentation": "",
+            "error": error_msg
+        }
+
+    except Exception as e:
+        logger.error(f"Documentation search error: {e}", exc_info=True)
+        return {
+            "success": False,
+            "documentation": "",
+            "error": f"Search failed: {str(e)}",
+            "guidance": "The documentation search tool failed. Use your embedded knowledge for common patterns."
+        }
+```
+
+### Perplexity Integration
+
+```python
+def search_web(query: str):
+    try:
+        logger.info(f"Searching web: query='{query}'")
+
+        service = get_perplexity_service()
+        result = service.search_web(query)
+
+        if result.get("success"):
+            logger.info("Web search successful")
+            return {
+                "success": True,
+                "answer": result.get("answer", "")
+            }
+        else:
+            error_msg = result.get("error", "Unknown error")
+            logger.warning(f"Web search failed: {error_msg}")
+            return {
+                "success": False,
+                "answer": "",
+                "error": error_msg
+            }
+
+    except Exception as e:
+        logger.error(f"Web search error: {e}", exc_info=True)
+        return {
+            "success": False,
+            "answer": "",
+            "error": f"Search failed: {str(e)}"
+        }
+```
+
+---
+
+## Service Configuration
+
+### Context7 Service
+
+```python
+# gaia/mcp/external_services.py
+def get_context7_service():
+    """
+    Get Context7 service instance.
+
+    Returns service with:
+    - search_documentation(query, library) method
+    - Returns {"success": bool, "documentation": str, "unavailable": bool}
+    """
+    pass
+```
+
+### Perplexity Service
+
+```python
+# gaia/mcp/external_services.py
+def get_perplexity_service():
+    """
+    Get Perplexity service instance.
+
+    Requires:
+    - PERPLEXITY_API_KEY environment variable
+
+    Returns service with:
+    - search_web(query) method
+    - Returns {"success": bool, "answer": str}
+    """
+    pass
+```
+
+---
+
+## Testing Requirements
+
+**File:** `tests/agents/code/test_external_tools_mixin.py`
+
+```python
+def test_search_documentation_success(agent, monkeypatch):
+    """Test successful documentation search."""
+    def mock_service():
+        class MockContext7:
+            def search_documentation(self, query, library):
+                return {
+                    "success": True,
+                    "documentation": "useState is a React Hook..."
+                }
+        return MockContext7()
+
+    monkeypatch.setattr("gaia.mcp.external_services.get_context7_service", mock_service)
+
+    result = agent.search_documentation("useState hook", library="react")
+    assert result["success"] is True
+    assert "useState" in result["documentation"]
+
+def test_search_documentation_unavailable(agent, monkeypatch):
+    """Test graceful fallback when Context7 unavailable."""
+    def mock_service():
+        class MockContext7:
+            def search_documentation(self, query, library):
+                return {"unavailable": True}
+        return MockContext7()
+
+    monkeypatch.setattr("gaia.mcp.external_services.get_context7_service", mock_service)
+
+    result = agent.search_documentation("useState hook")
+    assert result["success"] is False
+    assert result["unavailable"] is True
+    assert "embedded knowledge" in result["guidance"]
+
+def test_search_documentation_with_library(agent):
+    """Test library-specific search."""
+    result = agent.search_documentation("async/await", library="python")
+    # Should either succeed or gracefully degrade
+
+def test_search_web_success(agent, monkeypatch):
+    """Test successful web search."""
+    def mock_service():
+        class MockPerplexity:
+            def search_web(self, query):
+                return {
+                    "success": True,
+                    "answer": "Python async best practices include..."
+                }
+        return MockPerplexity()
+
+    monkeypatch.setattr("gaia.mcp.external_services.get_perplexity_service", mock_service)
+
+    result = agent.search_web("Python async best practices 2025")
+    assert result["success"] is True
+    assert "async" in result["answer"]
+
+def test_search_web_no_api_key(agent, monkeypatch):
+    """Test web search without API key."""
+    monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
+    result = agent.search_web("test query")
+    assert result["success"] is False
+    assert "error" in result
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Documentation Search with Fallback
+
+```python
+# Try Context7 first
+result = agent.search_documentation("useState hook", library="react")
+
+if result["success"]:
+    print(f"Documentation:\n{result['documentation']}")
+else:
+    if result.get("unavailable"):
+        print("Context7 unavailable, using embedded knowledge")
+        # Agent proceeds with built-in React knowledge
+    else:
+        print(f"Search failed: {result['error']}")
+```
+
+### Example 2: Web Search for Current Info
+
+```python
+# Search for recent best practices
+result = agent.search_web("Python async best practices 2025")
+
+if result["success"]:
+    print(f"Answer: {result['answer']}")
+else:
+    print(f"Web search failed: {result['error']}")
+    # Agent may try alternative approach
+```
+
+### Example 3: Library-Specific Documentation
+
+```python
+# Search specific library docs
+libraries = ["react", "tensorflow", "fastapi"]
+
+for lib in libraries:
+    result = agent.search_documentation("getting started", library=lib)
+    if result["success"]:
+        print(f"\n{lib} docs:\n{result['documentation']}")
+```
+
+---
+
+## Environment Variables
+
+```bash
+# Optional: Context7 API key (if required)
+export CONTEXT7_API_KEY="your-key-here"
+
+# Required for web search
+export PERPLEXITY_API_KEY="your-perplexity-key"
+```
+
+---
+
+## Escalation Strategy
+
+When external tools are unavailable:
+
+1. **First Attempt**: Use embedded knowledge from training data
+2. **Second Attempt**: Try alternative approach or reformulate
+3. **After 2 Failures**: Escalate to user with clear explanation
+
+Example guidance:
+```
+"Most common library patterns are in your training data. Try the standard
+approach first. If you encounter errors after 2 attempts, escalate to the user."
+```
+
+---
+
+## Acceptance Criteria
+
+- [x] ExternalToolsMixin implemented
+- [x] Context7 integration with graceful fallback
+- [x] Perplexity integration for web search
+- [x] Clear guidance messages when unavailable
+- [x] Library-specific documentation search
+- [x] Error handling for all failure modes
+- [x] Logging of all search operations
+- [x] Environment variable validation
+- [x] Escalation strategy documented
+
+---
+
+*ExternalToolsMixin Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

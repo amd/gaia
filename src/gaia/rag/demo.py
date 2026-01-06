@@ -85,7 +85,7 @@ def demo_basic_rag():
             print(
                 "1. Activate environment: source .venv/bin/activate (Linux/macOS) or .\\.venv\\Scripts\\Activate.ps1 (Windows)"
             )
-            print("2. Install RAG dependencies: pip install -e .[rag]")
+            print('2. Install RAG dependencies: uv pip install -e ".[rag]"')
             print("3. Either use the test PDF or get your own PDF file")
             print("4. Run: answer = quick_rag('document.pdf', 'What is this about?')")
 
@@ -123,10 +123,10 @@ def demo_basic_rag():
         print("  .\\.venv\\Scripts\\Activate.ps1")
         print("  ")
         print("  # Install RAG extras")
-        print("  pip install -e .[rag]")
+        print('  uv pip install -e ".[rag]"')
         print("  ")
         print("  # Or install dependencies individually:")
-        print("  pip install pypdf sentence-transformers faiss-cpu")
+        print("  uv pip install pypdf sentence-transformers faiss-cpu")
 
     print("\n" + "=" * 60)
 
@@ -215,7 +215,7 @@ def demo_error_handling():
 
     except ImportError as e:
         print(f"❌ Missing dependencies: {e}")
-        print("Install with: pip install -e .[rag]")
+        print('Install with: uv pip install -e ".[rag]"')
 
     print("-" * 40)
 
@@ -290,7 +290,7 @@ def main():
     print("1. Activate virtual environment:")
     print("   Linux/macOS: source .venv/bin/activate")
     print("   Windows: .\\.venv\\Scripts\\Activate.ps1")
-    print("2. Install RAG dependencies: pip install -e .[rag]")
+    print('2. Install RAG dependencies: uv pip install -e ".[rag]"')
     print("3. Get a PDF document to test with")
     print("4. Try the CLI commands: gaia rag --help")
     print("5. Use RAG in Python: from gaia.rag.sdk import RAGSDK, quick_rag")

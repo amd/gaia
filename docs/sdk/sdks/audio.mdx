@@ -1,0 +1,139 @@
+---
+title: "Audio & Voice"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/audio/`](https://github.com/amd/gaia/blob/main/src/gaia/audio/)
+</Info>
+
+<Note>
+**Import:** `from gaia.audio.audio_client import AudioClient`
+</Note>
+---
+
+<Badge text="development" color="orange" />
+
+**Detailed Spec:** [spec/audio-client](/spec/audio-client)
+
+**Purpose:** Voice interaction with ASR (Whisper) and TTS (Kokoro).
+
+## Audio Client
+
+```python
+from gaia.audio.audio_client import AudioClient
+
+# Initialize audio client
+audio = AudioClient(
+    whisper_model_size="base",    # ASR model: base, small, medium, large
+    audio_device_index=None,       # Auto-select
+    silence_threshold=0.05,        # Voice detection sensitivity
+    enable_tts=True                # Enable text-to-speech
+)
+
+# List audio devices
+devices = audio.get_device_list()
+for idx, device in enumerate(devices):
+    print(f"{idx}: {device}")
+
+# Define message processor
+def process_user_message(message: str) -> str:
+    # Your agent logic
+    return f"You said: {message}"
+
+# Start voice chat
+audio.start_voice_chat(message_processor_callback=process_user_message)
+```
+
+---
+
+## Whisper ASR (Speech-to-Text)
+
+**Import:** `from gaia.audio.whisper_asr import WhisperAsr`
+
+```python
+from gaia.audio.whisper_asr import WhisperAsr
+from queue import Queue
+
+# Create transcription queue
+transcription_queue = Queue()
+
+# Initialize Whisper
+asr = WhisperAsr(
+    model_size="base",
+    device_index=0,
+    transcription_queue=transcription_queue,
+    enable_cuda=False,  # Use CUDA if available
+    silence_threshold=0.05
+)
+
+# Start recording
+asr.start_recording()
+
+# Get transcriptions
+while True:
+    if not transcription_queue.empty():
+        text = transcription_queue.get()
+        print(f"Transcribed: {text}")
+        # Process text...
+
+# Stop recording
+asr.stop_recording()
+```
+
+---
+
+## Kokoro TTS (Text-to-Speech)
+
+**Import:** `from gaia.audio.kokoro_tts import KokoroTTS`
+
+```python
+from gaia.audio.kokoro_tts import KokoroTTS
+import wave
+
+# Initialize TTS
+tts = KokoroTTS()
+
+# List available voices
+voices = tts.list_voices()
+for voice_id, voice_data in voices.items():
+    print(f"{voice_id}: {voice_data['description']}")
+
+# Generate speech
+text = "Hello! This is a test of the Kokoro text-to-speech system."
+audio_bytes = tts.synthesize(
+    text=text,
+    voice="af_sarah"  # American female voice
+)
+
+# Save to file
+with wave.open("output.wav", "wb") as wav_file:
+    wav_file.setnchannels(1)
+    wav_file.setsampwidth(2)
+    wav_file.setframerate(24000)
+    wav_file.writeframes(audio_bytes)
+
+# Or play directly
+import sounddevice as sd
+import numpy as np
+audio_array = np.frombuffer(audio_bytes, dtype=np.int16)
+sd.play(audio_array, 24000)
+sd.wait()
+```
+
+---
+
+## Related Topics
+
+- **[Talk SDK](../agents/talk)** - Higher-level voice interaction
+- **[Agent System](../core/agent-system)** - Voice-enabled agents
+- **[Complete Examples](../examples)** - Voice assistant examples
+
+---
+
+<small style="color: #666;">
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

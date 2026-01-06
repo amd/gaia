@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 name: Test RAG
@@ -20,9 +20,10 @@ jobs:
   test-rag-unit:
     name: RAG Unit Tests
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
 
     - name: Free disk space
       uses: ./.github/actions/free-disk-space
@@ -32,6 +33,7 @@ jobs:
       with:
         python-version: '3.12'
         install-package: '.[dev,rag]'
+        extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
     - name: Install additional test dependencies
       run: |
@@ -44,7 +46,7 @@ jobs:
 
     - name: Upload coverage report
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: rag-unit-test-coverage
         path: .coverage
@@ -53,15 +55,17 @@ jobs:
     name: RAG Integration Tests
     runs-on: [stx]
     needs: test-rag-unit
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
 
     - name: Setup Python environment
       uses: ./.github/actions/setup-venv
       with:
         python-version: '3.12'
         install-package: '.[dev,rag]'
+        extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
     - name: Install additional test dependencies
       shell: powershell
@@ -262,7 +266,7 @@ jobs:
 
     - name: Upload test results
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: rag-integration-test-results
         path: |

@@ -1,0 +1,94 @@
+# Applications
+
+<Badge text="development" color="orange" />
+
+## 15.1 SummarizerApp (Meeting & Email Summarization)
+
+![Status](https://img.shields.io/badge/status-in_development-yellow)
+
+**Import:** `from gaia.apps.summarize.app import SummarizerApp, SummaryConfig`
+
+**Detailed Spec:** [spec/summarizer-app](/spec/summarizer-app)
+
+**Purpose:** Process meeting transcripts and emails to generate structured summaries with action items.
+
+```python
+from gaia.apps.summarize.app import SummarizerApp, SummaryConfig
+
+# Configure summarizer
+config = SummaryConfig(
+    model="Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    input_type="transcript",  # or "email", "auto"
+    styles=["executive", "participants", "action_items"],
+    max_tokens=1024
+)
+
+app = SummarizerApp(config)
+
+# Summarize meeting transcript
+result = app.summarize_file(
+    input_file="meeting_2024-12-11.txt",
+    output_file="summary.json"
+)
+
+print(result["summaries"]["executive"])
+print(result["summaries"]["action_items"])
+
+# Email summarization
+email_config = SummaryConfig(
+    input_type="email",
+    styles=["brief", "action_items"]
+)
+
+email_app = SummarizerApp(email_config)
+result = email_app.summarize_text(email_content)
+
+# Output includes:
+# - Executive summary
+# - Participant list
+# - Action items with owners
+# - Key decisions
+# - Timestamps and metadata
+```
+
+---
+
+## CLI Usage
+
+```bash
+# Summarize meeting transcript
+gaia summarize meeting.txt \
+    --type transcript \
+    --styles executive,participants,action_items \
+    --output summary.json
+
+# Summarize email
+gaia summarize email.txt \
+    --type email \
+    --styles brief,action_items
+
+# Multiple summary styles
+gaia summarize meeting.txt \
+    --styles brief,detailed,bullets,executive,action_items
+```
+
+---
+
+## Related Topics
+
+- [Core Agent System](./core/agent-system) - Learn about the base Agent class
+- [LLM Integration](./core/llm-integration) - Language model configuration
+- [Configuration](./configuration) - Environment and settings
+- [CLI Documentation](/reference/cli) - Command-line interface
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

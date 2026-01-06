@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import re
@@ -15,17 +15,22 @@ with open("src/gaia/version.py", encoding="utf-8") as fp:
 tkml_version = "5.0.4"
 
 setup(
-    name="gaia",
+    name="amd-gaia",
     version=gaia_version,
     description="GAIA is a lightweight agent framework designed for the edge and AI PCs.",
     author="AMD",
+    url="https://github.com/amd/gaia",
+    license="MIT",
     package_dir={"": "src"},
     packages=[
         "gaia",
         "gaia.llm",
         "gaia.audio",
         "gaia.chat",
+        "gaia.database",
         "gaia.talk",
+        "gaia.testing",
+        "gaia.utils",
         "gaia.apps",
         "gaia.apps.llm",
         "gaia.apps.summarize",
@@ -40,6 +45,8 @@ setup(
         "gaia.agents.chat",
         "gaia.agents.chat.tools",
         "gaia.agents.docker",
+        "gaia.agents.emr",
+        "gaia.agents.emr.dashboard",
         "gaia.agents.jira",
         "gaia.agents.code",
         "gaia.agents.code.orchestration",
@@ -71,11 +78,13 @@ setup(
         "aiohttp",
         "rich",
         "watchdog>=2.1.0",
+        "pillow>=9.0.0",
     ],
     extras_require={
         "api": [
             "fastapi>=0.115.0",
             "uvicorn>=0.32.0",
+            "python-multipart>=0.0.9",
         ],
         "audio": [
             "torch>=2.0.0,<2.4",
@@ -129,6 +138,7 @@ setup(
         ],
         "rag": [
             "pypdf",
+            "pymupdf>=1.24.0",
             "sentence-transformers",
             "faiss-cpu>=1.7.0",
         ],
@@ -142,13 +152,24 @@ setup(
             "bandit",
         ],
     },
-    classifiers=[],
+    classifiers=[
+        "Development Status :: 4 - Beta",
+        "Intended Audience :: Developers",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: OS Independent",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    ],
     entry_points={
         "console_scripts": [
             "gaia = gaia.cli:main",
             "gaia-cli = gaia.cli:main",
             "gaia-mcp = gaia.mcp.mcp_bridge:main",
             "gaia-mcp-atlassian = gaia.mcp.atlassian_mcp:main",
+            "gaia-emr = gaia.agents.emr.cli:main",
         ]
     },
     python_requires=">=3.10",

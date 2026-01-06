@@ -1,0 +1,119 @@
+---
+title: "LLM Integration"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/llm/`](https://github.com/amd/gaia/blob/main/src/gaia/llm/)
+</Info>
+
+<Note>
+**Import:** `from gaia.llm.llm_client import LLMClient`
+</Note>
+---
+
+<Badge text="development" color="orange" />
+
+**Detailed Spec:** [spec/llm-client](/spec/llm-client)
+
+**Purpose:** Unified client for local and cloud LLM providers.
+
+## LLM Client
+
+```python
+from gaia.llm.llm_client import LLMClient
+
+# Local LLM (Lemonade server)
+llm = LLMClient(
+    base_url="http://localhost:8000/api/v1",
+    system_prompt="You are a helpful assistant"
+)
+
+# Generate response
+response = llm.generate(
+    prompt="What is AI?",
+    model="Qwen2.5-0.5B-Instruct-CPU",
+    max_tokens=200,
+    temperature=0.7
+)
+print(response)
+
+# Streaming response
+for chunk in llm.generate(prompt="Tell me a story", stream=True):
+    print(chunk, end="", flush=True)
+
+# Chat completions format
+messages = [
+    {"role": "user", "content": "Hello!"},
+    {"role": "assistant", "content": "Hi! How can I help?"},
+    {"role": "user", "content": "Tell me about Python"}
+]
+
+response = llm.chat_completions(
+    messages=messages,
+    model="Qwen2.5-0.5B-Instruct-CPU"
+)
+print(response)
+
+# List available models
+models = llm.get_available_models()
+for model in models:
+    print(f"- {model}")
+```
+
+---
+
+## Cloud Providers
+
+```python
+from gaia.llm.llm_client import LLMClient
+
+# Claude API
+llm_claude = LLMClient(
+    use_claude=True,
+    claude_model="claude-sonnet-4-20250514",
+    system_prompt="You are an expert coder"
+)
+
+# OpenAI API
+llm_openai = LLMClient(
+    use_openai=True,
+    system_prompt="You are a helpful assistant"
+)
+
+# Use same interface
+response = llm_claude.generate("Explain Python decorators")
+```
+
+---
+
+## Lemonade Client (AMD-Optimized)
+
+**Import:** `from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, DEFAULT_LEMONADE_URL`
+
+```python
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, DEFAULT_LEMONADE_URL
+
+# Default configuration
+MODEL = DEFAULT_MODEL_NAME  # "Qwen2.5-0.5B-Instruct-CPU"
+URL = DEFAULT_LEMONADE_URL   # "http://localhost:8000/api/v1"
+
+# Used internally by LLMClient when no provider specified
+```
+
+---
+
+## Related Topics
+
+- **[Chat SDK](./chat)** - Higher-level chat interface
+- **[Configuration](../configuration)** - Setting up API keys and URLs
+- **[Agent System](../core/agent-system)** - Using LLMs in agents
+
+---
+
+<small style="color: #666;">
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

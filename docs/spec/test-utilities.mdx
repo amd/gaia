@@ -1,0 +1,816 @@
+---
+title: "Test Utilities"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/testing/`](https://github.com/amd/gaia/blob/main/src/gaia/testing/)
+</Info>
+
+<Note>
+**Component:** Test Utilities (MockLLMProvider, MockVLMClient, fixtures)
+**Module:** `gaia.testing` (planned location)
+**Import:** `from gaia.testing import MockLLMProvider, MockVLMClient, create_test_agent, temp_database`
+</Note>
+---
+
+<Badge text="development" color="orange" />
+
+## Overview
+
+Test Utilities provide fixtures, mocks, and helper functions for testing GAIA agents without requiring real LLMs, databases, or network resources. This enables fast, reliable unit testing for both GAIA framework and third-party agents.
+
+**Key Features:**
+- Mock LLM provider with configurable responses
+- Mock VLM client for image processing
+- Temporary database fixtures with auto-cleanup
+- Agent test factory with mocked dependencies
+- Assertion helpers for common test patterns
+
+---
+
+## Requirements
+
+### Functional Requirements
+
+1. **Mock LLM Provider**
+   - Simulate LLM responses without API calls
+   - Configurable response sequences
+   - Track call history for assertions
+
+2. **Mock VLM Client**
+   - Simulate image text extraction
+   - Configurable extracted text
+   - Track calls for testing
+
+3. **Temporary Database**
+   - In-memory SQLite for testing
+   - Automatic cleanup
+   - Isolation between tests
+
+4. **Agent Test Factory**
+   - Create agents with mocked dependencies
+   - Simplified agent instantiation
+   - Pre-configured for testing
+
+5. **Assertion Helpers**
+   - Verify tool calls
+   - Check agent state
+   - Validate responses
+
+### Non-Functional Requirements
+
+1. **Performance**
+   - Fast test execution (no real API calls)
+   - Minimal setup overhead
+
+2. **Ease of Use**
+   - Simple, intuitive API
+   - Good defaults
+   - Clear error messages
+
+3. **Isolation**
+   - Tests don't interfere with each other
+   - Clean state between tests
+
+---
+
+## API Specification
+
+### File Locations
+
+```
+src/gaia/testing/__init__.py
+src/gaia/testing/fixtures.py
+src/gaia/testing/assertions.py
+```
+
+### Public Interface
+
+#### fixtures.py
+
+```python
+from typing import List, Dict, Any, Optional, Callable
+from contextlib import contextmanager
+import tempfile
+from pathlib import Path
+
+class MockLLMProvider:
+    """
+    Mock LLM provider for testing agents.
+
+    Returns pre-configured responses instead of calling real LLM.
+    Tracks all calls for test assertions.
+
+    Usage:
+        mock_llm = MockLLMProvider(
+            responses=["First response", "Second response"]
+        )
+
+        # Inject into agent
+        agent = MyAgent()
+        agent.llm_provider = mock_llm
+
+        # Test
+        result = agent.process_query("Test")
+
+        # Verify
+        assert len(mock_llm.call_history) == 1
+    """
+
+    def __init__(self, responses: Optional[List[str]] = None):
+        """
+        Initialize mock LLM provider.
+
+        Args:
+            responses: List of responses to return in sequence
+                      (cycles if more calls than responses)
+        """
+        self.responses = responses or ["Mock response"]
+        self.call_history: List[Dict] = []
+        self._response_index = 0
+
+    def generate(self, prompt: str, **kwargs) -> str:
+        """
+        Generate mock response.
+
+        Args:
+            prompt: Input prompt (recorded but not used)
+            **kwargs: Additional parameters (recorded)
+
+        Returns:
+            Next response from response list
+        """
+        self.call_history.append({
+            "prompt": prompt,
+            "kwargs": kwargs,
+            "timestamp": time.time(),
+        })
+
+        response = self.responses[self._response_index % len(self.responses)]
+        self._response_index += 1
+
+        return response
+
+    def complete(self, prompt: str, **kwargs) -> str:
+        """Alias for generate() for compatibility."""
+        return self.generate(prompt, **kwargs)
+
+    def reset(self) -> None:
+        """Reset call history and response index."""
+        self.call_history = []
+        self._response_index = 0
+
+class MockVLMClient:
+    """
+    Mock VLM client for testing image processing.
+
+    Returns pre-configured text instead of processing images.
+
+    Usage:
+        mock_vlm = MockVLMClient(
+            extracted_text='{"name": "John", "dob": "1990-01-01"}'
+        )
+
+        # Inject into agent
+        agent = MyAgent()
+        agent.vlm = mock_vlm
+
+        # Test
+        result = agent.extract_form("test.png")
+
+        # Verify
+        assert mock_vlm.was_called
+    """
+
+    def __init__(self, extracted_text: str = "Mock extracted text"):
+        """
+        Initialize mock VLM.
+
+        Args:
+            extracted_text: Text to return from extract_from_image()
+        """
+        self.extracted_text = extracted_text
+        self.call_history: List[Dict] = []
+
+    def check_availability(self) -> bool:
+        """Always return True for testing."""
+        return True
+
+    def extract_from_image(
+        self,
+        image_bytes: bytes,
+        prompt: Optional[str] = None
+    ) -> str:
+        """
+        Mock image extraction.
+
+        Args:
+            image_bytes: Image data (recorded but not processed)
+            prompt: Extraction prompt (recorded)
+
+        Returns:
+            Pre-configured extracted text
+        """
+        self.call_history.append({
+            "image_size": len(image_bytes),
+            "prompt": prompt,
+            "timestamp": time.time(),
+        })
+
+        return self.extracted_text
+
+    @property
+    def was_called(self) -> bool:
+        """Check if extract_from_image was called."""
+        return len(self.call_history) > 0
+
+    def reset(self) -> None:
+        """Reset call history."""
+        self.call_history = []
+
+def create_test_agent(
+    agent_class: Type,
+    mock_responses: Optional[List[str]] = None,
+    **agent_kwargs
+):
+    """
+    Create agent instance with mocked LLM for testing.
+
+    Args:
+        agent_class: Agent class to instantiate
+        mock_responses: Responses for mock LLM
+        **agent_kwargs: Additional arguments for agent constructor
+
+    Returns:
+        Agent instance with mocked LLM
+
+    Usage:
+        agent = create_test_agent(
+            MyAgent,
+            mock_responses=["I'll use the search tool"],
+            custom_param="value"
+        )
+
+        result = agent.process_query("Test")
+        # Uses mock LLM instead of real one
+    """
+    # Create mock LLM
+    mock_llm = MockLLMProvider(responses=mock_responses)
+
+    # Create agent with silent mode
+    agent = agent_class(silent_mode=True, **agent_kwargs)
+
+    # Inject mock LLM
+    # Note: This requires agent to have llm_provider attribute
+    # or similar. Adjust based on actual Agent implementation.
+    if hasattr(agent, 'chat'):
+        agent.chat = mock_llm
+    elif hasattr(agent, 'llm_provider'):
+        agent.llm_provider = mock_llm
+
+    return agent
+
+@contextmanager
+def temp_database(schema_file: Optional[str] = None):
+    """
+    Create temporary SQLite database for testing.
+
+    Auto-deletes after test completes.
+
+    Args:
+        schema_file: Optional SQL file to execute
+
+    Yields:
+        Database URL string
+
+    Usage:
+        with temp_database() as db_url:
+            agent = MyAgent(db_url=db_url)
+            # Test with real database
+            agent.execute_insert("users", {"name": "Test"})
+
+        # Database automatically deleted
+    """
+    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
+        db_path = f.name
+
+    db_url = f"sqlite:///{db_path}"
+
+    try:
+        # Initialize database if schema provided
+        if schema_file:
+            import sqlite3
+            conn = sqlite3.connect(db_path)
+            with open(schema_file) as schema:
+                conn.executescript(schema.read())
+            conn.close()
+
+        yield db_url
+
+    finally:
+        # Cleanup
+        Path(db_path).unlink(missing_ok=True)
+
+@contextmanager
+def temp_directory():
+    """
+    Create temporary directory for testing.
+
+    Auto-deletes after test completes.
+
+    Yields:
+        Path to temporary directory
+
+    Usage:
+        with temp_directory() as tmp_dir:
+            # Create test files
+            (tmp_dir / "test.txt").write_text("content")
+
+            # Test agent
+            agent = MyAgent(data_dir=str(tmp_dir))
+
+        # Directory automatically deleted
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        yield Path(tmp_dir)
+```
+
+#### assertions.py
+
+```python
+from typing import Any, Dict
+import logging
+
+logger = logging.getLogger(__name__)
+
+def assert_tool_called(agent, tool_name: str, times: int = 1) -> None:
+    """
+    Assert that a tool was called specific number of times.
+
+    Args:
+        agent: Agent instance
+        tool_name: Name of the tool
+        times: Expected call count
+
+    Raises:
+        AssertionError: If tool was not called expected times
+
+    Usage:
+        agent = create_test_agent(MyAgent)
+        agent.process_query("Search for data")
+
+        assert_tool_called(agent, "search_data", times=1)
+    """
+    # Implementation depends on how agents track tool calls
+    # This is a placeholder showing the intended API
+    pass
+
+def assert_tool_result(result: Dict, expected_keys: List[str]) -> None:
+    """
+    Assert that tool result has expected structure.
+
+    Args:
+        result: Tool result dictionary
+        expected_keys: Keys that must be present
+
+    Raises:
+        AssertionError: If keys missing or result invalid
+
+    Usage:
+        result = agent.execute_tool("search", {"query": "test"})
+        assert_tool_result(result, ["results", "count"])
+    """
+    assert isinstance(result, dict), f"Result must be dict, got {type(result)}"
+
+    for key in expected_keys:
+        assert key in result, f"Missing expected key: '{key}'"
+
+def assert_agent_completed(result: Dict) -> None:
+    """
+    Assert that agent completed successfully.
+
+    Args:
+        result: Agent process_query result
+
+    Raises:
+        AssertionError: If agent did not complete
+
+    Usage:
+        result = agent.process_query("Test")
+        assert_agent_completed(result)
+    """
+    assert isinstance(result, dict), "Agent should return dict"
+    # Add more assertions based on Agent result structure
+```
+
+---
+
+## Testing Requirements
+
+### Unit Tests
+
+**File:** `tests/sdk/test_testing_utilities.py`
+
+```python
+import pytest
+from gaia.testing import (
+    MockLLMProvider,
+    MockVLMClient,
+    create_test_agent,
+    temp_database,
+    temp_directory,
+)
+from gaia import Agent
+
+def test_mock_llm_can_be_imported():
+    """Verify MockLLMProvider can be imported."""
+    from gaia.testing import MockLLMProvider
+    assert MockLLMProvider is not None
+
+def test_mock_llm_returns_responses():
+    """Test MockLLMProvider returns configured responses."""
+    mock = MockLLMProvider(responses=["Response 1", "Response 2"])
+
+    assert mock.generate("test") == "Response 1"
+    assert mock.generate("test") == "Response 2"
+    assert mock.generate("test") == "Response 1"  # Cycles
+
+def test_mock_llm_tracks_calls():
+    """Test MockLLMProvider tracks call history."""
+    mock = MockLLMProvider()
+
+    mock.generate("prompt 1", temperature=0.7)
+    mock.generate("prompt 2", max_tokens=100)
+
+    assert len(mock.call_history) == 2
+    assert mock.call_history[0]["prompt"] == "prompt 1"
+    assert mock.call_history[1]["kwargs"]["max_tokens"] == 100
+
+def test_mock_vlm_can_be_imported():
+    """Verify MockVLMClient can be imported."""
+    from gaia.testing import MockVLMClient
+    assert MockVLMClient is not None
+
+def test_mock_vlm_returns_text():
+    """Test MockVLMClient returns configured text."""
+    mock = MockVLMClient(extracted_text="Extracted data")
+
+    result = mock.extract_from_image(b"fake image bytes", prompt="Extract text")
+
+    assert result == "Extracted data"
+    assert mock.was_called
+
+def test_temp_database_creates_and_cleans_up():
+    """Test temp_database fixture."""
+    import sqlite3
+
+    with temp_database() as db_url:
+        # Database should exist
+        assert "sqlite:///" in db_url
+
+        # Should be usable
+        db_path = db_url.replace("sqlite:///", "")
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE test (id INTEGER)")
+        conn.close()
+
+        # File exists
+        assert Path(db_path).exists()
+
+    # After context, file should be deleted
+    assert not Path(db_path).exists()
+
+def test_temp_database_with_schema(tmp_path):
+    """Test temp_database with schema file."""
+    schema_file = tmp_path / "schema.sql"
+    schema_file.write_text("CREATE TABLE users (id INTEGER PRIMARY KEY);")
+
+    with temp_database(schema_file=str(schema_file)) as db_url:
+        import sqlite3
+        db_path = db_url.replace("sqlite:///", "")
+        conn = sqlite3.connect(db_path)
+
+        # Table should exist from schema
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [row[0] for row in cursor.fetchall()]
+
+        assert "users" in tables
+        conn.close()
+
+def test_temp_directory_creates_and_cleans_up():
+    """Test temp_directory fixture."""
+    created_path = None
+
+    with temp_directory() as tmp_dir:
+        created_path = tmp_dir
+
+        # Directory should exist
+        assert tmp_dir.exists()
+        assert tmp_dir.is_dir()
+
+        # Should be usable
+        test_file = tmp_dir / "test.txt"
+        test_file.write_text("content")
+        assert test_file.exists()
+
+    # After context, directory should be deleted
+    assert not created_path.exists()
+
+def test_create_test_agent():
+    """Test create_test_agent helper."""
+    class TestAgent(Agent):
+        def _get_system_prompt(self): return "Test"
+        def _create_console(self):
+            from gaia import SilentConsole
+            return SilentConsole()
+        def _register_tools(self): pass
+
+    agent = create_test_agent(
+        TestAgent,
+        mock_responses=["Response from mock"]
+    )
+
+    assert agent is not None
+    assert isinstance(agent, TestAgent)
+    # Should have mocked LLM (verify based on implementation)
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Testing Agent with Mock LLM
+
+```python
+import pytest
+from gaia.testing import create_test_agent, MockLLMProvider
+from my_agent import MyAgent
+
+def test_agent_processes_query():
+    """Test agent with mocked LLM."""
+    agent = create_test_agent(
+        MyAgent,
+        mock_responses=[
+            '{"tool": "search", "args": {"query": "test"}}',
+            "Found results from search."
+        ]
+    )
+
+    result = agent.process_query("Find test data")
+
+    assert "answer" in result
+    # LLM mock was used instead of real API
+```
+
+### Example 2: Testing Database Agent
+
+```python
+import pytest
+from gaia.testing import temp_database
+from gaia import Agent, DatabaseMixin
+
+def test_customer_agent_creates_record(tmp_path):
+    """Test agent can create database records."""
+    # Create schema
+    schema = tmp_path / "schema.sql"
+    schema.write_text("""
+        CREATE TABLE customers (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL
+        );
+    """)
+
+    # Test with temporary database
+    with temp_database(schema_file=str(schema)) as db_url:
+        agent = CustomerAgent(db_url=db_url)
+
+        # Create customer
+        result = agent.execute_tool("create_customer", {
+            "name": "Test Customer"
+        })
+
+        assert result["status"] == "created"
+
+        # Verify in database
+        customers = agent.execute_query("SELECT * FROM customers")
+        assert len(customers) == 1
+        assert customers[0]["name"] == "Test Customer"
+
+    # Database automatically cleaned up
+```
+
+### Example 3: Testing VLM Integration
+
+```python
+import pytest
+from gaia.testing import MockVLMClient
+from my_agent import FormProcessingAgent
+
+def test_form_extraction():
+    """Test form extraction with mock VLM."""
+    agent = FormProcessingAgent()
+
+    # Mock VLM response
+    agent.vlm = MockVLMClient(
+        extracted_text='{"first_name": "John", "last_name": "Doe"}'
+    )
+
+    # Test extraction
+    result = agent.execute_tool("extract_form", {"image_path": "fake.png"})
+
+    # Verify VLM was called
+    assert agent.vlm.was_called
+    assert len(agent.vlm.call_history) == 1
+
+    # Verify result
+    assert "first_name" in result
+    assert result["first_name"] == "John"
+```
+
+### Example 4: Testing File Watching
+
+```python
+import pytest
+from gaia.testing import temp_directory
+import time
+
+def test_agent_processes_new_files():
+    """Test agent processes files dropped in watched directory."""
+    with temp_directory() as tmp_dir:
+        agent = FileWatchAgent(watch_dir=str(tmp_dir))
+
+        # Drop a file
+        test_file = tmp_dir / "test.pdf"
+        test_file.write_text("content")
+
+        # Wait for processing
+        time.sleep(1)
+
+        # Verify agent processed it
+        assert agent.processed_count == 1
+
+    # Directory cleaned up automatically
+```
+
+---
+
+## pytest Fixtures
+
+### Fixture Exports
+
+**File:** `tests/conftest.py` (for GAIA framework tests)
+
+```python
+import pytest
+from gaia.testing import temp_database, temp_directory, MockLLMProvider
+
+@pytest.fixture
+def mock_llm():
+    """Provide MockLLMProvider fixture."""
+    return MockLLMProvider()
+
+@pytest.fixture
+def temp_db():
+    """Provide temporary database fixture."""
+    with temp_database() as db_url:
+        yield db_url
+
+@pytest.fixture
+def tmp_dir():
+    """Provide temporary directory fixture."""
+    with temp_directory() as tmp_path:
+        yield tmp_path
+```
+
+**Third-party agents can create similar fixtures in their test suites.**
+
+---
+
+## Documentation Updates Required
+
+### SDK.md
+
+Add new section:
+
+```markdown
+## 11. Testing
+
+### Testing Your Agents
+
+**Import:** `from gaia.testing import MockLLMProvider, temp_database, create_test_agent`
+
+**Purpose:** Test agents without real LLMs, databases, or network calls.
+
+#### Mock LLM Provider
+
+```python
+from gaia.testing import create_test_agent
+
+agent = create_test_agent(
+    MyAgent,
+    mock_responses=["I'll search for that", "Here are the results"]
+)
+
+result = agent.process_query("Find data")
+# Uses mocked responses instead of real LLM
+```
+
+[Full documentation with more examples]
+```
+
+---
+
+## Dependencies
+
+```toml
+# pyproject.toml
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio",
+]
+```
+
+---
+
+## Acceptance Criteria
+
+- [ ] `MockLLMProvider` implemented
+- [ ] `MockVLMClient` implemented
+- [ ] `create_test_agent()` function works
+- [ ] `temp_database()` context manager works
+- [ ] `temp_directory()` context manager works
+- [ ] Assertion helpers implemented
+- [ ] All unit tests pass (8+ tests)
+- [ ] Exported from `gaia.testing`
+- [ ] Can import: `from gaia.testing import ...`
+- [ ] Documented in SDK.md
+- [ ] Example tests using utilities work
+- [ ] External agents can use for testing
+
+---
+
+## Implementation Checklist
+
+### Step 1: Create Files
+- [ ] Create `src/gaia/testing/` directory
+- [ ] Create `src/gaia/testing/__init__.py`
+- [ ] Create `src/gaia/testing/fixtures.py`
+- [ ] Create `src/gaia/testing/assertions.py`
+
+### Step 2: Implement Mocks
+- [ ] `MockLLMProvider` class
+- [ ] `MockVLMClient` class
+- [ ] Response cycling logic
+- [ ] Call history tracking
+
+### Step 3: Implement Fixtures
+- [ ] `create_test_agent()` function
+- [ ] `temp_database()` context manager
+- [ ] `temp_directory()` context manager
+- [ ] Schema loading for temp DB
+
+### Step 4: Implement Assertions
+- [ ] `assert_tool_called()`
+- [ ] `assert_tool_result()`
+- [ ] `assert_agent_completed()`
+
+### Step 5: Write Tests
+- [ ] Create `tests/sdk/test_testing_utilities.py`
+- [ ] Test MockLLMProvider
+- [ ] Test MockVLMClient
+- [ ] Test temp_database
+- [ ] Test temp_directory
+- [ ] Test create_test_agent
+
+### Step 6: Export
+- [ ] Export from `src/gaia/testing/__init__.py`
+- [ ] Export from `src/gaia/__init__.py`
+- [ ] Add to `__all__`
+
+### Step 7: Document
+- [ ] Add section to SDK.md
+- [ ] Add usage examples
+- [ ] Update agent testing guide
+
+### Step 8: Validate
+- [ ] Can import: `from gaia.testing import MockLLMProvider`
+- [ ] Example tests work
+- [ ] All tests pass
+- [ ] External agents can use it
+
+---
+
+*Test Utilities Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

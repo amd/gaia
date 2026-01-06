@@ -1,0 +1,315 @@
+---
+title: "Code Agent Models"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/code/models.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code/models.py)
+</Info>
+
+<Note>
+**Component:** Code Agent Data Models (7 models)
+**Module:** `gaia.agents.code.models`
+**Import:** `from gaia.agents.code.models import CodeSymbol, ParsedCode, ProjectPlan, ValidationResult, ExecutionResult, ProjectStructure, WorkflowPlan`
+</Note>
+---
+
+## Overview
+
+Complete data model definitions for the Code Agent system. These dataclasses provide type-safe interfaces for code analysis, project planning, validation, execution, and workflow management.
+
+---
+
+## API Specification
+
+### 1. CodeSymbol
+
+```python
+@dataclass
+class CodeSymbol:
+    """Represents a code symbol (function, class, variable)."""
+
+    name: str
+    type: str  # 'function', 'class', 'variable', 'import'
+    line: int
+    docstring: Optional[str] = None
+    signature: Optional[str] = None
+```
+
+### 2. ParsedCode
+
+```python
+@dataclass
+class ParsedCode:
+    """Result of parsing Python code."""
+
+    ast_tree: Optional[ast.Module] = None
+    symbols: List[CodeSymbol] = field(default_factory=list)
+    imports: List[str] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
+    is_valid: bool = False
+```
+
+### 3. ProjectPlan
+
+```python
+@dataclass
+class ModuleSpec:
+    """Specification for a module in a project."""
+
+    name: str
+    purpose: str
+    classes: List[Dict[str, Any]] = field(default_factory=list)
+    functions: List[Dict[str, Any]] = field(default_factory=list)
+
+@dataclass
+class TestSpec:
+    """Specification for a test module."""
+
+    name: str
+    coverage: str
+    test_cases: List[str] = field(default_factory=list)
+
+@dataclass
+class ProjectPlan:
+    """Complete project plan with architecture and modules."""
+
+    name: str
+    architecture: Dict[str, Any]
+    modules: List[ModuleSpec]
+    tests: List[TestSpec]
+    description: str = ""
+    project_type: str = "application"
+```
+
+### 4. ValidationResult
+
+```python
+@dataclass
+class ValidationResult:
+    """Result of code validation."""
+
+    is_valid: bool
+    errors: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    fixes_applied: List[str] = field(default_factory=list)
+    file_modified: bool = False
+```
+
+### 5. ExecutionResult
+
+```python
+@dataclass
+class ExecutionResult:
+    """Result of executing Python code."""
+
+    stdout: str
+    stderr: str
+    return_code: int
+    has_errors: bool
+    duration_seconds: float
+    timed_out: bool = False
+    file_path: Optional[str] = None
+    command: Optional[str] = None
+```
+
+### 6. ProjectStructure
+
+```python
+@dataclass
+class ProjectStructure:
+    """Represents a complete project structure."""
+
+    name: str
+    files: Dict[str, str]  # filename -> content
+    structure: Dict[str, Any]  # nested directory structure
+    plan: Optional[ProjectPlan] = None
+```
+
+### 7. WorkflowPlan
+
+```python
+@dataclass
+class WorkflowPlan:
+    """Plan for executing a coding workflow."""
+
+    query: str
+    steps: List[Dict[str, Any]]
+    current_step: int = 0
+    completed_steps: List[int] = field(default_factory=list)
+    status: str = "pending"  # pending, in_progress, completed, failed
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Code Symbol Extraction
+
+```python
+from gaia.agents.code.models import CodeSymbol, ParsedCode
+
+# Parse Python code
+code = '''
+def calculate(x: int, y: int) -> int:
+    """Add two numbers."""
+    return x + y
+
+class Calculator:
+    """Simple calculator."""
+    pass
+'''
+
+# Create parsed result
+parsed = ParsedCode(
+    is_valid=True,
+    symbols=[
+        CodeSymbol(
+            name="calculate",
+            type="function",
+            line=1,
+            docstring="Add two numbers.",
+            signature="calculate(x: int, y: int) -> int"
+        ),
+        CodeSymbol(
+            name="Calculator",
+            type="class",
+            line=5,
+            docstring="Simple calculator."
+        )
+    ],
+    imports=[]
+)
+
+print(f"Found {len(parsed.symbols)} symbols")
+```
+
+### Example 2: Validation Workflow
+
+```python
+from gaia.agents.code.models import ValidationResult
+
+# Validate generated code
+result = ValidationResult(
+    is_valid=False,
+    errors=["SyntaxError: invalid syntax at line 10"],
+    warnings=["Missing docstring in function 'helper'"],
+    fixes_applied=["Added missing import statement"],
+    file_modified=True
+)
+
+if not result.is_valid:
+    print(f"Validation failed: {result.errors}")
+if result.file_modified:
+    print("Code was automatically fixed")
+```
+
+### Example 3: Project Creation
+
+```python
+from gaia.agents.code.models import ProjectPlan, ModuleSpec, TestSpec
+
+# Create project plan
+plan = ProjectPlan(
+    name="todo-app",
+    description="Simple TODO application",
+    project_type="web",
+    architecture={
+        "pattern": "MVC",
+        "database": "SQLite",
+        "frontend": "HTML/CSS"
+    },
+    modules=[
+        ModuleSpec(
+            name="models",
+            purpose="Data models",
+            classes=[{"name": "Todo", "fields": ["title", "done"]}]
+        )
+    ],
+    tests=[
+        TestSpec(
+            name="test_models",
+            coverage="models",
+            test_cases=["test_create_todo", "test_mark_done"]
+        )
+    ]
+)
+```
+
+---
+
+## Testing Requirements
+
+```python
+def test_code_symbol_creation():
+    """Test CodeSymbol dataclass."""
+    symbol = CodeSymbol(
+        name="test_func",
+        type="function",
+        line=1,
+        docstring="Test function"
+    )
+    assert symbol.name == "test_func"
+    assert symbol.type == "function"
+
+def test_validation_result():
+    """Test ValidationResult dataclass."""
+    result = ValidationResult(
+        is_valid=True,
+        errors=[],
+        warnings=["Style warning"]
+    )
+    assert result.is_valid
+    assert len(result.warnings) == 1
+
+def test_execution_result():
+    """Test ExecutionResult dataclass."""
+    result = ExecutionResult(
+        stdout="Hello World",
+        stderr="",
+        return_code=0,
+        has_errors=False,
+        duration_seconds=0.5
+    )
+    assert result.return_code == 0
+    assert not result.has_errors
+```
+
+---
+
+## Dependencies
+
+```toml
+[project]
+dependencies = [
+    "dataclasses",  # Python 3.7+
+    "typing",
+]
+```
+
+---
+
+## Acceptance Criteria
+
+- [ ] All 7 dataclasses defined
+- [ ] Type hints complete
+- [ ] Default factories for mutable defaults
+- [ ] Documentation for each field
+- [ ] Unit tests for all models
+- [ ] Integration with Code Agent
+- [ ] Exported from module
+
+---
+
+*Code Agent Models Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

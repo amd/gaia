@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 ARG TZ
 ENV TZ="$TZ"
@@ -35,14 +35,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   portaudio19-dev \
   ffmpeg \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Install Claude CLI (from claude.ai)
-RUN curl -fsSL https://claude.ai/install.sh | bash && \
-  # Make sure it's available in the system PATH
-  if [ -f "$HOME/.local/bin/claude" ]; then \
-    cp "$HOME/.local/bin/claude" /usr/local/bin/claude && \
-    chmod +x /usr/local/bin/claude; \
-  fi
 
 # Create gaia user
 ARG USERNAME=gaia

@@ -381,6 +381,80 @@ def _prompt_user_for_download(
             print("Please enter 'y' or 'n'")
 
 
+def _prompt_user_for_repair(model_name: str) -> bool:
+    """
+    Prompt user for confirmation before deleting and re-downloading a corrupt model.
+
+    Args:
+        model_name: Name of the model to repair
+
+    Returns:
+        True if user confirms, False otherwise
+    """
+    # Check if we're in an interactive terminal
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        # Non-interactive environment - auto-approve
+        return True
+
+    # Try to use rich for nice formatting, fall back to plain text
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+
+        console = Console()
+        console.print()
+
+        # Create info table
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column(style="dim")
+        table.add_column()
+        table.add_row("Model:", model_name)
+        table.add_row(
+            "Status:", "[yellow]Download incomplete or files corrupted[/yellow]"
+        )
+        table.add_row("Action:", "Delete and re-download the model")
+
+        console.print(
+            Panel(
+                table,
+                title="[bold yellow]⚠️  Corrupt Model Download Detected[/bold yellow]",
+                border_style="yellow",
+            )
+        )
+        console.print()
+
+        while True:
+            response = input("Delete and re-download? [Y/n]: ").strip().lower()
+            if response in ("", "y", "yes"):
+                console.print("[green]✓[/green] Proceeding with repair...")
+                return True
+            elif response in ("n", "no"):
+                console.print("[dim]Cancelled.[/dim]")
+                return False
+            else:
+                console.print("[dim]Please enter 'y' or 'n'[/dim]")
+
+    except ImportError:
+        # Fall back to plain text formatting
+        print("\n" + "=" * 60)
+        print(f"{_emoji('⚠️', '[WARNING]')} Corrupt Model Download Detected")
+        print("=" * 60)
+        print(f"Model: {model_name}")
+        print("Status: Download incomplete or files corrupted")
+        print("Action: Delete and re-download the model")
+        print("=" * 60)
+
+        while True:
+            response = input("Delete and re-download? [Y/n]: ").strip().lower()
+            if response in ("", "y", "yes"):
+                return True
+            elif response in ("n", "no"):
+                return False
+            else:
+                print("Please enter 'y' or 'n'")
+
+
 def _check_disk_space(size_gb: float, path: Optional[str] = None) -> bool:
     """
     Check if there's enough disk space for download.
@@ -466,9 +540,9 @@ class LemonadeClient:
         if not verbose:
             self.log.setLevel(logging.WARNING)
 
-        self.log.info(f"Initialized Lemonade client for {host}:{port}")
+        self.log.debug(f"Initialized Lemonade client for {host}:{port}")
         if model:
-            self.log.info(f"Initial model set to: {model}")
+            self.log.debug(f"Initial model set to: {model}")
 
     def launch_server(self, log_level="info", background="none", ctx_size=None):
         """
@@ -685,20 +759,27 @@ class LemonadeClient:
         """
         model_lower = model_name.lower()
 
-        # Look for billion parameter indicators
+        # Check for MoE models first (e.g., "30b-a3b" = 30B total, 3B active)
+        # MoE models are smaller than their total parameter count suggests
+        if "a3b" in model_lower or "a2b" in model_lower:
+            return 18.0  # MoE models like Qwen3-Coder-30B-A3B are ~18GB
+
+        # Look for billion parameter indicators (dense models)
         if "70b" in model_lower or "72b" in model_lower:
             return 40.0  # ~40GB for 70B models
         elif "30b" in model_lower or "34b" in model_lower:
-            return 20.0  # ~20GB for 30B models
+            return 18.0  # ~18GB for 30B models
         elif "13b" in model_lower or "14b" in model_lower:
             return 8.0  # ~8GB for 13B models
-        elif "7b" in model_lower:
-            return 5.0  # ~5GB for 7B models
+        elif "7b" in model_lower or "8b" in model_lower:
+            return 5.0  # ~5GB for 7-8B models
+        elif "4b" in model_lower:
+            return 2.5  # ~2.5GB for 4B models (e.g., Qwen3-VL-4B)
         elif "3b" in model_lower:
             return 2.0  # ~2GB for 3B models
-        elif "1b" in model_lower or "0.5b" in model_lower:
+        elif "1b" in model_lower or "0.5b" in model_lower or "0.6b" in model_lower:
             return 1.0  # ~1GB for small models
-        elif "embed" in model_lower:
+        elif "embed" in model_lower or "nomic" in model_lower:
             return 0.5  # Embedding models are usually small
         else:
             return 10.0  # Conservative default
@@ -877,6 +958,31 @@ class LemonadeClient:
                 "model is not loaded",
                 "model does not exist",
                 "model not available",
+            ]
+        )
+
+    def _is_corrupt_download_error(self, error: Union[str, Dict, Exception]) -> bool:
+        """
+        Check if an error indicates a corrupt or incomplete model download.
+
+        Args:
+            error: Error as string, dict, or exception
+
+        Returns:
+            True if this is a corrupt/incomplete download error
+        """
+        error_info = self._extract_error_info(error)
+        error_message = (error_info.get("message") or "").lower()
+
+        return any(
+            phrase in error_message
+            for phrase in [
+                "download validation failed",
+                "files are incomplete",
+                "files are missing",
+                "incomplete or missing",
+                "corrupted download",
+                "llama-server failed to start",  # Often indicates corrupt model files
             ]
         )
 
@@ -1979,6 +2085,7 @@ class LemonadeClient:
         timeout: int = DEFAULT_MODEL_LOAD_TIMEOUT,
         auto_download: bool = False,
         download_timeout: int = 7200,
+        llamacpp_args: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Load a model on the server.
@@ -1995,6 +2102,8 @@ class LemonadeClient:
             auto_download: If True, automatically download the model if not available
             download_timeout: Timeout for model download in seconds (default: 7200 = 2 hours)
                              Large models can be 100GB+ and take hours to download
+            llamacpp_args: Optional llama.cpp arguments (e.g., "--ubatch-size 2048").
+                          Used to configure model loading parameters like batch sizes.
 
         Returns:
             Dict containing the status of the load operation
@@ -2004,21 +2113,55 @@ class LemonadeClient:
             InsufficientDiskSpaceError: If not enough disk space
             LemonadeClientError: If model loading fails
         """
-        self.log.info(f"Loading {model_name}")
+        self.log.debug(f"Loading {model_name}")
 
         request_data = {"model_name": model_name}
+        if llamacpp_args:
+            request_data["llamacpp_args"] = llamacpp_args
         url = f"{self.base_url}/load"
 
         try:
             response = self._send_request("post", url, request_data, timeout=timeout)
-            self.log.info(f"Loaded {model_name} successfully: response={response}")
+            self.log.debug(f"Loaded {model_name} successfully: response={response}")
             self.model = model_name
             return response
         except Exception as e:
             original_error = str(e)
 
+            # Check if this is a corrupt/incomplete download error
+            if self._is_corrupt_download_error(e):
+                self.log.warning(
+                    f"{_emoji('⚠️', '[CORRUPT]')} Model '{model_name}' has incomplete "
+                    f"or corrupted files"
+                )
+
+                # Prompt user for confirmation to delete and re-download
+                if not _prompt_user_for_repair(model_name):
+                    raise ModelDownloadCancelledError(
+                        f"User declined to repair corrupt model: {model_name}"
+                    )
+
+                # Delete the corrupt model
+                self.log.info(
+                    f"{_emoji('🗑️', '[DELETE]')} Deleting corrupt model: {model_name}"
+                )
+                try:
+                    self.delete_model(model_name)
+                    self.log.info(
+                        f"{_emoji('✅', '[OK]')} Deleted corrupt model: {model_name}"
+                    )
+                except Exception as delete_error:
+                    self.log.warning(f"Failed to delete corrupt model: {delete_error}")
+                    # Continue anyway - the download may still work
+
+                # Now trigger a fresh download by falling through to auto-download flow
+                # (the model is now "not found" so _is_model_error will match)
+
             # Check if this is a "model not found" error and auto_download is enabled
-            if not (auto_download and self._is_model_error(e)):
+            if not (
+                auto_download
+                and (self._is_model_error(e) or self._is_corrupt_download_error(e))
+            ):
                 # Not a model error or auto_download disabled - re-raise
                 self.log.error(f"Failed to load {model_name}: {original_error}")
                 if isinstance(e, LemonadeClientError):

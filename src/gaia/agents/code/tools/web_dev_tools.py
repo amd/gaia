@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """Generic web development tools for Code Agent.
 
@@ -29,6 +29,7 @@ from gaia.agents.code.prompts.code_patterns import (
     APP_GLOBALS_CSS,
     APP_LAYOUT,
     CLIENT_COMPONENT_FORM,
+    CLIENT_COMPONENT_TIMER,
     COMPONENT_TEST_ACTIONS,
     COMPONENT_TEST_FORM,
     LANDING_PAGE_WITH_LINKS,
@@ -345,7 +346,6 @@ class WebToolsMixin:
                 # Generate validation schema if needed
                 validation_schema = ""
                 if needs_validation:
-                    print("WE ARE IN THE DUDUUUUUUDE")
                     validation_schema = generate_zod_schema(Resource, fields)
 
                 # Generate handlers based on operations
@@ -504,7 +504,7 @@ class WebToolsMixin:
                 # These variants always generate client components with "use client"
                 # This prevents the stub fallback when variant="form" but component_type
                 # defaults to "server"
-                if variant in ["form", "new", "detail", "actions"]:
+                if variant in ["form", "new", "detail", "actions", "artifact-timer"]:
                     component_type = "client"
 
                 # Phase 1 Fix (Issue #885): Read from Prisma schema instead of
@@ -629,6 +629,20 @@ class WebToolsMixin:
                             "hint": "Run manage_data_model first to create the Prisma model with fields",
                         }
                     content = generate_detail_page(clean_resource_name, fields)
+
+                elif variant == "artifact-timer":
+                    timer_component = component_name or (
+                        f"{clean_resource_name.capitalize()}Timer"
+                        if clean_resource_name
+                        else "CountdownTimer"
+                    )
+                    timer_component = re.sub(r"[^0-9A-Za-z_]", "", timer_component)
+                    if not timer_component:
+                        timer_component = "CountdownTimer"
+                    component_name = timer_component
+                    content = CLIENT_COMPONENT_TIMER.format(
+                        ComponentName=timer_component,
+                    )
 
                 elif variant == "actions" and clean_resource_name:
                     # Generate actions component with delete functionality
