@@ -61,11 +61,7 @@ jobs:
 
       - name: Install NSIS
         run: |
-          # Download NSIS installer
-          curl -L -o nsis.exe https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10-setup.exe
-
-          # Install NSIS
-          Start-Process nsis.exe -ArgumentList '/S' -Wait
+          choco install nsis -y
 
       - name: Verify NSIS installation
         run: |
