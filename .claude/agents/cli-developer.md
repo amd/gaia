@@ -17,7 +17,7 @@ You are a GAIA CLI development specialist focused on command-line interface desi
 ```bash
 gaia llm          # Direct LLM queries
 gaia chat         # Interactive chat
-gaia code         # Code development agent
+gaia-code         # Code development agent
 gaia talk         # Voice interaction
 gaia blender      # 3D content creation
 gaia jira         # Issue management
