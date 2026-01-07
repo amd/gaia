@@ -410,10 +410,10 @@ class TestRAGSDK:
 class TestLLMClient:
     """Test LLMClient interface."""
 
-    @patch("gaia.llm.llm_client.LLMClient.__init__")
+    @patch("gaia.llm.LLMClient.__init__")
     def test_llm_client_can_be_imported(self, mock_init):
         """Verify LLMClient can be imported."""
-        from gaia.llm.llm_client import LLMClient
+        from gaia.llm import LLMClient
 
         mock_init.return_value = None
         client = LLMClient.__new__(LLMClient)
@@ -421,7 +421,7 @@ class TestLLMClient:
 
     def test_llm_client_interface_methods(self):
         """Verify LLMClient has required methods."""
-        from gaia.llm.llm_client import LLMClient
+        from gaia.llm import LLMClient
 
         # Check methods exist
         assert hasattr(LLMClient, "generate")
@@ -853,7 +853,7 @@ class TestSDKDocumentation:
 
         # LLM
         try:
-            from gaia.llm.llm_client import LLMClient  # noqa: F401
+            from gaia.llm import LLMClient  # noqa: F401
             from gaia.llm.vlm_client import VLMClient  # noqa: F401
         except ImportError as e:
             pytest.fail(f"LLM import failed: {e}")
@@ -1502,7 +1502,7 @@ class TestApplications:
             assert LlmApp is not None
         except ImportError:
             # LLM app may be in different location
-            from gaia.llm.llm_client import LLMClient
+            from gaia.llm import LLMClient
 
             assert LLMClient is not None
 

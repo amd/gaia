@@ -8,10 +8,10 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 from dotenv import load_dotenv
 
+from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
     DEFAULT_HOST,
     DEFAULT_LEMONADE_URL,
@@ -21,7 +21,6 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
     _get_lemonade_config,
 )
-from gaia.llm.llm_client import LLMClient
 from gaia.logger import get_logger
 from gaia.version import version
 
@@ -120,8 +119,8 @@ def initialize_lemonade_for_agent(
     skip_if_external: bool = False,
     use_claude: bool = False,
     use_chatgpt: bool = False,
-    host: Optional[str] = None,
-    port: Optional[int] = None,
+    host: str | None = None,
+    port: int | None = None,
 ):
     """
     Initialize Lemonade Server for a specific GAIA agent.
@@ -401,7 +400,7 @@ class GaiaCliClient:
         self.show_stats = show_stats
 
         # Initialize LLM client for local inference
-        self.llm_client = LLMClient()
+        self.llm_client = create_client("lemonade", model=model)
 
         self.log.debug("Gaia CLI client initialized.")
         self.log.debug(f"model: {self.model}\n max_tokens: {self.max_tokens}")
@@ -3138,16 +3137,6 @@ Let me know your answer!
                 LemonadeManager.print_server_error()
             else:
                 print(f"❌ Error: {str(e)}")
-                # Check for model loading related errors
-                if (
-                    "404" in error_msg
-                    or "not found" in error_msg
-                    or "not loaded" in error_msg
-                ):
-                    print(
-                        "\nMake sure that the model is loaded. You can load it using:"
-                    )
-                    print(f"  gaia pull {DEFAULT_MODEL_NAME}")
             return
 
     # Handle groundtruth generation
