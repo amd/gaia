@@ -173,9 +173,7 @@ class DatabaseMixin:
             RuntimeError: If database not initialized
         """
         if not self.engine:
-            raise RuntimeError(
-                "Database not initialized. Call init_database() first."
-            )
+            raise RuntimeError("Database not initialized. Call init_database() first.")
 
     def execute_query(
         self, sql: str, params: Optional[Dict[str, Any]] = None
