@@ -79,6 +79,7 @@ setup(
         "rich",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",
+        "sqlalchemy>=2.0",
     ],
     extras_require={
         "api": [
