@@ -100,8 +100,14 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
                 db_path = "./data/patients.db"
             # Convert file path to SQLite URL
             self._db_url = f"sqlite:///{db_path}"
+            self._db_path = db_path  # Keep for backward compatibility
         else:
             self._db_url = db_url
+            # Extract db_path from URL for backward compatibility (SQLite only)
+            if db_url.startswith("sqlite:///"):
+                self._db_path = db_url.replace("sqlite:///", "")
+            else:
+                self._db_path = db_url  # For non-SQLite, just use URL
         self._vlm_model = vlm_model
         self._vlm = None
         self._processed_files: List[Dict[str, Any]] = []

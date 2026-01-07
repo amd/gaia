@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 """
@@ -8,9 +8,9 @@ Following TDD approach: Tests written FIRST, then implementation.
 """
 
 import concurrent.futures
-import pytest
 import time
-from pathlib import Path
+
+import pytest
 
 from gaia.agents.base.database_mixin import DatabaseMixin
 
@@ -253,13 +253,13 @@ def test_execute_update_param_collision():
     """Data and where params shouldn't collide."""
     db = TestDB()
     db.init_database("sqlite:///:memory:")
-    db.execute_raw("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, value INTEGER)")
+    db.execute_raw(
+        "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, value INTEGER)"
+    )
     db.execute_insert("items", {"id": 1, "name": "apple", "value": 10})
 
     # Both data and where have 'id' parameter - should not collide
-    count = db.execute_update(
-        "items", {"value": 20}, "id = :id", {"id": 1}
-    )
+    count = db.execute_update("items", {"value": 20}, "id = :id", {"id": 1})
     assert count == 1
 
     results = db.execute_query("SELECT value FROM items WHERE id = 1")
@@ -360,7 +360,9 @@ def test_transaction_multiple_operations():
     db = TestDB()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
-    db.execute_raw("CREATE TABLE profiles (id INTEGER PRIMARY KEY, user_id INTEGER, bio TEXT)")
+    db.execute_raw(
+        "CREATE TABLE profiles (id INTEGER PRIMARY KEY, user_id INTEGER, bio TEXT)"
+    )
 
     with db.transaction():
         user_id = db.execute_insert("users", {"name": "Alice"})
@@ -398,13 +400,15 @@ def test_execute_raw_create_table():
     db = TestDB()
     db.init_database("sqlite:///:memory:")
 
-    db.execute_raw("""
+    db.execute_raw(
+        """
         CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             email TEXT UNIQUE
         )
-    """)
+    """
+    )
 
     assert db.table_exists("users")
     db.close_database()
@@ -436,14 +440,15 @@ def test_parameterized_query_prevents_sql_injection():
     """SQL injection attempts should be safe with parameterized queries."""
     db = TestDB()
     db.init_database("sqlite:///:memory:")
-    db.execute_raw("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, password TEXT)")
+    db.execute_raw(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, password TEXT)"
+    )
     db.execute_insert("users", {"id": 1, "name": "admin", "password": "secret"})
 
     # Attempt SQL injection - should be treated as literal string
     malicious_input = "admin' OR '1'='1"
     results = db.execute_query(
-        "SELECT * FROM users WHERE name = :name",
-        {"name": malicious_input}
+        "SELECT * FROM users WHERE name = :name", {"name": malicious_input}
     )
 
     # Should return empty (no match), NOT all users
@@ -451,8 +456,7 @@ def test_parameterized_query_prevents_sql_injection():
 
     # Verify normal query still works
     results = db.execute_query(
-        "SELECT * FROM users WHERE name = :name",
-        {"name": "admin"}
+        "SELECT * FROM users WHERE name = :name", {"name": "admin"}
     )
     assert len(results) == 1
     db.close_database()
@@ -518,7 +522,9 @@ def test_concurrent_inserts():
     """Multiple threads inserting simultaneously should work."""
     db = TestDB()
     db.init_database("sqlite:///:memory:", pool_size=5)
-    db.execute_raw("CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, thread_id INTEGER)")
+    db.execute_raw(
+        "CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, thread_id INTEGER)"
+    )
 
     def insert_worker(thread_id):
         """Each thread performs multiple inserts."""

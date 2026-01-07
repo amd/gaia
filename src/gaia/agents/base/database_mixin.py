@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 """
@@ -211,6 +211,7 @@ class DatabaseMixin:
         conn = self.engine.connect()
         try:
             result = conn.execute(text(sql), params or {})
+            # pylint: disable=protected-access
             return [dict(row._mapping) for row in result]
         finally:
             conn.close()
@@ -447,3 +448,41 @@ class DatabaseMixin:
         self._require_db()
         inspector = inspect(self.engine)
         return table in inspector.get_table_names()
+
+    # ===== Backward Compatibility Aliases =====
+    # The following aliases maintain compatibility with existing code
+    # that uses the old method names from the sqlite3-based mixin.
+
+    def query(
+        self, sql: str, params: Optional[Dict[str, Any]] = None, one: bool = False
+    ):
+        """Backward compatibility alias for execute_query()."""
+        results = self.execute_query(sql, params)
+        if one:
+            return results[0] if results else None
+        return results
+
+    def insert(self, table: str, data: Dict[str, Any]):
+        """Backward compatibility alias for execute_insert()."""
+        return self.execute_insert(table, data)
+
+    def update(
+        self, table: str, data: Dict[str, Any], where: str, where_params: Dict[str, Any]
+    ):
+        """Backward compatibility alias for execute_update()."""
+        return self.execute_update(table, data, where, where_params)
+
+    def delete(self, table: str, where: str, where_params: Dict[str, Any]):
+        """Backward compatibility alias for execute_delete()."""
+        return self.execute_delete(table, where, where_params)
+
+    def execute(
+        self, sql: str, params: Optional[Dict[str, Any]] = None
+    ):  # pylint: disable=unused-argument
+        """Backward compatibility alias for execute_raw()."""
+        # Note: params are ignored - old execute() didn't support them either
+        return self.execute_raw(sql)
+
+    def close_db(self):
+        """Backward compatibility alias for close_database()."""
+        return self.close_database()
