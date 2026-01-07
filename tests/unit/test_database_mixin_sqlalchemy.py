@@ -16,12 +16,10 @@ from gaia.agents.base.database_mixin import DatabaseMixin
 
 
 # Test helper class
-class TestDB(DatabaseMixin):
+class DBHelper(DatabaseMixin):
     """Test helper that uses the DatabaseMixin."""
 
-    def __init__(self):
-        # Don't call super().__init__() since it raises NotImplementedError in stub
-        pass
+    pass
 
 
 # ===== Initialization Tests =====
@@ -29,7 +27,7 @@ class TestDB(DatabaseMixin):
 
 def test_init_memory():
     """In-memory SQLite should initialize correctly."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     assert db.db_ready is True
     db.close_database()
@@ -39,7 +37,7 @@ def test_init_memory():
 def test_init_file(tmp_path):
     """File-based SQLite should create file and parent dirs."""
     db_path = tmp_path / "subdir" / "test.db"
-    db = TestDB()
+    db = DBHelper()
     db.init_database(f"sqlite:///{db_path}")
     assert db_path.exists()
     assert db.db_ready is True
@@ -48,7 +46,7 @@ def test_init_file(tmp_path):
 
 def test_init_custom_pool_size():
     """Custom pool_size parameter should work."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:", pool_size=10)
     assert db.db_ready is True
     db.close_database()
@@ -56,7 +54,7 @@ def test_init_custom_pool_size():
 
 def test_reinit_closes_previous():
     """Calling init_database twice should close first engine."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE t1 (id INTEGER)")
     assert db.table_exists("t1")
@@ -69,14 +67,14 @@ def test_reinit_closes_previous():
 
 def test_require_init():
     """Operations before init should raise RuntimeError."""
-    db = TestDB()
+    db = DBHelper()
     with pytest.raises(RuntimeError, match="not initialized"):
         db.execute_query("SELECT 1")
 
 
 def test_close_idempotent():
     """close_database should be safe to call multiple times."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.close_database()
     db.close_database()  # Should not raise
@@ -85,7 +83,7 @@ def test_close_idempotent():
 
 def test_db_ready_property():
     """db_ready should return True/False appropriately."""
-    db = TestDB()
+    db = DBHelper()
     assert db.db_ready is False
     db.init_database("sqlite:///:memory:")
     assert db.db_ready is True
@@ -98,7 +96,7 @@ def test_db_ready_property():
 
 def test_execute_query_select_all():
     """SELECT * should return all rows as list of dicts."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER, name TEXT)")
     db.execute_insert("items", {"id": 1, "name": "apple"})
@@ -114,7 +112,7 @@ def test_execute_query_select_all():
 
 def test_execute_query_with_params():
     """Parameterized queries should work correctly."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER, name TEXT)")
     db.execute_insert("items", {"id": 1, "name": "apple"})
@@ -130,7 +128,7 @@ def test_execute_query_with_params():
 
 def test_execute_query_empty_result():
     """Empty results should return []."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER, name TEXT)")
 
@@ -141,7 +139,7 @@ def test_execute_query_empty_result():
 
 def test_execute_query_no_params():
     """Queries without params should work."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER, name TEXT)")
     db.execute_insert("items", {"id": 1, "name": "apple"})
@@ -156,7 +154,7 @@ def test_execute_query_no_params():
 
 def test_execute_insert_basic():
     """Basic insert should return row ID."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
 
@@ -173,7 +171,7 @@ def test_execute_insert_basic():
 
 def test_execute_insert_with_returning():
     """RETURNING clause should return specified column (if supported)."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
 
@@ -187,7 +185,7 @@ def test_execute_insert_with_returning():
 
 def test_execute_insert_multiple():
     """Multiple inserts should work correctly."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
 
@@ -205,7 +203,7 @@ def test_execute_insert_multiple():
 
 def test_execute_update_single_row():
     """Update single row should return count=1."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
     db.execute_insert("items", {"id": 1, "name": "apple"})
@@ -220,7 +218,7 @@ def test_execute_update_single_row():
 
 def test_execute_update_multiple_rows():
     """Update multiple rows should return correct count."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER, category TEXT, price REAL)")
     db.execute_insert("items", {"id": 1, "category": "fruit", "price": 1.0})
@@ -239,7 +237,7 @@ def test_execute_update_multiple_rows():
 
 def test_execute_update_no_match():
     """Update with no matches should return count=0."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
     db.execute_insert("items", {"id": 1, "name": "apple"})
@@ -251,7 +249,7 @@ def test_execute_update_no_match():
 
 def test_execute_update_param_collision():
     """Data and where params shouldn't collide."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw(
         "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, value INTEGER)"
@@ -272,7 +270,7 @@ def test_execute_update_param_collision():
 
 def test_execute_delete_single():
     """Delete single row should return count=1."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
     db.execute_insert("items", {"id": 1, "name": "apple"})
@@ -289,7 +287,7 @@ def test_execute_delete_single():
 
 def test_execute_delete_multiple():
     """Delete multiple rows should return correct count."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER, category TEXT)")
     db.execute_insert("items", {"id": 1, "category": "fruit"})
@@ -306,7 +304,7 @@ def test_execute_delete_multiple():
 
 def test_execute_delete_no_match():
     """Delete with no matches should return count=0."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
     db.execute_insert("items", {"id": 1, "name": "apple"})
@@ -324,7 +322,7 @@ def test_execute_delete_no_match():
 
 def test_transaction_commit():
     """Successful transaction should commit all changes."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
 
@@ -339,7 +337,7 @@ def test_transaction_commit():
 
 def test_transaction_rollback_on_error():
     """Exception should rollback all changes."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
 
@@ -357,7 +355,7 @@ def test_transaction_rollback_on_error():
 
 def test_transaction_multiple_operations():
     """Multiple operations in transaction should be atomic."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
     db.execute_raw(
@@ -378,7 +376,7 @@ def test_transaction_multiple_operations():
 
 def test_transaction_connection_cleanup():
     """Connection should be closed after transaction."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
 
@@ -397,7 +395,7 @@ def test_transaction_connection_cleanup():
 
 def test_execute_raw_create_table():
     """execute_raw should handle CREATE TABLE."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
 
     db.execute_raw(
@@ -416,7 +414,7 @@ def test_execute_raw_create_table():
 
 def test_table_exists_true():
     """table_exists should return True for existing table."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER)")
 
@@ -426,7 +424,7 @@ def test_table_exists_true():
 
 def test_table_exists_false():
     """table_exists should return False for missing table."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
 
     assert db.table_exists("nonexistent") is False
@@ -438,7 +436,7 @@ def test_table_exists_false():
 
 def test_parameterized_query_prevents_sql_injection():
     """SQL injection attempts should be safe with parameterized queries."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, password TEXT)"
@@ -464,7 +462,7 @@ def test_parameterized_query_prevents_sql_injection():
 
 def test_special_characters_in_data():
     """Special chars (quotes, semicolons) should work correctly."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:")
     db.execute_raw("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
 
@@ -493,7 +491,7 @@ def test_special_characters_in_data():
 
 def test_concurrent_queries():
     """Multiple threads doing SELECT simultaneously should work."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:", pool_size=5)
     db.execute_raw("CREATE TABLE items (id INTEGER, value TEXT)")
     for i in range(10):
@@ -520,7 +518,7 @@ def test_concurrent_queries():
 
 def test_concurrent_inserts():
     """Multiple threads inserting simultaneously should work."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:", pool_size=5)
     db.execute_raw(
         "CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, thread_id INTEGER)"
@@ -547,7 +545,7 @@ def test_concurrent_inserts():
 
 def test_concurrent_transactions():
     """Multiple transactions in different threads should be isolated."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:", pool_size=5)
     db.execute_raw("CREATE TABLE counters (id INTEGER PRIMARY KEY, value INTEGER)")
     db.execute_insert("counters", {"id": 1, "value": 0})
@@ -579,7 +577,7 @@ def test_concurrent_transactions():
 
 def test_connection_pool_exhaustion():
     """Verify behavior when pool is exhausted (should block, not fail)."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:", pool_size=2)  # Small pool
     db.execute_raw("CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT)")
 
@@ -605,7 +603,7 @@ def test_connection_pool_exhaustion():
 
 def test_connection_cleanup_under_load():
     """Connections should be released properly under concurrent load."""
-    db = TestDB()
+    db = DBHelper()
     db.init_database("sqlite:///:memory:", pool_size=5)
     db.execute_raw("CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT)")
 

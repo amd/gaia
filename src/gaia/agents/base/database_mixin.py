@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.pool import QueuePool
+from sqlalchemy.pool import QueuePool, StaticPool
 
 logger = logging.getLogger(__name__)
 
@@ -103,15 +103,32 @@ class DatabaseMixin:
             db_path = db_url.replace("sqlite:///", "")
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
+        # SQLite-specific configuration for thread safety
+        connect_args = {}
+        poolclass = QueuePool
+
+        if db_url.startswith("sqlite:"):
+            connect_args["check_same_thread"] = False
+
+            # In-memory SQLite needs StaticPool (single connection shared)
+            # Otherwise each connection gets a separate in-memory database
+            if ":memory:" in db_url:
+                poolclass = StaticPool
+
         # Create engine with connection pooling
-        self.engine = create_engine(
-            db_url,
-            poolclass=QueuePool,
-            pool_size=pool_size,
-            max_overflow=10,
-            pool_pre_ping=True,  # Verify connections before use
-            pool_recycle=3600,  # Recycle connections after 1 hour
-        )
+        engine_args = {
+            "poolclass": poolclass,
+            "pool_pre_ping": True,  # Verify connections before use
+            "pool_recycle": 3600,  # Recycle connections after 1 hour
+            "connect_args": connect_args,
+        }
+
+        # QueuePool-specific parameters
+        if poolclass == QueuePool:
+            engine_args["pool_size"] = pool_size
+            engine_args["max_overflow"] = 10
+
+        self.engine = create_engine(db_url, **engine_args)
 
         logger.info(f"Database initialized: {db_url} (pool_size={pool_size})")
 
