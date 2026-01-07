@@ -1,6 +1,6 @@
 ---
-name: amd-optimizer
-description: AMD hardware optimization specialist for NPU and iGPU. Use PROACTIVELY for Ryzen AI optimizations, ONNX Runtime GenAI integration, hardware-specific performance tuning, or Lemonade Server configuration.
+name: hardware-optimizer
+description: AMD hardware optimization specialist. Use PROACTIVELY when OPTIMIZING FOR AMD HARDWARE - NPU acceleration, iGPU tuning, ONNX Runtime GenAI configuration, or Ryzen AI-specific performance. NOT for Lemonade Server setup (use lemonade-specialist).
 tools: Read, Write, Edit, Bash, Grep
 model: opus
 ---
