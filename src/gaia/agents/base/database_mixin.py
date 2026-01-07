@@ -10,6 +10,12 @@ pooling and thread-safe operations.
 This implementation follows Test-Driven Development (TDD) principles and
 provides thread-safe database access through SQLAlchemy Core.
 
+BREAKING CHANGES from sqlite3-based DatabaseMixin:
+    - Query parameters must use NAMED parameters (dict) instead of positional (tuple)
+    - Old: query("SELECT * FROM users WHERE id = ?", (42,))
+    - New: execute_query("SELECT * FROM users WHERE id = :id", {"id": 42})
+    - The backward compatibility query() method accepts dicts only
+
 Thread Safety:
     - The Engine is thread-safe and shared across threads
     - Each operation gets its own connection from the pool
@@ -48,7 +54,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.pool import QueuePool, StaticPool
+from sqlalchemy.pool import NullPool, QueuePool, StaticPool
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +75,6 @@ class DatabaseMixin:
         to the pool. The Engine and connection pool handle concurrent access
         with internal locking.
     """
-
-    # Class attribute - will be None until init_database() is called
-    engine: Optional[Any] = None
 
     def init_database(self, db_url: str, pool_size: int = 5) -> None:
         """
@@ -94,6 +97,10 @@ class DatabaseMixin:
             self.init_database("sqlite:///data/app.db", pool_size=10)
             self.init_database("postgresql://user:pass@localhost/mydb")
         """
+        # Initialize engine attribute (if not already set)
+        if not hasattr(self, "engine"):
+            self.engine = None
+
         # Close existing engine if any
         if self.engine:
             self.close_database()
@@ -114,6 +121,10 @@ class DatabaseMixin:
             # Otherwise each connection gets a separate in-memory database
             if ":memory:" in db_url:
                 poolclass = StaticPool
+            else:
+                # File-based SQLite should use NullPool to avoid "database is locked" errors
+                # SQLite's locking model doesn't work well with connection pooling
+                poolclass = NullPool
 
         # Create engine with connection pooling
         engine_args = {
@@ -429,23 +440,40 @@ class DatabaseMixin:
 
         Auto-commits on success, rolls back on exception.
 
+        IMPORTANT LIMITATION:
+            The execute_insert(), execute_update(), execute_delete(), and other
+            database methods create their OWN connections and are NOT part of
+            this transaction. Only operations using the yielded connection
+            directly will be part of the transaction.
+
+            To use transactions with insert/update/delete operations, you must
+            use the yielded connection directly with execute_raw() or
+            conn.execute(text(...)).
+
         Yields:
             SQLAlchemy Connection object (for advanced usage)
 
         Example:
-            # Basic usage - automatic transaction management
+            # INCORRECT - These operations will NOT be in the transaction!
             with self.transaction():
-                user_id = self.execute_insert("users", {"name": "Alice"})
-                self.execute_insert("profiles", {
-                    "user_id": user_id,
-                    "bio": "Hello"
-                })
-                # If any operation fails, all are rolled back
+                user_id = self.execute_insert("users", {"name": "Alice"})  # Gets own connection
+                self.execute_insert("profiles", {"user_id": user_id})      # Gets own connection
 
-            # Advanced usage - direct connection access
+            # CORRECT - Direct connection access
             with self.transaction() as conn:
-                result = conn.execute(text("SELECT * FROM users"))
-                # ... custom operations ...
+                # Insert user
+                result = conn.execute(
+                    text("INSERT INTO users (name) VALUES (:name) RETURNING id"),
+                    {"name": "Alice"}
+                )
+                user_id = result.scalar()
+
+                # Insert profile in same transaction
+                conn.execute(
+                    text("INSERT INTO profiles (user_id, bio) VALUES (:user_id, :bio)"),
+                    {"user_id": user_id, "bio": "Hello"}
+                )
+                # If any operation fails, all are rolled back
         """
         self._require_db()
         conn = self.engine.connect()

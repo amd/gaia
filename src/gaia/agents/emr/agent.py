@@ -459,8 +459,8 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
             file_hash = compute_file_hash(path)
             if file_hash:
                 existing = self.execute_query(
-                    "SELECT id, first_name, last_name FROM patients WHERE file_hash = ?",
-                    (file_hash,),
+                    "SELECT id, first_name, last_name FROM patients WHERE file_hash = :file_hash",
+                    {"file_hash": file_hash},
                 )
                 if existing:
                     patient = existing[0]
