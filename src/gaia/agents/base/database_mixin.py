@@ -70,9 +70,8 @@ class DatabaseMixin:
         with internal locking.
     """
 
-    def __init__(self):
-        """Initialize the mixin with no engine."""
-        self.engine = None
+    # Class attribute - will be None until init_database() is called
+    engine: Optional[Any] = None
 
     def init_database(self, db_url: str, pool_size: int = 5) -> None:
         """
