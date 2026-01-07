@@ -69,6 +69,35 @@ python -m gaia.mcp.mcp_bridge
 
 **Feature documentation:** All documentation is in MDX format in `docs/` directory. See external site https://amd-gaia.ai for rendered version.
 
+## Common Development Commands
+
+### Setup
+```bash
+uv venv && uv pip install -e ".[dev]"
+```
+
+### Linting (run before commits)
+```bash
+python util/lint.py --all --fix    # Auto-fix formatting
+python util/lint.py --black        # Just black
+python util/lint.py --isort        # Just imports
+```
+
+### Testing
+```bash
+python -m pytest tests/unit/       # Unit tests only
+python -m pytest tests/ -xvs       # All tests, verbose
+python -m pytest tests/ --hybrid   # Cloud + local testing
+```
+
+### Running GAIA
+```bash
+lemonade-server serve              # Start LLM backend
+gaia llm "Hello"                   # Test LLM
+gaia chat                          # Interactive chat
+gaia-code                          # Code agent
+```
+
 ## Project Structure
 
 ```
