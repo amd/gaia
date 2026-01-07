@@ -17,9 +17,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from gaia.agents.base import Agent
+from gaia.agents.base import Agent, DatabaseMixin
 from gaia.agents.base.tools import tool
-from gaia.database import DatabaseMixin
 from gaia.llm.vlm_client import detect_image_mime_type
 from gaia.utils import (
     FileWatcherMixin,
@@ -60,7 +59,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
 
         agent = MedicalIntakeAgent(
             watch_dir="./intake_forms",
-            db_path="./data/patients.db",
+            db_url="sqlite:///./data/patients.db",  # SQLAlchemy URL
         )
 
         # Agent automatically processes new files in watch_dir
@@ -75,7 +74,8 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
     def __init__(
         self,
         watch_dir: str = "./intake_forms",
-        db_path: str = "./data/patients.db",
+        db_path: Optional[str] = None,
+        db_url: Optional[str] = None,
         vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF",
         auto_start_watching: bool = True,
         **kwargs,
@@ -85,14 +85,23 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
 
         Args:
             watch_dir: Directory to watch for new intake forms
-            db_path: Path to SQLite database for patient records
+            db_path: DEPRECATED - Path to SQLite database (use db_url instead)
+            db_url: SQLAlchemy database URL (e.g., "sqlite:///./data/patients.db")
             vlm_model: VLM model to use for extraction
             auto_start_watching: Start watching immediately (default: True)
             **kwargs: Additional arguments for Agent base class
         """
         # Set attributes before super().__init__() as it may call _get_system_prompt()
         self._watch_dir = Path(watch_dir)
-        self._db_path = db_path
+
+        # Backward compatibility: convert db_path to db_url
+        if db_url is None:
+            if db_path is None:
+                db_path = "./data/patients.db"
+            # Convert file path to SQLite URL
+            self._db_url = f"sqlite:///{db_path}"
+        else:
+            self._db_url = db_url
         self._vlm_model = vlm_model
         self._vlm = None
         self._processed_files: List[Dict[str, Any]] = []
@@ -135,14 +144,10 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
     def _init_database(self) -> None:
         """Initialize the patient database."""
         try:
-            # Ensure data directory exists
-            db_dir = Path(self._db_path).parent
-            db_dir.mkdir(parents=True, exist_ok=True)
-
-            # Initialize database with schema
-            self.init_db(self._db_path)
-            self.execute(PATIENT_SCHEMA)
-            logger.info(f"Database initialized: {self._db_path}")
+            # Initialize database with connection pooling (SQLAlchemy)
+            self.init_database(self._db_url, pool_size=5)
+            self.execute_raw(PATIENT_SCHEMA)
+            logger.info(f"Database initialized: {self._db_url}")
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}")
             raise
@@ -155,7 +160,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
         """
         try:
             # Get aggregate stats from patients table
-            result = self.query(
+            result = self.execute_query(
                 """
                 SELECT
                     COUNT(*) as total_patients,
@@ -297,7 +302,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
         # Get all processed file hashes from database
         processed_hashes = set()
         try:
-            results = self.query(
+            results = self.execute_query(
                 "SELECT DISTINCT file_hash FROM patients WHERE file_hash IS NOT NULL"
             )
             for r in results:
@@ -446,7 +451,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
             self._emit_progress(filename, 2, total_steps, "Checking for duplicates")
             file_hash = compute_file_hash(path)
             if file_hash:
-                existing = self.query(
+                existing = self.execute_query(
                     "SELECT id, first_name, last_name FROM patients WHERE file_hash = ?",
                     (file_hash,),
                 )
@@ -770,7 +775,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
 
         # Match on name + DOB (most reliable)
         if data.get("date_of_birth"):
-            results = self.query(
+            results = self.execute_query(
                 """SELECT * FROM patients
                    WHERE first_name = :fn AND last_name = :ln AND date_of_birth = :dob
                    ORDER BY created_at DESC LIMIT 1""",
@@ -784,7 +789,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
                 return results[0]
 
         # Fallback: match on name only (less reliable)
-        results = self.query(
+        results = self.execute_query(
             """SELECT * FROM patients
                WHERE first_name = :fn AND last_name = :ln
                ORDER BY created_at DESC LIMIT 1""",
@@ -828,7 +833,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
             # Merge with existing additional_fields if any
             if additional_fields:
                 # Get existing additional_fields
-                existing = self.query(
+                existing = self.execute_query(
                     "SELECT additional_fields FROM patients WHERE id = :id",
                     {"id": patient_id},
                 )
@@ -849,7 +854,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
             update_data["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
             # Use mixin's update() method with proper signature
-            self.update(
+            self.execute_update(
                 "patients",
                 update_data,
                 "id = :id",
@@ -872,7 +877,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
     ) -> None:
         """Record intake session for audit trail."""
         try:
-            self.insert(
+            self.execute_insert(
                 "intake_sessions",
                 {
                     "patient_id": patient_id,
@@ -893,14 +898,14 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
             # Critical allergy alert (avoid duplicates for returning patients)
             if data.get("allergies"):
                 # Check for existing unacknowledged allergy alert
-                existing = self.query(
+                existing = self.execute_query(
                     """SELECT id FROM alerts
                        WHERE patient_id = :pid AND alert_type = 'allergy'
                        AND acknowledged = FALSE""",
                     {"pid": patient_id},
                 )
                 if not existing:
-                    self.insert(
+                    self.execute_insert(
                         "alerts",
                         {
                             "patient_id": patient_id,
@@ -916,14 +921,14 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
             missing = [f for f in critical_fields if not data.get(f)]
             if missing:
                 # Check for existing unacknowledged missing_field alert
-                existing = self.query(
+                existing = self.execute_query(
                     """SELECT id FROM alerts
                        WHERE patient_id = :pid AND alert_type = 'missing_field'
                        AND acknowledged = FALSE""",
                     {"pid": patient_id},
                 )
                 if not existing:
-                    self.insert(
+                    self.execute_insert(
                         "alerts",
                         {
                             "patient_id": patient_id,
@@ -1137,7 +1142,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
                     f"{list(additional_fields.keys())}"
                 )
 
-            patient_id = self.insert("patients", insert_data)
+            patient_id = self.execute_insert("patients", insert_data)
             logger.info(f"Stored patient record ID: {patient_id}")
             return patient_id
 
@@ -1336,17 +1341,17 @@ Use the available tools to search and retrieve patient information."""
             - uptime_seconds: Agent uptime
         """
         # Get total patient count
-        count_result = self.query("SELECT COUNT(*) as count FROM patients")
+        count_result = self.execute_query("SELECT COUNT(*) as count FROM patients")
         total_patients = count_result[0]["count"] if count_result else 0
 
         # Get today's count
-        today_result = self.query(
+        today_result = self.execute_query(
             "SELECT COUNT(*) as count FROM patients WHERE date(created_at) = date('now')"
         )
         today_count = today_result[0]["count"] if today_result else 0
 
         # Get unacknowledged alerts count
-        alerts_result = self.query(
+        alerts_result = self.execute_query(
             "SELECT COUNT(*) as count FROM alerts WHERE acknowledged = FALSE"
         )
         unacknowledged_alerts = alerts_result[0]["count"] if alerts_result else 0
@@ -1420,13 +1425,13 @@ Use the available tools to search and retrieve patient information."""
         try:
             # Get counts before deletion
             for table in ["patients", "alerts", "intake_sessions"]:
-                result = self.query(f"SELECT COUNT(*) as count FROM {table}")
+                result = self.execute_query(f"SELECT COUNT(*) as count FROM {table}")
                 counts[table] = result[0]["count"] if result else 0
 
             # Delete all records from each table
-            self.execute("DELETE FROM intake_sessions")
-            self.execute("DELETE FROM alerts")
-            self.execute("DELETE FROM patients")
+            self.execute_raw("DELETE FROM intake_sessions")
+            self.execute_raw("DELETE FROM alerts")
+            self.execute_raw("DELETE FROM patients")
 
             # Reset in-memory statistics
             self._stats = {
