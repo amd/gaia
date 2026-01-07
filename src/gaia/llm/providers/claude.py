@@ -57,15 +57,18 @@ class ClaudeProvider(LLMClient):
         stream: bool = False,
         **kwargs,
     ) -> Union[str, Iterator[str]]:
-        # Prepend system prompt if set
+        # Build parameters for Anthropic messages.create
+        params = {
+            "model": model or self._model,
+            "messages": messages,
+            "stream": stream,
+            **kwargs,
+        }
+        # Claude API requires system prompt as separate parameter, not in messages
         if self._system_prompt:
-            messages = [{"role": "system", "content": self._system_prompt}] + list(
-                messages
-            )
+            params["system"] = self._system_prompt
 
-        response = self._client.messages.create(
-            model=model or self._model, messages=messages, stream=stream, **kwargs
-        )
+        response = self._client.messages.create(**params)
         if stream:
             return self._handle_stream(response)
         return response.content[0].text

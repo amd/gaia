@@ -35,7 +35,7 @@ For testing purposes:
 - For any other request, respond with: CYLINDER,0,2,0,0.5,0.5,3
 """
     # Using local LLM for faster testing
-    return create_client("lemonade")
+    return create_client("lemonade", system_prompt=system_prompt)
 
 
 @pytest.fixture

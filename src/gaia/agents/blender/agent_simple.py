@@ -40,7 +40,6 @@ Example: "Make a tall cylinder" → CYLINDER,0,0,0,1,1,3
         self,
         llm: Optional[LLMClient] = None,
         mcp: Optional[MCPClient] = None,
-        use_local: bool = True,
         base_url: Optional[str] = "http://localhost:8000/api/v1",
     ):
         """
@@ -49,9 +48,7 @@ Example: "Make a tall cylinder" → CYLINDER,0,0,0,1,1,3
         Args:
             llm: An optional pre-configured LLM client, otherwise a new one will be created
             mcp: An optional pre-configured MCP client, otherwise a new one will be created
-            use_local: Whether to use a local LLM (True) or a remote API (False)
-            base_url: Base URL for the local LLM API if using local LLM. If None and use_local=True,
-                      defaults to "http://localhost:8000/api/v1"
+            base_url: Base URL for the Lemonade LLM server
         """
         self.llm = (
             llm

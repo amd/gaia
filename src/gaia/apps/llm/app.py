@@ -28,8 +28,11 @@ class LlmApp:
             base_url: Base URL for local LLM server (defaults to LEMONADE_BASE_URL env var)
         """
         self.log = get_logger(__name__)
-        self.client = create_client("lemonade", base_url=base_url)
-        self.system_prompt = system_prompt  # Store for potential future use
+        self.client = create_client(
+            "lemonade",
+            base_url=base_url,
+            system_prompt=system_prompt,
+        )
         self.log.debug("LLM app initialized")
 
     def query(

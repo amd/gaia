@@ -29,7 +29,7 @@ def create_client(
         use_openai: If True, use OpenAI provider (ignored if provider is specified)
         **kwargs: Provider-specific arguments (base_url, model, api_key, etc.)
 
-    Comments:
+    Note:
         The design in using these flags is to maintain backward compatibility
         while allowing explicit provider selection. If both use_claude and
         use_openai are False and provider is not specified, the default

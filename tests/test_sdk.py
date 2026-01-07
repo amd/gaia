@@ -423,11 +423,13 @@ class TestLLMClient:
         """Verify LLMClient has required methods."""
         from gaia.llm import LLMClient
 
-        # Check methods exist
+        # Check abstract methods exist
         assert hasattr(LLMClient, "generate")
-        assert hasattr(LLMClient, "chat_completions")
-        assert hasattr(LLMClient, "get_available_models")
-        assert hasattr(LLMClient, "estimate_tokens")
+        assert hasattr(LLMClient, "chat")
+        assert hasattr(LLMClient, "provider_name")
+        # Check optional methods exist
+        assert hasattr(LLMClient, "embed")
+        assert hasattr(LLMClient, "vision")
 
     def test_lemonade_constants_exist(self):
         """Verify Lemonade client constants."""

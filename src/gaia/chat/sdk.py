@@ -97,6 +97,7 @@ class ChatSDK:
                 else self.config.model
             ),
             base_url=self.config.base_url,
+            system_prompt=self.config.system_prompt,
         )
 
         # Store conversation history

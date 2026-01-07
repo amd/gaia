@@ -41,8 +41,11 @@ class AudioClient:
         self.tts = None
 
         # Initialize LLM client - factory auto-detects provider from flags
-        self.llm_client = create_client(use_claude=use_claude, use_openai=use_chatgpt)
-        self.system_prompt = system_prompt  # Store for potential future use
+        self.llm_client = create_client(
+            use_claude=use_claude,
+            use_openai=use_chatgpt,
+            system_prompt=system_prompt,
+        )
 
         self.log.info("Audio client initialized.")
 
