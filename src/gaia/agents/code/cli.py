@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 """CLI for Code Agent."""
@@ -12,8 +12,6 @@ from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
-
-from gaia.agents.code.agent import CodeAgent
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -30,8 +28,6 @@ def _print_header():
         )
     )
     console.print()
-
-
 
 
 def cmd_run(args):
@@ -63,6 +59,7 @@ def cmd_run(args):
     # Check if code agent is available
     try:
         from gaia.agents.code.agent import CodeAgent  # noqa: F401
+
         CODE_AVAILABLE = True
     except ImportError:
         CODE_AVAILABLE = False
@@ -278,8 +275,6 @@ def cmd_run(args):
 
             traceback.print_exc()
         return 1
-
-
 
 
 def main():

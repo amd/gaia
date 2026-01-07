@@ -36,14 +36,6 @@ except ImportError:
     MCPClient = None
     BLENDER_AVAILABLE = False
 
-try:
-    from gaia.agents.code.agent import CodeAgent
-
-    CODE_AVAILABLE = True
-except ImportError:
-    CodeAgent = None
-    CODE_AVAILABLE = False
-
 # Load environment variables from .env file
 load_dotenv()
 
