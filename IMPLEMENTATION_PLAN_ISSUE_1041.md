@@ -8,6 +8,7 @@ Create a new database mixin using SQLAlchemy Core to support multiple database b
 **Estimated Effort:** 4-6 hours (AI-assisted)
 **Priority:** Critical
 **Component:** Agents
+**Development Approach:** Test-Driven Development (TDD)
 
 ---
 
@@ -326,9 +327,19 @@ class TestDatabaseMixinSecurity:
 
 ## 6. Migration Path
 
-### 6.1 Coexistence Strategy
+### 6.1 Migration Strategy: Replace sqlite3 Mixin in MedicalIntakeAgent
 
-Both mixins will coexist:
+**IMPORTANT:** As part of this issue, we WILL migrate the MedicalIntakeAgent (EMR agent) to use the new SQLAlchemy-based mixin. This is required because the issue states: "This is the only new framework component required for the Medical Intake PoC."
+
+**Files to Migrate:**
+- `src/gaia/agents/emr/agent.py` - Update to use new mixin
+- `src/gaia/agents/emr/cli.py` - Update if needed for new db_url parameter
+- `tests/integration/test_database_mixin_integration.py` - May need updates
+- `docs/playbooks/emr-agent/*.mdx` - Update documentation
+
+### 6.2 Coexistence Strategy (Long-term)
+
+Both mixins will coexist in the codebase:
 
 | Aspect | Existing (`gaia.database.mixin`) | New (`gaia.agents.base.database_mixin`) |
 |--------|----------------------------------|----------------------------------------|
@@ -337,27 +348,28 @@ Both mixins will coexist:
 | **Databases** | SQLite only | SQLite, PostgreSQL, MySQL |
 | **Dependencies** | Zero (built-in) | `sqlalchemy>=2.0` |
 | **Use Case** | Simple agents, prototyping | Production agents, multi-DB |
+| **Status** | Keep for backward compatibility | New default for production |
 
-### 6.2 When to Use Which Mixin?
+### 6.3 When to Use Which Mixin?
 
-**Use existing sqlite3 mixin when:**
-- Prototyping or simple agents
-- SQLite is sufficient
-- Want zero dependencies
-- Need maximum simplicity
-
-**Use new SQLAlchemy mixin when:**
+**Use new SQLAlchemy mixin (RECOMMENDED):**
+- Production deployments (like Medical Intake PoC)
 - Need PostgreSQL or MySQL
 - Require connection pooling
-- Production deployment
 - Multi-database support
+- **Default choice for new agents**
 
-### 6.3 Migrating Existing Code
+**Use existing sqlite3 mixin:**
+- Legacy code / backward compatibility
+- Prototyping with zero dependencies
+- Simple scripts where SQLite is sufficient
 
-**Example: Updating MedicalIntakeAgent**
+### 6.4 Migrating MedicalIntakeAgent (THIS ISSUE)
+
+**Changes Required in `src/gaia/agents/emr/agent.py`:**
 
 ```python
-# Before (using sqlite3 mixin)
+# BEFORE (current implementation using sqlite3 mixin)
 from gaia.database import DatabaseMixin
 
 class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
@@ -365,177 +377,327 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
         super().__init__(**kwargs)
         self.init_db(db_path)  # SQLite only
 
-# After (using SQLAlchemy mixin)
+    def _init_database(self):
+        self.init_db(self._db_path)
+        self.execute(PATIENT_SCHEMA)
+
+    # Uses: self.query(), self.insert(), self.update(), self.delete()
+
+# AFTER (updated to use SQLAlchemy mixin)
 from gaia.agents.base.database_mixin import DatabaseMixin
 
 class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
     def __init__(self, db_url: str = "sqlite:///./data/patients.db", **kwargs):
         super().__init__(**kwargs)
-        self.init_database(db_url, pool_size=5)  # Multi-DB support
+        self._db_url = db_url  # Changed from db_path to db_url
+        # ... rest of init ...
 
-    # Method name changes:
-    # - query() -> execute_query()
-    # - insert() -> execute_insert()
-    # - update() -> execute_update()
-    # - delete() -> execute_delete()
-    # - execute() -> execute_raw()
-    # - transaction() stays the same
+    def _init_database(self):
+        self.init_database(self._db_url, pool_size=5)  # Multi-DB support
+        self.execute_raw(PATIENT_SCHEMA)  # execute() -> execute_raw()
+
+    # Update all database calls throughout the file:
+    # - self.query() -> self.execute_query()
+    # - self.insert() -> self.execute_insert()
+    # - self.update() -> self.execute_update()
+    # - self.delete() -> self.execute_delete()
+    # - self.execute() -> self.execute_raw()
+    # - self.transaction() stays the same
 ```
+
+**Backward Compatibility:** To maintain backward compatibility, the CLI can accept both `--db-path` (converted to SQLite URL) and `--db-url` parameters.
 
 ---
 
-## 7. Step-by-Step Implementation Plan
+## 7. Step-by-Step Implementation Plan (Test-Driven Development)
 
-### Phase 1: Core Implementation (2-3 hours)
+**CRITICAL: This implementation follows Test-Driven Development (TDD).**
+
+**TDD Workflow:**
+1. ✅ Write tests FIRST (define expected behavior)
+2. ✅ Verify tests are correct (review test logic, ensure they test the right things)
+3. ✅ Run tests - they should FAIL (no implementation yet)
+4. ✅ Implement minimal code to make tests pass
+5. ✅ Run tests - iterate until all pass
+6. ✅ Refactor and polish
+
+---
+
+### Phase 1: Setup & Dependencies (15 min)
 
 #### Step 1.1: Update Dependencies
 - [ ] Modify `setup.py` to add `sqlalchemy>=2.0` to `install_requires`
+- [ ] Install SQLAlchemy: `pip install sqlalchemy>=2.0`
 
-#### Step 1.2: Create DatabaseMixin Class
+#### Step 1.2: Create Stub Implementation
 - [ ] Create `src/gaia/agents/base/database_mixin.py`
 - [ ] Add copyright header and module docstring
-- [ ] Implement `__init__` to initialize instance variables
-- [ ] Implement `init_database()` with engine creation and connection pooling
-- [ ] Implement `close_database()` for cleanup
-- [ ] Implement `get_connection()` for obtaining connections
-- [ ] Implement `db_ready` property
-- [ ] Add `_require_db()` internal validation method
-
-#### Step 1.3: Implement Query Operations
-- [ ] Implement `execute_query()` for SELECT operations
-  - Support parameterized queries with `text()` and binding
-  - Return list of dictionaries
-  - Proper error handling
-
-#### Step 1.4: Implement Insert Operations
-- [ ] Implement `execute_insert()` for INSERT operations
-  - Support `returning` parameter for PostgreSQL/MySQL
-  - Return inserted ID or specified column value
-  - Generate SQL dynamically based on data dict
-
-#### Step 1.5: Implement Update Operations
-- [ ] Implement `execute_update()` for UPDATE operations
-  - Support WHERE clause with parameters
-  - Return affected row count
-  - Proper parameter merging (avoid collisions)
-
-#### Step 1.6: Implement Delete Operations
-- [ ] Implement `execute_delete()` for DELETE operations
-  - Support WHERE clause with parameters
-  - Return deleted row count
-
-#### Step 1.7: Implement Transactions
-- [ ] Implement `transaction()` context manager
-  - Auto-commit on success
-  - Auto-rollback on exception
-  - Proper connection cleanup
-
-#### Step 1.8: Implement Utilities
-- [ ] Implement `execute_raw()` for DDL (CREATE TABLE, etc.)
-- [ ] Implement `table_exists()` utility
-  - Use database-specific queries for different backends
-
-#### Step 1.9: Export the Mixin
+- [ ] Create `DatabaseMixin` class with method stubs (all raise `NotImplementedError`)
 - [ ] Update `src/gaia/agents/base/__init__.py` to export `DatabaseMixin`
 
-### Phase 2: Testing (1-2 hours)
+**Why stub first?** This allows us to import the mixin in our tests without errors.
 
-#### Step 2.1: Create Test File
+---
+
+### Phase 2: Write Tests FIRST (1.5-2 hours)
+
+**CRITICAL: Write ALL tests before implementing any functionality!**
+
+#### Step 2.1: Setup Test Infrastructure
 - [ ] Create `tests/unit/test_database_mixin_sqlalchemy.py`
 - [ ] Add copyright header and imports
-- [ ] Create test helper class that uses the mixin
+- [ ] Create test helper class `TestDB(DatabaseMixin)`
+- [ ] Add pytest fixtures for common setup
 
 #### Step 2.2: Write Initialization Tests
-- [ ] Test in-memory SQLite initialization
-- [ ] Test file-based SQLite initialization
-- [ ] Test custom pool size
-- [ ] Test reinitialization
-- [ ] Test operations before init (should raise error)
-- [ ] Test close_database idempotency
+Write tests that define how initialization should work:
 
-#### Step 2.3: Write CRUD Tests
-- [ ] Test execute_query (various scenarios)
-- [ ] Test execute_insert (with and without returning)
-- [ ] Test execute_update (single and multiple rows)
-- [ ] Test execute_delete (single and multiple rows)
-- [ ] Test execute_raw for DDL
+- [ ] `test_init_memory()` - In-memory SQLite should initialize correctly
+- [ ] `test_init_file()` - File-based SQLite should create file and parent dirs
+- [ ] `test_init_custom_pool_size()` - Custom pool_size parameter should work
+- [ ] `test_reinit_closes_previous()` - Calling init_database twice should close first connection
+- [ ] `test_require_init()` - Operations before init should raise RuntimeError
+- [ ] `test_close_idempotent()` - close_database should be safe to call multiple times
+- [ ] `test_db_ready_property()` - db_ready should return True/False appropriately
 
-#### Step 2.4: Write Transaction Tests
-- [ ] Test transaction commit
-- [ ] Test transaction rollback on exception
-- [ ] Test multiple operations in single transaction
+#### Step 2.3: Write Query Tests (SELECT)
+- [ ] `test_execute_query_select_all()` - SELECT * should return all rows as list of dicts
+- [ ] `test_execute_query_with_params()` - Parameterized queries should work correctly
+- [ ] `test_execute_query_empty_result()` - Empty results should return []
+- [ ] `test_execute_query_no_params()` - Queries without params should work
 
-#### Step 2.5: Write Utility Tests
-- [ ] Test table_exists (true and false cases)
+#### Step 2.4: Write Insert Tests
+- [ ] `test_execute_insert_basic()` - Basic insert should return row ID
+- [ ] `test_execute_insert_with_returning()` - RETURNING clause should return specified column
+- [ ] `test_execute_insert_multiple()` - Multiple inserts should work correctly
 
-#### Step 2.6: Write Security Tests
-- [ ] Test parameterized queries prevent SQL injection
-- [ ] Test special characters in data
+#### Step 2.5: Write Update Tests
+- [ ] `test_execute_update_single_row()` - Update single row should return count=1
+- [ ] `test_execute_update_multiple_rows()` - Update multiple rows should return correct count
+- [ ] `test_execute_update_no_match()` - Update with no matches should return count=0
+- [ ] `test_execute_update_param_collision()` - Data and where params shouldn't collide
 
-#### Step 2.7: Run Tests
-- [ ] Execute: `pytest tests/unit/test_database_mixin_sqlalchemy.py -v`
-- [ ] Ensure 100% pass rate
-- [ ] Check code coverage
+#### Step 2.6: Write Delete Tests
+- [ ] `test_execute_delete_single()` - Delete single row should return count=1
+- [ ] `test_execute_delete_multiple()` - Delete multiple rows should return correct count
+- [ ] `test_execute_delete_no_match()` - Delete with no matches should return count=0
 
-### Phase 3: Documentation (1 hour)
+#### Step 2.7: Write Transaction Tests
+- [ ] `test_transaction_commit()` - Successful transaction should commit all changes
+- [ ] `test_transaction_rollback_on_error()` - Exception should rollback all changes
+- [ ] `test_transaction_multiple_operations()` - Multiple operations in transaction should be atomic
+- [ ] `test_transaction_connection_cleanup()` - Connection should be closed after transaction
 
-#### Step 3.1: Comprehensive Docstrings
-- [ ] Ensure all methods have detailed docstrings
-- [ ] Add usage examples in docstrings
-- [ ] Document parameters, return values, and exceptions
+#### Step 2.8: Write Utility Tests
+- [ ] `test_execute_raw_create_table()` - execute_raw should handle CREATE TABLE
+- [ ] `test_table_exists_true()` - table_exists should return True for existing table
+- [ ] `test_table_exists_false()` - table_exists should return False for missing table
 
-#### Step 3.2: Module-Level Documentation
-- [ ] Add comprehensive module docstring with overview
-- [ ] Include complete usage examples
-- [ ] Document database URL formats
-- [ ] Explain connection pooling parameters
+#### Step 2.9: Write Security Tests
+- [ ] `test_parameterized_query_prevents_sql_injection()` - SQL injection attempts should be safe
+- [ ] `test_special_characters_in_data()` - Special chars (quotes, semicolons) should work
 
-#### Step 3.3: Optional: Update External Docs
-- [ ] Update `docs/sdk/mixins/database-mixin.mdx` (if time permits)
-- [ ] Add section comparing sqlite3 vs SQLAlchemy mixin
-- [ ] Provide migration guide
+#### Step 2.10: **VERIFY TESTS ARE CORRECT** ⚠️
+**CRITICAL STEP - DO NOT SKIP!**
 
-### Phase 4: Validation & Polish (30 min - 1 hour)
+- [ ] Review EVERY test carefully
+- [ ] Ask: "Does this test actually verify the intended behavior?"
+- [ ] Check test assertions are meaningful (not just "no error thrown")
+- [ ] Verify test data covers edge cases
+- [ ] Ensure parameterized queries are actually used (not string interpolation)
+- [ ] Check that security tests would catch vulnerabilities
+- [ ] Run tests - they should ALL FAIL (no implementation yet)
 
-#### Step 4.1: Code Review
-- [ ] Review code for clarity and consistency
-- [ ] Ensure proper error handling throughout
-- [ ] Verify SQL injection prevention
-- [ ] Check connection cleanup in all paths
+**Questions to ask for each test:**
+- ✅ Is the test name clear and descriptive?
+- ✅ Does the test check the right thing?
+- ✅ Are assertions specific and meaningful?
+- ✅ Does it test edge cases?
+- ✅ Would it catch bugs if the code is wrong?
 
-#### Step 4.2: Run Full Test Suite
+---
+
+### Phase 3: Implement Code to Pass Tests (2-3 hours)
+
+**Now implement the mixin to make the tests pass!**
+
+#### Step 3.1: Core Infrastructure
+- [ ] Implement `__init__` to initialize instance variables (engine, connection pool)
+- [ ] Implement `init_database()` with SQLAlchemy engine creation
+  - Use `create_engine()` with connection pooling
+  - Set pool_size, max_overflow, pool_pre_ping
+- [ ] Implement `close_database()` for cleanup (dispose engine)
+- [ ] Implement `get_connection()` to return a connection from pool
+- [ ] Implement `db_ready` property
+- [ ] Implement `_require_db()` internal validation method
+- [ ] Run initialization tests - should PASS now
+
+#### Step 3.2: Query Operations (SELECT)
+- [ ] Implement `execute_query()` for SELECT operations
+  - Use `text()` with parameter binding
+  - Convert rows to list of dictionaries
+  - Handle empty results
+  - Proper error handling and connection cleanup
+- [ ] Run query tests - should PASS now
+
+#### Step 3.3: Insert Operations
+- [ ] Implement `execute_insert()` for INSERT operations
+  - Generate INSERT SQL from data dict
+  - Support `returning` parameter for PostgreSQL/MySQL
+  - Return inserted ID or RETURNING value
+  - Use parameterized queries
+- [ ] Run insert tests - should PASS now
+
+#### Step 3.4: Update Operations
+- [ ] Implement `execute_update()` for UPDATE operations
+  - Generate UPDATE SQL from data dict
+  - Support WHERE clause with parameters
+  - Merge data and where params (avoid collisions with prefix)
+  - Return affected row count
+- [ ] Run update tests - should PASS now
+
+#### Step 3.5: Delete Operations
+- [ ] Implement `execute_delete()` for DELETE operations
+  - Generate DELETE SQL with WHERE clause
+  - Use parameterized queries
+  - Return deleted row count
+- [ ] Run delete tests - should PASS now
+
+#### Step 3.6: Transactions
+- [ ] Implement `transaction()` context manager
+  - Get connection from pool
+  - Begin transaction
+  - Yield connection to caller
+  - Auto-commit on success
+  - Auto-rollback on exception
+  - Always close connection in finally block
+- [ ] Run transaction tests - should PASS now
+
+#### Step 3.7: Utilities
+- [ ] Implement `execute_raw()` for DDL (CREATE TABLE, etc.)
+- [ ] Implement `table_exists()` using SQLAlchemy inspector
+- [ ] Run utility tests - should PASS now
+
+#### Step 3.8: Verify All Tests Pass
 - [ ] Run: `pytest tests/unit/test_database_mixin_sqlalchemy.py -v`
-- [ ] Run: `python util/lint.py` (if available)
-- [ ] Fix any linting issues
+- [ ] ALL tests should PASS (if not, iterate!)
+- [ ] Fix any failing tests
 
-#### Step 4.3: Manual Testing (Optional)
-- [ ] Create simple test agent using the mixin
-- [ ] Test with SQLite
-- [ ] Test with PostgreSQL (if available)
-- [ ] Verify connection pooling behavior
+---
+
+### Phase 4: Migrate MedicalIntakeAgent (1 hour)
+
+**Update the EMR agent to use the new SQLAlchemy mixin**
+
+#### Step 4.1: Update EMR Agent Implementation
+- [ ] Modify `src/gaia/agents/emr/agent.py`:
+  - Change import from `gaia.database` to `gaia.agents.base.database_mixin`
+  - Update `__init__` parameter from `db_path` to `db_url`
+  - Convert `db_path` to SQLite URL format: `sqlite:///./data/patients.db`
+  - Update `_init_database()` method
+  - Find/replace method calls throughout the file:
+    - `self.query()` → `self.execute_query()`
+    - `self.insert()` → `self.execute_insert()`
+    - `self.update()` → `self.execute_update()`
+    - `self.delete()` → `self.execute_delete()`
+    - `self.execute()` → `self.execute_raw()`
+    - `self.transaction()` stays the same
+  - Add pool_size parameter to `init_database()` call
+
+#### Step 4.2: Update EMR CLI (if needed)
+- [ ] Check `src/gaia/agents/emr/cli.py` for any database path handling
+- [ ] Add support for `--db-url` parameter
+- [ ] Maintain backward compatibility with `--db-path` (convert to SQLite URL)
+
+#### Step 4.3: Test EMR Agent Migration
+- [ ] Run existing EMR agent tests
+- [ ] Fix any breaking changes
+- [ ] Verify backward compatibility (SQLite still works)
+
+---
+
+### Phase 5: Documentation & Polish (1 hour)
+
+#### Step 5.1: Add Comprehensive Docstrings
+- [ ] Add detailed module-level docstring to `database_mixin.py`
+  - Overview of the mixin
+  - Complete usage example
+  - Database URL formats (SQLite, PostgreSQL, MySQL)
+  - Connection pooling parameters
+- [ ] Ensure all methods have detailed docstrings with:
+  - Description of what it does
+  - Args documentation
+  - Returns documentation
+  - Raises documentation
+  - Usage examples
+
+#### Step 5.2: Code Review & Refactoring
+- [ ] Review all code for clarity and consistency
+- [ ] Ensure proper error handling throughout
+- [ ] Verify SQL injection prevention (all queries use parameterization)
+- [ ] Check connection cleanup in all code paths
+- [ ] Refactor any duplicated code
+
+#### Step 5.3: Run Full Test Suite
+- [ ] Run: `pytest tests/unit/test_database_mixin_sqlalchemy.py -v`
+- [ ] Run EMR agent tests: `pytest tests/ -k emr -v`
+- [ ] Run all database tests: `pytest tests/ -k database -v`
+- [ ] Ensure 100% pass rate
+
+#### Step 5.4: Linting
+- [ ] Run: `python util/lint.py` (if available) or `black`, `flake8`
+- [ ] Fix any linting issues
+- [ ] Ensure code follows GAIA style guidelines
+
+#### Step 5.5: Final Verification
+- [ ] Verify all acceptance criteria are met (see Section 8)
+- [ ] Test manually with SQLite (create a simple test script)
+- [ ] Verify connection pooling is working
+- [ ] Check that migrations don't break existing functionality
 
 ---
 
 ## 8. Acceptance Criteria Checklist
 
-From the original issue:
+### From the Original Issue:
 
-- [x] Create `src/gaia/agents/base/database_mixin.py`
-- [x] Support SQLite, PostgreSQL, MySQL via SQLAlchemy connection URLs
-- [x] Implement connection pooling for concurrent requests
-- [x] Provide transaction management with context managers
-- [x] Include parameterized queries (SQL injection prevention)
-- [x] Add methods: `init_database()`, `execute_query()`, `execute_insert()`, `execute_update()`, `transaction()`
-- [x] Add unit tests for all database operations
-- [x] Document usage in docstrings
-- [x] Add `sqlalchemy>=2.0` to `install_requires` in `setup.py`
+- [ ] Create `src/gaia/agents/base/database_mixin.py`
+- [ ] Support SQLite, PostgreSQL, MySQL via SQLAlchemy connection URLs
+- [ ] Implement connection pooling for concurrent requests
+- [ ] Provide transaction management with context managers
+- [ ] Include parameterized queries (SQL injection prevention)
+- [ ] Add methods: `init_database()`, `execute_query()`, `execute_insert()`, `execute_update()`, `transaction()`
+- [ ] Add unit tests for all database operations
+- [ ] Document usage in docstrings
+- [ ] Add `sqlalchemy>=2.0` to `install_requires` in `setup.py`
 
-**Additional Items (Nice-to-Have):**
-- [ ] `execute_delete()` method (not in original spec but useful)
-- [ ] `table_exists()` utility (not in original spec but useful)
-- [ ] `get_connection()` method (in spec)
-- [ ] Integration tests for PostgreSQL/MySQL (optional)
-- [ ] Documentation updates (optional)
+### Additional Required Items:
+
+- [ ] `execute_delete()` method (needed for CRUD completeness)
+- [ ] `get_connection()` method (specified in issue interface)
+- [ ] `table_exists()` utility (useful for schema management)
+- [ ] `execute_raw()` method (for DDL operations like CREATE TABLE)
+- [ ] `close_database()` method (for cleanup)
+- [ ] `db_ready` property (for checking initialization state)
+
+### Migration Requirements:
+
+**CRITICAL: Issue states "This is the only new framework component required for the Medical Intake PoC"**
+
+- [ ] Migrate `MedicalIntakeAgent` in `src/gaia/agents/emr/agent.py` to use new mixin
+- [ ] Update all database method calls in EMR agent
+- [ ] Ensure EMR agent tests still pass
+- [ ] Maintain backward compatibility where possible
+
+### Quality Requirements:
+
+- [ ] All tests written FIRST (TDD approach)
+- [ ] Tests verified to test the correct behavior
+- [ ] All tests pass (100% pass rate)
+- [ ] Code follows GAIA style guidelines (linting passes)
+- [ ] No SQL injection vulnerabilities
+- [ ] Proper connection cleanup in all code paths
+- [ ] Comprehensive docstrings with examples
 
 ---
 
@@ -643,20 +805,58 @@ flake8 src/gaia/agents/base/database_mixin.py
 
 ## 12. Summary
 
-This implementation plan provides a comprehensive roadmap for creating a production-ready database mixin using SQLAlchemy Core. The mixin will:
+This implementation plan provides a comprehensive roadmap for creating a production-ready database mixin using SQLAlchemy Core and migrating the Medical Intake PoC to use it.
 
-✅ Support multiple databases (SQLite, PostgreSQL, MySQL)
-✅ Provide connection pooling for performance
-✅ Implement robust transaction management
-✅ Prevent SQL injection through parameterized queries
-✅ Include comprehensive unit tests
-✅ Be fully documented with examples
-✅ Coexist peacefully with the existing sqlite3-based mixin
+### What We're Building:
 
-**Estimated Timeline:** 4-6 hours (AI-assisted)
+✅ **SQLAlchemy-based database mixin** supporting multiple databases (SQLite, PostgreSQL, MySQL)
+✅ **Connection pooling** for concurrent requests and better performance
+✅ **Robust transaction management** with automatic rollback
+✅ **SQL injection prevention** through parameterized queries
+✅ **Comprehensive unit tests** written FIRST (TDD approach)
+✅ **Full documentation** with examples and usage guides
+✅ **Migration of MedicalIntakeAgent** to use the new mixin
 
-**Files to Create:** 2 (mixin + tests)
-**Files to Modify:** 2 (setup.py + __init__.py)
-**Lines of Code:** ~800-1000 total
+### Development Approach: Test-Driven Development (TDD)
 
-The implementation follows GAIA's architecture patterns and maintains consistency with existing database tooling while providing enterprise-grade features for production deployments.
+**Critical:** This plan follows TDD methodology:
+1. ✅ Write ALL tests first (define expected behavior)
+2. ✅ Verify tests are correct and test the right things
+3. ✅ Run tests - they should fail (no implementation yet)
+4. ✅ Implement code to make tests pass
+5. ✅ Iterate until all tests pass
+6. ✅ Refactor and polish
+
+### Implementation Phases:
+
+1. **Phase 1:** Setup & Dependencies (15 min)
+2. **Phase 2:** Write Tests FIRST (1.5-2 hours) ⚠️ CRITICAL PHASE
+3. **Phase 3:** Implement Code to Pass Tests (2-3 hours)
+4. **Phase 4:** Migrate MedicalIntakeAgent (1 hour)
+5. **Phase 5:** Documentation & Polish (1 hour)
+
+**Estimated Timeline:** 5-7 hours (AI-assisted with TDD)
+
+### Files Affected:
+
+**New Files:**
+- `src/gaia/agents/base/database_mixin.py` (~300-400 lines)
+- `tests/unit/test_database_mixin_sqlalchemy.py` (~300-400 lines)
+
+**Modified Files:**
+- `setup.py` (add sqlalchemy dependency)
+- `src/gaia/agents/base/__init__.py` (export DatabaseMixin)
+- `src/gaia/agents/emr/agent.py` (migrate to new mixin)
+- `src/gaia/agents/emr/cli.py` (update if needed)
+
+**Total Lines of Code:** ~800-1200
+
+### Key Success Factors:
+
+1. **Tests written FIRST** - No implementation before tests
+2. **Test verification** - Ensure tests actually test the right behavior
+3. **100% test pass rate** - All tests must pass before completion
+4. **Successful migration** - EMR agent must work with new mixin
+5. **No regressions** - Existing tests must still pass
+
+The implementation follows GAIA's architecture patterns and maintains consistency with existing database tooling while providing enterprise-grade features for production deployments of the Medical Intake PoC.
