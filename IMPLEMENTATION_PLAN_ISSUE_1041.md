@@ -138,6 +138,91 @@ class DatabaseMixin(ABC):
     def db_ready(self) -> bool
 ```
 
+### 2.4 Thread Safety Design
+
+**CRITICAL: This mixin MUST be thread-safe for production use.**
+
+#### Thread Safety Guarantees:
+
+✅ **SQLAlchemy Engine is thread-safe**
+- The `Engine` object is designed for concurrent access from multiple threads
+- Multiple threads can safely call `engine.connect()` simultaneously
+- Source: [SQLAlchemy docs on Engine threading](https://docs.sqlalchemy.org/en/20/core/connections.html#engine-disposal)
+
+✅ **Connection Pool (QueuePool) is thread-safe**
+- Uses internal threading locks to manage connection checkout/checkin
+- `pool_size` parameter limits concurrent connections
+- When pool is exhausted, threads block until a connection is available
+- `max_overflow` allows temporary additional connections beyond pool_size
+
+✅ **Our Implementation Pattern is thread-safe**
+- Store only the `engine` as an instance variable (thread-safe)
+- **Never store connections** as instance variables (would be thread-unsafe)
+- Each operation gets its own connection via `engine.connect()`
+- Connections are always released in `finally` blocks
+- Transaction context manager provides per-thread transaction isolation
+
+#### Anti-Patterns to Avoid:
+
+❌ **DO NOT store connections as instance variables:**
+```python
+# BAD - Not thread-safe!
+class DatabaseMixin:
+    def init_database(self, db_url):
+        self._connection = self.engine.connect()  # Shared across threads!
+
+    def execute_query(self, sql):
+        return self._connection.execute(text(sql))  # Race conditions!
+```
+
+✅ **DO get connections per-operation:**
+```python
+# GOOD - Thread-safe!
+class DatabaseMixin:
+    def execute_query(self, sql, params=None):
+        conn = self.engine.connect()  # New connection per operation
+        try:
+            result = conn.execute(text(sql), params or {})
+            return [dict(row) for row in result]
+        finally:
+            conn.close()  # Always release back to pool
+```
+
+#### Transaction Isolation:
+
+Each call to `transaction()` gets its own connection and transaction:
+
+```python
+@contextmanager
+def transaction(self):
+    """Thread-safe transaction context manager."""
+    conn = self.engine.connect()  # Each thread gets own connection
+    trans = conn.begin()
+    try:
+        yield conn
+        trans.commit()
+    except Exception:
+        trans.rollback()
+        raise
+    finally:
+        conn.close()  # Release connection back to pool
+```
+
+**Thread Isolation Guarantee:**
+- Thread A's transaction is isolated from Thread B's transaction
+- Each has its own connection from the pool
+- ACID properties are maintained per-transaction
+- Default isolation level: READ_COMMITTED
+
+#### Testing Thread Safety:
+
+We will add comprehensive thread safety tests (see Phase 2, Step 2.10):
+- Concurrent queries from multiple threads
+- Concurrent inserts/updates/deletes
+- Transaction isolation verification
+- Connection pool exhaustion handling
+- Connection cleanup under load
+
 ---
 
 ## 3. File Changes Required
@@ -497,7 +582,46 @@ Write tests that define how initialization should work:
 - [ ] `test_parameterized_query_prevents_sql_injection()` - SQL injection attempts should be safe
 - [ ] `test_special_characters_in_data()` - Special chars (quotes, semicolons) should work
 
-#### Step 2.10: **VERIFY TESTS ARE CORRECT** ⚠️
+#### Step 2.10: Write Thread Safety Tests
+**CRITICAL: Verify concurrent access is safe**
+
+- [ ] `test_concurrent_queries()` - Multiple threads doing SELECT simultaneously should work
+- [ ] `test_concurrent_inserts()` - Multiple threads inserting simultaneously should work
+- [ ] `test_concurrent_transactions()` - Multiple transactions in different threads should be isolated
+- [ ] `test_connection_pool_exhaustion()` - Verify behavior when pool is exhausted (should block, not fail)
+- [ ] `test_connection_cleanup_under_load()` - Connections should be released properly under concurrent load
+
+**Test Implementation Strategy:**
+```python
+import threading
+import concurrent.futures
+
+def test_concurrent_queries():
+    """Verify multiple threads can query simultaneously."""
+    db = TestDB()
+    db.init_database("sqlite:///:memory:", pool_size=5)
+    db.execute_raw("CREATE TABLE items (id INTEGER, value TEXT)")
+    for i in range(10):
+        db.execute_insert("items", {"id": i, "value": f"item{i}"})
+
+    def query_worker(thread_id):
+        # Each thread performs multiple queries
+        for _ in range(10):
+            results = db.execute_query("SELECT * FROM items WHERE id = :id", {"id": thread_id % 10})
+            assert len(results) == 1
+            assert results[0]["value"] == f"item{thread_id % 10}"
+        return thread_id
+
+    # Run 20 threads concurrently
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        futures = [executor.submit(query_worker, i) for i in range(20)]
+        results = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+    assert len(results) == 20
+    db.close_database()
+```
+
+#### Step 2.11: **VERIFY TESTS ARE CORRECT** ⚠️
 **CRITICAL STEP - DO NOT SKIP!**
 
 - [ ] Review EVERY test carefully
@@ -521,24 +645,68 @@ Write tests that define how initialization should work:
 
 **Now implement the mixin to make the tests pass!**
 
-#### Step 3.1: Core Infrastructure
-- [ ] Implement `__init__` to initialize instance variables (engine, connection pool)
+#### Step 3.1: Core Infrastructure (Thread-Safe Implementation)
+- [ ] Implement `__init__` to initialize instance variables
+  - Store only the `engine` (thread-safe)
+  - **DO NOT** store connections as instance variables (not thread-safe)
 - [ ] Implement `init_database()` with SQLAlchemy engine creation
   - Use `create_engine()` with connection pooling
   - Set pool_size, max_overflow, pool_pre_ping
+  - Set `pool_recycle=3600` to recycle stale connections
 - [ ] Implement `close_database()` for cleanup (dispose engine)
-- [ ] Implement `get_connection()` to return a connection from pool
-- [ ] Implement `db_ready` property
+- [ ] Implement `get_connection()` to return a NEW connection from pool
+  - Always returns `self.engine.connect()` (creates new connection)
+  - Never reuse connections across calls
+- [ ] Implement `db_ready` property (check if engine exists)
 - [ ] Implement `_require_db()` internal validation method
 - [ ] Run initialization tests - should PASS now
 
-#### Step 3.2: Query Operations (SELECT)
+**Thread Safety Pattern:**
+```python
+class DatabaseMixin:
+    def __init__(self):
+        self.engine = None  # Engine is thread-safe
+        # DO NOT store: self._connection (not thread-safe!)
+
+    def init_database(self, db_url, pool_size=5):
+        self.engine = create_engine(
+            db_url,
+            poolclass=QueuePool,
+            pool_size=pool_size,
+            max_overflow=10,
+            pool_pre_ping=True,
+            pool_recycle=3600
+        )
+
+    def get_connection(self):
+        """Returns a NEW connection (thread-safe)."""
+        self._require_db()
+        return self.engine.connect()
+```
+
+#### Step 3.2: Query Operations (SELECT) - Thread-Safe
 - [ ] Implement `execute_query()` for SELECT operations
+  - **Get connection per-operation** (not shared)
   - Use `text()` with parameter binding
   - Convert rows to list of dictionaries
   - Handle empty results
-  - Proper error handling and connection cleanup
+  - **Always close connection in finally block**
+  - Proper error handling
 - [ ] Run query tests - should PASS now
+- [ ] Run thread safety tests - should PASS now
+
+**Thread-Safe Pattern:**
+```python
+def execute_query(self, sql, params=None):
+    """Thread-safe query execution."""
+    self._require_db()
+    conn = self.engine.connect()  # Get new connection from pool
+    try:
+        result = conn.execute(text(sql), params or {})
+        return [dict(row) for row in result]
+    finally:
+        conn.close()  # Always release back to pool
+```
 
 #### Step 3.3: Insert Operations
 - [ ] Implement `execute_insert()` for INSERT operations
@@ -653,6 +821,7 @@ Write tests that define how initialization should work:
 - [ ] Verify all acceptance criteria are met (see Section 8)
 - [ ] Test manually with SQLite (create a simple test script)
 - [ ] Verify connection pooling is working
+- [ ] **Verify thread safety tests pass** (concurrent operations work correctly)
 - [ ] Check that migrations don't break existing functionality
 
 ---
@@ -694,9 +863,11 @@ Write tests that define how initialization should work:
 - [ ] All tests written FIRST (TDD approach)
 - [ ] Tests verified to test the correct behavior
 - [ ] All tests pass (100% pass rate)
+- [ ] **Thread safety tests pass** (concurrent operations work correctly)
 - [ ] Code follows GAIA style guidelines (linting passes)
 - [ ] No SQL injection vulnerabilities
 - [ ] Proper connection cleanup in all code paths
+- [ ] **No shared connection state** (connections are per-operation, not instance variables)
 - [ ] Comprehensive docstrings with examples
 
 ---
