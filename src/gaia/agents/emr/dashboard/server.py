@@ -1181,11 +1181,20 @@ def create_app(
                 "vlm_model": "Qwen3-VL-4B-Instruct-GGUF",
             }
 
+        # Handle database path (may be None for non-SQLite databases)
+        if _agent_instance._db_path:
+            db_path_abs = str(Path(_agent_instance._db_path).resolve())
+            db_path_rel = str(_agent_instance._db_path)
+        else:
+            # For non-SQLite databases, show the connection URL
+            db_path_abs = _agent_instance._db_url
+            db_path_rel = _agent_instance._db_url
+
         return {
             "watch_dir": str(Path(_agent_instance._watch_dir).resolve()),
             "watch_dir_relative": str(_agent_instance._watch_dir),
-            "db_path": str(Path(_agent_instance._db_path).resolve()),
-            "db_path_relative": str(_agent_instance._db_path),
+            "db_path": db_path_abs,
+            "db_path_relative": db_path_rel,
             "agent_running": True,
             "vlm_model": _agent_instance._vlm_model,
         }

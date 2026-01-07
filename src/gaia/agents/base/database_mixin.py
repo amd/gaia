@@ -191,6 +191,36 @@ class DatabaseMixin:
         if not self.engine:
             raise RuntimeError("Database not initialized. Call init_database() first.")
 
+    def _validate_identifier(
+        self, identifier: str, identifier_type: str = "identifier"
+    ) -> None:
+        """
+        Validate SQL identifier (table/column name) to prevent SQL injection.
+
+        Args:
+            identifier: The identifier to validate
+            identifier_type: Type description for error message
+
+        Raises:
+            ValueError: If identifier contains invalid characters
+
+        Note:
+            In practice, table/column names are controlled by agent code, not user input.
+            This validation provides defense-in-depth against accidental misuse.
+        """
+        if not identifier:
+            raise ValueError(f"Invalid {identifier_type}: cannot be empty")
+
+        # Allow alphanumeric, underscore, and dot (for schema.table)
+        # Disallow quotes, semicolons, spaces, and other SQL meta-characters
+        import re
+
+        if not re.match(r"^[a-zA-Z0-9_.]+$", identifier):
+            raise ValueError(
+                f"Invalid {identifier_type} '{identifier}': "
+                f"only alphanumeric, underscore, and dot allowed"
+            )
+
     def execute_query(
         self, sql: str, params: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
@@ -263,6 +293,12 @@ class DatabaseMixin:
             )
         """
         self._require_db()
+        self._validate_identifier(table, "table name")
+        for col in data.keys():
+            self._validate_identifier(col, "column name")
+        if returning:
+            self._validate_identifier(returning, "returning column")
+
         conn = self.engine.connect()
         try:
             cols = ", ".join(data.keys())
@@ -270,9 +306,18 @@ class DatabaseMixin:
 
             if returning:
                 # PostgreSQL/MySQL style with RETURNING
-                sql = f"INSERT INTO {table} ({cols}) VALUES ({placeholders}) RETURNING {returning}"
-                result = conn.execute(text(sql), data)
-                return result.scalar()
+                try:
+                    sql = f"INSERT INTO {table} ({cols}) VALUES ({placeholders}) RETURNING {returning}"
+                    result = conn.execute(text(sql), data)
+                    return result.scalar()
+                except Exception as e:
+                    # Fallback for SQLite < 3.35 or databases without RETURNING support
+                    if "RETURNING" in str(e):
+                        sql = f"INSERT INTO {table} ({cols}) VALUES ({placeholders})"
+                        result = conn.execute(text(sql), data)
+                        conn.commit()
+                        return result.lastrowid
+                    raise
             else:
                 # SQLite style - use lastrowid
                 sql = f"INSERT INTO {table} ({cols}) VALUES ({placeholders})"
@@ -317,6 +362,10 @@ class DatabaseMixin:
             )
         """
         self._require_db()
+        self._validate_identifier(table, "table name")
+        for col in data.keys():
+            self._validate_identifier(col, "column name")
+
         conn = self.engine.connect()
         try:
             # Prefix data params with __set_ to avoid collision with where params
@@ -359,6 +408,8 @@ class DatabaseMixin:
             )
         """
         self._require_db()
+        self._validate_identifier(table, "table name")
+
         conn = self.engine.connect()
         try:
             sql = f"DELETE FROM {table} WHERE {where}"
@@ -462,6 +513,7 @@ class DatabaseMixin:
                 self.execute_raw("CREATE TABLE users (...)")
         """
         self._require_db()
+        self._validate_identifier(table, "table name")
         inspector = inspect(self.engine)
         return table in inspector.get_table_names()
 

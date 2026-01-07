@@ -107,7 +107,8 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
             if db_url.startswith("sqlite:///"):
                 self._db_path = db_url.replace("sqlite:///", "")
             else:
-                self._db_path = db_url  # For non-SQLite, just use URL
+                # For non-SQLite, set to None since it's not a filesystem path
+                self._db_path = None
         self._vlm_model = vlm_model
         self._vlm = None
         self._processed_files: List[Dict[str, Any]] = []
@@ -1429,10 +1430,15 @@ Use the available tools to search and retrieve patient information."""
         counts = {}
 
         try:
-            # Get counts before deletion
+            # Get counts before deletion (using table_exists for validation)
             for table in ["patients", "alerts", "intake_sessions"]:
-                result = self.execute_query(f"SELECT COUNT(*) as count FROM {table}")
-                counts[table] = result[0]["count"] if result else 0
+                if self.table_exists(table):  # Validates table name
+                    result = self.execute_query(
+                        f"SELECT COUNT(*) as count FROM {table}"
+                    )
+                    counts[table] = result[0]["count"] if result else 0
+                else:
+                    counts[table] = 0
 
             # Delete all records from each table
             self.execute_raw("DELETE FROM intake_sessions")

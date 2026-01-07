@@ -584,7 +584,7 @@ def test_connection_pool_exhaustion():
     def slow_query_worker(thread_id):
         """Each thread performs a slow operation."""
         time.sleep(0.1)  # Hold connection briefly
-        results = db.execute_query("SELECT * FROM items")
+        _ = db.execute_query("SELECT * FROM items")  # Just execute, result not needed
         return thread_id
 
     # Run more threads than pool_size - should block, not fail
