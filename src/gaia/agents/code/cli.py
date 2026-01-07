@@ -11,23 +11,59 @@ import sys
 from pathlib import Path
 
 from rich.console import Console
-from rich.panel import Panel
 
 logger = logging.getLogger(__name__)
 console = Console()
 
 
-def _print_header():
-    """Print a styled header for the CLI."""
-    console.print()
-    console.print(
-        Panel.fit(
-            "[bold cyan]GAIA Code Agent[/bold cyan]\n"
-            "[dim]AI-powered code generation and analysis[/dim]",
-            border_style="cyan",
-        )
-    )
-    console.print()
+def _run_interactive_mode(agent, project_path, args, log):
+    """Run the interactive REPL loop for the Code Agent."""
+    while True:
+        try:
+            query = input("\ncode> ").strip()
+
+            if query.lower() in ["exit", "quit"]:
+                log.info("Goodbye!")
+                break
+
+            if query.lower() == "help":
+                print("\nAvailable commands:")
+                print("  Generate functions, classes, or tests")
+                print("  Analyze Python files")
+                print("  Validate Python syntax")
+                print("  Lint and format code")
+                print("  Edit files with diffs")
+                print("  Search for code patterns")
+                print("  Type 'exit' or 'quit' to end")
+                continue
+
+            if not query:
+                continue
+
+            # Process the query
+            result = agent.process_query(
+                query,
+                workspace_root=project_path,
+                max_steps=args.max_steps,
+                trace=args.trace,
+            )
+
+            # Display result
+            if not args.silent:
+                if result.get("status") == "success":
+                    log.info(f"\n✅ {result.get('result', 'Task completed')}")
+                else:
+                    log.error(f"\n❌ {result.get('result', 'Task failed')}")
+
+        except KeyboardInterrupt:
+            print("\n\nInterrupted. Type 'exit' to quit.")
+            continue
+        except Exception as e:
+            log.error(f"Error processing query: {e}")
+            if args.debug:
+                import traceback
+
+                traceback.print_exc()
 
 
 def cmd_run(args):
@@ -149,52 +185,8 @@ def cmd_run(args):
             log.info("Type 'exit' or 'quit' to end the session")
             log.info("Type 'help' for available commands\n")
 
-            while True:
-                try:
-                    query = input("\ncode> ").strip()
-
-                    if query.lower() in ["exit", "quit"]:
-                        log.info("Goodbye!")
-                        break
-
-                    if query.lower() == "help":
-                        print("\nAvailable commands:")
-                        print("  Generate functions, classes, or tests")
-                        print("  Analyze Python files")
-                        print("  Validate Python syntax")
-                        print("  Lint and format code")
-                        print("  Edit files with diffs")
-                        print("  Search for code patterns")
-                        print("  Type 'exit' or 'quit' to end")
-                        continue
-
-                    if not query:
-                        continue
-
-                    # Process the query
-                    result = agent.process_query(
-                        query,
-                        workspace_root=project_path,
-                        max_steps=args.max_steps,
-                        trace=args.trace,
-                    )
-
-                    # Display result
-                    if not args.silent:
-                        if result.get("status") == "success":
-                            log.info(f"\n✅ {result.get('result', 'Task completed')}")
-                        else:
-                            log.error(f"\n❌ {result.get('result', 'Task failed')}")
-
-                except KeyboardInterrupt:
-                    print("\n\nInterrupted. Type 'exit' to quit.")
-                    continue
-                except Exception as e:
-                    log.error(f"Error processing query: {e}")
-                    if args.debug:
-                        import traceback
-
-                        traceback.print_exc()
+            _run_interactive_mode(agent, project_path, args, log)
+            return 0
 
         # Single query mode
         elif query:
@@ -220,52 +212,7 @@ def cmd_run(args):
             # Default to interactive mode when no query provided
             log.info("Starting Code Agent interactive mode (type 'help' for commands)")
 
-            while True:
-                try:
-                    query = input("\ncode> ").strip()
-
-                    if query.lower() in ["exit", "quit"]:
-                        log.info("Goodbye!")
-                        break
-
-                    if query.lower() == "help":
-                        print("\nAvailable commands:")
-                        print("  Generate functions, classes, or tests")
-                        print("  Analyze Python files")
-                        print("  Validate Python syntax")
-                        print("  Lint and format code")
-                        print("  Edit files with diffs")
-                        print("  Search for code patterns")
-                        print("  Type 'exit' or 'quit' to end")
-                        continue
-
-                    if not query:
-                        continue
-
-                    # Process the query
-                    result = agent.process_query(
-                        query,
-                        workspace_root=project_path,
-                        max_steps=args.max_steps,
-                        trace=args.trace,
-                    )
-
-                    # Display result
-                    if not args.silent:
-                        if result.get("status") == "success":
-                            log.info(f"\n✅ {result.get('result', 'Task completed')}")
-                        else:
-                            log.error(f"\n❌ {result.get('result', 'Task failed')}")
-
-                except KeyboardInterrupt:
-                    print("\n\nInterrupted. Type 'exit' to quit.")
-                    continue
-                except Exception as e:
-                    log.error(f"Error processing query: {e}")
-                    if args.debug:
-                        import traceback
-
-                        traceback.print_exc()
+            _run_interactive_mode(agent, project_path, args, log)
             return 0
 
     except Exception as e:
