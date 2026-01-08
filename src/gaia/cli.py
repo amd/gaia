@@ -36,6 +36,14 @@ except ImportError:
     MCPClient = None
     BLENDER_AVAILABLE = False
 
+try:
+    from gaia.agents.code.agent import CodeAgent
+
+    CODE_AVAILABLE = True
+except ImportError:
+    CodeAgent = None
+    CODE_AVAILABLE = False
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -1043,6 +1051,54 @@ def main():
         action="store_true",
         help="Enable debug logging",
     )
+
+    # Add Code agent command
+    code_parser = subparsers.add_parser(
+        "code",
+        help="Python code assistant with analysis, generation, and linting",
+        parents=[parent_parser],
+    )
+    code_parser.add_argument(
+        "query",
+        nargs="?",
+        help="Code operation query (e.g., 'Generate a function to sort a list')",
+    )
+    code_parser.add_argument(
+        "--interactive",
+        "-i",
+        action="store_true",
+        help="Interactive mode for multiple queries",
+    )
+    code_parser.add_argument(
+        "--silent",
+        "-s",
+        action="store_true",
+        help="Silent mode - suppress console output, return JSON only",
+    )
+    code_parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging",
+    )
+    code_parser.add_argument(
+        "--show-prompts",
+        action="store_true",
+        help="Display prompts sent to LLM",
+    )
+    # Note: --use-claude, --use-chatgpt, --max-steps, --list-tools, --stream, --stats inherited from parent_parser
+    code_parser.add_argument(
+        "--step-through",
+        action="store_true",
+        help="Enable step-through debugging mode (pause at each agent step)",
+    )
+    code_parser.add_argument(
+        "--path",
+        "-p",
+        type=str,
+        default=None,
+        help="Project directory path. Creates directory if it doesn't exist. All operations will use this as working directory.",
+    )
+    code_parser.set_defaults(action="code")
 
     # Add Docker app command
     docker_parser = subparsers.add_parser(
@@ -3936,6 +3992,11 @@ Let me know your answer!
         handle_blender_command(args)
         return
 
+    # Handle Code command
+    if args.action == "code":
+        handle_code_command(args)
+        return
+
     # Handle Jira command
     if args.action == "jira":
         handle_jira_command(args)
@@ -4163,6 +4224,245 @@ def run_blender_interactive_mode(agent, print_result=True):
             break
         except Exception as e:
             console.print_error(f"Error processing Blender query: {e}")
+
+
+def handle_code_command(args):
+    """
+    Handle the Code agent command.
+
+    Args:
+        args: Parsed command line arguments for the code command
+    """
+    log = get_logger(__name__)
+
+    # Set logging level to DEBUG if --debug flag is used
+    if getattr(args, "debug", False):
+        from gaia.logger import log_manager
+
+        # Set root logger level first to ensure all handlers process DEBUG messages
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)
+
+        # Update all existing loggers that start with "gaia"
+        for logger_name in list(log_manager.loggers.keys()):
+            if logger_name.startswith("gaia"):
+                log_manager.loggers[logger_name].setLevel(logging.DEBUG)
+
+        # Set default level for future loggers
+        log_manager.set_level("gaia", logging.DEBUG)
+
+        # Also ensure all handlers have DEBUG level
+        for handler in root_logger.handlers:
+            handler.setLevel(logging.DEBUG)
+
+    if not CODE_AVAILABLE:
+        log.error("Code agent is not available. Please check your installation.")
+        return
+
+    # Get base_url from args or environment
+    base_url = getattr(args, "base_url", None)
+    if base_url is None:
+        base_url = os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
+
+    # Initialize Lemonade with code agent profile (32768 context)
+    # Skip for remote servers (e.g., devtunnel URLs), external APIs, or --no-lemonade-check
+    is_local = "localhost" in base_url or "127.0.0.1" in base_url
+    skip_lemonade = getattr(args, "no_lemonade_check", False)
+    if is_local and not skip_lemonade:
+        success, _ = initialize_lemonade_for_agent(
+            agent="code",
+            skip_if_external=True,
+            use_claude=getattr(args, "use_claude", False),
+            use_chatgpt=getattr(args, "use_chatgpt", False),
+        )
+        if not success:
+            sys.exit(1)
+
+    try:
+        # Import RoutingAgent for intelligent language detection
+        from gaia.agents.routing.agent import RoutingAgent
+
+        # Handle --path argument
+        project_path = getattr(args, "path", None)
+        if project_path:
+            project_path = Path(project_path).expanduser().resolve()
+            # Create directory if it doesn't exist
+            project_path.mkdir(parents=True, exist_ok=True)
+            project_path = str(project_path)
+            log.debug(f"Using project path: {project_path}")
+
+        # Get the query to analyze
+        query = args.query if hasattr(args, "query") and args.query else None
+
+        # Use RoutingAgent to determine language and project type
+        if query:
+            # Prepare agent configuration from CLI args
+            agent_config = {
+                "silent_mode": getattr(args, "silent", False),
+                "debug": getattr(args, "debug", False),
+                "show_prompts": getattr(args, "show_prompts", False),
+                "max_steps": getattr(args, "max_steps", 100),
+                "use_claude": getattr(args, "use_claude", False),
+                "use_chatgpt": getattr(args, "use_chatgpt", False),
+                "streaming": getattr(args, "streaming", False),
+                "base_url": getattr(args, "base_url", None),
+                "skip_lemonade": getattr(args, "no_lemonade_check", False),
+            }
+
+            # Single query mode - use routing with configuration
+            router = RoutingAgent(**agent_config)
+            agent = router.process_query(query)
+        else:
+            # Interactive mode - start with default Python agent
+            # User can still benefit from routing per query
+            agent = CodeAgent(
+                silent_mode=getattr(args, "silent", False),
+                debug=getattr(args, "debug", False),
+                show_prompts=getattr(args, "show_prompts", False),
+                max_steps=getattr(args, "max_steps", 100),
+                use_claude=getattr(args, "use_claude", False),
+                use_chatgpt=getattr(args, "use_chatgpt", False),
+                streaming=getattr(args, "streaming", False),
+                base_url=getattr(args, "base_url", None),
+                skip_lemonade=getattr(args, "no_lemonade_check", False),
+            )
+
+        # Handle list tools option
+        if getattr(args, "list_tools", False):
+            agent.list_tools(verbose=True)
+            return
+
+        # Handle interactive mode
+        if getattr(args, "interactive", False):
+            log.info("🤖 Code Agent Interactive Mode")
+            log.info("Type 'exit' or 'quit' to end the session")
+            log.info("Type 'help' for available commands\n")
+
+            while True:
+                try:
+                    query = input("\ncode> ").strip()
+
+                    if query.lower() in ["exit", "quit"]:
+                        log.info("Goodbye!")
+                        break
+
+                    if query.lower() == "help":
+                        print("\nAvailable commands:")
+                        print("  Generate functions, classes, or tests")
+                        print("  Analyze Python files")
+                        print("  Validate Python syntax")
+                        print("  Lint and format code")
+                        print("  Edit files with diffs")
+                        print("  Search for code patterns")
+                        print("  Type 'exit' or 'quit' to end")
+                        continue
+
+                    if not query:
+                        continue
+
+                    # Process the query
+                    result = agent.process_query(
+                        query,
+                        workspace_root=project_path,
+                        max_steps=getattr(args, "max_steps", 100),
+                        trace=args.trace,
+                    )
+
+                    # Display result
+                    if not args.silent:
+                        if result.get("status") == "success":
+                            log.info(f"\n✅ {result.get('result', 'Task completed')}")
+                        else:
+                            log.error(f"\n❌ {result.get('result', 'Task failed')}")
+
+                except KeyboardInterrupt:
+                    print("\n\nInterrupted. Type 'exit' to quit.")
+                    continue
+                except Exception as e:
+                    log.error(f"Error processing query: {e}")
+                    if args.debug:
+                        import traceback
+
+                        traceback.print_exc()
+
+        # Single query mode
+        elif hasattr(args, "query") and args.query:
+            result = agent.process_query(
+                args.query,
+                workspace_root=project_path,
+                max_steps=args.max_steps,
+                trace=args.trace,
+                step_through=getattr(args, "step_through", False),
+            )
+
+            # Output result
+            if args.silent:
+                # In silent mode, output only JSON
+                import json
+
+                print(json.dumps(result, indent=2))
+            else:
+                # Display formatted result
+                agent.display_result("Code Operation Result", result)
+
+        else:
+            # Default to interactive mode when no query provided
+            log.info("Starting Code Agent interactive mode (type 'help' for commands)")
+
+            while True:
+                try:
+                    query = input("\ncode> ").strip()
+
+                    if query.lower() in ["exit", "quit"]:
+                        log.info("Goodbye!")
+                        break
+
+                    if query.lower() == "help":
+                        print("\nAvailable commands:")
+                        print("  Generate functions, classes, or tests")
+                        print("  Analyze Python files")
+                        print("  Validate Python syntax")
+                        print("  Lint and format code")
+                        print("  Edit files with diffs")
+                        print("  Search for code patterns")
+                        print("  Type 'exit' or 'quit' to end")
+                        continue
+
+                    if not query:
+                        continue
+
+                    # Process the query
+                    result = agent.process_query(
+                        query,
+                        workspace_root=project_path,
+                        max_steps=getattr(args, "max_steps", 100),
+                        trace=args.trace,
+                    )
+
+                    # Display result
+                    if not args.silent:
+                        if result.get("status") == "success":
+                            log.info(f"\n✅ {result.get('result', 'Task completed')}")
+                        else:
+                            log.error(f"\n❌ {result.get('result', 'Task failed')}")
+
+                except KeyboardInterrupt:
+                    print("\n\nInterrupted. Type 'exit' to quit.")
+                    continue
+                except Exception as e:
+                    log.error(f"Error processing query: {e}")
+                    if getattr(args, "debug", False):
+                        import traceback
+
+                        traceback.print_exc()
+            return
+
+    except Exception as e:
+        log.error(f"Error initializing Code agent: {e}")
+        if getattr(args, "debug", False):
+            import traceback
+
+            traceback.print_exc()
 
 
 def handle_jira_command(args):
