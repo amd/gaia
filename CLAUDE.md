@@ -117,20 +117,57 @@ gaia/
 
 When responding to GitHub issues and pull requests, follow these guidelines:
 
-- **Check documentation first:** Always search the `docs/` folder for answers to user questions before suggesting solutions
-- **Reference specific files:** Use precise file references to help users navigate the codebase
-  - Agent questions: `src/gaia/agents/`
-  - CLI questions: `src/gaia/cli.py`
-  - MCP questions: `src/gaia/mcp/`
-  - LLM backend: `src/gaia/llm/`
-- **Link to relevant documentation:** Provide direct links to documentation that addresses the issue
-- **For bugs:** Check `tests/` directory for related test cases that might reveal the issue or need updating
-- **Key documentation files:**
-  - CLI usage: [`docs/cli.md`](docs/cli.md)
-  - Chat and RAG: [`docs/chat.md`](docs/chat.md)
-  - Common issues: [`docs/faq.md`](docs/faq.md)
-  - Development setup: [`docs/dev.md`](docs/dev.md)
-  - Feature overview: [`docs/features.md`](docs/features.md)
+### Documentation Structure
+
+The documentation is organized in [`docs/docs.json`](docs/docs.json) with the following structure:
+- **User Guides** (`docs/guides/`): Feature-specific guides (chat, talk, code, blender, jira, docker, routing)
+- **Playbooks** (`docs/playbooks/`): Step-by-step tutorials for building agents
+- **SDK Reference** (`docs/sdk/`): Core concepts, SDKs, infrastructure, mixins, agents
+- **Specifications** (`docs/spec/`): Technical specs for all components
+- **Reference** (`docs/reference/`): CLI, API, features, FAQ, development
+- **Deployment** (`docs/deployment/`): Packaging, installers, UI
+
+### Response Protocol
+
+1. **Check documentation first:** Always search `docs/` folder before suggesting solutions
+   - See [`docs/docs.json`](docs/docs.json) for the complete documentation structure
+
+2. **Check for duplicates:** Search existing issues/PRs to avoid redundant responses
+
+3. **Reference specific files:** Use precise file references with line numbers when possible
+   - Agent implementations: `src/gaia/agents/` (base.py, chat_agent.py, code_agent.py, jira_agent.py, blender_agent.py)
+   - CLI commands: `src/gaia/cli.py`
+   - MCP integration: `src/gaia/mcp/`
+   - LLM backend: `src/gaia/llm/`
+   - Audio processing: `src/gaia/audio/` (ASR, TTS)
+   - RAG system: `src/gaia/rag/` (document Q&A, embeddings)
+   - Evaluation: `src/gaia/eval/` (batch experiments, ground truth)
+   - Applications: `src/gaia/apps/` (jira, llm, summarize)
+   - Chat SDK: `src/gaia/chat/`
+
+4. **Link to relevant documentation:**
+   - **Getting Started:** [`docs/setup.md`](docs/setup.md), [`docs/quickstart.md`](docs/quickstart.md)
+   - **User Guides:** [`docs/guides/chat.md`](docs/guides/chat.md), [`docs/guides/talk.md`](docs/guides/talk.md), [`docs/guides/code.md`](docs/guides/code.md), [`docs/guides/blender.md`](docs/guides/blender.md), [`docs/guides/jira.md`](docs/guides/jira.md)
+   - **SDK Reference:** [`docs/sdk/core/agent-system.md`](docs/sdk/core/agent-system.md), [`docs/sdk/sdks/chat.md`](docs/sdk/sdks/chat.md), [`docs/sdk/sdks/rag.md`](docs/sdk/sdks/rag.md), [`docs/sdk/infrastructure/mcp.md`](docs/sdk/infrastructure/mcp.md)
+   - **CLI Reference:** [`docs/reference/cli.md`](docs/reference/cli.md), [`docs/reference/features.md`](docs/reference/features.md)
+   - **Development:** [`docs/reference/dev.md`](docs/reference/dev.md), [`docs/sdk/testing.md`](docs/sdk/testing.md), [`docs/sdk/best-practices.md`](docs/sdk/best-practices.md)
+   - **FAQ & Help:** [`docs/reference/faq.md`](docs/reference/faq.md), [`docs/glossary.md`](docs/glossary.md)
+
+5. **For bugs:**
+   - Search `src/gaia/` for related code
+   - Check `tests/` for related test cases that might reveal the issue or need updating
+   - Reference [`docs/sdk/troubleshooting.md`](docs/sdk/troubleshooting.md)
+   - Check security implications using [`docs/sdk/security.md`](docs/sdk/security.md)
+
+6. **For feature requests:**
+   - Check if similar functionality exists in `src/gaia/agents/` or `src/gaia/apps/`
+   - Reference [`docs/sdk/examples.md`](docs/sdk/examples.md) and [`docs/sdk/advanced-patterns.md`](docs/sdk/advanced-patterns.md)
+   - Suggest approaches following [`docs/sdk/best-practices.md`](docs/sdk/best-practices.md)
+
+7. **Follow contribution guidelines:**
+   - Reference [`CONTRIBUTING.md`](CONTRIBUTING.md) for code standards
+   - Ensure AMD copyright headers on new files
+   - Point to [`docs/reference/dev.md`](docs/reference/dev.md) for development workflow
 
 ## File Path Rules (Workaround for Claude Code v1.0.111 Bug)
 - When reading or editing a file, **ALWAYS use relative paths.**

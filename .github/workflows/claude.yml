@@ -2,25 +2,35 @@
 # SPDX-License-Identifier: MIT
 
 name: Claude AI Assistant
+
 on:
   issues:
     types: [opened, labeled]
   issue_comment:
     types: [created]
   pull_request:
-    types: [opened, synchronize, ready_for_review]
+    types: [opened, ready_for_review]
   pull_request_review_comment:
     types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
 
 jobs:
   # Auto-review new PRs
   pr-review:
     if: |
       github.event_name == 'pull_request' &&
-      github.event.pull_request.draft == false
+      (github.event.pull_request.draft == false ||
+       contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
     runs-on: ubuntu-latest
+    concurrency:
+      group: claude-pr-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - uses: anthropics/claude-code-action@v1
@@ -28,11 +38,12 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
             Review this GAIA PR:
-            - Check AMD copyright headers on new files
+            - Check AMD copyright headers on new files (must have: Copyright(C) 2025-2026 Advanced Micro Devices, Inc.)
             - Verify code follows patterns in src/gaia/
-            - Look for security issues
-            - Check test coverage
-            - Reference docs/dev.md for standards
+            - Look for security issues (SQL injection, command injection, XSS, secrets exposure)
+            - Check test coverage in tests/
+            - Reference docs/dev.md and CLAUDE.md for standards
+            - Verify documentation updates if API changes
           claude_args: "--max-turns 5"
 
   # Respond to @claude in PRs
@@ -42,7 +53,7 @@ jobs:
       contains(github.event.comment.body, '@claude')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -55,16 +66,24 @@ jobs:
        contains(github.event.comment.body, '@claude'))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
-            You are GAIA's helpful AI assistant.
+            You are GAIA's helpful AI assistant. Follow the Issue Response Guidelines in CLAUDE.md.
 
-            For questions: Check docs/ folder, especially faq.md, cli.md
-            For bugs: Search src/gaia/ for related code
-            For features: Check if similar exists, suggest approach
+            For questions: Check docs/ folder - see docs/docs.json for structure
+              - User guides: guides/chat.md, guides/talk.md, guides/code.md, guides/blender.md, guides/jira.md
+              - SDK reference: sdk/core/agent-system.md, sdk/sdks/chat.md, sdk/sdks/rag.md, sdk/infrastructure/mcp.md
+              - CLI reference: reference/cli.md, reference/features.md
+              - FAQ: reference/faq.md, glossary.md
+              - Development: reference/dev.md, sdk/testing.md, sdk/best-practices.md
 
-            Always be helpful, concise, and reference specific files.
+            For bugs: Search src/gaia/ for related code, check tests/ for test cases
+
+            For features: Check if similar exists in src/gaia/agents/ or src/gaia/apps/
+
+            Always reference specific files with line numbers when possible.
+            Check for duplicate issues before responding in detail.
           claude_args: "--max-turns 3"
