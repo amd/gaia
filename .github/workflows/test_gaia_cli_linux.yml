@@ -268,7 +268,7 @@ jobs:
               from gaia.cli import main
               from gaia.version import version
               from gaia.logger import get_logger
-              from gaia.llm.llm_client import LLMClient
+              from gaia.llm import LLMClient
               print('✅ All core imports successful on Linux')
           except ImportError as e:
               print(f'❌ Import error: {e}')
