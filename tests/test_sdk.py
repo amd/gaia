@@ -430,6 +430,9 @@ class TestLLMClient:
         # Check optional methods exist
         assert hasattr(LLMClient, "embed")
         assert hasattr(LLMClient, "vision")
+        assert hasattr(LLMClient, "get_performance_stats")
+        assert hasattr(LLMClient, "load_model")
+        assert hasattr(LLMClient, "unload_model")
 
     def test_lemonade_constants_exist(self):
         """Verify Lemonade client constants."""

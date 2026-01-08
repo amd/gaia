@@ -30,7 +30,7 @@ def create_client(
         **kwargs: Provider-specific arguments (base_url, model, api_key, etc.)
 
     Note:
-        The design in using these flags is to maintain backward compatibility
+        The design using these flags maintains backward compatibility
         while allowing explicit provider selection. If both use_claude and
         use_openai are False and provider is not specified, the default
         provider "lemonade" is used. This was deemed better than updating all
