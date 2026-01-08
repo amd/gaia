@@ -49,12 +49,14 @@ Database URLs:
 """
 
 import logging
+import threading
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.pool import NullPool, QueuePool, StaticPool
+from sqlalchemy.pool import NullPool, QueuePool, SingletonThreadPool, StaticPool
 
 logger = logging.getLogger(__name__)
 
@@ -101,12 +103,21 @@ class DatabaseMixin:
         if not hasattr(self, "engine"):
             self.engine = None
 
+        # Initialize thread-local storage for transaction contexts
+        if not hasattr(self, "_local"):
+            self._local = threading.local()
+
         # Close existing engine if any
         if self.engine:
             self.close_database()
 
+        # Track if this is a file-based SQLite database (before URL transformation)
+        is_file_sqlite = (
+            db_url.startswith("sqlite:///") and not db_url.endswith(":memory:")
+        )
+
         # Create parent directory for file-based SQLite
-        if db_url.startswith("sqlite:///") and not db_url.endswith(":memory:"):
+        if is_file_sqlite:
             db_path = db_url.replace("sqlite:///", "")
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -117,10 +128,20 @@ class DatabaseMixin:
         if db_url.startswith("sqlite:"):
             connect_args["check_same_thread"] = False
 
-            # In-memory SQLite needs StaticPool (single connection shared)
-            # Otherwise each connection gets a separate in-memory database
+            # In-memory SQLite needs special handling for thread safety
+            # StaticPool shares a single connection which causes threading issues
+            # Solution: Use a shared-cache named in-memory database with QueuePool
             if ":memory:" in db_url:
-                poolclass = StaticPool
+                # Convert :memory: to file:memdb_<uuid>?mode=memory&cache=shared
+                # This creates a unique named in-memory database that can be shared across threads
+                # Each thread gets its own connection from the pool
+                # The unique name ensures each init_database() gets a fresh database
+                unique_name = f"memdb_{uuid.uuid4().hex[:8]}"
+                db_url = db_url.replace(
+                    ":memory:", f"file:{unique_name}?mode=memory&cache=shared"
+                )
+                connect_args["uri"] = True  # Required for file: URI syntax
+                poolclass = QueuePool
             else:
                 # File-based SQLite should use NullPool to avoid "database is locked" errors
                 # SQLite's locking model doesn't work well with connection pooling
@@ -141,6 +162,12 @@ class DatabaseMixin:
 
         self.engine = create_engine(db_url, **engine_args)
 
+        # For file-based SQLite, create the database file if it doesn't exist
+        # NullPool doesn't create connections eagerly, so we need to force one
+        if is_file_sqlite:
+            with self.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))  # Touch the database to create file
+
         logger.info(f"Database initialized: {db_url} (pool_size={pool_size})")
 
     def close_database(self) -> None:
@@ -158,10 +185,13 @@ class DatabaseMixin:
 
     def get_connection(self):
         """
-        Get a new connection from the pool.
+        Get a connection from the pool or the active transaction.
 
-        Thread-safe: Each call returns a NEW connection from the pool.
-        The connection must be closed by the caller.
+        Thread-safe: Returns the active transaction connection if in a transaction,
+        otherwise returns a new connection from the pool.
+
+        IMPORTANT: If a transaction is active, the returned connection belongs to
+        the transaction and should NOT be closed by the caller.
 
         Returns:
             SQLAlchemy Connection object
@@ -175,9 +205,15 @@ class DatabaseMixin:
                 result = conn.execute(text("SELECT * FROM users"))
                 # ... process result ...
             finally:
-                conn.close()  # Always close!
+                conn.close()  # Only close if NOT in a transaction!
         """
         self._require_db()
+
+        # If we're in a transaction context, return that connection
+        if hasattr(self._local, "transaction_conn") and self._local.transaction_conn:
+            return self._local.transaction_conn
+
+        # Otherwise, return a new connection from the pool
         return self.engine.connect()
 
     @property
@@ -190,7 +226,7 @@ class DatabaseMixin:
         Returns:
             True if engine exists, False otherwise
         """
-        return self.engine is not None
+        return hasattr(self, "engine") and self.engine is not None
 
     def _require_db(self) -> None:
         """
@@ -199,8 +235,25 @@ class DatabaseMixin:
         Raises:
             RuntimeError: If database not initialized
         """
-        if not self.engine:
+        if not hasattr(self, "engine") or not self.engine:
             raise RuntimeError("Database not initialized. Call init_database() first.")
+
+    def _should_close_connection(self, conn) -> bool:
+        """
+        Check if a connection should be closed.
+
+        Returns False if the connection is part of an active transaction.
+
+        Args:
+            conn: SQLAlchemy Connection object
+
+        Returns:
+            True if connection should be closed, False otherwise
+        """
+        # Don't close if this is a transaction connection
+        if hasattr(self._local, "transaction_conn") and self._local.transaction_conn is conn:
+            return False
+        return True
 
     def _validate_identifier(
         self, identifier: str, identifier_type: str = "identifier"
@@ -265,13 +318,14 @@ class DatabaseMixin:
             assert results == []
         """
         self._require_db()
-        conn = self.engine.connect()
+        conn = self.get_connection()
         try:
             result = conn.execute(text(sql), params or {})
             # pylint: disable=protected-access
             return [dict(row._mapping) for row in result]
         finally:
-            conn.close()
+            if self._should_close_connection(conn):
+                conn.close()
 
     def execute_insert(
         self, table: str, data: Dict[str, Any], returning: Optional[str] = None
@@ -310,7 +364,8 @@ class DatabaseMixin:
         if returning:
             self._validate_identifier(returning, "returning column")
 
-        conn = self.engine.connect()
+        conn = self.get_connection()
+        should_close = self._should_close_connection(conn)
         try:
             cols = ", ".join(data.keys())
             placeholders = ", ".join(f":{k}" for k in data.keys())
@@ -320,23 +375,31 @@ class DatabaseMixin:
                 try:
                     sql = f"INSERT INTO {table} ({cols}) VALUES ({placeholders}) RETURNING {returning}"
                     result = conn.execute(text(sql), data)
-                    return result.scalar()
+                    return_value = result.scalar()  # Consume result before commit
+                    if should_close:  # Only commit if not in transaction
+                        conn.commit()
+                    return return_value
                 except Exception as e:
                     # Fallback for SQLite < 3.35 or databases without RETURNING support
                     if "RETURNING" in str(e):
                         sql = f"INSERT INTO {table} ({cols}) VALUES ({placeholders})"
                         result = conn.execute(text(sql), data)
-                        conn.commit()
-                        return result.lastrowid
+                        return_value = result.lastrowid  # Get lastrowid before commit
+                        if should_close:  # Only commit if not in transaction
+                            conn.commit()
+                        return return_value
                     raise
             else:
                 # SQLite style - use lastrowid
                 sql = f"INSERT INTO {table} ({cols}) VALUES ({placeholders})"
                 result = conn.execute(text(sql), data)
-                conn.commit()
-                return result.lastrowid
+                return_value = result.lastrowid  # Get lastrowid before commit
+                if should_close:  # Only commit if not in transaction
+                    conn.commit()
+                return return_value
         finally:
-            conn.close()
+            if should_close:
+                conn.close()
 
     def execute_update(
         self, table: str, data: Dict[str, Any], where: str, where_params: Dict[str, Any]
@@ -377,7 +440,8 @@ class DatabaseMixin:
         for col in data.keys():
             self._validate_identifier(col, "column name")
 
-        conn = self.engine.connect()
+        conn = self.get_connection()
+        should_close = self._should_close_connection(conn)
         try:
             # Prefix data params with __set_ to avoid collision with where params
             set_clause = ", ".join(f"{k} = :__set_{k}" for k in data.keys())
@@ -386,10 +450,12 @@ class DatabaseMixin:
 
             sql = f"UPDATE {table} SET {set_clause} WHERE {where}"
             result = conn.execute(text(sql), merged_params)
-            conn.commit()
+            if should_close:  # Only commit if not in transaction
+                conn.commit()
             return result.rowcount
         finally:
-            conn.close()
+            if should_close:
+                conn.close()
 
     def execute_delete(
         self, table: str, where: str, where_params: Dict[str, Any]
@@ -421,14 +487,17 @@ class DatabaseMixin:
         self._require_db()
         self._validate_identifier(table, "table name")
 
-        conn = self.engine.connect()
+        conn = self.get_connection()
+        should_close = self._should_close_connection(conn)
         try:
             sql = f"DELETE FROM {table} WHERE {where}"
             result = conn.execute(text(sql), where_params)
-            conn.commit()
+            if should_close:  # Only commit if not in transaction
+                conn.commit()
             return result.rowcount
         finally:
-            conn.close()
+            if should_close:
+                conn.close()
 
     @contextmanager
     def transaction(self):
@@ -440,44 +509,40 @@ class DatabaseMixin:
 
         Auto-commits on success, rolls back on exception.
 
-        IMPORTANT LIMITATION:
-            The execute_insert(), execute_update(), execute_delete(), and other
-            database methods create their OWN connections and are NOT part of
-            this transaction. Only operations using the yielded connection
-            directly will be part of the transaction.
-
-            To use transactions with insert/update/delete operations, you must
-            use the yielded connection directly with execute_raw() or
-            conn.execute(text(...)).
+        All execute_insert(), execute_update(), execute_delete(), execute_query(),
+        and execute_raw() operations within the transaction context will use
+        the transaction's connection automatically.
 
         Yields:
             SQLAlchemy Connection object (for advanced usage)
 
         Example:
-            # INCORRECT - These operations will NOT be in the transaction!
+            # All operations use the same transaction connection
             with self.transaction():
-                user_id = self.execute_insert("users", {"name": "Alice"})  # Gets own connection
-                self.execute_insert("profiles", {"user_id": user_id})      # Gets own connection
+                user_id = self.execute_insert("users", {"name": "Alice"})
+                self.execute_insert("profiles", {"user_id": user_id, "bio": "Hello"})
+                # If any operation fails, all are rolled back
 
-            # CORRECT - Direct connection access
+            # Can also use the connection directly
             with self.transaction() as conn:
-                # Insert user
                 result = conn.execute(
                     text("INSERT INTO users (name) VALUES (:name) RETURNING id"),
                     {"name": "Alice"}
                 )
                 user_id = result.scalar()
-
-                # Insert profile in same transaction
-                conn.execute(
-                    text("INSERT INTO profiles (user_id, bio) VALUES (:user_id, :bio)"),
-                    {"user_id": user_id, "bio": "Hello"}
-                )
-                # If any operation fails, all are rolled back
         """
         self._require_db()
+
+        # Check if already in a transaction (nested transactions not supported)
+        if hasattr(self._local, "transaction_conn") and self._local.transaction_conn:
+            raise RuntimeError("Nested transactions are not supported")
+
         conn = self.engine.connect()
         trans = conn.begin()
+
+        # Store connection in thread-local storage
+        self._local.transaction_conn = conn
+
         try:
             yield conn
             trans.commit()
@@ -485,6 +550,8 @@ class DatabaseMixin:
             trans.rollback()
             raise
         finally:
+            # Clear thread-local transaction connection
+            self._local.transaction_conn = None
             conn.close()
 
     def execute_raw(self, sql: str) -> None:
@@ -513,16 +580,19 @@ class DatabaseMixin:
             ''')
         """
         self._require_db()
-        conn = self.engine.connect()
+        conn = self.get_connection()
+        should_close = self._should_close_connection(conn)
         try:
             # Split multiple statements and execute each
             for statement in sql.split(";"):
                 statement = statement.strip()
                 if statement:
                     conn.execute(text(statement))
-            conn.commit()
+            if should_close:  # Only commit if not in transaction
+                conn.commit()
         finally:
-            conn.close()
+            if should_close:
+                conn.close()
 
     def table_exists(self, table: str) -> bool:
         """
