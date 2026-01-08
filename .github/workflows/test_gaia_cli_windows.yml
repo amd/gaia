@@ -8,6 +8,7 @@
 name: GAIA CLI Tests (Windows)
 
 on:
+  workflow_call:
   push:
     branches: ["main"]
     paths:
