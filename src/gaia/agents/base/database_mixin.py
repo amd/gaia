@@ -56,7 +56,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.pool import NullPool, QueuePool, SingletonThreadPool, StaticPool
+from sqlalchemy.pool import NullPool, QueuePool
 
 logger = logging.getLogger(__name__)
 

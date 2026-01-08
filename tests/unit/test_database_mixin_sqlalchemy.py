@@ -19,8 +19,6 @@ from gaia.agents.base.database_mixin import DatabaseMixin
 class DBHelper(DatabaseMixin):
     """Test helper that uses the DatabaseMixin."""
 
-    pass
-
 
 # ===== Initialization Tests =====
 
@@ -580,9 +578,6 @@ def test_connection_pool_exhaustion():
     db = DBHelper()
     db.init_database("sqlite:///:memory:", pool_size=2)  # Small pool
     db.execute_raw("CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT)")
-
-    completed_count = []
-    lock = time  # Use time module as a simple way to avoid circular import
 
     def slow_query_worker(thread_id):
         """Each thread holds a connection while sleeping."""
