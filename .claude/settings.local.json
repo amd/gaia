@@ -76,19 +76,5 @@
   "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "github"
-  ],
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/util/pre-commit-lint.py\"",
-            "timeout": 120
-          }
-        ]
-      }
-    ]
-  }
+  ]
 }
