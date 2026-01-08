@@ -112,8 +112,8 @@ class DatabaseMixin:
             self.close_database()
 
         # Track if this is a file-based SQLite database (before URL transformation)
-        is_file_sqlite = (
-            db_url.startswith("sqlite:///") and not db_url.endswith(":memory:")
+        is_file_sqlite = db_url.startswith("sqlite:///") and not db_url.endswith(
+            ":memory:"
         )
 
         # Create parent directory for file-based SQLite
@@ -251,7 +251,10 @@ class DatabaseMixin:
             True if connection should be closed, False otherwise
         """
         # Don't close if this is a transaction connection
-        if hasattr(self._local, "transaction_conn") and self._local.transaction_conn is conn:
+        if (
+            hasattr(self._local, "transaction_conn")
+            and self._local.transaction_conn is conn
+        ):
             return False
         return True
 
