@@ -5,28 +5,50 @@ icon: "brain"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/llm/llm_client.py`](https://github.com/amd/gaia/blob/main/src/gaia/llm/llm_client.py)
+  **Source Code:**
+  - [`src/gaia/llm/__init__.py`](https://github.com/amd/gaia/blob/main/src/gaia/llm/__init__.py) - Package exports
+  - [`src/gaia/llm/base_client.py`](https://github.com/amd/gaia/blob/main/src/gaia/llm/base_client.py) - Abstract interface
+  - [`src/gaia/llm/factory.py`](https://github.com/amd/gaia/blob/main/src/gaia/llm/factory.py) - Client factory
+  - [`src/gaia/llm/providers/`](https://github.com/amd/gaia/blob/main/src/gaia/llm/providers/) - Provider implementations
 </Info>
 
 <Note>
-**Component:** LLMClient
-**Module:** `gaia.llm.llm_client`
-**Import:** `from gaia.llm import LLMClient`
+**Primary API:** `create_client()` factory function
+**Module:** `gaia.llm`
+**Imports:**
+- `from gaia.llm import create_client` (preferred)
+- `from gaia.llm import LLMClient, NotSupportedError`
 </Note>
 
 ---
 
 ## Overview
 
-LLMClient provides a unified interface for generating text from multiple LLM backends (local Lemonade server, Claude API, OpenAI API). It handles connection management, retry logic, streaming responses, and performance monitoring with automatic endpoint selection and base URL normalization.
+The LLM client package provides a unified interface for generating text from multiple LLM backends using a **provider pattern**. Each provider implements the abstract `LLMClient` interface, with optional methods raising `NotSupportedError` when unavailable.
 
 **Key Features:**
-- Multi-backend support (local, Claude, OpenAI)
-- Automatic retry with exponential backoff
-- Streaming and non-streaming generation
-- Performance statistics tracking
-- Generation halting/interruption
-- Context manager for resource cleanup
+- **Factory-based client creation** with `create_client()`
+- **Three providers**: Lemonade (local AMD-optimized), OpenAI, Claude
+- **Abstract base class** for type safety and extensibility
+- **Graceful handling** of unsupported features via `NotSupportedError`
+- **Streaming and non-streaming** generation
+- **Backward-compatible** `use_claude`/`use_openai` flags
+
+**Provider Capabilities:**
+
+| Method | Lemonade | OpenAI | Claude |
+|--------|:--------:|:------:|:------:|
+| `generate()` | ✓ | ✓ | ✓ |
+| `chat()` | ✓ | ✓ | ✓ |
+| `embed()` | ✓ | ✓ | ✗ |
+| `vision()` | ✓ | ✗ | ✓ |
+| `get_performance_stats()` | ✓ | ✗ | ✗ |
+| `load_model()` | ✓ | ✗ | ✗ |
+| `unload_model()` | ✓ | ✗ | ✗ |
+
+<Note>
+Methods marked with ✗ raise `NotSupportedError` when called on that provider.
+</Note>
 
 ---
 
@@ -34,419 +56,532 @@ LLMClient provides a unified interface for generating text from multiple LLM bac
 
 ### Functional Requirements
 
-1. **Multi-Backend Support**
-   - Local LLM via Lemonade server (default)
-   - Anthropic Claude API
-   - OpenAI ChatGPT API
-   - Automatic base URL normalization
+1. **Factory Pattern**
+   - `create_client()` factory function for client creation
+   - Explicit provider selection via `provider` parameter ("lemonade", "openai", "claude")
+   - Backward-compatible `use_claude`/`use_openai` flags
+   - Auto-detection of provider from flags when `provider` not specified
+   - Default to Lemonade provider when no flags set
 
-2. **Generation Interface**
-   - `generate()` - Generate text with prompt
-   - Streaming and non-streaming modes
-   - System prompt support
-   - Temperature and other parameters
-   - Messages array support for chat
+2. **Abstract Interface**
+   - `LLMClient` ABC defines unified interface
+   - `provider_name` property returns provider name
+   - **Required methods** (all providers must implement):
+     - `generate()` - Text completion
+     - `chat()` - Chat completion with message history
+   - **Optional methods** (raise `NotSupportedError` if not implemented):
+     - `embed()` - Generate embeddings
+     - `vision()` - Vision/image understanding
+     - `get_performance_stats()` - Performance statistics
+     - `load_model()` - Load a model
+     - `unload_model()` - Unload current model
 
-3. **Connection Management**
-   - Configurable timeouts (connect, read, write, pool)
-   - Connection pooling
-   - Retry logic with exponential backoff
-   - Connection error handling
+3. **Provider Implementations**
+   - **LemonadeProvider**: Full support for all methods, connects to local Lemonade server
+   - **OpenAIProvider**: `generate`, `chat`, `embed` only
+   - **ClaudeProvider**: `generate`, `chat`, `vision` only
+   - All providers support streaming and non-streaming modes
 
-4. **Performance Monitoring**
-   - `get_performance_stats()` - Token counts, timing
-   - `is_generating()` - Check generation status
-   - `halt_generation()` - Stop current generation
-
-5. **Error Handling**
-   - Network error detection and retry
-   - Timeout handling
-   - API endpoint validation
-   - Clear error messages with fix suggestions
+4. **Error Handling**
+   - `NotSupportedError` raised for unsupported methods
+   - Clear error messages indicating provider and unsupported method
+   - Connection errors handled by underlying provider implementations
 
 ### Non-Functional Requirements
 
 1. **Performance**
-   - Fast connection establishment (15s timeout)
-   - Streaming with 120s read timeout
-   - Efficient token counting
-   - Minimal overhead
+   - Lazy provider loading via `importlib` (load only when needed)
+   - Minimal overhead from abstraction layer
+   - Streaming support across all providers
+   - Default temperature of 0.1 for deterministic responses
 
 2. **Reliability**
-   - Automatic retry on transient failures
-   - Exponential backoff (base: 1s, max: 60s)
-   - Configurable max retries (default: 3)
-   - Connection pool management
+   - Type safety through ABC pattern
+   - Graceful handling of unsupported features
+   - Clear error messages for provider capabilities
+   - Provider-specific connection management
 
 3. **Usability**
-   - Simple initialization
-   - Sensible defaults
-   - Clear documentation
-   - Helpful error messages
+   - Simple factory function interface
+   - Backward compatibility with existing code
+   - Consistent API across all providers
+   - Clear documentation with examples
 
 ---
 
 ## API Specification
 
-### File Location
+### Package Structure
 
 ```
-src/gaia/llm/llm_client.py
+src/gaia/llm/
+├── __init__.py              # Package exports
+├── base_client.py           # Abstract LLMClient interface
+├── factory.py               # create_client() factory function
+├── exceptions.py            # NotSupportedError
+├── lemonade_client.py       # Low-level REST client for Lemonade
+└── providers/
+    ├── lemonade.py          # LemonadeProvider
+    ├── openai_provider.py   # OpenAIProvider
+    └── claude.py            # ClaudeProvider
 ```
 
-### Public Interface
+### Package Exports (`__init__.py`)
 
 ```python
-from typing import Any, Dict, Iterator, List, Literal, Optional, Union
-import httpx
-from openai import OpenAI
+from gaia.llm import create_client, LLMClient, NotSupportedError
+```
 
-class LLMClient:
+---
+
+### Factory Function (`factory.py`)
+
+```python
+def create_client(
+    provider: Optional[str] = None,
+    use_claude: bool = False,
+    use_openai: bool = False,
+    **kwargs,
+) -> LLMClient:
     """
-    Unified LLM client for local, Claude, and OpenAI backends.
+    Create an LLM client, auto-detecting provider from parameters.
 
-    Usage:
-        # Local LLM (default)
-        client = LLMClient()
-        response = client.generate("Hello world")
+    Args:
+        provider: Explicit provider name ("lemonade", "openai", or "claude").
+                  If not specified, auto-detected from use_claude/use_openai flags.
+        use_claude: If True, use Claude provider (ignored if provider is specified)
+        use_openai: If True, use OpenAI provider (ignored if provider is specified)
+        **kwargs: Provider-specific arguments (base_url, model, api_key, etc.)
 
-        # Claude API
-        client = LLMClient(use_claude=True)
-        response = client.generate("Hello world")
+    Returns:
+        LLMClient instance for the specified or detected provider
 
-        # OpenAI API
-        client = LLMClient(use_openai=True)
-        response = client.generate("Hello world")
+    Raises:
+        ValueError: If provider is unknown or both use_claude and use_openai are True
 
-        # With custom base URL
-        client = LLMClient(base_url="http://remote-server:8000")
+    Examples:
+        # Default Lemonade provider
+        client = create_client()
 
-        # With streaming
-        for chunk in client.generate("Hello", stream=True):
-            print(chunk, end="")
+        # Explicit provider selection
+        client = create_client(provider="lemonade", model="Qwen2.5-0.5B-Instruct-CPU")
+        client = create_client(provider="openai", api_key="sk-...")
+        client = create_client(provider="claude", api_key="sk-ant-...")
+
+        # Backward-compatible flags
+        client = create_client(use_claude=True, api_key="sk-ant-...")
+        client = create_client(use_openai=True, api_key="sk-...")
+
+    Note:
+        Provider defaults to "lemonade" when no flags are set.
+        The design maintains backward compatibility while allowing explicit provider selection.
+    """
+```
+
+---
+
+### Abstract Base Class (`base_client.py`)
+
+```python
+from abc import ABC, abstractmethod
+from typing import Iterator, Union
+
+class LLMClient(ABC):
+    """
+    Unified LLM client interface.
+
+    Methods raise NotSupportedError if not available for this provider.
     """
 
-    def __init__(
-        self,
-        use_claude: bool = False,
-        use_openai: bool = False,
-        system_prompt: Optional[str] = None,
-        base_url: Optional[str] = None,
-        claude_model: str = "claude-sonnet-4-20250514",
-        max_retries: int = 3,
-        retry_base_delay: float = 1.0,
-    ):
-        """
-        Initialize the LLM client.
+    @property
+    @abstractmethod
+    def provider_name(self) -> str:
+        """Return the provider name for error messages."""
+        ...
 
-        Args:
-            use_claude: If True, uses Anthropic Claude API.
-            use_openai: If True, uses OpenAI ChatGPT API.
-            system_prompt: Default system prompt to use for all generation requests.
-            base_url: Base URL for local LLM server (defaults to LEMONADE_BASE_URL env var).
-                     Automatically normalized to include /api/v1 suffix if needed.
-            claude_model: Claude model to use (e.g., "claude-sonnet-4-20250514").
-            max_retries: Maximum number of retry attempts on connection errors.
-            retry_base_delay: Base delay in seconds for exponential backoff.
-
-        Note:
-            - Uses local LLM server by default unless use_claude or use_openai is True.
-            - Context size is configured when starting the Lemonade server.
-            - Base URL normalization: "http://localhost:8000" -> "http://localhost:8000/api/v1"
-
-        Environment Variables:
-            LEMONADE_BASE_URL: Default base URL for local LLM server
-            OPENAI_API_KEY: Required when use_openai=True
-        """
-        pass
-
+    @abstractmethod
     def generate(
         self,
         prompt: str,
-        model: Optional[str] = None,
-        endpoint: Optional[Literal["completions", "chat", "claude", "openai"]] = None,
-        system_prompt: Optional[str] = None,
+        model: str | None = None,
         stream: bool = False,
-        messages: Optional[List[Dict[str, str]]] = None,
-        **kwargs: Any,
+        **kwargs,
     ) -> Union[str, Iterator[str]]:
         """
-        Generate a response from the LLM.
+        Generate text completion.
 
         Args:
-            prompt: The user prompt/query to send to the LLM. For chat endpoint,
-                   if messages is not provided, this is treated as a pre-formatted
-                   prompt string that already contains the full conversation.
-            model: The model to use (defaults to endpoint-appropriate model)
-            endpoint: Override the endpoint to use (completions, chat, claude, or openai)
-            system_prompt: System prompt to use for this specific request (overrides default)
+            prompt: The user prompt/query to send to the LLM
+            model: The model to use (defaults to provider's default model)
             stream: If True, returns a generator that yields chunks of the response
-            messages: Optional list of message dicts with 'role' and 'content' keys.
-                     If provided, these are used directly for chat completions instead of prompt.
-            **kwargs: Additional parameters to pass to the API (temperature, max_tokens, etc.)
+            **kwargs: Additional parameters (temperature, max_tokens, etc.)
 
         Returns:
             If stream=False: The complete generated text as a string
             If stream=True: A generator yielding chunks of the response
 
-        Raises:
-            ConnectionError: Network or server connection issues
-            ValueError: Invalid parameters or configuration
+        Example:
+            response = client.generate("Write a hello world program")
+        """
+        ...
+
+    @abstractmethod
+    def chat(
+        self,
+        messages: list[dict],
+        model: str | None = None,
+        stream: bool = False,
+        **kwargs,
+    ) -> Union[str, Iterator[str]]:
+        """
+        Chat completion with message history.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content' keys
+            model: The model to use (defaults to provider's default model)
+            stream: If True, returns a generator that yields chunks of the response
+            **kwargs: Additional parameters (temperature, max_tokens, etc.)
+
+        Returns:
+            If stream=False: The complete generated text as a string
+            If stream=True: A generator yielding chunks of the response
 
         Example:
-            # Non-streaming
-            response = client.generate("Write a hello world program")
-            print(response)
-
-            # Streaming
-            for chunk in client.generate("Write a story", stream=True):
-                print(chunk, end="", flush=True)
-
-            # With messages array (proper chat history)
             messages = [
-                {"role": "system", "content": "You are a helpful assistant"},
                 {"role": "user", "content": "Hello"},
                 {"role": "assistant", "content": "Hi there!"},
-                {"role": "user", "content": "Tell me a joke"}
+                {"role": "user", "content": "How are you?"}
             ]
-            response = client.generate("", messages=messages)
+            response = client.chat(messages)
         """
-        pass
+        ...
 
-    def get_performance_stats(self) -> Dict[str, Any]:
+    # Optional methods - default raises NotSupportedError
+    def embed(self, texts: list[str], **kwargs) -> list[list[float]]:
+        """
+        Generate embeddings for texts.
+
+        Args:
+            texts: List of text strings to embed
+            **kwargs: Additional parameters (e.g., model="text-embedding-3-small" for OpenAI)
+
+        Returns:
+            List of embedding vectors (list of floats)
+
+        Raises:
+            NotSupportedError: If provider doesn't support embeddings
+
+        Note:
+            Supported by: Lemonade, OpenAI (default: "text-embedding-3-small")
+            Not supported by: Claude
+        """
+        raise NotSupportedError(self.provider_name, "embed")
+
+    def vision(self, images: list[bytes], prompt: str, **kwargs) -> str:
+        """
+        Vision/image understanding.
+
+        Args:
+            images: List of image data as bytes
+            prompt: Text prompt describing what to analyze
+            **kwargs: Additional parameters
+
+        Returns:
+            Text response describing the image
+
+        Raises:
+            NotSupportedError: If provider doesn't support vision
+
+        Note:
+            Supported by: Lemonade, Claude
+            Not supported by: OpenAI
+        """
+        raise NotSupportedError(self.provider_name, "vision")
+
+    def get_performance_stats(self) -> dict:
         """
         Get performance statistics from the last LLM request.
 
         Returns:
-            Dictionary containing performance statistics:
-            - time_to_first_token: Time in seconds until first token is generated
-            - tokens_per_second: Rate of token generation
-            - input_tokens: Number of tokens in the input
-            - output_tokens: Number of tokens in the output
-
-        Note:
-            Only available for local LLM server. Returns empty dict for API backends.
-
-        Example:
-            >>> response = client.generate("Hello")
-            >>> stats = client.get_performance_stats()
-            >>> print(f"Speed: {stats['tokens_per_second']:.1f} tokens/sec")
-            Speed: 45.3 tokens/sec
-        """
-        pass
-
-    def is_generating(self) -> bool:
-        """
-        Check if the local LLM is currently generating.
-
-        Returns:
-            True if generating, False otherwise
-
-        Note:
-            Only available when using local LLM (use_local=True).
-            Returns False for OpenAI/Claude API usage.
-
-        Example:
-            >>> client.is_generating()
-            False
-            >>> # Start generation in background thread
-            >>> client.is_generating()
-            True
-        """
-        pass
-
-    def halt_generation(self) -> bool:
-        """
-        Halt current generation on the local LLM server.
-
-        Returns:
-            True if halt was successful, False otherwise
-
-        Note:
-            Only available when using local LLM (use_local=True).
-            Does nothing for OpenAI/Claude API usage.
-
-        Example:
-            >>> if client.is_generating():
-            ...     client.halt_generation()
-            ...     print("Generation stopped")
-            Generation stopped
-        """
-        pass
-
-    def _retry_with_exponential_backoff(
-        self,
-        func: Callable[..., T],
-        *args,
-        **kwargs,
-    ) -> T:
-        """
-        Execute a function with exponential backoff retry on connection errors.
-
-        Args:
-            func: The function to execute
-            *args: Positional arguments for the function
-            **kwargs: Keyword arguments for the function
-
-        Returns:
-            The result of the function call
+            Dictionary containing performance statistics
 
         Raises:
-            The last exception if all retries are exhausted
+            NotSupportedError: If provider doesn't support performance stats
 
         Note:
-            - Base delay: 1.0 seconds (configurable)
-            - Exponential base: 2.0
-            - Max delay: 60.0 seconds
-            - Retries on: ConnectionError, httpx errors, requests errors
+            Only supported by: Lemonade
         """
-        pass
+        raise NotSupportedError(self.provider_name, "get_performance_stats")
 
-    def _clean_claude_response(self, response: str) -> str:
+    def load_model(self, model_name: str, **kwargs) -> None:
         """
-        Extract valid JSON from Claude responses that may contain extra content.
+        Load a specific model.
 
         Args:
-            response: The raw response from Claude API
+            model_name: Name of the model to load
+            **kwargs: Additional parameters
 
-        Returns:
-            Cleaned response with only the JSON portion (if JSON detected)
+        Raises:
+            NotSupportedError: If provider doesn't support model loading
 
         Note:
-            Claude sometimes returns valid JSON followed by additional text.
-            This method extracts just the JSON part by matching braces.
+            Only supported by: Lemonade
         """
-        pass
+        raise NotSupportedError(self.provider_name, "load_model")
+
+    def unload_model(self) -> None:
+        """
+        Unload the current model.
+
+        Raises:
+            NotSupportedError: If provider doesn't support model unloading
+
+        Note:
+            Only supported by: Lemonade
+        """
+        raise NotSupportedError(self.provider_name, "unload_model")
+```
+
+---
+
+### NotSupportedError (`exceptions.py`)
+
+```python
+class NotSupportedError(Exception):
+    """Raised when a provider doesn't support a method."""
+
+    def __init__(self, provider: str, method: str):
+        super().__init__(f"{provider} does not support {method}")
+```
+
+---
+
+### Provider Implementations
+
+#### LemonadeProvider (`providers/lemonade.py`)
+
+**Full feature support** - implements all methods.
+
+```python
+class LemonadeProvider(LLMClient):
+    """Lemonade provider - local AMD-optimized inference."""
+
+    def __init__(
+        self,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+        system_prompt: Optional[str] = None,
+        **kwargs,
+    ):
+        """
+        Initialize Lemonade provider.
+
+        Args:
+            model: Model name (defaults to "Qwen2.5-0.5B-Instruct-CPU")
+            base_url: Base URL for Lemonade server (overrides LEMONADE_BASE_URL env var)
+            host: Server host (alternative to base_url)
+            port: Server port (alternative to base_url)
+            system_prompt: Default system prompt for chat
+            **kwargs: Additional arguments passed to LemonadeClient
+
+        Environment:
+            LEMONADE_BASE_URL: Default base URL (http://localhost:8000/api/v1)
+            LEMONADE_MODEL: Default model name if not specified
+
+        Note:
+            Default model is "Qwen2.5-0.5B-Instruct-CPU" for CPU-only inference.
+            All methods use temperature=0.1 by default for deterministic responses.
+        """
+
+    # Supports all methods: generate, chat, embed, vision,
+    # get_performance_stats, load_model, unload_model
+```
+
+#### OpenAIProvider (`providers/openai_provider.py`)
+
+**Partial support** - `generate`, `chat`, `embed` only.
+
+```python
+class OpenAIProvider(LLMClient):
+    """OpenAI (OpenAI API) provider."""
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "gpt-4o",
+        system_prompt: Optional[str] = None,
+        **_kwargs,
+    ):
+        """
+        Initialize OpenAI provider.
+
+        Args:
+            api_key: OpenAI API key (defaults to OPENAI_API_KEY env var)
+            model: Model name (default: "gpt-4o")
+            system_prompt: Default system prompt for chat
+
+        Environment:
+            OPENAI_API_KEY: API key for OpenAI
+        """
+
+    # Supports: generate, chat, embed
+    # Raises NotSupportedError: vision, get_performance_stats, load_model, unload_model
+```
+
+#### ClaudeProvider (`providers/claude.py`)
+
+**Partial support** - `generate`, `chat`, `vision` only.
+
+```python
+class ClaudeProvider(LLMClient):
+    """Claude (Anthropic) provider."""
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "claude-3-5-sonnet-20241022",
+        system_prompt: Optional[str] = None,
+        **_kwargs,
+    ):
+        """
+        Initialize Claude provider.
+
+        Args:
+            api_key: Anthropic API key (defaults to ANTHROPIC_API_KEY env var)
+            model: Model name (default: "claude-3-5-sonnet-20241022")
+            system_prompt: Default system prompt for chat
+
+        Environment:
+            ANTHROPIC_API_KEY: API key for Anthropic Claude
+
+        Raises:
+            ImportError: If anthropic package not installed
+        """
+
+    # Supports: generate, chat, vision
+    # Raises NotSupportedError: embed, get_performance_stats, load_model, unload_model
 ```
 
 ---
 
 ## Implementation Details
 
-### Connection Configuration
+### Provider Selection Logic
 
-**Local LLM (Lemonade Server):**
+The factory function auto-detects the provider based on parameters:
+
 ```python
-self.client = OpenAI(
-    base_url=base_url,  # Default: http://localhost:8000/api/v1
-    api_key="None",  # Not needed for local server
-    timeout=httpx.Timeout(
-        connect=15.0,   # 15 seconds to establish connection
-        read=120.0,     # 120 seconds between data chunks (matches Lemonade)
-        write=15.0,     # 15 seconds to send request
-        pool=15.0,      # 15 seconds to acquire connection from pool
-    ),
-    max_retries=0,  # Disable built-in retries (use custom retry logic)
-)
+# From factory.py
+def create_client(provider=None, use_claude=False, use_openai=False, **kwargs):
+    # Auto-detect provider from flags if not explicitly specified
+    if provider is None:
+        if use_claude and use_openai:
+            raise ValueError("Cannot specify both use_claude and use_openai")
+        elif use_claude:
+            provider = "claude"
+        elif use_openai:
+            provider = "openai"
+        else:
+            provider = "lemonade"  # Default
+
+    # Validate provider
+    if provider.lower() not in _PROVIDERS:
+        available = ", ".join(_PROVIDERS.keys())
+        raise ValueError(f"Unknown provider: {provider}. Available: {available}")
+
+    # Load provider class dynamically...
 ```
 
-**Claude API:**
+### Lazy Provider Loading
+
+Providers are loaded dynamically using `importlib` to avoid importing unnecessary dependencies:
+
 ```python
-from gaia.eval.claude import ClaudeClient
-self.claude_client = ClaudeClient(model=claude_model)
+_PROVIDERS = {
+    "lemonade": "gaia.llm.providers.lemonade.LemonadeProvider",
+    "openai": "gaia.llm.providers.openai_provider.OpenAIProvider",
+    "claude": "gaia.llm.providers.claude.ClaudeProvider",
+}
+
+# Lazy import - only load when needed
+module_path, class_name = _PROVIDERS[provider_lower].rsplit(".", 1)
+module = importlib.import_module(module_path)
+provider_class = getattr(module, class_name)
+
+return provider_class(**kwargs)
 ```
 
-**OpenAI API:**
+### NotSupportedError Pattern
+
+Optional methods raise `NotSupportedError` by default in the ABC:
+
 ```python
-self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# In base_client.py
+class LLMClient(ABC):
+    def embed(self, texts: list[str], **kwargs) -> list[list[float]]:
+        raise NotSupportedError(self.provider_name, "embed")
+
+    def vision(self, images: list[bytes], prompt: str, **kwargs) -> str:
+        raise NotSupportedError(self.provider_name, "vision")
+    # etc...
 ```
 
-### Base URL Normalization
+Providers override only the methods they support:
 
 ```python
-# Normalize base_url to ensure it has the /api/v1 suffix
-if base_url and not base_url.endswith("/api/v1"):
-    base_url = base_url.rstrip("/")
-    from urllib.parse import urlparse
-    parsed = urlparse(base_url)
-    # Only add /api/v1 if path is empty or just "/"
-    if not parsed.path or parsed.path == "/":
-        base_url = f"{base_url}/api/v1"
+# OpenAIProvider overrides embed but not vision
+class OpenAIProvider(LLMClient):
+    def embed(self, texts: list[str], **kwargs):
+        # Implementation for OpenAI embeddings
+        response = self._client.embeddings.create(...)
+        return [item.embedding for item in response.data]
+
+    # vision() inherited - raises NotSupportedError
 ```
 
-### Retry Logic
+### Temperature Defaults
+
+All providers default to `temperature=0.1` for deterministic responses:
 
 ```python
-def _retry_with_exponential_backoff(self, func, *args, **kwargs):
-    delay = self.retry_base_delay  # 1.0 seconds
-    max_delay = 60.0
-    exponential_base = 2.0
-
-    for attempt in range(self.max_retries + 1):
-        try:
-            return func(*args, **kwargs)
-        except (ConnectionError, httpx.ConnectError, httpx.TimeoutException,
-                httpx.NetworkError, requests.exceptions.ConnectionError,
-                requests.exceptions.Timeout) as e:
-            if attempt == self.max_retries:
-                raise
-
-            wait_time = min(delay, max_delay)
-            logger.warning(
-                f"Connection error (attempt {attempt + 1}/{self.max_retries + 1}): {e}. "
-                f"Retrying in {wait_time:.1f}s..."
-            )
-            time.sleep(wait_time)
-            delay *= exponential_base
+# In LemonadeProvider
+kwargs.setdefault("temperature", 0.1)
+response = self._backend.completions(model=model, prompt=prompt, **kwargs)
 ```
 
-### Endpoint Selection
+### Provider-Specific Implementation
+
+**LemonadeProvider** wraps the low-level `LemonadeClient`:
 
 ```python
-# Completions endpoint (pre-formatted prompts, ChatSDK compatibility)
-if endpoint_to_use == "completions":
-    response = self.client.completions.create(
-        model=model,
-        prompt=prompt,  # Full formatted conversation
-        temperature=0.1,
-        stream=stream,
-        **kwargs,
-    )
+class LemonadeProvider(LLMClient):
+    def __init__(self, model=None, base_url=None, **kwargs):
+        self._backend = LemonadeClient(model=model, base_url=base_url, **kwargs)
 
-# Chat endpoint (proper message history)
-elif endpoint_to_use == "chat":
-    chat_messages = messages or [{"role": "user", "content": prompt}]
-    if effective_system_prompt:
-        chat_messages.insert(0, {"role": "system", "content": effective_system_prompt})
-
-    response = self.client.chat.completions.create(
-        model=model,
-        messages=chat_messages,
-        temperature=0.1,
-        stream=stream,
-        **kwargs,
-    )
+    def generate(self, prompt, model=None, stream=False, **kwargs):
+        return self._backend.completions(prompt=prompt, stream=stream, **kwargs)
 ```
 
-### Error Handling
+**OpenAIProvider** uses the OpenAI SDK directly:
 
 ```python
-try:
-    response = self._retry_with_exponential_backoff(
-        self.client.completions.create,
-        model=model,
-        prompt=prompt,
-        temperature=0.1,
-        stream=stream,
-        **kwargs,
-    )
-except httpx.ConnectError as e:
-    error_msg = f"LLM Server Connection Error: {str(e)}"
-    raise ConnectionError(error_msg) from e
-except Exception as e:
-    error_str = str(e)
-    if "404" in error_str:
-        if "endpoint" in error_str.lower() or "not found" in error_str.lower():
-            raise ConnectionError(
-                f"API endpoint error: {error_str}\n\n"
-                f"This may indicate:\n"
-                f"  1. Lemonade Server version mismatch (try updating to {LEMONADE_VERSION})\n"
-                f"  2. Model not properly loaded or corrupted\n\n"
-                f"To fix model issues, try:\n"
-                f"  lemonade model remove <model-name>\n"
-                f"  lemonade model download <model-name>\n"
-            ) from e
-    raise
+class OpenAIProvider(LLMClient):
+    def __init__(self, api_key=None, model="gpt-4o", **kwargs):
+        import openai
+        self._client = openai.OpenAI(api_key=api_key)
+        self._model = model
+```
+
+**ClaudeProvider** uses the Anthropic SDK:
+
+```python
+class ClaudeProvider(LLMClient):
+    def __init__(self, api_key=None, model="claude-3-5-sonnet-20241022", **kwargs):
+        import anthropic
+        self._client = anthropic.Anthropic(api_key=api_key)
+        self._model = model
 ```
 
 ---
@@ -455,231 +590,173 @@ except Exception as e:
 
 ### Unit Tests
 
-**File:** `tests/llm/test_llm_client.py`
+**File:** `tests/unit/test_llm_client_factory.py`
 
 ```python
 import pytest
-from unittest.mock import Mock, patch
-from gaia.llm import LLMClient
+from unittest.mock import patch, Mock
+from gaia.llm import create_client, LLMClient, NotSupportedError
 
-def test_llm_client_can_be_imported():
-    """Verify LLMClient can be imported."""
-    from gaia.llm import LLMClient
-    assert LLMClient is not None
+class TestImports:
+    def test_can_import_create_client(self):
+        """Verify create_client can be imported."""
+        from gaia.llm import create_client
+        assert callable(create_client)
 
-def test_initialize_local_llm():
-    """Test local LLM initialization."""
-    client = LLMClient()
-    assert client.use_claude is False
-    assert client.use_openai is False
-    assert client.base_url.endswith("/api/v1")
-    assert client.endpoint == "completions"
+    def test_can_import_llm_client_abc(self):
+        """Verify LLMClient ABC can be imported."""
+        from abc import ABC
+        from gaia.llm import LLMClient
+        assert issubclass(LLMClient, ABC)
 
-def test_initialize_with_custom_base_url():
-    """Test base URL normalization."""
-    # Without /api/v1
-    client = LLMClient(base_url="http://localhost:8000")
-    assert client.base_url == "http://localhost:8000/api/v1"
+    def test_can_import_not_supported_error(self):
+        """Verify NotSupportedError can be imported."""
+        from gaia.llm import NotSupportedError
+        assert issubclass(NotSupportedError, Exception)
 
-    # With /api/v1
-    client = LLMClient(base_url="http://localhost:8000/api/v1")
-    assert client.base_url == "http://localhost:8000/api/v1"
+class TestFactory:
+    def test_default_creates_lemonade_provider(self):
+        """Test factory creates Lemonade by default."""
+        with patch("gaia.llm.providers.lemonade.LemonadeClient"):
+            client = create_client()
+            assert client.provider_name == "Lemonade"
 
-    # With trailing slash
-    client = LLMClient(base_url="http://localhost:8000/")
-    assert client.base_url == "http://localhost:8000/api/v1"
+    def test_explicit_provider_selection(self):
+        """Test explicit provider parameter."""
+        with patch("gaia.llm.providers.lemonade.LemonadeClient"):
+            client = create_client(provider="lemonade")
+            assert client.provider_name == "Lemonade"
 
-def test_initialize_claude():
-    """Test Claude API initialization."""
-    with patch('gaia.llm.llm_client.CLAUDE_AVAILABLE', True):
-        with patch('gaia.llm.llm_client.AnthropicClaudeClient'):
-            client = LLMClient(use_claude=True)
-            assert client.use_claude is True
-            assert client.endpoint == "claude"
-            assert client.default_model.startswith("claude-")
+    def test_use_claude_flag(self):
+        """Test backward-compatible use_claude flag."""
+        with patch("gaia.llm.providers.claude.anthropic"):
+            client = create_client(use_claude=True, api_key="test")
+            assert client.provider_name == "Claude"
 
-def test_initialize_openai():
-    """Test OpenAI API initialization."""
-    with patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'}):
-        client = LLMClient(use_openai=True)
-        assert client.use_openai is True
-        assert client.endpoint == "openai"
-        assert client.default_model == "gpt-4o"
+    def test_use_openai_flag(self):
+        """Test backward-compatible use_openai flag."""
+        with patch("openai.OpenAI"):
+            client = create_client(use_openai=True, api_key="test")
+            assert client.provider_name == "OpenAI"
 
-def test_generate_non_streaming():
-    """Test non-streaming generation."""
-    client = LLMClient()
+    def test_invalid_provider_raises_error(self):
+        """Test unknown provider raises ValueError."""
+        with pytest.raises(ValueError, match="Unknown provider"):
+            create_client(provider="invalid")
 
-    # Mock the OpenAI client
-    mock_response = Mock()
-    mock_response.choices = [Mock(text="Hello world")]
-    client.client.completions.create = Mock(return_value=mock_response)
+    def test_both_flags_raises_error(self):
+        """Test both flags raise ValueError."""
+        with pytest.raises(ValueError, match="Cannot specify both"):
+            create_client(use_claude=True, use_openai=True)
 
-    response = client.generate("Test prompt")
-    assert response == "Hello world"
-    assert client.client.completions.create.called
+    def test_case_insensitive_provider(self):
+        """Test provider names are case-insensitive."""
+        with patch("gaia.llm.providers.lemonade.LemonadeClient"):
+            client = create_client(provider="LEMONADE")
+            assert client.provider_name == "Lemonade"
 
-def test_generate_streaming():
-    """Test streaming generation."""
-    client = LLMClient()
+class TestNotSupportedError:
+    def test_error_message_format(self):
+        """Test NotSupportedError message format."""
+        error = NotSupportedError("TestProvider", "test_method")
+        assert "TestProvider" in str(error)
+        assert "test_method" in str(error)
 
-    # Mock streaming response
-    def mock_stream():
-        for chunk in ["Hello", " ", "world"]:
-            mock_chunk = Mock()
-            mock_chunk.choices = [Mock(text=chunk)]
-            yield mock_chunk
+    def test_claude_embed_raises_not_supported(self):
+        """Test Claude provider raises NotSupportedError for embed."""
+        with patch("gaia.llm.providers.claude.anthropic"):
+            client = create_client(provider="claude", api_key="test")
+        with pytest.raises(NotSupportedError) as exc:
+            client.embed(["text"])
+        assert "Claude" in str(exc.value)
+        assert "embed" in str(exc.value)
 
-    client.client.completions.create = Mock(return_value=mock_stream())
+    def test_openai_vision_raises_not_supported(self):
+        """Test OpenAI provider raises NotSupportedError for vision."""
+        with patch("openai.OpenAI"):
+            client = create_client(provider="openai", api_key="test")
+        with pytest.raises(NotSupportedError) as exc:
+            client.vision([b"image"], "describe")
+        assert "OpenAI" in str(exc.value)
+        assert "vision" in str(exc.value)
 
-    result = list(client.generate("Test prompt", stream=True))
-    assert result == ["Hello", " ", "world"]
+class TestProviderMethods:
+    def test_lemonade_generate(self):
+        """Test LemonadeProvider.generate()."""
+        with patch("gaia.llm.providers.lemonade.LemonadeClient") as MockClient:
+            mock_backend = Mock()
+            mock_backend.completions.return_value = {
+                "choices": [{"text": "Hello"}]
+            }
+            MockClient.return_value = mock_backend
 
-def test_generate_with_messages():
-    """Test generation with messages array."""
-    client = LLMClient()
+            client = create_client()
+            response = client.generate("Test")
+            assert response == "Hello"
 
-    mock_response = Mock()
-    mock_response.choices = [Mock(message=Mock(content="Response"))]
-    client.client.chat.completions.create = Mock(return_value=mock_response)
+    def test_lemonade_chat(self):
+        """Test LemonadeProvider.chat()."""
+        with patch("gaia.llm.providers.lemonade.LemonadeClient") as MockClient:
+            mock_backend = Mock()
+            mock_backend.chat_completions.return_value = {
+                "choices": [{"message": {"content": "Hi"}}]
+            }
+            MockClient.return_value = mock_backend
 
-    messages = [
-        {"role": "user", "content": "Hello"}
-    ]
-    response = client.generate("", endpoint="chat", messages=messages)
-    assert response == "Response"
+            client = create_client()
+            response = client.chat([{"role": "user", "content": "Hello"}])
+            assert response == "Hi"
 
-def test_retry_logic():
-    """Test exponential backoff retry."""
-    client = LLMClient(max_retries=2, retry_base_delay=0.1)
+    def test_streaming_returns_iterator(self):
+        """Test streaming returns an iterator."""
+        with patch("gaia.llm.providers.lemonade.LemonadeClient") as MockClient:
+            mock_backend = Mock()
 
-    # Mock function that fails twice then succeeds
-    mock_func = Mock(side_effect=[
-        ConnectionError("Failed"),
-        ConnectionError("Failed"),
-        "Success"
-    ])
+            def mock_stream():
+                yield {"choices": [{"delta": {"content": "Hi"}}]}
+                yield {"choices": [{"delta": {"content": " there"}}]}
 
-    result = client._retry_with_exponential_backoff(mock_func)
-    assert result == "Success"
-    assert mock_func.call_count == 3
+            mock_backend.chat_completions.return_value = mock_stream()
+            MockClient.return_value = mock_backend
 
-def test_retry_exhausted():
-    """Test retry exhaustion."""
-    client = LLMClient(max_retries=1, retry_base_delay=0.1)
-
-    mock_func = Mock(side_effect=ConnectionError("Always fails"))
-
-    with pytest.raises(ConnectionError):
-        client._retry_with_exponential_backoff(mock_func)
-
-    assert mock_func.call_count == 2  # Initial + 1 retry
-
-def test_get_performance_stats():
-    """Test performance stats retrieval."""
-    client = LLMClient()
-
-    with patch('requests.get') as mock_get:
-        mock_get.return_value.status_code = 200
-        mock_get.return_value.json.return_value = {
-            "time_to_first_token": 0.5,
-            "tokens_per_second": 45.3,
-            "input_tokens": 10,
-            "output_tokens": 20
-        }
-
-        stats = client.get_performance_stats()
-        assert stats["time_to_first_token"] == 0.5
-        assert stats["tokens_per_second"] == 45.3
-
-def test_is_generating():
-    """Test generation status check."""
-    client = LLMClient()
-
-    with patch('requests.get') as mock_get:
-        mock_get.return_value.status_code = 200
-        mock_get.return_value.json.return_value = {"is_generating": True}
-
-        assert client.is_generating() is True
-
-def test_halt_generation():
-    """Test generation halting."""
-    client = LLMClient()
-
-    with patch('requests.get') as mock_get:
-        mock_get.return_value.status_code = 200
-
-        assert client.halt_generation() is True
-
-def test_clean_claude_response():
-    """Test Claude response cleaning."""
-    client = LLMClient()
-
-    # Valid JSON with extra text
-    response = '{"result": "success"} Some extra text after'
-    cleaned = client._clean_claude_response(response)
-    assert cleaned == '{"result": "success"}'
-
-    # Plain text (no JSON)
-    response = "Just plain text"
-    cleaned = client._clean_claude_response(response)
-    assert cleaned == "Just plain text"
-
-def test_system_prompt():
-    """Test system prompt handling."""
-    system_prompt = "You are a helpful assistant."
-    client = LLMClient(system_prompt=system_prompt)
-    assert client.system_prompt == system_prompt
-
-    # Override in generate()
-    mock_response = Mock()
-    mock_response.choices = [Mock(text="Response")]
-    client.client.completions.create = Mock(return_value=mock_response)
-
-    client.generate("Test", system_prompt="Different prompt")
-    # Verify different prompt was used (would need more sophisticated mocking)
-
-def test_error_handling_404():
-    """Test 404 error handling with helpful message."""
-    client = LLMClient()
-
-    client.client.completions.create = Mock(
-        side_effect=Exception("404 endpoint not found")
-    )
-
-    with pytest.raises(ConnectionError) as exc_info:
-        client.generate("Test")
-
-    assert "Lemonade Server version mismatch" in str(exc_info.value)
-    assert "lemonade model remove" in str(exc_info.value)
+            client = create_client()
+            result = client.chat([{"role": "user", "content": "Hello"}], stream=True)
+            chunks = list(result)
+            assert len(chunks) == 2
+            assert "".join(chunks) == "Hi there"
 ```
 
 ### Integration Tests
 
-```python
-def test_integration_local_llm():
-    """Test integration with local Lemonade server."""
-    client = LLMClient()
+**File:** `tests/integration/test_llm_providers.py`
 
+```python
+def test_integration_lemonade_generate():
+    """Test Lemonade provider with live server."""
     try:
+        client = create_client()
         response = client.generate("Say hello")
         assert isinstance(response, str)
         assert len(response) > 0
     except ConnectionError:
         pytest.skip("Lemonade server not running")
 
-def test_integration_streaming():
-    """Test streaming integration."""
-    client = LLMClient()
-
+def test_integration_lemonade_streaming():
+    """Test Lemonade streaming."""
     try:
-        chunks = []
-        for chunk in client.generate("Count to 3", stream=True):
-            chunks.append(chunk)
-
+        client = create_client()
+        chunks = list(client.generate("Count to 3", stream=True))
         assert len(chunks) > 0
-        full_response = "".join(chunks)
-        assert len(full_response) > 0
+    except ConnectionError:
+        pytest.skip("Lemonade server not running")
+
+def test_integration_lemonade_performance_stats():
+    """Test performance stats (Lemonade only)."""
+    try:
+        client = create_client()
+        client.generate("Test")
+        stats = client.get_performance_stats()
+        assert isinstance(stats, dict)
     except ConnectionError:
         pytest.skip("Lemonade server not running")
 ```
@@ -706,148 +783,215 @@ claude = ["anthropic>=0.18.0"]  # Claude API support
 
 ### Import Dependencies
 
+**Factory (`factory.py`):**
 ```python
-import logging
-import os
-import time
-from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, TypeVar, Union
+import importlib
+from typing import Optional
+from .base_client import LLMClient
+```
 
-import httpx
-import requests
-from dotenv import load_dotenv
-from openai import OpenAI
+**Base Client (`base_client.py`):**
+```python
+from abc import ABC, abstractmethod
+from typing import Iterator, Union
+from .exceptions import NotSupportedError
+```
 
-# Conditional Claude import
+**LemonadeProvider (`providers/lemonade.py`):**
+```python
+from typing import Iterator, Optional, Union
+from ..base_client import LLMClient
+from ..lemonade_client import LemonadeClient, DEFAULT_MODEL_NAME
+# DEFAULT_MODEL_NAME = "Qwen2.5-0.5B-Instruct-CPU"
+```
+
+**OpenAIProvider (`providers/openai_provider.py`):**
+```python
+from typing import Iterator, Optional, Union
+import openai  # Requires: pip install openai
+from ..base_client import LLMClient
+```
+
+**ClaudeProvider (`providers/claude.py`):**
+```python
+from typing import Iterator, Optional, Union
 try:
-    from gaia.eval.claude import ClaudeClient as AnthropicClaudeClient
-    CLAUDE_AVAILABLE = True
+    import anthropic  # Requires: pip install anthropic
 except ImportError:
-    CLAUDE_AVAILABLE = False
+    anthropic = None
+from ..base_client import LLMClient
 ```
 
 ---
 
 ## Usage Examples
 
-### Example 1: Basic Local LLM
+### Example 1: Basic Usage with Factory
 
 ```python
-from gaia.llm import LLMClient
+from gaia.llm import create_client
 
-# Initialize with local Lemonade server
-client = LLMClient()
+# Default Lemonade provider
+client = create_client()
 
 # Non-streaming generation
 response = client.generate("Write a hello world program in Python")
 print(response)
 
-# Get performance stats
+# Get performance stats (Lemonade only)
 stats = client.get_performance_stats()
-print(f"Speed: {stats['tokens_per_second']:.1f} tokens/sec")
+print(f"Speed: {stats.get('tokens_per_second', 'N/A')} tokens/sec")
 ```
 
-### Example 2: Streaming Responses
+### Example 2: Explicit Provider Selection
 
 ```python
-from gaia.llm import LLMClient
+from gaia.llm import create_client
 
-client = LLMClient()
+# Lemonade (local)
+lemonade = create_client(provider="lemonade", model="Qwen2.5-0.5B-Instruct-CPU")
 
-# Streaming generation
-print("AI: ", end="", flush=True)
-for chunk in client.generate("Tell me a short story", stream=True):
-    print(chunk, end="", flush=True)
-print()
+# OpenAI
+openai_client = create_client(provider="openai", api_key="sk-...")
+
+# Claude
+claude = create_client(provider="claude", api_key="sk-ant-...")
+
+# Backward-compatible flags
+legacy_claude = create_client(use_claude=True, api_key="sk-ant-...")
 ```
 
-### Example 3: Using Claude API
+### Example 3: Handling Unsupported Features
 
 ```python
-from gaia.llm import LLMClient
+from gaia.llm import create_client, NotSupportedError
 
-# Initialize with Claude
-client = LLMClient(
-    use_claude=True,
-    claude_model="claude-sonnet-4-20250514",
-    system_prompt="You are a helpful coding assistant."
-)
+# Create OpenAI client
+client = create_client(provider="openai", api_key="sk-...")
 
-# Generate code
-response = client.generate("Write a binary search function")
-print(response)
+# This works (OpenAI supports embed)
+embeddings = client.embed(["Hello world", "How are you?"])
+
+# This raises NotSupportedError (OpenAI doesn't support vision)
+try:
+    result = client.vision([image_bytes], "Describe this image")
+except NotSupportedError as e:
+    print(f"Feature not available: {e}")
+    # Output: "OpenAI does not support vision"
 ```
 
 ### Example 4: Chat with Message History
 
 ```python
-from gaia.llm import LLMClient
+from gaia.llm import create_client
 
-client = LLMClient()
+client = create_client()
 
 # Build conversation history
 messages = [
-    {"role": "system", "content": "You are a helpful assistant."},
     {"role": "user", "content": "What's 2+2?"},
     {"role": "assistant", "content": "2+2 equals 4."},
     {"role": "user", "content": "What about 3+3?"}
 ]
 
-# Generate with full context
-response = client.generate("", endpoint="chat", messages=messages)
+# Use chat() method
+response = client.chat(messages)
 print(response)  # "3+3 equals 6."
 ```
 
-### Example 5: Halting Generation
+### Example 5: Streaming Responses
 
 ```python
-from gaia.llm import LLMClient
-import threading
-import time
+from gaia.llm import create_client
 
-client = LLMClient()
+client = create_client()
 
-def generate_long_text():
-    """Generate in background thread."""
-    response = client.generate("Write a very long essay about AI")
-    print(response)
+# Streaming with generate()
+print("AI: ", end="", flush=True)
+for chunk in client.generate("Tell me a short story", stream=True):
+    print(chunk, end="", flush=True)
+print()
 
-# Start generation in background
-thread = threading.Thread(target=generate_long_text)
-thread.start()
-
-# Wait a bit, then halt
-time.sleep(2)
-if client.is_generating():
-    client.halt_generation()
-    print("Generation stopped!")
-
-thread.join()
+# Streaming with chat()
+for chunk in client.chat([{"role": "user", "content": "Hello"}], stream=True):
+    print(chunk, end="", flush=True)
 ```
 
-### Example 6: Custom Retry Configuration
+### Example 6: Embeddings (Lemonade and OpenAI only)
 
 ```python
-from gaia.llm import LLMClient
+from gaia.llm import create_client
 
-# Configure aggressive retry
-client = LLMClient(
-    max_retries=5,
-    retry_base_delay=0.5,  # Start with 0.5s delay
-)
+# With Lemonade
+lemonade = create_client()
+embeddings = lemonade.embed(["Hello world", "How are you?"])
+print(f"Embedding dimensions: {len(embeddings[0])}")
 
-# Will retry up to 5 times with exponential backoff
+# With OpenAI
+openai_client = create_client(provider="openai", api_key="sk-...")
+embeddings = openai_client.embed(["Text to embed"])
+```
+
+### Example 7: Vision (Lemonade and Claude only)
+
+```python
+from gaia.llm import create_client
+
+# With Claude
+claude = create_client(provider="claude", api_key="sk-ant-...")
+with open("image.jpg", "rb") as f:
+    image_data = f.read()
+description = claude.vision([image_data], "Describe what you see")
+print(description)
+```
+
+### Example 8: Model Management (Lemonade only)
+
+```python
+from gaia.llm import create_client
+
+client = create_client()
+
+# Load a specific model
+client.load_model("Qwen2.5-0.5B-Instruct-CPU")
+
+# Generate
 response = client.generate("Hello")
+
+# Get performance stats
+stats = client.get_performance_stats()
+print(f"Speed: {stats.get('tokens_per_second', 'N/A')} tokens/sec")
+
+# Unload model
+client.unload_model()
 ```
 
-### Example 7: Remote Lemonade Server
+### Example 9: Remote Lemonade Server
 
 ```python
-from gaia.llm import LLMClient
+from gaia.llm import create_client
 
 # Connect to remote server
-client = LLMClient(base_url="http://192.168.1.100:8000")
+client = create_client(base_url="http://192.168.1.100:8000")
 
 response = client.generate("Hello from remote server")
+print(response)
+```
+
+### Example 10: System Prompts
+
+```python
+from gaia.llm import create_client
+
+# Set default system prompt
+client = create_client(
+    system_prompt="You are a helpful coding assistant."
+)
+
+# System prompt automatically prepended to chat messages
+response = client.chat([
+    {"role": "user", "content": "Write a binary search function"}
+])
 print(response)
 ```
 
@@ -995,16 +1139,16 @@ Your LLM service must implement at least one of these OpenAI-compatible endpoint
 
   <Tab title="Direct Initialization">
     ```python
-    from gaia.llm import LLMClient
+    from gaia.llm import create_client
 
-    client = LLMClient(base_url="http://your-llm-service:8080")
+    client = create_client(base_url="http://your-llm-service:8080")
     response = client.generate("Hello world")
     ```
   </Tab>
 </Tabs>
 
 <Note>
-**URL Normalization:** GAIA automatically appends `/api/v1` if not present:
+**URL Normalization:** LemonadeClient automatically appends `/api/v1` if not present:
 - `http://localhost:8080` → `http://localhost:8080/api/v1`
 - If your service uses `/v1` instead, provide the full path: `http://localhost:8080/v1`
 </Note>
@@ -1015,10 +1159,10 @@ Your LLM service must implement at least one of these OpenAI-compatible endpoint
 
 <CodeGroup>
 ```python Basic Connection
-from gaia.llm import LLMClient
+from gaia.llm import create_client
 
 # Connect to your third-party LLM service
-client = LLMClient(base_url="http://your-service:8080/v1")
+client = create_client(base_url="http://your-service:8080/v1")
 
 # Test connection
 response = client.generate("Hello, are you working?")
@@ -1026,9 +1170,9 @@ print(response)
 ```
 
 ```python Streaming
-from gaia.llm import LLMClient
+from gaia.llm import create_client
 
-client = LLMClient(base_url="http://your-service:8080/v1")
+client = create_client(base_url="http://your-service:8080/v1")
 
 # Stream response chunks
 for chunk in client.generate("Tell me a story", stream=True):
@@ -1036,7 +1180,7 @@ for chunk in client.generate("Tell me a story", stream=True):
 ```
 
 ```python With Agent
-from gaia.llm import LLMClient
+from gaia.llm import create_client
 from gaia.agents import Agent
 
 class CustomAgent(Agent):
@@ -1076,10 +1220,10 @@ result = agent.process_task("Analyze this code...")
   </Accordion>
 
   <Accordion title="GAIA-Specific Features" icon="info">
-    The following features are specific to Lemonade Server and will not work with third-party services:
-    - `get_performance_stats()` - Returns empty dict `{}`
-    - `is_generating()` - Returns `False`
-    - `halt_generation()` - Returns `False`
+    The following features are specific to Lemonade provider and raise `NotSupportedError` with third-party services:
+    - `get_performance_stats()` - Performance statistics
+    - `load_model()` - Model loading
+    - `unload_model()` - Model unloading
   </Accordion>
 </AccordionGroup>
 
@@ -1098,9 +1242,9 @@ result = agent.process_task("Analyze this code...")
        ```
     2. Check firewall settings
     3. Ensure correct base URL format
-    4. Test with explicit endpoint:
+    4. Test with explicit base URL:
        ```python
-       client = LLMClient(base_url="http://localhost:8080/v1")
+       client = create_client(base_url="http://localhost:8080/v1")
        ```
   </Accordion>
 
@@ -1111,9 +1255,9 @@ result = agent.process_task("Analyze this code...")
     1. Check if service uses `/v1/completions` (OpenAI standard)
     2. Verify API path structure: `/v1` vs `/api/v1`
     3. Consult service documentation for correct endpoint paths
-    4. Use explicit endpoint override:
+    4. Use chat method explicitly if needed:
        ```python
-       client.generate("Test", endpoint="chat")  # Force chat endpoint
+       client.chat([{"role": "user", "content": "Test"}])
        ```
   </Accordion>
 
@@ -1159,25 +1303,26 @@ result = agent.process_task("Analyze this code...")
 Add to LLM Section:
 
 ```markdown
-### LLMClient
+### LLM Client
 
-**Import:** `from gaia.llm import LLMClient`
+**Import:** `from gaia.llm import create_client, LLMClient, NotSupportedError`
 
-**Purpose:** Unified interface for LLM generation across local, Claude, and OpenAI backends.
+**Purpose:** Provider-based LLM client with factory pattern for local and cloud backends.
 
 **Features:**
-- Multi-backend support (local Lemonade, Claude, OpenAI)
+- Factory-based client creation with `create_client()`
+- Three providers: Lemonade (local), OpenAI, Claude
+- Abstract base class for type safety
+- `NotSupportedError` for unsupported features
 - Streaming and non-streaming generation
-- Automatic retry with exponential backoff
-- Performance monitoring
-- Generation control (halt/resume)
+- Backward-compatible flags
 
 **Quick Start:**
 ```python
-from gaia.llm import LLMClient
+from gaia.llm import create_client
 
-# Local LLM
-client = LLMClient()
+# Local LLM (default)
+client = create_client()
 response = client.generate("Hello world")
 
 # Streaming
@@ -1185,26 +1330,33 @@ for chunk in client.generate("Tell me a story", stream=True):
     print(chunk, end="")
 
 # Claude API
-client = LLMClient(use_claude=True)
-response = client.generate("Explain Python decorators")
+claude = create_client(provider="claude", api_key="sk-ant-...")
+response = claude.generate("Explain Python decorators")
+
+# Backward-compatible
+client = create_client(use_claude=True)
 ```
 
 ---
 
 ## Acceptance Criteria
 
-- [ ] LLMClient implemented in `src/gaia/llm/llm_client.py`
-- [ ] All methods implemented with docstrings
-- [ ] Supports local Lemonade, Claude, OpenAI backends
-- [ ] Retry logic with exponential backoff works
-- [ ] Streaming generation works
-- [ ] Performance stats retrieval works
-- [ ] Generation halting works
-- [ ] Base URL normalization works
-- [ ] All unit tests pass (15+ tests)
-- [ ] Integration tests pass with live server
-- [ ] Error messages are helpful
-- [ ] Can import: `from gaia.llm import LLMClient`
+- [ ] `create_client()` factory implemented in `src/gaia/llm/factory.py`
+- [ ] `LLMClient` ABC implemented in `src/gaia/llm/base_client.py`
+- [ ] `NotSupportedError` implemented in `src/gaia/llm/exceptions.py`
+- [ ] `LemonadeProvider` implements all methods (generate, chat, embed, vision, get_performance_stats, load_model, unload_model)
+- [ ] `OpenAIProvider` implements generate, chat, embed
+- [ ] `ClaudeProvider` implements generate, chat, vision
+- [ ] Unsupported methods raise `NotSupportedError` with clear messages
+- [ ] Backward-compatible `use_claude=True` and `use_openai=True` flags work
+- [ ] Provider name property returns correct string for each provider
+- [ ] Streaming works for all providers' supported methods
+- [ ] Factory validates provider names (case-insensitive)
+- [ ] Factory raises ValueError when both flags are True
+- [ ] All unit tests pass (20+ tests covering factory, ABC, providers, NotSupportedError)
+- [ ] Integration tests pass with live Lemonade server
+- [ ] Error messages are helpful and indicate provider capabilities
+- [ ] Can import: `from gaia.llm import create_client, LLMClient, NotSupportedError`
 - [ ] Documented in SDK.md
 - [ ] Example code works
 
