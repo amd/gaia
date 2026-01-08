@@ -170,7 +170,6 @@ setup(
             "gaia-mcp = gaia.mcp.mcp_bridge:main",
             "gaia-mcp-atlassian = gaia.mcp.atlassian_mcp:main",
             "gaia-emr = gaia.agents.emr.cli:main",
-            "gaia-code = gaia.agents.code.cli:main",
         ]
     },
     python_requires=">=3.10",
