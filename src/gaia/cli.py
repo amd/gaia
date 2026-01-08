@@ -897,7 +897,7 @@ def main():
     summarize_parser.add_argument(
         "-t",
         "--type",
-        choices=["transcript", "email", "auto"],
+        choices=["transcript", "email", "pdf", "auto"],
         default="auto",
         help="Input type (default: auto-detect)",
     )

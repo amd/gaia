@@ -57,6 +57,7 @@ setup(
         "gaia.agents.code.tools",
         "gaia.agents.code.validators",
         "gaia.agents.routing",
+        "gaia.agents.summarize",
         "gaia.api",
     ],
     package_data={
@@ -67,6 +68,9 @@ setup(
             "webapp/public/*.html",
             "webapp/public/*.css",
             "webapp/public/*.js",
+        ],
+        "gaia.agents.summarize": [
+            "prompts.yml",
         ],
     },
     install_requires=[

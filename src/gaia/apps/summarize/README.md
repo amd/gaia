@@ -47,6 +47,10 @@ gaia summarize -i data/txt/test_email.txt -o email_summary.json
 # Summarize with specific styles
 gaia summarize -i data/txt/test_transcript.txt --styles executive action_items
 
+# Summarize the sample PDF document
+
+gaia summarize -i data/pdf/Oil-and-Gas-Activity-Operations-Manual-1-10.pdf
+
 # Generate PDF output
 gaia summarize -i data/txt/test_transcript.txt -f pdf
 

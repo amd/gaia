@@ -8,12 +8,18 @@ GAIA MCP Bridge - HTTP Native Implementation
 No WebSockets, just clean HTTP + JSON-RPC for maximum compatibility
 """
 
+import io
 import json
 import os
+import shutil
 import sys
+import tempfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import urlparse
+
+from python_multipart.multipart import MultipartParser, parse_options_header
 
 # Add GAIA to path
 sys.path.insert(
@@ -28,6 +34,79 @@ logger = get_logger(__name__)
 
 # Global verbose flag for request logging
 VERBOSE = False
+
+
+class MultipartCollector:
+    def __init__(self):
+        self.fields = {}
+        self.files = {}
+        self._headers = []
+        self._name = None
+        self._filename = None
+        self._buffer = None
+
+    def _parse_cd(self, value: str):
+        name = None
+        filename = None
+        try:
+            parts = [p.strip() for p in value.split(";")]
+            for p in parts:
+                pl = p.lower()
+                if pl.startswith("name="):
+                    name = p.split("=", 1)[1].strip().strip('"')
+                elif pl.startswith("filename="):
+                    filename = p.split("=", 1)[1].strip().strip('"')
+        except Exception:
+            pass
+        return name, filename
+
+    def on_part_begin(self):
+        self._headers = []
+        self._name = None
+        self._filename = None
+        self._buffer = io.BytesIO()
+
+    def on_header_field(self, data: bytes, start: int, end: int):
+        field = data[start:end].decode("latin-1")
+        self._headers.append([field, ""])
+
+    def on_header_value(self, data: bytes, start: int, end: int):
+        if self._headers:
+            self._headers[-1][1] += data[start:end].decode("latin-1")
+
+    def on_headers_finished(self):
+        for k, v in self._headers:
+            if k.lower() == "content-disposition":
+                name, filename = self._parse_cd(v)
+                self._name = name
+                self._filename = filename
+
+    def on_part_data(self, data: bytes, start: int, end: int):
+        if self._buffer is not None:
+            self._buffer.write(data[start:end])
+
+    def on_part_end(self):
+        if self._name is None:
+            self._buffer = None
+            return
+        if self._filename:
+            self.files[self._name] = {
+                "file_name": self._filename,
+                "file_object": self._buffer,
+            }
+        else:
+            self.fields[self._name] = self._buffer.getvalue()
+        self._buffer = None
+
+    def callbacks(self):
+        return {
+            "on_part_begin": self.on_part_begin,
+            "on_header_field": self.on_header_field,
+            "on_header_value": self.on_header_value,
+            "on_headers_finished": self.on_headers_finished,
+            "on_part_data": self.on_part_data,
+            "on_part_end": self.on_part_end,
+        }
 
 
 class GAIAMCPBridge:
@@ -82,7 +161,19 @@ class GAIAMCPBridge:
                 }
             except ImportError:
                 logger.warning("Blender agent not available")
+            # Summarize agent
+            try:
+                from gaia.agents.summarize.agent import SummarizerAgent
 
+                self.agents["summarize"] = {
+                    "class": SummarizerAgent,
+                    "description": "Text/document summarization",
+                    "capabilities": ["summarize", "pdf", "email", "transcript"],
+                    "init_params": {},
+                }
+                logger.info("✅ Summarize agent registered")
+            except ImportError as e:
+                logger.warning(f"Summarize agent not available: {e}")
             # Jira agent - THE KEY ADDITION
             try:
                 from gaia.agents.jira.agent import JiraAgent
@@ -176,6 +267,8 @@ class GAIAMCPBridge:
                 return self._execute_chat(arguments)
             elif tool_name == "gaia.blender.create":
                 return self._execute_blender(arguments)
+            elif tool_name == "gaia.summarize":
+                return self._execute_summarize(arguments)
             else:
                 return {"error": f"Tool not implemented: {tool_name}"}
         except Exception as e:
@@ -266,6 +359,94 @@ class GAIAMCPBridge:
         # Implementation would go here
         return {"success": True, "result": "Blender operation completed"}
 
+    def _execute_summarize(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute summarize operations.
+        Returns either a non-streaming result or streaming iterator metadata.
+        """
+        collector = args.get("multipart_collector")
+        if not collector:
+            return {"success": False, "error": "Missing multipart_collector"}
+
+        file_rec = collector.files.get("file")
+        style_bytes = collector.fields.get("style") or b"brief"
+        stream_val = collector.fields.get("stream")
+        accept_sse = bool(args.get("accept_sse"))
+
+        # Normalize flags
+        try:
+            style = (
+                style_bytes.decode("utf-8", errors="ignore")
+                if isinstance(style_bytes, (bytes, bytearray))
+                else str(style_bytes)
+            )
+        except Exception:
+            style = "brief"
+        try:
+            stream = str(
+                (
+                    stream_val.decode("utf-8")
+                    if isinstance(stream_val, (bytes, bytearray))
+                    else stream_val
+                )
+                or ""
+            ).lower() in ["1", "true", "yes"]
+        except Exception:
+            stream = False
+        # Honor Accept: text/event-stream if not explicitly set by field
+        if not stream and accept_sse:
+            stream = True
+
+        if not file_rec:
+            return {"success": False, "error": "No file uploaded"}
+
+        # Save file to temp
+        filename = file_rec.get("file_name")
+        ext = os.path.splitext(filename)[1] if filename else ".pdf"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext or ".pdf") as tmpfile:
+            buf = file_rec.get("file_object")
+            buf.seek(0)
+            shutil.copyfileobj(buf, tmpfile)
+            tmpfile_path = tmpfile.name
+
+        # Initialize agent
+        agent_config = self.agents.get("summarize")
+        if not agent_config:
+            os.unlink(tmpfile_path)
+            return {"success": False, "error": "Summarize agent not available"}
+        if "instance" not in agent_config:
+            agent_class = agent_config["class"]
+            init_params = agent_config.get("init_params", {})
+            agent_config["instance"] = agent_class(**init_params)
+        agent = agent_config["instance"]
+
+        if stream:
+            content = agent.get_summary_content_from_file(Path(tmpfile_path))
+            if not content:
+                os.unlink(tmpfile_path)
+                return {
+                    "success": False,
+                    "error": "No extractable text found in uploaded file",
+                }
+            iterator = agent.summarize_stream(content, input_type="pdf", style=style)
+            return {
+                "success": True,
+                "stream": True,
+                "style": style,
+                "tmpfile_path": tmpfile_path,
+                "iterator": iterator,
+            }
+        else:
+            try:
+                result = agent.summarize_file(tmpfile_path, styles=[style])
+                return {
+                    "success": True,
+                    "stream": False,
+                    "style": style,
+                    "result": result,
+                }
+            finally:
+                os.unlink(tmpfile_path)
+
 
 class MCPHTTPHandler(BaseHTTPRequestHandler):
     """HTTP handler for MCP protocol."""
@@ -345,7 +526,10 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         """Handle POST requests - main MCP endpoint."""
         content_length = int(self.headers.get("Content-Length", 0))
 
-        if content_length > 0:
+        parsed = urlparse(self.path)
+        ctype = self.headers.get("content-type", "")
+
+        if ctype.startswith("application/json") and content_length > 0:
             body = self.rfile.read(content_length)
             try:
                 data = json.loads(body.decode("utf-8"))
@@ -355,11 +539,32 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 logger.error("Invalid JSON in request body")
                 self.send_json(400, {"error": "Invalid JSON"})
                 return
+        elif ctype.startswith("multipart/form-data"):
+            raw_data = self.rfile.read(content_length)
+
+            # Extract boundary using python-multipart helper and ensure bytes
+            _, opts = parse_options_header(ctype)
+            boundary = opts.get(b"boundary")
+            if not boundary:
+                raise ValueError("Missing multipart boundary")
+
+            # boundary is bytes, decode for parser if needed
+            boundary = boundary.decode("latin-1").strip('"')
+            boundary_bytes = (
+                boundary
+                if isinstance(boundary, (bytes, bytearray))
+                else str(boundary).encode("utf-8")
+            )
+
+            collector = MultipartCollector()
+            mp = MultipartParser(boundary_bytes, callbacks=collector.callbacks())
+            mp.write(raw_data)
+            mp.finalize()
+            data = {}
+            data["multipart_collector"] = collector
         else:
             data = {}
             self.log_request_details("POST", self.path)
-
-        parsed = urlparse(self.path)
 
         # Handle different endpoints
         if parsed.path in ["/", "/v1/messages", "/rpc"]:
@@ -377,6 +582,24 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             # Direct LLM endpoint (no conversation context)
             result = self.bridge.execute_tool("gaia.query", data)
             self.send_json(200 if result.get("success") else 500, result)
+        elif parsed.path == "/summarize":
+            # Direct Summarize endpoint accept multipart/form-data (file upload) for browser clients
+            accept_header = self.headers.get("Accept", "")
+            if isinstance(data, dict):
+                data["accept_sse"] = "text/event-stream" in accept_header
+            result = self.bridge.execute_tool("gaia.summarize", data)
+            if result.get("success") and result.get("stream"):
+                self.send_sse_headers()
+                try:
+                    self.stream_sse(result.get("iterator", []))
+                finally:
+                    tmp = result.get("tmpfile_path")
+                    if tmp and os.path.exists(tmp):
+                        os.unlink(tmp)
+                return
+            else:
+                self.send_json(200 if result.get("success") else 500, result)
+                return
         else:
             self.send_json(404, {"error": "Not found"})
 
@@ -434,6 +657,28 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
+
+    def send_sse_headers(self):
+        """Send standard headers for Server-Sent Events."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+    def stream_sse(self, iterator):
+        """Stream SSE data from an iterator of chunk dicts."""
+        for chunk in iterator:
+            if chunk.get("is_complete"):
+                data_out = json.dumps(
+                    {"event": "complete", "performance": chunk.get("performance", {})}
+                )
+            else:
+                data_out = json.dumps({"text": chunk.get("text", "")})
+            self.wfile.write(f"data: {data_out}\n\n".encode("utf-8"))
+            self.wfile.flush()
 
     def send_json(self, status, data):
         """Send JSON response."""
