@@ -1,0 +1,70 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: Claude AI Assistant
+on:
+  issues:
+    types: [opened, labeled]
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  # Auto-review new PRs
+  pr-review:
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Review this GAIA PR:
+            - Check AMD copyright headers on new files
+            - Verify code follows patterns in src/gaia/
+            - Look for security issues
+            - Check test coverage
+            - Reference docs/dev.md for standards
+          claude_args: "--max-turns 5"
+
+  # Respond to @claude in PRs
+  pr-comment:
+    if: |
+      github.event_name == 'pull_request_review_comment' &&
+      contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  # Respond to new issues or @claude mentions
+  issue-handler:
+    if: |
+      github.event_name == 'issues' ||
+      (github.event_name == 'issue_comment' &&
+       contains(github.event.comment.body, '@claude'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You are GAIA's helpful AI assistant.
+
+            For questions: Check docs/ folder, especially faq.md, cli.md
+            For bugs: Search src/gaia/ for related code
+            For features: Check if similar exists, suggest approach
+
+            Always be helpful, concise, and reference specific files.
+          claude_args: "--max-turns 3"

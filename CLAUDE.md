@@ -113,6 +113,25 @@ gaia/
 
 **Platform:** [`docs/installer.md`](docs/installer.md), [`docs/ui.md`](docs/ui.md)
 
+## Issue Response Guidelines
+
+When responding to GitHub issues and pull requests, follow these guidelines:
+
+- **Check documentation first:** Always search the `docs/` folder for answers to user questions before suggesting solutions
+- **Reference specific files:** Use precise file references to help users navigate the codebase
+  - Agent questions: `src/gaia/agents/`
+  - CLI questions: `src/gaia/cli.py`
+  - MCP questions: `src/gaia/mcp/`
+  - LLM backend: `src/gaia/llm/`
+- **Link to relevant documentation:** Provide direct links to documentation that addresses the issue
+- **For bugs:** Check `tests/` directory for related test cases that might reveal the issue or need updating
+- **Key documentation files:**
+  - CLI usage: [`docs/cli.md`](docs/cli.md)
+  - Chat and RAG: [`docs/chat.md`](docs/chat.md)
+  - Common issues: [`docs/faq.md`](docs/faq.md)
+  - Development setup: [`docs/dev.md`](docs/dev.md)
+  - Feature overview: [`docs/features.md`](docs/features.md)
+
 ## File Path Rules (Workaround for Claude Code v1.0.111 Bug)
 - When reading or editing a file, **ALWAYS use relative paths.**
 - Example: `./src/components/Component.tsx` ✅
