@@ -68,7 +68,8 @@
       "WebFetch",
       "WebFetch(domain:code.claude.com)",
       "WebFetch(domain:lemonade-server.ai)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(git add:*)"
     ],
     "deny": []
   },
@@ -83,7 +84,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/util/pre-commit-lint.sh",
+            "command": "python \"$CLAUDE_PROJECT_DIR/util/pre-commit-lint.py\"",
             "timeout": 120
           }
         ]
