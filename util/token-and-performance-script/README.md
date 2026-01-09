@@ -16,6 +16,20 @@ python perf_analysis.py [--show] <log_file> [<log_file> ...]
 - All plots are generated: prompt tokens, input tokens, output tokens, TTFT, TPS, and a prefill vs decode pie chart.
 - `--show` — display plots interactively in addition to saving images.
 
+## Getting llama.cpp logs
+
+The script expects llama.cpp server logs. You can collect them from [Lemonade](https://lemonade-server.ai/) by running:
+
+```bash
+lemonade-server serve --ctx-size 32768 2>&1 | tee agent.log
+```
+
+This writes the llama.cpp telemetry to `agent.log`, which you can then feed into the plotter:
+
+```bash
+python perf_analysis.py agent.log
+```
+
 ## Outputs
 
 Image files are written to the current directory:
