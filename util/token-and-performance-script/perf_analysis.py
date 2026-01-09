@@ -9,6 +9,7 @@ producing line charts per metric with one series per log file.
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import sys
 from dataclasses import dataclass
@@ -112,7 +113,7 @@ def extract_metrics(lines: Iterable[str]) -> Dict[Metric, List[float]]:
 def build_plot(
     series: Sequence[Tuple[str, List[float]]],
     metric_config: MetricConfig,
-    output_path: Path | None,
+    output_path: Path,
     show: bool,
 ) -> None:
     """Create the plot and either save it, display it, or both."""
@@ -133,9 +134,104 @@ def build_plot(
         ax.legend(title="Log file")
     fig.tight_layout()
 
-    if output_path is not None:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path)
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+
+def build_prefill_decode_pies(
+    prefill_decode_times: Sequence[Tuple[str, float, float]],
+    output_path: Path,
+    show: bool,
+) -> None:
+    """Plot per-log prefill vs decode time split as multiple pies."""
+    if not prefill_decode_times:
+        print("No timing data available to build prefill/decode split.", file=sys.stderr)
+        return
+
+    slice_colors = ["#4c78a8", "#f58518"]  # Prefill, decode
+    pie_outline_colors = plt.get_cmap("tab10").colors
+    cols = min(len(prefill_decode_times), 3)
+    rows = math.ceil(len(prefill_decode_times) / cols)
+
+    def autopct_with_seconds(values: Sequence[float]) -> callable:
+        def format_pct(pct: float) -> str:
+            seconds = pct / 100 * sum(values)
+            return f"{pct:.1f}%\n{seconds:.2f}s"
+
+        return format_pct
+
+    fig, axes = plt.subplots(rows, cols, figsize=(4 * cols, 4 * rows))
+    axes_flat: List[plt.Axes] = (
+        [axes]
+        if isinstance(axes, plt.Axes)
+        else list(axes.ravel() if hasattr(axes, "ravel") else axes)
+    )
+
+    legend_handles = []
+
+    for idx, (log_name, prefill_total, decode_total) in enumerate(prefill_decode_times):
+        total_time = prefill_total + decode_total
+        if total_time <= 0:
+            axes_flat[idx].axis("off")
+            continue
+
+        ax = axes_flat[idx]
+        sizes = [prefill_total, decode_total]
+        outline_color = pie_outline_colors[idx % len(pie_outline_colors)]
+
+        ax.pie(
+            sizes,
+            labels=["Prefill", "Decode"],
+            colors=slice_colors,
+            autopct=autopct_with_seconds(sizes),
+            startangle=90,
+            wedgeprops={"edgecolor": outline_color, "linewidth": 2},
+        )
+        ax.axis("equal")  # Equal aspect ratio for a true circle.
+        ax.set_title(log_name)
+        ax.text(
+            0,
+            0,
+            f"Total\n{total_time:.2f}s",
+            ha="center",
+            va="center",
+            fontsize=10,
+            weight="bold",
+        )
+
+        legend_handles.append(
+            plt.Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="w",
+                markerfacecolor="w",
+                markeredgecolor=outline_color,
+                markeredgewidth=2,
+                markersize=10,
+                label=log_name,
+            )
+        )
+
+    for ax in axes_flat[len(prefill_decode_times) :]:
+        ax.axis("off")
+
+    fig.legend(
+        handles=legend_handles,
+        loc="upper center",
+        ncol=min(len(legend_handles), cols),
+        title="Log file",
+    )
+    fig.suptitle("Prefill vs decode time split", y=0.98)
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path)
 
     if show:
         plt.show()
@@ -157,47 +253,9 @@ def parse_cli() -> argparse.Namespace:
         help="One or more paths to llama.cpp server log files.",
     )
     parser.add_argument(
-        "--all",
-        action="store_true",
-        help="Generate plots for prompt tokens, input tokens, output tokens, TTFT, and TPS.",
-    )
-    parser.add_argument(
-        "--prompt-tokens",
-        action="store_true",
-        dest="prompt_tokens",
-        help="Generate a plot for prompt token counts (from n_prompt_tokens).",
-    )
-    parser.add_argument(
-        "--input-tokens",
-        action="store_true",
-        dest="input_tokens",
-        help="Generate a plot for input token counts (from 'Input tokens:' lines).",
-    )
-    parser.add_argument(
-        "--output-tokens",
-        action="store_true",
-        dest="output_tokens",
-        help="Generate a plot for output token counts.",
-    )
-    parser.add_argument(
-        "--ttft",
-        action="store_true",
-        help="Generate a plot for time to first token (seconds).",
-    )
-    parser.add_argument(
-        "--tps",
-        action="store_true",
-        help="Generate a plot for tokens per second.",
-    )
-    parser.add_argument(
         "--show",
         action="store_true",
         help="Display the plot window in addition to saving the image.",
-    )
-    parser.add_argument(
-        "--no-save",
-        action="store_true",
-        help="Display the plot without saving an image.",
     )
     return parser.parse_args()
 
@@ -205,27 +263,11 @@ def parse_cli() -> argparse.Namespace:
 def main() -> int:
     args = parse_cli()
 
-    if args.all:
-        selected_metrics = list(Metric)
-    else:
-        selected_metrics = [
-            metric
-            for flag, metric in (
-                ("prompt_tokens", Metric.PROMPT_TOKENS),
-                ("input_tokens", Metric.INPUT_TOKENS),
-                ("output_tokens", Metric.OUTPUT_TOKENS),
-                ("ttft", Metric.TTFT),
-                ("tps", Metric.TPS),
-            )
-            if getattr(args, flag)
-        ]
-
-    if not selected_metrics:
-        selected_metrics = [Metric.PROMPT_TOKENS]
-
+    metrics = list(Metric)
     series_by_metric: Dict[Metric, List[Tuple[str, List[float]]]] = {
-        metric: [] for metric in selected_metrics
+        metric: [] for metric in metrics
     }
+    prefill_decode_times: List[Tuple[str, float, float]] = []
 
     for log_path in args.log_paths:
         if not log_path.is_file():
@@ -239,7 +281,7 @@ def main() -> int:
             print(f"error: failed to read log file {log_path}: {exc}", file=sys.stderr)
             return 1
 
-        for metric in selected_metrics:
+        for metric in metrics:
             values = metric_values.get(metric, [])
             if not values:
                 print(
@@ -252,22 +294,43 @@ def main() -> int:
             log_name = log_path.name or str(log_path)
             series_by_metric[metric].append((log_name, values))
 
-    for metric in selected_metrics:
-        output_path = None if args.no_save else METRIC_CONFIGS[metric].filename
+        prefill_total_time = sum(metric_values[Metric.TTFT])
+        # Use paired output token and TPS values; ignore any unmatched trailing values.
+        decode_total_time = sum(
+            output_tokens / tps
+            for output_tokens, tps in zip(
+                metric_values[Metric.OUTPUT_TOKENS], metric_values[Metric.TPS]
+            )
+            if tps > 0
+        )
+        prefill_decode_times.append((log_name, prefill_total_time, decode_total_time))
+
+    for metric in metrics:
         build_plot(
             series_by_metric[metric],
             metric_config=METRIC_CONFIGS[metric],
-            output_path=output_path,
+            output_path=METRIC_CONFIGS[metric].filename,
             show=args.show,
         )
 
-        if output_path is not None:
-            total_points = sum(len(counts) for _, counts in series_by_metric[metric])
-            print(
-                f"Saved {METRIC_CONFIGS[metric].title.lower()} plot with "
-                f"{total_points} entries from {len(series_by_metric[metric])} log(s) "
-                f"to {output_path}"
-            )
+        total_points = sum(len(counts) for _, counts in series_by_metric[metric])
+        print(
+            f"Saved {METRIC_CONFIGS[metric].title.lower()} plot with "
+            f"{total_points} entries from {len(series_by_metric[metric])} log(s) "
+            f"to {METRIC_CONFIGS[metric].filename}"
+        )
+
+    prefill_decode_path = Path("prefill_decode_split.png")
+    build_prefill_decode_pies(
+        prefill_decode_times=prefill_decode_times,
+        output_path=prefill_decode_path,
+        show=args.show,
+    )
+    if prefill_decode_times:
+        print(
+            f"Saved prefill vs decode time split pies for "
+            f"{len(prefill_decode_times)} log(s) to {prefill_decode_path}"
+        )
 
     return 0
 
