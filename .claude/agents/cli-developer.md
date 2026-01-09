@@ -2,7 +2,7 @@
 name: cli-developer
 description: GAIA CLI command development. Use PROACTIVELY for adding new CLI commands, modifying src/gaia/cli.py, implementing argument parsing, or creating command documentation.
 tools: Read, Write, Edit, Bash, Grep
-model: sonnet
+model: opus
 ---
 
 You are a GAIA CLI development specialist focused on command-line interface design.

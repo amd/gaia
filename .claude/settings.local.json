@@ -69,7 +69,8 @@
       "WebFetch(domain:code.claude.com)",
       "WebFetch(domain:lemonade-server.ai)",
       "WebSearch",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": []
   },

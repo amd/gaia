@@ -27,7 +27,10 @@ src/gaia/
 - **External**: https://amd-gaia.ai/sdk
 - **Local**: `docs/sdk/` (Mintlify MDX format)
 - **Specs**: `docs/spec/` - 47 technical specifications
+- **Guides**: `docs/guides/` - Feature guides showing SDK usage patterns
+- **Playbooks**: `docs/playbooks/` - Step-by-step tutorials for building agents
 - **Examples**: `docs/sdk/examples.mdx`
+- **Navigation structure**: See `docs/docs.json` for complete Mintlify configuration
 
 ## Architectural Principles
 

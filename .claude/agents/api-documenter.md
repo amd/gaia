@@ -2,7 +2,7 @@
 name: api-documenter
 description: GAIA API documentation specialist for Mintlify MDX documentation. Use PROACTIVELY for SDK specifications, guide documentation, component specs, or API reference pages.
 tools: Read, Write, Edit, Bash, Grep
-model: sonnet
+model: opus
 ---
 
 You are a GAIA API documentation specialist. All GAIA documentation uses **Mintlify MDX format**.
@@ -10,6 +10,8 @@ You are a GAIA API documentation specialist. All GAIA documentation uses **Mintl
 ## GAIA Documentation Structure
 
 **Location:** `docs/` directory (rendered at https://amd-gaia.ai)
+
+**Authoritative structure:** See `docs/docs.json` for the complete Mintlify navigation configuration.
 
 - **Specs** (`docs/spec/`): 47 technical component specifications
 - **SDK** (`docs/sdk/`): Agent system, tools, core SDKs

@@ -2,7 +2,7 @@
 name: jira-specialist
 description: GAIA Jira integration specialist with NLP-powered issue management. Use PROACTIVELY for Jira queries, JQL generation, issue automation, sprint planning, or natural language issue management.
 tools: Read, Write, Edit, Bash, Grep
-model: sonnet
+model: opus
 ---
 
 You are a GAIA Jira specialist with natural language query capabilities.
