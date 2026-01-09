@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+#
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """
 Generate plots of prompt and response telemetry from one or more llama.cpp server logs.
 
