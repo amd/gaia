@@ -20,7 +20,7 @@ This glossary defines technical terms, acronyms, and concepts used throughout th
 A shell script that activates a Python virtual environment, making its packages available in the current terminal session.
 
 ### Agent
-An AI system that can autonomously plan, reason, and use tools to accomplish tasks. In GAIA, agents extend the base `Agent` class and follow a Think-Act-Observe-Reason loop.
+An AI system that can autonomously plan, reason, and use tools to accomplish tasks. In GAIA, agents extend the base `Agent` class, register tools via `_register_tools()`, and follow an iterative loop: think about the task, act by calling tools, observe results, and reason about next steps. Built-in agents include ChatAgent, CodeAgent, JiraAgent, and BlenderAgent. See also: Agent Loop, Tool, Mixin.
 
 ### Agent Loop
 The cyclic process an agent follows: thinking about the task, acting by calling tools, observing the results, and reasoning about next steps.
@@ -32,10 +32,13 @@ The current phase of agent processing, such as planning, executing, error recove
 GAIA's colorful command-line interface that provides formatted output for agent operations, making it easier to follow agent reasoning.
 
 ### Agentic RAG
-Retrieval-Augmented Generation with multi-step reasoning capabilities, where the agent can iteratively refine queries and synthesize information from multiple sources.
+Retrieval-Augmented Generation with multi-step reasoning capabilities, where the agent can iteratively refine queries and synthesize information from multiple sources. Unlike traditional RAG (one search, one answer), Agentic RAG can make multiple retrieval calls, refine queries based on initial results, and know when documents don't contain the needed information.
 
 ### ANTHROPIC_API_KEY
 Environment variable containing the API key for accessing Anthropic's Claude models via their API.
+
+### ApiAgent
+A GAIA base class for agents exposed via OpenAI-compatible REST API. Subclasses implement `get_model_id()` to define their model name (shown in `/v1/models`) and `get_model_info()` to describe capabilities. See also: MCP Server, OpenAI-compatible API.
 
 ### API Endpoint
 A specific URL path on a server that handles particular requests, such as `/v1/chat/completions` for chat interactions.
@@ -48,6 +51,12 @@ A segment of audio data processed at one time, typically measured in millisecond
 
 ### Audio Device Index
 A numerical identifier for microphone or speaker hardware used by audio processing libraries.
+
+### ATLASSIAN_API_KEY
+Environment variable containing the API token for authenticating with Atlassian Jira. Required for JiraAgent operations.
+
+### Auto-Discovery
+The automatic detection and configuration of external service capabilities. Used by JiraAgent to discover available projects, issue types, statuses, and priorities from a Jira instance.
 
 ### AWQ (Activation-Aware Weight Quantization)
 An advanced quantization technique that reduces model size while preserving accuracy by considering activation patterns.
@@ -62,6 +71,9 @@ The root address of an API server (e.g., `http://localhost:8080`), used as the f
 ### Batch Experiment
 Running evaluation tests on multiple inputs simultaneously to measure AI performance across diverse scenarios.
 
+### BlenderAgent
+GAIA's specialized agent for 3D content creation and Blender automation. Communicates with Blender via MCP to create objects, apply materials, and manage scenes through natural language commands.
+
 ---
 
 ## C
@@ -73,7 +85,7 @@ A folder where processed documents, embeddings, or other computed data are store
 An OpenAI-compatible API endpoint (`/v1/chat/completions`) that processes conversation history as a list of messages.
 
 ### ChatAgent
-GAIA's agent implementation for conversational interactions, supporting text and voice-based conversations.
+GAIA's agent for conversational interactions. Maintains conversation history, supports RAG for document Q&A, integrates with voice (Talk mode), and provides interactive commands like `/clear`, `/history`, and `/stats`. See also: ChatSDK, ChatSession.
 
 ### ChatSDK
 High-level interface for building chat applications in GAIA, providing conversation management, history, and memory features.
@@ -91,13 +103,16 @@ The number of tokens in each piece when splitting text for processing, typically
 A text-based interface for interacting with software through terminal commands, such as `gaia chat` or `gaia talk`.
 
 ### CodeAgent
-GAIA's specialized agent for code generation, analysis, and debugging tasks.
+GAIA's specialized agent for full-stack Next.js application generation. Creates complete projects with Prisma data models, REST API routes with Zod validation, React pages with Tailwind styling, and iterative TypeScript error fixing.
 
 ### Command-line Parameter
 Arguments passed to commands when executing them, such as `--model` or `--debug`.
 
 ### Completions Endpoint
 An OpenAI-compatible API endpoint (`/v1/completions`) that processes pre-formatted prompt strings directly.
+
+### Confidence Threshold
+The minimum relevance score (typically 0.6-0.9) required to trust RAG retrieval results. Results below this threshold suggest the documents may not contain the needed information.
 
 ### Configuration File
 A JSON or YAML file (like `settings.json`) containing application settings and preferences.
@@ -110,6 +125,9 @@ Generating a unique identifier for document content to detect when files have ch
 
 ### Context Preservation
 Maintaining important information when splitting text across chunks, ensuring coherent answers.
+
+### Context Size
+The number of tokens allocated for LLM processing, configured via `--ctx-size` parameter when starting Lemonade Server. Larger values (e.g., 32768) allow processing more input but require more memory. Not the same as Context Window (the model's inherent limit). See also: Context Window, Max Tokens.
 
 ### Context Window
 The maximum number of tokens an LLM can process at once, including both input and output. Modern models range from 4K to 1M+ tokens.
@@ -133,8 +151,14 @@ Monitoring API usage and associated costs, especially important when using cloud
 ### Debug Mode
 A verbose logging setting that provides detailed information about system operations for troubleshooting.
 
+### Disambiguation
+The process of clarifying ambiguous user requests through follow-up questions. The RoutingAgent uses disambiguation to determine programming language and project type when not specified.
+
 ### Document Chunking
 The process of splitting large documents into smaller, manageable pieces for processing by LLMs or embedding models.
+
+### Document Indexing
+The process of preparing documents for RAG by extracting text, splitting into chunks, generating embeddings, and storing in a vector database like FAISS.
 
 ---
 
@@ -146,8 +170,11 @@ Installing a Python package in development mode (`pip install -e .`) so code cha
 ### Editable Mode
 See Editable Install.
 
+### Electron
+A cross-platform desktop application framework using web technologies (HTML, CSS, JavaScript). GAIA uses Electron for desktop applications including the Jira WebUI and Chat WebUI, enabling native Windows/Linux apps with web-based interfaces.
+
 ### Embeddings
-Dense vector representations of text that capture semantic meaning, enabling similarity comparisons and search.
+Dense vector representations of text that capture semantic meaning. Text with similar meanings produces similar vectors, enabling semantic search even when exact words differ. GAIA uses embedding models like `nomic-embed-text-v2-moe-GGUF` for RAG. See also: Vector Search, Cosine Similarity, FAISS.
 
 ### Environment Variable
 A system-level configuration setting, such as `LEMONADE_BASE_URL` or `ANTHROPIC_API_KEY`.
@@ -168,6 +195,9 @@ A retry strategy that increases the wait time between retries exponentially (e.g
 ### FAISS (Facebook AI Similarity Search)
 A library for efficient similarity search and clustering of dense vectors, commonly used for RAG systems.
 
+### FastAPI
+A modern, high-performance Python web framework for building APIs. GAIA uses FastAPI for the OpenAI-compatible API server (`gaia api start`), providing endpoints like `/v1/chat/completions` and `/v1/models`. See also: Uvicorn, OpenAI-compatible API.
+
 ### Few-shot Learning
 Providing an LLM with a few example inputs and outputs to teach it how to perform a task.
 
@@ -185,7 +215,7 @@ A fundamental mathematical operation in neural networks, crucial for AI computat
 A file format for quantized LLM models, optimized for efficient loading and inference.
 
 ### Ground Truth
-Known correct answers used to evaluate AI system performance during testing.
+Known correct answers used to evaluate AI system performance. In GAIA, generate ground truth via `gaia groundtruth` command, then compare model outputs against it using `gaia eval`. Essential for measuring accuracy, detecting regressions, and benchmarking models. See also: Evaluation Framework, Batch Experiment.
 
 ### Grounding
 Anchoring LLM responses in factual data or retrieved documents to reduce hallucinations.
@@ -201,7 +231,7 @@ When an LLM generates plausible-sounding but factually incorrect or nonsensical 
 Using specialized processors (NPU, GPU) instead of general-purpose CPUs for faster AI computations.
 
 ### Hybrid Mode
-Using both NPU and iGPU together to maximize AI performance on AMD Ryzen AI processors.
+Using both NPU and iGPU together to maximize AI performance on AMD Ryzen AI processors. The NPU handles efficient matrix operations while the iGPU provides additional compute capacity. Enabled automatically by Lemonade Server with compatible models. See also: NPU, iGPU, Lemonade Server.
 
 ---
 
@@ -226,15 +256,31 @@ The folder where GAIA and its dependencies are installed on your system.
 
 ## J
 
+### JiraAgent
+GAIA's specialized agent for Atlassian Jira integration. Provides natural language interface for searching, creating, and updating issues via the Jira REST API with auto-discovery of project configuration.
+
+### JQL (Jira Query Language)
+A domain-specific query language for searching Jira issues. JiraAgent translates natural language queries into JQL for execution.
+
 ### JSON Schema
 A standard format for describing the structure and validation rules of JSON data, used for tool parameter definitions.
 
 ---
 
+## K
+
+### Kokoro TTS
+A lightweight, high-quality text-to-speech engine used by GAIA for voice output in Talk mode. Runs locally without cloud dependencies. See also: TTS (Text-to-Speech), ASR.
+
+---
+
 ## L
 
+### Language Detection
+The RoutingAgent's ability to identify programming languages and frameworks from natural language prompts, used to configure specialized agents appropriately.
+
 ### Lemonade Server
-AMD's optimized LLM serving platform that provides hardware-accelerated inference on Ryzen AI processors with NPU support.
+AMD's optimized LLM serving platform providing hardware-accelerated inference on Ryzen AI processors. Supports NPU/iGPU hybrid mode, model management, and an OpenAI-compatible API. Start with `lemonade-server serve`. Required for most GAIA operations. See also: NPU, Hybrid Mode, LEMONADE_BASE_URL.
 
 ### LEMONADE_BASE_URL
 Environment variable specifying the address of the Lemonade Server (e.g., `http://localhost:8080`).
@@ -259,7 +305,10 @@ The number of conversation pairs retained in chat history before older messages 
 The maximum length of an LLM response, measured in tokens.
 
 ### MCP (Model Context Protocol)
-A standardized protocol for integrating AI agents with external tools and services.
+A standardized protocol for integrating AI agents with external tools and services. Enables GAIA agents to be used from VSCode, Claude Desktop, and other MCP-compatible clients. GAIA's BlenderAgent uses MCP to communicate with Blender. See also: MCPAgent, MCP Server.
+
+### MCPAgent
+A GAIA base class for agents compatible with the Model Context Protocol. Subclasses implement `get_mcp_tool_definitions()` for tool schemas, `execute_mcp_tool()` for tool execution, and optionally `get_mcp_resources()` to expose data URIs. Enables integration with VSCode, Claude Desktop, and other MCP clients. See also: MCP Server, MCP Tools.
 
 ### MCP Server
 A service that exposes agent capabilities through the Model Context Protocol.
@@ -268,7 +317,7 @@ A service that exposes agent capabilities through the Model Context Protocol.
 Functions and capabilities exposed through an MCP server that agents can call.
 
 ### Mixin
-A reusable class that provides a set of related tools to agents, following Python's mixin pattern.
+A reusable class that provides a set of related tools to agents, following Python's mixin pattern. Examples include FileToolsMixin (file operations), ShellToolsMixin (shell commands), and RAGToolsMixin (document Q&A). Agents inherit from multiple mixins to combine capabilities. See also: Tool, Tool Registry.
 
 ### Model ID
 A unique identifier for a specific LLM, such as `Qwen2.5-0.5B-Instruct-CPU`.
@@ -276,9 +325,15 @@ A unique identifier for a specific LLM, such as `Qwen2.5-0.5B-Instruct-CPU`.
 ### Multi-step Reasoning
 An agent's ability to break complex tasks into steps and execute them sequentially or adaptively.
 
+### Multi-Turn Conversation
+A conversation with multiple exchanges where context from previous turns is preserved and used to inform responses.
+
 ---
 
 ## N
+
+### Next.js
+A React framework for building full-stack web applications. GAIA's CodeAgent generates Next.js projects with TypeScript, Prisma, and Tailwind CSS.
 
 ### NPU (Neural Processing Unit)
 A dedicated AI accelerator in AMD Ryzen AI processors, optimized for running neural networks efficiently.
@@ -324,8 +379,17 @@ The process of extracting text, images, and structure from PDF documents.
 ### Per-file Indexing
 Creating separate vector search indexes for each document rather than one combined index.
 
+### Perplexity API
+An external web search API that can be integrated with GAIA agents for real-time information retrieval beyond indexed documents.
+
 ### Performance Metrics
 Quantitative measurements of system behavior, such as tokens per second or time to first token.
+
+### Prisma
+A TypeScript/JavaScript ORM (Object-Relational Mapping) for database access. GAIA's CodeAgent generates Prisma schemas with SQLite for data persistence. Includes automatic ID generation, timestamps, and type-safe queries. See also: Next.js, Zod.
+
+### Project Type
+Classification of code projects by their architecture: frontend (UI only), backend (API only), fullstack (both), or script (utilities/CLI). The RoutingAgent uses this to configure CodeAgent appropriately.
 
 ### Prompt
 The input text provided to an LLM, including instructions, context, and the user's question or request.
@@ -343,21 +407,27 @@ The official repository for distributing Python packages, accessible via `pip in
 ### Quantization
 Reducing the precision of model weights (e.g., from float32 to int4) to decrease model size and increase inference speed.
 
+### Quick RAG
+A GAIA convenience function (`quick_rag()`) that indexes documents and answers a question in a single call. The index is temporary (not persisted), making it ideal for one-off queries or prototyping. For repeated queries, use RAGSDK with a persistent cache. See also: RAGSDK, RAGConfig.
+
 ---
 
 ## R
 
 ### RAG (Retrieval-Augmented Generation)
-A technique combining document search with LLM generation, allowing models to answer questions using retrieved information.
+A technique combining document search with LLM generation, allowing models to answer questions using retrieved information. Process: (1) chunk documents, (2) generate embeddings, (3) store in vector database, (4) search for relevant chunks, (5) include in LLM prompt. Solves the knowledge cutoff problem. See also: RAGSDK, Agentic RAG, Document Indexing.
+
+### RAGConfig
+Configuration dataclass for RAGSDK settings including chunk_size, chunk_overlap, max_chunks, embedding model, and cache directory.
 
 ### RAGToolsMixin
 A GAIA mixin providing document Q&A capabilities to agents through RAG functionality.
 
 ### RAGSDK
-GAIA's high-level interface for document question-answering with RAG.
+GAIA's high-level interface for document Q&A. Handles document indexing, embedding generation, vector storage (FAISS), and query processing. Supports persistent indexes, configurable chunking, and relevance scoring. Configure via RAGConfig. See also: Quick RAG, Agentic RAG.
 
 ### Relevance Score
-A numerical measure of how well a retrieved document chunk matches a search query.
+A numerical measure (0.0-1.0) of how well a retrieved document chunk matches a search query. Scores above 0.7 indicate strong matches; below 0.5 suggests the documents may not contain the needed information. Accessible via `response.chunk_scores` in RAGSDK. See also: Confidence Threshold, Cosine Similarity.
 
 ### Resource Cleanup
 Properly freeing memory, closing connections, and releasing system resources when no longer needed.
@@ -372,7 +442,7 @@ An API following Representational State Transfer principles, using HTTP methods 
 Automatic retry mechanisms when operations fail, often with exponential backoff.
 
 ### RoutingAgent
-A GAIA agent that analyzes requests and delegates them to specialized agents best suited for the task.
+A GAIA agent that analyzes requests and intelligently routes them to specialized agents. Uses LLM-powered language detection to identify programming languages and project types, asks disambiguating questions when confidence is low, and configures target agents appropriately.
 
 ### Ryzen AI
 AMD's brand for processors featuring integrated NPU hardware for AI acceleration.
@@ -414,14 +484,23 @@ A configuration option to display performance metrics like tokens per second and
 ### Silent Installation
 Installing software without user interface prompts, using flags like `/S` in Windows installers.
 
+### SilentConsole
+A GAIA console implementation that suppresses all output, useful for programmatic agent usage or API server contexts.
+
 ### Silent Mode
-Suppressing agent console output, useful for programmatic usage or when output is not needed.
+Suppressing agent console output, enabled by passing `silent_mode=True` to agent constructors. Internally uses SilentConsole. Useful for API servers, testing, or programmatic usage. See also: SilentConsole, AgentConsole.
 
 ### Silence Threshold
 The audio level sensitivity setting for detecting when a user starts or stops speaking.
 
 ### SimpleChat
 A lightweight chat wrapper in GAIA for basic conversational interactions without session management.
+
+### Source Triangulation
+An Agentic RAG pattern that verifies information by checking if it appears in multiple independent documents. For example, confirming a policy detail appears in both the handbook and FAQ increases confidence. Useful for critical information where accuracy matters. See also: Agentic RAG, Confidence Threshold.
+
+### SSEOutputHandler
+A GAIA output handler for Server-Sent Events streaming, used by the API server to deliver real-time agent responses to clients.
 
 ### State Management
 Tracking and managing an agent's current progress, variables, and execution context.
@@ -433,11 +512,14 @@ Real-time token-by-token delivery of LLM responses as they're generated, rather 
 Artificially generated test data used for evaluation when real-world data is unavailable or insufficient.
 
 ### System Prompt
-Instructions that shape an LLM's behavior, persona, and response style, typically invisible to end users.
+Instructions that shape an LLM's behavior, persona, and response style. In GAIA, agents define system prompts via `_get_system_prompt()`. Typically includes role definition, capabilities, constraints, and output format. View with `/system` command in ChatAgent. See also: Prompt, Prompt Engineering.
 
 ---
 
 ## T
+
+### Tailwind CSS
+A utility-first CSS framework for rapid UI development. GAIA's CodeAgent generates Tailwind-styled Next.js applications.
 
 ### Temperature
 A parameter (typically 0.0-2.0) controlling randomness in LLM output. Lower values produce more deterministic responses.
@@ -455,10 +537,13 @@ The basic unit of text processed by LLMs, roughly equivalent to 3/4 of an Englis
 A performance metric measuring how quickly an LLM generates text output.
 
 ### Tool
-A Python function decorated with `@tool` that agents can call to perform actions like reading files or searching documents.
+A Python function decorated with `@tool` that agents can call to perform actions. The decorator automatically generates a JSON schema from the function signature and docstring. Examples include file operations, database queries, API calls, and shell commands. See also: Tool Decorator, Tool Contract, Tool Registry.
 
 ### Tool Calling
 The LLM's ability to invoke predefined functions to take actions or retrieve information.
+
+### Tool Contract
+The JSON schema that describes a tool's interface to the LLM, including parameter types, descriptions, and required fields. Generated automatically from Python function signatures.
 
 ### Tool Decorator (@tool)
 A Python decorator (`@tool`) that marks functions as callable by agents, automatically generating schemas.
@@ -466,8 +551,11 @@ A Python decorator (`@tool`) that marks functions as callable by agents, automat
 ### Tool Execution
 The process of running a tool function with provided arguments and returning results to the agent.
 
+### Tool Registry
+The collection of tools registered with an agent, accessible for LLM tool calling. Built automatically when agents inherit from mixins or define tools in `_register_tools()`.
+
 ### Tool Schema
-A JSON description of a tool's parameters, types, and documentation used by LLMs to understand how to call it.
+See Tool Contract. These terms are used interchangeably to describe the JSON interface definition for tools.
 
 ### Transcription Queue
 A buffer that stores speech-to-text output as it's being processed, before delivery to the application.
@@ -481,6 +569,9 @@ Technology that converts written text into spoken audio. GAIA uses the Kokoro TT
 
 ### UV
 A modern Python package manager written in Rust, offering 10-100x faster installation compared to pip.
+
+### Uvicorn
+A lightning-fast ASGI server for Python web applications. Used by GAIA to serve the FastAPI-based API server.
 
 ---
 
@@ -515,7 +606,7 @@ The variant of an ASR model (base, small, medium, large), trading accuracy for s
 An HTTP callback that sends real-time data to a specified URL when events occur.
 
 ### Whisper
-OpenAI's open-source speech recognition model, used by GAIA for ASR functionality.
+OpenAI's open-source speech recognition model, used by GAIA for ASR in Talk mode. Available in multiple sizes (tiny, base, small, medium, large) trading accuracy for speed. Configure with `--whisper-model-size`. See also: ASR, Voice Model Size, Kokoro TTS.
 
 ---
 
@@ -523,6 +614,9 @@ OpenAI's open-source speech recognition model, used by GAIA for ASR functionalit
 
 ### Zero-shot
 An LLM performing a task without any training examples, relying solely on its pre-training knowledge.
+
+### Zod
+A TypeScript-first schema validation library. GAIA's CodeAgent generates Zod schemas for API endpoint request validation.
 
 ---
 

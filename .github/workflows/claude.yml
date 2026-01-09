@@ -14,10 +14,9 @@ on:
     types: [created]
 
 permissions:
-  contents: read
+  contents: write  # Allows Claude to commit changes directly to PRs
   issues: write
   pull-requests: write
-  id-token: write
 
 jobs:
   # Auto-review new PRs
@@ -37,9 +36,33 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          model: claude-opus-4-5-20251101
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             You are reviewing a GAIA pull request. Provide a thorough, professional code review following GAIA standards.
+
+            ## Suggested Changes Policy
+
+            Use GitHub's suggestion feature for fixable issues. Provide suggestions for:
+            - ✅ Missing copyright headers: `Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.`
+            - ✅ Missing SPDX license: `SPDX-License-Identifier: MIT`
+            - ✅ Import sorting issues (isort violations)
+            - ✅ Code formatting issues (black violations)
+            - ✅ Trailing whitespace, missing newlines at EOF
+            - ✅ Simple typos in comments or docstrings
+            - ✅ Simple bug fixes with clear solutions
+
+            **Format suggestions using GitHub's syntax:**
+            ```suggestion
+            corrected code here
+            ```
+
+            **Comment only (no suggestion):**
+            - Security vulnerabilities (comment with 🔒 and tag @kovtcharov-amd)
+            - Complex architectural decisions requiring discussion
+            - Changes with multiple valid approaches
+            - Breaking changes requiring maintainer decision
+
+            Provide suggestions on the specific lines that need changes. Each suggestion should be a complete, ready-to-apply fix.
 
             ## Review Checklist
 
@@ -99,10 +122,13 @@ jobs:
             - **Summary:** 2-3 sentences on overall quality
             - **Strengths:** What's done well
             - **Issues:** Numbered list with severity (🔴 Critical, 🟡 Important, 🟢 Minor)
-            - **Recommendations:** Specific, actionable suggestions
+            - **Suggested Changes:** Use GitHub's ```suggestion blocks on specific lines for fixable issues
+            - **Recommendations:** Specific, actionable suggestions for items requiring discussion
             - **File References:** Use format `file.py:123` when referencing code
 
             Be professional, constructive, and specific. Assume the author is skilled but may not know GAIA conventions.
+
+            Make it easy for maintainers to accept good suggestions with one click.
           claude_args: "--max-turns 5"
 
   # Respond to @claude in PRs
@@ -116,9 +142,25 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          model: claude-opus-4-5-20251101
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             You are GAIA's AI assistant helping with pull request discussions.
+
+            **When to provide suggested changes:**
+            - User explicitly asks you to fix something (e.g., "@claude fix the formatting")
+            - Simple, clear fixes like copyright headers, formatting, import sorting
+            - Bug fixes with obvious solutions
+
+            Use GitHub's suggestion syntax:
+            ```suggestion
+            corrected code here
+            ```
+
+            **When to comment only:**
+            - Answering questions or providing guidance
+            - Discussing architectural approaches
+            - Security concerns (tag @kovtcharov-amd)
+            - Changes that need discussion or have multiple approaches
 
             Follow the Issue Response Guidelines in CLAUDE.md:
             - Reference specific files and line numbers
@@ -130,7 +172,7 @@ jobs:
             Maintain a helpful, professional tone. You're assisting both maintainers and contributors.
           claude_args: "--max-turns 5"
 
-  # Respond to new issues or @claude mentions
+  # Respond to new issues or @claude mentions in issues/PRs
   issue-handler:
     if: |
       github.event_name == 'issues' ||
@@ -142,11 +184,25 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          model: claude-opus-4-5-20251101
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             You are GAIA's helpful AI assistant. Follow the Issue Response Guidelines in CLAUDE.md.
 
-            ## Response Protocol
+            **IMPORTANT:** This handler responds to both issues AND PR conversation comments. Detect the context:
+            - If responding to a PR comment: Focus on the PR content, provide feedback on changes, answer questions about the code/docs being modified
+            - If responding to an issue: Follow the Issue Response Protocol below
+
+            ## For PR Comments
+
+            When responding to questions or discussions in PR comments:
+            - Review the PR diff to understand what's being changed
+            - Answer questions about placement, structure, naming, etc.
+            - Reference GAIA conventions and existing patterns
+            - Provide suggested changes if requested (use ```suggestion syntax)
+            - Check docs/ for relevant documentation standards
+            - Be helpful and constructive
+
+            ## Response Protocol (for Issues)
 
             ### 1. Check for Duplicates First
             Search existing issues/PRs before providing a detailed response.
