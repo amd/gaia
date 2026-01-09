@@ -7,9 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 GAIA (Generative AI Is Awesome) is AMD's open-source framework for running generative AI applications locally on AMD hardware, with specialized optimizations for Ryzen AI processors with NPU support.
 
 **Key Documentation:**
-- Development setup: [`docs/dev.md`](docs/dev.md)
-- Code Agent: [`docs/code.md`](docs/code.md)
-- All features: [`docs/features.md`](docs/features.md)
+- External site: https://amd-gaia.ai
+- Development setup: [`docs/dev.md`](docs/dev.md) (local MDX format)
+- SDK Reference: https://amd-gaia.ai/sdk
+- Guides: https://amd-gaia.ai/guides
 
 ## File Headers
 
@@ -66,7 +67,36 @@ python -m gaia.mcp.mcp_bridge
 
 **See [`docs/dev.md`](docs/dev.md)** for complete setup (using uv for fast installs), testing, and linting instructions.
 
-**Feature documentation:** [`docs/cli.md`](docs/cli.md), [`docs/chat.md`](docs/chat.md), [`docs/code.md`](docs/code.md), [`docs/talk.md`](docs/talk.md), [`docs/blender.md`](docs/blender.md), [`docs/jira.md`](docs/jira.md), [`docs/mcp.md`](docs/mcp.md)
+**Feature documentation:** All documentation is in MDX format in `docs/` directory. See external site https://amd-gaia.ai for rendered version.
+
+## Common Development Commands
+
+### Setup
+```bash
+uv venv && uv pip install -e ".[dev]"
+```
+
+### Linting (run before commits)
+```bash
+python util/lint.py --all --fix    # Auto-fix formatting
+python util/lint.py --black        # Just black
+python util/lint.py --isort        # Just imports
+```
+
+### Testing
+```bash
+python -m pytest tests/unit/       # Unit tests only
+python -m pytest tests/ -xvs       # All tests, verbose
+python -m pytest tests/ --hybrid   # Cloud + local testing
+```
+
+### Running GAIA
+```bash
+lemonade-server serve              # Start LLM backend
+gaia llm "Hello"                   # Test LLM
+gaia chat                          # Interactive chat
+gaia-code                          # Code agent
+```
 
 ## Project Structure
 
@@ -119,12 +149,20 @@ When responding to GitHub issues and pull requests, follow these guidelines:
 
 ### Documentation Structure
 
+**External Site:** https://amd-gaia.ai
+- [Quickstart](https://amd-gaia.ai/quickstart) - Build your first agent in 10 minutes
+- [SDK Reference](https://amd-gaia.ai/sdk) - Complete API documentation
+- [Guides](https://amd-gaia.ai/guides) - Chat, Code, Talk, Blender, Jira, and more
+- [FAQ](https://amd-gaia.ai/reference/faq) - Frequently asked questions
+
 The documentation is organized in [`docs/docs.json`](docs/docs.json) with the following structure:
+- **SDK**: `docs/sdk/` - Agent system, tools, core SDKs (chat, llm, rag, vlm, audio)
 - **User Guides** (`docs/guides/`): Feature-specific guides (chat, talk, code, blender, jira, docker, routing)
 - **Playbooks** (`docs/playbooks/`): Step-by-step tutorials for building agents
 - **SDK Reference** (`docs/sdk/`): Core concepts, SDKs, infrastructure, mixins, agents
 - **Specifications** (`docs/spec/`): Technical specs for all components
 - **Reference** (`docs/reference/`): CLI, API, features, FAQ, development
+- **Integrations**: `docs/integrations/` - MCP, n8n, VSCode
 - **Deployment** (`docs/deployment/`): Packaging, installers, UI
 
 ### Response Protocol
@@ -269,8 +307,25 @@ Looking at your code, the issue is on line 45 where you're using subprocess.call
 
 ## File Path Rules (Workaround for Claude Code v1.0.111 Bug)
 - When reading or editing a file, **ALWAYS use relative paths.**
+
+## File Path Rules
+- When reading or editing files, **ALWAYS use relative paths** starting with `./`
 - Example: `./src/components/Component.tsx` ✅
-- **DO NOT use absolute paths.**
+- **DO NOT use absolute paths**
 - Example: `C:/Users/user/project/src/components/Component.tsx` ❌
-- Reason: This is a workaround for a known bug in Claude Code v1.0.111 (GitHub Issue
-- when you invoke a particular proactive agent from @.claude\agents\, make sure to indicate what agent you are invoking in your response back to the user
+
+## Claude Agents
+Specialized agents are available in `.claude/agents/` for specific tasks:
+- **Agent Development**: gaia-agent-builder (opus) - Creating new GAIA agents, tool registration, state management
+- **SDK Architecture**: sdk-architect (opus) - API design, pattern consistency, breaking changes
+- **Hardware Optimization**: hardware-optimizer (opus) - NPU/iGPU tuning, Ryzen AI performance
+- **Python**: python-developer (sonnet) - Python code, refactoring, design patterns
+- **TypeScript**: typescript-developer (sonnet) - TypeScript, Electron apps, type definitions
+- **Testing**: test-engineer (sonnet) - pytest, CLI testing, AMD hardware validation
+- **Frontend**: frontend-developer (sonnet) - Electron apps, web UIs
+- **Architecture Review**: architecture-reviewer (opus) - SOLID principles, dependency analysis
+- **Documentation**: api-documenter (sonnet) - OpenAPI specs, MCP schemas
+- **MCP Development**: mcp-developer (sonnet) - MCP server creation
+- And many more - see `.claude/agents/` directory
+
+When invoking a proactive agent from `.claude/agents/`, indicate which agent you are using in your response.
