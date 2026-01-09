@@ -3392,8 +3392,8 @@ Let me know your answer!
         if getattr(args, "eval_command", None) == "fix-code":
             try:
                 from gaia.eval.fix_code_testbench.fix_code_testbench import (
-                    FixCodeTestbench,
                     DEFAULT_LOCAL_MODEL,
+                    FixCodeTestbench,
                 )
             except ImportError as e:
                 log.error(f"Failed to import fix_code_testbench: {e}")
@@ -3405,8 +3405,12 @@ Let me know your answer!
                 return
 
             if args.use_chatgpt:
-                print("❌ The fix_code testbench does not support the ChatGPT backend yet.")
-                print("Please use the local Lemonade endpoint (default) or --use-claude.")
+                print(
+                    "❌ The fix_code testbench does not support the ChatGPT backend yet."
+                )
+                print(
+                    "Please use the local Lemonade endpoint (default) or --use-claude."
+                )
                 return
 
             model_name = args.model or DEFAULT_LOCAL_MODEL

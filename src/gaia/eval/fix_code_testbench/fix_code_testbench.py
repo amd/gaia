@@ -155,7 +155,9 @@ class FixCodeTestbench:
 
         new_snippet = snippet.replace(old_content, new_content, 1)
         new_snippet_lines = new_snippet.splitlines()
-        new_lines = all_lines[: start_line - 1] + new_snippet_lines + all_lines[end_line:]
+        new_lines = (
+            all_lines[: start_line - 1] + new_snippet_lines + all_lines[end_line:]
+        )
         cleaned_full = "\n".join(new_lines)
         if full_content.endswith("\n") and not cleaned_full.endswith("\n"):
             cleaned_full += "\n"
@@ -298,7 +300,9 @@ Requirements:
 
     def _call_local_model(self, prompt: str) -> str:
         """Send prompt to the local OpenAI-compatible endpoint."""
-        client = OpenAI(base_url=DEFAULT_ENDPOINT, api_key="not-needed", timeout=self.timeout)
+        client = OpenAI(
+            base_url=DEFAULT_ENDPOINT, api_key="not-needed", timeout=self.timeout
+        )
         response = client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
@@ -310,12 +314,17 @@ Requirements:
         """Send prompt to Claude Sonnet 4.5."""
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
-            print("ANTHROPIC_API_KEY environment variable is required for Claude.", file=sys.stderr)
+            print(
+                "ANTHROPIC_API_KEY environment variable is required for Claude.",
+                file=sys.stderr,
+            )
             sys.exit(1)
 
         import anthropic
 
-        client = anthropic.Anthropic(api_key=api_key, max_retries=3, timeout=self.timeout)
+        client = anthropic.Anthropic(
+            api_key=api_key, max_retries=3, timeout=self.timeout
+        )
         response = client.messages.create(
             model="claude-sonnet-4-5-20250929",
             max_tokens=4096,
