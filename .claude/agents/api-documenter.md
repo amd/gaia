@@ -111,7 +111,7 @@ Run GAIA agents for various AI tasks.
 
 ### Commands:
 - `gaia chat` - Interactive chat
-- `gaia code` - Code development
+- `gaia-code` - Code development
 - `gaia jira` - Issue management
 - `gaia blender` - 3D automation
 - `gaia mcp` - MCP server control
@@ -122,7 +122,7 @@ Run GAIA agents for various AI tasks.
 gaia llm "What is GAIA?"
 
 # Code generation
-gaia code "Create REST API"
+gaia-code "Create REST API"
 
 # Jira query
 gaia jira "show my open bugs"
