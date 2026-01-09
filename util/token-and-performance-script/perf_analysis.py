@@ -23,7 +23,6 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 
 import matplotlib.pyplot as plt
 
-
 PROMPT_MARKER = "new prompt"
 TOKEN_PATTERN = re.compile(r"n_prompt_tokens\s*=\s*(\d+)")
 INPUT_PATTERN = re.compile(r"Input tokens:\s*(\d+)", re.IGNORECASE)
@@ -154,7 +153,9 @@ def build_prefill_decode_pies(
 ) -> None:
     """Plot per-log prefill vs decode time split as multiple pies."""
     if not prefill_decode_times:
-        print("No timing data available to build prefill/decode split.", file=sys.stderr)
+        print(
+            "No timing data available to build prefill/decode split.", file=sys.stderr
+        )
         return
 
     slice_colors = ["#4c78a8", "#f58518"]  # Prefill, decode
