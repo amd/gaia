@@ -60,26 +60,23 @@ jobs:
           # Fetch base branch
           git fetch origin $BASE_BRANCH
 
-          # Generate diff
-          git diff origin/$BASE_BRANCH...HEAD > /tmp/pr-diff.txt
-          git diff --name-status origin/$BASE_BRANCH...HEAD > /tmp/pr-files.txt
+          # Generate diff in repo root (where Claude has access)
+          git diff origin/$BASE_BRANCH...HEAD > pr-diff.txt
+          git diff --name-status origin/$BASE_BRANCH...HEAD > pr-files.txt
 
-          echo "Diff generated: $(wc -l < /tmp/pr-diff.txt) lines"
-          echo "Files changed: $(wc -l < /tmp/pr-files.txt) files"
+          echo "Diff generated: $(wc -l < pr-diff.txt) lines"
+          echo "Files changed: $(wc -l < pr-files.txt) files"
 
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          additional_permissions: |
-            read:/tmp/pr-diff.txt
-            read:/tmp/pr-files.txt
           prompt: |
             You are reviewing a GAIA pull request. Provide a thorough, professional code review following GAIA standards.
 
             **Context Available:**
-            - Read /tmp/pr-diff.txt for the full diff of changes in this PR
-            - Read /tmp/pr-files.txt for the list of changed files
+            - Read pr-diff.txt for the full diff of changes in this PR
+            - Read pr-files.txt for the list of changed files
             - Repository is checked out at the PR head
             - Focus your review on the changed files and their impact
 
@@ -172,7 +169,7 @@ jobs:
             Be professional, constructive, and specific. Assume the author is skilled but may not know GAIA conventions.
 
             Make it easy for maintainers to accept good suggestions with one click.
-          claude_args: "--max-turns 5"
+          claude_args: "--max-turns 10 --model claude-opus-4-5-20251101"
 
   # Respond to @claude in PR review comments (non-fork PRs only - secrets unavailable on forks)
   pr-comment:
@@ -197,26 +194,23 @@ jobs:
           # Fetch base branch
           git fetch origin $BASE_BRANCH
 
-          # Generate diff
-          git diff origin/$BASE_BRANCH...HEAD > /tmp/pr-diff.txt
-          git diff --name-status origin/$BASE_BRANCH...HEAD > /tmp/pr-files.txt
+          # Generate diff in repo root (where Claude has access)
+          git diff origin/$BASE_BRANCH...HEAD > pr-diff.txt
+          git diff --name-status origin/$BASE_BRANCH...HEAD > pr-files.txt
 
-          echo "Diff generated: $(wc -l < /tmp/pr-diff.txt) lines"
-          echo "Files changed: $(wc -l < /tmp/pr-files.txt) files"
+          echo "Diff generated: $(wc -l < pr-diff.txt) lines"
+          echo "Files changed: $(wc -l < pr-files.txt) files"
 
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          additional_permissions: |
-            read:/tmp/pr-diff.txt
-            read:/tmp/pr-files.txt
           prompt: |
             You are GAIA's AI assistant helping with pull request discussions.
 
             **Context Available:**
-            - Read /tmp/pr-diff.txt for the full diff of changes in this PR
-            - Read /tmp/pr-files.txt for the list of changed files
+            - Read pr-diff.txt for the full diff of changes in this PR
+            - Read pr-files.txt for the list of changed files
             - Repository is checked out at the PR head
 
             **When to provide suggested changes:**
@@ -243,7 +237,7 @@ jobs:
             - If you don't know, say so and suggest who to ask (@kovtcharov-amd)
 
             Maintain a helpful, professional tone. You're assisting both maintainers and contributors.
-          claude_args: "--max-turns 5"
+          claude_args: "--max-turns 10 --model claude-opus-4-5-20251101"
 
   # Respond to new issues or @claude mentions in PR conversations (including forks)
   issue-handler:
@@ -278,23 +272,20 @@ jobs:
           git fetch origin $BASE_BRANCH
           git checkout $PR_HEAD_SHA
 
-          # Generate diff for Claude
+          # Generate diff in repo root (where Claude has access)
           echo "Generating diff between $BASE_BRANCH and PR head..."
-          git diff origin/$BASE_BRANCH...$PR_HEAD_SHA > /tmp/pr-diff.txt
+          git diff origin/$BASE_BRANCH...$PR_HEAD_SHA > pr-diff.txt
 
           # Also get list of changed files
-          git diff --name-status origin/$BASE_BRANCH...$PR_HEAD_SHA > /tmp/pr-files.txt
+          git diff --name-status origin/$BASE_BRANCH...$PR_HEAD_SHA > pr-files.txt
 
-          echo "Diff generated: $(wc -l < /tmp/pr-diff.txt) lines"
-          echo "Files changed: $(wc -l < /tmp/pr-files.txt) files"
+          echo "Diff generated: $(wc -l < pr-diff.txt) lines"
+          echo "Files changed: $(wc -l < pr-files.txt) files"
 
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          additional_permissions: |
-            read:/tmp/pr-diff.txt
-            read:/tmp/pr-files.txt
           prompt: |
             You are GAIA's helpful AI assistant. Follow the Issue Response Guidelines in CLAUDE.md.
 
@@ -305,8 +296,8 @@ jobs:
             ## For PR Conversation Comments
 
             When responding to questions in PR conversation (not line-specific review comments):
-            - **IMPORTANT:** Read /tmp/pr-diff.txt to see the full diff of changes in this PR
-            - Read /tmp/pr-files.txt to see the list of changed files
+            - **IMPORTANT:** Read pr-diff.txt to see the full diff of changes in this PR
+            - Read pr-files.txt to see the list of changed files
             - Use the diff to understand context and answer questions accurately
             - Answer questions about placement, structure, naming, conventions
             - Reference GAIA patterns and documentation standards
@@ -363,4 +354,4 @@ jobs:
             - Acknowledge AMD's open-source commitment
 
             Always reference specific files with line numbers when possible.
-          claude_args: "--max-turns 4"
+          claude_args: "--max-turns 10 --model claude-opus-4-5-20251101"
