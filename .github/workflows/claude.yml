@@ -275,27 +275,30 @@ jobs:
           # Fetch base branch from origin
           git fetch origin $BASE_BRANCH
 
+          # Extract branch name first
+          HEAD_REF=$(echo "$PR_DATA" | jq -r '.headRefName')
+
           # For fork PRs, add fork as remote and fetch from it
           if [ "$HEAD_REPO_OWNER" != "${{ github.repository_owner }}" ]; then
             echo "Fork PR detected, fetching from fork repository"
             # Remove fork remote if it already exists from a previous run
             git remote remove fork 2>/dev/null || true
             git remote add fork https://github.com/$HEAD_REPO_OWNER/$HEAD_REPO_NAME.git
-            git fetch fork $PR_HEAD_SHA || {
-              echo "Failed to fetch from fork. Fork may be private or deleted."
+
+            # Fetch the actual branch from the fork
+            git fetch fork $HEAD_REF:$HEAD_REF || {
+              echo "Failed to fetch branch from fork. Fork may be private or deleted."
               exit 1
             }
+
+            echo "Successfully fetched $HEAD_REF from fork"
+            git checkout $HEAD_REF
           else
             echo "Non-fork PR, fetching from origin"
             git fetch origin $PR_HEAD_SHA
+            git checkout $PR_HEAD_SHA
+            git checkout -b "$HEAD_REF" $PR_HEAD_SHA 2>/dev/null || git checkout "$HEAD_REF"
           fi
-
-          git checkout $PR_HEAD_SHA
-
-          # Create local branch to satisfy action's prepare.ts expectations
-          # Extract branch name from PR data
-          HEAD_REF=$(echo "$PR_DATA" | jq -r '.headRefName')
-          git checkout -b "$HEAD_REF" $PR_HEAD_SHA 2>/dev/null || git checkout "$HEAD_REF"
 
           # Generate diff in repo root (where Claude has access)
           echo "Generating diff between $BASE_BRANCH and PR head..."
