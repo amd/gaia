@@ -1,7 +1,10 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# NOTE: This workflow uses pull_request_target to work with fork PRs.
+# Fork PR Support:
+# - pr-review (pull_request_target): ✅ Works on fork PRs - auto-reviews when PR opened
+# - issue-handler (issue_comment): ✅ Works on fork PRs - responds to @claude in PR conversations
+# - pr-comment (pull_request_review_comment): ❌ Only non-fork PRs - GitHub doesn't expose secrets to this event on forks
 #
 # SECURITY: pull_request_target runs with base repo permissions (access to secrets) even on fork PRs.
 # This is SAFE here because:
@@ -168,11 +171,12 @@ jobs:
             Make it easy for maintainers to accept good suggestions with one click.
           claude_args: "--max-turns 5"
 
-  # Respond to @claude in PR review comments (including forks)
+  # Respond to @claude in PR review comments (non-fork PRs only - secrets unavailable on forks)
   pr-comment:
     if: |
       github.event_name == 'pull_request_review_comment' &&
-      contains(github.event.comment.body, '@claude')
+      contains(github.event.comment.body, '@claude') &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
