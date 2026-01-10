@@ -71,7 +71,9 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          prompt: |
+          max_turns: 10
+          model: claude-opus-4-5-20251101
+          custom_instructions: |
             You are reviewing a GAIA pull request. Provide a thorough, professional code review following GAIA standards.
 
             **Context Available:**
@@ -169,7 +171,6 @@ jobs:
             Be professional, constructive, and specific. Assume the author is skilled but may not know GAIA conventions.
 
             Make it easy for maintainers to accept good suggestions with one click.
-          claude_args: "--max-turns 10 --model claude-opus-4-5-20251101"
 
   # Respond to @claude in PR review comments (non-fork PRs only - secrets unavailable on forks)
   pr-comment:
@@ -205,7 +206,9 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          prompt: |
+          max_turns: 10
+          model: claude-opus-4-5-20251101
+          custom_instructions: |
             You are GAIA's AI assistant helping with pull request discussions.
 
             **Context Available:**
@@ -237,7 +240,6 @@ jobs:
             - If you don't know, say so and suggest who to ask (@kovtcharov-amd)
 
             Maintain a helpful, professional tone. You're assisting both maintainers and contributors.
-          claude_args: "--max-turns 10 --model claude-opus-4-5-20251101"
 
   # Respond to new issues or @claude mentions in PR conversations (including forks)
   issue-handler:
@@ -260,17 +262,40 @@ jobs:
         run: |
           PR_NUMBER=${{ github.event.issue.number }}
 
-          # Get PR details
-          PR_DATA=$(gh pr view $PR_NUMBER --json headRefOid,baseRefName,headRefName)
+          # Get PR details including fork info
+          PR_DATA=$(gh pr view $PR_NUMBER --json headRefOid,baseRefName,headRefName,headRepository,headRepositoryOwner)
           PR_HEAD_SHA=$(echo "$PR_DATA" | jq -r '.headRefOid')
           BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')
+          HEAD_REPO_OWNER=$(echo "$PR_DATA" | jq -r '.headRepositoryOwner.login')
+          HEAD_REPO_NAME=$(echo "$PR_DATA" | jq -r '.headRepository.name')
 
           echo "PR #$PR_NUMBER: $BASE_BRANCH...$PR_HEAD_SHA"
+          echo "Head repo: $HEAD_REPO_OWNER/$HEAD_REPO_NAME"
 
-          # Fetch and checkout PR head
-          git fetch origin $PR_HEAD_SHA
+          # Fetch base branch from origin
           git fetch origin $BASE_BRANCH
+
+          # For fork PRs, add fork as remote and fetch from it
+          if [ "$HEAD_REPO_OWNER" != "${{ github.repository_owner }}" ]; then
+            echo "Fork PR detected, fetching from fork repository"
+            # Remove fork remote if it already exists from a previous run
+            git remote remove fork 2>/dev/null || true
+            git remote add fork https://github.com/$HEAD_REPO_OWNER/$HEAD_REPO_NAME.git
+            git fetch fork $PR_HEAD_SHA || {
+              echo "Failed to fetch from fork. Fork may be private or deleted."
+              exit 1
+            }
+          else
+            echo "Non-fork PR, fetching from origin"
+            git fetch origin $PR_HEAD_SHA
+          fi
+
           git checkout $PR_HEAD_SHA
+
+          # Create local branch to satisfy action's prepare.ts expectations
+          # Extract branch name from PR data
+          HEAD_REF=$(echo "$PR_DATA" | jq -r '.headRefName')
+          git checkout -b "$HEAD_REF" $PR_HEAD_SHA 2>/dev/null || git checkout "$HEAD_REF"
 
           # Generate diff in repo root (where Claude has access)
           echo "Generating diff between $BASE_BRANCH and PR head..."
@@ -286,7 +311,9 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          prompt: |
+          max_turns: 10
+          model: claude-opus-4-5-20251101
+          custom_instructions: |
             You are GAIA's helpful AI assistant. Follow the Issue Response Guidelines in CLAUDE.md.
 
             **Context Detection:** This handler responds to both issues AND PR conversation comments (not review comments on specific lines).
@@ -354,4 +381,3 @@ jobs:
             - Acknowledge AMD's open-source commitment
 
             Always reference specific files with line numbers when possible.
-          claude_args: "--max-turns 10 --model claude-opus-4-5-20251101"
