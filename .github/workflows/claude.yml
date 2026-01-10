@@ -1,5 +1,9 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
+#
+# NOTE: This workflow uses pull_request_target to work with fork PRs.
+# This is safe because Claude only analyzes code and posts comments (doesn't execute PR code).
+# However, fork PRs will consume your Anthropic API quota.
 
 name: Claude AI Assistant
 
@@ -8,7 +12,7 @@ on:
     types: [opened, labeled]
   issue_comment:
     types: [created]
-  pull_request:
+  pull_request_target:
     types: [opened, ready_for_review]
   pull_request_review_comment:
     types: [created]
@@ -19,10 +23,10 @@ permissions:
   pull-requests: write
 
 jobs:
-  # Auto-review new PRs
+  # Auto-review new PRs (including forks)
   pr-review:
     if: |
-      github.event_name == 'pull_request' &&
+      github.event_name == 'pull_request_target' &&
       (github.event.pull_request.draft == false ||
        contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
     runs-on: ubuntu-latest
@@ -32,6 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - uses: anthropics/claude-code-action@v1
         with:
@@ -131,7 +136,7 @@ jobs:
             Make it easy for maintainers to accept good suggestions with one click.
           claude_args: "--max-turns 5"
 
-  # Respond to @claude in PRs
+  # Respond to @claude in PR review comments (including forks)
   pr-comment:
     if: |
       github.event_name == 'pull_request_review_comment' &&
@@ -139,6 +144,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -172,7 +179,7 @@ jobs:
             Maintain a helpful, professional tone. You're assisting both maintainers and contributors.
           claude_args: "--max-turns 5"
 
-  # Respond to new issues or @claude mentions in issues/PRs
+  # Respond to new issues or @claude mentions in PR conversations (including forks)
   issue-handler:
     if: |
       github.event_name == 'issues' ||
@@ -188,18 +195,17 @@ jobs:
           prompt: |
             You are GAIA's helpful AI assistant. Follow the Issue Response Guidelines in CLAUDE.md.
 
-            **IMPORTANT:** This handler responds to both issues AND PR conversation comments. Detect the context:
-            - If responding to a PR comment: Focus on the PR content, provide feedback on changes, answer questions about the code/docs being modified
+            **Context Detection:** This handler responds to both issues AND PR conversation comments (not review comments on specific lines).
+            - If responding to a PR conversation comment: Focus on the PR content, answer questions about changes, provide feedback
             - If responding to an issue: Follow the Issue Response Protocol below
 
-            ## For PR Comments
+            ## For PR Conversation Comments
 
-            When responding to questions or discussions in PR comments:
+            When responding to questions in PR conversation (not line-specific review comments):
             - Review the PR diff to understand what's being changed
-            - Answer questions about placement, structure, naming, etc.
-            - Reference GAIA conventions and existing patterns
+            - Answer questions about placement, structure, naming, conventions
+            - Reference GAIA patterns and documentation standards
             - Provide suggested changes if requested (use ```suggestion syntax)
-            - Check docs/ for relevant documentation standards
             - Be helpful and constructive
 
             ## Response Protocol (for Issues)
