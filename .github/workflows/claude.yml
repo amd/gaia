@@ -71,6 +71,9 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          additional_permissions: |
+            read:/tmp/pr-diff.txt
+            read:/tmp/pr-files.txt
           prompt: |
             You are reviewing a GAIA pull request. Provide a thorough, professional code review following GAIA standards.
 
@@ -205,6 +208,9 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          additional_permissions: |
+            read:/tmp/pr-diff.txt
+            read:/tmp/pr-files.txt
           prompt: |
             You are GAIA's AI assistant helping with pull request discussions.
 
@@ -286,6 +292,9 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          additional_permissions: |
+            read:/tmp/pr-diff.txt
+            read:/tmp/pr-files.txt
           prompt: |
             You are GAIA's helpful AI assistant. Follow the Issue Response Guidelines in CLAUDE.md.
 
