@@ -260,16 +260,34 @@ jobs:
         run: |
           PR_NUMBER=${{ github.event.issue.number }}
 
-          # Get PR details
-          PR_DATA=$(gh pr view $PR_NUMBER --json headRefOid,baseRefName,headRefName)
+          # Get PR details including fork info
+          PR_DATA=$(gh pr view $PR_NUMBER --json headRefOid,baseRefName,headRefName,headRepository,headRepositoryOwner)
           PR_HEAD_SHA=$(echo "$PR_DATA" | jq -r '.headRefOid')
           BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')
+          HEAD_REPO_OWNER=$(echo "$PR_DATA" | jq -r '.headRepositoryOwner.login')
+          HEAD_REPO_NAME=$(echo "$PR_DATA" | jq -r '.headRepository.name')
 
           echo "PR #$PR_NUMBER: $BASE_BRANCH...$PR_HEAD_SHA"
+          echo "Head repo: $HEAD_REPO_OWNER/$HEAD_REPO_NAME"
 
-          # Fetch and checkout PR head
-          git fetch origin $PR_HEAD_SHA
+          # Fetch base branch from origin
           git fetch origin $BASE_BRANCH
+
+          # For fork PRs, add fork as remote and fetch from it
+          if [ "$HEAD_REPO_OWNER" != "${{ github.repository_owner }}" ]; then
+            echo "Fork PR detected, fetching from fork repository"
+            # Remove fork remote if it already exists from a previous run
+            git remote remove fork 2>/dev/null || true
+            git remote add fork https://github.com/$HEAD_REPO_OWNER/$HEAD_REPO_NAME.git
+            git fetch fork $PR_HEAD_SHA || {
+              echo "Failed to fetch from fork. Fork may be private or deleted."
+              exit 1
+            }
+          else
+            echo "Non-fork PR, fetching from origin"
+            git fetch origin $PR_HEAD_SHA
+          fi
+
           git checkout $PR_HEAD_SHA
 
           # Generate diff in repo root (where Claude has access)
