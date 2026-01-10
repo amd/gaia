@@ -2,8 +2,16 @@
 # SPDX-License-Identifier: MIT
 #
 # NOTE: This workflow uses pull_request_target to work with fork PRs.
-# This is safe because Claude only analyzes code and posts comments (doesn't execute PR code).
-# However, fork PRs will consume your Anthropic API quota.
+#
+# SECURITY: pull_request_target runs with base repo permissions (access to secrets) even on fork PRs.
+# This is SAFE here because:
+# 1. We checkout the PR code for analysis but don't execute it
+# 2. Claude only reads code and posts comments (no code execution)
+# 3. All actions are review/comment operations, not builds or tests
+#
+# IMPORTANT: Never add steps that execute code from the PR (npm install, pip install, make, etc.)
+#
+# COST: Fork PRs will consume your Anthropic API quota.
 
 name: Claude AI Assistant
 
@@ -18,7 +26,7 @@ on:
     types: [created]
 
 permissions:
-  contents: write  # Allows Claude to commit changes directly to PRs
+  contents: write  # Allows Claude to post suggested changes (requires write for GitHub API)
   issues: write
   pull-requests: write
 
@@ -38,12 +46,36 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+
+      - name: Generate PR diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
+          echo "Generating diff from $BASE_BRANCH to PR head"
+
+          # Fetch base branch
+          git fetch origin $BASE_BRANCH
+
+          # Generate diff
+          git diff origin/$BASE_BRANCH...HEAD > /tmp/pr-diff.txt
+          git diff --name-status origin/$BASE_BRANCH...HEAD > /tmp/pr-files.txt
+
+          echo "Diff generated: $(wc -l < /tmp/pr-diff.txt) lines"
+          echo "Files changed: $(wc -l < /tmp/pr-files.txt) files"
+
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             You are reviewing a GAIA pull request. Provide a thorough, professional code review following GAIA standards.
+
+            **Context Available:**
+            - Read /tmp/pr-diff.txt for the full diff of changes in this PR
+            - Read /tmp/pr-files.txt for the list of changed files
+            - Repository is checked out at the PR head
+            - Focus your review on the changed files and their impact
 
             ## Suggested Changes Policy
 
@@ -146,12 +178,36 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Generate PR diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
+          echo "Generating diff from $BASE_BRANCH to current PR head"
+
+          # Fetch base branch
+          git fetch origin $BASE_BRANCH
+
+          # Generate diff
+          git diff origin/$BASE_BRANCH...HEAD > /tmp/pr-diff.txt
+          git diff --name-status origin/$BASE_BRANCH...HEAD > /tmp/pr-files.txt
+
+          echo "Diff generated: $(wc -l < /tmp/pr-diff.txt) lines"
+          echo "Files changed: $(wc -l < /tmp/pr-files.txt) files"
+
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             You are GAIA's AI assistant helping with pull request discussions.
+
+            **Context Available:**
+            - Read /tmp/pr-diff.txt for the full diff of changes in this PR
+            - Read /tmp/pr-files.txt for the list of changed files
+            - Repository is checked out at the PR head
 
             **When to provide suggested changes:**
             - User explicitly asks you to fix something (e.g., "@claude fix the formatting")
@@ -187,7 +243,41 @@ jobs:
        contains(github.event.comment.body, '@claude'))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # If this is a PR comment, fetch and checkout the PR head
+      - name: Checkout PR head and generate diff if commenting on PR
+        if: github.event.issue.pull_request != null
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=${{ github.event.issue.number }}
+
+          # Get PR details
+          PR_DATA=$(gh pr view $PR_NUMBER --json headRefOid,baseRefName,headRefName)
+          PR_HEAD_SHA=$(echo "$PR_DATA" | jq -r '.headRefOid')
+          BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')
+
+          echo "PR #$PR_NUMBER: $BASE_BRANCH...$PR_HEAD_SHA"
+
+          # Fetch and checkout PR head
+          git fetch origin $PR_HEAD_SHA
+          git fetch origin $BASE_BRANCH
+          git checkout $PR_HEAD_SHA
+
+          # Generate diff for Claude
+          echo "Generating diff between $BASE_BRANCH and PR head..."
+          git diff origin/$BASE_BRANCH...$PR_HEAD_SHA > /tmp/pr-diff.txt
+
+          # Also get list of changed files
+          git diff --name-status origin/$BASE_BRANCH...$PR_HEAD_SHA > /tmp/pr-files.txt
+
+          echo "Diff generated: $(wc -l < /tmp/pr-diff.txt) lines"
+          echo "Files changed: $(wc -l < /tmp/pr-files.txt) files"
+
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -202,11 +292,15 @@ jobs:
             ## For PR Conversation Comments
 
             When responding to questions in PR conversation (not line-specific review comments):
-            - Review the PR diff to understand what's being changed
+            - **IMPORTANT:** Read /tmp/pr-diff.txt to see the full diff of changes in this PR
+            - Read /tmp/pr-files.txt to see the list of changed files
+            - Use the diff to understand context and answer questions accurately
             - Answer questions about placement, structure, naming, conventions
             - Reference GAIA patterns and documentation standards
             - Provide suggested changes if requested (use ```suggestion syntax)
             - Be helpful and constructive
+
+            The repository is checked out at the PR head, and the diff shows changes from the base branch.
 
             ## Response Protocol (for Issues)
 
