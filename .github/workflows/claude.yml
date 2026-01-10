@@ -272,27 +272,29 @@ jobs:
           echo "PR #$PR_NUMBER: $BASE_BRANCH...$PR_HEAD_SHA"
           echo "Head repo: $HEAD_REPO_OWNER/$HEAD_REPO_NAME"
 
-          # Fetch base branch from origin
+          # Fetch base branch from origin BEFORE any URL changes
           git fetch origin $BASE_BRANCH
 
           # Extract branch name first
           HEAD_REF=$(echo "$PR_DATA" | jq -r '.headRefName')
 
-          # For fork PRs, add fork as remote and fetch from it
+          # For fork PRs, temporarily redirect origin to the fork
           if [ "$HEAD_REPO_OWNER" != "${{ github.repository_owner }}" ]; then
-            echo "Fork PR detected, fetching from fork repository"
-            # Remove fork remote if it already exists from a previous run
-            git remote remove fork 2>/dev/null || true
-            git remote add fork https://github.com/$HEAD_REPO_OWNER/$HEAD_REPO_NAME.git
+            echo "Fork PR detected: $HEAD_REPO_OWNER/$HEAD_REPO_NAME"
 
-            # Fetch the actual branch from the fork
-            git fetch fork $HEAD_REF:$HEAD_REF || {
+            # Temporarily point origin to the fork so the action's prepare.ts can fetch from it
+            echo "Temporarily redirecting 'origin' remote to fork"
+            git remote set-url origin https://github.com/$HEAD_REPO_OWNER/$HEAD_REPO_NAME.git
+
+            # Fetch and checkout branch from origin (now pointing to fork)
+            git fetch origin $HEAD_REF || {
               echo "Failed to fetch branch from fork. Fork may be private or deleted."
               exit 1
             }
 
-            echo "Successfully fetched $HEAD_REF from fork"
-            git checkout $HEAD_REF
+            git checkout -b $HEAD_REF origin/$HEAD_REF
+
+            echo "Successfully checked out $HEAD_REF (origin now points to fork)"
           else
             echo "Non-fork PR, fetching from origin"
             git fetch origin $PR_HEAD_SHA
