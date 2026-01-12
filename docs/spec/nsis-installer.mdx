@@ -89,89 +89,65 @@ The NSIS (Nullsoft Scriptable Install System) installer is GAIA's primary Window
 
 ### Installation Flow Diagram
 
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+flowchart TD
+    A[/"LAUNCH"/] --> B(["CHECK"])
+    B --> C(["SELECT"])
+    C --> D(["DOWNLOAD"])
+    D --> E(["PREREQS"])
+    E --> F(["INSTALL"])
+    F --> G(["CONFIGURE"])
+    G --> H(["FINISH"])
+
+    style A fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
+    style B fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style C fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style D fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style E fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style F fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style G fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+    style H fill:#28a745,stroke:#1e7e34,stroke-width:2px,color:#fff
+
+    linkStyle 0,1,2,3,4,5,6 stroke:#ED1C24,stroke-width:2px
 ```
-┌─────────────────┐
-│  User Launches  │
-│  setup.exe      │
-└────────┬────────┘
-         │
-    ┌────▼─────────────────────┐
-    │  Check Existing Install  │
-    │  (Prompt to remove)      │
-    └────┬─────────────────────┘
-         │
-    ┌────▼──────────────────┐
-    │  Select Components    │
-    │  ☑ GAIA (required)   │
-    │  ☐ RAUX UI (optional)│
-    └────┬──────────────────┘
-         │
-    ┌────▼─────────────────────┐
-    │  Download/Extract        │
-    │  - Embedded Python       │
-    │  - docopt.py (workaround)│
-    └────┬─────────────────────┘
-         │
-    ┌────▼──────────────────┐
-    │  Check Prerequisites  │
-    │  - Lemonade (prompt)  │
-    │  - FFmpeg (winget)    │
-    └────┬──────────────────┘
-         │
-    ┌────▼───────────────────┐
-    │  Install GAIA Package  │
-    │  (via install.bat)     │
-    └────┬───────────────────┘
-         │
-    ┌────▼──────────────────┐
-    │  Configure System     │
-    │  - Update PATH        │
-    │  - Create shortcuts   │
-    │  - Launch RAUX setup  │
-    └────┬──────────────────┘
-         │
-    ┌────▼───────────┐
-    │  Finish Page   │
-    │  - Launch CLI? │
-    │  - Launch RAUX?│
-    └────────────────┘
-```
+
+| Step | Action | Details |
+|------|--------|---------|
+| **LAUNCH** | User runs `setup.exe` | Starts NSIS installer with MUI2 interface |
+| **CHECK** | Check existing install | Prompts to remove previous installation if found |
+| **SELECT** | Select components | GAIA (required), RAUX UI (optional) |
+| **DOWNLOAD** | Download/Extract | Embedded Python 3.10.9, docopt.py workaround |
+| **PREREQS** | Check prerequisites | Lemonade Server (prompt), FFmpeg (via winget) |
+| **INSTALL** | Install GAIA | Runs `install.bat` to configure Python and pip install |
+| **CONFIGURE** | Configure system | Update PATH, create desktop shortcuts, launch RAUX setup |
+| **FINISH** | Finish page | Options to launch GAIA CLI or RAUX UI |
 
 ### NSIS Script Structure
 
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+flowchart TD
+    A(["Installer.nsi"]) --> B(["HEADER"])
+    A --> C(["PAGES"])
+    A --> D(["INSTALL"])
+    A --> E(["FUNCTIONS"])
+
+    style A fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style B fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style C fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style D fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style E fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+
+    linkStyle 0,1,2,3 stroke:#ED1C24,stroke-width:2px
 ```
-Installer.nsi
-├── Header Section
-│   ├── Command-line parameters (!define)
-│   ├── Variables (Var)
-│   └── MUI2 settings
-│
-├── Pages
-│   ├── Welcome (MUI_PAGE_WELCOME)
-│   ├── License (MUI_PAGE_LICENSE)
-│   ├── Directory (MUI_PAGE_DIRECTORY)
-│   ├── RAUX Options (custom page)
-│   ├── Install (MUI_PAGE_INSTFILES)
-│   └── Finish (custom page)
-│
-├── Main Install Section
-│   ├── Cleanup existing install
-│   ├── Create directory structure
-│   ├── Download Python
-│   ├── Configure Python
-│   ├── Install dependencies
-│   └── Install GAIA
-│
-└── Functions
-    ├── .onInit
-    ├── RAUXOptionsPage
-    ├── CustomFinishPage
-    ├── run_raux_installer
-    ├── check_raux_install
-    ├── uninstall_raux
-    ├── RunGAIACLI
-    └── RunRAUX
-```
+
+| Section | Contents |
+|---------|----------|
+| **HEADER** | `!define` parameters, `Var` declarations, MUI2 settings |
+| **PAGES** | Welcome, License, Directory, RAUX Options (custom), Install, Finish (custom) |
+| **INSTALL** | Cleanup existing, Create directories, Download Python, Configure Python, Install dependencies, Install GAIA |
+| **FUNCTIONS** | `.onInit`, `RAUXOptionsPage`, `CustomFinishPage`, `run_raux_installer`, `check_raux_install`, `uninstall_raux`, `RunGAIACLI`, `RunRAUX` |
 
 ---
 
