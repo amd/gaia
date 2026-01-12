@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -33,7 +34,7 @@ class TestSummarizer:
     """Integration tests for the summarizer application"""
 
     @staticmethod
-    def create_synthetic_pdf(output_path: Path):
+    def create_synthetic_pdf(output_path: Path) -> None:
         """
         Create a synthetic PDF with text rendered as images for OCR testing.
 
@@ -228,9 +229,10 @@ class TestSummarizer:
             y_position += 24
 
         y_position += 30
+        current_date = datetime.now().strftime("%Y-%m-%d")
         draw.text(
             (left_margin, y_position),
-            "Document generated for testing purposes - Date: 2026-01-08",
+            f"Document generated for testing purposes - Date: {current_date}",
             fill="gray",
             font=body_font,
         )
@@ -253,21 +255,21 @@ class TestSummarizer:
         print(f"Successfully created synthetic OCR PDF (text as images): {output_path}")
 
     @pytest.fixture
-    def data_txt_path(self):
+    def data_txt_path(self) -> Path:
         """Path to data/txt directory"""
         return Path(__file__).parent.parent / "data" / "txt"
 
     @pytest.fixture
-    def data_pdf_path(self):
+    def data_pdf_path(self) -> Path:
         """Path to data/pdf directory"""
         return Path(__file__).parent.parent / "data" / "pdf"
 
     @pytest.fixture
-    def test_model(self):
+    def test_model(self) -> str:
         """Get test model from environment or use default"""
         return os.environ.get("GAIA_TEST_MODEL", SummarizerAgent.DEFAULT_MODEL)
 
-    def test_summarize_transcript(self, data_txt_path, test_model):
+    def test_summarize_transcript(self, data_txt_path, test_model) -> None:
         """Integration test: summarize a real meeting transcript via CLI"""
         # Create temporary output file
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp_file:
@@ -395,7 +397,7 @@ class TestSummarizer:
             if output_path.exists():
                 output_path.unlink()
 
-    def test_summarize_email(self, data_txt_path, test_model):
+    def test_summarize_email(self, data_txt_path, test_model) -> None:
         """Integration test: summarize a real email via CLI"""
         # Add delay to prevent server overload from previous test
         print("⏳ Waiting 3 seconds to prevent server overload...")
@@ -519,7 +521,7 @@ class TestSummarizer:
             if output_path.exists():
                 output_path.unlink()
 
-    def test_multiple_styles(self, data_txt_path, test_model):
+    def test_multiple_styles(self, data_txt_path, test_model) -> None:
         """Integration test: verify multiple summary styles work correctly via CLI"""
         # Add delay to prevent server overload from previous tests
         print("⏳ Waiting 5 seconds to prevent server overload...")
@@ -651,7 +653,7 @@ class TestSummarizer:
             if output_path.exists():
                 output_path.unlink()
 
-    def test_summarize_directory(self, test_model):
+    def test_summarize_directory(self, test_model) -> None:
         """Unit-style test for SummarizerAgent.summarize_directory on a temp dir."""
         # Build a temporary directory with a few small files
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -707,7 +709,7 @@ class TestSummarizer:
             input_types = [r["metadata"]["input_type"] for r in results]
             assert set(input_types).issubset({"transcript", "email", "auto", "txt"})
 
-    def test_invalid_style_raises(self, test_model):
+    def test_invalid_style_raises(self, test_model) -> None:
         """Ensure passing an unsupported style raises a clear ValueError."""
 
         agent = SummarizerAgent(
@@ -721,7 +723,7 @@ class TestSummarizer:
         # Error message should list allowed styles
         assert "Unsupported style" in str(exc.value)
 
-    def test_summarize_synthetic_pdf_ocr(self, data_pdf_path, test_model):
+    def test_summarize_synthetic_pdf_ocr(self, data_pdf_path, test_model) -> None:
         """Test OCR extraction on a synthetically generated PDF"""
         if not HAS_REPORTLAB:
             pytest.skip("reportlab not installed - required for PDF generation")
@@ -741,7 +743,7 @@ class TestSummarizer:
         )
         print(f"Synthetic PDF retained at: {synthetic_pdf_path}")
 
-    def test_summarize_pdf_ocr(self, data_pdf_path, test_model):
+    def test_summarize_pdf_ocr(self, data_pdf_path, test_model) -> None:
         self._run_pdf_cli_test(
             data_pdf_path,
             test_model,
@@ -751,7 +753,7 @@ class TestSummarizer:
 
     def _run_pdf_cli_test(
         self, data_pdf_path: Path, test_model: str, pdf_name: str, title: str
-    ):
+    ) -> None:
         # Add delay to prevent server overload from previous tests
         print("Waiting 3 seconds to prevent server overload...")
         time.sleep(3)

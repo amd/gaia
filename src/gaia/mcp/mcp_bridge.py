@@ -402,41 +402,51 @@ class GAIAMCPBridge:
         # Save file to temp
         filename = file_rec.get("file_name")
         ext = os.path.splitext(filename)[1] if filename else ".pdf"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext or ".pdf") as tmpfile:
-            buf = file_rec.get("file_object")
-            buf.seek(0)
-            shutil.copyfileobj(buf, tmpfile)
-            tmpfile_path = tmpfile.name
+        tmpfile_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                delete=False, suffix=ext or ".pdf"
+            ) as tmpfile:
+                buf = file_rec.get("file_object")
+                buf.seek(0)
+                shutil.copyfileobj(buf, tmpfile)
+                tmpfile_path = tmpfile.name
 
-        # Initialize agent
-        agent_config = self.agents.get("summarize")
-        if not agent_config:
-            os.unlink(tmpfile_path)
-            return {"success": False, "error": "Summarize agent not available"}
-        if "instance" not in agent_config:
-            agent_class = agent_config["class"]
-            init_params = agent_config.get("init_params", {})
-            agent_config["instance"] = agent_class(**init_params)
-        agent = agent_config["instance"]
+            # Initialize agent
+            agent_config = self.agents.get("summarize")
+            if not agent_config:
+                return {"success": False, "error": "Summarize agent not available"}
+            if "instance" not in agent_config:
+                agent_class = agent_config["class"]
+                init_params = agent_config.get("init_params", {})
+                agent_config["instance"] = agent_class(**init_params)
+            agent = agent_config["instance"]
 
-        if stream:
-            content = agent.get_summary_content_from_file(Path(tmpfile_path))
-            if not content:
-                os.unlink(tmpfile_path)
-                return {
-                    "success": False,
-                    "error": "No extractable text found in uploaded file",
-                }
-            iterator = agent.summarize_stream(content, input_type="pdf", style=style)
-            return {
-                "success": True,
-                "stream": True,
-                "style": style,
-                "tmpfile_path": tmpfile_path,
-                "iterator": iterator,
-            }
-        else:
+            # Validate style early to provide clear error message
             try:
+                agent._validate_styles(style)  # pylint: disable=protected-access
+            except ValueError as e:
+                return {"success": False, "error": str(e)}
+
+            if stream:
+                content = agent.get_summary_content_from_file(Path(tmpfile_path))
+                if not content:
+                    return {
+                        "success": False,
+                        "error": "No extractable text found in uploaded file",
+                    }
+                iterator = agent.summarize_stream(
+                    content, input_type="pdf", style=style
+                )
+                # Return tmpfile_path for cleanup after streaming completes
+                return {
+                    "success": True,
+                    "stream": True,
+                    "style": style,
+                    "tmpfile_path": tmpfile_path,
+                    "iterator": iterator,
+                }
+            else:
                 result = agent.summarize_file(tmpfile_path, styles=[style])
                 return {
                     "success": True,
@@ -444,8 +454,14 @@ class GAIAMCPBridge:
                     "style": style,
                     "result": result,
                 }
-            finally:
-                os.unlink(tmpfile_path)
+        finally:
+            # Clean up temp file for non-streaming responses or on error
+            # For streaming responses, cleanup happens in the HTTP handler after streaming completes
+            if tmpfile_path and not stream and os.path.exists(tmpfile_path):
+                try:
+                    os.unlink(tmpfile_path)
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup temp file {tmpfile_path}: {e}")
 
 
 class MCPHTTPHandler(BaseHTTPRequestHandler):

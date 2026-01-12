@@ -33,6 +33,7 @@ class Chunker:
         est_by_chars = chars // 4
         est_by_words = int(words * 1.3)
         num_tokens = max(est_by_chars, est_by_words)
+
         self.logger.info(f"Approximated token count: {num_tokens} tokens")
         return num_tokens
 
@@ -97,8 +98,8 @@ class Chunker:
                 self.logger.info(
                     f"Created chunk {len(chunks)}: {len(chunk_text)} chars"
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                self.logger.warning(f"Failed to log chunk creation: {e}")
 
         self.logger.info(f"Total chunks created: {len(chunks)}")
         return chunks
@@ -200,8 +201,8 @@ class SummarizerAgent:
         """Clear prior chat context and set system prompt for the given input type."""
         try:
             self.chat_sdk.clear_history()
-        except Exception:
-            pass
+        except Exception as e:
+            self.log.warning(f"Failed to clear chat history: {e}")
         system_prompt = (self.system_prompts or {}).get(input_type)
         if not system_prompt:
             raise KeyError(f"Missing system prompt for '{input_type}' in prompts.yml")
@@ -221,14 +222,15 @@ class SummarizerAgent:
     def _should_use_iterative(self, text: str) -> bool:
         """Decide if iterative summarization is needed based on estimated tokens."""
         # Reserve 25% of context for prompts, instructions, and output
-        effective_limit = int(self.max_ctx_size * 0.75)
+        # Apply additional 15% safety margin to account for token estimation variance
+        effective_limit = int(self.max_ctx_size * 0.75 * 0.87)  # 0.87 = 1/1.15
         content_tokens = self.chunker.count_tokens(text)
         should_iterate = content_tokens > effective_limit
 
         if should_iterate:
             self.log.info(
                 f"Using iterative summarization: {content_tokens} tokens > {effective_limit} effective limit "
-                f"(75% of {self.max_ctx_size} max context)"
+                f"(65% of {self.max_ctx_size} max context with safety margin)"
             )
 
         return should_iterate
@@ -294,6 +296,26 @@ class SummarizerAgent:
         # Large inputs: delegate to unified iterative streaming generator
         yield from self._iterative_summary_events(content, input_type, style)
 
+    def _stream_chunk_and_accumulate(
+        self,
+        prompt: str,
+        chunk_index: int,
+        total_chunks: int,
+        label: str = "LLM Prompt",
+    ):
+        """Helper to stream a chunk's LLM response and return the accumulated text."""
+        self.log.info(
+            f"[{label} - chunk {chunk_index+1}/{total_chunks}] {prompt[:500]}..."
+        )
+        streamed_text = ""
+        for part in self.chat_sdk.send_stream(prompt):
+            if part.is_complete:
+                return streamed_text.strip()
+            else:
+                streamed_text += part.text
+                yield {"text": part.text, "is_complete": False}
+        return streamed_text.strip()
+
     def _iterative_summary_events(self, content: str, input_type: str, style: str):
         """Unified generator for iterative summarization: streams per-chunk and yields final stats."""
         self._prepare_chat(input_type)
@@ -316,24 +338,18 @@ class SummarizerAgent:
                     new_chunk=chunk,
                 )
             try:
-                self.log.info(
-                    f"[LLM Prompt - chunk {i+1}/{len(chunks)}] {base_prompt}..."
+                completed = yield from self._stream_chunk_and_accumulate(
+                    base_prompt, i, len(chunks)
                 )
-                streamed_text = ""
-                for part in self.chat_sdk.send_stream(base_prompt):
-                    if part.is_complete:
-                        completed = streamed_text.strip()
-                        if completed:
-                            summary_so_far = (
-                                summary_so_far
-                                + ("\n" if summary_so_far else "")
-                                + completed
-                            )
-                    else:
-                        streamed_text += part.text
-                        yield {"text": part.text, "is_complete": False}
+                if completed:
+                    summary_so_far = (
+                        summary_so_far + ("\n" if summary_so_far else "") + completed
+                    )
                 yield {"text": "\n", "is_complete": False}
-            except Exception:
+            except Exception as e:
+                self.log.warning(
+                    f"Error processing chunk {i+1}/{len(chunks)}: {e}. Attempting fallback with smaller chunk."
+                )
                 mid = max(1, len(chunk) // 2)
                 fallback_chunk = chunk[:mid]
                 if i == 0:
@@ -351,28 +367,25 @@ class SummarizerAgent:
                     if not style_instruction:
                         raise KeyError(f"Missing style '{style}' in prompts.yml")
                     prompt = f"{fallback_prompt}\n\nNow, please provide the summary in the following style: {style_instruction}"
-                    self.log.info(
-                        f"[LLM Prompt Fallback - chunk {i+1}/{len(chunks)}] {prompt[:500]}..."
+                    completed = yield from self._stream_chunk_and_accumulate(
+                        prompt, i, len(chunks), "LLM Prompt Fallback"
                     )
-                    streamed_text = ""
-                    for part in self.chat_sdk.send_stream(prompt):
-                        if part.is_complete:
-                            completed = streamed_text.strip()
-                            if completed:
-                                summary_so_far = (
-                                    summary_so_far
-                                    + ("\n" if summary_so_far else "")
-                                    + completed
-                                )
-                        else:
-                            streamed_text += part.text
-                            yield {"text": part.text, "is_complete": False}
+                    if completed:
+                        summary_so_far = (
+                            summary_so_far
+                            + ("\n" if summary_so_far else "")
+                            + completed
+                        )
                     yield {"text": "\n", "is_complete": False}
-                except Exception:
+                except Exception as e:
+                    self.log.warning(
+                        f"Error in fallback processing for chunk {i+1}/{len(chunks)}: {e}. Stopping chunk processing."
+                    )
                     break
         try:
             perf_stats = self.llm_client.get_performance_stats()
-        except Exception:
+        except Exception as e:
+            self.log.warning(f"Failed to retrieve performance stats: {e}")
             perf_stats = {}
         yield {
             "text": summary_so_far,
@@ -674,8 +687,8 @@ class SummarizerAgent:
         # Ensure no prior conversation context leaks into this summary
         try:
             self.chat_sdk.clear_history()
-        except Exception:
-            pass
+        except Exception as e:
+            self.log.warning(f"Failed to clear chat history: {e}")
         start_time = time.time()
         content_type = self.detect_content_type(content, input_type)
         applicable_styles = styles or self.styles.copy()
@@ -746,10 +759,13 @@ class SummarizerAgent:
         self._validate_styles(style)
         yield from self._stream_summary_content(content, input_type, style)
 
+    def _ensure_path(self, file_path) -> Path:
+        """Convert file_path to Path object if it's not already."""
+        return file_path if isinstance(file_path, Path) else Path(file_path)
+
     def get_summary_content_from_file(self, file_path: Path) -> str:
         """Extract content to be summarized from a file."""
-        if not isinstance(file_path, Path):
-            file_path = Path(file_path)
+        file_path = self._ensure_path(file_path)
         abs_path = str(file_path.absolute())
         ext = file_path.suffix.lower()
         if ext == ".pdf":
@@ -835,9 +851,7 @@ class SummarizerAgent:
         combined_prompt: Optional[bool] = None,
         input_type: str = "auto",
     ) -> Dict[str, Any]:
-        # Always convert file_path to Path object if it's a string
-        if not isinstance(file_path, Path):
-            file_path = Path(file_path)
+        file_path = self._ensure_path(file_path)
         self.log.info(f"Summarizing file: {file_path}")
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
