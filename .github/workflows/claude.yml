@@ -67,13 +67,12 @@ jobs:
           echo "Diff generated: $(wc -l < pr-diff.txt) lines"
           echo "Files changed: $(wc -l < pr-files.txt) files"
 
-      - uses: anthropics/claude-code-action@beta
+      - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          max_turns: 20
-          model: claude-opus-4-5-20251101
-          custom_instructions: |
+          claude_args: "--max-turns 20 --model claude-opus-4-5-20251101"
+          prompt: |
             You are reviewing a GAIA pull request. Provide a thorough, professional code review following GAIA standards.
 
             **Context Available:**
