@@ -79,6 +79,11 @@ ci-cd:
   - changed-files:
     - any-glob-to-any-file: ['.github/workflows/**/*']
 
+# DevOps changes (anything in .github)
+devops:
+  - changed-files:
+    - any-glob-to-any-file: ['.github/**/*']
+
 # Installer changes
 installer:
   - changed-files:
