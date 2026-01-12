@@ -1,0 +1,121 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# This workflow tests the GAIA Summarizer Agent functionality
+# Tests include: Transcript/email summarization, PDF OCR, multiple styles, directory processing
+
+name: Summarizer Agent Tests
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-summarizer:
+    name: Test Summarizer Agent
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          lfs: true  # Enable Git LFS for PDF test files
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e .[dev,rag]
+          # Install additional dependencies for PDF generation and testing
+          uv pip install --system reportlab pillow
+
+      - name: Start Lemonade Server
+        run: |
+          echo "================================================================"
+          echo "                 STARTING LEMONADE SERVER"
+          echo "================================================================"
+          echo "Starting LLM backend server in background..."
+          lemonade-server serve --host 127.0.0.1 --port 8000 &
+          SERVER_PID=$!
+          echo "Server PID: $SERVER_PID"
+          
+          # Wait for server to be ready
+          echo "Waiting for server to start..."
+          for i in {1..30}; do
+            if curl -s http://127.0.0.1:8000/health > /dev/null 2>&1; then
+              echo "[SUCCESS] Server is ready"
+              break
+            fi
+            echo "Attempt $i/30: Server not ready yet..."
+            sleep 2
+          done
+          
+          # Verify server is responding
+          if ! curl -s http://127.0.0.1:8000/health > /dev/null 2>&1; then
+            echo "[FAILURE] Server failed to start"
+            exit 1
+          fi
+
+      - name: Run All Summarizer Tests
+        run: |
+          echo ""
+          echo "================================================================"
+          echo "            SUMMARIZER AGENT TESTS"
+          echo "================================================================"
+          echo "Running all test_summarizer.py tests..."
+          echo ""
+
+          python -m pytest tests/test_summarizer.py -v --tb=short
+
+          TEST_EXIT=$?
+          if [ $TEST_EXIT -eq 0 ]; then
+            echo ""
+            echo "[SUCCESS] All summarizer tests passed"
+          else
+            echo ""
+            echo "[FAILURE] Some summarizer tests failed"
+            exit 1
+          fi
+
+      - name: Test Summary
+        if: always()
+        run: |
+          echo ""
+          echo "================================================================"
+          echo "              SUMMARIZER AGENT TEST SUMMARY"
+          echo "================================================================"
+          echo "Test Categories:"
+          echo "  - Transcript Tests: Meeting transcripts with participants/actions"
+          echo "  - Email Tests: Email content type detection and summarization"
+          echo "  - Multiple Styles: Brief, executive, participants styles"
+          echo "  - Directory Tests: Batch processing multiple files"
+          echo "  - Validation Tests: Invalid style error handling"
+          echo "  - PDF OCR Tests: Text extraction and summarization from PDFs"
+          echo ""
+          echo "Test Coverage:"
+          echo "  - Content type auto-detection (transcript/email/pdf)"
+          echo "  - Multiple summary styles (brief/executive/participants/action_items)"
+          echo "  - Iterative summarization for large documents"
+          echo "  - PDF text extraction with OCR fallback"
+          echo "  - Batch directory processing"
+          echo "  - Style validation and error handling"
+          echo "  - Text caching for performance"
+          echo "================================================================"
