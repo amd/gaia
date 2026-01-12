@@ -193,7 +193,6 @@ The extension provides the following commands via the Command Palette:
 
 ### Architecture
 
-<Frame>
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 graph TB
@@ -210,7 +209,6 @@ graph TB
 
     linkStyle 0,1,2,3 stroke:#ED1C24,stroke-width:2px
 ```
-</Frame>
 
 The extension implements VSCode's `LanguageModelChatProvider` API to register GAIA as a language model provider.
 
@@ -348,7 +346,6 @@ VSCode can also integrate with GAIA through the Model Context Protocol (MCP) ser
 
 ### Architecture
 
-<Frame>
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 graph TB
@@ -363,7 +360,6 @@ graph TB
 
     linkStyle 0,1,2 stroke:#ED1C24,stroke-width:2px
 ```
-</Frame>
 
 ### Available Tools
 
@@ -590,7 +586,6 @@ View > Output > Select "GAIA" from dropdown
 
 <Tabs>
   <Tab title="Message Flow">
-    <Frame>
     ```mermaid
     %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'actorBkg':'#ED1C24', 'actorTextColor':'#fff', 'actorBorder':'#C8171E', 'signalColor':'#F4484D', 'signalTextColor':'#333', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
     sequenceDiagram
@@ -607,11 +602,9 @@ View > Output > Select "GAIA" from dropdown
         Provider->>VSCode: Report chunks
         VSCode->>User: Display response
     ```
-    </Frame>
   </Tab>
 
   <Tab title="Model Discovery">
-    <Frame>
     ```mermaid
     %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'actorBkg':'#ED1C24', 'actorTextColor':'#fff', 'actorBorder':'#C8171E', 'signalColor':'#F4484D', 'signalTextColor':'#333', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
     sequenceDiagram
@@ -626,7 +619,6 @@ View > Output > Select "GAIA" from dropdown
         Provider->>VSCode: Return models
         VSCode->>VSCode: Show in picker
     ```
-    </Frame>
   </Tab>
 </Tabs>
 
