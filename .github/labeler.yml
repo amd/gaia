@@ -1,0 +1,105 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Auto-labeling configuration for pull requests
+# See: https://github.com/actions/labeler
+
+# Documentation changes (user-facing docs only)
+documentation:
+  - changed-files:
+    - any-glob-to-any-file: ['docs/**/*', 'README.md', 'CONTRIBUTING.md']
+
+# Workflow/config changes (not user docs)
+workflow-config:
+  - changed-files:
+    - any-glob-to-any-file: ['.github/**/*', 'CLAUDE.md', '.gitignore', '.editorconfig']
+
+# Agent system changes (base agent or multiple agents)
+agents:
+  - changed-files:
+    - any-glob-to-any-file: ['src/gaia/agents/**/*']
+
+# Chat SDK changes
+chat:
+  - changed-files:
+    - any-glob-to-any-file: ['src/gaia/chat/**/*', 'docs/guides/chat.md', 'docs/sdk/sdks/chat.md']
+
+# Code agent specific (use "agents" for general agent changes)
+code-agent:
+  - changed-files:
+    - any-glob-to-any-file: ['src/gaia/agents/code_agent.py', 'docs/guides/code.md', 'docs/spec/code-*']
+
+# MCP changes
+mcp:
+  - changed-files:
+    - any-glob-to-any-file: ['src/gaia/mcp/**/*', 'docs/guides/mcp.md', 'docs/spec/mcp-*']
+
+# RAG changes
+rag:
+  - changed-files:
+    - any-glob-to-any-file: ['src/gaia/rag/**/*', 'docs/sdk/sdks/rag.md', 'docs/spec/rag-*']
+
+# LLM backend changes
+llm:
+  - changed-files:
+    - any-glob-to-any-file: ['src/gaia/llm/**/*', 'docs/sdk/sdks/llm.md', 'docs/spec/llm-*']
+
+# Audio changes (ASR/TTS)
+audio:
+  - changed-files:
+    - any-glob-to-any-file: ['src/gaia/audio/**/*', 'docs/sdk/sdks/audio.md']
+
+# Talk agent changes
+talk:
+  - changed-files:
+    - any-glob-to-any-file: ['src/gaia/talk/**/*', 'docs/guides/talk.md', 'docs/sdk/agents/talk.md']
+
+# Blender agent changes
+blender:
+  - changed-files:
+    - any-glob-to-any-file: ['src/gaia/agents/blender_agent.py', 'docs/guides/blender.md', 'docs/spec/blender-agent.md']
+
+# Jira agent changes
+jira:
+  - changed-files:
+    - any-glob-to-any-file: ['src/gaia/agents/jira_agent.py', 'src/gaia/apps/jira/**/*', 'docs/guides/jira.md', 'docs/spec/jira-agent.md']
+
+# Evaluation framework changes
+eval:
+  - changed-files:
+    - any-glob-to-any-file: ['src/gaia/eval/**/*', 'docs/reference/eval.md']
+
+# Test changes
+tests:
+  - changed-files:
+    - any-glob-to-any-file: ['tests/**/*']
+
+# CI/CD workflow changes
+ci-cd:
+  - changed-files:
+    - any-glob-to-any-file: ['.github/workflows/**/*']
+
+# Installer changes
+installer:
+  - changed-files:
+    - any-glob-to-any-file: ['installer/**/*', 'docs/deployment/installer.md']
+
+# Electron app changes
+electron:
+  - changed-files:
+    - any-glob-to-any-file: ['src/gaia/apps/**/*.html', 'src/gaia/apps/**/*.js', 'src/gaia/apps/**/*.css']
+
+# Dependencies
+dependencies:
+  - changed-files:
+    - any-glob-to-any-file: ['setup.py', 'pyproject.toml', 'requirements*.txt', 'uv.lock', 'package.json', 'package-lock.json']
+
+# Security-sensitive changes
+security:
+  - changed-files:
+    - any-glob-to-any-file: ['docs/sdk/security.md', 'src/gaia/**/security.py', '.github/workflows/test_security.yml']
+
+# Performance-critical changes
+performance:
+  - changed-files:
+    - any-glob-to-any-file: ['src/gaia/llm/**/*', 'src/gaia/rag/**/*', 'src/gaia/eval/**/*']
