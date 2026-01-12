@@ -639,22 +639,6 @@ async def execute_agent(request: AgentRequest):
 
 ---
 
-## Acceptance Criteria
-
-- [ ] OutputHandler abstract base class defined
-- [ ] All 3 implementations (AgentConsole, SilentConsole, SSEOutputHandler) working
-- [ ] Rich formatting works in AgentConsole (when library available)
-- [ ] Graceful fallback when Rich not installed
-- [ ] SilentConsole suppresses all output correctly
-- [ ] SSEOutputHandler queues and formats events
-- [ ] File preview works in AgentConsole
-- [ ] All unit tests pass (8+ tests)
-- [ ] Integration with Agent base class works
-- [ ] API streaming integration works
-- [ ] Documentation complete
-
----
-
 *Console Output Handlers Technical Specification*
 
 ---
