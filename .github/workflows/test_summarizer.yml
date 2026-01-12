@@ -3,8 +3,9 @@
 
 # This workflow tests the GAIA Summarizer Agent functionality
 # Tests include: Transcript/email summarization, PDF OCR, multiple styles, directory processing
+# Platform: Windows (with Lemonade server support)
 
-name: Summarizer Agent Tests
+name: Summarizer Agent Tests (Windows)
 
 on:
   workflow_call:
@@ -21,101 +22,152 @@ permissions:
 
 jobs:
   test-summarizer:
-    name: Test Summarizer Agent
-    runs-on: ubuntu-latest
+    name: Test Summarizer Agent on Windows
+    runs-on: [stx]
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
-      - uses: actions/checkout@v5
-        with:
-          lfs: true  # Enable Git LFS for PDF test files
+      - uses: actions/checkout@v4
 
       - name: Free disk space
         uses: ./.github/actions/free-disk-space
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
+          install-package: '.[dev,rag]'
+          extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
-      - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
-
-      - name: Install dependencies
+      - name: Install additional dependencies
+        shell: powershell
         run: |
-          uv pip install --system -e .[dev,rag]
-          # Install additional dependencies for PDF generation and testing
-          uv pip install --system reportlab pillow
+          uv pip install reportlab pillow --python .venv\Scripts\python.exe
 
-      - name: Start Lemonade Server
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
+      - name: Install GAIA dependencies
         run: |
-          echo "================================================================"
-          echo "                 STARTING LEMONADE SERVER"
-          echo "================================================================"
-          echo "Starting LLM backend server in background..."
-          lemonade-server serve --host 127.0.0.1 --port 8000 &
-          SERVER_PID=$!
-          echo "Server PID: $SERVER_PID"
-          
-          # Wait for server to be ready
-          echo "Waiting for server to start..."
-          for i in {1..30}; do
-            if curl -s http://127.0.0.1:8000/health > /dev/null 2>&1; then
-              echo "[SUCCESS] Server is ready"
-              break
-            fi
-            echo "Attempt $i/30: Server not ready yet..."
-            sleep 2
-          done
-          
-          # Verify server is responding
-          if ! curl -s http://127.0.0.1:8000/health > /dev/null 2>&1; then
-            echo "[FAILURE] Server failed to start"
+          Write-Host "Step 1: Activate conda environment"
+          & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
+          conda activate gaiaenv
+
+          Write-Host "Step 2: Install dependencies"
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+          Write-Host "Step 3: Verify installation"
+          $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
+          if (-not $gaiaPath) {
+            Write-Host "Error: gaia not installed correctly"
+            Write-Host "Current PATH: $env:Path"
             exit 1
-          fi
+          }
+          Write-Host "Found gaia at: $($gaiaPath.Source)"
+          python -m pip check
 
-      - name: Run All Summarizer Tests
+      - name: Start Lemonade Server for Integration Tests
+        timeout-minutes: 15
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         run: |
-          echo ""
-          echo "================================================================"
-          echo "            SUMMARIZER AGENT TESTS"
-          echo "================================================================"
-          echo "Running all test_summarizer.py tests..."
-          echo ""
+          Write-Host "Activate and verify Conda environment"
+          $env:Path = "$env:GITHUB_WORKSPACE\miniforge3;$env:GITHUB_WORKSPACE\miniforge3\Scripts;$env:Path"
+          & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
+          conda activate gaiaenv
 
-          python -m pytest tests/test_summarizer.py -v --tb=short
+          Write-Host "Verify Python environment"
+          python -c "import sys; print(sys.executable)"
 
-          TEST_EXIT=$?
-          if [ $TEST_EXIT -eq 0 ]; then
-            echo ""
-            echo "[SUCCESS] All summarizer tests passed"
-          else
-            echo ""
-            echo "[FAILURE] Some summarizer tests failed"
+          Write-Host "Find gaia executable location"
+          $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
+          if (-not $gaiaPath) {
+            Write-Host "Error: Cannot find gaia executable in PATH"
+            Write-Host "Current PATH: $env:Path"
             exit 1
-          fi
+          }
+          Write-Host "Found gaia at: $($gaiaPath.Source)"
 
-      - name: Test Summary
-        if: always()
+          # Start the server in the background as a process (not PowerShell job)
+          Write-Host "Starting lemonade-server in background..."
+          # Start the server as a background process
+          $serverProcess = Start-Process -FilePath "lemonade-server" -ArgumentList "serve", "--no-tray" -PassThru -WindowStyle Hidden
+          Write-Host "Started lemonade-server process with ID: $($serverProcess.Id)"
+
+          # Wait for server to start up
+          Write-Host "Waiting for server to start up..."
+          $maxWaitTime = 30  # seconds
+          $waitTime = 0
+          $serverReady = $false
+
+          while ($waitTime -lt $maxWaitTime -and -not $serverReady) {
+              Start-Sleep -Seconds 2
+              $waitTime += 2
+
+              try {
+                  $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 5
+                  Write-Host "Server is ready and responding to health checks"
+                  $serverReady = $true
+              } catch {
+                  Write-Host "Server not ready yet (waited $waitTime seconds)..."
+              }
+          }
+
+          if (-not $serverReady) {
+              Write-Host "Server failed to start within $maxWaitTime seconds"
+              try {
+                  if (-not $serverProcess.HasExited) {
+                      $serverProcess.Kill()
+                  }
+              } catch {
+                  Write-Host "Error stopping server process: $_"
+              }
+              throw "Failed to start lemonade-server for tests"
+          }
+
+          Write-Host "Lemonade server started successfully"
+
+          # Pull the model now that server is running
+          Write-Host "Pulling Qwen3-4B-Instruct-2507-GGUF model..."
+          lemonade-server pull Qwen3-4B-Instruct-2507-GGUF
+
+
+      - name: Run Summarizer Integration Tests with Lemonade
+        shell: cmd
         run: |
-          echo ""
-          echo "================================================================"
-          echo "              SUMMARIZER AGENT TEST SUMMARY"
-          echo "================================================================"
-          echo "Test Categories:"
-          echo "  - Transcript Tests: Meeting transcripts with participants/actions"
-          echo "  - Email Tests: Email content type detection and summarization"
-          echo "  - Multiple Styles: Brief, executive, participants styles"
-          echo "  - Directory Tests: Batch processing multiple files"
-          echo "  - Validation Tests: Invalid style error handling"
-          echo "  - PDF OCR Tests: Text extraction and summarization from PDFs"
-          echo ""
-          echo "Test Coverage:"
-          echo "  - Content type auto-detection (transcript/email/pdf)"
-          echo "  - Multiple summary styles (brief/executive/participants/action_items)"
-          echo "  - Iterative summarization for large documents"
-          echo "  - PDF text extraction with OCR fallback"
-          echo "  - Batch directory processing"
-          echo "  - Style validation and error handling"
-          echo "  - Text caching for performance"
-          echo "================================================================"
+          REM Activate conda environment
+          call "%GITHUB_WORKSPACE%\miniforge3\Scripts\activate.bat" gaiaenv
+
+          echo ================================================================
+          echo           SUMARIZER INTEGRATION TESTS WITH LEMONADE SERVER
+          echo ================================================================
+          echo Testing real LLM integration with running Lemonade server
+          echo.
+
+          echo ****************************************************************
+          echo                 COMPREHENSIVE INTEGRATION TEST SUITE
+          echo ****************************************************************
+          echo Starting comprehensive integration tests at %TIME%...
+          echo.
+
+          REM Run the comprehensive integration test suite
+          set PYTHONIOENCODING=utf-8
+          python tests\test_summarizer.py
+          set integration_exit=%ERRORLEVEL%
+
+          echo.
+          echo ----------------------------------------------------------------
+          echo Integration tests completed at %TIME% with exit code: %integration_exit%
+          if %integration_exit% equ 0 (
+              echo [SUCCESS] Summarizer integration tests passed
+          ) else (
+              echo [FAILURE] Summarizer integration tests failed with exit code %integration_exit%
+              echo Full error output displayed above - no truncation
+          )
+          echo ----------------------------------------------------------------
+
+          if %integration_exit% neq 0 (
+              exit /b 1
+          )
