@@ -100,6 +100,12 @@ jobs:
 
             **IMPORTANT: Maximize use of actionable ```suggestion blocks** - These provide immediate value to contributors.
 
+            **DO NOT review or flag:**
+            - ❌ Copyright headers (presence, absence, or year inconsistencies)
+            - ❌ SPDX license identifiers
+            - ❌ License-related boilerplate
+            This is an open-source project - contributors retain their own copyright.
+
             **Always provide suggestions for:**
             - ✅ Import sorting issues (isort violations)
             - ✅ Code formatting issues (black violations)
@@ -222,6 +228,7 @@ jobs:
             3. **Strengths** (always include, even for PRs with issues)
                - What's implemented well
                - Good patterns followed
+               - Do NOT mention copyright headers as a strength
 
             4. **Verdict**
                - **Approve** - No blocking issues, ready to merge
