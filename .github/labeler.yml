@@ -84,6 +84,11 @@ devops:
   - changed-files:
     - any-glob-to-any-file: ['.github/**/*']
 
+# CLI changes
+cli:
+  - changed-files:
+    - any-glob-to-any-file: ['src/gaia/cli.py', 'docs/reference/cli.md']
+
 # Installer changes
 installer:
   - changed-files:
