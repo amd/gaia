@@ -9,11 +9,6 @@ documentation:
   - changed-files:
     - any-glob-to-any-file: ['docs/**/*', 'README.md', 'CONTRIBUTING.md']
 
-# Workflow/config changes (not user docs)
-workflow-config:
-  - changed-files:
-    - any-glob-to-any-file: ['.github/**/*', 'CLAUDE.md', '.gitignore', '.editorconfig']
-
 # Agent system changes (base agent or multiple agents)
 agents:
   - changed-files:
@@ -74,15 +69,10 @@ tests:
   - changed-files:
     - any-glob-to-any-file: ['tests/**/*']
 
-# CI/CD workflow changes
-ci-cd:
-  - changed-files:
-    - any-glob-to-any-file: ['.github/workflows/**/*']
-
-# DevOps changes (anything in .github)
+# DevOps changes (.github, CI/CD, config files)
 devops:
   - changed-files:
-    - any-glob-to-any-file: ['.github/**/*']
+    - any-glob-to-any-file: ['.github/**/*', 'CLAUDE.md', '.gitignore', '.editorconfig']
 
 # CLI changes
 cli:
