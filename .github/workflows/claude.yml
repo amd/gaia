@@ -67,13 +67,12 @@ jobs:
           echo "Diff generated: $(wc -l < pr-diff.txt) lines"
           echo "Files changed: $(wc -l < pr-files.txt) files"
 
-      - uses: anthropics/claude-code-action@beta
+      - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          max_turns: 10
-          model: claude-opus-4-5-20251101
-          custom_instructions: |
+          claude_args: "--max-turns 20 --model claude-opus-4-5-20251101"
+          prompt: |
             You are reviewing a GAIA pull request. Provide a thorough, professional code review following GAIA standards.
 
             **Context Available:**
@@ -81,6 +80,16 @@ jobs:
             - Read pr-files.txt for the list of changed files
             - Repository is checked out at the PR head
             - Focus your review on the changed files and their impact
+
+            **CRITICAL: Efficient Review Strategy**
+            - **ALWAYS read pr-diff.txt FIRST** to see exactly what changed
+            - **DO NOT** read entire large files (>1000 lines) - you'll hit token limits
+            - For large files like cli.py:
+              1. Read pr-diff.txt to see the changed sections
+              2. Use Grep with context to find related code: `grep -C 10 "pattern"`
+              3. Use Read with offset/limit for specific line ranges
+            - Focus on reviewing CHANGED code, not reading entire files
+            - Complete your review even if you can't read every file
 
             ## Suggested Changes Policy
 
@@ -206,7 +215,7 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          max_turns: 10
+          max_turns: 20
           model: claude-opus-4-5-20251101
           custom_instructions: |
             You are GAIA's AI assistant helping with pull request discussions.
@@ -215,6 +224,12 @@ jobs:
             - Read pr-diff.txt for the full diff of changes in this PR
             - Read pr-files.txt for the list of changed files
             - Repository is checked out at the PR head
+
+            **CRITICAL: File Reading Strategy**
+            - Read pr-diff.txt first to see what changed
+            - Use Grep for searching large files (>1000 lines)
+            - Use Read with offset/limit for specific sections
+            - Focus on changed code, not entire files
 
             **When to provide suggested changes:**
             - User explicitly asks you to fix something (e.g., "@claude fix the formatting")
@@ -316,7 +331,7 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          max_turns: 10
+          max_turns: 30
           model: claude-opus-4-5-20251101
           custom_instructions: |
             You are GAIA's helpful AI assistant. Follow the Issue Response Guidelines in CLAUDE.md.
@@ -326,6 +341,22 @@ jobs:
             - If responding to an issue: Follow the Issue Response Protocol below
 
             ## For PR Conversation Comments
+
+            **CRITICAL: Handling Large Files**
+            - **NEVER** read entire large files (>1000 lines). You will hit token limits and fail.
+            - For large files like cli.py:
+              1. Use Grep to search for specific changes: `grep -C 10 "pattern" file.py`
+              2. Use Read with offset/limit for specific sections
+              3. Focus on changed sections shown in pr-diff.txt
+            - **ALWAYS** read pr-diff.txt first to see what actually changed
+            - Only read full files if they are small (<500 lines)
+
+            **Review Approach:**
+            1. Read pr-diff.txt and pr-files.txt first
+            2. Focus review on changed lines, not entire files
+            3. Use grep to search for patterns, imports, related code
+            4. Read small files completely, large files selectively
+            5. Provide review once you've analyzed all changes (don't stop early)
 
             When responding to questions in PR conversation (not line-specific review comments):
             - **IMPORTANT:** Read pr-diff.txt to see the full diff of changes in this PR
