@@ -79,6 +79,16 @@ ci-cd:
   - changed-files:
     - any-glob-to-any-file: ['.github/workflows/**/*']
 
+# DevOps changes (anything in .github)
+devops:
+  - changed-files:
+    - any-glob-to-any-file: ['.github/**/*']
+
+# CLI changes
+cli:
+  - changed-files:
+    - any-glob-to-any-file: ['src/gaia/cli.py', 'docs/reference/cli.md']
+
 # Installer changes
 installer:
   - changed-files:
