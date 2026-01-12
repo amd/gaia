@@ -12,15 +12,6 @@ GAIA (Generative AI Is Awesome) is AMD's open-source framework for running gener
 - SDK Reference: https://amd-gaia.ai/sdk
 - Guides: https://amd-gaia.ai/guides
 
-## File Headers
-
-**IMPORTANT: All new files created in this project MUST start with the following copyright header (using appropriate comment syntax for the file type):**
-
-```
-Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
-SPDX-License-Identifier: MIT
-```
-
 ## Version Control Guidelines
 
 ### Repository Structure
@@ -204,7 +195,6 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 
 7. **Follow contribution guidelines:**
    - Reference [`CONTRIBUTING.md`](CONTRIBUTING.md) for code standards
-   - Ensure AMD copyright headers on new files
    - Point to [`docs/reference/dev.md`](docs/reference/dev.md) for development workflow
 
 ### Response Quality Guidelines
