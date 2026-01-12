@@ -288,6 +288,24 @@
             ]
           }
         ]
+      },
+      {
+        "tab": "Roadmap",
+        "groups": [
+          {
+            "group": "What's Next",
+            "pages": [
+              "roadmap"
+            ]
+          },
+          {
+            "group": "Plans",
+            "pages": [
+              "plans/installer",
+              "plans/chat-ui"
+            ]
+          }
+        ]
       }
     ],
     "global": {
