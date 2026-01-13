@@ -1,4 +1,4 @@
-# Performance Analysis Plotter
+# Performance Visualizer
 
 Generate plots of llama.cpp telemetry from one or more server log files. The script pulls prompt tokens (`n_prompt_tokens`), input tokens, output tokens, TTFT, TPS, and an aggregate prefill vs decode time split, producing one line per log file for each metric.
 
