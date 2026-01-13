@@ -52,7 +52,7 @@ gaia eval fix-code \
 gaia eval fix-code \
     off_by_one_bug/off_by_one_bug.py \
     "This is resulting in 10 but the correct answer is 15. Analyze and fix what is wrong." \
-    off_by_one_bug/off_by_one_bug.py \
+    off_by_one_bug/off_by_one_bug_fixed.py \
     --use-edit-file
 ```
 
@@ -69,7 +69,7 @@ gaia eval fix-code \
 
 The tool displays the prompt sent to the model, the raw response, and a diff showing the fix:
 
-```
+````text
 === Prompt ===
 Fix the following Python code error:
 File path: off_by_one_bug/off_by_one_bug.py
@@ -118,7 +118,7 @@ print(f"Sum through 5: {sum_first_n(5)}")
 +    for i in range(n + 1):
          total += i
      return total
-```
+````
 
 Testing if a model can fix a variable name typo:
 
