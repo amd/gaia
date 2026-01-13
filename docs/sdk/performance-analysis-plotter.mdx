@@ -1,0 +1,58 @@
+# Performance Analysis Plotter
+
+Visualize llama.cpp telemetry by turning one or more server logs into plots for prompt tokens, input tokens, output tokens, time-to-first-token (TTFT), tokens-per-second (TPS), and a prefill vs decode time split.
+
+---
+
+## Requirements
+
+- Python 3.8+
+- `matplotlib` (`pip install matplotlib`)
+
+---
+
+## Run the Plotter (GAIA CLI)
+
+```bash
+gaia perf-vis <log_file> [<log_file> ...]
+```
+
+- Pass multiple log files to compare runs; each plot adds one line per log with a legend.
+
+---
+
+## Collecting llama.cpp Logs
+
+The script expects llama.cpp server logs. With [Lemonade](https://lemonade-server.ai/), you can capture telemetry like this:
+
+```bash
+lemonade-server serve --ctx-size 32768 2>&1 | tee agent.log
+gaia perf-vis agent.log
+```
+
+---
+
+## Outputs
+
+Images are written to the directory where you run the script:
+
+- `prompt_token_counts.png` — prompt token totals per call
+- `input_token_counts.png` — input token counts
+- `output_token_counts.png` — output token counts
+- `ttft_seconds.png` — time to first token
+- `tps.png` — tokens per second
+- `prefill_decode_split.png` — one pie per log showing prefill (TTFT) vs decode (output tokens / TPS) time
+
+When multiple logs are provided, every plot includes one line/pie per log plus legends mapping each series to its log filename.
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>
