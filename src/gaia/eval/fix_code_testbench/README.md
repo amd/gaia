@@ -162,14 +162,14 @@ Sometimes, the agent does not split the errors into multiple different tool call
 gaia eval fix-code \
     examples/workout_web_app_component/WorkoutForm.tsx \
     "src/components/WorkoutForm.tsx:33:21 - error TS7053: Element implicitly has an 'any' type because expression of type 'string' can't be used to index type '{ name: string; duration: number; date: string; goal: string; }'. No index signature with a parameter of type 'string' was found on type '{ name: string; duration: number; date: string; goal: string; }'. 33  const value = normalized[field]; src/components/WorkoutForm.tsx:43:9 - error TS2322: Type 'string' is not assignable to type 'never'. 43 normalized[field as keyof typeof normalized] = parsedValue.toISOString()" \
-    ../../../../web-dev-test/workout/src/components/WorkoutForm.tsx
+    examples/workout_web_app_component/WorkoutForm-new.tsx
 ``` 
 
 This will produce the following diff which does not fix the issue:
 
 ```
 --- examples/workout_web_app_component/WorkoutForm.tsx:1-184
-+++ ../../../../web-dev-test/workout/src/components/WorkoutForm.tsx:1-184                                                                                                                                                                                                                                                                                                      
++++ examples/workout_web_app_component/WorkoutForm-new.tsx:1-184                                                                                                                                                                                                                                                                                                      
 @@ -40,7 +40,7 @@                                                                                                                                                                                                                                                                                                             
        const parsedValue = new Date(value as string | number | Date);
        if (!Number.isNaN(parsedValue.getTime())) {
@@ -187,7 +187,7 @@ Another failure mode was not providing enough specific information to the agent.
 gaia eval fix-code \
     examples/workout_web_app_component/WorkoutForm.tsx \
     "src/components/WorkoutForm.tsx:43:9 - error TS2322: Type 'string' is not assignable to type 'never'. " \
-    ../../../../web-dev-test/workout/src/components/WorkoutForm.tsx
+    examples/workout_web_app_component/WorkoutForm-new.tsx
 ```
 
 This results in no diff created, presumably as the agent is not able to identify the failing line.
@@ -200,7 +200,7 @@ We can recreate what would happen if we avoid the two previous failure modes whi
 gaia eval fix-code \
     examples/workout_web_app_component/WorkoutForm.tsx \
     "src/components/WorkoutForm.tsx:43:9 - error TS2322: Type 'string' is not assignable to type 'never'. 43 normalized[field as keyof typeof normalized] = parsedValue.toISOString();" \
-    ../../../../web-dev-test/workout/src/components/WorkoutForm.tsx
+    examples/workout_web_app_component/WorkoutForm-new.tsx
 ```
 
 This will actually fix the issue ~50% of the time, unfortunately the other ~50% of the time it will create the following diff which does not fix the issue:
@@ -208,7 +208,7 @@ This will actually fix the issue ~50% of the time, unfortunately the other ~50% 
 ```
 === Diff (cleaned vs original) ===
 --- examples/workout_web_app_component/WorkoutForm.tsx:1-184
-+++ ../../../../web-dev-test/workout/src/components/WorkoutForm.tsx:1-184
++++ examples/workout_web_app_component/WorkoutForm-new.tsx:1-184
 @@ -40,7 +40,7 @@
  
        const parsedValue = new Date(value as string | number | Date);
@@ -234,7 +234,7 @@ There is a flag in the testbench called `--use-prompt-engineering` which will ad
 gaia eval fix-code \
     examples/workout_web_app_component/WorkoutForm.tsx \
     "src/components/WorkoutForm.tsx:43:9 - error TS2322: Type 'string' is not assignable to type 'never'. 43 normalized[field as keyof typeof normalized] = parsedValue.toISOString();" \
-    ../../../../web-dev-test/workout/src/components/WorkoutForm.tsx \
+    examples/workout_web_app_component/WorkoutForm-new.tsx \
     --use-prompt-engineering
 ```
 
@@ -246,7 +246,7 @@ Alternatively, the same correct solution can be achieved by focusing the model o
 gaia eval fix-code \
     examples/workout_web_app_component/WorkoutForm.tsx \
     "src/components/WorkoutForm.tsx:43:9 - error TS2322: Type 'string' is not assignable to type 'never'. 43 normalized[field as keyof typeof normalized] = parsedValue.toISOString();" \
-    ../../../../web-dev-test/workout/src/components/WorkoutForm.tsx \
+    examples/workout_web_app_component/WorkoutForm-new.tsx \
     --start-line 35 \
     --end-line 45
 ```
@@ -256,7 +256,7 @@ Both approaches produce the same correct diff:
 ```
 === Diff (cleaned vs original) ===
 --- examples/workout_web_app_component/WorkoutForm.tsx:1-181
-+++ ../../../../web-dev-test/workout/src/components/WorkoutForm.tsx:1-181
++++ examples/workout_web_app_component/WorkoutForm-new.tsx:1-181
 @@ -37,7 +37,7 @@
  
        const parsedValue = new Date(value as string | number | Date);
