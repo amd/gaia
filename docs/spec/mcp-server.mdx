@@ -432,22 +432,6 @@ python -m gaia.mcp.start_docker_mcp --port 8080 --verbose
 
 ---
 
-## Acceptance Criteria
-
-- [ ] AgentMCPServer wraps any MCPAgent subclass
-- [ ] Tools registered dynamically from agent
-- [ ] Streamable HTTP transport works (POST + SSE)
-- [ ] VSCode kwargs wrapper handled correctly
-- [ ] Parameter name variations mapped (app_dir → appPath)
-- [ ] Verbose logging shows all transformations
-- [ ] Startup banner displays correctly
-- [ ] Server stops gracefully on Ctrl+C
-- [ ] Multiple agents can run on different ports
-- [ ] Error handling returns structured responses
-- [ ] Tests pass
-
----
-
 ## Related Specifications
 
 - [agent-base](/spec/agent-base) - MCPAgent interface
