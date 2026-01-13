@@ -27,9 +27,9 @@ gaia eval fix-code path/to/buggy_file.py "Error message" output.py
 
 ```
 gaia eval fix-code \
-    mispelled_variable/mispelled_variable.py \
+    examples/average-calc.py \
     "NameError: name 'number' is not defined" \
-    mispelled_variable/mispelled_variable_fixed.py \
+    examples/average-calc-fixed.py \
     --model Qwen3-Coder-30B-A3B-Instruct-GGUF
 ```
 
@@ -40,9 +40,9 @@ All of the script flags (`--use-claude`, `--use-edit-file`, `--context`, `--star
 ```bash
 export ANTHROPIC_API_KEY=your_key_here
 gaia eval fix-code \
-    missing_return_bug/missing_return_bug.py \
+    examples/max-value.py \
     "TypeError: 'NoneType' object is not callable" \
-    missing_return_bug/missing_return_bug_fixed.py \
+    examples/max-value-fixed.py \
     --use-claude
 ```
 
@@ -50,9 +50,9 @@ gaia eval fix-code \
 
 ```bash
 gaia eval fix-code \
-    off_by_one_bug/off_by_one_bug.py \
+    examples/sum.py \
     "This is resulting in 10 but the correct answer is 15. Analyze and fix what is wrong." \
-    off_by_one_bug/off_by_one_bug_fixed.py \
+    examples/sum-fixed.py \
     --use-edit-file
 ```
 
@@ -62,9 +62,9 @@ Testing if a model can fix a simple off-by-one error:
 
 ```bash
 gaia eval fix-code \
-    off_by_one_bug/off_by_one_bug.py \
+    examples/sum.py \
     "This is resulting in 10 but the correct answer is 15. Analyze and fix what is wrong." \
-    off_by_one_bug/off_by_one_bug_fixed.py
+    examples/sum-fixed.py
 ```
 
 The tool displays the prompt sent to the model, the raw response, and a diff showing the fix:
@@ -72,7 +72,7 @@ The tool displays the prompt sent to the model, the raw response, and a diff sho
 ````text
 === Prompt ===
 Fix the following Python code error:
-File path: off_by_one_bug/off_by_one_bug.py
+File path: examples/sum.py
 Error: This is resulting in 10 but the correct answer is 15. Analyze and fix what is wrong.
 Code:
 
@@ -108,8 +108,8 @@ print(f"Sum through 5: {sum(5)}")
 
 === Diff (cleaned vs original) ===
 
---- off_by_one_bug/off_by_one_bug.py:1-13\
-+++ off_by_one_bug/off_by_one_bug_fixed.py:1-13
+--- examples/sum.py:1-16\
++++ examples/sum-fixed.py:1-16
 @@ -5,7 +5,7 @@
      if n < 0:
          raise ValueError("n must be non-negative")
@@ -124,9 +124,9 @@ Testing if a model can fix a variable name typo:
 
 ```bash
 gaia eval fix-code \
-    mispelled_variable/mispelled_variable.py \
-    "File \"/scratch/eddier/gaia/util/fix_code_testbench/mispelled_variable/mispelled_variable.py\", line 12, in <module>" \
-    mispelled_variable/mispelled_variable_fix.py
+    examples/average-calc.py \
+    "File \"/scratch/eddier/gaia/src/gaia/eval/fix_code_testbench/examples/average-calc.py\", line 16, in <module>" \
+    examples/average-calc-fixed.py
 ```
 
 This tests the model's ability to identify and fix a simple typo where `number` is used instead of `numbers` on line 12.
@@ -287,10 +287,10 @@ This demonstrates how the testbench enables experimentation with different promp
 ## Test Cases
 
 The directory includes example bug scenarios:
-- `mispelled_variable/`: Variable name typo
-- `missing_return_bug/`: Function missing return statement
+- `examples/average-calc.py`: Variable name typo
+- `examples/max-value.py`: Function missing return statement
 - `mutable_default_argument_bug/`: Mutable default argument issue
-- `off_by_one_bug/`: Off-by-one loop error
+- `examples/sum.py`: Off-by-one loop error
 
 ## Requirements
 
