@@ -72,13 +72,14 @@
       "WebFetch",
       "WebFetch(domain:code.claude.com)",
       "WebFetch(domain:lemonade-server.ai)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": []
   },
   "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "github"
-  ],
-  "hooks": {}
+  ]
 }

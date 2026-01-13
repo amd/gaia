@@ -1339,29 +1339,6 @@ client = create_client(use_claude=True)
 
 ---
 
-## Acceptance Criteria
-
-- [ ] `create_client()` factory implemented in `src/gaia/llm/factory.py`
-- [ ] `LLMClient` ABC implemented in `src/gaia/llm/base_client.py`
-- [ ] `NotSupportedError` implemented in `src/gaia/llm/exceptions.py`
-- [ ] `LemonadeProvider` implements all methods (generate, chat, embed, vision, get_performance_stats, load_model, unload_model)
-- [ ] `OpenAIProvider` implements generate, chat, embed
-- [ ] `ClaudeProvider` implements generate, chat, vision
-- [ ] Unsupported methods raise `NotSupportedError` with clear messages
-- [ ] Backward-compatible `use_claude=True` and `use_openai=True` flags work
-- [ ] Provider name property returns correct string for each provider
-- [ ] Streaming works for all providers' supported methods
-- [ ] Factory validates provider names (case-insensitive)
-- [ ] Factory raises ValueError when both flags are True
-- [ ] All unit tests pass (20+ tests covering factory, ABC, providers, NotSupportedError)
-- [ ] Integration tests pass with live Lemonade server
-- [ ] Error messages are helpful and indicate provider capabilities
-- [ ] Can import: `from gaia.llm import create_client, LLMClient, NotSupportedError`
-- [ ] Documented in SDK.md
-- [ ] Example code works
-
----
-
 *LLMClient Technical Specification*
 
 ---

@@ -31,7 +31,7 @@ jobs:
     uses: ./.github/workflows/build_installer.yml
 
   gaia-hybrid-local-tests:
-    runs-on: [stx, miniforge]
+    runs-on: [stx]
     needs: build-installer
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
