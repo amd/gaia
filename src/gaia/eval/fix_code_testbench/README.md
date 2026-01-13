@@ -142,7 +142,7 @@ gaia eval fix-code \
 
 This tests the model's ability to recognize and fix the common Python anti-pattern where a mutable default argument (like a list) is shared across function calls.
 
-### Real-World Use Case: TypeScript Type InfereOnly error 
+### Real-World Use Case: TypeScript Type Error 
 
 In an earlier version of the web dev agent, we were creating web apps that failed TypeScript validation. For example, the `workout_web_app_component/WorkoutForm.tsx` component had a TypeScript error that could be discovered when running TypeScript validation:
 
