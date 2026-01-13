@@ -32,30 +32,36 @@ The routing agent solves these problems by:
 
 ## How It Works
 
-```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│ User Request    │────▶│  Routing Agent   │────▶│ Specialized     │
-│ "Create todo    │     │  - Analyzes query│     │ Agent           │
-│  backend app"   │     │  - Detects lang  │     │ (CodeAgent)     │
-└─────────────────┘     │  - Asks if needed│     │ Configured with │
-                        └──────────────────┘     │ language=TS     │
-                                │                │ project_type=BE │
-                                │                └─────────────────┘
-                        ┌───────▼────────┐
-                        │ If Uncertain:  │
-                        │ "What language/│
-                        │  framework?"   │
-                        └────────────────┘
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+flowchart LR
+    A[/"REQUEST"/] --> B(["ANALYZE"])
+    B --> C{"CONFIDENT?"}
+    C -->|Yes| D(["ROUTE"])
+    C -->|No| E[/"CLARIFY"/]
+    E --> B
+
+    style A fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
+    style B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style C fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    style D fill:#28a745,stroke:#1e7e34,stroke-width:2px,color:#fff
+    style E fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+
+    linkStyle 0,1,2 stroke:#ED1C24,stroke-width:2px
+    linkStyle 3,4 stroke:#F4484D,stroke-width:2px,stroke-dasharray:5
 ```
 
-The routing agent:
-1. Analyzes the user's request using an LLM
-2. Detects programming language (TypeScript, Python) and project type (frontend, backend, fullstack)
-3. Checks confidence level (must be ≥0.9 to proceed)
-4. If uncertain, asks a clarifying question
-5. Incorporates the user's response into the conversation history
-6. Re-analyzes with the enriched context
-7. Once confident, creates the specialized agent with the correct configuration
+| Step | Description | Example |
+|------|-------------|---------|
+| **REQUEST** | User submits a natural language request | `"Create a todo backend app"` |
+| **ANALYZE** | LLM detects language (TypeScript, Python) and project type (frontend, backend, fullstack) | Detects: backend project, needs framework clarification |
+| **CONFIDENT?** | Checks if confidence ≥ 0.9 to proceed | Confidence: 0.6 → too low, needs clarification |
+| **CLARIFY** | Asks user for missing information, then re-analyzes with enriched context | `"What framework? (Express, Django, FastAPI)"` |
+| **ROUTE** | Creates specialized agent with the detected configuration | `CodeAgent(language=TypeScript, project_type=backend)` |
+
+<Note>
+The **CLARIFY → ANALYZE** loop can repeat multiple times until the agent reaches high confidence. Each user response is incorporated into the conversation history before re-analysis.
+</Note>
 
 ## Quick Start
 
