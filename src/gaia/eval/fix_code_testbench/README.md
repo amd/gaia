@@ -135,9 +135,9 @@ Testing if a model can fix a mutable default argument bug:
 
 ```bash
 gaia eval fix-code \
-    mutable_default_argument_bug/mutable_default_argument_bug.py \
+    examples/append.py \
     "Default list is shared across calls. Fix this." \
-    mutable_default_argument_bug/mutable_default_argument_bug_fixed.py
+    examples/append-fixed.py
 ```
 
 This tests the model's ability to recognize and fix the common Python anti-pattern where a mutable default argument (like a list) is shared across function calls.
@@ -289,7 +289,7 @@ This demonstrates how the testbench enables experimentation with different promp
 The directory includes example bug scenarios:
 - `examples/average-calc.py`: Variable name typo
 - `examples/max-value.py`: Function missing return statement
-- `mutable_default_argument_bug/`: Mutable default argument issue
+- `examples/append.py`: Mutable default argument issue
 - `examples/sum.py`: Off-by-one loop error
 
 ## Requirements
