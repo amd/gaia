@@ -8,12 +8,19 @@
 name: Summarizer Agent Tests (Windows)
 
 on:
-  workflow_call:
   push:
-    branches: [ main ]
+    branches: ["main"]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "setup.py"
   pull_request:
-    branches: [ main ]
+    branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "setup.py"
   merge_group:
   workflow_dispatch:
 
@@ -21,28 +28,30 @@ permissions:
   contents: read
 
 jobs:
-  test-summarizer:
-    name: Test Summarizer Agent on Windows
-    runs-on: [stx]
+  test-summarizer-windows:
+    name: Test Summarizer on Windows (Lemonade Integration)
+    runs-on: [stx, miniforge]
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
-
-      - name: Setup Python environment
-        uses: ./.github/actions/setup-venv
-        with:
-          python-version: '3.12'
-          install-package: '.[dev,rag]'
-          extra-index-url: 'https://download.pytorch.org/whl/cpu'
-
-      - name: Install additional dependencies
-        shell: powershell
+      - name: Download and Install Miniforge
         run: |
-          uv pip install reportlab pillow --python .venv\Scripts\python.exe
+          Invoke-WebRequest -Uri "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Windows-x86_64.exe" -OutFile "miniforge3.exe"
+          Start-Process -FilePath "miniforge3.exe" -ArgumentList "/S", "/D=$env:GITHUB_WORKSPACE\miniforge3" -Wait
+
+      - name: Initialize Conda
+        run: |
+          Write-Host "Step 1: Get conda path"
+          $condaPath = "$env:GITHUB_WORKSPACE\miniforge3"
+          $env:Path = "$condaPath;$condaPath\Scripts;$env:Path"
+
+          Write-Host "Step 2: Initialize conda for both shells"
+          & "$condaPath\Scripts\conda.exe" init powershell
+          & "$condaPath\Scripts\conda.exe" init cmd.exe
+
+          Write-Host "Step 3: Create the environment at system level"
+          & "$condaPath\Scripts\conda.exe" create -n gaiaenv python=3.10 -y
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
@@ -141,7 +150,7 @@ jobs:
           call "%GITHUB_WORKSPACE%\miniforge3\Scripts\activate.bat" gaiaenv
 
           echo ================================================================
-          echo           SUMARIZER INTEGRATION TESTS WITH LEMONADE SERVER
+          echo           SUMMARIZER INTEGRATION TESTS WITH LEMONADE SERVER
           echo ================================================================
           echo Testing real LLM integration with running Lemonade server
           echo.
