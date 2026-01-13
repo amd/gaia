@@ -25,6 +25,7 @@ gaia eval fix-code path/to/buggy_file.py "Error message" output.py
 
 ### With Local Model
 
+```
 gaia eval fix-code \
     mispelled_variable/mispelled_variable.py \
     "NameError: name 'number' is not defined" \
