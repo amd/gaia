@@ -26,7 +26,6 @@ icon: "sitemap"
 
 ## System Architecture
 
-<Frame>
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
@@ -45,7 +44,6 @@ flowchart TD
 
     linkStyle 0,1,2,3,4 stroke:#ED1C24,stroke-width:2px
 ```
-</Frame>
 
 ### Component Overview
 
@@ -424,7 +422,6 @@ A form with 15 fields and ~300 characters:
 
 The Medical Intake Agent combines three GAIA mixins.
 
-<Frame>
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 classDiagram
@@ -457,7 +454,6 @@ classDiagram
     FileWatcherMixin <|-- MedicalIntakeAgent
     DatabaseMixin <|-- MedicalIntakeAgent
 ```
-</Frame>
 
 ### Mixin Responsibilities
 
