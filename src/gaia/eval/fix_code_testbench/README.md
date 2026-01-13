@@ -79,7 +79,7 @@ Code:
 ```python
 
 """Compute a numeric series."""
-def sum_first_n(n):
+def sum(n):
     if n < 0:
         raise ValueError("n must be non-negative")
     total = 0
@@ -87,7 +87,7 @@ def sum_first_n(n):
         total += i
     return total
 
-print(f"Sum through 5: {sum_first_n(5)}")
+print(f"Sum through 5: {sum(5)}")
 ```
 
 Return ONLY the corrected code, no explanations.
@@ -96,14 +96,14 @@ Return ONLY the corrected code, no explanations.
 
 ```python
 """Compute a numeric series."""
-def sum_first_n(n):
+def sum(n):
     if n < 0:
         raise ValueError("n must be non-negative")
     total = 0
     for i in range(n + 1):
         total += i
     return total
-print(f"Sum through 5: {sum_first_n(5)}")
+print(f"Sum through 5: {sum(5)}")
 ```
 
 === Diff (cleaned vs original) ===
