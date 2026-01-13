@@ -1597,7 +1597,7 @@ Examples:
         epilog="""
 Examples:
   # Run fix_code testbench with local Lemonade model
-  gaia eval fix-code src/gaia/eval/fix_code_testbench/util/fix_code_testbench/off_by_one_bug/off_by_one_bug.py \\
+  gaia eval fix-code src/gaia/eval/fix_code_testbench/off_by_one_bug/off_by_one_bug.py \\
       "Loop stops too early" \\
       output/off_by_one_bug_fixed.py \\
       --model Qwen3-Coder-30B-A3B-Instruct-GGUF
