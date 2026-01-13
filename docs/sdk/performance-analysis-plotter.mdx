@@ -11,15 +11,13 @@ Visualize llama.cpp telemetry by turning one or more server logs into plots for 
 
 ---
 
-## Run the Plotter
+## Run the Plotter (GAIA CLI)
 
 ```bash
-cd util/token-and-performance-script
-pip install matplotlib  # if not already installed
-python perf_analysis.py <log_file> [<log_file> ...]
+gaia perf-vis <log_file> [<log_file> ...]
 ```
 
-- You can pass multiple log files; each plot adds one line per log with a legend.
+- Pass multiple log files to compare runs; each plot adds one line per log with a legend.
 
 ---
 
@@ -29,7 +27,7 @@ The script expects llama.cpp server logs. With [Lemonade](https://lemonade-serve
 
 ```bash
 lemonade-server serve --ctx-size 32768 2>&1 | tee agent.log
-python perf_analysis.py agent.log
+gaia perf-vis agent.log
 ```
 
 ---

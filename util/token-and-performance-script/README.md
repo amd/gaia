@@ -16,6 +16,12 @@ python perf_analysis.py [--show] <log_file> [<log_file> ...]
 - All plots are generated: prompt tokens, input tokens, output tokens, TTFT, TPS, and a prefill vs decode pie chart.
 - `--show` — display plots interactively in addition to saving images.
 
+You can also run the same visualizer directly from the GAIA CLI:
+
+```bash
+gaia perf-vis <log_file> [<log_file> ...]
+```
+
 ## Getting llama.cpp logs
 
 The script expects llama.cpp server logs. You can collect them from [Lemonade](https://lemonade-server.ai/) by running:
