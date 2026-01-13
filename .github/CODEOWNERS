@@ -1,0 +1,31 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# CODEOWNERS file for GAIA repository
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default reviewer for all files
+* @kovtcharov-amd
+
+# Core agent system
+src/gaia/agents/ @kovtcharov-amd
+
+# MCP integration
+src/gaia/mcp/ @kovtcharov-amd
+
+# Documentation
+docs/ @kovtcharov-amd
+*.md @kovtcharov-amd
+CLAUDE.md @kovtcharov-amd
+
+# CI/CD workflows
+.github/workflows/ @kovtcharov-amd
+
+# Installer & packaging
+installer/ @kovtcharov-amd
+docs/deployment/ @kovtcharov-amd
+
+# Security-sensitive files
+src/gaia/llm/ @kovtcharov-amd
+docs/sdk/security.md @kovtcharov-amd
+.github/workflows/test_security.yml @kovtcharov-amd
