@@ -1,0 +1,485 @@
+---
+title: "GAIA SDK Component Status"
+description: "Implementation status and readiness tracking for all GAIA SDK components"
+icon: "chart-line"
+---
+
+<Info>
+**Last Updated:** December 10, 2025
+**Version:** v1.0.0 (in development)
+**Strategy:** All components marked as "In Development" until exhaustive testing validates them
+</Info>
+
+---
+
+## Status Definitions
+
+<CardGroup cols={2}>
+  <Card title="Available" icon="circle-check" color="#10b981">
+    **Implemented, tested, and production-ready**
+
+    Promoted after passing all SDK tests and successful use in external agents
+  </Card>
+
+  <Card title="Beta" icon="flask" color="#eab308">
+    **Implemented but may have limitations**
+
+    Basic tests pass, known limitations documented
+  </Card>
+
+  <Card title="In Development" icon="code" color="#f97316">
+    **Code exists, testing in progress**
+
+    Default status until validation is complete
+  </Card>
+
+  <Card title="Planned" icon="calendar" color="#3b82f6">
+    **Designed but not yet implemented**
+
+    Spec exists, implementation not started
+  </Card>
+</CardGroup>
+
+<Card title="Future" icon="lightbulb" color="#6b7280">
+  **Under consideration for future versions**
+
+  Idea stage, no spec yet
+</Card>
+
+---
+
+## Component Status Strategy for v1.0.0
+
+<Note>
+**Approach:** Conservative status labeling to ensure quality and reliability
+</Note>
+
+<Steps>
+  <Step title="In Development (Default)">
+    All components start with "In Development" status
+  </Step>
+
+  <Step title="Promote to Beta">
+    Requirements:
+    - SDK interface tests pass
+    - Basic functionality validated
+    - Known limitations documented
+  </Step>
+
+  <Step title="Promote to Available">
+    Requirements:
+    - Comprehensive testing complete
+    - Used successfully in external agent (e.g., EMR agent)
+    - No known critical issues
+  </Step>
+
+  <Step title="Mark as Planned">
+    Criteria:
+    - Spec exists but implementation not started
+    - Example: DatabaseMixin (Issue #1) before implementation
+  </Step>
+</Steps>
+
+---
+
+## Core Agent System
+
+<CardGroup cols={1}>
+  <Card title="Agent Base Class" icon="robot" href="./agent-base">
+    <Badge variant="success">Available</Badge>
+
+    Core framework for all GAIA agents
+
+    [View Specification →](./agent-base)
+  </Card>
+
+  <Card title="@tool Decorator" icon="wrench" href="./tool-decorator">
+    <Badge variant="success">Available</Badge>
+
+    Tool registration system
+
+    [View Specification →](./tool-decorator)
+  </Card>
+
+  <Card title="AgentConsole" icon="terminal" href="./console">
+    <Badge variant="success">Available</Badge>
+
+    Rich CLI output with formatting
+
+    [View Specification →](./console)
+  </Card>
+
+  <Card title="SilentConsole" icon="volume-xmark" href="./console">
+    <Badge variant="success">Available</Badge>
+
+    Silent mode for API usage
+
+    [View Specification →](./console)
+  </Card>
+
+  <Card title="ApiAgent" icon="plug" href="./api-agent">
+    <Badge variant="success">Available</Badge>
+
+    OpenAI-compatible API exposure
+
+    [View Specification →](./api-agent)
+  </Card>
+
+  <Card title="MCPAgent" icon="arrows-split-up-and-left" href="./mcp-agent">
+    <Badge variant="success">Available</Badge>
+
+    Model Context Protocol integration
+
+    [View Specification →](./mcp-agent)
+  </Card>
+
+  <Card title="DatabaseMixin" icon="database" href="./database-mixin">
+    <Badge variant="info">Planned</Badge>
+
+    Database operations for agents - **Issue #1**
+
+    [View Specification →](./database-mixin)
+  </Card>
+
+  <Card title="RoutingAgent" icon="route" href="./routing-agent">
+    <Badge variant="warning">In Development</Badge>
+
+    Multi-agent routing and orchestration
+
+    [View Specification →](./routing-agent)
+  </Card>
+</CardGroup>
+
+---
+
+## Chat & LLM
+
+<Tabs>
+  <Tab title="Chat SDK">
+    <Card title="ChatSDK" icon="comments" href="./chat-sdk">
+      <Badge variant="success">Available</Badge>
+
+      Conversation management with memory
+
+      [View Specification →](./chat-sdk)
+    </Card>
+
+    <Card title="ChatConfig" icon="gear" href="./chat-sdk">
+      <Badge variant="success">Available</Badge>
+
+      Configuration for chat sessions
+
+      [View Specification →](./chat-sdk)
+    </Card>
+
+    <Card title="quick_chat" icon="bolt" href="./chat-sdk">
+      <Badge variant="success">Available</Badge>
+
+      One-off chat function
+
+      [View Specification →](./chat-sdk)
+    </Card>
+  </Tab>
+
+  <Tab title="LLM Clients">
+    <Card title="LLMClient" icon="brain" href="./llm-client">
+      <Badge variant="success">Available</Badge>
+
+      Unified interface for LLM backends
+
+      [View Specification →](./llm-client)
+    </Card>
+
+    <Card title="VLMClient" icon="eye" href="./vlm-client">
+      <Badge variant="warning">Beta</Badge>
+
+      Vision-language models (model availability varies)
+
+      [View Specification →](./vlm-client)
+    </Card>
+  </Tab>
+</Tabs>
+
+---
+
+## RAG (Document Q&A)
+
+<CardGroup cols={3}>
+  <Card title="RAGSDK" icon="book-open" href="./rag-sdk">
+    <Badge variant="success">Available</Badge>
+
+    PDF indexing and question answering
+  </Card>
+
+  <Card title="RAGConfig" icon="sliders" href="./rag-sdk">
+    <Badge variant="success">Available</Badge>
+
+    RAG system configuration
+  </Card>
+
+  <Card title="quick_rag" icon="bolt" href="./rag-sdk">
+    <Badge variant="success">Available</Badge>
+
+    One-off RAG queries
+  </Card>
+</CardGroup>
+
+---
+
+## Audio & Voice
+
+<CardGroup cols={3}>
+  <Card title="AudioClient" icon="microphone" href="./audio-client">
+    <Badge variant="success">Available</Badge>
+
+    Complete voice interaction system
+  </Card>
+
+  <Card title="WhisperAsr" icon="waveform-lines" href="./audio-client">
+    <Badge variant="success">Available</Badge>
+
+    Speech-to-text with Whisper
+  </Card>
+
+  <Card title="KokoroTTS" icon="volume-high" href="./audio-client">
+    <Badge variant="success">Available</Badge>
+
+    High-quality text-to-speech
+  </Card>
+</CardGroup>
+
+---
+
+## API Server
+
+<CardGroup cols={3}>
+  <Card title="create_openai_app" icon="server" href="./api-server">
+    <Badge variant="success">Available</Badge>
+
+    FastAPI server generator
+  </Card>
+
+  <Card title="SSEOutputHandler" icon="stream" href="./api-server">
+    <Badge variant="success">Available</Badge>
+
+    Server-sent events streaming
+  </Card>
+
+  <Card title="API Schemas" icon="file-code" href="./api-server">
+    <Badge variant="success">Available</Badge>
+
+    Pydantic models for OpenAI API
+  </Card>
+</CardGroup>
+
+---
+
+## MCP Integration
+
+<CardGroup cols={2}>
+  <Card title="MCPAgent" icon="sitemap" href="./mcp-agent">
+    <Badge variant="success">Available</Badge>
+
+    MCP protocol base class
+
+    [View Specification →](./mcp-agent)
+  </Card>
+
+  <Card title="AgentMCPServer" icon="network-wired" href="./mcp-server">
+    <Badge variant="success">Available</Badge>
+
+    MCP server implementation
+
+    [View Specification →](./mcp-server)
+  </Card>
+</CardGroup>
+
+---
+
+## Plugin System
+
+<Note>
+Plugin system is designed and specified, implementation planned
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="AgentRegistry" icon="list" href="./plugin-registry">
+    <Badge variant="info">Planned</Badge>
+
+    Dynamic agent discovery - **Issue #4**
+  </Card>
+
+  <Card title="get_registry" icon="magnifying-glass" href="./plugin-registry">
+    <Badge variant="info">Planned</Badge>
+
+    Registry accessor function - **Issue #4**
+  </Card>
+</CardGroup>
+
+---
+
+## Testing Utilities
+
+<Warning>
+Testing utilities are being developed to support external agent development
+</Warning>
+
+<CardGroup cols={2}>
+  <Card title="MockLLMProvider" icon="flask-vial" href="./test-utilities">
+    <Badge variant="warning">In Development</Badge>
+
+    Mock LLM for testing - **Issue #9**
+  </Card>
+
+  <Card title="MockVLMClient" icon="image" href="./test-utilities">
+    <Badge variant="warning">In Development</Badge>
+
+    Mock vision model - **Issue #9**
+  </Card>
+
+  <Card title="create_test_agent" icon="robot" href="./test-utilities">
+    <Badge variant="warning">In Development</Badge>
+
+    Test agent factory - **Issue #9**
+  </Card>
+
+  <Card title="temp_database" icon="database" href="./test-utilities">
+    <Badge variant="warning">In Development</Badge>
+
+    Temporary database fixture - **Issue #9**
+  </Card>
+</CardGroup>
+
+---
+
+## Utilities
+
+<CardGroup cols={3}>
+  <Card title="FileChangeHandler" icon="file-clock" href="./file-change-handler">
+    <Badge variant="warning">In Development</Badge>
+
+    File system monitoring - **Issue #2**
+  </Card>
+
+  <Card title="get_logger" icon="file-lines" href="./prompts">
+    <Badge variant="success">Available</Badge>
+
+    Structured logging utility
+  </Card>
+
+  <Card title="PathValidator" icon="shield-check" href="./validators">
+    <Badge variant="success">Available</Badge>
+
+    Path security validation
+  </Card>
+</CardGroup>
+
+---
+
+## Tool Mixins
+
+<Info>
+Tool mixins extend agent capabilities with reusable functionality
+</Info>
+
+<CardGroup cols={2}>
+  <Card title="FileToolsMixin" icon="folder" href="./file-tools-mixin">
+    <Badge variant="success">Available</Badge>
+
+    File read/write operations
+  </Card>
+
+  <Card title="RAGToolsMixin" icon="magnifying-glass-plus" href="./rag-tools-mixin">
+    <Badge variant="success">Available</Badge>
+
+    Document search and retrieval
+  </Card>
+
+  <Card title="ShellToolsMixin" icon="terminal" href="./shell-tools-mixin">
+    <Badge variant="success">Available</Badge>
+
+    Shell command execution
+  </Card>
+
+  <Card title="FileSearchToolsMixin" icon="search" href="./file-search-mixin">
+    <Badge variant="success">Available</Badge>
+
+    Advanced file search capabilities
+  </Card>
+</CardGroup>
+
+---
+
+## Configuration (Future)
+
+<Note>
+Centralized configuration system is planned for a future release
+</Note>
+
+<CardGroup cols={3}>
+  <Card title="GAIAConfig" icon="gear">
+    <Badge variant="info">Planned</Badge>
+
+    Global configuration - **Issue #5**
+  </Card>
+
+  <Card title="get_config" icon="download">
+    <Badge variant="info">Planned</Badge>
+
+    Config getter - **Issue #5**
+  </Card>
+
+  <Card title="set_config" icon="upload">
+    <Badge variant="info">Planned</Badge>
+
+    Config setter - **Issue #5**
+  </Card>
+</CardGroup>
+
+---
+
+## Summary Statistics
+
+<CardGroup cols={4}>
+  <Card title="Available" icon="circle-check" color="#10b981">
+    **28 Components**
+
+    Production-ready
+  </Card>
+
+  <Card title="Beta" icon="flask" color="#eab308">
+    **1 Component**
+
+    Limited testing
+  </Card>
+
+  <Card title="In Development" icon="code" color="#f97316">
+    **5 Components**
+
+    Active work
+  </Card>
+
+  <Card title="Planned" icon="calendar" color="#3b82f6">
+    **6 Components**
+
+    Future releases
+  </Card>
+</CardGroup>
+
+---
+
+<Note>
+Component Status Reference - Last Updated: December 2025
+</Note>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

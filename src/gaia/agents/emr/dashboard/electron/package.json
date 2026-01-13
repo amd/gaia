@@ -1,0 +1,16 @@
+{
+  "name": "emr-dashboard-electron",
+  "version": "1.0.0",
+  "description": "EMR Dashboard Electron Wrapper",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "start:dev": "GAIA_APP_MODE=development electron ."
+  },
+  "dependencies": {
+    "electron": "^28.0.0"
+  },
+  "devDependencies": {},
+  "author": "AMD",
+  "license": "MIT"
+}

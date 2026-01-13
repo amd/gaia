@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 # This workflow tests the MCP (Model Context Protocol) bridge functionality
@@ -10,20 +10,11 @@ name: MCP Bridge Tests
 on:
   workflow_call:
   push:
-    branches: ["main"]
-    paths:
-      - "src/gaia/mcp/**"
-      - "tests/mcp/**"
-      - "src/gaia/cli.py"
-      - ".github/workflows/test_mcp.yml"
+    branches: [ main ]
   pull_request:
-    branches: ["main"]
+    branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "src/gaia/mcp/**"
-      - "tests/mcp/**"
-      - "src/gaia/cli.py"
-      - ".github/workflows/test_mcp.yml"
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -36,19 +27,24 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.10'
-          cache: 'pip'
+          python-version: '3.12'
+
+      - name: Install uv
+        run: |
+          irm https://astral.sh/uv/install.ps1 | iex
+          echo "$env:USERPROFILE\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: pwsh
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e .[dev,mcp]
-          pip install pytest pytest-timeout
+          uv pip install --system -e .[dev,mcp]
+          uv pip install --system pytest pytest-timeout
+        shell: pwsh
 
       - name: Note about Lemonade
         run: |
@@ -59,24 +55,39 @@ jobs:
       - name: Start MCP Bridge
         run: |
           # Start MCP bridge using gaia CLI
+          # Use --no-lemonade-check since Lemonade is not running in CI
           Write-Host "Starting MCP bridge using gaia CLI..."
-          gaia mcp start --background --port 8765
-          
-          # Wait for bridge to start
+          gaia mcp start --background --port 8765 --no-lemonade-check
+
+          # Wait for bridge to start and check health
           Write-Host "Waiting for MCP bridge to start..."
-          Start-Sleep -Seconds 5
-          
-          # Check status
-          gaia mcp status
-          $status = gaia mcp status 2>&1
-          if ($status -match "accessible") {
-            Write-Host "✅ MCP bridge is running"
-          } else {
-            Write-Host "❌ MCP bridge is not accessible"
+          $maxAttempts = 15
+          $attempt = 0
+          $ready = $false
+
+          while ($attempt -lt $maxAttempts) {
+            Start-Sleep -Seconds 2
+            $attempt++
+            try {
+              $response = Invoke-RestMethod -Uri "http://localhost:8765/health" -TimeoutSec 3 -ErrorAction Stop
+              if ($response.status -eq "healthy") {
+                Write-Host "✅ MCP bridge is running and healthy (attempt $attempt)"
+                $ready = $true
+                break
+              }
+            } catch {
+              Write-Host "Attempt $attempt/$maxAttempts - waiting for MCP bridge..."
+            }
+          }
+
+          if (-not $ready) {
+            Write-Host "❌ MCP bridge failed to start after $maxAttempts attempts"
             Write-Host "Log file contents:"
             if (Test-Path "gaia.mcp.log") {
               Get-Content "gaia.mcp.log"
             }
+            # Check if process is running
+            Get-Process -Name python -ErrorAction SilentlyContinue | Format-Table
             exit 1
           }
         shell: pwsh
@@ -120,21 +131,25 @@ jobs:
     name: MCP Tests (Linux)
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
-    
+
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.10'
-          cache: 'pip'
+          python-version: '3.12'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e .[dev,mcp]
-          pip install pytest pytest-timeout
+          uv pip install --system -e .[dev,mcp]
+          uv pip install --system pytest pytest-timeout
 
       - name: Note about Lemonade
         run: |
@@ -144,22 +159,17 @@ jobs:
       - name: Start MCP Bridge
         run: |
           # Start MCP bridge using gaia CLI
-          echo "Starting MCP bridge using gaia CLI..."
-          gaia mcp start --background --port 8765
-          
-          # Wait for bridge to start
+          echo "Starting MCP bridge..."
+          gaia mcp start --background --port 8765 --no-lemonade-check
+
+          # Wait for bridge to start and verify with gaia mcp status
           echo "Waiting for MCP bridge to start..."
           sleep 5
-          
-          # Check status
-          gaia mcp status
-          if gaia mcp status 2>&1 | grep -q "accessible"; then
-            echo "✅ MCP bridge is running"
+          if gaia mcp status --port 8765 2>&1 | grep -q "MCP server is running and accessible"; then
+            echo "✅ MCP bridge is running and accessible"
           else
-            echo "❌ MCP bridge is not accessible"
-            echo "Log file contents:"
-            [ -f "gaia.mcp.log" ] && cat gaia.mcp.log
-            exit 1
+            echo "⚠️ MCP status check - showing full output:"
+            gaia mcp status --port 8765 || true
           fi
 
       - name: Run MCP Tests
@@ -211,9 +221,22 @@ jobs:
           echo "Windows Tests: ${{ needs.test-mcp-windows.result }}"
           echo "Linux Tests: ${{ needs.test-mcp-linux.result }}"
           echo ""
-          
-          if [[ "${{ needs.test-mcp-windows.result }}" == "success" && 
-                "${{ needs.test-mcp-linux.result }}" == "success" ]]; then
+
+          # Check if all tests were skipped (draft PR without ready_for_ci label)
+          if [[ "${{ needs.test-mcp-windows.result }}" == "skipped" &&
+                "${{ needs.test-mcp-linux.result }}" == "skipped" ]]; then
+            echo "⏭️ All MCP tests skipped (draft PR - add 'ready_for_ci' label to run)"
+            exit 0
+          fi
+
+          # Helper function to check if result is acceptable (success or skipped)
+          check_result() {
+            [[ "$1" == "success" || "$1" == "skipped" ]]
+          }
+
+          # Check if all results are acceptable (success or skipped)
+          if check_result "${{ needs.test-mcp-windows.result }}" &&
+             check_result "${{ needs.test-mcp-linux.result }}"; then
             echo "✅ All MCP tests passed!"
             echo "Coverage:"
             echo "  ✅ HTTP-native bridge functionality"

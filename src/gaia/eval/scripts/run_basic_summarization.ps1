@@ -23,7 +23,6 @@ param (
 ###################################################################################
 
 $basicSummarizationConfig = ".\src\gaia\eval\configs\basic_summarization_lfm2.json"
-$gaiaEnv = "gaiaenv"
 
 $meetingTypes = "standup planning client_call design_review performance_review all_hands budget_planning product_roadmap"
 $countPerType = 3
@@ -39,7 +38,13 @@ if ($test) {
 #
 ###################################################################################
 
-conda activate $gaiaEnv
+# Activate virtual environment (assumes .venv in project root)
+if (Test-Path ".\.venv\Scripts\Activate.ps1") {
+    .\.venv\Scripts\Activate.ps1
+} else {
+    Write-Host "Warning: Virtual environment not found at .\.venv" -ForegroundColor Yellow
+    Write-Host "Please create one with: python -m venv .venv" -ForegroundColor Yellow
+}
 
 if ($generate -Or $all) {
 	# Step 1: Generate synthetic meeting transcripts
@@ -83,4 +88,5 @@ if ($visualize -Or $all) {
 	Invoke-Expression $cmdStr
 }
 
-conda deactivate
+# Deactivate virtual environment
+deactivate

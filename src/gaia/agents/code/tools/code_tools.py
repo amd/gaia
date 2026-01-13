@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """Consolidated code tools mixin combining generation, analysis, and helper methods."""
 
@@ -568,7 +568,7 @@ if __name__ == "__main__":
             except ImportError:
                 return {
                     "status": "error",
-                    "error": "pylint is not installed. Install with: pip install pylint",
+                    "error": "pylint is not installed. Install with: uv pip install pylint",
                 }
             except Exception as e:
                 return {"status": "error", "error": str(e)}
@@ -664,12 +664,18 @@ Generate ONLY the code, no explanations."""
             return self._get_timeout_placeholder(filename, purpose)
 
     def _fix_code_with_llm(
-        self, code: str, error_msg: str, context: str = "", max_attempts: int = 3
+        self,
+        code: str,
+        file_path: str,
+        error_msg: str,
+        context: str = "",
+        max_attempts: int = 3,
     ) -> Optional[str]:
         """Fix code using LLM based on error message.
 
         Args:
             code: Code with errors
+            file_path: Path to the file (used to detect language)
             error_msg: Error message from linting/execution
             context: Additional context
             max_attempts: Maximum number of fix attempts
@@ -677,13 +683,29 @@ Generate ONLY the code, no explanations."""
         Returns:
             Fixed code or None if unable to fix
         """
-        for attempt in range(max_attempts):
-            prompt = f"""Fix the following Python code error:
+        # Detect language from file extension
+        is_typescript = file_path.endswith((".ts", ".tsx"))
+        is_python = file_path.endswith(".py")
+        is_css = file_path.endswith(".css")
+        lang = (
+            "typescript"
+            if is_typescript
+            else "python" if is_python else "css" if is_css else "unknown"
+        )
+        lang_label = (
+            "TypeScript"
+            if is_typescript
+            else "Python" if is_python else "CSS" if is_css else "unknown"
+        )
 
+        for attempt in range(max_attempts):
+            prompt = f"""Fix the following {lang_label} code error:
+
+File path: {file_path}
 Error: {error_msg}
 
 Code:
-```python
+```{lang}
 {code}
 ```
 
@@ -692,21 +714,26 @@ Code:
 Return ONLY the corrected code, no explanations."""
 
             try:
-                response = self.chat.send(prompt)
+                response = self.chat.send(prompt, timeout=600)
                 fixed_code = response.text.strip()
 
                 # Extract code from markdown blocks
-                if "```python" in fixed_code:
+                if f"```{lang}" in fixed_code:
                     fixed_code = (
-                        fixed_code.split("```python")[1].split("```")[0].strip()
+                        fixed_code.split(f"```{lang}")[1].split("```")[0].strip()
                     )
                 elif "```" in fixed_code:
                     fixed_code = fixed_code.split("```")[1].split("```")[0].strip()
 
-                # Validate the fix
-                validation = self.syntax_validator.validate_dict(fixed_code)
-                if validation["is_valid"]:
-                    return fixed_code
+                # Validate the fix (only for Python - TypeScript validated later)
+                if is_python:
+                    validation = self.syntax_validator.validate_dict(fixed_code)
+                    if validation["is_valid"]:
+                        return fixed_code
+                else:
+                    # For TypeScript, return the fix and let tsc validate
+                    if fixed_code and fixed_code != code:
+                        return fixed_code
 
             except Exception as e:
                 logger.warning(f"Fix attempt {attempt + 1} failed: {e}")

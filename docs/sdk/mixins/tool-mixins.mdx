@@ -1,0 +1,147 @@
+---
+title: "Tool Mixins"
+---
+
+<Note>
+⚡ **You are viewing:** Quick Reference - Common mixin usage patterns
+
+**See also:** [17 Detailed Mixin Specifications](/spec/file-tools-mixin) (under Specifications → Tool Mixins)
+</Note>
+
+<Info>
+  **Source Code:** [`src/gaia/agents/mixins/`](https://github.com/amd/gaia/tree/main/src/gaia/agents/mixins/), [`src/gaia/agents/chat/tools/`](https://github.com/amd/gaia/tree/main/src/gaia/agents/chat/tools/)
+</Info>
+
+<Note>
+**Import:** `from gaia.agents.chat.tools.file_tools import FileToolsMixin`
+</Note>
+---
+
+<Badge text="development" color="orange" />
+
+**Purpose:** Reusable tool sets that can be mixed into your agents.
+
+**Available Mixins:** For complete API specifications of all 17 mixins, see [Specifications → Tool Mixins](/spec/file-tools-mixin)
+
+## 9.1 File Operations Mixin
+
+**Detailed Spec:** [FileToolsMixin](/spec/file-tools-mixin)
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.chat.tools.file_tools import FileToolsMixin
+
+class MyAgent(Agent, FileToolsMixin):
+    """Agent with file operation tools."""
+
+    def _register_tools(self):
+        # FileToolsMixin provides these tools automatically:
+        # - read_file(file_path: str) -> dict
+        # - write_file(file_path: str, content: str) -> dict
+        # - append_to_file(file_path: str, content: str) -> dict
+        # - list_directory(directory_path: str) -> dict
+        pass
+
+# Usage
+agent = MyAgent()
+result = agent.process_query("Read the config.json file")
+# Agent uses read_file tool automatically
+```
+
+---
+
+## 9.2 RAG Tools Mixin
+
+**Import:** `from gaia.agents.chat.tools.rag_tools import RAGToolsMixin`
+**Detailed Spec:** [RAGToolsMixin](/spec/rag-tools-mixin)
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.chat.tools.rag_tools import RAGToolsMixin
+
+class MyAgent(Agent, RAGToolsMixin):
+    """Agent with document Q&A tools."""
+
+    def __init__(self, documents_path: str = "./docs", **kwargs):
+        self.documents_path = documents_path
+        super().__init__(**kwargs)
+
+    def _register_tools(self):
+        # RAGToolsMixin provides:
+        # - index_documents(path: str) -> dict
+        # - search_documents(query: str) -> dict
+        # - list_indexed_documents() -> dict
+        pass
+
+# Usage
+agent = MyAgent(documents_path="./manuals")
+result = agent.process_query("What does the manual say about installation?")
+# Agent searches indexed documents automatically
+```
+
+---
+
+## 9.3 Shell Commands Mixin
+
+**Import:** `from gaia.agents.chat.tools.shell_tools import ShellToolsMixin`
+**Detailed Spec:** [ShellToolsMixin](/spec/shell-tools-mixin)
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.chat.tools.shell_tools import ShellToolsMixin
+
+class MyAgent(Agent, ShellToolsMixin):
+    """Agent that can execute shell commands."""
+
+    def _register_tools(self):
+        # ShellToolsMixin provides:
+        # - execute_shell_command(command: str) -> dict
+        pass
+
+# Usage
+agent = MyAgent()
+result = agent.process_query("List files in the current directory")
+# Agent uses execute_shell_command("ls") automatically
+```
+
+---
+
+## 9.4 File Search Mixin
+
+**Import:** `from gaia.agents.tools.file_search import FileSearchToolsMixin`
+**Detailed Spec:** [FileSearchToolsMixin](/spec/file-search-mixin)
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.tools.file_search import FileSearchToolsMixin
+
+class MyAgent(Agent, FileSearchToolsMixin):
+    """Agent with file search capabilities."""
+
+    def _register_tools(self):
+        # FileSearchToolsMixin provides:
+        # - search_files(pattern: str, directory: str) -> dict
+        # - find_file(filename: str) -> dict
+        pass
+```
+
+---
+
+## Related Topics
+
+- [Core Agent System](../core/agent-system) - Learn about the base Agent class
+- [Code Development Mixins](./code-mixins) - Specialized code development tools
+- [Specialized Agents](../agents/specialized) - Pre-built agent implementations
+- [Best Practices](../best-practices) - Agent development guidelines
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

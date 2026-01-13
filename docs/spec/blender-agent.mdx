@@ -1,0 +1,371 @@
+---
+title: "BlenderAgent"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/blender/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/blender/agent.py)
+</Info>
+
+<Note>
+**Component:** BlenderAgent - 3D Scene Creation via Natural Language
+**Module:** `gaia.agents.blender.agent`
+**Inherits:** Agent
+**MCP:** BlenderMCPClient for Blender communication
+</Note>
+
+---
+
+## Overview
+
+BlenderAgent enables natural language 3D scene creation in Blender. It translates user requests into Blender operations via MCP (Model Context Protocol), handling object creation, material assignment, and scene manipulation.
+
+**Key Features:**
+- Natural language to Blender operations
+- Multi-step plan execution
+- Colored object handling (create + material)
+- MCP-based Blender communication
+- Scene diagnosis capabilities
+
+---
+
+## Requirements
+
+### Functional Requirements
+
+1. **Object Creation**
+   - Create primitives (CUBE, SPHERE, CYLINDER, CONE, TORUS)
+   - Set location, rotation, scale
+   - Assign materials and colors
+
+2. **Scene Management**
+   - Clear scene
+   - Get scene info
+   - Get object info
+   - Delete objects
+
+3. **Material System**
+   - Create materials
+   - Set RGBA colors
+   - Apply materials to objects
+
+4. **Plan Execution**
+   - Multi-step plans for complex scenes
+   - Atomic tool calls
+   - Object name tracking (Blender auto-naming)
+
+---
+
+## API Specification
+
+### BlenderAgent Class
+
+```python
+class BlenderAgent(Agent):
+    """Blender-specific agent for 3D scene creation."""
+
+    SIMPLE_TOOLS = ["clear_scene", "get_scene_info"]
+
+    def __init__(
+        self,
+        mcp: Optional[MCPClient] = None,
+        model_id: str = None,
+        base_url: str = "http://localhost:8000/api/v1",
+        max_steps: int = 5,
+        **kwargs
+    ):
+        """
+        Initialize BlenderAgent.
+
+        Args:
+            mcp: Pre-configured MCP client (or creates new one)
+            model_id: LLM model ID
+            max_steps: Max steps before terminating
+        """
+        pass
+
+    # Tools
+    @tool
+    def clear_scene() -> Dict[str, Any]:
+        """Remove all objects from scene."""
+        pass
+
+    @tool
+    def create_object(
+        type: str = "CUBE",
+        name: str = None,
+        location: tuple = (0, 0, 0),
+        rotation: tuple = (0, 0, 0),
+        scale: tuple = (1, 1, 1)
+    ) -> Dict[str, Any]:
+        """Create 3D object. Returns actual Blender-assigned name."""
+        pass
+
+    @tool
+    def set_material_color(
+        object_name: str,
+        color: tuple = (1, 0, 0, 1)  # RGBA
+    ) -> Dict[str, Any]:
+        """Set object material color. MUST have 4 values (RGBA)."""
+        pass
+
+    @tool
+    def modify_object(
+        name: str,
+        location: tuple = None,
+        scale: tuple = None,
+        rotation: tuple = None
+    ) -> Dict[str, Any]:
+        """Modify existing object."""
+        pass
+
+    @tool
+    def get_scene_info() -> Dict[str, Any]:
+        """Get current scene information."""
+        pass
+
+    def create_interactive_scene(
+        self,
+        scene_description: str,
+        max_steps: int = None,
+        trace: bool = True,
+        filename: str = None
+    ) -> Dict[str, Any]:
+        """Create complex scene with multiple objects."""
+        pass
+```
+
+---
+
+## Implementation Details
+
+### System Prompt: Colored Object Detection
+
+```python
+def _get_system_prompt(self) -> str:
+    return """You are a specialized Blender 3D assistant.
+
+==== COLORED OBJECT DETECTION ====
+🔍 SCAN user request for color words:
+- "red", "green", "blue", "yellow", "purple", "cyan", "white", "black"
+
+⚠️ IF color mentioned, you MUST:
+1. Create object with create_object
+2. Set color with set_material_color
+
+❌ NEVER skip the color step!
+
+==== TOOL PARAMETER RULES ====
+⚠️ CRITICAL: create_object does NOT accept 'color' parameter!
+✅ CORRECT workflow:
+   Step 1: create_object(type, name, location, rotation, scale ONLY)
+   Step 2: set_material_color(object_name, color)
+
+⚠️ Colors must be RGBA with 4 values:
+   ❌ WRONG: [0, 0, 1]
+   ✅ CORRECT: [0, 0, 1, 1]
+
+==== EXAMPLES ====
+User: "Create a blue cylinder"
+Plan:
+1. create_object(type="CYLINDER", name="cylinder1", location=[0,0,0])
+2. set_material_color(object_name="cylinder1", color=[0,0,1,1])
+
+User: "Green cube and red sphere"
+Plan:
+1. create_object(type="CUBE", name="cube1", location=[0,0,0])
+2. set_material_color(object_name="cube1", color=[0,1,0,1])
+3. create_object(type="SPHERE", name="sphere1", location=[3,0,0])
+4. set_material_color(object_name="sphere1", color=[1,0,0,1])
+"""
+```
+
+### Object Name Tracking
+
+**Problem:** Blender auto-generates names (e.g., "Cube.001" instead of "my_cube").
+
+**Solution:** Post-process tool results to extract actual name.
+
+```python
+def _post_process_tool_result(
+    self,
+    tool_name: str,
+    tool_args: Dict[str, Any],
+    tool_result: Dict[str, Any]
+) -> None:
+    """Post-process tool results to track actual object names."""
+
+    if tool_name == "create_object":
+        actual_name = self._track_object_name(tool_result)
+        if actual_name:
+            logger.debug(f"Actual object name: {actual_name}")
+
+            # Update future steps in plan that reference this object
+            if self.current_plan and self.current_step < len(self.current_plan) - 1:
+                for i in range(self.current_step + 1, len(self.current_plan)):
+                    future_step = self.current_plan[i]
+                    args = future_step.get("tool_args", {})
+
+                    # Update object_name or name parameters
+                    if "object_name" in args and args["object_name"] == tool_args.get("name"):
+                        self.current_plan[i]["tool_args"]["object_name"] = actual_name
+
+                    if "name" in args and args["name"] == tool_args.get("name"):
+                        self.current_plan[i]["tool_args"]["name"] = actual_name
+
+def _track_object_name(self, result: Dict) -> str:
+    """Extract actual object name from create_object result."""
+    if isinstance(result, dict) and result.get("status") == "success":
+        if "result" in result and isinstance(result["result"], dict):
+            return result["result"].get("name")
+    return None
+```
+
+---
+
+## Testing Requirements
+
+### Unit Tests
+
+```python
+# tests/agents/test_blender_agent.py
+
+def test_blender_agent_initialization(mock_mcp):
+    """Test BlenderAgent initializes."""
+    agent = BlenderAgent(mcp=mock_mcp)
+    assert agent is not None
+    assert agent.mcp == mock_mcp
+
+def test_clear_scene_tool(mock_mcp):
+    """Test clear_scene tool."""
+    mock_mcp.clear_scene.return_value = {"status": "success"}
+
+    agent = BlenderAgent(mcp=mock_mcp)
+    result = agent.process_query("Clear the scene")
+
+    assert result["status"] == "success"
+    mock_mcp.clear_scene.assert_called_once()
+
+def test_colored_object_creates_two_steps():
+    """Test colored object generates create + material steps."""
+    agent = BlenderAgent()
+
+    result = agent.process_query("Create a red cube")
+
+    # Should have called both create_object and set_material_color
+    assert "create_object" in str(result)
+    assert "set_material_color" in str(result)
+
+def test_object_name_tracking():
+    """Test object name tracking updates future steps."""
+    agent = BlenderAgent()
+
+    # Create object (Blender returns "Cube.001" instead of "my_cube")
+    tool_result = {
+        "status": "success",
+        "result": {"name": "Cube.001"}
+    }
+
+    # Mock plan with future step referencing "my_cube"
+    agent.current_plan = [
+        {"tool": "create_object", "tool_args": {"name": "my_cube"}},
+        {"tool": "set_material_color", "tool_args": {"object_name": "my_cube", "color": [1,0,0,1]}}
+    ]
+    agent.current_step = 0
+
+    # Post-process should update future step
+    agent._post_process_tool_result("create_object", {"name": "my_cube"}, tool_result)
+
+    # Future step should now reference "Cube.001"
+    assert agent.current_plan[1]["tool_args"]["object_name"] == "Cube.001"
+
+def test_rgba_validation():
+    """Test that colors must have 4 values."""
+    agent = BlenderAgent()
+
+    # This should fail or be caught by system prompt
+    result = agent.process_query("Create a blue cube with color [0, 0, 1]")
+
+    # Agent should either add alpha or fail gracefully
+    # (LLM is taught to always use 4 values)
+```
+
+---
+
+## Dependencies
+
+```python
+# GAIA dependencies
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.tools import tool
+from gaia.mcp.blender_mcp_client import MCPClient
+
+# Blender core modules (separate package)
+from gaia.agents.blender.core.scene import SceneManager
+from gaia.agents.blender.core.materials import MaterialManager
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Simple Scene
+
+```python
+from gaia.agents.blender.agent import BlenderAgent
+
+agent = BlenderAgent()
+
+# Create colored objects
+agent.process_query("Create a red cube at the origin")
+agent.process_query("Add a blue sphere at position (3, 0, 0)")
+```
+
+### Example 2: Complex Scene
+
+```python
+agent = BlenderAgent(max_steps=10)
+
+result = agent.create_interactive_scene(
+    "Create a scene with a green ground plane, "
+    "a yellow sun sphere in the sky, "
+    "and three colored buildings (red, blue, purple)"
+)
+
+print(result["result"])
+```
+
+### Example 3: MCP Client Usage
+
+```python
+from gaia.mcp.blender_mcp_client import MCPClient
+
+# Connect to running Blender instance with MCP server
+mcp = MCPClient(host="localhost", port=5555)
+
+agent = BlenderAgent(mcp=mcp)
+agent.process_query("Clear scene and create a red torus")
+```
+
+---
+
+## Related Specifications
+
+- [agent-base](/spec/agent-base) - Agent architecture
+- [tool-decorator](/spec/tool-decorator) - Tool system
+- [mcp-server](/spec/mcp-server) - MCP protocol
+
+---
+
+*BlenderAgent Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

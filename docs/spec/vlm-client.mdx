@@ -1,0 +1,888 @@
+---
+title: "VLMClient"
+description: "Vision-Language Model client for image understanding and multimodal AI"
+icon: "eye"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/llm/vlm_client.py`](https://github.com/amd/gaia/blob/main/src/gaia/llm/vlm_client.py)
+</Info>
+
+<Note>
+**Component:** VLMClient
+**Module:** `gaia.llm.vlm_client`
+**Import:** `from gaia.llm import VLMClient`
+</Note>
+---
+
+## Overview
+
+VLMClient provides Vision-Language Model capabilities for extracting text from images using Lemonade server. It handles model loading/unloading, image-to-markdown conversion, and state tracking for VLM processing with automatic model downloading and context manager support.
+
+**Key Features:**
+- Image-to-text extraction via VLM
+- Automatic model loading and downloading
+- Base64 image encoding
+- Batch processing for multiple images
+- Context manager for resource cleanup
+- Integration with LemonadeClient
+
+---
+
+## Requirements
+
+### Functional Requirements
+
+1. **Model Management**
+   - Load VLM model (Qwen2.5-VL-7B-Instruct-GGUF)
+   - Automatic model download via Lemonade
+   - Model availability checking
+   - State tracking (loaded/unloaded)
+
+2. **Image Extraction**
+   - `extract_from_image()` - Extract text from single image
+   - `extract_from_page_images()` - Batch extraction from page
+   - Custom extraction prompts
+   - Progress logging
+
+3. **Image Format Support**
+   - PNG images (base64 encoded)
+   - JPEG images (base64 encoded)
+   - Automatic image optimization (handled by caller)
+   - Size and dimension tracking
+
+4. **Resource Management**
+   - Context manager support (`with VLMClient()`)
+   - Cleanup after processing
+   - State reset
+
+5. **Error Handling**
+   - Model availability errors
+   - Loading failures
+   - Extraction failures
+   - Connection errors
+
+### Non-Functional Requirements
+
+1. **Performance**
+   - 60-second timeout for VLM inference
+   - Low temperature (0.1) for accuracy
+   - Up to 2048 tokens per extraction
+   - Progress logging for user feedback
+
+2. **Reliability**
+   - Automatic model download (may take hours)
+   - Graceful error handling
+   - Helpful error messages
+   - Connection retry via LemonadeClient
+
+3. **Usability**
+   - Simple initialization
+   - Auto-load option
+   - Clear progress messages
+   - Context manager pattern
+
+---
+
+## API Specification
+
+### File Location
+
+```
+src/gaia/llm/vlm_client.py
+```
+
+### Public Interface
+
+```python
+import base64
+from typing import Optional
+from gaia.llm.lemonade_client import LemonadeClient
+
+class VLMClient:
+    """
+    VLM client for extracting text from images using Lemonade server.
+
+    Handles:
+    - Model loading (Qwen2.5-VL-7B-Instruct-GGUF)
+    - Image-to-markdown conversion
+    - State tracking for VLM processing
+
+    Usage:
+        # Manual lifecycle
+        vlm = VLMClient()
+        text = vlm.extract_from_image(image_bytes, image_num=1, page_num=1)
+        vlm.cleanup()
+
+        # Context manager (recommended)
+        with VLMClient() as vlm:
+            text = vlm.extract_from_image(image_bytes, image_num=1, page_num=1)
+    """
+
+    def __init__(
+        self,
+        vlm_model: str = "Qwen2.5-VL-7B-Instruct-GGUF",
+        base_url: Optional[str] = None,
+        auto_load: bool = True,
+    ):
+        """
+        Initialize VLM client.
+
+        Args:
+            vlm_model: Vision model to use for image extraction
+            base_url: Lemonade server API URL (defaults to LEMONADE_BASE_URL env var)
+            auto_load: Automatically load VLM model on first use
+
+        Note:
+            - Model will be auto-downloaded if not available (may take hours)
+            - base_url defaults to http://localhost:8000/api/v1
+
+        Environment Variables:
+            LEMONADE_BASE_URL: Default base URL for Lemonade server
+        """
+        pass
+
+    def check_availability(self) -> bool:
+        """
+        Check if VLM model is available on Lemonade server.
+
+        Returns:
+            True if model is available, False otherwise
+
+        Note:
+            Provides helpful messages if model is not found, including
+            instructions to download via Lemonade Model Manager.
+
+        Example:
+            >>> vlm = VLMClient()
+            >>> if not vlm.check_availability():
+            ...     print("Model not available")
+            ❌ VLM model not found: Qwen2.5-VL-7B-Instruct-GGUF
+            📥 To download this model:
+               1. Open Lemonade Model Manager (http://localhost:8000)
+               2. Search for: Qwen2.5-VL-7B-Instruct-GGUF
+               3. Click 'Download' to install the model
+        """
+        pass
+
+    def extract_from_image(
+        self,
+        image_bytes: bytes,
+        image_num: int = 1,
+        page_num: int = 1,
+        prompt: Optional[str] = None,
+    ) -> str:
+        """
+        Extract text from an image using VLM.
+
+        Args:
+            image_bytes: Image as PNG/JPEG bytes
+            image_num: Image number on page (for logging)
+            page_num: Page number (for logging)
+            prompt: Custom extraction prompt (optional)
+
+        Returns:
+            Extracted text in markdown format
+
+        Note:
+            - Ensures VLM is loaded before extraction
+            - Uses default OCR prompt if none provided
+            - Returns error message if extraction fails
+
+        Default Prompt:
+            "You are an OCR system. Extract ALL visible text from this image
+            exactly as it appears. Preserve formatting, convert tables to
+            markdown, describe charts as [CHART: ...]. Do NOT add placeholders
+            or generate content."
+
+        Example:
+            >>> vlm = VLMClient()
+            >>> with open("image.png", "rb") as f:
+            ...     text = vlm.extract_from_image(f.read())
+            >>> print(text)
+            # Heading
+            This is the extracted text...
+        """
+        pass
+
+    def extract_from_page_images(self, images: list, page_num: int) -> list:
+        """
+        Extract text from multiple images on a page.
+
+        Args:
+            images: List of image dicts with 'image_bytes', 'width', 'height', etc.
+            page_num: Page number
+
+        Returns:
+            List of dicts:
+            [
+                {
+                    "image_num": 1,
+                    "text": "extracted markdown",
+                    "dimensions": "800x600",
+                    "size_kb": 45.2
+                },
+                ...
+            ]
+
+        Example:
+            >>> images = [
+            ...     {"image_bytes": b"...", "width": 800, "height": 600, "size_kb": 45.2},
+            ...     {"image_bytes": b"...", "width": 1024, "height": 768, "size_kb": 67.3},
+            ... ]
+            >>> results = vlm.extract_from_page_images(images, page_num=1)
+            >>> for result in results:
+            ...     print(f"Image {result['image_num']}: {len(result['text'])} chars")
+            Image 1: 523 chars
+            Image 2: 891 chars
+        """
+        pass
+
+    def cleanup(self):
+        """
+        Cleanup VLM resources.
+
+        Call this after batch processing to mark VLM as unloaded.
+        Note: Model remains loaded on server; this just updates local state.
+
+        Example:
+            >>> vlm = VLMClient()
+            >>> # Process images...
+            >>> vlm.cleanup()
+            🧹 VLM processing complete
+        """
+        pass
+
+    def __enter__(self):
+        """
+        Context manager entry - ensure VLM loaded.
+
+        Returns:
+            self
+
+        Example:
+            >>> with VLMClient() as vlm:
+            ...     text = vlm.extract_from_image(image_bytes)
+        """
+        pass
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        Context manager exit - cleanup VLM state.
+
+        Args:
+            exc_type: Exception type (if any)
+            exc_val: Exception value (if any)
+            exc_tb: Exception traceback (if any)
+        """
+        pass
+
+    def _ensure_vlm_loaded(self) -> bool:
+        """
+        Ensure VLM model is loaded, load it if necessary.
+
+        The model will be automatically downloaded if not available (handled by
+        lemonade_client.chat_completions with auto_download=True).
+
+        Returns:
+            True if VLM is loaded, False if loading failed
+
+        Note:
+            Only loads if auto_load=True and model not already loaded.
+        """
+        pass
+```
+
+---
+
+## Implementation Details
+
+### Model Loading
+
+```python
+def _ensure_vlm_loaded(self) -> bool:
+    if self.vlm_loaded:
+        return True
+
+    if not self.auto_load:
+        logger.warning("VLM not loaded and auto_load=False")
+        return False
+
+    try:
+        logger.info(f"📥 Loading VLM model: {self.vlm_model}")
+        # Load model (auto-download handled by lemonade_client, may take hours)
+        self.client.load_model(self.vlm_model, timeout=60, auto_download=True)
+        self.vlm_loaded = True
+        logger.info(f"✅ VLM model loaded: {self.vlm_model}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to load VLM model: {e}")
+        logger.error(
+            f"   Make sure Lemonade server is running at {self.server_url}"
+        )
+        return False
+```
+
+### Image Extraction
+
+```python
+def extract_from_image(
+    self,
+    image_bytes: bytes,
+    image_num: int = 1,
+    page_num: int = 1,
+    prompt: Optional[str] = None,
+) -> str:
+    # Ensure VLM is loaded
+    if not self._ensure_vlm_loaded():
+        error_msg = "VLM model not available"
+        logger.error(error_msg)
+        return f"[VLM extraction failed: {error_msg}]"
+
+    # Encode image as base64
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+    # Default OCR prompt
+    if not prompt:
+        prompt = """You are an OCR system. Extract ALL visible text from this image exactly as it appears.
+
+Instructions:
+1. Extract EVERY word you see - don't skip or paraphrase
+2. Preserve exact formatting (headings, bold, bullets, tables)
+3. If it's a table, format as markdown table
+4. If it's a chart, describe what you see: [CHART: ...]
+5. Do NOT add placeholders like "[Insert ...]"  - only extract actual text
+6. Do NOT generate or invent content - only extract what you see
+
+Output format: Clean markdown with the ACTUAL text from the image."""
+
+    # Format message with image (OpenAI vision format)
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                },
+            ],
+        }
+    ]
+
+    try:
+        import time
+        start_time = time.time()
+
+        logger.info(
+            f"   🔍 VLM extracting from image {image_num} on page {page_num}..."
+        )
+
+        # Call VLM using chat completions endpoint
+        response = self.client.chat_completions(
+            model=self.vlm_model,
+            messages=messages,
+            temperature=0.1,  # Low temp for accurate extraction
+            max_completion_tokens=2048,  # Allow detailed extraction
+            timeout=60,  # VLM may be slower than text models
+        )
+
+        elapsed = time.time() - start_time
+
+        # Extract text from response
+        if (
+            isinstance(response, dict)
+            and "choices" in response
+            and len(response["choices"]) > 0
+        ):
+            extracted_text = response["choices"][0]["message"]["content"]
+            logger.info(
+                f"   ✅ Extracted {len(extracted_text)} chars from image {image_num} "
+                f"in {elapsed:.2f}s ({len(image_bytes)/1024:.0f}KB image)"
+            )
+            return extracted_text
+        else:
+            logger.error(f"Unexpected VLM response format: {response}")
+            return "[VLM extraction failed: unexpected response format]"
+
+    except Exception as e:
+        logger.error(
+            f"VLM extraction failed for page {page_num}, image {image_num}: {e}"
+        )
+        return f"[VLM extraction failed: {str(e)}]"
+```
+
+### Server URL Parsing
+
+```python
+from urllib.parse import urlparse
+
+# Parse base_url to extract host and port for LemonadeClient
+parsed = urlparse(base_url)
+host = parsed.hostname or "localhost"
+port = parsed.port or 8000
+
+# Get base server URL (without /api/v1) for user-facing messages
+self.server_url = f"http://{host}:{port}"
+
+self.client = LemonadeClient(model=vlm_model, host=host, port=port)
+```
+
+---
+
+## Testing Requirements
+
+### Unit Tests
+
+**File:** `tests/llm/test_vlm_client.py`
+
+```python
+import pytest
+from unittest.mock import Mock, patch
+from gaia.llm import VLMClient
+
+def test_vlm_client_can_be_imported():
+    """Verify VLMClient can be imported."""
+    from gaia.llm import VLMClient
+    assert VLMClient is not None
+
+def test_initialize_vlm_client():
+    """Test VLM client initialization."""
+    with patch('gaia.llm.vlm_client.LemonadeClient'):
+        vlm = VLMClient()
+        assert vlm.vlm_model == "Qwen2.5-VL-7B-Instruct-GGUF"
+        assert vlm.auto_load is True
+        assert vlm.vlm_loaded is False
+
+def test_initialize_with_custom_model():
+    """Test initialization with custom model."""
+    with patch('gaia.llm.vlm_client.LemonadeClient'):
+        vlm = VLMClient(vlm_model="Custom-VLM-Model")
+        assert vlm.vlm_model == "Custom-VLM-Model"
+
+def test_initialize_with_base_url():
+    """Test initialization with custom base URL."""
+    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+        vlm = VLMClient(base_url="http://remote:9000/api/v1")
+        assert vlm.base_url == "http://remote:9000/api/v1"
+        assert vlm.server_url == "http://remote:9000"
+        # Verify LemonadeClient was initialized with correct host/port
+        mock_client.assert_called_once()
+
+def test_check_availability_success():
+    """Test model availability check - model found."""
+    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+        vlm = VLMClient()
+        vlm.client.list_models = Mock(return_value={
+            "data": [
+                {"id": "Qwen2.5-VL-7B-Instruct-GGUF"},
+                {"id": "Other-Model"}
+            ]
+        })
+
+        assert vlm.check_availability() is True
+
+def test_check_availability_not_found():
+    """Test model availability check - model not found."""
+    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+        vlm = VLMClient()
+        vlm.client.list_models = Mock(return_value={
+            "data": [
+                {"id": "Other-Model"}
+            ]
+        })
+
+        assert vlm.check_availability() is False
+
+def test_ensure_vlm_loaded_already_loaded():
+    """Test VLM loading when already loaded."""
+    with patch('gaia.llm.vlm_client.LemonadeClient'):
+        vlm = VLMClient()
+        vlm.vlm_loaded = True
+
+        result = vlm._ensure_vlm_loaded()
+        assert result is True
+
+def test_ensure_vlm_loaded_success():
+    """Test VLM loading success."""
+    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+        vlm = VLMClient()
+        vlm.client.load_model = Mock()
+
+        result = vlm._ensure_vlm_loaded()
+        assert result is True
+        assert vlm.vlm_loaded is True
+        vlm.client.load_model.assert_called_once()
+
+def test_ensure_vlm_loaded_auto_load_false():
+    """Test VLM loading when auto_load=False."""
+    with patch('gaia.llm.vlm_client.LemonadeClient'):
+        vlm = VLMClient(auto_load=False)
+
+        result = vlm._ensure_vlm_loaded()
+        assert result is False
+
+def test_extract_from_image_success():
+    """Test successful image extraction."""
+    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+        vlm = VLMClient()
+        vlm.vlm_loaded = True  # Skip loading
+
+        # Mock successful extraction
+        vlm.client.chat_completions = Mock(return_value={
+            "choices": [{
+                "message": {
+                    "content": "# Extracted Text\n\nThis is the text from the image."
+                }
+            }]
+        })
+
+        image_bytes = b"fake_image_data"
+        result = vlm.extract_from_image(image_bytes, image_num=1, page_num=1)
+
+        assert "Extracted Text" in result
+        assert vlm.client.chat_completions.called
+
+def test_extract_from_image_vlm_not_loaded():
+    """Test extraction when VLM fails to load."""
+    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+        vlm = VLMClient(auto_load=False)
+
+        image_bytes = b"fake_image_data"
+        result = vlm.extract_from_image(image_bytes)
+
+        assert "[VLM extraction failed" in result
+        assert "not available" in result
+
+def test_extract_from_image_extraction_error():
+    """Test extraction failure."""
+    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+        vlm = VLMClient()
+        vlm.vlm_loaded = True
+
+        # Mock extraction error
+        vlm.client.chat_completions = Mock(side_effect=Exception("Network error"))
+
+        image_bytes = b"fake_image_data"
+        result = vlm.extract_from_image(image_bytes)
+
+        assert "[VLM extraction failed" in result
+        assert "Network error" in result
+
+def test_extract_from_image_with_custom_prompt():
+    """Test extraction with custom prompt."""
+    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+        vlm = VLMClient()
+        vlm.vlm_loaded = True
+
+        vlm.client.chat_completions = Mock(return_value={
+            "choices": [{"message": {"content": "Extracted"}}]
+        })
+
+        custom_prompt = "Extract only headings"
+        result = vlm.extract_from_image(b"data", prompt=custom_prompt)
+
+        # Verify custom prompt was used
+        call_args = vlm.client.chat_completions.call_args
+        messages = call_args[1]["messages"]
+        assert custom_prompt in str(messages)
+
+def test_extract_from_page_images():
+    """Test batch extraction from page."""
+    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+        vlm = VLMClient()
+        vlm.vlm_loaded = True
+
+        vlm.client.chat_completions = Mock(return_value={
+            "choices": [{"message": {"content": "Extracted text"}}]
+        })
+
+        images = [
+            {"image_bytes": b"img1", "width": 800, "height": 600, "size_kb": 45.2},
+            {"image_bytes": b"img2", "width": 1024, "height": 768, "size_kb": 67.3},
+        ]
+
+        results = vlm.extract_from_page_images(images, page_num=1)
+
+        assert len(results) == 2
+        assert results[0]["image_num"] == 1
+        assert results[0]["text"] == "Extracted text"
+        assert results[0]["dimensions"] == "800x600"
+        assert results[0]["size_kb"] == 45.2
+        assert results[1]["image_num"] == 2
+
+def test_cleanup():
+    """Test cleanup method."""
+    with patch('gaia.llm.vlm_client.LemonadeClient'):
+        vlm = VLMClient()
+        vlm.vlm_loaded = True
+
+        vlm.cleanup()
+        assert vlm.vlm_loaded is False
+
+def test_context_manager():
+    """Test context manager usage."""
+    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+        vlm = VLMClient()
+        vlm.client.load_model = Mock()
+
+        with vlm as v:
+            assert v is vlm
+            assert vlm.vlm_loaded is True  # Loaded on enter
+
+        # Verify cleanup was called on exit
+        assert vlm.vlm_loaded is False
+```
+
+### Integration Tests
+
+```python
+def test_integration_vlm_extraction():
+    """Test integration with real Lemonade server."""
+    vlm = VLMClient()
+
+    try:
+        if not vlm.check_availability():
+            pytest.skip("VLM model not available")
+
+        # Create a simple test image (requires PIL)
+        from PIL import Image, ImageDraw, ImageFont
+        import io
+
+        img = Image.new('RGB', (800, 600), color='white')
+        draw = ImageDraw.Draw(img)
+        draw.text((10, 10), "Test Text", fill='black')
+
+        # Convert to bytes
+        img_bytes = io.BytesIO()
+        img.save(img_bytes, format='PNG')
+        img_bytes = img_bytes.getvalue()
+
+        # Extract text
+        text = vlm.extract_from_image(img_bytes)
+
+        assert isinstance(text, str)
+        assert len(text) > 0
+        # Should contain "Test" or "Text"
+        assert any(word in text for word in ["Test", "Text", "test", "text"])
+
+        vlm.cleanup()
+
+    except Exception as e:
+        pytest.skip(f"Lemonade server not running or VLM not available: {e}")
+```
+
+---
+
+## Dependencies
+
+### Required Packages
+
+```toml
+# pyproject.toml
+[project]
+dependencies = [
+    "python-dotenv>=1.0.0",
+]
+
+# VLMClient requires LemonadeClient from same package
+# No external dependencies beyond what LemonadeClient needs
+```
+
+### Import Dependencies
+
+```python
+import base64
+import logging
+import os
+from typing import Optional
+
+from dotenv import load_dotenv
+from urllib.parse import urlparse
+
+from gaia.llm.lemonade_client import LemonadeClient
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Basic Image Extraction
+
+```python
+from gaia.llm import VLMClient
+
+# Initialize VLM client
+vlm = VLMClient()
+
+# Check if model is available
+if not vlm.check_availability():
+    print("Please download the VLM model first")
+    exit(1)
+
+# Extract text from image
+with open("document.png", "rb") as f:
+    image_bytes = f.read()
+
+text = vlm.extract_from_image(image_bytes, image_num=1, page_num=1)
+print(text)
+
+# Cleanup
+vlm.cleanup()
+```
+
+### Example 2: Context Manager (Recommended)
+
+```python
+from gaia.llm import VLMClient
+
+with VLMClient() as vlm:
+    with open("invoice.png", "rb") as f:
+        text = vlm.extract_from_image(f.read())
+    print(text)
+# Automatic cleanup
+```
+
+### Example 3: Batch Processing
+
+```python
+from gaia.llm import VLMClient
+import os
+
+# Prepare images
+images = []
+for filename in ["img1.png", "img2.png", "img3.png"]:
+    with open(filename, "rb") as f:
+        image_bytes = f.read()
+        images.append({
+            "image_bytes": image_bytes,
+            "width": 800,
+            "height": 600,
+            "size_kb": len(image_bytes) / 1024
+        })
+
+# Extract from all images
+with VLMClient() as vlm:
+    results = vlm.extract_from_page_images(images, page_num=1)
+
+    for result in results:
+        print(f"\n=== Image {result['image_num']} ({result['dimensions']}) ===")
+        print(result['text'])
+```
+
+### Example 4: Custom Extraction Prompt
+
+```python
+from gaia.llm import VLMClient
+
+# Custom prompt for specific extraction task
+custom_prompt = """
+Extract only the following information from this invoice:
+1. Invoice number
+2. Date
+3. Total amount
+4. Vendor name
+
+Format as JSON.
+"""
+
+with VLMClient() as vlm:
+    with open("invoice.png", "rb") as f:
+        text = vlm.extract_from_image(
+            f.read(),
+            prompt=custom_prompt
+        )
+    print(text)
+```
+
+### Example 5: Remote Lemonade Server
+
+```python
+from gaia.llm import VLMClient
+
+# Connect to remote server
+vlm = VLMClient(base_url="http://192.168.1.100:8000/api/v1")
+
+with open("image.png", "rb") as f:
+    text = vlm.extract_from_image(f.read())
+
+print(text)
+vlm.cleanup()
+```
+
+### Example 6: Error Handling
+
+```python
+from gaia.llm import VLMClient
+
+vlm = VLMClient()
+
+try:
+    if not vlm.check_availability():
+        raise RuntimeError("VLM model not available")
+
+    with open("image.png", "rb") as f:
+        text = vlm.extract_from_image(f.read())
+
+    if "[VLM extraction failed" in text:
+        print(f"Extraction failed: {text}")
+    else:
+        print(f"Success: {len(text)} chars extracted")
+
+except Exception as e:
+    print(f"Error: {e}")
+finally:
+    vlm.cleanup()
+```
+
+---
+
+## Documentation Updates Required
+
+### SDK.md
+
+Add to Vision Section:
+
+```markdown
+### VLMClient
+
+**Purpose:** Vision-Language Model client for extracting text from images.
+
+**Features:**
+- Image-to-text OCR extraction
+- Automatic model loading
+- Batch processing
+- Context manager support
+
+**Quick Start:**
+```python
+from gaia.llm import VLMClient
+
+# Basic extraction
+with VLMClient() as vlm:
+    with open("image.png", "rb") as f:
+        text = vlm.extract_from_image(f.read())
+    print(text)
+
+# Batch processing
+images = [...]  # List of image dicts
+with VLMClient() as vlm:
+    results = vlm.extract_from_page_images(images, page_num=1)
+```
+
+---
+
+*VLMClient Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

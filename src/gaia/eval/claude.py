@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import base64
@@ -6,8 +6,16 @@ import json
 import os
 from pathlib import Path
 
-import anthropic
-from bs4 import BeautifulSoup
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
+
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    BeautifulSoup = None
+
 from dotenv import load_dotenv
 
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
@@ -19,7 +27,36 @@ load_dotenv()
 class ClaudeClient:
     log = get_logger(__name__)
 
-    def __init__(self, model=None, max_tokens=1024):
+    def __init__(self, model=None, max_tokens=1024, max_retries=3):
+        """
+        Initialize Claude client with retry support.
+
+        Args:
+            model: Claude model to use (defaults to DEFAULT_CLAUDE_MODEL)
+            max_tokens: Maximum tokens in response (default: 1024)
+            max_retries: Maximum number of retry attempts for API calls with exponential backoff (default: 3)
+        """
+        # Check for required dependencies
+        if anthropic is None:
+            error_msg = (
+                "\n❌ Error: Missing required package 'anthropic'\n\n"
+                "Please install the eval dependencies:\n"
+                '  uv pip install -e ".[eval]"\n\n'
+                "Or install anthropic directly:\n"
+                "  uv pip install anthropic\n"
+            )
+            raise ImportError(error_msg)
+
+        if BeautifulSoup is None:
+            error_msg = (
+                "\n❌ Error: Missing required package 'bs4' (BeautifulSoup4)\n\n"
+                "Please install the eval dependencies:\n"
+                '  uv pip install -e ".[eval]"\n\n'
+                "Or install beautifulsoup4 directly:\n"
+                "  uv pip install beautifulsoup4\n"
+            )
+            raise ImportError(error_msg)
+
         if model is None:
             model = DEFAULT_CLAUDE_MODEL
         self.log = self.__class__.log  # Use the class-level logger for instances
@@ -34,10 +71,19 @@ class ClaudeClient:
             )
             self.log.error(error_msg)
             raise ValueError(error_msg)
-        self.client = anthropic.Anthropic(api_key=self.api_key)
+        # Initialize Anthropic client with retry support
+        # The SDK handles exponential backoff automatically
+        self.client = anthropic.Anthropic(
+            api_key=self.api_key,
+            max_retries=max_retries,
+            timeout=300.0,  # 5 minute timeout for large documents
+        )
         self.model = model
         self.max_tokens = max_tokens
-        self.log.info(f"Initialized ClaudeClient with model: {model}")
+        self.max_retries = max_retries
+        self.log.info(
+            f"Initialized ClaudeClient with model: {model}, max_retries: {max_retries}"
+        )
 
     def calculate_cost(self, input_tokens, output_tokens):
         """

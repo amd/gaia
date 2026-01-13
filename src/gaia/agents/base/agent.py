@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
 Generic Agent class for building domain-specific agents.
@@ -13,9 +13,11 @@ import logging
 import os
 import re
 import subprocess
+import uuid
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
+from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
 # First-party imports
@@ -24,6 +26,10 @@ from gaia.chat.sdk import ChatConfig, ChatSDK
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Content truncation thresholds
+CHUNK_TRUNCATION_THRESHOLD = 5000
+CHUNK_TRUNCATION_SIZE = 2500
 
 
 class Agent(abc.ABC):
@@ -64,6 +70,7 @@ class Agent(abc.ABC):
         use_claude: bool = False,
         use_chatgpt: bool = False,
         claude_model: str = "claude-sonnet-4-20250514",
+        base_url: Optional[str] = None,
         model_id: str = None,
         max_steps: int = 5,
         debug_prompts: bool = False,
@@ -75,6 +82,8 @@ class Agent(abc.ABC):
         debug: bool = False,
         output_handler=None,
         max_plan_iterations: int = 3,
+        min_context_size: int = 32768,
+        skip_lemonade: bool = False,
     ):
         """
         Initialize the Agent with LLM client.
@@ -83,6 +92,7 @@ class Agent(abc.ABC):
             use_claude: If True, uses Claude API (default: False)
             use_chatgpt: If True, uses ChatGPT/OpenAI API (default: False)
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-4-20250514")
+            base_url: Base URL for local LLM server (default: reads from LEMONADE_BASE_URL env var, falls back to http://localhost:8000/api/v1)
             model_id: The ID of the model to use with LLM server (default for local)
             max_steps: Maximum number of steps the agent can take before terminating
             debug_prompts: If True, includes prompts in the conversation history
@@ -94,10 +104,16 @@ class Agent(abc.ABC):
             debug: If True, enables debug output for troubleshooting (default: False)
             output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
             max_plan_iterations: Maximum number of plan-execute-replan cycles (default: 3, 0 = unlimited)
+            min_context_size: Minimum context size required for this agent (default: 32768).
+            skip_lemonade: If True, skip Lemonade server initialization (default: False).
+                          Use this when connecting to a different OpenAI-compatible backend.
 
         Note: Uses local LLM server by default unless use_claude or use_chatgpt is True.
         """
         self.error_history = []  # Store error history for learning
+        self.conversation_history = (
+            []
+        )  # Store conversation history for session persistence
         self.max_steps = max_steps
         self.debug_prompts = debug_prompts
         self.show_prompts = show_prompts  # Separate flag for displaying prompts
@@ -108,6 +124,24 @@ class Agent(abc.ABC):
         self.debug = debug
         self.last_result = None  # Store the most recent result
         self.max_plan_iterations = max_plan_iterations
+        self._current_query: Optional[str] = (
+            None  # Store current query for error context
+        )
+
+        # Read base_url from environment if not provided
+        if base_url is None:
+            base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+
+        # Lazy Lemonade initialization for local LLM users
+        # This ensures Lemonade server is running before we try to use it
+        if not (use_claude or use_chatgpt or skip_lemonade):
+            from gaia.llm.lemonade_manager import LemonadeManager
+
+            LemonadeManager.ensure_ready(
+                min_context_size=min_context_size,
+                quiet=silent_mode,
+                base_url=base_url,
+            )
 
         # Initialize state management
         self.execution_state = self.STATE_PLANNING
@@ -129,19 +163,51 @@ class Agent(abc.ABC):
         # Register tools for this agent
         self._register_tools()
 
-        # Update system prompt with available tools
+        # Update system prompt with available tools and response format
         tools_description = self._format_tools_for_prompt()
-        self.system_prompt += f"\n\n==== AVAILABLE TOOLS ====\n{tools_description}\n\n"
+        self.system_prompt += f"\n\n==== AVAILABLE TOOLS ====\n{tools_description}\n"
+
+        # Add JSON response format instructions (shared across all agents)
+        self.system_prompt += """
+==== RESPONSE FORMAT ====
+You must respond ONLY in valid JSON. No text before { or after }.
+
+**To call a tool:**
+{"thought": "reasoning", "goal": "objective", "tool": "tool_name", "tool_args": {"arg1": "value1"}}
+
+**To create a multi-step plan:**
+{
+  "thought": "reasoning",
+  "goal": "objective",
+  "plan": [
+    {"tool": "tool1", "tool_args": {"arg": "val"}},
+    {"tool": "tool2", "tool_args": {"arg": "val"}}
+  ],
+  "tool": "tool1",
+  "tool_args": {"arg": "val"}
+}
+
+**To provide a final answer:**
+{"thought": "reasoning", "goal": "achieved", "answer": "response to user"}
+
+**RULES:**
+1. ALWAYS use tools for real data - NEVER hallucinate
+2. Plan steps MUST be objects like {"tool": "x", "tool_args": {}}, NOT strings
+3. After tool results, provide an "answer" summarizing them
+"""
 
         # Initialize ChatSDK with proper configuration
         # Note: We don't set system_prompt in config, we pass it per request
         # Note: Context size is configured when starting Lemonade server, not here
+        # Use Qwen3-Coder-30B by default for better reasoning and JSON formatting
+        # The 0.5B model is too small for complex agent tasks
         chat_config = ChatConfig(
-            model=model_id or "Qwen2.5-0.5B-Instruct-CPU",
+            model=model_id or "Qwen3-Coder-30B-A3B-Instruct-GGUF",
             use_claude=use_claude,
             use_chatgpt=use_chatgpt,
             claude_model=claude_model,
-            show_stats=show_stats,
+            base_url=base_url,
+            show_stats=True,  # Always collect stats for token tracking
             max_history_length=20,  # Keep more history for agent conversations
             max_tokens=4096,  # Increased for complex code generation
         )
@@ -166,15 +232,17 @@ class Agent(abc.ABC):
         """
         raise NotImplementedError("Subclasses must implement _get_system_prompt")
 
-    @abc.abstractmethod
     def _create_console(self):
         """
         Create and return a console output handler.
         Returns SilentConsole if in silent_mode, otherwise AgentConsole.
-        Subclasses should override this to provide domain-specific console output.
+        Subclasses can override this to provide domain-specific console output.
         """
         if self.silent_mode:
-            return SilentConsole()
+            # Check if we should completely silence everything (including final answer)
+            # This would be true for JSON-only output or when output_dir is set
+            silence_final_answer = getattr(self, "output_dir", None) is not None
+            return SilentConsole(silence_final_answer=silence_final_answer)
         return AgentConsole()
 
     @abc.abstractmethod
@@ -260,9 +328,6 @@ class Agent(abc.ABC):
             r"```(?:json)?\s*(.*?)\s*```",  # Standard code block
             r"`json\s*(.*?)\s*`",  # Single backtick with json tag
             r"<json>\s*(.*?)\s*</json>",  # XML-style tags
-            r'\{\s*"thought".*\}',  # Direct JSON object starting with thought
-            r'\{\s*"tool".*\}',  # Direct JSON object starting with tool
-            r'\{\s*"answer".*\}',  # Direct JSON object starting with answer
         ]
 
         for pattern in json_patterns:
@@ -278,23 +343,44 @@ class Agent(abc.ABC):
                 except json.JSONDecodeError:
                     continue
 
-        # Strategy 2: Try to fix common JSON format issues and parse again
-        fixed_response = response
-        # Replace single quotes with double quotes
-        fixed_response = re.sub(r"'([^']*)':", r'"\1":', fixed_response)
-        # Fix trailing commas in objects and arrays
-        fixed_response = re.sub(r",\s*}", "}", fixed_response)
-        fixed_response = re.sub(r",\s*]", "]", fixed_response)
+        start_idx = response.find("{")
+        if start_idx >= 0:
+            bracket_count = 0
+            in_string = False
+            escape_next = False
 
-        try:
-            # Try to find JSON object in the fixed text
-            match = re.search(r"(\{.*\})", fixed_response, re.DOTALL)
-            if match:
-                result = json.loads(match.group(1))
-                logger.debug("Successfully extracted JSON after fixing format issues")
-                return result
-        except json.JSONDecodeError as e:
-            logger.debug(f"Regex extraction failed to parse JSON: {e}")
+            for i, char in enumerate(response[start_idx:], start_idx):
+                if escape_next:
+                    escape_next = False
+                    continue
+                if char == "\\":
+                    escape_next = True
+                    continue
+                if char == '"' and not escape_next:
+                    in_string = not in_string
+                if not in_string:
+                    if char == "{":
+                        bracket_count += 1
+                    elif char == "}":
+                        bracket_count -= 1
+                        if bracket_count == 0:
+                            # Found complete JSON object
+                            try:
+                                extracted = response[start_idx : i + 1]
+                                # Fix common issues before parsing
+                                fixed = re.sub(r",\s*}", "}", extracted)
+                                fixed = re.sub(r",\s*]", "]", fixed)
+                                result = json.loads(fixed)
+                                # Ensure tool_args exists if tool is present
+                                if "tool" in result and "tool_args" not in result:
+                                    result["tool_args"] = {}
+                                logger.debug(
+                                    "Successfully extracted JSON using bracket-matching"
+                                )
+                                return result
+                            except json.JSONDecodeError as e:
+                                logger.debug(f"Bracket-matched JSON parse failed: {e}")
+                                break
 
         return None
 
@@ -462,12 +548,13 @@ class Agent(abc.ABC):
             )
 
         # Validate required fields
+        # Note: 'goal' is optional for simple answer responses
         if "answer" in json_response:
-            required_fields = ["thought", "goal", "answer"]
+            required_fields = ["thought", "answer"]  # goal is optional
         elif "tool" in json_response:
-            required_fields = ["thought", "goal", "tool", "tool_args"]
+            required_fields = ["thought", "tool", "tool_args"]  # goal is optional
         else:
-            required_fields = ["thought", "goal", "plan"]
+            required_fields = ["thought", "plan"]  # goal is optional
 
         missing_fields = [
             field for field in required_fields if field not in json_response
@@ -481,7 +568,11 @@ class Agent(abc.ABC):
 
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """
-        Parse the LLM response to extract tool calls or final answers.
+        Parse the LLM response to extract tool calls or conversational answers.
+
+        ARCHITECTURE: Supports two response modes
+        - Plain text for conversation (no JSON required)
+        - JSON for tool invocations
 
         Args:
             response: The raw response from the LLM
@@ -489,7 +580,7 @@ class Agent(abc.ABC):
         Returns:
             Parsed response as a dictionary
         """
-        # Check for empty or whitespace-only responses
+        # Check for empty responses
         if not response or not response.strip():
             logger.warning("Empty LLM response received")
             self.error_history.append("Empty LLM response")
@@ -506,50 +597,46 @@ class Agent(abc.ABC):
                 "answer": answer,
             }
 
-        # First try to validate and process the response using our robust JSON validation
-        try:
-            validated_response = self.validate_json_response(response)
-            logger.debug(
-                f"[PARSE] Successfully validated response: {str(validated_response)[:200]}..."
-            )
-            return validated_response
-        except Exception as e:
-            # If validation fails, fall back to the original parsing logic
-            logger.warning(
-                f"[PARSE] JSON validation failed, falling back to original parsing: {str(e)}"
-            )
-            # Continue with existing parsing logic
-
-        # Clean up the response
         response = response.strip()
-        logger.debug(f"[PARSE] Cleaned response length: {len(response)}")
 
-        # Try more aggressive JSON extraction methods
-        extracted_json = self._extract_json_from_response(response)
-        if extracted_json:
+        # Log what we received for debugging (show more to see full JSON)
+        if len(response) > 500:
             logger.debug(
-                f"Successfully extracted JSON with advanced methods: {extracted_json}"
+                f"📥 LLM Response ({len(response)} chars): {response[:500]}..."
             )
-            return extracted_json
+        else:
+            logger.debug(f"📥 LLM Response: {response}")
 
-        # If no code blocks or JSON parsing failed, try to parse the raw response
+        # STEP 1: Fast path - detect plain text conversational responses
+        # If response doesn't start with '{', it's likely plain text
+        # Accept it immediately without logging errors
+        if not response.startswith("{"):
+            logger.debug(
+                f"[PARSE] Plain text conversational response (length: {len(response)})"
+            )
+            return {"thought": "", "goal": "", "answer": response}
+
+        # STEP 2: Response starts with '{' - looks like JSON
+        # Try direct JSON parsing first (fastest path)
         try:
-            logger.debug("Attempting to parse raw response as JSON")
             result = json.loads(response)
             # Ensure tool_args exists if tool is present
             if "tool" in result and "tool_args" not in result:
                 result["tool_args"] = {}
-            # Ensure plan is included in conversation if present
-            if "plan" in result:
-                logger.debug(f"Found plan in response: {result['plan']}")
-            logger.debug(f"Successfully parsed raw response as JSON: {result}")
+            logger.debug("[PARSE] Valid JSON response")
             return result
-        except json.JSONDecodeError as e:
-            error_msg = f"[PARSE] Failed to parse raw response as JSON: {str(e)}, response length: {len(response)}, preview: {response[:100]}..."
-            logger.error(error_msg)
-            self.error_history.append(error_msg)
+        except json.JSONDecodeError:
+            # JSON parsing failed - continue to extraction methods
+            logger.debug("[PARSE] Malformed JSON, trying extraction")
 
-        # If JSON parsing fails, try to extract thought/tool/tool_args using regex
+        # STEP 3: Try JSON extraction methods (handles code blocks, mixed text, etc.)
+        extracted_json = self._extract_json_from_response(response)
+        if extracted_json:
+            logger.debug("[PARSE] Extracted JSON successfully")
+            return extracted_json
+
+        # STEP 4: JSON was expected (starts with '{') but all parsing failed
+        # Log error ONLY for JSON that couldn't be parsed
         logger.debug("Attempting to extract fields using regex")
         thought_match = re.search(r'"thought":\s*"([^"]*)"', response)
         tool_match = re.search(r'"tool":\s*"([^"]*)"', response)
@@ -566,16 +653,42 @@ class Agent(abc.ABC):
             return result
 
         if tool_match:
-            tool_args_match = re.search(r'"tool_args":\s*(\{.*\})', response, re.DOTALL)
             tool_args = {}
 
-            if tool_args_match:
-                try:
-                    tool_args = json.loads(tool_args_match.group(1))
-                except json.JSONDecodeError as e:
-                    error_msg = f"Failed to parse tool_args JSON: {str(e)}, content: {tool_args_match.group(1)[:100]}..."
-                    logger.error(error_msg)
-                    self.error_history.append(error_msg)
+            tool_args_start = response.find('"tool_args"')
+
+            if tool_args_start >= 0:
+                # Find the opening brace after "tool_args":
+                brace_start = response.find("{", tool_args_start)
+                if brace_start >= 0:
+                    # Use bracket-matching to find the complete object
+                    bracket_count = 0
+                    in_string = False
+                    escape_next = False
+                    for i, char in enumerate(response[brace_start:], brace_start):
+                        if escape_next:
+                            escape_next = False
+                            continue
+                        if char == "\\":
+                            escape_next = True
+                            continue
+                        if char == '"' and not escape_next:
+                            in_string = not in_string
+                        if not in_string:
+                            if char == "{":
+                                bracket_count += 1
+                            elif char == "}":
+                                bracket_count -= 1
+                                if bracket_count == 0:
+                                    # Found complete tool_args object
+                                    tool_args_str = response[brace_start : i + 1]
+                                    try:
+                                        tool_args = json.loads(tool_args_str)
+                                    except json.JSONDecodeError as e:
+                                        error_msg = f"Failed to parse tool_args JSON: {str(e)}, content: {tool_args_str[:100]}..."
+                                        logger.error(error_msg)
+                                        self.error_history.append(error_msg)
+                                    break
 
             result = {
                 "thought": thought_match.group(1) if thought_match else "",
@@ -612,23 +725,23 @@ class Agent(abc.ABC):
                     "answer": object_name,
                 }
 
-        # If all else fails, treat the entire response as the answer
-        error_msg = f"[PARSE] All parsing attempts failed, treating entire response as answer. Length: {len(response)}, preview: {response[:100]}..."
-        logger.error(error_msg)
-        self.error_history.append(error_msg)
+        # CONVERSATIONAL MODE: No JSON found - treat as plain conversational response
+        # This is normal and expected for chat agents responding to greetings, explanations, etc.
+        logger.debug(
+            f"[PARSE] No JSON structure found, treating as conversational response. Length: {len(response)}, preview: {response[:100]}..."
+        )
 
-        # If response is still empty after all processing, provide a meaningful fallback
+        # If response is empty, provide a meaningful fallback
         if not response.strip():
-            logger.error(
-                "[PARSE] Final fallback: response is empty, returning error message"
-            )
+            logger.warning("[PARSE] Empty response received from LLM")
             return {
-                "thought": "All parsing failed and response is empty",
-                "goal": "Handle complete parsing failure",
-                "answer": "I encountered an issue processing the response. The language model returned an empty or invalid response.",
+                "thought": "",
+                "goal": "",
+                "answer": "I apologize, but I received an empty response. Please try again.",
             }
 
-        return {"thought": "", "goal": "what was achieved", "answer": response}
+        # Valid conversational response - wrap it in expected format
+        return {"thought": "", "goal": "", "answer": response.strip()}
 
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
@@ -677,9 +790,29 @@ class Agent(abc.ABC):
             self.error_history.append(error_msg)
             return {"status": "error", "error": error_msg, "timeout": True}
         except Exception as e:
-            logger.error(f"Error executing tool {tool_name}: {str(e)}")
-            self.error_history.append(str(e))
-            return {"status": "error", "error": str(e)}
+            # Format error with full execution trace for debugging
+            formatted_error = format_execution_trace(
+                exception=e,
+                query=getattr(self, "_current_query", None),
+                plan_step=self.current_step + 1 if self.current_plan else None,
+                total_steps=self.total_plan_steps if self.current_plan else None,
+                tool_name=tool_name,
+                tool_args=tool_args,
+            )
+            logger.error(f"Error executing tool {tool_name}: {e}")
+            self.error_history.append(str(e))  # Store brief error, not formatted
+
+            # Print to console immediately so user sees it
+            self.console.print_error(formatted_error)
+
+            return {
+                "status": "error",
+                "error_brief": str(e),  # Brief error message for quick reference
+                "error_displayed": True,  # Flag to prevent duplicate display
+                "tool_name": tool_name,
+                "tool_args": tool_args,
+                "plan_step": self.current_step + 1 if self.current_plan else None,
+            }
 
     def _generate_max_steps_message(
         self, conversation: List[Dict], steps_taken: int, steps_limit: int
@@ -757,25 +890,34 @@ class Agent(abc.ABC):
         return os.path.abspath(file_path)
 
     def _handle_large_tool_result(
-        self, tool_result: Any, conversation: List[Dict[str, Any]]
+        self,
+        tool_name: str,
+        tool_result: Any,
+        conversation: List[Dict[str, Any]],
+        tool_args: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """
         Handle large tool results by truncating them if necessary.
 
         Args:
+            tool_name: Name of the executed tool
             tool_result: The result from tool execution
             conversation: The conversation list to append to
+            tool_args: Arguments passed to the tool (optional)
 
         Returns:
             The truncated result or original if within limits
         """
-
         truncated_result = tool_result
         if isinstance(tool_result, (dict, list)):
-            result_str = json.dumps(tool_result)
-            if len(result_str) > 3000:  # Threshold for truncation
+            # Use custom encoder to handle bytes and other non-serializable types
+            result_str = json.dumps(tool_result, default=self._json_serialize_fallback)
+            if (
+                len(result_str) > 30000
+            ):  # Threshold for truncation (appropriate for 32K context)
+                # Truncate large results to prevent overwhelming the LLM
                 truncated_str = self._truncate_large_content(
-                    tool_result, max_chars=2000
+                    tool_result, max_chars=20000  # Increased for 32K context
                 )
                 try:
                     truncated_result = json.loads(truncated_str)
@@ -790,20 +932,91 @@ class Agent(abc.ABC):
                     print(f"[DEBUG] Tool result truncated from {len(result_str)} chars")
 
         # Add to conversation
-        conversation.append({"role": "system", "content": truncated_result})
+        tool_entry: Dict[str, Any] = {
+            "role": "tool",
+            "name": tool_name,
+            "content": truncated_result,
+        }
+        if tool_args is not None:
+            tool_entry["tool_args"] = tool_args
+        conversation.append(tool_entry)
         return truncated_result
+
+    def _create_tool_message(self, tool_name: str, tool_output: Any) -> Dict[str, Any]:
+        """
+        Build a message structure representing a tool output for downstream LLM calls.
+        """
+        if isinstance(tool_output, str):
+            text_content = tool_output
+        else:
+            text_content = self._truncate_large_content(tool_output, max_chars=2000)
+
+        if not isinstance(text_content, str):
+            text_content = json.dumps(
+                tool_output, default=self._json_serialize_fallback
+            )
+
+        return {
+            "role": "tool",
+            "name": tool_name,
+            "tool_call_id": uuid.uuid4().hex,
+            "content": [{"type": "text", "text": text_content}],
+        }
+
+    def _json_serialize_fallback(self, obj: Any) -> Any:
+        """
+        Fallback serializer for JSON encoding non-standard types.
+
+        Handles bytes, datetime, and other common non-serializable types.
+        """
+        try:
+            import numpy as np  # Local import to avoid hard dependency at module import time
+
+            if isinstance(obj, np.generic):
+                return obj.item()
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+        except Exception:
+            pass
+
+        if isinstance(obj, bytes):
+            # For binary data, return a placeholder (don't expose raw bytes to LLM)
+            return f"<binary data: {len(obj)} bytes>"
+        if hasattr(obj, "isoformat"):
+            # Handle datetime objects
+            return obj.isoformat()
+        if hasattr(obj, "__dict__"):
+            # Handle objects with __dict__
+            return obj.__dict__
+
+        for caster in (float, int, str):
+            try:
+                return caster(obj)
+            except Exception:
+                continue
+
+        return "<non-serializable>"
 
     def _truncate_large_content(self, content: Any, max_chars: int = 2000) -> str:
         """
         Truncate large content to prevent overwhelming the LLM.
+        Defaults to 20000 chars which is appropriate for 32K token context window.
         """
+
+        # If we have test_results in the output we don't want to
+        # truncate as this can contain important information on
+        # how to fix the tests
+        if isinstance(content, dict) and (
+            "test_results" in content or "run_tests" in content
+        ):
+            return json.dumps(content, default=self._json_serialize_fallback)
 
         # Convert to string (use compact JSON first to check size)
         if isinstance(content, (dict, list)):
-            compact_str = json.dumps(content)
+            compact_str = json.dumps(content, default=self._json_serialize_fallback)
             # Only use indented format if we need to truncate anyway
             content_str = (
-                json.dumps(content, indent=2)
+                json.dumps(content, indent=2, default=self._json_serialize_fallback)
                 if len(compact_str) > max_chars
                 else compact_str
             )
@@ -813,6 +1026,39 @@ class Agent(abc.ABC):
         # Return as-is if within limits
         if len(content_str) <= max_chars:
             return content_str
+
+        # For responses with chunks (e.g., search results, document retrieval)
+        if (
+            isinstance(content, dict)
+            and "chunks" in content
+            and isinstance(content["chunks"], list)
+        ):
+            truncated = content.copy()
+
+            # Keep all chunks but truncate individual chunk content if needed
+            if "chunks" in truncated:
+                for chunk in truncated["chunks"]:
+                    if isinstance(chunk, dict) and "content" in chunk:
+                        # Keep full content for chunks (they're the actual data)
+                        # Only truncate if a single chunk is massive
+                        if len(chunk["content"]) > CHUNK_TRUNCATION_THRESHOLD:
+                            chunk["content"] = (
+                                chunk["content"][:CHUNK_TRUNCATION_SIZE]
+                                + "\n...[chunk truncated]...\n"
+                                + chunk["content"][-CHUNK_TRUNCATION_SIZE:]
+                            )
+
+            result_str = json.dumps(
+                truncated, indent=2, default=self._json_serialize_fallback
+            )
+            # Use larger limit for chunked responses since chunks are the actual data
+            if len(result_str) <= max_chars * 3:  # Allow up to 60KB for chunked data
+                return result_str
+            # If still too large, keep first 3 chunks only
+            truncated["chunks"] = truncated["chunks"][:3]
+            return json.dumps(
+                truncated, indent=2, default=self._json_serialize_fallback
+            )
 
         # For Jira responses, keep first 3 issues
         if (
@@ -826,7 +1072,9 @@ class Agent(abc.ABC):
                 "truncated": True,
                 "total": len(content["issues"]),
             }
-            return json.dumps(truncated, indent=2)[:max_chars]
+            return json.dumps(
+                truncated, indent=2, default=self._json_serialize_fallback
+            )[:max_chars]
 
         # For lists, keep first 3 items
         if isinstance(content, list):
@@ -835,40 +1083,19 @@ class Agent(abc.ABC):
                 if len(content) > 3
                 else content
             )
-            return json.dumps(truncated, indent=2)[:max_chars]
+            return json.dumps(
+                truncated, indent=2, default=self._json_serialize_fallback
+            )[:max_chars]
 
         # Simple truncation
         half = max_chars // 2 - 20
         return f"{content_str[:half]}\n...[truncated]...\n{content_str[-half:]}"
 
-    def _add_format_reminder(self) -> str:
-        """
-        Add JSON format reminders to reinforce proper response structure.
-
-        Returns:
-            Format reminder string for prompts
-        """
-        # Short reminder for standard prompts
-        reminder = """
-IMPORTANT: Your response must be a single valid JSON object.
-Use double quotes for keys and string values. Ensure all fields are present.
-DO NOT include text, markdown, or explanations outside the JSON structure.
-NEVER wrap your response in code blocks or backticks.
-
-CONTINUING WORK: When a plan completes, evaluate if more work is needed:
-- If more work is needed (validation, testing, fixing), create a NEW plan
-- Only provide an "answer" when ALL work is truly complete
-- Format for new plan: {{"thought": "...", "goal": "...", "plan": [...]}}
-- Format for completion: {{"thought": "...", "goal": "...", "answer": "..."}}
-        """
-
-        return reminder
-
     def process_query(
         self,
         user_input: str,
         max_steps: int = None,
-        output_to_file: bool = True,
+        trace: bool = False,
         filename: str = None,
     ) -> Dict[str, Any]:
         """
@@ -878,8 +1105,8 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
         Args:
             user_input: User's query or request
             max_steps: Maximum number of steps to take in the conversation (overrides class default if provided)
-            output_to_file: If True, write results to a JSON file
-            filename: Optional filename for output, if None a timestamped name will be generated
+            trace: If True, write detailed JSON trace to file
+            filename: Optional filename for trace output, if None a timestamped name will be generated
 
         Returns:
             Dict containing the final result and operation details
@@ -888,10 +1115,21 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
 
         start_time = time.time()  # Track query processing start time
 
+        # Store query for error context (used in _execute_tool for error formatting)
+        self._current_query = user_input
+
         logger.debug(f"Processing query: {user_input}")
         conversation = []
-        # Build messages array for chat completions (user/assistant only, system passed separately)
+        # Build messages array for chat completions
         messages = []
+
+        # Prepopulate with conversation history if available (for session persistence)
+        if hasattr(self, "conversation_history") and self.conversation_history:
+            messages.extend(self.conversation_history)
+            logger.debug(
+                f"Loaded {len(self.conversation_history)} messages from conversation history"
+            )
+
         steps_taken = 0
         final_answer = None
         error_count = 0
@@ -929,9 +1167,6 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                 "   2. Include both a plan and a 'tool' field, the 'tool' field MUST match the tool in the first step of the plan.\n"
                 "   3. Create plans with clear, executable steps that include both the tool name and the exact arguments for each step.\n"
             )
-
-        # Apply format reminders to the prompt
-        prompt += self._add_format_reminder()
 
         logger.debug(f"Input prompt: {prompt[:200]}...")
 
@@ -1046,11 +1281,8 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
 
                     # Handle large tool results
                     truncated_result = self._handle_large_tool_result(
-                        tool_result, conversation
+                        tool_name, tool_result, conversation, tool_args
                     )
-
-                    # Note: Tool results are not added to messages array
-                    # The assistant's next response will incorporate the tool result
 
                     # Display the tool result in real-time (show full result to user)
                     self.console.print_tool_complete()
@@ -1066,17 +1298,40 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                         }
                     )
 
-                    # Check for error
-                    if (
-                        isinstance(tool_result, dict)
-                        and tool_result.get("status") == "error"
-                    ):
+                    # Share tool output with subsequent LLM calls
+                    messages.append(
+                        self._create_tool_message(tool_name, truncated_result)
+                    )
+
+                    # Check for error (support multiple error formats)
+                    is_error = isinstance(tool_result, dict) and (
+                        tool_result.get("status") == "error"  # Standard format
+                        or tool_result.get("success")
+                        is False  # Tools returning success: false
+                        or tool_result.get("has_errors") is True  # CLI tools
+                        or tool_result.get("return_code", 0) != 0  # Build failures
+                    )
+
+                    if is_error:
                         error_count += 1
-                        last_error = tool_result.get("error")
+                        # Extract error message from various formats
+                        # Prefer error_brief for logging (avoids duplicate formatted output)
+                        last_error = (
+                            tool_result.get("error_brief")
+                            or tool_result.get("error")
+                            or tool_result.get("stderr")
+                            or tool_result.get("hint")  # Many tools provide hints
+                            or tool_result.get(
+                                "suggested_fix"
+                            )  # Some tools provide fix suggestions
+                            or f"Command failed with return code {tool_result.get('return_code')}"
+                        )
                         logger.warning(
                             f"Tool execution error in plan (count: {error_count}): {last_error}"
                         )
-                        self.console.print_error(last_error)
+                        # Only print if error wasn't already displayed by _execute_tool
+                        if not tool_result.get("error_displayed"):
+                            self.console.print_error(last_error)
 
                         # Switch to error recovery state
                         self.execution_state = self.STATE_ERROR_RECOVERY
@@ -1110,49 +1365,51 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                                 and self.plan_iterations >= self.max_plan_iterations
                             )
 
-                            # Prepare message for final answer - truncate if too large
-                            # Truncate previous outputs if they're too large
-
-                            original_str = json.dumps(previous_outputs)
-                            if len(original_str) > 2000:
-                                truncated_outputs = self._truncate_large_content(
-                                    previous_outputs, max_chars=2000
+                            # Prepare message for final answer with the completed plan context
+                            plan_context = {
+                                "completed_plan": self.current_plan,
+                                "total_steps": self.total_plan_steps,
+                            }
+                            plan_context_raw = json.dumps(
+                                plan_context, default=self._json_serialize_fallback
+                            )
+                            if len(plan_context_raw) > 20000:
+                                plan_context_str = self._truncate_large_content(
+                                    plan_context, max_chars=20000
                                 )
                             else:
-                                # Use compact JSON for small outputs to avoid unnecessary expansion
-                                truncated_outputs = original_str
+                                plan_context_str = plan_context_raw
 
                             if reached_max_iterations:
                                 # Force final answer after max iterations
                                 completion_message = (
                                     f"Maximum plan iterations ({self.max_plan_iterations}) reached for task: {user_input}\n"
-                                    f"Previous outputs:\n{truncated_outputs}\n\n"
+                                    f"Task: {user_input}\n"
+                                    f"Plan information:\n{plan_context_str}\n\n"
                                     f"IMPORTANT: You MUST now provide a final answer with an honest assessment:\n"
                                     f"- Summarize what was successfully accomplished\n"
                                     f"- Clearly state if anything remains incomplete or if errors occurred\n"
                                     f"- If the task is fully complete, state that clearly\n\n"
-                                    f'Provide {{"thought": "...", "goal": "...", "answer": "..."}}\n\n'
-                                    f"{self._add_format_reminder()}"
+                                    f'Provide {{"thought": "...", "goal": "...", "answer": "..."}}'
                                 )
                             else:
-                                # Normal completion - allow for additional validation/testing plans if needed
                                 completion_message = (
-                                    f"You have successfully completed all steps in the plan for: {user_input}\n"
-                                    f"Previous outputs:\n{truncated_outputs}\n\n"
+                                    "You have successfully completed all steps in the plan.\n"
+                                    f"Task: {user_input}\n"
+                                    f"Plan information:\n{plan_context_str}\n\n"
                                     f"Plan iteration: {self.plan_iterations}/{self.max_plan_iterations if self.max_plan_iterations > 0 else 'unlimited'}\n"
-                                    f"Check if more work is needed:\n"
-                                    f"- If the task is complete and verified, provide a final answer\n"
-                                    f"- If critical validation/testing is needed, you may create ONE more plan\n"
-                                    f"- Only create additional plans if absolutely necessary\n\n"
-                                    f'If more work needed: Provide a NEW plan with {{"thought": "...", "goal": "...", "plan": [...]}}\n'
-                                    f'If everything is complete: Provide {{"thought": "...", "goal": "...", "answer": "..."}}\n\n'
-                                    f"{self._add_format_reminder()}"
+                                    "Check if more work is needed:\n"
+                                    "- If the task is complete and verified, provide a final answer\n"
+                                    "- If critical validation/testing is needed, you may create ONE more plan\n"
+                                    "- Only create additional plans if absolutely necessary\n\n"
+                                    'If more work needed: Provide a NEW plan with {{"thought": "...", "goal": "...", "plan": [...]}}\n'
+                                    'If everything is complete: Provide {{"thought": "...", "goal": "...", "answer": "..."}}'
                                 )
 
                             # Debug logging - only show if truncation happened
-                            if self.debug and len(original_str) > 2000:
+                            if self.debug and len(plan_context_raw) > 2000:
                                 print(
-                                    f"\n[DEBUG] Large completion context truncated: {len(original_str)} → {len(truncated_outputs)} chars"
+                                    "\n[DEBUG] Plan context truncated for completion message"
                                 )
 
                             # Add completion request to messages
@@ -1161,7 +1418,6 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                             )
 
                             # Send the completion prompt to get final answer
-                            self.console.print_step_header(steps_taken, steps_limit)
                             self.console.print_state_info(
                                 "COMPLETION: Requesting final answer"
                             )
@@ -1181,12 +1437,9 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                     )
                     prompt = (
                         f"You are following a plan but step {self.current_step + 1} doesn't have proper format: {next_step}\n"
-                        f"Please interpret this step and decide what tool to use next.\n\n"
+                        "Please interpret this step and decide what tool to use next.\n\n"
                         f"Task: {user_input}\n\n"
                     )
-
-                    # Apply format reminders to the prompt
-                    prompt += self._add_format_reminder()
             else:
                 # Normal execution flow - query the LLM
                 if self.execution_state == self.STATE_DIRECT_EXECUTION:
@@ -1207,19 +1460,19 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
 
                     # Create a specific error recovery prompt
                     prompt = (
-                        f"TOOL EXECUTION FAILED!\n\n"
+                        "TOOL EXECUTION FAILED!\n\n"
                         f"You were trying to execute: {last_tool_call[0] if last_tool_call else 'unknown tool'}\n"
                         f"Error: {last_error}\n\n"
                         f"Original task: {user_input}\n\n"
                         f"Current plan step {self.current_step + 1}/{self.total_plan_steps} failed.\n"
                         f"Current plan: {self.current_plan}\n\n"
                         f"Previous successful outputs: {truncated_outputs}\n\n"
-                        f"INSTRUCTIONS:\n"
-                        f"1. Analyze the error and understand what went wrong\n"
-                        f"2. Create a NEW corrected plan that fixes the error\n"
-                        f"3. Make sure to use correct tool parameters (check the available tools)\n"
-                        f"4. Start executing the corrected plan\n\n"
-                        f"Respond with your analysis, a corrected plan, and the first tool to execute."
+                        "INSTRUCTIONS:\n"
+                        "1. Analyze the error and understand what went wrong\n"
+                        "2. Create a NEW corrected plan that fixes the error\n"
+                        "3. Make sure to use correct tool parameters (check the available tools)\n"
+                        "4. Start executing the corrected plan\n\n"
+                        "Respond with your analysis, a corrected plan, and the first tool to execute."
                     )
 
                     # Add the error recovery prompt to the messages array so it gets sent to LLM
@@ -1260,14 +1513,12 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                 self.console.print_prompt("\n".join(context_parts), "LLM Context")
 
             # Handle streaming or non-streaming LLM response
+            # Initialize response_stats so it's always in scope
+            response_stats = None
+
             if self.streaming:
-                # Print LLM thinking header for streaming mode
-                if hasattr(self.console, "console"):
-                    self.console.console.print(
-                        "\n[bold blue]🧠 LLM Response:[/bold blue]"
-                    )
-                else:
-                    print("\n🧠 LLM Response:")
+                # Streaming mode - raw response will be streamed
+                # (SilentConsole will suppress this, AgentConsole will show it)
 
                 # Add prompt to conversation if debug is enabled
                 if self.debug_prompts:
@@ -1289,22 +1540,13 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                     # Process the streaming response chunks as they arrive
                     full_response = ""
                     for chunk_response in response_stream:
-                        if not chunk_response.is_complete:
-                            chunk = chunk_response.text
-                            # Display each chunk as it arrives
-                            if hasattr(self.console, "print_streaming_text"):
-                                self.console.print_streaming_text(chunk)
-                            else:
-                                print(chunk, end="", flush=True)
-                            full_response += chunk
+                        if chunk_response.is_complete:
+                            response_stats = chunk_response.stats
+                        else:
+                            self.console.print_streaming_text(chunk_response.text)
+                            full_response += chunk_response.text
 
-                    # Signal end of stream
-                    if hasattr(self.console, "print_streaming_text"):
-                        self.console.print_streaming_text("", end_of_stream=True)
-                    else:
-                        print("", flush=True)
-
-                    # Get the full response from the buffer
+                    self.console.print_streaming_text("", end_of_stream=True)
                     response = full_response
                 except ConnectionError as e:
                     # Handle LLM server connection errors specifically
@@ -1363,25 +1605,22 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                             f"[DEBUG] Last message content length: {len(messages[-1].get('content', ''))}"
                         )
                     print(f"[DEBUG] Execution state: {self.execution_state}")
-                    print(
-                        f"[DEBUG] Current step: {self.current_step}/{self.total_plan_steps}"
-                    )
+                    if self.execution_state == "PLANNING":
+                        print("[DEBUG] Current step: Planning (no active plan yet)")
+                    else:
+                        print(
+                            f"[DEBUG] Current step: {self.current_step}/{self.total_plan_steps}"
+                        )
 
-                # Get complete response from ChatSDK with proper conversation history
+                # Get complete response from ChatSDK
                 try:
-                    if self.debug:
-                        print("[DEBUG] Calling chat.send_messages...")
                     chat_response = self.chat.send_messages(
                         messages=messages, system_prompt=self.system_prompt
                     )
-                    if self.debug:
-                        print("[DEBUG] LLM response received")
                     response = chat_response.text
+                    response_stats = chat_response.stats
                 except ConnectionError as e:
-                    # Handle LLM server connection errors specifically
                     error_msg = f"LLM Server Connection Failed: {str(e)}"
-                    if self.debug:
-                        print(f"[DEBUG] {error_msg}")
                     logger.error(error_msg)
                     self.console.print_error(error_msg)
 
@@ -1439,24 +1678,21 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                 deferred_args = parsed.get("deferred_tool_args", {})
 
                 plan_prompt = (
-                    f"You MUST create a detailed plan first before taking any action.\n\n"
+                    "You MUST create a detailed plan first before taking any action.\n\n"
                     f"User request: {user_input}\n\n"
                 )
 
                 if deferred_tool:
                     plan_prompt += (
                         f"You initially wanted to use the {deferred_tool} tool with these arguments:\n"
-                        f"{json.dumps(deferred_args, indent=2)}\n\n"
-                        f"However, you MUST first create a plan. Please create a plan that includes this tool usage as a step.\n\n"
+                        f"{json.dumps(deferred_args, indent=2, default=self._json_serialize_fallback)}\n\n"
+                        "However, you MUST first create a plan. Please create a plan that includes this tool usage as a step.\n\n"
                     )
 
                 plan_prompt += (
                     "Create a detailed plan with all necessary steps in JSON format, including exact tool names and arguments.\n"
                     "Respond with your reasoning, plan, and the first tool to use."
                 )
-
-                # Apply format reminders to the prompt
-                plan_prompt = self._add_format_reminder()
 
                 # Store the plan prompt in conversation if debug is enabled
                 if self.debug_prompts:
@@ -1545,15 +1781,81 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
 
                 # Set the parsed response to the new plan for further processing
                 parsed = parsed_plan
+            else:
+                # Display the agent's reasoning in real-time (only if provided)
+                # Skip if we just displayed thought/goal for a plan request above
+                thought = parsed.get("thought", "").strip()
+                goal = parsed.get("goal", "").strip()
 
-            # Display the agent's reasoning in real-time
-            self.console.print_thought(
-                parsed.get("thought", "No explicit reasoning provided")
-            )
-            self.console.print_goal(parsed.get("goal", "No explicit goal provided"))
+                if thought and thought != "No explicit reasoning provided":
+                    self.console.print_thought(thought)
+
+                if goal and goal != "No explicit goal provided":
+                    self.console.print_goal(goal)
 
             # Process plan if available
             if "plan" in parsed:
+                # Validate that plan is actually a list, not a string or other type
+                if not isinstance(parsed["plan"], list):
+                    logger.error(
+                        f"Invalid plan format: expected list, got {type(parsed['plan']).__name__}. "
+                        f"Plan content: {parsed['plan']}"
+                    )
+                    self.console.print_error(
+                        f"LLM returned invalid plan format (expected array, got {type(parsed['plan']).__name__}). "
+                        "Asking for correction..."
+                    )
+
+                    # Create error recovery prompt
+                    error_msg = (
+                        "ERROR: You provided a plan in the wrong format.\n"
+                        "Expected: an array of step objects\n"
+                        f"You provided: {type(parsed['plan']).__name__}\n\n"
+                        "The correct format is:\n"
+                        f'{{"plan": [{{"tool": "tool_name", "tool_args": {{...}}, "description": "..."}}]}}\n\n'
+                        f"Please create a proper plan as an array of step objects for: {user_input}"
+                    )
+                    messages.append({"role": "user", "content": error_msg})
+
+                    # Continue to next iteration to get corrected plan
+                    continue
+
+                # Validate that plan items are dictionaries with required fields
+                invalid_steps = []
+                for i, step in enumerate(parsed["plan"]):
+                    if not isinstance(step, dict):
+                        invalid_steps.append((i, type(step).__name__, step))
+                    elif "tool" not in step or "tool_args" not in step:
+                        invalid_steps.append((i, "missing fields", step))
+
+                if invalid_steps:
+                    logger.error(f"Invalid plan steps found: {invalid_steps}")
+                    self.console.print_error(
+                        f"Plan contains {len(invalid_steps)} invalid step(s). Asking for correction..."
+                    )
+
+                    # Create detailed error message
+                    error_details = "\n".join(
+                        [
+                            f"Step {i+1}: {issue} - {step}"
+                            for i, issue, step in invalid_steps[
+                                :3
+                            ]  # Show first 3 errors
+                        ]
+                    )
+
+                    error_msg = (
+                        f"ERROR: Your plan contains invalid steps:\n{error_details}\n\n"
+                        f"Each step must be a dictionary with 'tool' and 'tool_args' fields:\n"
+                        f'{{"tool": "tool_name", "tool_args": {{...}}, "description": "..."}}\n\n'
+                        f"Please create a corrected plan for: {user_input}"
+                    )
+                    messages.append({"role": "user", "content": error_msg})
+
+                    # Continue to next iteration to get corrected plan
+                    continue
+
+                # Plan is valid - proceed with execution
                 self.current_plan = parsed["plan"]
                 self.current_step = 0
                 self.total_plan_steps = len(self.current_plan)
@@ -1624,11 +1926,8 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
 
                 # Handle large tool results
                 truncated_result = self._handle_large_tool_result(
-                    tool_result, conversation
+                    tool_name, tool_result, conversation, tool_args
                 )
-
-                # Note: Tool results are not added to messages array
-                # The assistant's next response will incorporate the tool result
 
                 # Display the tool result in real-time (show full result to user)
                 self.console.print_tool_complete()
@@ -1640,30 +1939,50 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                     {"tool": tool_name, "args": tool_args, "result": truncated_result}
                 )
 
+                # Share tool output with subsequent LLM calls
+                messages.append(self._create_tool_message(tool_name, truncated_result))
+
                 # Update last tool call
                 last_tool_call = (tool_name, str(tool_args))
 
-                # For single-step plans, set final answer and break the loop after execution
+                # For single-step plans, we still need to let the LLM process the result
+                # This is especially important for RAG queries where the LLM needs to
+                # synthesize the retrieved information into a coherent answer
                 if (
                     self.execution_state == self.STATE_COMPLETION
                     and self.total_plan_steps == 1
                 ):
-                    logger.debug("Single-step plan execution completed, finalizing")
-                    final_answer = f"Task completed with {tool_name}. {tool_result.get('result', {}).get('message', '')}"
-                    self.console.print_final_answer(final_answer)
-                    break
+                    logger.debug(
+                        "Single-step plan execution completed, requesting final answer from LLM"
+                    )
+                    # Don't break here - let the loop continue so the LLM can process the tool result
+                    # The tool result has already been added to messages, so the next iteration
+                    # will call the LLM with that result
 
-                # Check if tool execution resulted in an error
-                if (
-                    isinstance(tool_result, dict)
-                    and tool_result.get("status") == "error"
-                ):
+                # Check if tool execution resulted in an error (support multiple error formats)
+                is_error = isinstance(tool_result, dict) and (
+                    tool_result.get("status") == "error"
+                    or tool_result.get("success") is False
+                    or tool_result.get("has_errors") is True
+                    or tool_result.get("return_code", 0) != 0
+                )
+                if is_error:
                     error_count += 1
-                    last_error = tool_result.get("error")
+                    # Prefer error_brief for logging (avoids duplicate formatted output)
+                    last_error = (
+                        tool_result.get("error_brief")
+                        or tool_result.get("error")
+                        or tool_result.get("stderr")
+                        or tool_result.get("hint")
+                        or tool_result.get("suggested_fix")
+                        or f"Command failed with return code {tool_result.get('return_code')}"
+                    )
                     logger.warning(
                         f"Tool execution error in plan (count: {error_count}): {last_error}"
                     )
-                    self.console.print_error(last_error)
+                    # Only print if error wasn't already displayed by _execute_tool
+                    if not tool_result.get("error_displayed"):
+                        self.console.print_error(last_error)
 
                     # Switch to error recovery state
                     self.execution_state = self.STATE_ERROR_RECOVERY
@@ -1674,26 +1993,9 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                     # Break out of tool execution to trigger error recovery prompt
                     continue
 
-            # If the response contains a final answer, we're done
-            elif "answer" in parsed:
-                logger.debug(f"Final answer received: {parsed['answer']}")
-                final_answer = parsed["answer"]
-                self.execution_state = self.STATE_COMPLETION
-                self.console.print_final_answer(parsed["answer"])
-                break  # Break the loop when we get a final answer
-
-            # Always collect performance stats for tracking (but only display if enabled)
-            perf_stats = self.chat.get_stats()
-
-            # Remove decode_token_times from the stats before displaying and adding to conversation
-            if perf_stats and "decode_token_times" in perf_stats:
-                del perf_stats["decode_token_times"]
-
-            # Display stats if enabled
-            if self.show_stats:
-                self.console.display_stats(perf_stats)
-
-            # Always add performance stats to the conversation history for token tracking
+            # Collect and store performance stats for token tracking
+            # Do this BEFORE checking for final answer so stats are always collected
+            perf_stats = response_stats or self.chat.get_stats()
             if perf_stats:
                 conversation.append(
                     {
@@ -1705,6 +2007,13 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                         },
                     }
                 )
+
+            # Check for final answer (after collecting stats)
+            if "answer" in parsed:
+                final_answer = parsed["answer"]
+                self.execution_state = self.STATE_COMPLETION
+                self.console.print_final_answer(final_answer, streaming=self.streaming)
+                break
 
             # Validate plan required
             self._validate_plan_required(parsed, steps_taken)
@@ -1758,8 +2067,8 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
             "error_history": self.error_history,  # Include the full error history
         }
 
-        # Write result to file if requested
-        if output_to_file:
+        # Write trace to file if requested
+        if trace:
             file_path = self._write_json_to_file(result, filename)
             result["output_file"] = file_path
 
@@ -1846,7 +2155,8 @@ CONTINUING WORK: When a plan completes, evaluate if more work is needed:
                 return
 
         # Check if plan is missing on the first step
-        if "plan" not in parsed and step == 1:
+        # BUT: Allow direct answers without plans (for simple conversational queries)
+        if "plan" not in parsed and "answer" not in parsed and step == 1:
             warning_msg = f"No plan found in step {step} response. The agent should create a plan for all tasks."
             logger.warning(warning_msg)
             self.console.print_warning(warning_msg)

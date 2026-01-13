@@ -1,0 +1,437 @@
+---
+title: "GAIA Playbooks"
+description: "Hands-on tutorials for building production AI agents on Ryzen AI"
+icon: "book-atlas"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/chat/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/chat/sdk.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py) | [`src/gaia/agents/emr/`](https://github.com/amd/gaia/blob/main/src/gaia/agents/emr/) | [`examples/hardware_advisor_agent.py`](https://github.com/amd/gaia/blob/main/examples/hardware_advisor_agent.py)
+</Info>
+
+<Badge text="development" color="orange" />
+
+These playbooks provide step-by-step tutorials for building AI agents on AMD AI PCs. Each explains implementation details and architectural decisions.
+
+<Info>
+**Built for AI PCs:** All agents run locally on Ryzen AI hardware (NPU/iGPU acceleration) for private, fast AI processing.
+</Info>
+
+<Info>
+**What makes playbooks different?**
+
+Unlike reference documentation, playbooks are **journey-based tutorials** that:
+- Start with a working example in 5 minutes
+- Build complexity incrementally
+- Explain what happens "under the hood"
+- Include production deployment patterns
+- Provide reusable code you can extend
+</Info>
+
+---
+
+## Available Playbooks
+
+### Hardware Advisor Agent
+
+Build an agent that analyzes your system hardware and recommends which LLMs you can run locally.
+
+<CardGroup cols={1}>
+  <Card
+    title="Building a Hardware Advisor"
+    icon="microchip"
+    href="/playbooks/hardware-advisor/part-1-getting-started"
+  >
+    **15-20 minutes**
+
+    Build an agent that advises on LLM capabilities based on hardware.
+
+    - Quick start (5 min working example)
+    - LemonadeClient SDK integration
+    - GPU/NPU detection (Windows & Linux)
+    - Memory-based recommendations
+    </Card>
+</CardGroup>
+
+---
+
+### Document Q&A Agent with RAG
+
+Build an agent that searches, indexes, and answers questions about documents. Split into 3 progressive parts for easier learning.
+
+<CardGroup cols={3}>
+  <Card
+    title="Part 1: Getting Started"
+    icon="rocket"
+    href="/playbooks/chat-agent/part-1-getting-started"
+  >
+    **15-20 minutes**
+
+    Build your first agent with RAG capability.
+
+    - Quick start (5 min working example)
+    - Understanding components
+    - Steps 1-3: Basic → RAG → File Discovery
+  </Card>
+
+  <Card
+    title="Part 2: Advanced Features"
+    icon="gears"
+    href="/playbooks/chat-agent/part-2-advanced-features"
+  >
+    **15-20 minutes**
+
+    Add monitoring, sessions, and customization.
+
+    - Tool mixins pattern
+    - File monitoring & auto-indexing
+    - Session persistence
+    - Custom tools & specialization
+    - Real-world examples
+  </Card>
+
+  <Card
+    title="Part 3: Deployment & Optimization"
+    icon="rocket"
+    href="/playbooks/chat-agent/part-3-deployment"
+  >
+    **15-20 minutes**
+
+    Deploy and optimize your agent.
+
+    - Agent intelligence & reasoning
+    - Advanced patterns
+    - Web API & CLI deployment
+    - Performance tuning
+    - Troubleshooting
+  </Card>
+</CardGroup>
+
+---
+
+### Medical Intake Agent (EMR)
+
+Build an automated patient intake processor with VLM extraction, database storage, and a real-time web dashboard. Perfect for learning FileWatcherMixin and DatabaseMixin.
+
+<CardGroup cols={3}>
+  <Card
+    title="Part 1: Getting Started"
+    icon="notes-medical"
+    href="/playbooks/emr-agent/part-1-getting-started"
+  >
+    **20-25 minutes**
+
+    Build an automated intake form processor.
+
+    - FileWatcherMixin for auto-detection
+    - VLM extraction from images/PDFs
+    - DatabaseMixin for patient storage
+    - Natural language patient queries
+  </Card>
+
+  <Card
+    title="Part 2: Dashboard & API"
+    icon="chart-line"
+    href="/playbooks/emr-agent/part-2-dashboard"
+  >
+    **20-25 minutes**
+
+    Create a real-time monitoring dashboard.
+
+    - FastAPI server setup
+    - Server-Sent Events (SSE)
+    - React frontend components
+    - REST API endpoints
+  </Card>
+
+  <Card
+    title="Part 3: Architecture"
+    icon="sitemap"
+    href="/playbooks/emr-agent/part-3-architecture"
+  >
+    **15-20 minutes**
+
+    Deep dive into system design.
+
+    - Database schema design
+    - Processing pipeline steps
+    - Time savings calculation
+    - Production considerations
+  </Card>
+</CardGroup>
+
+---
+
+### Code Generation Agent
+
+Build an AI-powered agent that generates complete Next.js applications from natural language descriptions. Split into 3 progressive parts.
+
+<CardGroup cols={3}>
+  <Card
+    title="Part 1: Introduction & Architecture"
+    icon="code"
+    href="/playbooks/code-agent/part-1-introduction"
+  >
+    **20-25 minutes**
+
+    Understanding GAIA Code Agent architecture.
+
+    - What is GAIA Code?
+    - System architecture
+    - MVP approach
+    - Technology stack
+    - Quick start example
+  </Card>
+
+  <Card
+    title="Part 2: App Creation & Components"
+    icon="puzzle-piece"
+    href="/playbooks/code-agent/part-2-app-creation"
+  >
+    **20-25 minutes**
+
+    Schema, API, and React component generation.
+
+    - Database schema generation
+    - API route creation with validation
+    - React component creation
+    - Tailwind CSS styling
+    - Working examples
+  </Card>
+
+  <Card
+    title="Part 3: Validation & Building"
+    icon="hammer"
+    href="/playbooks/code-agent/part-3-validation-building"
+  >
+    **15-20 minutes**
+
+    TypeScript validation and error iteration.
+
+    - TypeScript validation process
+    - Next.js build pipeline
+    - Error iteration loop
+    - Auto-fix process
+    - Testing final applications
+  </Card>
+</CardGroup>
+
+---
+
+### Coming Soon
+
+<CardGroup cols={2}>
+  <Card
+    title="Voice-Enabled Assistant"
+    icon="microphone"
+    href="/playbooks/voice-agent"
+    color="#ea5a0c"
+  >
+    Integrate Whisper (ASR) and Kokoro (TTS) for voice interaction.
+
+    **Coming soon**
+  </Card>
+
+  <Card
+    title="Multi-Agent Orchestration"
+    icon="users"
+    href="/playbooks/multi-agent"
+    color="#16a34a"
+  >
+    Build a routing agent that delegates tasks to specialized sub-agents.
+
+    **Coming soon**
+  </Card>
+</CardGroup>
+
+---
+
+## How to Use Playbooks
+
+<Steps>
+  <Step title="Choose your playbook">
+    Pick a use case that matches your needs. Each playbook is self-contained.
+  </Step>
+
+  <Step title="Follow the journey">
+    Start from Step 1 and work through sequentially. Each step builds on the previous one.
+  </Step>
+
+  <Step title="Understand the implementation">
+    Read the "Under the Hood" sections to understand the technical details and design decisions.
+  </Step>
+
+  <Step title="Extend and customize">
+    Use the "Making It Your Own" sections to adapt the agent for your specific use case.
+  </Step>
+
+  <Step title="Deploy to production">
+    Review deployment patterns for packaging and distribution.
+  </Step>
+</Steps>
+
+---
+
+## Playbook Structure
+
+Each playbook follows this format:
+
+<Accordion title="1. Why Build This? (Context)">
+  Sets the stage - what problem does this solve? What will you build?
+</Accordion>
+
+<Accordion title="2. Quick Start (5 min)">
+  Minimal working example to verify setup and understand basic usage.
+</Accordion>
+
+<Accordion title="3. Architecture Overview">
+  Visual diagram showing how components fit together.
+</Accordion>
+
+<Accordion title="4. Understanding Components">
+  Deep dive into each piece with "under the hood" explanations.
+</Accordion>
+
+<Accordion title="5. Step-by-Step Build">
+  Incremental construction - each step adds one feature and explains it.
+</Accordion>
+
+<Accordion title="6. Making It Your Own">
+  Customization patterns, extensions, and advanced use cases.
+</Accordion>
+
+<Accordion title="7. Production Deployment">
+  API servers, CLI tools, and distribution patterns.
+</Accordion>
+
+<Accordion title="8. Real-World Examples">
+  Complete, copy-paste ready examples for common scenarios.
+</Accordion>
+
+---
+
+## Prerequisites
+
+All playbooks assume you have:
+
+<Tabs>
+  <Tab title="Python Environment">
+    - Python 3.10 or higher
+    - Virtual environment (venv or conda)
+    - pip or uv for package management
+  </Tab>
+
+  <Tab title="GAIA Installed">
+    ```bash
+    uv pip install amd-gaia
+    ```
+  </Tab>
+
+  <Tab title="Lemonade Server">
+    ```bash
+    # Install Lemonade Server (AMD-optimized for Ryzen AI)
+    uv pip install lemonade-server
+
+    # Start with NPU/iGPU acceleration
+    lemonade-server serve
+    ```
+
+    <Tip>
+    Lemonade Server provides AMD-optimized inference for AI PCs, utilizing NPU and iGPU acceleration.
+    </Tip>
+  </Tab>
+
+  <Tab title="Basic Python Knowledge">
+    - Classes and inheritance
+    - Decorators (@tool)
+    - Type hints
+    - Async/await (for voice playbooks)
+  </Tab>
+</Tabs>
+
+---
+
+## Learning Path
+
+<Steps>
+  <Step title="Start here" icon="rocket">
+    Begin with **[Document Q&A Agent](/playbooks/chat-agent-rag)** - it covers foundational concepts used in all other playbooks.
+  </Step>
+
+  <Step title="Add capabilities" icon="puzzle-piece">
+    Once comfortable, add voice with **[Voice-Enabled Assistant](/playbooks/voice-agent)** or code generation with **[Code Agent](/playbooks/code-agent)**.
+  </Step>
+
+  <Step title="Go advanced" icon="star">
+    Build complex systems with **[Multi-Agent Orchestration](/playbooks/multi-agent)** and custom tool mixins.
+  </Step>
+
+  <Step title="Ship it" icon="box">
+    Package and distribute with **[Deployment](/deployment/installer)** guides.
+  </Step>
+</Steps>
+
+---
+
+## Playbook Principles
+
+Our playbooks follow these principles:
+
+<CardGroup cols={3}>
+  <Card title="Fast Start" icon="bolt">
+    Working example in 5 minutes to verify setup.
+  </Card>
+
+  <Card title="Teachable" icon="brain">
+    Technical explanations of implementation details and design trade-offs.
+  </Card>
+
+  <Card title="Extensible" icon="wrench">
+    Code is designed for extension via inheritance and composition.
+  </Card>
+
+  <Card title="Progressive" icon="rocket">
+    Incremental build process, adding one feature per step.
+  </Card>
+
+  <Card title="Practical" icon="bullseye">
+    Production-oriented examples with real-world use cases.
+  </Card>
+
+  <Card title="Reusable" icon="box">
+    Code samples you can adapt for your specific requirements.
+  </Card>
+</CardGroup>
+
+---
+
+## Contributing Playbooks
+
+If you've built an agent that demonstrates useful patterns, consider contributing a playbook.
+
+<Tip>
+**Playbook template coming soon**
+
+We're creating a template to make it easy for the community to contribute playbooks. Check the [GitHub repo](https://github.com/amd/gaia) for updates.
+</Tip>
+
+---
+
+## Feedback
+
+Help us improve these playbooks!
+
+- **Found a bug?** [Report it](https://github.com/amd/gaia/issues)
+- **Have a suggestion?** [Open a discussion](https://github.com/amd/gaia/discussions)
+- **Built something useful?** Share it in [Discord](https://discord.com/channels/1392562559122407535/1402013282495102997)
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

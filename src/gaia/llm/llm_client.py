@@ -1,10 +1,21 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 # Standard library imports
 import logging
 import os
-from typing import Any, Dict, Iterator, Literal, Optional, Union
+import time
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    TypeVar,
+    Union,
+)
 
 import httpx
 
@@ -13,8 +24,16 @@ import requests
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from ..version import LEMONADE_VERSION
+
 # Local imports
 from .lemonade_client import DEFAULT_MODEL_NAME
+
+# Default Lemonade server URL (can be overridden via LEMONADE_BASE_URL env var)
+DEFAULT_LEMONADE_URL = "http://localhost:8000/api/v1"
+
+# Type variable for retry decorator
+T = TypeVar("T")
 
 # Conditional import for Claude
 try:
@@ -39,8 +58,10 @@ class LLMClient:
         use_claude: bool = False,
         use_openai: bool = False,
         system_prompt: Optional[str] = None,
-        base_url: Optional[str] = "http://localhost:8000/api/v0",
+        base_url: Optional[str] = None,
         claude_model: str = "claude-sonnet-4-20250514",
+        max_retries: int = 3,
+        retry_base_delay: float = 1.0,
     ):
         """
         Initialize the LLM client.
@@ -49,12 +70,33 @@ class LLMClient:
             use_claude: If True, uses Anthropic Claude API.
             use_openai: If True, uses OpenAI ChatGPT API.
             system_prompt: Default system prompt to use for all generation requests.
-            base_url: Base URL for local LLM server.
+            base_url: Base URL for local LLM server (defaults to LEMONADE_BASE_URL env var).
             claude_model: Claude model to use (e.g., "claude-sonnet-4-20250514").
+            max_retries: Maximum number of retry attempts on connection errors.
+            retry_base_delay: Base delay in seconds for exponential backoff.
 
         Note: Uses local LLM server by default unless use_claude or use_openai is True.
               Context size is configured when starting the Lemonade server with --ctx-size parameter.
         """
+        # Use provided base_url, fall back to env var, then default
+        if base_url is None:
+            base_url = os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
+
+        # Normalize base_url to ensure it has the /api/v1 suffix for Lemonade server
+        # This allows users to specify just "http://localhost:8000" for convenience
+        if base_url and not base_url.endswith("/api/v1"):
+            # Remove trailing slash if present
+            base_url = base_url.rstrip("/")
+            # Add /api/v1 if the URL looks like a Lemonade server (localhost or IP with port)
+            # but doesn't already have a path beyond the port
+            from urllib.parse import urlparse
+
+            parsed = urlparse(base_url)
+            # Only add /api/v1 if path is empty or just "/"
+            if not parsed.path or parsed.path == "/":
+                base_url = f"{base_url}/api/v1"
+                logger.debug(f"Normalized base_url to: {base_url}")
+
         # Compute use_local: True if neither claude nor openai is selected
         use_local = not (use_claude or use_openai)
 
@@ -66,6 +108,8 @@ class LLMClient:
         self.use_openai = use_openai
         self.base_url = base_url
         self.system_prompt = system_prompt
+        self.max_retries = max_retries
+        self.retry_base_delay = retry_base_delay
 
         if use_local:
             # Configure timeout for local LLM server
@@ -82,8 +126,10 @@ class LLMClient:
                 ),
                 max_retries=0,  # Disable retries to fail fast on connection issues
             )
+            # Use completions endpoint for pre-formatted prompts (ChatSDK compatibility)
+            # Use chat endpoint when messages array is explicitly provided
             self.endpoint = "completions"
-            # self.endpoint = "responses" TODO: Put back once new Lemonade version is released.
+            logger.debug("Using Lemonade completions endpoint")
             self.default_model = DEFAULT_MODEL_NAME
             self.claude_client = None
             logger.debug(f"Using local LLM with model={self.default_model}")
@@ -96,7 +142,7 @@ class LLMClient:
             logger.debug(f"Using Claude API with model={self.default_model}")
         elif use_claude and not CLAUDE_AVAILABLE:
             raise ValueError(
-                "Claude support requested but anthropic library not available. Install with: pip install anthropic"
+                "Claude support requested but anthropic library not available. Install with: uv pip install anthropic"
             )
         elif use_openai:
             # Use OpenAI API
@@ -116,24 +162,81 @@ class LLMClient:
         if system_prompt:
             logger.debug(f"System prompt set: {system_prompt[:100]}...")
 
+    def _retry_with_exponential_backoff(
+        self,
+        func: Callable[..., T],
+        *args,
+        **kwargs,
+    ) -> T:
+        """
+        Execute a function with exponential backoff retry on connection errors.
+
+        Args:
+            func: The function to execute
+            *args: Positional arguments for the function
+            **kwargs: Keyword arguments for the function
+
+        Returns:
+            The result of the function call
+
+        Raises:
+            The last exception if all retries are exhausted
+        """
+        delay = self.retry_base_delay
+        max_delay = 60.0
+        exponential_base = 2.0
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                return func(*args, **kwargs)
+            except (
+                ConnectionError,
+                httpx.ConnectError,
+                httpx.TimeoutException,
+                httpx.NetworkError,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+            ) as e:
+                if attempt == self.max_retries:
+                    logger.error(
+                        f"Max retries ({self.max_retries}) reached for {func.__name__}. "
+                        f"Last error: {str(e)}"
+                    )
+                    raise
+
+                # Calculate next delay with exponential backoff
+                wait_time = min(delay, max_delay)
+                logger.warning(
+                    f"Connection error in {func.__name__} (attempt {attempt + 1}/{self.max_retries + 1}): {str(e)}. "
+                    f"Retrying in {wait_time:.1f}s..."
+                )
+
+                time.sleep(wait_time)
+                delay *= exponential_base
+
     def generate(
         self,
         prompt: str,
         model: Optional[str] = None,
-        endpoint: Optional[Literal["completions", "responses"]] = None,
+        endpoint: Optional[Literal["completions", "chat", "claude", "openai"]] = None,
         system_prompt: Optional[str] = None,
         stream: bool = False,
+        messages: Optional[List[Dict[str, str]]] = None,
         **kwargs: Any,
     ) -> Union[str, Iterator[str]]:
         """
         Generate a response from the LLM.
 
         Args:
-            prompt: The user prompt/query to send to the LLM
+            prompt: The user prompt/query to send to the LLM. For chat endpoint,
+                   if messages is not provided, this is treated as a pre-formatted
+                   prompt string that already contains the full conversation.
             model: The model to use (defaults to endpoint-appropriate model)
-            endpoint: Override the endpoint to use (completions or responses)
+            endpoint: Override the endpoint to use (completions, chat, claude, or openai)
             system_prompt: System prompt to use for this specific request (overrides default)
             stream: If True, returns a generator that yields chunks of the response as they become available
+            messages: Optional list of message dicts with 'role' and 'content' keys.
+                     If provided, these are used directly for chat completions instead of prompt.
             **kwargs: Additional parameters to pass to the API
 
         Returns:
@@ -143,7 +246,7 @@ class LLMClient:
         model = model or self.default_model
         endpoint_to_use = endpoint or self.endpoint
         logger.debug(
-            f"Generating response with model={model}, endpoint={endpoint_to_use}, stream={stream}"
+            f"LLMClient.generate() called with model={model}, endpoint={endpoint_to_use}, stream={stream}"
         )
 
         # Use provided system_prompt, fall back to instance default if not provided
@@ -170,9 +273,13 @@ class LLMClient:
                         "Streaming not yet implemented for Claude API, falling back to non-streaming"
                     )
 
-                # Use Claude client
+                # Use Claude client with retry logic
                 logger.debug("Making request to Claude API")
-                result = self.claude_client.get_completion(full_prompt)
+
+                # Use retry logic for the API call
+                result = self._retry_with_exponential_backoff(
+                    self.claude_client.get_completion, full_prompt
+                )
 
                 # Claude returns a list of content blocks, extract text
                 if isinstance(result, list) and len(result) > 0:
@@ -206,21 +313,19 @@ class LLMClient:
                 logger.error(f"Error generating response from Claude API: {str(e)}")
                 raise
         elif endpoint_to_use == "completions":
-            # For local LLM, use the prompt as-is
-            # ChatSDK handles all formatting including system prompts
-            effective_prompt = prompt
-            logger.debug(f"Using raw prompt for local LLM: {effective_prompt[:200]}...")
+            # For local LLM with pre-formatted prompts (ChatSDK uses this)
+            # The prompt already contains the full formatted conversation
+            logger.debug(
+                f"Using completions endpoint: prompt_length={len(prompt)} chars"
+            )
 
             try:
-                # Set stream parameter in the API call
-                # Stop tokens should be provided by caller if needed
-                logger.debug(
-                    f"Making LLM request to {self.base_url} with timeout settings"
-                )
-                response = self.client.completions.create(
+                # Use retry logic for the API call
+                response = self._retry_with_exponential_backoff(
+                    self.client.completions.create,
                     model=model,
-                    prompt=effective_prompt,
-                    temperature=0.1,  # Lower temperature for more consistent JSON output
+                    prompt=prompt,
+                    temperature=0.1,
                     stream=stream,
                     **kwargs,
                 )
@@ -237,13 +342,10 @@ class LLMClient:
 
                     return stream_generator()
                 else:
-                    # Return the complete response as before
+                    # Return the complete response
                     result = response.choices[0].text
-
-                    # Check for empty responses
                     if not result or not result.strip():
                         logger.warning("Empty response from local LLM")
-
                     return result
             except (
                 httpx.ConnectError,
@@ -254,10 +356,104 @@ class LLMClient:
                 error_msg = f"LLM Server Connection Error: {str(e)}"
                 raise ConnectionError(error_msg) from e
             except Exception as e:
-                logger.error(f"Error generating response from local LLM: {str(e)}")
-                # Check if this is a network-related error
-                if "network" in str(e).lower() or "connection" in str(e).lower():
-                    raise ConnectionError(f"LLM Server Error: {str(e)}") from e
+                error_str = str(e)
+                logger.error(f"Error generating response from local LLM: {error_str}")
+
+                if "404" in error_str:
+                    if (
+                        "endpoint" in error_str.lower()
+                        or "not found" in error_str.lower()
+                    ):
+                        raise ConnectionError(
+                            f"API endpoint error: {error_str}\n\n"
+                            f"This may indicate:\n"
+                            f"  1. Lemonade Server version mismatch (try updating to {LEMONADE_VERSION})\n"
+                            f"  2. Model not properly loaded or corrupted\n"
+                        ) from e
+
+                if "network" in error_str.lower() or "connection" in error_str.lower():
+                    raise ConnectionError(f"LLM Server Error: {error_str}") from e
+                raise
+        elif endpoint_to_use == "chat":
+            # For local LLM using chat completions format (Lemonade v9+)
+            if messages:
+                # Use provided messages directly (proper chat history support)
+                chat_messages = list(messages)
+                # Prepend system prompt if provided and not already in messages
+                if effective_system_prompt and (
+                    not chat_messages or chat_messages[0].get("role") != "system"
+                ):
+                    chat_messages.insert(
+                        0, {"role": "system", "content": effective_system_prompt}
+                    )
+            else:
+                # Treat prompt as pre-formatted string (legacy ChatSDK support)
+                # Pass as single user message - the prompt already contains formatted history
+                chat_messages = []
+                if effective_system_prompt:
+                    chat_messages.append(
+                        {"role": "system", "content": effective_system_prompt}
+                    )
+                chat_messages.append({"role": "user", "content": prompt})
+            logger.debug(
+                f"Using chat completions for local LLM: {len(chat_messages)} messages"
+            )
+
+            try:
+                # Use retry logic for the API call
+                response = self._retry_with_exponential_backoff(
+                    self.client.chat.completions.create,
+                    model=model,
+                    messages=chat_messages,
+                    temperature=0.1,
+                    stream=stream,
+                    **kwargs,
+                )
+
+                if stream:
+                    # Return a generator that yields chunks
+                    def stream_generator():
+                        for chunk in response:
+                            if (
+                                hasattr(chunk.choices[0].delta, "content")
+                                and chunk.choices[0].delta.content
+                            ):
+                                yield chunk.choices[0].delta.content
+
+                    return stream_generator()
+                else:
+                    # Return the complete response
+                    result = response.choices[0].message.content
+                    if not result or not result.strip():
+                        logger.warning("Empty response from local LLM")
+                    return result
+            except (
+                httpx.ConnectError,
+                httpx.TimeoutException,
+                httpx.NetworkError,
+            ) as e:
+                logger.error(f"Network error connecting to local LLM server: {str(e)}")
+                error_msg = f"LLM Server Connection Error: {str(e)}"
+                raise ConnectionError(error_msg) from e
+            except Exception as e:
+                error_str = str(e)
+                logger.error(f"Error generating response from local LLM: {error_str}")
+
+                # Check for 404 errors which might indicate endpoint or model issues
+                if "404" in error_str:
+                    if (
+                        "endpoint" in error_str.lower()
+                        or "not found" in error_str.lower()
+                    ):
+                        raise ConnectionError(
+                            f"API endpoint error: {error_str}\n\n"
+                            f"This may indicate:\n"
+                            f"  1. Lemonade Server version mismatch (try updating to {LEMONADE_VERSION})\n"
+                            f"  2. Model not properly loaded or corrupted\n"
+                        ) from e
+
+                if "network" in error_str.lower() or "connection" in error_str.lower():
+                    raise ConnectionError(f"LLM Server Error: {error_str}") from e
                 raise
         elif endpoint_to_use == "openai":
             # For OpenAI API, use the messages format
@@ -268,9 +464,13 @@ class LLMClient:
             logger.debug(f"OpenAI API messages: {messages}")
 
             try:
-                # Set stream parameter in the API call
-                response = self.client.chat.completions.create(
-                    model=model, messages=messages, stream=stream, **kwargs
+                # Use retry logic for the API call
+                response = self._retry_with_exponential_backoff(
+                    self.client.chat.completions.create,
+                    model=model,
+                    messages=messages,
+                    stream=stream,
+                    **kwargs,
                 )
 
                 if stream:
@@ -294,7 +494,7 @@ class LLMClient:
                 raise
         else:
             raise ValueError(
-                f"Unsupported endpoint: {endpoint_to_use}. Supported endpoints: 'completions', 'claude', 'openai'."
+                f"Unsupported endpoint: {endpoint_to_use}. Supported endpoints: 'completions', 'chat', 'claude', 'openai'."
             )
 
     def get_performance_stats(self) -> Dict[str, Any]:
@@ -318,9 +518,11 @@ class LLMClient:
             }
 
         try:
-            # Extract the base URL from client configuration
+            # Use the Lemonade API v1 stats endpoint
+            # This returns both timing stats and token counts
             stats_url = f"{self.base_url}/stats"
             response = requests.get(stats_url)
+
             if response.status_code == 200:
                 stats = response.json()
                 # Remove decode_token_times as it's too verbose
@@ -353,7 +555,9 @@ class LLMClient:
 
         try:
             # Check the generating endpoint
-            generating_url = f"{self.base_url.replace('/api/v0', '')}/generating"
+            # Remove /api/v1 suffix to access root-level endpoints
+            base = self.base_url.replace("/api/v1", "")
+            generating_url = f"{base}/generating"
             response = requests.get(generating_url)
             if response.status_code == 200:
                 response_data = response.json()
@@ -386,7 +590,9 @@ class LLMClient:
 
         try:
             # Send halt request
-            halt_url = f"{self.base_url.replace('/api/v0', '')}/halt"
+            # Remove /api/v1 suffix to access root-level endpoints
+            base = self.base_url.replace("/api/v1", "")
+            halt_url = f"{base}/halt"
             response = requests.get(halt_url)
             if response.status_code == 200:
                 logger.debug("Successfully halted current generation")

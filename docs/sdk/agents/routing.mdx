@@ -1,0 +1,158 @@
+---
+title: "Multi-Agent Orchestration"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/routing/`](https://github.com/amd/gaia/blob/main/src/gaia/agents/routing/)
+</Info>
+
+<Note>
+**Import:** `from gaia.agents.routing.agent import RoutingAgent`
+</Note>
+---
+
+<Badge text="development" color="orange" />
+
+**Detailed Spec:** [spec/routing-agent](/spec/routing-agent)
+
+**Purpose:** Intelligently routes user requests to appropriate specialized agents with parameter disambiguation.
+
+**When to use it:**
+- Building multi-agent systems
+- Creating unified interfaces for multiple capabilities
+- Handling ambiguous user requests
+- Orchestrating code, Jira, Docker, and other agents
+
+---
+
+## 11.1 Basic Routing
+
+```python
+from gaia.agents.routing.agent import RoutingAgent
+
+# Create router (no interactive mode - uses defaults)
+router = RoutingAgent(api_mode=True)
+
+# Router analyzes query and selects appropriate agent
+result = router.process_query(
+    query="Create a React app with authentication",
+    execute=True,  # Execute immediately and return result
+    workspace_root="./my-project"
+)
+
+print(result)
+# Router automatically:
+# 1. Detects this is a code generation task
+# 2. Creates a CodeAgent instance
+# 3. Executes the query
+# 4. Returns the result
+```
+
+---
+
+## 11.2 Interactive Routing (CLI Mode)
+
+```python
+from gaia.agents.routing.agent import RoutingAgent
+
+# Create router with user interaction
+router = RoutingAgent(api_mode=False)
+
+# Router will ask clarifying questions
+agent = router.process_query(
+    query="Build a web app",
+    execute=False  # Return agent instance, don't execute
+)
+
+# Router might ask:
+# "What programming language? (React/Vue/Python Flask/etc.)"
+# "What features do you need?"
+
+# Once resolved, returns configured agent
+result = agent.process_query("Build the app")
+```
+
+---
+
+## 11.3 Routing with Conversation History
+
+```python
+from gaia.agents.routing.agent import RoutingAgent
+
+router = RoutingAgent(api_mode=False)
+
+# Multi-turn disambiguation
+conversation_history = []
+
+# First query (ambiguous)
+user_query = "Create an issue"
+agent = router.process_query(
+    query=user_query,
+    conversation_history=conversation_history,
+    execute=False
+)
+# Router: "Which system? (Jira/GitHub/GitLab)"
+
+# User clarifies
+conversation_history.append({"role": "user", "content": "Jira"})
+
+# Router re-analyzes with context
+agent = router.process_query(
+    query=user_query,
+    conversation_history=conversation_history,
+    execute=False
+)
+# Now returns configured JiraAgent
+```
+
+---
+
+## 11.4 Intent Detection Patterns
+
+```python
+from gaia.agents.routing.agent import RoutingAgent
+
+router = RoutingAgent(api_mode=True)
+
+# Router detects intent and routes to appropriate agent:
+
+# Code generation -> CodeAgent
+result = router.process_query(
+    "Build a Python REST API with FastAPI",
+    execute=True
+)
+
+# Issue tracking -> JiraAgent
+result = router.process_query(
+    "Show my high priority bugs",
+    execute=True
+)
+
+# Containerization -> DockerAgent
+result = router.process_query(
+    "Create a Dockerfile for this Node.js app",
+    execute=True,
+    workspace_root="./my-app"
+)
+```
+
+---
+
+## Related Topics
+
+- [Core Agent System](../core/agent-system) - Learn about the base Agent class
+- [Specialized Agents](./specialized) - Agents that can be routed to
+- [ChatAgent](./specialized#chat-agent) - General-purpose conversational agent
+- [Best Practices](../best-practices) - Multi-agent system patterns
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

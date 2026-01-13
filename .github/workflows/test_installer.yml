@@ -1,22 +1,15 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 name: GAIA Installer Test
 
 on:
+  workflow_call:
   push:
-    branches: ["main"]
-    paths:
-      - "installer/**"
-      - "src/**"
-      - "setup.py"
+    branches: [ main ]
   pull_request:
-    branches: ["main"]
+    branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "installer/**"
-      - "src/**"
-      - "setup.py"
   merge_group:
   workflow_dispatch:
 
@@ -33,7 +26,7 @@ jobs:
     needs: build-installer
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Log build information
         shell: powershell

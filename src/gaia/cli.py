@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import asyncio
@@ -8,9 +8,22 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
-from gaia.eval.config import DEFAULT_CLAUDE_MODEL
+from dotenv import load_dotenv
+
+from gaia.llm.lemonade_client import (
+    DEFAULT_HOST,
+    DEFAULT_LEMONADE_URL,
+    DEFAULT_MODEL_NAME,
+    DEFAULT_PORT,
+    LemonadeClient,
+    LemonadeClientError,
+    _get_lemonade_config,
+)
+from gaia.llm.llm_client import LLMClient
 from gaia.logger import get_logger
+from gaia.perf_analysis import run_perf_visualization
 from gaia.version import version
 
 # Optional imports
@@ -24,19 +37,8 @@ except ImportError:
     MCPClient = None
     BLENDER_AVAILABLE = False
 
-try:
-    from gaia.agents.code.agent import CodeAgent
-
-    CODE_AVAILABLE = True
-except ImportError:
-    CodeAgent = None
-    CODE_AVAILABLE = False
-from gaia.llm.lemonade_client import (
-    DEFAULT_MODEL_NAME,
-    LemonadeClient,
-    LemonadeClientError,
-)
-from gaia.llm.llm_client import LLMClient
+# Load environment variables from .env file
+load_dotenv()
 
 # Set debug level for the logger
 logging.getLogger("gaia").setLevel(logging.INFO)
@@ -54,9 +56,33 @@ DEFAULT_EXPERIMENTS_DIR = "output/experiments"
 DEFAULT_EVALUATIONS_DIR = "output/evaluations"
 
 
-def check_lemonade_health(host="127.0.0.1", port=8000):
+# Helper functions for download progress display
+def _format_bytes(b: int) -> str:
+    """Format bytes to human readable string."""
+    if b >= 1024 * 1024 * 1024:
+        return f"{b / (1024 * 1024 * 1024):.1f} GB"
+    elif b >= 1024 * 1024:
+        return f"{b / (1024 * 1024):.1f} MB"
+    elif b >= 1024:
+        return f"{b / 1024:.1f} KB"
+    return f"{b} B"
+
+
+def _make_progress_bar(percent: int, width: int = 20) -> str:
+    """Create a progress bar string."""
+    filled = int(width * percent / 100)
+    empty = width - filled
+    return f"[{'█' * filled}{'░' * empty}]"
+
+
+def check_lemonade_health(host=None, port=None):
     """Check if Lemonade server is running and healthy using LemonadeClient."""
     log = get_logger(__name__)
+
+    # Use provided host/port, or get from env var, or use defaults
+    env_host, env_port, _ = _get_lemonade_config()
+    host = host if host is not None else env_host
+    port = port if port is not None else env_port
 
     try:
         # Create a LemonadeClient instance for health checking
@@ -81,40 +107,220 @@ def check_lemonade_health(host="127.0.0.1", port=8000):
         return False
 
 
-def print_lemonade_error(for_code_agent=False):
-    """Print informative error message when Lemonade is not running.
+def initialize_lemonade_for_agent(
+    agent: str,
+    quiet: bool = False,
+    skip_if_external: bool = False,
+    use_claude: bool = False,
+    use_chatgpt: bool = False,
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+):
+    """
+    Initialize Lemonade Server for a specific GAIA agent.
+
+    Uses LemonadeManager singleton shared by CLI and SDK for consistent
+    initialization and error handling.
 
     Args:
-        for_code_agent: If True, includes instructions for --ctx-size parameter
+        agent: Agent name (chat, code, talk, rag, blender, jira, docker, vlm, minimal, mcp)
+        quiet: Suppress output (only errors)
+        skip_if_external: If True, skip initialization when using Claude/ChatGPT
+        use_claude: Whether Claude API is being used
+        use_chatgpt: Whether ChatGPT API is being used
+        host: Host address of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
+        port: Port number of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
+
+    Returns:
+        Tuple of (success: bool, base_url: str | None)
+
+    Note:
+        Host and port can be configured via LEMONADE_BASE_URL environment variable.
+
+    Example:
+        success, base_url = initialize_lemonade_for_agent("chat")
+        if not success:
+            sys.exit(1)
     """
-    print(
-        "❌ Error: Lemonade server is not running or not accessible.", file=sys.stderr
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    # Use provided host/port, or get from env var, or use defaults
+    env_host, env_port, env_base_url = _get_lemonade_config()
+    host = host if host is not None else env_host
+    port = port if port is not None else env_port
+
+    # Skip initialization if using external API
+    if skip_if_external and (use_claude or use_chatgpt):
+        return True, env_base_url
+
+    # Map agent names to context size requirements
+    # Complex agents need 32768+, simple ones can use default 4096
+    agent_context_sizes = {
+        "code": 32768,
+        "chat": 32768,
+        "jira": 32768,
+        "blender": 32768,
+        "docker": 32768,
+        "talk": 32768,
+        "rag": 32768,
+        "mcp": 4096,
+        "minimal": 4096,
+        "vlm": 8192,
+    }
+    required_ctx = agent_context_sizes.get(agent.lower(), 32768)
+
+    # LemonadeManager handles all validation and error printing
+    success = LemonadeManager.ensure_ready(
+        min_context_size=required_ctx,
+        quiet=quiet,
+        host=host,
+        port=port,
     )
-    print("", file=sys.stderr)
-    print("Please start the Lemonade server first by:", file=sys.stderr)
-    print("  • Double-clicking the desktop shortcut, or", file=sys.stderr)
-    if for_code_agent:
-        print(
-            "  • Running: lemonade-server serve --ctx-size 32768  (for Code Agent)",
-            file=sys.stderr,
-        )
-    else:
-        print("  • Running: lemonade-server serve", file=sys.stderr)
-    print("", file=sys.stderr)
-    if for_code_agent:
-        print(
-            "Note: Code Agent requires larger context size (32768 tokens)",
-            file=sys.stderr,
-        )
-        print("", file=sys.stderr)
-    print(
-        "The server should be accessible at http://127.0.0.1:8000/api/v1/health",
-        file=sys.stderr,
-    )
-    print("Then try your command again.", file=sys.stderr)
+
+    if not success:
+        return False, None
+
+    # Get base_url from LemonadeManager
+    base_url = LemonadeManager.get_base_url() or f"http://{host}:{port}/api/v1"
+    return True, base_url
 
 
-def check_mcp_health(host="127.0.0.1", port=9876):
+def ensure_agent_models(
+    agent: str,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    quiet: bool = False,
+    timeout: int = 1800,
+) -> bool:
+    """
+    Ensure all models required for an agent are downloaded.
+
+    This function checks if models are available and downloads them with
+    streaming progress if needed. Called before starting agents to provide
+    user feedback during model downloads.
+
+    Args:
+        agent: Agent name (chat, code, rag, talk, blender, jira, docker, vlm, minimal, mcp)
+        host: Lemonade server host
+        port: Lemonade server port
+        quiet: Suppress output (only errors)
+        timeout: Timeout per model in seconds
+
+    Returns:
+        bool: True if all models are available, False on error
+    """
+    log = get_logger(__name__)
+
+    try:
+        client = LemonadeClient(host=host, port=port, verbose=False)
+
+        # Get required models for this agent
+        model_ids = client.get_required_models(agent)
+
+        if not model_ids:
+            return True
+
+        # Check which models need downloading
+        models_to_download = []
+        for model_id in model_ids:
+            if not client.check_model_available(model_id):
+                models_to_download.append(model_id)
+
+        if not models_to_download:
+            log.debug(f"All models for {agent} agent already available")
+            return True
+
+        if not quiet:
+            print(
+                f"📥 Downloading {len(models_to_download)} model(s) for {agent} agent..."
+            )
+            print()
+
+        # Progress tracking
+        last_percent = [-1]
+        last_file_index = [0]
+
+        def progress_callback(event_type: str, data: dict) -> None:
+            """Display download progress in CLI."""
+            if quiet:
+                return
+
+            if event_type == "progress":
+                percent = data.get("percent", 0)
+                file_name = data.get("file", "unknown")
+                file_index = data.get("file_index", 1)
+                total_files = data.get("total_files", 1)
+
+                # Print newline when moving to a new file
+                if file_index != last_file_index[0] and last_file_index[0] > 0:
+                    print()  # Newline for previous file
+                last_file_index[0] = file_index
+
+                # Update every 2% for smooth progress
+                if percent >= last_percent[0] + 2 or percent == 0 or percent == 100:
+                    bytes_downloaded = data.get("bytes_downloaded", 0)
+                    bytes_total = data.get("bytes_total", 0)
+
+                    # Create progress bar
+                    bar = _make_progress_bar(percent)
+                    progress_line = (
+                        f"   {bar} {percent:3d}% "
+                        f"[{file_index}/{total_files}] {file_name}: "
+                        f"{_format_bytes(bytes_downloaded)}/{_format_bytes(bytes_total)}"
+                    )
+                    print(f"\r{progress_line:<100}", end="", flush=True)
+                    last_percent[0] = percent
+
+            elif event_type == "complete":
+                print()  # Newline after progress
+                print("   ✅ Download complete")
+                last_percent[0] = -1
+                last_file_index[0] = 0
+
+            elif event_type == "error":
+                print()  # Newline after progress
+                error_msg = data.get("error", "Unknown error")
+                print(f"   ❌ Error: {error_msg}")
+
+        # Download each model
+        for model_id in models_to_download:
+            last_percent[0] = -1
+
+            if not quiet:
+                print(f"📥 {model_id}")
+
+            try:
+                for event in client.pull_model_stream(
+                    model_name=model_id,
+                    timeout=timeout,
+                    progress_callback=progress_callback,
+                ):
+                    if event.get("event") == "error":
+                        log.error(f"Failed to download {model_id}")
+                        return False
+            except LemonadeClientError as e:
+                log.error(f"Failed to download {model_id}: {e}")
+                if not quiet:
+                    print(f"   ❌ Failed: {e}")
+                return False
+
+            if not quiet:
+                print()
+
+        if not quiet:
+            print(f"✅ All models ready for {agent} agent")
+            print()
+
+        return True
+
+    except Exception as e:
+        log.error(f"Failed to ensure models for {agent}: {e}")
+        if not quiet:
+            print(f"❌ Error checking/downloading models: {e}", file=sys.stderr)
+        return False
+
+
+def check_mcp_health(host="localhost", port=9876):
     """Check if Blender MCP server is running and accessible."""
     log = get_logger(__name__)
 
@@ -242,26 +448,24 @@ class GaiaCliClient:
             # Interactive mode if no message provided, single message mode if message provided
             use_interactive = message is None
 
+            # Build config dict, only include model if specified
+            config_kwargs = {
+                "max_tokens": max_tokens,
+                "system_prompt": system_prompt,
+                "assistant_name": assistant_name or "assistant",
+                "show_stats": stats,
+            }
+            if model:
+                config_kwargs["model"] = model
+
             if use_interactive:
                 # Interactive mode using ChatSDK
-                config = ChatConfig(
-                    model=model or DEFAULT_MODEL_NAME,
-                    max_tokens=max_tokens,
-                    system_prompt=system_prompt,
-                    assistant_name=assistant_name or "assistant",
-                    show_stats=stats,
-                )
+                config = ChatConfig(**config_kwargs)
                 chat = ChatSDK(config)
                 asyncio.run(chat.start_interactive_session())
             else:
                 # Single message mode with streaming
-                config = ChatConfig(
-                    model=model or DEFAULT_MODEL_NAME,
-                    max_tokens=max_tokens,
-                    system_prompt=system_prompt,
-                    assistant_name=assistant_name or "assistant",
-                    show_stats=stats,
-                )
+                config = ChatConfig(**config_kwargs)
                 chat = ChatSDK(config)
                 full_response = ""
                 for chunk in chat.send_stream(message):
@@ -286,23 +490,50 @@ class GaiaCliClient:
 async def async_main(action, **kwargs):
     log = get_logger(__name__)
 
-    # Check Lemonade health for all actions that require it
-    if action in ["prompt", "chat", "talk", "stats"]:
-        if not check_lemonade_health():
-            print_lemonade_error()
+    # Map actions to agent profiles for Lemonade initialization
+    # Each agent has specific model and context size requirements
+    # Note: code, blender, jira, docker are handled by their own handler functions
+    action_to_agent = {
+        "prompt": "minimal",  # Basic prompts use minimal profile
+        "chat": "chat",
+        "talk": "talk",
+        "stats": "minimal",
+    }
+
+    # Initialize Lemonade with agent-specific profile
+    lemonade_base_url = kwargs.get("base_url")  # May be None if not specified
+    if action in action_to_agent:
+        agent_profile = action_to_agent[action]
+        use_claude = kwargs.get("use_claude", False)
+        use_chatgpt = kwargs.get("use_chatgpt", False)
+
+        success, detected_base_url = initialize_lemonade_for_agent(
+            agent=agent_profile,
+            skip_if_external=True,
+            use_claude=use_claude,
+            use_chatgpt=use_chatgpt,
+        )
+        if not success:
             sys.exit(1)
 
-    # Create client for all actions - exclude parameters that aren't constructor arguments
-    # Filter out audio-related parameters that are no longer part of GaiaCliClient
-    audio_params = {
-        "whisper_model_size",
-        "audio_device_index",
-        "silence_threshold",
-        "no_tts",
-    }
-    excluded_params = {"message", "stats", "assistant_name"} | audio_params
-    client_params = {k: v for k, v in kwargs.items() if k not in excluded_params}
-    client = GaiaCliClient(**client_params)
+        # Use detected base_url if not explicitly provided
+        if lemonade_base_url is None:
+            lemonade_base_url = detected_base_url
+            kwargs["base_url"] = detected_base_url
+
+    # Create client for actions that use GaiaCliClient (not chat - it uses ChatAgent)
+    client = None
+    if action in ["prompt", "stats"]:
+        # Filter out audio-related parameters that are no longer part of GaiaCliClient
+        audio_params = {
+            "whisper_model_size",
+            "audio_device_index",
+            "silence_threshold",
+            "no_tts",
+        }
+        excluded_params = {"message", "stats", "assistant_name"} | audio_params
+        client_params = {k: v for k, v in kwargs.items() if k not in excluded_params}
+        client = GaiaCliClient(**client_params)
 
     if action == "prompt":
         if not kwargs.get("message"):
@@ -318,43 +549,90 @@ async def async_main(action, **kwargs):
                 return {"response": response, "stats": stats}
         return {"response": response}
     elif action == "chat":
-        # Use ChatSDK for chat functionality
-        from gaia.chat.sdk import ChatConfig, ChatSDK
+        # Use Chat Agent with RAG, file search, and shell execution
+        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+        from gaia.agents.chat.app import interactive_mode
 
-        # Create SDK configuration
-        config = ChatConfig(
-            model=kwargs.get("model", DEFAULT_MODEL_NAME),
-            max_tokens=kwargs.get("max_tokens", 512),
-            system_prompt=kwargs.get("system_prompt"),
-            assistant_name=kwargs.get("assistant_name", "assistant"),
-            show_stats=kwargs.get("stats", False),
-            logging_level=kwargs.get("logging_level", "INFO"),
-        )
+        try:
+            # Use silent mode when debug is off to hide intermediate processing
+            # SilentConsole will still stream the final answer
+            query = kwargs.get("query")
+            debug_mode = kwargs.get("debug", False)
+            use_silent_mode = not debug_mode  # Hide processing steps unless debugging
 
-        chat_sdk = ChatSDK(config)
+            # Create configuration with CLI values
+            config = ChatAgentConfig(
+                use_claude=kwargs.get("use_claude", False),
+                use_chatgpt=kwargs.get("use_chatgpt", False),
+                claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
+                base_url=kwargs.get(
+                    "base_url",
+                    os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL),
+                ),
+                model_id=kwargs.get("model", None),
+                max_steps=kwargs.get("max_steps", 100),
+                streaming=kwargs.get("stream", False),
+                show_prompts=kwargs.get("show_prompts", False),
+                show_stats=kwargs.get("show_stats", False),
+                silent_mode=use_silent_mode,
+                debug=debug_mode,
+                rag_documents=kwargs.get("index", []),
+                watch_directories=kwargs.get("watch", []),
+                chunk_size=kwargs.get("chunk_size", 500),
+                max_chunks=kwargs.get("max_chunks", 3),
+                allowed_paths=kwargs.get("allowed_paths", None),
+            )
 
-        message = kwargs.get("message")
-        if message:
-            # Single message mode with streaming
-            for chunk in chat_sdk.send_stream(message):
-                if not chunk.is_complete:
-                    print(chunk.text, end="", flush=True)
-                else:
-                    # Show stats if requested
-                    if kwargs.get("stats", False) and chunk.stats:
-                        print()  # Add newline before stats
-                        chat_sdk.display_stats(chunk.stats)
-            print()  # Add final newline
-        else:
-            # Interactive mode using ChatSDK
-            await chat_sdk.start_interactive_session()
+            # Create Chat Agent with configuration
+            agent = ChatAgent(config)
 
-        return
+            # Create initial session if not loading one
+            if not agent.current_session:
+                agent.current_session = agent.session_manager.create_session()
+                log.debug(f"Created new session: {agent.current_session.session_id}")
+
+            # List tools if requested
+            if kwargs.get("list_tools", False):
+                agent.list_tools(verbose=True)
+                return
+
+            # Single query mode
+            query = kwargs.get("query")
+            if query:
+                result = agent.process_query(query, trace=kwargs.get("trace", False))
+                # The console (either AgentConsole or SilentConsole) already handles printing
+
+                if kwargs.get("show_stats", False) and result.get("duration"):
+                    agent.console.display_stats(result)
+
+                return 0 if result["status"] == "success" else 1
+
+            # Interactive mode
+            interactive_mode(agent)
+            return
+
+        except KeyboardInterrupt:
+            print("\n\nInterrupted by user")
+            return
+        except Exception as e:
+            log.error(f"Error in chat: {e}", exc_info=True)
+            print(f"❌ Error: {e}")
+            return
+        finally:
+            # Cleanup
+            try:
+                if "agent" in locals():
+                    agent.stop_watching()
+            except Exception:  # pylint: disable=broad-except
+                pass
     elif action == "talk":
         # Use TalkSDK for voice functionality
         from gaia.talk.sdk import TalkConfig, TalkSDK
 
         # Create SDK configuration from CLI arguments
+        index_file = kwargs.get("index")
+        rag_documents = [index_file] if index_file else None
+
         config = TalkConfig(
             whisper_model_size=kwargs.get("whisper_model_size", "base"),
             audio_device_index=kwargs.get(
@@ -367,6 +645,8 @@ async def async_main(action, **kwargs):
             logging_level=kwargs.get(
                 "logging_level", "INFO"
             ),  # Back to INFO now that issues are fixed
+            # RAG configuration
+            rag_documents=rag_documents,
         )
 
         # Create SDK instance
@@ -426,6 +706,66 @@ def main():
         help="Set the logging level (default: INFO)",
     )
 
+    # Generic LLM backend options (available to all agents)
+    parent_parser.add_argument(
+        "--use-claude",
+        action="store_true",
+        help="Use Claude API instead of local Lemonade server",
+    )
+    parent_parser.add_argument(
+        "--use-chatgpt",
+        action="store_true",
+        help="Use ChatGPT/OpenAI API instead of local Lemonade server",
+    )
+    parent_parser.add_argument(
+        "--claude-model",
+        default="claude-sonnet-4-20250514",
+        help="Claude model to use when --use-claude is specified (default: claude-sonnet-4-20250514)",
+    )
+    parent_parser.add_argument(
+        "--base-url",
+        default=None,
+        help=f"Lemonade LLM server base URL (default: from LEMONADE_BASE_URL env or {DEFAULT_LEMONADE_URL})",
+    )
+    parent_parser.add_argument(
+        "--model",
+        default=None,
+        help="Model ID to use (default: auto-selected by each agent)",
+    )
+    parent_parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="Save detailed JSON trace of agent execution (default: disabled)",
+    )
+    parent_parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=100,
+        help="Maximum conversation steps (default: 100)",
+    )
+    parent_parser.add_argument(
+        "--list-tools",
+        action="store_true",
+        help="List available tools and exit",
+    )
+    parent_parser.add_argument(
+        "--stats",
+        "--show-stats",
+        action="store_true",
+        dest="show_stats",
+        help="Show performance statistics",
+    )
+    parent_parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Enable real-time streaming of LLM responses (shows raw JSON)",
+    )
+    parent_parser.add_argument(
+        "--no-lemonade-check",
+        action="store_true",
+        help="Skip Lemonade server check (for CI/testing without Lemonade)",
+    )
+
     # Create subparsers for different commands
     subparsers = parser.add_subparsers(dest="action", help="Action to perform")
 
@@ -440,63 +780,59 @@ def main():
         "message",
         help="Message to send to Gaia",
     )
-
-    prompt_parser.add_argument(
-        "--model",
-        default=DEFAULT_MODEL_NAME,
-        help=f"Model to use for the agent (default: {DEFAULT_MODEL_NAME})",
-    )
     prompt_parser.add_argument(
         "--max-tokens",
         type=int,
         default=512,
         help="Maximum number of tokens to generate (default: 512)",
     )
-    prompt_parser.add_argument(
-        "--stats",
-        action="store_true",
-        help="Show performance statistics after generation",
-    )
 
     chat_parser = subparsers.add_parser(
         "chat",
-        help="Start interactive chat session with conversation history",
+        help="Interactive chat with RAG, file search, and shell execution",
         parents=[parent_parser],
     )
     chat_parser.add_argument(
-        "message",
-        nargs="?",
-        help="Message to send to the chatbot (defaults to interactive mode if not provided)",
+        "--query",
+        "-q",
+        type=str,
+        help="Single query to execute (defaults to interactive mode if not provided)",
+    )
+
+    # Agent configuration
+    chat_parser.add_argument(
+        "--show-prompts", action="store_true", help="Display prompts sent to LLM"
+    )
+    chat_parser.add_argument("--debug", action="store_true", help="Enable debug output")
+
+    # RAG configuration
+    chat_parser.add_argument(
+        "--index",
+        "-i",
+        nargs="+",
+        metavar="FILE",
+        help="PDF document(s) to index for RAG (space-separated)",
     )
     chat_parser.add_argument(
-        "--model",
-        default=DEFAULT_MODEL_NAME,
-        help=f"Model name to use (default: {DEFAULT_MODEL_NAME})",
+        "--watch", "-w", nargs="+", help="Directories to monitor for new documents"
     )
     chat_parser.add_argument(
-        "--max-tokens",
+        "--chunk-size", type=int, default=500, help="Document chunk size (default: 500)"
+    )
+    chat_parser.add_argument(
+        "--max-chunks",
         type=int,
-        default=512,
-        help="Maximum tokens to generate (default: 512)",
-    )
-    chat_parser.add_argument("--system-prompt", help="Custom system prompt to use")
-    chat_parser.add_argument(
-        "--assistant-name",
-        default="gaia",
-        help="Name to use for the assistant (default: gaia)",
+        default=3,
+        help="Maximum chunks to retrieve (default: 3)",
     )
     chat_parser.add_argument(
-        "--stats", action="store_true", help="Show performance statistics"
+        "--allowed-paths",
+        nargs="+",
+        help="Allowed directory paths for file operations (default: current directory)",
     )
 
     talk_parser = subparsers.add_parser(
         "talk", help="Start voice conversation with Gaia", parents=[parent_parser]
-    )
-
-    talk_parser.add_argument(
-        "--model",
-        default=DEFAULT_MODEL_NAME,
-        help=f"Model to use for the agent (default: {DEFAULT_MODEL_NAME})",
     )
     talk_parser.add_argument(
         "--max-tokens",
@@ -528,11 +864,12 @@ def main():
         default=0.5,
         help="Silence threshold in seconds (default: 0.5)",
     )
+
+    # RAG configuration for talk (document Q&A with voice)
     talk_parser.add_argument(
-        "--stats",
-        action="store_true",
-        help="Show performance statistics during voice chat",
+        "--index", "-i", type=str, help="Index a PDF document for voice Q&A"
     )
+    talk_parser.set_defaults(action="talk")
 
     # Add summarize command
     summarize_parser = subparsers.add_parser(
@@ -563,12 +900,6 @@ def main():
         choices=["json", "pdf", "email", "both"],
         default="json",
         help="Output format (default: json). 'both' generates json and pdf",
-    )
-    summarize_parser.add_argument(
-        "-m",
-        "--model",
-        default=DEFAULT_MODEL_NAME,
-        help=f"LLM model to use (default: {DEFAULT_MODEL_NAME}). Use gpt-4 for OpenAI",
     )
     summarize_parser.add_argument(
         "--styles",
@@ -632,11 +963,6 @@ def main():
         parents=[parent_parser],
     )
     blender_parser.add_argument(
-        "--model",
-        default=DEFAULT_MODEL_NAME,
-        help=f"Model ID to use (default: {DEFAULT_MODEL_NAME})",
-    )
-    blender_parser.add_argument(
         "--example",
         type=int,
         choices=range(1, 7),
@@ -650,15 +976,6 @@ def main():
         type=str,
         default="output",
         help="Directory to save output files",
-    )
-    blender_parser.add_argument(
-        "--stream", action="store_true", help="Enable streaming mode for LLM responses"
-    )
-    blender_parser.add_argument(
-        "--stats",
-        action="store_true",
-        default=True,
-        help="Display performance statistics",
     )
     blender_parser.add_argument(
         "--query", type=str, help="Custom query to run instead of examples"
@@ -716,10 +1033,6 @@ def main():
         help="MCP bridge port (default: 8765)",
     )
     jira_parser.add_argument(
-        "--model",
-        help="LLM model to use (default: Qwen3-Coder-30B-A3B-Instruct-GGUF)",
-    )
-    jira_parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -731,77 +1044,6 @@ def main():
         action="store_true",
         help="Enable debug logging",
     )
-
-    # Add Code agent command
-    code_parser = subparsers.add_parser(
-        "code",
-        help="Python code assistant with analysis, generation, and linting",
-        parents=[parent_parser],
-    )
-    code_parser.add_argument(
-        "query",
-        nargs="?",
-        help="Code operation query (e.g., 'Generate a function to sort a list')",
-    )
-    code_parser.add_argument(
-        "--interactive",
-        "-i",
-        action="store_true",
-        help="Interactive mode for multiple queries",
-    )
-    code_parser.add_argument(
-        "--silent",
-        "-s",
-        action="store_true",
-        help="Silent mode - suppress console output, return JSON only",
-    )
-    code_parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug logging",
-    )
-    code_parser.add_argument(
-        "--show-prompts",
-        action="store_true",
-        help="Display prompts sent to LLM",
-    )
-    code_parser.add_argument(
-        "--output",
-        "-o",
-        help="Output file for results (JSON format)",
-    )
-    code_parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=100,
-        help="Maximum conversation steps (default: 100)",
-    )
-    code_parser.add_argument(
-        "--list-tools",
-        action="store_true",
-        help="List all available tools and exit",
-    )
-    code_parser.add_argument(
-        "--use-claude",
-        action="store_true",
-        help="Use Claude API instead of local Lemonade server",
-    )
-    code_parser.add_argument(
-        "--use-chatgpt",
-        action="store_true",
-        help="Use ChatGPT/OpenAI API instead of local Lemonade server",
-    )
-    code_parser.add_argument(
-        "--streaming",
-        action="store_true",
-        help="Enable real-time streaming of LLM responses (shows raw JSON)",
-    )
-    code_parser.add_argument(
-        "--step-through",
-        action="store_true",
-        help="Enable step-through debugging mode (pause at each agent step)",
-    )
-    code_parser.set_defaults(action="code")
 
     # Add Docker app command
     docker_parser = subparsers.add_parser(
@@ -829,10 +1071,6 @@ def main():
         "--debug",
         action="store_true",
         help="Enable debug logging",
-    )
-    docker_parser.add_argument(
-        "--model",
-        help="LLM model to use (default: Qwen3-Coder-30B-A3B-Instruct-GGUF)",
     )
     docker_parser.set_defaults(action="docker")
 
@@ -879,6 +1117,144 @@ def main():
         help="Enable step-through debugging mode (pause at each agent step)",
     )
     api_parser.set_defaults(action="api")
+
+    # Add model pull command
+    pull_parser = subparsers.add_parser(
+        "pull",
+        help="Download/install a model from the Lemonade Server registry",
+        parents=[parent_parser],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Pull a registered model
+  gaia pull Qwen3-0.6B-GGUF
+
+  # Pull and register a custom model from HuggingFace
+  gaia pull user.Custom-Model-GGUF --checkpoint unsloth/Custom-Model-GGUF:Q4_K_M --recipe llamacpp
+
+  # Pull a reasoning model
+  gaia pull user.DeepSeek-GGUF --checkpoint unsloth/DeepSeek-R1-GGUF --recipe llamacpp --reasoning
+
+  # Pull a vision model with mmproj
+  gaia pull user.Vision-Model --checkpoint model/vision:Q4 --recipe llamacpp --vision --mmproj mmproj.gguf
+        """,
+    )
+    pull_parser.add_argument(
+        "model_name",
+        help="Name of the model to pull (use 'user.' prefix for custom models)",
+    )
+    pull_parser.add_argument(
+        "--checkpoint",
+        help="HuggingFace checkpoint for custom models (e.g., unsloth/Model-GGUF:Q4_K_M)",
+    )
+    pull_parser.add_argument(
+        "--recipe",
+        help="Lemonade recipe for custom models (e.g., llamacpp, oga-cpu)",
+    )
+    pull_parser.add_argument(
+        "--reasoning",
+        action="store_true",
+        help="Mark model as a reasoning model (like DeepSeek)",
+    )
+    pull_parser.add_argument(
+        "--vision",
+        action="store_true",
+        help="Mark model as having vision capabilities",
+    )
+    pull_parser.add_argument(
+        "--embedding",
+        action="store_true",
+        help="Mark model as an embedding model",
+    )
+    pull_parser.add_argument(
+        "--reranking",
+        action="store_true",
+        help="Mark model as a reranking model",
+    )
+    pull_parser.add_argument(
+        "--mmproj",
+        help="Multimodal projector file for vision models",
+    )
+    pull_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=1200,
+        help="Timeout in seconds for model download (default: 1200)",
+    )
+    pull_parser.add_argument(
+        "--host",
+        default="localhost",
+        help="Lemonade server host (default: localhost)",
+    )
+    pull_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Lemonade server port (default: 8000)",
+    )
+    pull_parser.set_defaults(action="pull")
+
+    # Add model download command
+    download_parser = subparsers.add_parser(
+        "download",
+        help="Download all models required for GAIA agents",
+        parents=[parent_parser],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Download all models for all agents
+  gaia download
+
+  # Download models for chat agent only
+  gaia download --agent chat
+
+  # Download models for code agent
+  gaia download --agent code
+
+  # List available agents and their required models
+  gaia download --list
+
+  # Delete all downloaded GAIA models (free up disk space)
+  gaia download --clear-cache
+
+Available agents: chat, code, talk, rag, blender, jira, docker, vlm, minimal, mcp
+        """,
+    )
+    download_parser.add_argument(
+        "--agent",
+        default="all",
+        help="Agent to download models for (default: all)",
+    )
+    download_parser.add_argument(
+        "--list",
+        action="store_true",
+        dest="list_models",
+        help="List required models without downloading",
+    )
+    download_parser.add_argument(
+        "--clear-cache",
+        action="store_true",
+        dest="clear_cache",
+        help="Delete all downloaded GAIA models to free up disk space",
+    )
+    download_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=1800,
+        help="Timeout per model in seconds (default: 1800)",
+    )
+    download_parser.add_argument(
+        "--host",
+        default="localhost",
+        help="Lemonade server host (default: localhost)",
+    )
+    download_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Lemonade server port (default: 8000)",
+    )
+    download_parser.set_defaults(action="download")
 
     subparsers.add_parser(
         "stats",
@@ -966,9 +1342,6 @@ def main():
     )
     llm_parser.add_argument("query", help="The query/prompt to send to the LLM")
     llm_parser.add_argument(
-        "--model", help="Model name to use (optional, uses client default)"
-    )
-    llm_parser.add_argument(
         "--max-tokens",
         type=int,
         default=512,
@@ -1016,10 +1389,13 @@ Examples:
   gaia groundtruth -f ./data/html/intro.html -o ./output/gt
 
   # Use custom Claude model
-  gaia groundtruth -f ./data/doc.html -m claude-3-opus-20240229
+  gaia groundtruth -f ./data/doc.html --claude-model claude-3-opus-20240229
 
   # Generate 10 Q&A pairs per document (RAG only)
   gaia groundtruth -d ./data/html/blender --num-samples 10
+
+  # Force regeneration of all ground truth files
+  gaia groundtruth -d ./data/html/blender --force
         """,
     )
 
@@ -1060,13 +1436,6 @@ Examples:
         help="Use case for ground truth generation: 'rag' for document Q&A pairs, 'summarization' for transcript summaries, 'qa' for transcript Q&A pairs, 'email' for email processing analysis (default: summarization)",
     )
     gt_parser.add_argument(
-        "-m",
-        "--model",
-        type=str,
-        default=DEFAULT_CLAUDE_MODEL,
-        help=f"Claude model to use (default: {DEFAULT_CLAUDE_MODEL})",
-    )
-    gt_parser.add_argument(
         "--max-tokens",
         type=int,
         default=4096,
@@ -1087,6 +1456,11 @@ Examples:
         type=int,
         default=5,
         help="Number of Q&A pairs to generate per document (RAG use case only, default: 5)",
+    )
+    gt_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force regeneration of all ground truth files, even if they already exist (default: skip existing)",
     )
 
     # Add new subparser for creating evaluation templates
@@ -1150,7 +1524,7 @@ Examples:
   gaia eval -f ./output/experiments/meetings/design_review_meeting.Claude-Sonnet-Basic-Summary.experiment.json -g ./output/groundtruth/meetings/design_review_meeting.summarization.groundtruth.json
 
   # Evaluate directory with specific Claude model
-  gaia eval -d ./output/experiments -m claude-3-opus-20240229
+  gaia eval -d ./output/experiments --claude-model claude-3-opus-20240229
 
   # Evaluate and display summary only (no detailed report file)
   gaia eval -d ./output/experiments --summary-only
@@ -1178,13 +1552,6 @@ Examples:
         type=str,
         default=f"./{DEFAULT_EVALUATIONS_DIR}",
         help=f"Output directory for evaluation report (default: ./{DEFAULT_EVALUATIONS_DIR})",
-    )
-    eval_parser.add_argument(
-        "-m",
-        "--model",
-        type=str,
-        default=DEFAULT_CLAUDE_MODEL,
-        help=f"Claude model to use for evaluation (default: {DEFAULT_CLAUDE_MODEL})",
     )
     eval_parser.add_argument(
         "-g",
@@ -1342,6 +1709,23 @@ Examples:
         help="Single agent output JSON file to visualize",
     )
 
+    perf_vis_parser = subparsers.add_parser(
+        "perf-vis",
+        help="Visualize llama.cpp performance metrics from log files",
+        parents=[parent_parser],
+    )
+    perf_vis_parser.add_argument(
+        "log_paths",
+        type=Path,
+        nargs="+",
+        help="One or more llama.cpp server log files to visualize",
+    )
+    perf_vis_parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Display plots interactively in addition to saving images",
+    )
+
     # Add new subparser for generating synthetic test data
     generate_parser = subparsers.add_parser(
         "generate",
@@ -1432,12 +1816,7 @@ Examples:
         default=1,
         help="Number items to generate per type (default: 1)",
     )
-    generate_parser.add_argument(
-        "--claude-model",
-        type=str,
-        default=DEFAULT_CLAUDE_MODEL,
-        help=f"Claude model to use for generation (default: {DEFAULT_CLAUDE_MODEL})",
-    )
+    # Note: --claude-model inherited from parent_parser
 
     # Add type-specific arguments
     generate_parser.add_argument(
@@ -1529,7 +1908,7 @@ Examples:
 
     # MCP start command
     mcp_start_parser = mcp_subparsers.add_parser(
-        "start", help="Start the MCP bridge server"
+        "start", help="Start the MCP bridge server", parents=[parent_parser]
     )
     mcp_start_parser.add_argument(
         "--host",
@@ -1539,11 +1918,7 @@ Examples:
     mcp_start_parser.add_argument(
         "--port", type=int, default=8765, help="Port to listen on (default: 8765)"
     )
-    mcp_start_parser.add_argument(
-        "--base-url",
-        default="http://localhost:8000/api/v0",
-        help="GAIA LLM server base URL",
-    )
+    # Note: --base-url is inherited from parent_parser
     mcp_start_parser.add_argument(
         "--auth-token", help="Optional authentication token for secure connections"
     )
@@ -1562,6 +1937,12 @@ Examples:
         "--verbose",
         action="store_true",
         help="Enable verbose logging for all HTTP requests",
+    )
+    mcp_start_parser.add_argument(
+        "--ctx-size",
+        type=int,
+        default=32768,
+        help="Context size for Lemonade Server (default: 32768 for coding)",
     )
 
     # MCP status command
@@ -1631,6 +2012,26 @@ Examples:
         "--verbose", action="store_true", help="Enable verbose logging"
     )
 
+    # Cache command (for Context7 cache management)
+    cache_parser = subparsers.add_parser(
+        "cache", help="Manage Context7 API cache and rate limiting"
+    )
+    cache_subparsers = cache_parser.add_subparsers(
+        dest="cache_action", help="Cache action to perform"
+    )
+
+    # Cache status command
+    _ = cache_subparsers.add_parser("status", help="Show cache and rate limiter status")
+
+    # Cache clear command
+    cache_clear_parser = cache_subparsers.add_parser("clear", help="Clear cached data")
+    cache_clear_parser.add_argument(
+        "--context7", action="store_true", help="Clear Context7 cache"
+    )
+    cache_clear_parser.add_argument(
+        "--all", action="store_true", help="Clear all caches"
+    )
+
     args = parser.parse_args()
 
     # Check if action is specified
@@ -1671,7 +2072,7 @@ Examples:
             print("The evaluation dependencies are not installed.")
             print("")
             print("To fix this, install the evaluation dependencies:")
-            print("  pip install -e .[eval]")
+            print('  uv pip install -e ".[eval]"')
             print("")
             print("This will install required packages including:")
             print("  - anthropic (for Claude AI)")
@@ -2026,7 +2427,7 @@ Examples:
 
                         if not HAS_REPORTLAB:
                             print(
-                                "❌ Error: PDF output requires reportlab. Install with: pip install reportlab"
+                                "❌ Error: PDF output requires reportlab. Install with: uv pip install reportlab"
                             )
                             if args.format == "both":
                                 print(
@@ -2104,7 +2505,7 @@ Examples:
                             pdf_formatter = PDFFormatter()
                         else:
                             print(
-                                "⚠️  Warning: PDF output requires reportlab. Install with: pip install reportlab"
+                                "⚠️  Warning: PDF output requires reportlab. Install with: uv pip install reportlab"
                             )
                             if args.format == "pdf":
                                 print("❌ Cannot generate PDF files without reportlab.")
@@ -2222,7 +2623,7 @@ Let me know your answer!
                 log.debug("ASR initialized successfully")
             except ImportError:
                 log.error(
-                    "WhisperAsr not found. Please install voice support with: pip install -e .[talk]"
+                    'WhisperAsr not found. Please install voice support with: uv pip install -e ".[talk]"'
                 )
                 raise
             except Exception as e:
@@ -2308,7 +2709,7 @@ Let me know your answer!
                     "❌ Error: YouTube transcript functionality requires additional dependencies."
                 )
                 print(
-                    "Please install: pip install llama-index-readers-youtube-transcript"
+                    "Please install: uv pip install llama-index-readers-youtube-transcript"
                 )
                 print(f"Import error: {e}")
                 sys.exit(1)
@@ -2324,10 +2725,352 @@ Let me know your answer!
             print(f"❌ {result['message']}")
         return
 
+    # Import LemonadeManager for model commands error handling
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    # Handle model pull command
+    if args.action == "pull":
+        log.info(f"Pulling model: {args.model_name}")
+        verbose = getattr(args, "verbose", False)
+        try:
+            client = LemonadeClient(host=args.host, port=args.port, verbose=verbose)
+
+            # Check if Lemonade server is running
+            if not check_lemonade_health(args.host, args.port):
+                LemonadeManager.print_server_error()
+                return
+
+            print(f"📥 Pulling model: {args.model_name}")
+
+            # Define a CLI progress callback for real-time updates
+            last_percent = [-1]  # Use list to allow mutation in closure
+            last_file_index = [0]
+
+            def cli_progress_callback(event_type: str, data: dict) -> None:
+                """Display download progress in CLI."""
+                if event_type == "progress":
+                    percent = data.get("percent", 0)
+                    file_name = data.get("file", "unknown")
+                    file_index = data.get("file_index", 1)
+                    total_files = data.get("total_files", 1)
+
+                    # Print newline when moving to a new file
+                    if file_index != last_file_index[0] and last_file_index[0] > 0:
+                        print()  # Newline for previous file
+                    last_file_index[0] = file_index
+
+                    # Update every 2% for smooth progress
+                    if percent >= last_percent[0] + 2 or percent == 0 or percent == 100:
+                        bytes_downloaded = data.get("bytes_downloaded", 0)
+                        bytes_total = data.get("bytes_total", 0)
+
+                        # Create progress bar
+                        bar = _make_progress_bar(percent)
+                        progress_line = (
+                            f"   {bar} {percent:3d}% "
+                            f"[{file_index}/{total_files}] {file_name}: "
+                            f"{_format_bytes(bytes_downloaded)}/{_format_bytes(bytes_total)}"
+                        )
+                        print(f"\r{progress_line:<100}", end="", flush=True)
+                        last_percent[0] = percent
+
+                elif event_type == "complete":
+                    print()  # Newline after progress
+                    print(f"✅ Model downloaded successfully: {args.model_name}")
+
+                elif event_type == "error":
+                    print()  # Newline after progress
+                    error_msg = data.get("error", "Unknown error")
+                    print(f"❌ Download failed: {error_msg}")
+
+            # Use streaming pull with progress callback
+            completed = False
+            for event in client.pull_model_stream(
+                model_name=args.model_name,
+                checkpoint=getattr(args, "checkpoint", None),
+                recipe=getattr(args, "recipe", None),
+                reasoning=getattr(args, "reasoning", False) or None,
+                vision=getattr(args, "vision", False) or None,
+                embedding=getattr(args, "embedding", False) or None,
+                reranking=getattr(args, "reranking", False) or None,
+                mmproj=getattr(args, "mmproj", None),
+                timeout=args.timeout,
+                progress_callback=cli_progress_callback,
+            ):
+                if event.get("event") == "complete":
+                    completed = True
+                elif event.get("event") == "error":
+                    sys.exit(1)
+
+            if not completed:
+                print("⚠️  Model pull completed without explicit complete event")
+
+        except LemonadeClientError as e:
+            print(f"❌ Error pulling model: {e}")
+            sys.exit(1)
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "connection" in error_msg or "refused" in error_msg:
+                LemonadeManager.print_server_error()
+            else:
+                print(f"❌ Error: {e}")
+            sys.exit(1)
+        return
+
+    # Handle model download command
+    if args.action == "download":
+        from gaia.llm.lemonade_client import AGENT_PROFILES, MODELS
+
+        log.info(f"Download models command - agent: {args.agent}")
+        verbose = getattr(args, "verbose", False)
+        try:
+            client = LemonadeClient(host=args.host, port=args.port, verbose=verbose)
+
+            # Clear cache mode: delete all GAIA models (including partial downloads)
+            if args.clear_cache:
+                # Check if Lemonade server is running
+                if not check_lemonade_health(args.host, args.port):
+                    LemonadeManager.print_server_error()
+                    return
+
+                model_ids = client.get_required_models("all")
+                if not model_ids:
+                    print("📦 No GAIA models defined")
+                    return
+
+                print(f"🗑️  Clearing cache for {len(model_ids)} GAIA model(s)...")
+                print("   (This removes both complete and partial downloads)")
+                print()
+
+                success_count = 0
+                skip_count = 0
+                fail_count = 0
+
+                in_use_models = []
+                for model_id in model_ids:
+                    print(f"   Deleting {model_id}...", end=" ", flush=True)
+                    try:
+                        client.delete_model(model_id)
+                        print("✅")
+                        success_count += 1
+                    except LemonadeClientError as e:
+                        error_str = str(e).lower()
+                        # Model not found is OK - means it wasn't downloaded
+                        if "not found" in error_str or "does not exist" in error_str:
+                            print("⏭️  (not downloaded)")
+                            skip_count += 1
+                        elif "being used by another process" in error_str:
+                            print("🔒 (model is loaded)")
+                            in_use_models.append(model_id)
+                            fail_count += 1
+                        else:
+                            print(f"❌ {e}")
+                            fail_count += 1
+
+                print()
+                print("=" * 50)
+                print("🗑️  Cache Clear Summary:")
+                print(f"   ✅ Deleted: {success_count}")
+                print(f"   ⏭️  Skipped (not downloaded): {skip_count}")
+                if fail_count > 0:
+                    print(f"   ❌ Failed: {fail_count}")
+                print("=" * 50)
+
+                # Show helpful tips if models are in use
+                if in_use_models:
+                    print()
+                    print(
+                        "💡 Some models could not be deleted because they are currently loaded."
+                    )
+                    print("   To delete them, restart Lemonade Server and try again:")
+                    print()
+                    print(
+                        "   1. Close any running GAIA commands (gaia chat, gaia code, etc.)"
+                    )
+                    print(
+                        "   2. Restart Lemonade Server (close window and run: lemonade-server serve)"
+                    )
+                    print("   3. Run: gaia download --clear-cache")
+                    print()
+                    print("   Or manually delete the model cache folders:")
+                    print("   - Lemonade cache: %LOCALAPPDATA%\\lemonade\\")
+                    print(
+                        "   - HuggingFace cache: %USERPROFILE%\\.cache\\huggingface\\hub\\"
+                    )
+
+                return
+
+            # List mode: show required models without downloading
+            if args.list_models:
+                agent_name = args.agent.lower()
+                if agent_name == "all":
+                    print("📦 Models required for all GAIA agents:\n")
+                    all_models = set()
+                    for profile in AGENT_PROFILES.values():
+                        print(f"  {profile.display_name} ({profile.name}):")
+                        for model_key in profile.models:
+                            if model_key in MODELS:
+                                model = MODELS[model_key]
+                                all_models.add(model.model_id)
+                                # Check if available
+                                available = client.check_model_available(model.model_id)
+                                status = "✅" if available else "⬜"
+                                print(f"    {status} {model.model_id}")
+                        print()
+                    print(f"  Total unique models: {len(all_models)}")
+                else:
+                    profile = client.get_agent_profile(agent_name)
+                    if not profile:
+                        print(f"❌ Unknown agent: {agent_name}")
+                        print(f"   Available: {', '.join(client.list_agents())}")
+                        sys.exit(1)
+                    print(f"📦 Models required for {profile.display_name}:\n")
+                    for model_key in profile.models:
+                        if model_key in MODELS:
+                            model = MODELS[model_key]
+                            available = client.check_model_available(model.model_id)
+                            status = "✅" if available else "⬜"
+                            print(f"  {status} {model.model_id}")
+                return
+
+            # Check if Lemonade server is running
+            if not check_lemonade_health(args.host, args.port):
+                LemonadeManager.print_server_error()
+                return
+
+            agent_name = args.agent.lower()
+            model_ids = client.get_required_models(agent_name)
+
+            if not model_ids:
+                if agent_name != "all":
+                    profile = client.get_agent_profile(agent_name)
+                    if not profile:
+                        print(f"❌ Unknown agent: {agent_name}")
+                        print(f"   Available: {', '.join(client.list_agents())}")
+                        sys.exit(1)
+                print(f"📦 No models to download for '{agent_name}'")
+                return
+
+            print(f"📥 Downloading {len(model_ids)} model(s) for '{agent_name}'...")
+            print()
+
+            # Track progress per model
+            current_model = [None]
+            last_percent = [-1]
+            last_file_index = [0]
+
+            def download_progress_callback(event_type: str, data: dict) -> None:
+                """Display download progress in CLI."""
+                if event_type == "progress":
+                    percent = data.get("percent", 0)
+                    file_name = data.get("file", "unknown")
+                    file_index = data.get("file_index", 1)
+                    total_files = data.get("total_files", 1)
+
+                    # Print newline when moving to a new file
+                    if file_index != last_file_index[0] and last_file_index[0] > 0:
+                        print()  # Newline for previous file
+                    last_file_index[0] = file_index
+
+                    # Update every 2% for smooth progress
+                    if percent >= last_percent[0] + 2 or percent == 0 or percent == 100:
+                        bytes_downloaded = data.get("bytes_downloaded", 0)
+                        bytes_total = data.get("bytes_total", 0)
+
+                        # Create progress bar
+                        bar = _make_progress_bar(percent)
+                        progress_line = (
+                            f"   {bar} {percent:3d}% "
+                            f"[{file_index}/{total_files}] {file_name}: "
+                            f"{_format_bytes(bytes_downloaded)}/{_format_bytes(bytes_total)}"
+                        )
+                        print(f"\r{progress_line:<100}", end="", flush=True)
+                        last_percent[0] = percent
+
+                elif event_type == "complete":
+                    print()  # Newline after progress
+                    print("   ✅ Download complete")
+                    last_percent[0] = -1  # Reset for next model
+                    last_file_index[0] = 0
+
+                elif event_type == "error":
+                    print()  # Newline after progress
+                    error_msg = data.get("error", "Unknown error")
+                    print(f"   ❌ Error: {error_msg}")
+
+            # Download each model
+            success_count = 0
+            skip_count = 0
+            fail_count = 0
+
+            for model_id in model_ids:
+                current_model[0] = model_id
+                last_percent[0] = -1
+
+                # Check if already available
+                if client.check_model_available(model_id):
+                    print(f"✅ {model_id} (already downloaded)")
+                    skip_count += 1
+                    continue
+
+                print(f"📥 {model_id}")
+
+                try:
+                    completed = False
+                    for event in client.pull_model_stream(
+                        model_name=model_id,
+                        timeout=args.timeout,
+                        progress_callback=download_progress_callback,
+                    ):
+                        if event.get("event") == "complete":
+                            completed = True
+                        elif event.get("event") == "error":
+                            fail_count += 1
+                            break
+
+                    if completed:
+                        success_count += 1
+                except LemonadeClientError as e:
+                    print(f"   ❌ Failed: {e}")
+                    fail_count += 1
+
+                print()
+
+            # Summary
+            print("=" * 50)
+            print("📊 Download Summary:")
+            print(f"   ✅ Downloaded: {success_count}")
+            print(f"   ⏭️  Skipped (already available): {skip_count}")
+            if fail_count > 0:
+                print(f"   ❌ Failed: {fail_count}")
+            print("=" * 50)
+
+            if fail_count > 0:
+                sys.exit(1)
+
+        except LemonadeClientError as e:
+            print(f"❌ Error: {e}")
+            sys.exit(1)
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "connection" in error_msg or "refused" in error_msg:
+                LemonadeManager.print_server_error()
+            else:
+                print(f"❌ Error: {e}")
+            sys.exit(1)
+        return
+
     # Handle LLM command
     if args.action == "llm":
+        # Initialize Lemonade with minimal profile for direct LLM queries
+        success, _ = initialize_lemonade_for_agent(
+            agent="minimal",
+            quiet=False,
+        )
+        if not success:
+            return
+
         try:
-            # Fast import and execution - health check happens in LLMClient
             from gaia.apps.llm.app import main as llm
 
             response = llm(
@@ -2335,6 +3078,7 @@ Let me know your answer!
                 model=args.model,
                 max_tokens=args.max_tokens,
                 stream=not getattr(args, "no_stream", False),
+                base_url=getattr(args, "base_url", None),
             )
 
             # Only print if streaming is disabled (response wasn't already printed during streaming)
@@ -2353,9 +3097,19 @@ Let me know your answer!
                 or "refused" in error_msg
                 or "timeout" in error_msg
             ):
-                print_lemonade_error()
+                LemonadeManager.print_server_error()
             else:
                 print(f"❌ Error: {str(e)}")
+                # Check for model loading related errors
+                if (
+                    "404" in error_msg
+                    or "not found" in error_msg
+                    or "not loaded" in error_msg
+                ):
+                    print(
+                        "\nMake sure that the model is loaded. You can load it using:"
+                    )
+                    print(f"  gaia pull {DEFAULT_MODEL_NAME}")
             return
 
     # Handle groundtruth generation
@@ -2369,7 +3123,7 @@ Let me know your answer!
             print("The evaluation dependencies are not installed.")
             print("")
             print("To fix this, install the evaluation dependencies:")
-            print("  pip install -e .[eval]")
+            print('  uv pip install -e ".[eval]"')
             print("")
             print("This will install required packages including:")
             print("  - anthropic (for Claude AI)")
@@ -2380,7 +3134,7 @@ Let me know your answer!
         # Initialize generator
         try:
             generator = GroundTruthGenerator(
-                model=args.model, max_tokens=args.max_tokens
+                model=args.claude_model, max_tokens=args.max_tokens
             )
         except Exception as e:
             log.error(f"Error initializing generator: {e}")
@@ -2460,6 +3214,7 @@ Let me know your answer!
                     input_dir=args.directory,
                     file_pattern=args.pattern,
                     use_case=use_case,
+                    force=args.force,
                     prompt=custom_prompt,
                     save_text=save_text,
                     output_dir=args.output_dir,
@@ -2541,7 +3296,7 @@ Let me know your answer!
             print("The evaluation dependencies are not installed.")
             print("")
             print("To fix this, install the evaluation dependencies:")
-            print("  pip install -e .[eval]")
+            print('  uv pip install -e ".[eval]"')
             print("")
             print("This will install required packages including:")
             print("  - anthropic (for Claude AI)")
@@ -2581,7 +3336,7 @@ Let me know your answer!
             print("The evaluation dependencies are not installed.")
             print("")
             print("To fix this, install the evaluation dependencies:")
-            print("  pip install -e .[eval]")
+            print('  uv pip install -e ".[eval]"')
             print("")
             print("This will install required packages including:")
             print("  - anthropic (for Claude AI)")
@@ -2590,7 +3345,7 @@ Let me know your answer!
             return
 
         try:
-            evaluator = Evaluator(model=args.model)
+            evaluator = Evaluator(model=args.claude_model)
 
             # If summary_only is True, don't save to output_dir (None)
             output_dir = None if args.summary_only else args.output_dir
@@ -2945,7 +3700,7 @@ Let me know your answer!
                 print("The evaluation dependencies are not installed.")
                 print("")
                 print("To fix this, install the evaluation dependencies:")
-                print("  pip install -e .[eval]")
+                print('  uv pip install -e ".[eval]"')
                 print("")
                 print("This will install required packages including:")
                 print("  - anthropic (for Claude AI)")
@@ -3020,7 +3775,7 @@ Let me know your answer!
                 print("The evaluation dependencies are not installed.")
                 print("")
                 print("To fix this, install the evaluation dependencies:")
-                print("  pip install -e .[eval]")
+                print('  uv pip install -e ".[eval]"')
                 print("")
                 print("This will install required packages including:")
                 print("  - anthropic (for Claude AI)")
@@ -3096,7 +3851,7 @@ Let me know your answer!
             print("The evaluation dependencies are not installed.")
             print("")
             print("To fix this, install the evaluation dependencies:")
-            print("  pip install -e .[eval]")
+            print('  uv pip install -e ".[eval]"')
             print("")
             print("This will install required packages including:")
             print("  - anthropic (for Claude AI)")
@@ -3189,14 +3944,14 @@ Let me know your answer!
         handle_mcp_command(args)
         return
 
+    # Handle Cache command
+    if args.action == "cache":
+        handle_cache_command(args)
+        return
+
     # Handle Blender command
     if args.action == "blender":
         handle_blender_command(args)
-        return
-
-    # Handle Code command
-    if args.action == "code":
-        handle_code_command(args)
         return
 
     # Handle Jira command
@@ -3212,6 +3967,10 @@ Let me know your answer!
     # Handle API server command
     if args.action == "api":
         handle_api_command(args)
+        return
+
+    if args.action == "perf-vis":
+        handle_perf_vis_command(args)
         return
 
     # Handle visualize command
@@ -3388,7 +4147,7 @@ def run_blender_examples(agent, selected_example=None, print_result=True):
     for idx, example in examples.items():
         console.print_header(f"=== Example {idx}: {example['name']} ===")
         console.print_header(example["description"])
-        agent.process_query(example["query"], output_to_file=True)
+        agent.process_query(example["query"], trace=True)
         agent.display_result(print_result=print_result)
 
         # Wait for user input between examples, except the last one
@@ -3428,179 +4187,6 @@ def run_blender_interactive_mode(agent, print_result=True):
             console.print_error(f"Error processing Blender query: {e}")
 
 
-def handle_code_command(args):
-    """
-    Handle the Code agent command.
-
-    Args:
-        args: Parsed command line arguments for the code command
-    """
-    log = get_logger(__name__)
-
-    if not CODE_AVAILABLE:
-        log.error("Code agent is not available. Please check your installation.")
-        return
-
-    # Check if using local Lemonade server (not Claude or ChatGPT)
-    using_local = not getattr(args, "use_claude", False) and not getattr(
-        args, "use_chatgpt", False
-    )
-
-    # Check Lemonade health if using local server
-    if using_local and not check_lemonade_health():
-        print_lemonade_error(for_code_agent=True)
-        sys.exit(1)
-
-    try:
-        # Initialize the Code agent
-        agent = CodeAgent(
-            silent_mode=getattr(args, "silent", False),
-            debug=getattr(args, "debug", False),
-            show_prompts=getattr(args, "show_prompts", False),
-            max_steps=getattr(args, "max_steps", 100),
-            use_claude=getattr(args, "use_claude", False),
-            use_chatgpt=getattr(args, "use_chatgpt", False),
-            streaming=getattr(args, "streaming", False),
-            step_through=getattr(args, "step_through", False),
-        )
-
-        # Handle list tools option
-        if getattr(args, "list_tools", False):
-            agent.list_tools(verbose=True)
-            return
-
-        # Handle interactive mode
-        if getattr(args, "interactive", False):
-            log.info("🤖 Code Agent Interactive Mode")
-            log.info("Type 'exit' or 'quit' to end the session")
-            log.info("Type 'help' for available commands\n")
-
-            while True:
-                try:
-                    query = input("\ncode> ").strip()
-
-                    if query.lower() in ["exit", "quit"]:
-                        log.info("Goodbye!")
-                        break
-
-                    if query.lower() == "help":
-                        print("\nAvailable commands:")
-                        print("  Generate functions, classes, or tests")
-                        print("  Analyze Python files")
-                        print("  Validate Python syntax")
-                        print("  Lint and format code")
-                        print("  Edit files with diffs")
-                        print("  Search for code patterns")
-                        print("  Type 'exit' or 'quit' to end")
-                        continue
-
-                    if not query:
-                        continue
-
-                    # Process the query
-                    result = agent.process_query(
-                        query,
-                        max_steps=getattr(args, "max_steps", 100),
-                        output_to_file=bool(getattr(args, "output", None)),
-                        filename=getattr(args, "output", None),
-                    )
-
-                    # Display result
-                    if not args.silent:
-                        if result.get("status") == "success":
-                            log.info(f"\n✅ {result.get('result', 'Task completed')}")
-                        else:
-                            log.error(f"\n❌ {result.get('result', 'Task failed')}")
-
-                except KeyboardInterrupt:
-                    print("\n\nInterrupted. Type 'exit' to quit.")
-                    continue
-                except Exception as e:
-                    log.error(f"Error processing query: {e}")
-                    if args.debug:
-                        import traceback
-
-                        traceback.print_exc()
-
-        # Single query mode
-        elif hasattr(args, "query") and args.query:
-            result = agent.process_query(
-                args.query,
-                max_steps=args.max_steps,
-                output_to_file=bool(getattr(args, "output", None)),
-                filename=getattr(args, "output", None),
-            )
-
-            # Output result
-            if args.silent:
-                # In silent mode, output only JSON
-                import json
-
-                print(json.dumps(result, indent=2))
-            else:
-                # Display formatted result
-                agent.display_result("Code Operation Result", result)
-
-        else:
-            # Default to interactive mode when no query provided
-            log.info("Starting Code Agent interactive mode (type 'help' for commands)")
-
-            while True:
-                try:
-                    query = input("\ncode> ").strip()
-
-                    if query.lower() in ["exit", "quit"]:
-                        log.info("Goodbye!")
-                        break
-
-                    if query.lower() == "help":
-                        print("\nAvailable commands:")
-                        print("  Generate functions, classes, or tests")
-                        print("  Analyze Python files")
-                        print("  Validate Python syntax")
-                        print("  Lint and format code")
-                        print("  Edit files with diffs")
-                        print("  Search for code patterns")
-                        print("  Type 'exit' or 'quit' to end")
-                        continue
-
-                    if not query:
-                        continue
-
-                    # Process the query
-                    result = agent.process_query(
-                        query,
-                        max_steps=getattr(args, "max_steps", 100),
-                        output_to_file=bool(getattr(args, "output", None)),
-                        filename=getattr(args, "output", None),
-                    )
-
-                    # Display result
-                    if not args.silent:
-                        if result.get("status") == "success":
-                            log.info(f"\n✅ {result.get('result', 'Task completed')}")
-                        else:
-                            log.error(f"\n❌ {result.get('result', 'Task failed')}")
-
-                except KeyboardInterrupt:
-                    print("\n\nInterrupted. Type 'exit' to quit.")
-                    continue
-                except Exception as e:
-                    log.error(f"Error processing query: {e}")
-                    if getattr(args, "debug", False):
-                        import traceback
-
-                        traceback.print_exc()
-            return
-
-    except Exception as e:
-        log.error(f"Error initializing Code agent: {e}")
-        if getattr(args, "debug", False):
-            import traceback
-
-            traceback.print_exc()
-
-
 def handle_jira_command(args):
     """
     Handle the Jira app command.
@@ -3609,6 +4195,18 @@ def handle_jira_command(args):
         args: Parsed command line arguments for the jira command
     """
     log = get_logger(__name__)
+
+    # Initialize Lemonade with jira agent profile (32768 context)
+    # Skip if --no-lemonade-check is specified
+    if not getattr(args, "no_lemonade_check", False):
+        success, _ = initialize_lemonade_for_agent(
+            agent="jira",
+            skip_if_external=True,
+            use_claude=getattr(args, "use_claude", False),
+            use_chatgpt=getattr(args, "use_chatgpt", False),
+        )
+        if not success:
+            sys.exit(1)
 
     try:
         # Import and use JiraApp directly (no MCP needed)
@@ -3630,7 +4228,7 @@ def handle_jira_command(args):
     except ImportError as e:
         log.error(f"Failed to import Jira app: {e}")
         print("❌ Error: Jira app components are not available")
-        print("Make sure GAIA is installed properly: pip install -e .")
+        print("Make sure GAIA is installed properly: uv pip install -e .")
         sys.exit(1)
     except Exception as e:
         log.error(f"Error running Jira app: {e}")
@@ -3646,6 +4244,18 @@ def handle_docker_command(args):
         args: Parsed command line arguments for the docker command
     """
     log = get_logger(__name__)
+
+    # Initialize Lemonade with docker agent profile (32768 context)
+    # Skip if --no-lemonade-check is specified
+    if not getattr(args, "no_lemonade_check", False):
+        success, _ = initialize_lemonade_for_agent(
+            agent="docker",
+            skip_if_external=True,
+            use_claude=getattr(args, "use_claude", False),
+            use_chatgpt=getattr(args, "use_chatgpt", False),
+        )
+        if not success:
+            sys.exit(1)
 
     try:
         # Import and use DockerApp directly
@@ -3669,7 +4279,7 @@ def handle_docker_command(args):
     except ImportError as e:
         log.error(f"Failed to import Docker app: {e}")
         print("❌ Error: Docker app components are not available")
-        print("Make sure GAIA is installed properly: pip install -e .")
+        print("Make sure GAIA is installed properly: uv pip install -e .")
         sys.exit(1)
     except Exception as e:
         log.error(f"Error running Docker app: {e}")
@@ -3687,6 +4297,15 @@ def handle_api_command(args):
     log = get_logger(__name__)
 
     if args.subcommand == "start":
+        # Initialize Lemonade with mcp profile (unless --no-lemonade-check)
+        if not getattr(args, "no_lemonade_check", False):
+            success, _ = initialize_lemonade_for_agent(
+                agent="mcp",
+                quiet=False,
+            )
+            if not success:
+                return
+
         try:
             import uvicorn
 
@@ -3738,7 +4357,7 @@ def handle_api_command(args):
         except ImportError as e:
             log.error(f"Failed to import API server: {e}")
             print("❌ Error: API server components are not available")
-            print("Make sure uvicorn is installed: pip install uvicorn")
+            print("Make sure uvicorn is installed: uv pip install uvicorn")
             sys.exit(1)
         except KeyboardInterrupt:
             print("\n✅ API server stopped")
@@ -3774,6 +4393,20 @@ def handle_api_command(args):
         except Exception as e:
             print(f"❌ Error stopping server: {e}")
             sys.exit(1)
+
+
+def handle_perf_vis_command(args):
+    """Generate llama.cpp performance plots from one or more log files."""
+    try:
+        exit_code = run_perf_visualization(args.log_paths, show=args.show)
+    except Exception as exc:
+        log = get_logger(__name__)
+        log.error(f"Error running perf-vis: {exc}")
+        print(f"❌ Error running perf-vis: {exc}")
+        sys.exit(1)
+
+    if exit_code != 0:
+        sys.exit(exit_code)
 
 
 def handle_visualize_command(args):
@@ -3980,15 +4613,21 @@ def handle_blender_command(args):
     # Check if Blender components are available
     if not BLENDER_AVAILABLE:
         print("❌ Error: Blender agent components are not available")
-        print("Install blender dependencies with: pip install -e .[blender]")
+        print('Install blender dependencies with: uv pip install -e ".[blender]"')
         sys.exit(1)
 
-    # Check if Lemonade server is running
-    log.info("Checking Lemonade server connectivity...")
-    if not check_lemonade_health():
-        print_lemonade_error()
-        sys.exit(1)
-    log.info("✅ Lemonade server is accessible")
+    # Initialize Lemonade with blender agent profile (32768 context)
+    # Skip if --no-lemonade-check is specified
+    if not getattr(args, "no_lemonade_check", False):
+        log.info("Initializing Lemonade for Blender agent...")
+        success, _ = initialize_lemonade_for_agent(
+            agent="blender",
+            skip_if_external=True,
+            use_claude=getattr(args, "use_claude", False),
+            use_chatgpt=getattr(args, "use_chatgpt", False),
+        )
+        if not success:
+            sys.exit(1)
 
     # Check if Blender MCP server is running
     mcp_port = getattr(args, "mcp_port", 9876)
@@ -4008,14 +4647,18 @@ def handle_blender_command(args):
         # Create MCP client with custom port if specified
         mcp_client = MCPClient(host="localhost", port=mcp_port)
 
+        # Get base_url from args or environment
+        base_url = getattr(args, "base_url", None)
+
         # Create the BlenderAgent
         agent = BlenderAgent(
             mcp=mcp_client,
             model_id=args.model,
+            base_url=base_url,
             max_steps=args.steps,
             output_dir=output_dir,
             streaming=args.stream,
-            show_stats=args.stats,
+            show_stats=args.show_stats,
             debug_prompts=args.debug_prompts,
         )
 
@@ -4034,7 +4677,90 @@ def handle_blender_command(args):
             )
 
     except Exception as e:
-        log.error(f"Error running Blender agent: {e}")
+        blender_log = get_logger(__name__)
+        blender_log.error(f"Error running Blender agent: {e}")
+        print(f"❌ Error: {e}")
+        sys.exit(1)
+
+
+def handle_cache_command(args):
+    """Handle the cache management command.
+
+    Args:
+        args: Parsed command-line arguments
+    """
+    if not hasattr(args, "cache_action") or args.cache_action is None:
+        print("❌ Error: No cache action specified")
+        print("Available actions: status, clear")
+        print("Run 'gaia cache --help' for more information")
+        return
+
+    from gaia.mcp.context7_cache import Context7Cache, Context7RateLimiter
+    from gaia.mcp.external_services import Context7Service
+
+    try:
+        if args.cache_action == "status":
+            # Check Context7 availability first
+            is_available = Context7Service.check_availability()
+
+            print("\n=== Context7 Service Status ===")
+            if is_available:
+                print("✓ Context7 is AVAILABLE (npx found, service working)")
+            else:
+                print("✗ Context7 is UNAVAILABLE (npx not found or service failed)")
+                print("  The Code Agent will use embedded knowledge instead.")
+
+            # Show cache and rate limiter status
+            cache = Context7Cache()
+            rate_limiter = Context7RateLimiter()
+
+            status = rate_limiter.get_status()
+
+            print("\n=== Context7 Cache Status ===")
+            print(f"Cache directory: {cache.cache_dir}")
+            # Use glob to count library ID files since _load_json is protected
+            library_id_count = (
+                len(list(cache.cache_dir.glob("library_*.json")))
+                if hasattr(cache, "cache_dir")
+                else 0
+            )
+            print(f"Library IDs cached: {library_id_count}")
+
+            # Count documentation files
+            doc_count = len(list(cache.docs_dir.glob("*.json")))
+            print(f"Documentation entries: {doc_count}")
+
+            print("\n=== Rate Limiter Status ===")
+            print(
+                f"Tokens available: {status['tokens_available']}/{status['max_tokens']}"
+            )
+            print(f"Circuit breaker: {'OPEN' if status['circuit_open'] else 'CLOSED'}")
+            print(f"Consecutive failures: {status['consecutive_failures']}")
+
+            if status["tokens_available"] < 5:
+                print("\n⚠️  Warning: Low token count. Rate limiting may occur soon.")
+
+            if not is_available:
+                print("\n💡 To enable Context7:")
+                print("   1. Install Node.js and npm")
+                print("   2. Ensure 'npx' is in your PATH")
+                print(
+                    "   3. Optionally add CONTEXT7_API_KEY to .env for higher rate limits"
+                )
+
+        elif args.cache_action == "clear":
+            # Clear caches
+            if args.all or args.context7:
+                cache = Context7Cache()
+                cache.clear()
+                print("✓ Context7 cache cleared")
+            else:
+                print("Specify --context7 or --all to clear caches")
+                print("Run 'gaia cache clear --help' for more information")
+
+    except Exception as e:
+        cache_log = get_logger(__name__)
+        cache_log.error(f"Error managing cache: {e}")
         print(f"❌ Error: {e}")
         sys.exit(1)
 
@@ -4084,11 +4810,21 @@ def handle_mcp_start(args):
             print("❌ Error: MCP dependencies not installed.")
             print("")
             print("To fix this, install the MCP dependencies:")
-            print("  pip install -e .[mcp]")
+            print('  uv pip install -e ".[mcp]"')
             return
 
         # Import and start the HTTP-native MCP bridge
         from gaia.mcp.mcp_bridge import start_server as start_mcp_http
+
+        # Initialize Lemonade with mcp agent profile (unless --no-lemonade-check)
+        if not getattr(args, "no_lemonade_check", False):
+            success, _ = initialize_lemonade_for_agent(
+                agent="mcp",
+                quiet=False,
+            )
+            if not success:
+                return
+            print("")  # Add blank line before MCP output
 
         # Handle background mode
         if args.background:
@@ -4121,23 +4857,39 @@ def handle_mcp_start(args):
                 args.host,
                 "--port",
                 str(args.port),
-                "--base-url",
-                args.base_url,
             ]
 
             # Add optional arguments if provided
+            if args.base_url:
+                cmd_args.extend(["--base-url", args.base_url])
             if args.auth_token:
                 cmd_args.extend(["--auth-token", args.auth_token])
             if args.no_streaming:
                 cmd_args.append("--no-streaming")
             if getattr(args, "verbose", False):
                 cmd_args.append("--verbose")
+            if getattr(args, "no_lemonade_check", False):
+                cmd_args.append("--no-lemonade-check")
 
             print("🚀 Starting GAIA MCP Bridge in background")
             print(f"📍 Host: {args.host}:{args.port}")
             print(f"📄 Log file: {log_file_path}")
 
-            # Open log file for appending
+            # Write initial banner BEFORE starting subprocess (prevents truncation issues)
+            import datetime
+
+            ts = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
+            with open(log_file_path, "w", encoding="utf-8") as init_log:
+                init_log.write(
+                    f"{ts} | INFO | GAIA MCP Bridge started in background mode\n"
+                )
+                init_log.write(f"{ts} | INFO | Host: {args.host}:{args.port}\n")
+                init_log.write(f"{ts} | INFO | Base URL: {args.base_url}\n")
+                streaming = "disabled" if args.no_streaming else "enabled"
+                init_log.write(f"{ts} | INFO | Streaming: {streaming}\n")
+                init_log.write(f"{ts} | INFO | " + "=" * 60 + "\n")
+
+            # Open for append - subprocess will add its output after banner
             log_handle = open(log_file_path, "a", encoding="utf-8")
 
             # Start the process
@@ -4169,22 +4921,10 @@ def handle_mcp_start(args):
             with open(pid_file_path, "w", encoding="utf-8") as pid_file:
                 pid_file.write(str(process.pid))
 
-            # Write PID info to log file
-            with open(log_file_path, "w", encoding="utf-8") as log_file:
-                import datetime
-
-                timestamp = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
-                log_file.write(
-                    f"{timestamp} | INFO | GAIA MCP Bridge started in background mode\n"
-                )
-                log_file.write(f"{timestamp} | INFO | Process ID: {process.pid}\n")
-                log_file.write(f"{timestamp} | INFO | Host: {args.host}:{args.port}\n")
-                log_file.write(f"{timestamp} | INFO | Base URL: {args.base_url}\n")
-                log_file.write(
-                    f"{timestamp} | INFO | Streaming: {'disabled' if args.no_streaming else 'enabled'}\n"
-                )
-                log_file.write(f"{timestamp} | INFO | {'='*60}\n")
-                log_file.flush()
+            # Append PID to log (banner was written before subprocess started)
+            ts = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
+            log_handle.write(f"{ts} | INFO | Process ID: {process.pid}\n")
+            log_handle.flush()
 
             print("✅ MCP bridge started in background")
             print(f"📍 Listening on: {args.host}:{args.port}")

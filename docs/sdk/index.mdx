@@ -1,0 +1,221 @@
+# GAIA SDK Reference
+
+<Badge text="development" color="orange" />
+
+**Version:** 0.14.0+
+**Last Updated:** December 2025
+
+## What is GAIA?
+
+GAIA (Generative AI Is Awesome) is AMD's framework for building **intelligent AI agents** that run locally on your computer—no cloud required. Think of it as a toolkit for creating AI assistants that can:
+
+- Answer questions by searching through documents
+- Process images and extract information
+- Interact with databases
+- Respond to voice commands
+- Automate workflows
+- And much more!
+
+**Who is this for?**
+- Developers building custom AI agents
+- Teams creating specialized AI workflows
+- Researchers experimenting with AI applications
+- Anyone wanting to run AI locally on AMD hardware
+
+**What makes GAIA special?**
+- 🏠 **Privacy**: Everything runs on your machine
+- ⚡ **Speed**: AMD NPU/iGPU acceleration
+- 🔧 **Flexibility**: Build exactly what you need
+- 📦 **Distribution**: Share agents via `pip install`
+
+---
+
+## How This Documentation Works
+
+This SDK reference is organized by **component type**. Each section includes:
+- 📖 **What it does** - High-level purpose
+- 🎯 **When to use it** - Common use cases
+- 💻 **Code examples** - Working, copy-paste ready code
+- ⚠️ **Important notes** - Gotchas and best practices
+
+**New to AI agents?** Start with:
+1. [Quick Start](#quick-start) - Build your first agent in 5 minutes
+2. [Core Agent System](./core/agent-system) - Understand the foundation
+3. [Complete Examples](./examples) - See real-world patterns
+
+**Looking for something specific?** Use the navigation menu on the left.
+
+---
+
+## Quick Start
+
+### Understanding AI Agents
+
+Before we dive in, let's understand what an **AI agent** is:
+
+**Traditional Program:**
+```
+User input → Your code → Output
+```
+
+**AI Agent:**
+```
+User input → LLM decides what to do → Calls your tools → LLM formats output → User gets answer
+```
+
+**Why is this powerful?**
+- Users talk naturally: "Find customers in Texas and email them"
+- LLM breaks it down: Use `search_customers` tool, then `send_email` tool
+- Your code just provides the tools, LLM orchestrates them
+- No complex if/else logic needed!
+
+### Installation
+
+**Using uv (recommended - 10-100x faster than pip):**
+
+```bash
+# Install uv if you don't have it
+curl -LsSf https://astral.sh/uv/install.sh | sh  # Linux
+# or
+irm https://astral.sh/uv/install.ps1 | iex  # Windows PowerShell
+
+# Install GAIA
+uv pip install amd-gaia
+```
+
+**Prerequisites:**
+- Python 3.10 or higher
+- Lemonade Server running (for local LLM inference)
+  ```bash
+  # Start Lemonade Server
+  lemonade-server serve
+  ```
+
+**Why uv?**
+- ⚡ 10-100x faster than pip
+- 🔒 Better dependency resolution
+- 📦 Recommended by GAIA team
+
+### Your First Agent (5 Minutes)
+
+Let's build a simple agent that can search and analyze data:
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.tools import tool
+
+class MyAgent(Agent):
+    """Custom agent for my use case."""
+
+    # Step 1: Tell the agent its purpose
+    def _get_system_prompt(self) -> str:
+        return "You are a helpful assistant that can search and analyze data."
+
+    # Step 2: Choose how to display output
+    def _create_console(self):
+        from gaia.agents.base.console import AgentConsole
+        return AgentConsole()  # Rich CLI output with colors
+
+    # Step 3: Define tools the agent can use
+    def _register_tools(self):
+        @tool
+        def search_data(query: str) -> dict:
+            """Search for data matching the query."""
+            # Your implementation here
+            # This is what actually gets called when LLM decides to search
+            return {"results": ["item1", "item2"], "count": 2}
+
+        @tool
+        def analyze_data(data_id: str) -> dict:
+            """Analyze a specific data item."""
+            # Your implementation here
+            return {"analysis": "Data is valid", "confidence": 0.95}
+
+# Step 4: Use the agent
+if __name__ == "__main__":
+    agent = MyAgent()
+
+    # User talks naturally
+    result = agent.process_query("Search for user data and analyze it")
+
+    # LLM automatically:
+    # 1. Calls search_data("user")
+    # 2. Calls analyze_data("item1")
+    # 3. Formats a natural response
+
+    print(result)
+```
+
+**What just happened?**
+1. You defined **tools** (search_data, analyze_data)
+2. You described the agent's **personality** (system prompt)
+3. The agent **automatically** figured out which tools to call and in what order
+4. The LLM **orchestrated** the workflow based on user's natural language
+
+**That's it!** You've created an AI agent.
+
+---
+
+## What's Next?
+
+Explore the SDK documentation organized by topic:
+
+### Core Concepts
+- **[Agent System](./core/agent-system)** - Foundation of all GAIA agents
+- **[Tools](./core/tools)** - Registering agent capabilities
+- **[Console](./core/console)** - Output handling and display
+
+### SDKs
+- **[Chat SDK](./sdks/chat)** - Conversational AI with memory
+- **[RAG SDK](./sdks/rag)** - Document Q&A and retrieval
+- **[LLM Integration](./sdks/llm)** - Working with language models
+- **[Vision Models](./sdks/vlm)** - Image understanding
+- **[Audio SDK](./sdks/audio)** - Speech-to-text and text-to-speech
+
+### Building Agents
+- **[Talk SDK](./agents/talk)** - Voice and text integration
+- **[Routing Agent](./agents/routing)** - Multi-agent orchestration
+- **[Specialized Agents](./agents/specialized)** - Pre-built agents for specific tasks
+
+### Advanced Topics
+- **[Tool Mixins](./mixins/tool-mixins)** - Reusable tool collections
+- **[Code Mixins](./mixins/code-mixins)** - Development tool sets
+- **[API Server](./infrastructure/api-server)** - OpenAI-compatible API
+- **[MCP Integration](./infrastructure/mcp)** - Model Context Protocol
+
+### Guides & Resources
+- **[Configuration](./configuration)** - Environment and settings
+- **[Testing](./testing)** - Testing your agents
+- **[Security](./security)** - Security best practices
+- **[Best Practices](./best-practices)** - Code organization and patterns
+- **[Complete Examples](./examples)** - Full working examples
+- **[Advanced Patterns](./advanced-patterns)** - Complex use cases
+- **[Troubleshooting](./troubleshooting)** - Common issues and solutions
+
+---
+
+## Get Help
+
+- **[GitHub Issues](https://github.com/amd/gaia/issues)** - Bug reports and features
+- **[Discord Community](https://discord.com/channels/1392562559122407535/1402013282495102997)** - Chat with developers
+- **Email:** [gaia@amd.com](mailto:gaia@amd.com)
+
+---
+
+## License
+
+MIT License - See [LICENSE](https://github.com/amd/gaia/blob/main/LICENSE)
+
+Copyright (C) 2024-2025 Advanced Micro Devices, Inc.
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

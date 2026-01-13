@@ -1,0 +1,205 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# This workflow tests GAIA security features
+# Tests include: Path validation, shell injection prevention, argument sanitization
+# Platform: Cross-platform (Linux and Windows)
+
+name: Security Tests
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-security-linux:
+    name: Security Tests (Linux)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: uv pip install --system -e .[dev,rag]
+
+      - name: Run Path Validator Security Tests
+        run: |
+          echo "================================================================"
+          echo "              PATH VALIDATOR SECURITY TESTS"
+          echo "================================================================"
+          echo "Testing path traversal prevention and access control..."
+          echo ""
+
+          python tests/verify_path_validator.py
+
+          PATH_TEST_EXIT=$?
+
+          echo ""
+          if [ $PATH_TEST_EXIT -eq 0 ]; then
+            echo "[SUCCESS] All path validator tests passed"
+          else
+            echo "[FAILURE] Path validator tests failed with exit code $PATH_TEST_EXIT"
+            exit 1
+          fi
+
+      - name: Run Shell Security Tests
+        run: |
+          echo ""
+          echo "================================================================"
+          echo "              SHELL INJECTION SECURITY TESTS"
+          echo "================================================================"
+          echo "Testing shell command injection prevention..."
+          echo ""
+
+          python tests/verify_shell_security.py
+
+          SHELL_TEST_EXIT=$?
+
+          echo ""
+          if [ $SHELL_TEST_EXIT -eq 0 ]; then
+            echo "[SUCCESS] All shell security tests passed"
+          else
+            echo "[FAILURE] Shell security tests failed with exit code $SHELL_TEST_EXIT"
+            exit 1
+          fi
+
+      - name: Test Summary
+        if: always()
+        run: |
+          echo ""
+          echo "================================================================"
+          echo "                    SECURITY TEST SUMMARY"
+          echo "================================================================"
+          echo "Test Categories:"
+          echo "  ✅ Path Validator Tests: Prevents path traversal attacks"
+          echo "  ✅ Shell Security Tests: Prevents command injection"
+          echo ""
+          echo "Security Coverage:"
+          echo "  - PathValidator: Direct validation testing"
+          echo "  - DockerAgent: Path validation integration"
+          echo "  - ChatAgent: add_watch_directory security"
+          echo "  - CodeAgent: read_file security"
+          echo "  - RAGSDK: _safe_open security"
+          echo "  - Shell Injection: Command chaining prevention"
+          echo "  - Shell Injection: Pipe operator prevention"
+          echo "  - Shell Injection: Argument path traversal prevention"
+          echo ""
+          echo "These tests ensure that:"
+          echo "  - Users cannot access files outside allowed directories"
+          echo "  - Shell commands cannot be chained or piped"
+          echo "  - Command arguments are properly validated"
+          echo "  - All agents enforce security boundaries"
+          echo "================================================================"
+
+  test-security-windows:
+    name: Security Tests (Windows)
+    runs-on: windows-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: |
+          irm https://astral.sh/uv/install.ps1 | iex
+          echo "$env:USERPROFILE\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: pwsh
+
+      - name: Install dependencies
+        run: uv pip install --system -e .[dev,rag]
+
+      - name: Run Path Validator Security Tests
+        shell: pwsh
+        run: |
+          Write-Host "================================================================"
+          Write-Host "              PATH VALIDATOR SECURITY TESTS"
+          Write-Host "================================================================"
+          Write-Host "Testing path traversal prevention and access control..."
+          Write-Host ""
+
+          python tests/verify_path_validator.py
+
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host ""
+            Write-Host "[SUCCESS] All path validator tests passed"
+          } else {
+            Write-Host ""
+            Write-Host "[FAILURE] Path validator tests failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+
+      - name: Run Shell Security Tests
+        shell: pwsh
+        run: |
+          Write-Host ""
+          Write-Host "================================================================"
+          Write-Host "              SHELL INJECTION SECURITY TESTS"
+          Write-Host "================================================================"
+          Write-Host "Testing shell command injection prevention..."
+          Write-Host ""
+
+          python tests/verify_shell_security.py
+
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host ""
+            Write-Host "[SUCCESS] All shell security tests passed"
+          } else {
+            Write-Host ""
+            Write-Host "[FAILURE] Shell security tests failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+
+      - name: Test Summary
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host ""
+          Write-Host "================================================================"
+          Write-Host "                    SECURITY TEST SUMMARY"
+          Write-Host "================================================================"
+          Write-Host "Test Categories:"
+          Write-Host "  ✅ Path Validator Tests: Prevents path traversal attacks"
+          Write-Host "  ✅ Shell Security Tests: Prevents command injection"
+          Write-Host ""
+          Write-Host "Security Coverage:"
+          Write-Host "  - PathValidator: Direct validation testing"
+          Write-Host "  - DockerAgent: Path validation integration"
+          Write-Host "  - ChatAgent: add_watch_directory security"
+          Write-Host "  - CodeAgent: read_file security"
+          Write-Host "  - RAGSDK: _safe_open security"
+          Write-Host "  - Shell Injection: Command chaining prevention"
+          Write-Host "  - Shell Injection: Pipe operator prevention"
+          Write-Host "  - Shell Injection: Argument path traversal prevention"
+          Write-Host ""
+          Write-Host "These tests ensure that:"
+          Write-Host "  - Users cannot access files outside allowed directories"
+          Write-Host "  - Shell commands cannot be chained or piped"
+          Write-Host "  - Command arguments are properly validated"
+          Write-Host "  - All agents enforce security boundaries"
+          Write-Host "================================================================"

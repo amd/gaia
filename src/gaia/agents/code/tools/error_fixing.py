@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """Error fixing tools mixin for Code Agent."""
 
@@ -200,6 +200,11 @@ class ErrorFixingMixin:
                         "message": f"Fixed {os.path.basename(file_path)}",
                     }
                 else:
+                    console = getattr(self, "console", None)
+                    if console:
+                        console.print_info(
+                            f"fix_code: No changes were made to {os.path.basename(file_path)}"
+                        )
                     return {
                         "status": "info",
                         "file_modified": False,

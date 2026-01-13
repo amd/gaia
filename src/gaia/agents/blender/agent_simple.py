@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 from typing import Any, Dict, Optional, Tuple
@@ -40,7 +40,7 @@ Example: "Make a tall cylinder" → CYLINDER,0,0,0,1,1,3
         llm: Optional[LLMClient] = None,
         mcp: Optional[MCPClient] = None,
         use_local: bool = True,
-        base_url: Optional[str] = "http://localhost:8000/api/v0",
+        base_url: Optional[str] = "http://localhost:8000/api/v1",
     ):
         """
         Initialize the BlenderAgentSimple with LLM and MCP clients.
@@ -50,7 +50,7 @@ Example: "Make a tall cylinder" → CYLINDER,0,0,0,1,1,3
             mcp: An optional pre-configured MCP client, otherwise a new one will be created
             use_local: Whether to use a local LLM (True) or a remote API (False)
             base_url: Base URL for the local LLM API if using local LLM. If None and use_local=True,
-                      defaults to "http://localhost:8000/api/v0"
+                      defaults to "http://localhost:8000/api/v1"
         """
         self.llm = (
             llm

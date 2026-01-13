@@ -1,0 +1,904 @@
+---
+title: "Code Validators"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/code/validators/`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code/validators/)
+</Info>
+
+<Note>
+**Module:** `gaia.agents.code.validators`
+**Import:** `from gaia.agents.code.validators import SyntaxValidator, ASTAnalyzer, AntipatternChecker`
+</Note>
+---
+
+**Components:** SyntaxValidator, ASTAnalyzer, AntipatternChecker
+
+---
+
+## Overview
+
+The code validators subsystem provides comprehensive Python code quality checking including syntax validation, AST parsing/analysis, and anti-pattern detection. These components work together to ensure generated code meets quality standards before execution or storage.
+
+**Key Features:**
+- Python syntax validation with detailed error messages
+- AST parsing for code structure analysis
+- Symbol extraction (functions, classes, variables, imports)
+- Anti-pattern detection (naming, complexity, code smells)
+- Configurable quality thresholds
+- Integration with CodeAgent
+
+---
+
+## Requirements
+
+### Functional Requirements
+
+#### SyntaxValidator
+
+1. **Syntax Validation**
+   - `validate()` - Validate Python code syntax
+   - Compile and AST parse checking
+   - Line number and error position tracking
+
+2. **Code Quality Checks**
+   - `check_indentation()` - Mixed tabs/spaces, non-standard indentation
+   - `validate_imports()` - Wildcard imports, duplicate imports
+   - `check_line_length()` - Configurable max line length
+
+3. **Error Reporting**
+   - `ValidationResult` model with errors list
+   - Dictionary format for legacy compatibility
+   - SyntaxError extraction
+
+#### ASTAnalyzer
+
+1. **Code Parsing**
+   - `parse_code()` - Parse Python code into AST
+   - Symbol extraction (functions, classes, variables)
+   - Import statement analysis
+
+2. **Symbol Information**
+   - Function signatures with type annotations
+   - Docstring extraction
+   - Line number tracking
+
+3. **AST Utilities**
+   - `extract_functions()` - Get all function definitions
+   - `extract_classes()` - Get all class definitions
+   - `get_docstring()` - Extract docstrings
+
+#### AntipatternChecker
+
+1. **Anti-pattern Detection**
+   - Combinatorial naming patterns
+   - Excessive function/class name length
+   - High parameter counts
+   - Long functions/files
+
+2. **Complexity Analysis**
+   - `check_function_complexity()` - Nesting depth, branches, loops
+   - `check_naming_patterns()` - Naming convention issues
+   - Cyclomatic complexity heuristics
+
+3. **Configurable Thresholds**
+   - MAX_FUNCTION_NAME_LENGTH = 80
+   - MAX_FUNCTION_PARAMETERS = 6
+   - MAX_FUNCTION_LINES = 50
+   - MAX_NESTING_DEPTH = 4
+
+### Non-Functional Requirements
+
+1. **Performance**
+   - Fast syntax checking (< 100ms for typical files)
+   - Efficient AST parsing
+   - Minimal memory overhead
+
+2. **Reliability**
+   - Graceful error handling
+   - No crashes on malformed code
+   - Consistent results
+
+3. **Usability**
+   - Clear error messages
+   - Helpful suggestions
+   - Easy to integrate
+
+---
+
+## API Specification
+
+### File Locations
+
+```
+src/gaia/agents/code/validators/syntax_validator.py
+src/gaia/agents/code/validators/ast_analyzer.py
+src/gaia/agents/code/validators/antipattern_checker.py
+```
+
+### SyntaxValidator Interface
+
+```python
+import ast
+from typing import Any, Dict, List
+from ..models import ValidationResult
+
+class SyntaxValidator:
+    """Validates Python code syntax."""
+
+    def validate(self, code: str) -> ValidationResult:
+        """Validate Python code syntax.
+
+        Args:
+            code: Python code to validate
+
+        Returns:
+            ValidationResult with validation details
+
+        Example:
+            >>> validator = SyntaxValidator()
+            >>> result = validator.validate("print('hello')")
+            >>> result.is_valid
+            True
+
+            >>> result = validator.validate("print('hello'")
+            >>> result.is_valid
+            False
+            >>> result.errors
+            ["Line 1: EOL while scanning string literal"]
+        """
+        pass
+
+    def validate_dict(self, code: str) -> Dict[str, Any]:
+        """Validate Python code and return as dictionary (legacy format).
+
+        Args:
+            code: Python code to validate
+
+        Returns:
+            Dictionary with validation results:
+            - status: "success" or "error"
+            - is_valid: bool
+            - errors: list of error strings
+            - message: summary message
+
+        Example:
+            >>> validator.validate_dict("print('hello')")
+            {
+                "status": "success",
+                "is_valid": True,
+                "errors": [],
+                "message": "Syntax is valid"
+            }
+        """
+        pass
+
+    def get_syntax_errors(self, code: str) -> List[SyntaxError]:
+        """Get all syntax errors from code.
+
+        Args:
+            code: Python code to check
+
+        Returns:
+            List of SyntaxError objects
+
+        Example:
+            >>> errors = validator.get_syntax_errors("def foo(")
+            >>> len(errors)
+            1
+            >>> errors[0].msg
+            'unexpected EOF while parsing'
+        """
+        pass
+
+    def check_indentation(self, code: str) -> List[str]:
+        """Check for indentation issues in code.
+
+        Args:
+            code: Python code to check
+
+        Returns:
+            List of indentation warnings
+
+        Example:
+            >>> code = "def foo():\\n\\t    return 1"  # Mixed tabs/spaces
+            >>> warnings = validator.check_indentation(code)
+            >>> warnings
+            ["Line 2: Mixed tabs and spaces in indentation"]
+        """
+        pass
+
+    def validate_imports(self, code: str) -> List[str]:
+        """Validate import statements in code.
+
+        Args:
+            code: Python code to check
+
+        Returns:
+            List of import-related warnings
+
+        Example:
+            >>> code = "from os import *\\nimport sys\\nimport sys"
+            >>> warnings = validator.validate_imports(code)
+            >>> warnings
+            ["Line 1: Wildcard import 'from os import *' is discouraged",
+             "Line 3: Duplicate import 'sys'"]
+        """
+        pass
+
+    def check_line_length(self, code: str, max_length: int = 88) -> List[str]:
+        """Check for lines exceeding maximum length.
+
+        Args:
+            code: Python code to check
+            max_length: Maximum allowed line length (default: 88 for Black)
+
+        Returns:
+            List of line length warnings
+
+        Example:
+            >>> code = "x = " + "1" * 100
+            >>> warnings = validator.check_line_length(code, max_length=88)
+            >>> warnings
+            ["Line 1: Line too long (103 > 88 characters)"]
+        """
+        pass
+```
+
+### ASTAnalyzer Interface
+
+```python
+import ast
+from typing import List, Optional
+from ..models import CodeSymbol, ParsedCode
+
+class ASTAnalyzer:
+    """Analyzes Python code using Abstract Syntax Trees."""
+
+    def parse_code(self, code: str) -> ParsedCode:
+        """Parse Python code using AST.
+
+        Args:
+            code: Python source code
+
+        Returns:
+            ParsedCode object with parsing results:
+            - is_valid: bool
+            - ast_tree: AST Module (if valid)
+            - symbols: List of CodeSymbol objects
+            - imports: List of import strings
+            - errors: List of error messages
+
+        Example:
+            >>> analyzer = ASTAnalyzer()
+            >>> result = analyzer.parse_code('''
+            ... def hello(name: str) -> str:
+            ...     \"\"\"Say hello.\"\"\"
+            ...     return f"Hello, {name}"
+            ... ''')
+            >>> result.is_valid
+            True
+            >>> result.symbols[0].name
+            'hello'
+            >>> result.symbols[0].type
+            'function'
+            >>> result.symbols[0].signature
+            'hello(name: str) -> str'
+        """
+        pass
+
+    def extract_functions(
+        self,
+        tree: ast.Module
+    ) -> List[ast.FunctionDef | ast.AsyncFunctionDef]:
+        """Extract all function definitions from an AST.
+
+        Args:
+            tree: AST Module to analyze
+
+        Returns:
+            List of FunctionDef and AsyncFunctionDef nodes
+
+        Example:
+            >>> import ast
+            >>> code = "def foo(): pass\\nasync def bar(): pass"
+            >>> tree = ast.parse(code)
+            >>> funcs = analyzer.extract_functions(tree)
+            >>> len(funcs)
+            2
+            >>> funcs[0].name
+            'foo'
+            >>> isinstance(funcs[1], ast.AsyncFunctionDef)
+            True
+        """
+        pass
+
+    def extract_classes(self, tree: ast.Module) -> List[ast.ClassDef]:
+        """Extract all class definitions from an AST.
+
+        Args:
+            tree: AST Module to analyze
+
+        Returns:
+            List of ClassDef nodes
+
+        Example:
+            >>> code = "class Foo: pass\\nclass Bar: pass"
+            >>> tree = ast.parse(code)
+            >>> classes = analyzer.extract_classes(tree)
+            >>> [c.name for c in classes]
+            ['Foo', 'Bar']
+        """
+        pass
+
+    def get_docstring(
+        self,
+        node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.Module,
+    ) -> Optional[str]:
+        """Extract docstring from an AST node.
+
+        Args:
+            node: AST node to extract docstring from
+
+        Returns:
+            Docstring text or None
+
+        Example:
+            >>> code = 'def foo():\\n    \"\"\"This is a docstring.\"\"\"\\n    pass'
+            >>> tree = ast.parse(code)
+            >>> func = tree.body[0]
+            >>> analyzer.get_docstring(func)
+            'This is a docstring.'
+        """
+        pass
+
+    def _get_function_signature(
+        self,
+        node: ast.FunctionDef | ast.AsyncFunctionDef
+    ) -> str:
+        """Extract function signature from AST node.
+
+        Args:
+            node: AST FunctionDef or AsyncFunctionDef node
+
+        Returns:
+            Function signature as string (including type annotations)
+
+        Example:
+            >>> code = "def foo(x: int, y: str = 'default') -> bool: pass"
+            >>> tree = ast.parse(code)
+            >>> func = tree.body[0]
+            >>> analyzer._get_function_signature(func)
+            "foo(x: int, y: str) -> bool"
+        """
+        pass
+```
+
+### AntipatternChecker Interface
+
+```python
+import ast
+from pathlib import Path
+from typing import Any, Dict, List
+
+# Configurable thresholds
+MAX_FUNCTION_NAME_LENGTH = 80
+MAX_FUNCTION_NAME_LENGTH_WARNING = 40
+MAX_CLASS_NAME_LENGTH = 30
+MAX_COMBINATORIAL_NAMING_THRESHOLD = 3
+MAX_FUNCTION_PARAMETERS = 6
+MAX_FUNCTION_LINES = 50
+MAX_FILE_LINES = 1000
+MAX_UNDERSCORES_IN_NAME = 5
+MAX_NESTING_DEPTH = 4
+MAX_BRANCHES = 10
+MAX_LOOPS = 3
+
+class AntipatternChecker:
+    """Checks for combinatorial anti-patterns and code smells."""
+
+    def check(self, file_path: Path, content: str) -> Dict[str, Any]:
+        """Check for combinatorial anti-patterns.
+
+        Args:
+            file_path: Path to the file being checked (unused currently)
+            content: File content to analyze
+
+        Returns:
+            Dictionary with errors and warnings found:
+            - errors: List of error strings (serious issues)
+            - warnings: List of warning strings (suggestions)
+
+        Example:
+            >>> checker = AntipatternChecker()
+            >>> code = "def get_user_by_id_and_name_and_email_and_status(a, b, c, d, e, f, g): pass"
+            >>> result = checker.check(Path("test.py"), code)
+            >>> len(result["errors"])
+            2  # Combinatorial naming + too many parameters
+            >>> result["errors"][0]
+            "Line 1: Combinatorial function with 3 'and' and 0 'by'"
+        """
+        pass
+
+    def check_dict(self, content: str) -> Dict[str, Any]:
+        """Check for anti-patterns in code content (without file path).
+
+        Args:
+            content: Python code content to check
+
+        Returns:
+            Dictionary with errors and warnings found
+
+        Example:
+            >>> result = checker.check_dict("def foo(): pass")
+            >>> result
+            {"errors": [], "warnings": []}
+        """
+        pass
+
+    def check_naming_patterns(self, tree: ast.Module) -> List[str]:
+        """Check for problematic naming patterns.
+
+        Args:
+            tree: AST tree to analyze
+
+        Returns:
+            List of naming issues found
+
+        Example:
+            >>> code = "def very_long_function_name_that_exceeds_limits(): pass"
+            >>> tree = ast.parse(code)
+            >>> issues = checker.check_naming_patterns(tree)
+            >>> issues
+            ["Function 'very_long_function_name_that_exceeds_l...' has excessively long name (47 chars)"]
+        """
+        pass
+
+    def check_function_complexity(self, node: ast.FunctionDef) -> List[str]:
+        """Check function complexity metrics.
+
+        Args:
+            node: Function AST node to analyze
+
+        Returns:
+            List of complexity issues
+
+        Example:
+            >>> code = '''
+            ... def complex_func():
+            ...     if x:
+            ...         if y:
+            ...             if z:
+            ...                 if a:
+            ...                     if b:
+            ...                         return 1
+            ... '''
+            >>> tree = ast.parse(code)
+            >>> func = tree.body[0]
+            >>> issues = checker.check_function_complexity(func)
+            >>> issues
+            ["Function has excessive nesting depth: 5"]
+        """
+        pass
+
+    def _get_max_nesting_depth(self, node: ast.AST, current_depth: int = 0) -> int:
+        """Calculate maximum nesting depth in a function.
+
+        Args:
+            node: AST node to analyze
+            current_depth: Current nesting level
+
+        Returns:
+            Maximum nesting depth found
+        """
+        pass
+
+    def _count_branches(self, node: ast.AST) -> int:
+        """Count number of branches in a function.
+
+        Args:
+            node: AST node to analyze
+
+        Returns:
+            Number of branches (if/elif/else)
+        """
+        pass
+
+    def _count_loops(self, node: ast.AST) -> int:
+        """Count number of loops in a function.
+
+        Args:
+            node: AST node to analyze
+
+        Returns:
+            Number of loops (for/while)
+        """
+        pass
+```
+
+---
+
+## Implementation Details
+
+### Syntax Validation Flow
+
+```python
+def validate(self, code: str) -> ValidationResult:
+    result = ValidationResult(is_valid=True)
+
+    try:
+        # Try to compile the code
+        compile(code, "<string>", "exec")
+
+        # Also try to parse with AST for more detailed checking
+        ast.parse(code)
+
+        return result
+
+    except SyntaxError as e:
+        result.is_valid = False
+        result.errors.append(f"Line {e.lineno}: {e.msg}")
+        if e.text:
+            result.errors.append(f"  {e.text.rstrip()}")
+            if e.offset:
+                result.errors.append(f"  {' ' * (e.offset - 1)}^")
+        return result
+
+    except Exception as e:
+        result.is_valid = False
+        result.errors.append(f"Parse error: {str(e)}")
+        return result
+```
+
+### AST Symbol Extraction
+
+```python
+def parse_code(self, code: str) -> ParsedCode:
+    result = ParsedCode()
+    result.symbols = []
+    result.imports = []
+    result.errors = []
+
+    try:
+        tree = ast.parse(code)
+        result.ast_tree = tree
+        result.is_valid = True
+
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                signature = self._get_function_signature(node)
+                docstring = ast.get_docstring(node)
+                result.symbols.append(
+                    CodeSymbol(
+                        name=node.name,
+                        type="function",
+                        line=node.lineno,
+                        signature=signature,
+                        docstring=docstring,
+                    )
+                )
+
+            elif isinstance(node, ast.ClassDef):
+                docstring = ast.get_docstring(node)
+                result.symbols.append(
+                    CodeSymbol(
+                        name=node.name,
+                        type="class",
+                        line=node.lineno,
+                        docstring=docstring,
+                    )
+                )
+
+    except SyntaxError as e:
+        result.is_valid = False
+        result.errors.append(f"Syntax error at line {e.lineno}: {e.msg}")
+
+    return result
+```
+
+### Antipattern Detection
+
+```python
+def check(self, _file_path: Path, content: str) -> Dict[str, Any]:
+    errors = []
+    warnings = []
+
+    try:
+        tree = ast.parse(content)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+
+            func_name = node.name
+            params = [arg.arg for arg in node.args.args if arg.arg not in ("self", "cls")]
+
+            # Check for excessive function name length
+            if len(func_name) > MAX_FUNCTION_NAME_LENGTH:
+                errors.append(
+                    f"Line {node.lineno}: Function name {len(func_name)} chars: {func_name[:60]}..."
+                )
+
+            # Check for combinatorial naming
+            and_count = func_name.count("_and_")
+            by_count = func_name.count("_by_")
+            if (
+                and_count >= MAX_COMBINATORIAL_NAMING_THRESHOLD
+                or by_count >= MAX_COMBINATORIAL_NAMING_THRESHOLD
+            ):
+                errors.append(
+                    f"Line {node.lineno}: Combinatorial function with {and_count} 'and' and {by_count} 'by'"
+                )
+
+            # Check parameter count
+            if len(params) > MAX_FUNCTION_PARAMETERS:
+                warnings.append(
+                    f"Line {node.lineno}: Function has {len(params)} parameters"
+                )
+
+    except SyntaxError:
+        pass  # Let syntax validator handle this
+
+    return {"errors": errors, "warnings": warnings}
+```
+
+---
+
+## Testing Requirements
+
+### Unit Tests
+
+**File:** `tests/agents/code/validators/test_validators.py`
+
+```python
+import pytest
+from gaia.agents.code.validators import SyntaxValidator, ASTAnalyzer, AntipatternChecker
+from pathlib import Path
+
+# SyntaxValidator Tests
+
+def test_syntax_validator_valid_code():
+    """Test valid Python code."""
+    validator = SyntaxValidator()
+    result = validator.validate("print('hello')")
+    assert result.is_valid is True
+    assert len(result.errors) == 0
+
+def test_syntax_validator_invalid_code():
+    """Test invalid Python code."""
+    validator = SyntaxValidator()
+    result = validator.validate("print('hello'")
+    assert result.is_valid is False
+    assert len(result.errors) > 0
+    assert "EOL" in result.errors[0] or "EOF" in result.errors[0]
+
+def test_syntax_validator_check_indentation():
+    """Test indentation checking."""
+    validator = SyntaxValidator()
+    code = "def foo():\n\t    return 1"  # Mixed tabs and spaces
+    warnings = validator.check_indentation(code)
+    assert len(warnings) > 0
+    assert "Mixed" in warnings[0]
+
+def test_syntax_validator_validate_imports():
+    """Test import validation."""
+    validator = SyntaxValidator()
+    code = "from os import *\nimport sys\nimport sys"
+    warnings = validator.validate_imports(code)
+    assert len(warnings) >= 2
+    assert any("Wildcard" in w for w in warnings)
+    assert any("Duplicate" in w for w in warnings)
+
+# ASTAnalyzer Tests
+
+def test_ast_analyzer_parse_valid_code():
+    """Test parsing valid code."""
+    analyzer = ASTAnalyzer()
+    code = '''
+def hello(name: str) -> str:
+    """Say hello."""
+    return f"Hello, {name}"
+'''
+    result = analyzer.parse_code(code)
+    assert result.is_valid is True
+    assert len(result.symbols) == 1
+    assert result.symbols[0].name == "hello"
+    assert result.symbols[0].type == "function"
+    assert "name: str" in result.symbols[0].signature
+    assert result.symbols[0].docstring == "Say hello."
+
+def test_ast_analyzer_extract_classes():
+    """Test class extraction."""
+    analyzer = ASTAnalyzer()
+    code = "class Foo:\n    pass\n\nclass Bar:\n    pass"
+    result = analyzer.parse_code(code)
+    classes = [s for s in result.symbols if s.type == "class"]
+    assert len(classes) == 2
+    assert classes[0].name == "Foo"
+    assert classes[1].name == "Bar"
+
+# AntipatternChecker Tests
+
+def test_antipattern_checker_clean_code():
+    """Test clean code (no antipatterns)."""
+    checker = AntipatternChecker()
+    code = "def foo():\n    pass"
+    result = checker.check(Path("test.py"), code)
+    assert len(result["errors"]) == 0
+    assert len(result["warnings"]) == 0
+
+def test_antipattern_checker_combinatorial_naming():
+    """Test combinatorial naming detection."""
+    checker = AntipatternChecker()
+    code = "def get_user_by_id_and_name_and_email_and_status(): pass"
+    result = checker.check(Path("test.py"), code)
+    assert len(result["errors"]) > 0
+    assert any("Combinatorial" in e for e in result["errors"])
+
+def test_antipattern_checker_too_many_parameters():
+    """Test excessive parameter count."""
+    checker = AntipatternChecker()
+    code = "def foo(a, b, c, d, e, f, g, h): pass"
+    result = checker.check(Path("test.py"), code)
+    assert len(result["warnings"]) > 0
+    assert any("parameters" in w for w in result["warnings"])
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Basic Validation
+
+```python
+from gaia.agents.code.validators import SyntaxValidator
+
+validator = SyntaxValidator()
+
+# Valid code
+result = validator.validate("print('hello')")
+print(result.is_valid)  # True
+
+# Invalid code
+result = validator.validate("print('hello'")
+print(result.is_valid)  # False
+print(result.errors)  # ["Line 1: EOL while scanning string literal"]
+```
+
+### Example 2: AST Analysis
+
+```python
+from gaia.agents.code.validators import ASTAnalyzer
+
+analyzer = ASTAnalyzer()
+
+code = '''
+def calculate(x: int, y: int) -> int:
+    """Add two numbers."""
+    return x + y
+
+class Calculator:
+    """Simple calculator."""
+    pass
+'''
+
+result = analyzer.parse_code(code)
+
+for symbol in result.symbols:
+    print(f"{symbol.type}: {symbol.name} at line {symbol.line}")
+    if symbol.signature:
+        print(f"  Signature: {symbol.signature}")
+    if symbol.docstring:
+        print(f"  Doc: {symbol.docstring}")
+
+# Output:
+# function: calculate at line 2
+#   Signature: calculate(x: int, y: int) -> int
+#   Doc: Add two numbers.
+# class: Calculator at line 6
+#   Doc: Simple calculator.
+```
+
+### Example 3: Anti-pattern Detection
+
+```python
+from gaia.agents.code.validators import AntipatternChecker
+from pathlib import Path
+
+checker = AntipatternChecker()
+
+code = '''
+def get_user_by_id_and_name_and_email(id, name, email, status, role, permissions, created_at):
+    """Function with antipatterns."""
+    if status:
+        if role:
+            if permissions:
+                if created_at:
+                    return True
+    return False
+'''
+
+result = checker.check(Path("example.py"), code)
+
+print("Errors:")
+for error in result["errors"]:
+    print(f"  - {error}")
+
+print("\nWarnings:")
+for warning in result["warnings"]:
+    print(f"  - {warning}")
+
+# Output:
+# Errors:
+#   - Line 2: Combinatorial function with 3 'and' and 1 'by'
+# Warnings:
+#   - Line 2: Function has 7 parameters
+```
+
+### Example 4: Integrated Validation
+
+```python
+from gaia.agents.code.validators import SyntaxValidator, ASTAnalyzer, AntipatternChecker
+from pathlib import Path
+
+def validate_code(code: str) -> dict:
+    """Comprehensive code validation."""
+    results = {
+        "syntax": {},
+        "structure": {},
+        "quality": {}
+    }
+
+    # Syntax validation
+    syntax_validator = SyntaxValidator()
+    syntax_result = syntax_validator.validate(code)
+    results["syntax"]["valid"] = syntax_result.is_valid
+    results["syntax"]["errors"] = syntax_result.errors
+
+    if syntax_result.is_valid:
+        # AST analysis
+        ast_analyzer = ASTAnalyzer()
+        ast_result = ast_analyzer.parse_code(code)
+        results["structure"]["symbols"] = [
+            {
+                "name": s.name,
+                "type": s.type,
+                "line": s.line
+            }
+            for s in ast_result.symbols
+        ]
+
+        # Anti-pattern checking
+        antipattern_checker = AntipatternChecker()
+        quality_result = antipattern_checker.check(Path("code.py"), code)
+        results["quality"]["errors"] = quality_result["errors"]
+        results["quality"]["warnings"] = quality_result["warnings"]
+
+    return results
+
+# Usage
+code = '''
+def hello(name: str) -> str:
+    """Say hello."""
+    return f"Hello, {name}"
+'''
+
+validation = validate_code(code)
+print(validation)
+```
+
+---
+
+*Code Validators Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

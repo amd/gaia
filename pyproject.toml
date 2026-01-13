@@ -1,6 +1,6 @@
 [tool.black]
 line-length = 88
-target-version = ['py37']
+target-version = ['py312']
 exclude = '''
 (
   /(
@@ -24,7 +24,7 @@ skip_gitignore = true
 skip = [".git", "__pycache__", "venv", ".venv", ".mypy_cache", ".tox", ".eggs", "_build", "buck-out", "node_modules"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
@@ -48,3 +48,16 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "--tb=short --strict-markers"
+
+# UV configuration for PyTorch CPU-only builds
+# GAIA is optimized for AMD hardware and doesn't require NVIDIA/CUDA dependencies
+# This ensures torch, torchvision, and torchaudio are installed from CPU-only index
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+torchvision = [{ index = "pytorch-cpu" }]
+torchaudio = [{ index = "pytorch-cpu" }]

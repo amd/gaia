@@ -1,4 +1,4 @@
-@REM Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+@REM Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 @REM SPDX-License-Identifier: MIT
 
 @echo off

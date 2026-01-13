@@ -1,0 +1,279 @@
+---
+title: "Code Development"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/code/tools/`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code/tools/)
+</Info>
+
+<Note>
+**Import:** `from gaia.agents.code.tools.cli_tools import CLIToolsMixin`
+</Note>
+---
+
+<Badge text="development" color="orange" />
+
+**Purpose:** Reusable tool collections for the CodeAgent. Mix and match to create custom development agents.
+
+## 13.1 CLIToolsMixin (Process Management)
+
+**Detailed Spec:** [spec/cli-tools-mixin](/spec/cli-tools-mixin)
+
+**Purpose:** Process execution, command running, and terminal operations.
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.code.tools.cli_tools import CLIToolsMixin
+
+class MyDevAgent(Agent, CLIToolsMixin):
+    """Agent with CLI capabilities."""
+
+    def _register_tools(self):
+        # CLIToolsMixin provides:
+        # - run_command(command: str) -> dict
+        # - kill_process(pid: int) -> dict
+        # - list_processes() -> dict
+        pass
+
+# Usage
+agent = MyDevAgent()
+result = agent.process_query("Run npm install and start the dev server")
+# Agent executes: npm install && npm run dev
+```
+
+---
+
+## 13.2 CodeToolsMixin (Code Generation)
+
+**Import:** `from gaia.agents.code.tools.code_tools import CodeToolsMixin`
+
+**Detailed Spec:** [spec/code-tools-mixin](/spec/code-tools-mixin)
+
+**Purpose:** Code generation, scaffolding, and project templates.
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.code.tools.code_tools import CodeToolsMixin
+
+class MyCodeAgent(Agent, CodeToolsMixin):
+    """Agent with code generation."""
+
+    def _register_tools(self):
+        # CodeToolsMixin provides:
+        # - generate_file(path: str, content: str) -> dict
+        # - create_component(name: str, type: str) -> dict
+        # - scaffold_project(template: str) -> dict
+        pass
+```
+
+---
+
+## 13.3 FileIOToolsMixin (File Operations)
+
+**Import:** `from gaia.agents.code.tools.file_io import FileIOToolsMixin`
+
+**Detailed Spec:** [spec/file-io-tools-mixin](/spec/file-io-tools-mixin)
+
+**Purpose:** Advanced file operations with security validation.
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.code.tools.file_io import FileIOToolsMixin
+
+class MyAgent(Agent, FileIOToolsMixin):
+    """Agent with file I/O."""
+
+    def _register_tools(self):
+        # FileIOToolsMixin provides:
+        # - read_file(path: str) -> dict
+        # - write_file(path: str, content: str) -> dict
+        # - delete_file(path: str) -> dict
+        # - list_directory(path: str) -> dict
+        # - create_directory(path: str) -> dict
+        # All with security validation!
+        pass
+```
+
+---
+
+## 13.4 ValidationToolsMixin (Code Validation)
+
+**Import:** `from gaia.agents.code.tools.validation_tools import ValidationToolsMixin`
+
+**Detailed Spec:** [spec/validation-tools-mixin](/spec/validation-tools-mixin)
+
+**Purpose:** Syntax checking, linting, and code quality validation.
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.code.tools.validation_tools import ValidationToolsMixin
+
+class MyAgent(Agent, ValidationToolsMixin):
+    """Agent with validation."""
+
+    def _register_tools(self):
+        # ValidationToolsMixin provides:
+        # - validate_syntax(file: str, language: str) -> dict
+        # - lint_code(file: str) -> dict
+        # - check_types(file: str) -> dict
+        pass
+```
+
+---
+
+## 13.5 ErrorFixingMixin (Error Detection & Fixing)
+
+**Import:** `from gaia.agents.code.tools.error_fixing import ErrorFixingMixin`
+
+**Detailed Spec:** [spec/error-fixing-mixin](/spec/error-fixing-mixin)
+
+**Purpose:** Automatic error detection and intelligent fixing using LLM.
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.code.tools.error_fixing import ErrorFixingMixin
+
+class MyAgent(Agent, ErrorFixingMixin):
+    """Agent with error fixing."""
+
+    def _register_tools(self):
+        # ErrorFixingMixin provides:
+        # - detect_errors(file: str) -> dict
+        # - fix_error(file: str, error: str) -> dict
+        # - suggest_fix(error_message: str) -> dict
+        pass
+
+# Usage
+agent = MyAgent()
+result = agent.process_query(
+    "Fix the TypeError in app.py and make sure tests pass"
+)
+```
+
+---
+
+## 13.6 TestingMixin (Test Execution)
+
+**Import:** `from gaia.agents.code.tools.testing import TestingMixin`
+
+**Detailed Spec:** [spec/testing-mixin](/spec/testing-mixin)
+
+**Purpose:** Test execution, coverage analysis, and test generation.
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.code.tools.testing import TestingMixin
+
+class MyAgent(Agent, TestingMixin):
+    """Agent with testing."""
+
+    def _register_tools(self):
+        # TestingMixin provides:
+        # - run_tests(path: str, framework: str) -> dict
+        # - generate_tests(file: str) -> dict
+        # - check_coverage() -> dict
+        pass
+```
+
+---
+
+## 13.7 PrismaToolsMixin (Database Setup)
+
+**Import:** `from gaia.agents.code.tools.prisma_tools import PrismaToolsMixin`
+
+**Detailed Spec:** [spec/prisma-tools-mixin](/spec/prisma-tools-mixin)
+
+**Purpose:** Prisma ORM setup, schema generation, and database migrations.
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.code.tools.prisma_tools import PrismaToolsMixin
+
+class MyAgent(Agent, PrismaToolsMixin):
+    """Agent with Prisma support."""
+
+    def _register_tools(self):
+        # PrismaToolsMixin provides:
+        # - init_prisma(database: str) -> dict
+        # - generate_schema(models: list) -> dict
+        # - run_migration(name: str) -> dict
+        pass
+```
+
+---
+
+## 13.8 TypeScriptToolsMixin (TypeScript Development)
+
+**Import:** `from gaia.agents.code.tools.typescript_tools import TypeScriptToolsMixin`
+
+**Detailed Spec:** [spec/typescript-tools-mixin](/spec/typescript-tools-mixin)
+
+**Purpose:** TypeScript project setup, type checking, and compilation.
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.code.tools.typescript_tools import TypeScriptToolsMixin
+
+class MyAgent(Agent, TypeScriptToolsMixin):
+    """Agent with TypeScript support."""
+
+    def _register_tools(self):
+        # TypeScriptToolsMixin provides:
+        # - init_typescript(project: str) -> dict
+        # - compile_typescript(file: str) -> dict
+        # - check_types(file: str) -> dict
+        pass
+```
+
+---
+
+## 13.9 WebToolsMixin (Web Development)
+
+**Import:** `from gaia.agents.code.tools.web_dev_tools import WebToolsMixin`
+
+**Detailed Spec:** [spec/web-tools-mixin](/spec/web-tools-mixin)
+
+**Purpose:** Frontend development with React, Vue, Svelte scaffolding and component generation.
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.code.tools.web_dev_tools import WebToolsMixin
+
+class MyAgent(Agent, WebToolsMixin):
+    """Agent with web dev tools."""
+
+    def _register_tools(self):
+        # WebToolsMixin provides:
+        # - create_react_app(name: str) -> dict
+        # - generate_component(name: str, framework: str) -> dict
+        # - setup_tailwind() -> dict
+        # - create_api_route(path: str) -> dict
+        pass
+
+# Usage
+agent = MyAgent()
+result = agent.process_query(
+    "Create a React app with TypeScript, Tailwind, and a login component"
+)
+```
+
+---
+
+## Related Topics
+
+- [Core Agent System](../core/agent-system) - Learn about the base Agent class
+- [Tool Mixins](./tool-mixins) - General-purpose tool mixins
+- [Specialized Agents](../agents/specialized) - Pre-built agent implementations
+- [Best Practices](../best-practices) - Agent development guidelines
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

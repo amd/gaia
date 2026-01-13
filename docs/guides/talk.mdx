@@ -1,0 +1,382 @@
+---
+title: "Voice Interaction"
+description: "Natural voice conversations with AI using speech recognition (ASR) and text-to-speech (TTS)"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/talk/`](https://github.com/amd/gaia/tree/main/src/gaia/talk) · [`src/gaia/audio/`](https://github.com/amd/gaia/tree/main/src/gaia/audio)
+</Info>
+
+GAIA's talk mode enables natural voice-based interaction with LLMs using Whisper for automatic speech recognition (ASR) and Kokoro TTS for text-to-speech (TTS). Have natural conversations with AI through your microphone and speakers.
+
+<Info>
+  **First time here?** Complete the [Setup](/setup) guide first to install GAIA and its dependencies.
+</Info>
+
+## Quick Start
+
+<Steps>
+  <Step title="Install talk extras">
+    With GAIA installed, add the talk extras:
+
+    ```bash
+    uv pip install "amd-gaia[talk]"
+    ```
+  </Step>
+
+  <Step title="Start Lemonade Server">
+    Launch the AI backend server:
+
+    ```bash
+    lemonade-server serve
+    ```
+
+    <Tip>You can also double-click the desktop shortcut to start the server</Tip>
+  </Step>
+
+  <Step title="Launch Talk Mode">
+    Start voice conversation:
+
+    <Tabs>
+      <Tab title="Full Voice (ASR + TTS)">
+        ```bash
+        gaia talk
+        ```
+      </Tab>
+
+      <Tab title="ASR Only">
+        ```bash
+        gaia talk --no-tts
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Start Speaking">
+    When you see `⠴ Listening...`, you can start talking
+
+    ```bash
+    [2025-02-06 11:56:30] | INFO | Starting audio processing thread...
+    [2025-02-06 11:56:30] | INFO | Listening for voice input...
+    ⠴ Listening...
+    ```
+
+    Say "exit" or "quit" to end the session
+  </Step>
+</Steps>
+
+## Voice Commands
+
+<CardGroup cols={2}>
+  <Card title="Exit Session" icon="door-open">
+    Say **"exit"** or **"quit"**
+  </Card>
+
+  <Card title="Clear History" icon="rotate-right">
+    Say **"restart"**
+  </Card>
+
+  <Card title="Trigger Response" icon="pause">
+    Natural pauses (>1 second)
+  </Card>
+
+  <Card title="Stop Playback" icon="stop">
+    Press **Enter** during audio
+  </Card>
+</CardGroup>
+
+## Configuration Options
+
+Customize your voice interaction experience:
+
+<Tabs>
+  <Tab title="Whisper Model Size">
+    ```bash
+    # Choose model size for speech recognition
+    gaia talk --whisper-model-size medium
+
+    # Available: tiny, base, small, medium, large
+    ```
+
+    <Note>Larger models provide better accuracy but require more resources</Note>
+  </Tab>
+
+  <Tab title="Audio Device">
+    ```bash
+    # Specify which microphone to use
+    gaia talk --audio-device-index 2
+    ```
+
+    <Tip>Use `gaia test --test-type asr-list-audio-devices` to list available devices</Tip>
+  </Tab>
+
+  <Tab title="Performance Stats">
+    ```bash
+    # Show performance statistics
+    gaia talk --stats
+    ```
+  </Tab>
+</Tabs>
+
+## Document Q&A with Voice
+
+<Note>
+  Voice interaction supports document-based Q&A through RAG (Retrieval-Augmented Generation). Ask questions about your PDF documents using natural speech!
+</Note>
+
+### Quick Start with Documents
+
+<CodeGroup>
+```bash Single Document
+# Voice chat with a document
+gaia talk --index manual.pdf
+```
+
+```bash Short Form
+# Or use short form
+gaia talk -i guide.pdf
+```
+
+```bash ASR Only
+# Without text-to-speech
+gaia talk --index manual.pdf --no-tts
+```
+</CodeGroup>
+
+### Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Technical Support" icon="headset">
+    Voice chat with product manuals and troubleshooting guides
+  </Card>
+
+  <Card title="Research" icon="flask">
+    Speak questions about research papers and documentation
+  </Card>
+
+  <Card title="Learning" icon="graduation-cap">
+    Voice interaction with textbooks and educational materials
+  </Card>
+
+  <Card title="Accessibility" icon="universal-access">
+    Hands-free document Q&A for users with mobility needs
+  </Card>
+
+  <Card title="Field Work" icon="hammer">
+    Voice queries about procedures when hands are busy
+  </Card>
+
+  <Card title="Documentation" icon="book-open">
+    Quick reference lookup while working
+  </Card>
+</CardGroup>
+
+### How It Works
+
+<Steps>
+  <Step title="Document Indexing">
+    PDFs are automatically indexed when you start talk with `--index`
+  </Step>
+
+  <Step title="Voice Input">
+    Speak your question about the documents
+  </Step>
+
+  <Step title="Context Retrieval">
+    Relevant document sections are retrieved automatically
+  </Step>
+
+  <Step title="Voice Response">
+    AI answers based on document context and speaks the response
+  </Step>
+</Steps>
+
+<Info>
+  See the [Chat documentation - Document Q&A section](/guides/chat#document-qa-rag) for more details on RAG capabilities
+</Info>
+
+## Testing ASR Components
+
+Test the automatic speech recognition system using various test modes:
+
+### Audio File Transcription
+
+Test transcription of existing audio files:
+
+```bash
+gaia test --test-type asr-file-transcription --input-audio-file path/to/audio.wav
+```
+
+<Accordion title="Supported Audio Formats">
+  - WAV
+  - MP3
+  - M4A
+  - Other common formats
+</Accordion>
+
+**Options:**
+- `--input-audio-file`: Path to the audio file (required)
+- `--whisper-model-size`: Model size (default: "base")
+
+### List Audio Devices
+
+Discover available audio input devices:
+
+```bash
+gaia test --test-type asr-list-audio-devices
+```
+
+### Microphone Recording Test
+
+Test real-time transcription from your microphone:
+
+```bash
+gaia test --test-type asr-microphone --recording-duration 15
+```
+
+**Options:**
+- `--recording-duration`: Recording duration in seconds (default: 10)
+- `--whisper-model-size`: Model size (default: "base")
+- `--audio-device-index`: Specific microphone (optional)
+
+## Testing TTS Components
+
+Test text-to-speech capabilities with various test modes:
+
+### Text Preprocessing
+
+Test how TTS processes and formats text:
+
+<CodeGroup>
+```bash Default Test
+gaia test --test-type tts-preprocessing
+```
+
+```bash Custom Text
+gaia test --test-type tts-preprocessing --test-text "Your test text here"
+```
+</CodeGroup>
+
+### Streaming Playback
+
+Test real-time audio generation and playback:
+
+```bash
+gaia test --test-type tts-streaming --test-text "Your test text here"
+```
+
+<Accordion title="Test Output Includes">
+  - Processing progress
+  - Playback progress
+  - Currently spoken text
+  - Performance metrics
+</Accordion>
+
+### Audio File Generation
+
+Generate and save audio to WAV file:
+
+```bash
+gaia test --test-type tts-audio-file \
+  --test-text "Your test text here" \
+  --output-audio-file ./test_output.wav
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Audio Device Errors">
+    - Try different `--audio-device-index` values
+    - List available devices: `gaia test --test-type asr-list-audio-devices`
+    - Check system audio input settings (Settings > Audio > Input)
+    - Ensure correct microphone is selected as default input device
+  </Accordion>
+
+  <Accordion title="Poor ASR Accuracy">
+    - Try larger Whisper models: `--whisper-model-size medium` or `large`
+    - Ensure you're in a quiet environment
+    - Speak clearly at a moderate pace
+    - Check microphone positioning and quality
+    - Verify microphone is not muted
+  </Accordion>
+
+  <Accordion title="No Voice Response (TTS)">
+    - Check system audio output/speaker settings
+    - Verify TTS is enabled (not using `--no-tts` flag)
+    - Ensure system volume is not muted
+    - Verify espeak-ng is properly installed
+    - Test with: `gaia test --test-type tts-streaming`
+  </Accordion>
+
+  <Accordion title="Voice Input Not Recognized">
+    - Check microphone permissions
+    - Verify microphone is working in other applications
+    - Test with: `gaia test --test-type asr-microphone`
+    - Adjust `--audio-device-index` if multiple microphones
+  </Accordion>
+
+  <Accordion title="RAG Issues">
+    **Missing RAG dependencies:**
+    ```bash
+    uv pip install -e ".[rag]"
+    ```
+
+    **Other issues:**
+    - **PDF processing errors**: Ensure PDFs have extractable text (not scanned images)
+    - **Slow indexing**: Use `--stats` to monitor; larger documents take time
+    - **Context not used**: Verify documents indexed successfully at startup
+    - **Empty responses**: Check PDFs contain extractable text
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Optimal Environment" icon="volume-high">
+    Use in quiet environments for best recognition accuracy
+  </Card>
+
+  <Card title="Speech Clarity" icon="microphone">
+    Speak clearly and at moderate pace
+  </Card>
+
+  <Card title="Model Selection" icon="sliders">
+    Balance accuracy vs. performance based on your hardware
+  </Card>
+
+  <Card title="Natural Pauses" icon="clock">
+    Use natural pauses to trigger AI responses
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Chat SDK" icon="comments" href="/guides/chat">
+    Learn about the underlying chat capabilities
+  </Card>
+
+  <Card title="CLI Reference" icon="terminal" href="/reference/cli">
+    Explore all command-line options
+  </Card>
+
+  <Card title="Development Guide" icon="code" href="/reference/dev">
+    Build custom voice-enabled agents
+  </Card>
+
+  <Card title="Features Overview" icon="stars" href="/reference/features">
+    Discover all GAIA capabilities
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

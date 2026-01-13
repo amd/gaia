@@ -1,0 +1,1206 @@
+---
+title: "LLM Client"
+description: "Unified client for local and cloud LLM providers with streaming support"
+icon: "brain"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/llm/llm_client.py`](https://github.com/amd/gaia/blob/main/src/gaia/llm/llm_client.py)
+</Info>
+
+<Note>
+**Component:** LLMClient
+**Module:** `gaia.llm.llm_client`
+**Import:** `from gaia.llm import LLMClient`
+</Note>
+
+---
+
+## Overview
+
+LLMClient provides a unified interface for generating text from multiple LLM backends (local Lemonade server, Claude API, OpenAI API). It handles connection management, retry logic, streaming responses, and performance monitoring with automatic endpoint selection and base URL normalization.
+
+**Key Features:**
+- Multi-backend support (local, Claude, OpenAI)
+- Automatic retry with exponential backoff
+- Streaming and non-streaming generation
+- Performance statistics tracking
+- Generation halting/interruption
+- Context manager for resource cleanup
+
+---
+
+## Requirements
+
+### Functional Requirements
+
+1. **Multi-Backend Support**
+   - Local LLM via Lemonade server (default)
+   - Anthropic Claude API
+   - OpenAI ChatGPT API
+   - Automatic base URL normalization
+
+2. **Generation Interface**
+   - `generate()` - Generate text with prompt
+   - Streaming and non-streaming modes
+   - System prompt support
+   - Temperature and other parameters
+   - Messages array support for chat
+
+3. **Connection Management**
+   - Configurable timeouts (connect, read, write, pool)
+   - Connection pooling
+   - Retry logic with exponential backoff
+   - Connection error handling
+
+4. **Performance Monitoring**
+   - `get_performance_stats()` - Token counts, timing
+   - `is_generating()` - Check generation status
+   - `halt_generation()` - Stop current generation
+
+5. **Error Handling**
+   - Network error detection and retry
+   - Timeout handling
+   - API endpoint validation
+   - Clear error messages with fix suggestions
+
+### Non-Functional Requirements
+
+1. **Performance**
+   - Fast connection establishment (15s timeout)
+   - Streaming with 120s read timeout
+   - Efficient token counting
+   - Minimal overhead
+
+2. **Reliability**
+   - Automatic retry on transient failures
+   - Exponential backoff (base: 1s, max: 60s)
+   - Configurable max retries (default: 3)
+   - Connection pool management
+
+3. **Usability**
+   - Simple initialization
+   - Sensible defaults
+   - Clear documentation
+   - Helpful error messages
+
+---
+
+## API Specification
+
+### File Location
+
+```
+src/gaia/llm/llm_client.py
+```
+
+### Public Interface
+
+```python
+from typing import Any, Dict, Iterator, List, Literal, Optional, Union
+import httpx
+from openai import OpenAI
+
+class LLMClient:
+    """
+    Unified LLM client for local, Claude, and OpenAI backends.
+
+    Usage:
+        # Local LLM (default)
+        client = LLMClient()
+        response = client.generate("Hello world")
+
+        # Claude API
+        client = LLMClient(use_claude=True)
+        response = client.generate("Hello world")
+
+        # OpenAI API
+        client = LLMClient(use_openai=True)
+        response = client.generate("Hello world")
+
+        # With custom base URL
+        client = LLMClient(base_url="http://remote-server:8000")
+
+        # With streaming
+        for chunk in client.generate("Hello", stream=True):
+            print(chunk, end="")
+    """
+
+    def __init__(
+        self,
+        use_claude: bool = False,
+        use_openai: bool = False,
+        system_prompt: Optional[str] = None,
+        base_url: Optional[str] = None,
+        claude_model: str = "claude-sonnet-4-20250514",
+        max_retries: int = 3,
+        retry_base_delay: float = 1.0,
+    ):
+        """
+        Initialize the LLM client.
+
+        Args:
+            use_claude: If True, uses Anthropic Claude API.
+            use_openai: If True, uses OpenAI ChatGPT API.
+            system_prompt: Default system prompt to use for all generation requests.
+            base_url: Base URL for local LLM server (defaults to LEMONADE_BASE_URL env var).
+                     Automatically normalized to include /api/v1 suffix if needed.
+            claude_model: Claude model to use (e.g., "claude-sonnet-4-20250514").
+            max_retries: Maximum number of retry attempts on connection errors.
+            retry_base_delay: Base delay in seconds for exponential backoff.
+
+        Note:
+            - Uses local LLM server by default unless use_claude or use_openai is True.
+            - Context size is configured when starting the Lemonade server.
+            - Base URL normalization: "http://localhost:8000" -> "http://localhost:8000/api/v1"
+
+        Environment Variables:
+            LEMONADE_BASE_URL: Default base URL for local LLM server
+            OPENAI_API_KEY: Required when use_openai=True
+        """
+        pass
+
+    def generate(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        endpoint: Optional[Literal["completions", "chat", "claude", "openai"]] = None,
+        system_prompt: Optional[str] = None,
+        stream: bool = False,
+        messages: Optional[List[Dict[str, str]]] = None,
+        **kwargs: Any,
+    ) -> Union[str, Iterator[str]]:
+        """
+        Generate a response from the LLM.
+
+        Args:
+            prompt: The user prompt/query to send to the LLM. For chat endpoint,
+                   if messages is not provided, this is treated as a pre-formatted
+                   prompt string that already contains the full conversation.
+            model: The model to use (defaults to endpoint-appropriate model)
+            endpoint: Override the endpoint to use (completions, chat, claude, or openai)
+            system_prompt: System prompt to use for this specific request (overrides default)
+            stream: If True, returns a generator that yields chunks of the response
+            messages: Optional list of message dicts with 'role' and 'content' keys.
+                     If provided, these are used directly for chat completions instead of prompt.
+            **kwargs: Additional parameters to pass to the API (temperature, max_tokens, etc.)
+
+        Returns:
+            If stream=False: The complete generated text as a string
+            If stream=True: A generator yielding chunks of the response
+
+        Raises:
+            ConnectionError: Network or server connection issues
+            ValueError: Invalid parameters or configuration
+
+        Example:
+            # Non-streaming
+            response = client.generate("Write a hello world program")
+            print(response)
+
+            # Streaming
+            for chunk in client.generate("Write a story", stream=True):
+                print(chunk, end="", flush=True)
+
+            # With messages array (proper chat history)
+            messages = [
+                {"role": "system", "content": "You are a helpful assistant"},
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi there!"},
+                {"role": "user", "content": "Tell me a joke"}
+            ]
+            response = client.generate("", messages=messages)
+        """
+        pass
+
+    def get_performance_stats(self) -> Dict[str, Any]:
+        """
+        Get performance statistics from the last LLM request.
+
+        Returns:
+            Dictionary containing performance statistics:
+            - time_to_first_token: Time in seconds until first token is generated
+            - tokens_per_second: Rate of token generation
+            - input_tokens: Number of tokens in the input
+            - output_tokens: Number of tokens in the output
+
+        Note:
+            Only available for local LLM server. Returns empty dict for API backends.
+
+        Example:
+            >>> response = client.generate("Hello")
+            >>> stats = client.get_performance_stats()
+            >>> print(f"Speed: {stats['tokens_per_second']:.1f} tokens/sec")
+            Speed: 45.3 tokens/sec
+        """
+        pass
+
+    def is_generating(self) -> bool:
+        """
+        Check if the local LLM is currently generating.
+
+        Returns:
+            True if generating, False otherwise
+
+        Note:
+            Only available when using local LLM (use_local=True).
+            Returns False for OpenAI/Claude API usage.
+
+        Example:
+            >>> client.is_generating()
+            False
+            >>> # Start generation in background thread
+            >>> client.is_generating()
+            True
+        """
+        pass
+
+    def halt_generation(self) -> bool:
+        """
+        Halt current generation on the local LLM server.
+
+        Returns:
+            True if halt was successful, False otherwise
+
+        Note:
+            Only available when using local LLM (use_local=True).
+            Does nothing for OpenAI/Claude API usage.
+
+        Example:
+            >>> if client.is_generating():
+            ...     client.halt_generation()
+            ...     print("Generation stopped")
+            Generation stopped
+        """
+        pass
+
+    def _retry_with_exponential_backoff(
+        self,
+        func: Callable[..., T],
+        *args,
+        **kwargs,
+    ) -> T:
+        """
+        Execute a function with exponential backoff retry on connection errors.
+
+        Args:
+            func: The function to execute
+            *args: Positional arguments for the function
+            **kwargs: Keyword arguments for the function
+
+        Returns:
+            The result of the function call
+
+        Raises:
+            The last exception if all retries are exhausted
+
+        Note:
+            - Base delay: 1.0 seconds (configurable)
+            - Exponential base: 2.0
+            - Max delay: 60.0 seconds
+            - Retries on: ConnectionError, httpx errors, requests errors
+        """
+        pass
+
+    def _clean_claude_response(self, response: str) -> str:
+        """
+        Extract valid JSON from Claude responses that may contain extra content.
+
+        Args:
+            response: The raw response from Claude API
+
+        Returns:
+            Cleaned response with only the JSON portion (if JSON detected)
+
+        Note:
+            Claude sometimes returns valid JSON followed by additional text.
+            This method extracts just the JSON part by matching braces.
+        """
+        pass
+```
+
+---
+
+## Implementation Details
+
+### Connection Configuration
+
+**Local LLM (Lemonade Server):**
+```python
+self.client = OpenAI(
+    base_url=base_url,  # Default: http://localhost:8000/api/v1
+    api_key="None",  # Not needed for local server
+    timeout=httpx.Timeout(
+        connect=15.0,   # 15 seconds to establish connection
+        read=120.0,     # 120 seconds between data chunks (matches Lemonade)
+        write=15.0,     # 15 seconds to send request
+        pool=15.0,      # 15 seconds to acquire connection from pool
+    ),
+    max_retries=0,  # Disable built-in retries (use custom retry logic)
+)
+```
+
+**Claude API:**
+```python
+from gaia.eval.claude import ClaudeClient
+self.claude_client = ClaudeClient(model=claude_model)
+```
+
+**OpenAI API:**
+```python
+self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+```
+
+### Base URL Normalization
+
+```python
+# Normalize base_url to ensure it has the /api/v1 suffix
+if base_url and not base_url.endswith("/api/v1"):
+    base_url = base_url.rstrip("/")
+    from urllib.parse import urlparse
+    parsed = urlparse(base_url)
+    # Only add /api/v1 if path is empty or just "/"
+    if not parsed.path or parsed.path == "/":
+        base_url = f"{base_url}/api/v1"
+```
+
+### Retry Logic
+
+```python
+def _retry_with_exponential_backoff(self, func, *args, **kwargs):
+    delay = self.retry_base_delay  # 1.0 seconds
+    max_delay = 60.0
+    exponential_base = 2.0
+
+    for attempt in range(self.max_retries + 1):
+        try:
+            return func(*args, **kwargs)
+        except (ConnectionError, httpx.ConnectError, httpx.TimeoutException,
+                httpx.NetworkError, requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as e:
+            if attempt == self.max_retries:
+                raise
+
+            wait_time = min(delay, max_delay)
+            logger.warning(
+                f"Connection error (attempt {attempt + 1}/{self.max_retries + 1}): {e}. "
+                f"Retrying in {wait_time:.1f}s..."
+            )
+            time.sleep(wait_time)
+            delay *= exponential_base
+```
+
+### Endpoint Selection
+
+```python
+# Completions endpoint (pre-formatted prompts, ChatSDK compatibility)
+if endpoint_to_use == "completions":
+    response = self.client.completions.create(
+        model=model,
+        prompt=prompt,  # Full formatted conversation
+        temperature=0.1,
+        stream=stream,
+        **kwargs,
+    )
+
+# Chat endpoint (proper message history)
+elif endpoint_to_use == "chat":
+    chat_messages = messages or [{"role": "user", "content": prompt}]
+    if effective_system_prompt:
+        chat_messages.insert(0, {"role": "system", "content": effective_system_prompt})
+
+    response = self.client.chat.completions.create(
+        model=model,
+        messages=chat_messages,
+        temperature=0.1,
+        stream=stream,
+        **kwargs,
+    )
+```
+
+### Error Handling
+
+```python
+try:
+    response = self._retry_with_exponential_backoff(
+        self.client.completions.create,
+        model=model,
+        prompt=prompt,
+        temperature=0.1,
+        stream=stream,
+        **kwargs,
+    )
+except httpx.ConnectError as e:
+    error_msg = f"LLM Server Connection Error: {str(e)}"
+    raise ConnectionError(error_msg) from e
+except Exception as e:
+    error_str = str(e)
+    if "404" in error_str:
+        if "endpoint" in error_str.lower() or "not found" in error_str.lower():
+            raise ConnectionError(
+                f"API endpoint error: {error_str}\n\n"
+                f"This may indicate:\n"
+                f"  1. Lemonade Server version mismatch (try updating to {LEMONADE_VERSION})\n"
+                f"  2. Model not properly loaded or corrupted\n\n"
+                f"To fix model issues, try:\n"
+                f"  lemonade model remove <model-name>\n"
+                f"  lemonade model download <model-name>\n"
+            ) from e
+    raise
+```
+
+---
+
+## Testing Requirements
+
+### Unit Tests
+
+**File:** `tests/llm/test_llm_client.py`
+
+```python
+import pytest
+from unittest.mock import Mock, patch
+from gaia.llm import LLMClient
+
+def test_llm_client_can_be_imported():
+    """Verify LLMClient can be imported."""
+    from gaia.llm import LLMClient
+    assert LLMClient is not None
+
+def test_initialize_local_llm():
+    """Test local LLM initialization."""
+    client = LLMClient()
+    assert client.use_claude is False
+    assert client.use_openai is False
+    assert client.base_url.endswith("/api/v1")
+    assert client.endpoint == "completions"
+
+def test_initialize_with_custom_base_url():
+    """Test base URL normalization."""
+    # Without /api/v1
+    client = LLMClient(base_url="http://localhost:8000")
+    assert client.base_url == "http://localhost:8000/api/v1"
+
+    # With /api/v1
+    client = LLMClient(base_url="http://localhost:8000/api/v1")
+    assert client.base_url == "http://localhost:8000/api/v1"
+
+    # With trailing slash
+    client = LLMClient(base_url="http://localhost:8000/")
+    assert client.base_url == "http://localhost:8000/api/v1"
+
+def test_initialize_claude():
+    """Test Claude API initialization."""
+    with patch('gaia.llm.llm_client.CLAUDE_AVAILABLE', True):
+        with patch('gaia.llm.llm_client.AnthropicClaudeClient'):
+            client = LLMClient(use_claude=True)
+            assert client.use_claude is True
+            assert client.endpoint == "claude"
+            assert client.default_model.startswith("claude-")
+
+def test_initialize_openai():
+    """Test OpenAI API initialization."""
+    with patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'}):
+        client = LLMClient(use_openai=True)
+        assert client.use_openai is True
+        assert client.endpoint == "openai"
+        assert client.default_model == "gpt-4o"
+
+def test_generate_non_streaming():
+    """Test non-streaming generation."""
+    client = LLMClient()
+
+    # Mock the OpenAI client
+    mock_response = Mock()
+    mock_response.choices = [Mock(text="Hello world")]
+    client.client.completions.create = Mock(return_value=mock_response)
+
+    response = client.generate("Test prompt")
+    assert response == "Hello world"
+    assert client.client.completions.create.called
+
+def test_generate_streaming():
+    """Test streaming generation."""
+    client = LLMClient()
+
+    # Mock streaming response
+    def mock_stream():
+        for chunk in ["Hello", " ", "world"]:
+            mock_chunk = Mock()
+            mock_chunk.choices = [Mock(text=chunk)]
+            yield mock_chunk
+
+    client.client.completions.create = Mock(return_value=mock_stream())
+
+    result = list(client.generate("Test prompt", stream=True))
+    assert result == ["Hello", " ", "world"]
+
+def test_generate_with_messages():
+    """Test generation with messages array."""
+    client = LLMClient()
+
+    mock_response = Mock()
+    mock_response.choices = [Mock(message=Mock(content="Response"))]
+    client.client.chat.completions.create = Mock(return_value=mock_response)
+
+    messages = [
+        {"role": "user", "content": "Hello"}
+    ]
+    response = client.generate("", endpoint="chat", messages=messages)
+    assert response == "Response"
+
+def test_retry_logic():
+    """Test exponential backoff retry."""
+    client = LLMClient(max_retries=2, retry_base_delay=0.1)
+
+    # Mock function that fails twice then succeeds
+    mock_func = Mock(side_effect=[
+        ConnectionError("Failed"),
+        ConnectionError("Failed"),
+        "Success"
+    ])
+
+    result = client._retry_with_exponential_backoff(mock_func)
+    assert result == "Success"
+    assert mock_func.call_count == 3
+
+def test_retry_exhausted():
+    """Test retry exhaustion."""
+    client = LLMClient(max_retries=1, retry_base_delay=0.1)
+
+    mock_func = Mock(side_effect=ConnectionError("Always fails"))
+
+    with pytest.raises(ConnectionError):
+        client._retry_with_exponential_backoff(mock_func)
+
+    assert mock_func.call_count == 2  # Initial + 1 retry
+
+def test_get_performance_stats():
+    """Test performance stats retrieval."""
+    client = LLMClient()
+
+    with patch('requests.get') as mock_get:
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {
+            "time_to_first_token": 0.5,
+            "tokens_per_second": 45.3,
+            "input_tokens": 10,
+            "output_tokens": 20
+        }
+
+        stats = client.get_performance_stats()
+        assert stats["time_to_first_token"] == 0.5
+        assert stats["tokens_per_second"] == 45.3
+
+def test_is_generating():
+    """Test generation status check."""
+    client = LLMClient()
+
+    with patch('requests.get') as mock_get:
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {"is_generating": True}
+
+        assert client.is_generating() is True
+
+def test_halt_generation():
+    """Test generation halting."""
+    client = LLMClient()
+
+    with patch('requests.get') as mock_get:
+        mock_get.return_value.status_code = 200
+
+        assert client.halt_generation() is True
+
+def test_clean_claude_response():
+    """Test Claude response cleaning."""
+    client = LLMClient()
+
+    # Valid JSON with extra text
+    response = '{"result": "success"} Some extra text after'
+    cleaned = client._clean_claude_response(response)
+    assert cleaned == '{"result": "success"}'
+
+    # Plain text (no JSON)
+    response = "Just plain text"
+    cleaned = client._clean_claude_response(response)
+    assert cleaned == "Just plain text"
+
+def test_system_prompt():
+    """Test system prompt handling."""
+    system_prompt = "You are a helpful assistant."
+    client = LLMClient(system_prompt=system_prompt)
+    assert client.system_prompt == system_prompt
+
+    # Override in generate()
+    mock_response = Mock()
+    mock_response.choices = [Mock(text="Response")]
+    client.client.completions.create = Mock(return_value=mock_response)
+
+    client.generate("Test", system_prompt="Different prompt")
+    # Verify different prompt was used (would need more sophisticated mocking)
+
+def test_error_handling_404():
+    """Test 404 error handling with helpful message."""
+    client = LLMClient()
+
+    client.client.completions.create = Mock(
+        side_effect=Exception("404 endpoint not found")
+    )
+
+    with pytest.raises(ConnectionError) as exc_info:
+        client.generate("Test")
+
+    assert "Lemonade Server version mismatch" in str(exc_info.value)
+    assert "lemonade model remove" in str(exc_info.value)
+```
+
+### Integration Tests
+
+```python
+def test_integration_local_llm():
+    """Test integration with local Lemonade server."""
+    client = LLMClient()
+
+    try:
+        response = client.generate("Say hello")
+        assert isinstance(response, str)
+        assert len(response) > 0
+    except ConnectionError:
+        pytest.skip("Lemonade server not running")
+
+def test_integration_streaming():
+    """Test streaming integration."""
+    client = LLMClient()
+
+    try:
+        chunks = []
+        for chunk in client.generate("Count to 3", stream=True):
+            chunks.append(chunk)
+
+        assert len(chunks) > 0
+        full_response = "".join(chunks)
+        assert len(full_response) > 0
+    except ConnectionError:
+        pytest.skip("Lemonade server not running")
+```
+
+---
+
+## Dependencies
+
+### Required Packages
+
+```toml
+# pyproject.toml
+[project]
+dependencies = [
+    "openai>=1.0.0",      # OpenAI Python SDK (used for local + OpenAI)
+    "httpx>=0.24.0",      # HTTP client with timeout support
+    "requests>=2.31.0",   # For performance stats/control endpoints
+    "python-dotenv>=1.0.0",  # Environment variable management
+]
+
+[project.optional-dependencies]
+claude = ["anthropic>=0.18.0"]  # Claude API support
+```
+
+### Import Dependencies
+
+```python
+import logging
+import os
+import time
+from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, TypeVar, Union
+
+import httpx
+import requests
+from dotenv import load_dotenv
+from openai import OpenAI
+
+# Conditional Claude import
+try:
+    from gaia.eval.claude import ClaudeClient as AnthropicClaudeClient
+    CLAUDE_AVAILABLE = True
+except ImportError:
+    CLAUDE_AVAILABLE = False
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Basic Local LLM
+
+```python
+from gaia.llm import LLMClient
+
+# Initialize with local Lemonade server
+client = LLMClient()
+
+# Non-streaming generation
+response = client.generate("Write a hello world program in Python")
+print(response)
+
+# Get performance stats
+stats = client.get_performance_stats()
+print(f"Speed: {stats['tokens_per_second']:.1f} tokens/sec")
+```
+
+### Example 2: Streaming Responses
+
+```python
+from gaia.llm import LLMClient
+
+client = LLMClient()
+
+# Streaming generation
+print("AI: ", end="", flush=True)
+for chunk in client.generate("Tell me a short story", stream=True):
+    print(chunk, end="", flush=True)
+print()
+```
+
+### Example 3: Using Claude API
+
+```python
+from gaia.llm import LLMClient
+
+# Initialize with Claude
+client = LLMClient(
+    use_claude=True,
+    claude_model="claude-sonnet-4-20250514",
+    system_prompt="You are a helpful coding assistant."
+)
+
+# Generate code
+response = client.generate("Write a binary search function")
+print(response)
+```
+
+### Example 4: Chat with Message History
+
+```python
+from gaia.llm import LLMClient
+
+client = LLMClient()
+
+# Build conversation history
+messages = [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "What's 2+2?"},
+    {"role": "assistant", "content": "2+2 equals 4."},
+    {"role": "user", "content": "What about 3+3?"}
+]
+
+# Generate with full context
+response = client.generate("", endpoint="chat", messages=messages)
+print(response)  # "3+3 equals 6."
+```
+
+### Example 5: Halting Generation
+
+```python
+from gaia.llm import LLMClient
+import threading
+import time
+
+client = LLMClient()
+
+def generate_long_text():
+    """Generate in background thread."""
+    response = client.generate("Write a very long essay about AI")
+    print(response)
+
+# Start generation in background
+thread = threading.Thread(target=generate_long_text)
+thread.start()
+
+# Wait a bit, then halt
+time.sleep(2)
+if client.is_generating():
+    client.halt_generation()
+    print("Generation stopped!")
+
+thread.join()
+```
+
+### Example 6: Custom Retry Configuration
+
+```python
+from gaia.llm import LLMClient
+
+# Configure aggressive retry
+client = LLMClient(
+    max_retries=5,
+    retry_base_delay=0.5,  # Start with 0.5s delay
+)
+
+# Will retry up to 5 times with exponential backoff
+response = client.generate("Hello")
+```
+
+### Example 7: Remote Lemonade Server
+
+```python
+from gaia.llm import LLMClient
+
+# Connect to remote server
+client = LLMClient(base_url="http://192.168.1.100:8000")
+
+response = client.generate("Hello from remote server")
+print(response)
+```
+
+---
+
+## Third-Party LLM Integration
+
+<Info>
+GAIA supports third-party LLM service providers through its **OpenAI-compatible API interface**. Any service implementing the OpenAI API specification can be used with GAIA.
+</Info>
+
+---
+
+### Required API Endpoints
+
+Your LLM service must implement at least one of these OpenAI-compatible endpoints:
+
+<CardGroup cols={2}>
+  <Card title="Completions Endpoint" icon="code">
+    **Default:** `POST /v1/completions`
+
+    Used for pre-formatted prompts
+  </Card>
+
+  <Card title="Chat Completions Endpoint" icon="comments">
+    `POST /v1/chat/completions`
+
+    Used for structured conversations with message history
+  </Card>
+</CardGroup>
+
+#### Completions Endpoint
+
+<Tabs>
+  <Tab title="Request">
+    ```json
+    {
+      "model": "your-model-name",
+      "prompt": "Your prompt text here",
+      "stream": false,
+      "temperature": 0.1,
+      "max_tokens": 2048
+    }
+    ```
+  </Tab>
+
+  <Tab title="Response">
+    ```json
+    {
+      "id": "cmpl-abc123",
+      "object": "text_completion",
+      "created": 1677652288,
+      "model": "your-model-name",
+      "choices": [
+        {
+          "text": "Generated response text",
+          "index": 0,
+          "finish_reason": "stop"
+        }
+      ]
+    }
+    ```
+  </Tab>
+
+  <Tab title="Streaming">
+    Server-Sent Events (SSE) format:
+    ```
+    data: {"choices": [{"text": "chunk1", "index": 0}]}
+
+    data: {"choices": [{"text": "chunk2", "index": 0}]}
+
+    data: [DONE]
+    ```
+  </Tab>
+</Tabs>
+
+#### Chat Completions Endpoint
+
+<Tabs>
+  <Tab title="Request">
+    ```json
+    {
+      "model": "your-model-name",
+      "messages": [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello!"}
+      ],
+      "stream": false,
+      "temperature": 0.1
+    }
+    ```
+  </Tab>
+
+  <Tab title="Response">
+    ```json
+    {
+      "id": "chatcmpl-abc123",
+      "object": "chat.completion",
+      "created": 1677652288,
+      "model": "your-model-name",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "Hi! How can I help you?"
+          },
+          "finish_reason": "stop"
+        }
+      ]
+    }
+    ```
+  </Tab>
+
+  <Tab title="Streaming">
+    Server-Sent Events (SSE) with delta chunks:
+    ```
+    data: {"choices": [{"delta": {"content": "Hi!"}, "index": 0}]}
+
+    data: {"choices": [{"delta": {"content": " How"}, "index": 0}]}
+
+    data: [DONE]
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+### Configuration
+
+<Tabs>
+  <Tab title="Environment Variable">
+    ```bash Linux
+    export LEMONADE_BASE_URL="http://your-llm-service:8080"
+    ```
+
+    ```powershell Windows (PowerShell)
+    $env:LEMONADE_BASE_URL="http://your-llm-service:8080"
+    ```
+
+    ```cmd Windows (CMD)
+    set LEMONADE_BASE_URL=http://your-llm-service:8080
+    ```
+  </Tab>
+
+  <Tab title="Direct Initialization">
+    ```python
+    from gaia.llm import LLMClient
+
+    client = LLMClient(base_url="http://your-llm-service:8080")
+    response = client.generate("Hello world")
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+**URL Normalization:** GAIA automatically appends `/api/v1` if not present:
+- `http://localhost:8080` → `http://localhost:8080/api/v1`
+- If your service uses `/v1` instead, provide the full path: `http://localhost:8080/v1`
+</Note>
+
+---
+
+### Example Integration
+
+<CodeGroup>
+```python Basic Connection
+from gaia.llm import LLMClient
+
+# Connect to your third-party LLM service
+client = LLMClient(base_url="http://your-service:8080/v1")
+
+# Test connection
+response = client.generate("Hello, are you working?")
+print(response)
+```
+
+```python Streaming
+from gaia.llm import LLMClient
+
+client = LLMClient(base_url="http://your-service:8080/v1")
+
+# Stream response chunks
+for chunk in client.generate("Tell me a story", stream=True):
+    print(chunk, end="", flush=True)
+```
+
+```python With Agent
+from gaia.llm import LLMClient
+from gaia.agents import Agent
+
+class CustomAgent(Agent):
+    def __init__(self):
+        super().__init__(
+            name="custom_agent",
+            base_url="http://your-service:8080/v1",
+            model="your-model-name"
+        )
+
+    def process_task(self, task: str) -> str:
+        return self.llm.generate(task)
+
+# Use your agent
+agent = CustomAgent()
+result = agent.process_task("Analyze this code...")
+```
+</CodeGroup>
+
+---
+
+### Compatibility Checklist
+
+<AccordionGroup>
+  <Accordion title="Required Features" icon="check">
+    - ✅ **OpenAI-compatible endpoints** (`/v1/completions` or `/v1/chat/completions`)
+    - ✅ **JSON request/response format** matching OpenAI specification
+    - ✅ **HTTP POST method** for generation requests
+    - ✅ **Non-streaming responses** (complete response as JSON)
+  </Accordion>
+
+  <Accordion title="Optional Features" icon="circle-check">
+    - ⚠️ **Streaming responses** (Server-Sent Events format)
+    - ⚠️ **Error handling** (proper HTTP status codes: 200, 400, 404, 500)
+    - ⚠️ **Model listing** (`GET /v1/models` endpoint)
+    - ⚠️ **Token counting** (usage statistics in responses)
+  </Accordion>
+
+  <Accordion title="GAIA-Specific Features" icon="info">
+    The following features are specific to Lemonade Server and will not work with third-party services:
+    - `get_performance_stats()` - Returns empty dict `{}`
+    - `is_generating()` - Returns `False`
+    - `halt_generation()` - Returns `False`
+  </Accordion>
+</AccordionGroup>
+
+---
+
+### Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Connection Errors" icon="plug">
+    **Problem:** `ConnectionError: LLM Server Connection Error`
+
+    **Solutions:**
+    1. Verify service is running:
+       ```bash
+       curl http://your-service:port/v1/models
+       ```
+    2. Check firewall settings
+    3. Ensure correct base URL format
+    4. Test with explicit endpoint:
+       ```python
+       client = LLMClient(base_url="http://localhost:8080/v1")
+       ```
+  </Accordion>
+
+  <Accordion title="404 Endpoint Errors" icon="magnifying-glass">
+    **Problem:** `404 endpoint not found`
+
+    **Solutions:**
+    1. Check if service uses `/v1/completions` (OpenAI standard)
+    2. Verify API path structure: `/v1` vs `/api/v1`
+    3. Consult service documentation for correct endpoint paths
+    4. Use explicit endpoint override:
+       ```python
+       client.generate("Test", endpoint="chat")  # Force chat endpoint
+       ```
+  </Accordion>
+
+  <Accordion title="Model Not Found" icon="robot">
+    **Problem:** Model errors or "model not loaded"
+
+    **Solutions:**
+    1. Specify model explicitly:
+       ```python
+       client.generate("Test", model="your-model-name")
+       ```
+    2. List available models (if service supports):
+       ```bash
+       curl http://your-service:port/v1/models
+       ```
+    3. Ensure model is loaded in your service before connecting
+  </Accordion>
+
+  <Accordion title="Streaming Issues" icon="signal-stream">
+    **Problem:** Streaming responses not working
+
+    **Solutions:**
+    1. Verify service supports Server-Sent Events (SSE)
+    2. Check Content-Type headers: `text/event-stream`
+    3. Test non-streaming first:
+       ```python
+       response = client.generate("Test", stream=False)
+       ```
+    4. Enable debug logging:
+       ```python
+       import logging
+       logging.basicConfig(level=logging.DEBUG)
+       ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Documentation Updates Required
+
+### SDK.md
+
+Add to LLM Section:
+
+```markdown
+### LLMClient
+
+**Import:** `from gaia.llm import LLMClient`
+
+**Purpose:** Unified interface for LLM generation across local, Claude, and OpenAI backends.
+
+**Features:**
+- Multi-backend support (local Lemonade, Claude, OpenAI)
+- Streaming and non-streaming generation
+- Automatic retry with exponential backoff
+- Performance monitoring
+- Generation control (halt/resume)
+
+**Quick Start:**
+```python
+from gaia.llm import LLMClient
+
+# Local LLM
+client = LLMClient()
+response = client.generate("Hello world")
+
+# Streaming
+for chunk in client.generate("Tell me a story", stream=True):
+    print(chunk, end="")
+
+# Claude API
+client = LLMClient(use_claude=True)
+response = client.generate("Explain Python decorators")
+```
+
+---
+
+*LLMClient Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

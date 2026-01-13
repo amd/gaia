@@ -509,7 +509,8 @@ class TestDockerAgentMCP:
     @pytest.mark.slow
     def test_execute_dockerize_invalid_path(self, tmp_path):
         """execute_mcp_tool with non-existent path returns error"""
-        agent = DockerAgent(silent_mode=True)
+        # Allow tmp_path so we can test the "does not exist" error
+        agent = DockerAgent(silent_mode=True, allowed_paths=[str(tmp_path)])
 
         # Use absolute path that doesn't exist
         nonexistent_path = tmp_path / "nonexistent_dir"
@@ -532,7 +533,7 @@ class TestDockerAgentMCP:
         Tests the complete agent orchestration pipeline.
         """
         agent = DockerAgent(
-            silent_mode=True, max_steps=30
+            silent_mode=True, max_steps=30, allowed_paths=[test_flask_app]
         )  # Docker ops can take many steps
 
         # Track resources for cleanup
@@ -705,18 +706,19 @@ class TestDockerOperations:
 
     def test_analyze_directory_flask_app(self, test_flask_app):
         """Analyze directory detects Flask application"""
-        agent = DockerAgent(silent_mode=True)
+        agent = DockerAgent(silent_mode=True, allowed_paths=[test_flask_app])
 
         result = agent._analyze_directory(test_flask_app)
 
         assert result["app_type"] == "flask"
         assert result["entry_point"] == "app.py"
         assert result["dependencies"] == "requirements.txt"
-        assert result["port"] == 5000
+        assert result["port"] == 8080  # DEFAULT_PORT from DockerAgent
 
     def test_analyze_directory_nonexistent(self):
         """Analyze directory handles non-existent path"""
-        agent = DockerAgent(silent_mode=True)
+        # Allow the nonexistent path so we can test the "does not exist" error
+        agent = DockerAgent(silent_mode=True, allowed_paths=["/nonexistent"])
 
         result = agent._analyze_directory("/nonexistent/path")
 
@@ -725,7 +727,7 @@ class TestDockerOperations:
 
     def test_save_dockerfile(self, test_flask_app):
         """Save Dockerfile creates file with correct content"""
-        agent = DockerAgent(silent_mode=True)
+        agent = DockerAgent(silent_mode=True, allowed_paths=[test_flask_app])
 
         dockerfile_content = """# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
@@ -760,7 +762,7 @@ CMD ["python", "app.py"]
         self, docker_available, test_flask_app, docker_cleanup
     ):
         """Build Docker image with real Docker CLI"""
-        agent = DockerAgent(silent_mode=True)
+        agent = DockerAgent(silent_mode=True, allowed_paths=[test_flask_app])
 
         # First create Dockerfile
         dockerfile_content = """# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
@@ -836,7 +838,8 @@ class TestErrorHandling:
 
     def test_dockerize_path_does_not_exist(self, tmp_path):
         """Dockerize with non-existent path returns error"""
-        agent = DockerAgent(silent_mode=True)
+        # Allow tmp_path so we can test the "does not exist" error
+        agent = DockerAgent(silent_mode=True, allowed_paths=[str(tmp_path)])
 
         # Use absolute path that doesn't exist
         nonexistent_path = tmp_path / "nonexistent_dir_12345"
@@ -849,7 +852,8 @@ class TestErrorHandling:
 
     def test_dockerize_path_is_file_not_directory(self, tmp_path):
         """Dockerize with file path (not directory) returns error"""
-        agent = DockerAgent(silent_mode=True)
+        # Allow tmp_path so we can test the "not a directory" error
+        agent = DockerAgent(silent_mode=True, allowed_paths=[str(tmp_path)])
 
         # Create a file
         test_file = tmp_path / "test_file.txt"

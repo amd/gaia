@@ -1,0 +1,310 @@
+---
+title: "Plugin Registry"
+description: "Automatic discovery and registration of GAIA agents via setuptools entry points"
+icon: "list"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/plugins/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/plugins/registry.py)
+</Info>
+
+<Note>
+**Component:** AgentRegistry & Plugin Discovery System
+**Module:** `gaia.plugins.registry`
+**Import:** `from gaia import AgentRegistry, get_registry`
+</Note>
+
+---
+
+## Overview
+
+The Plugin Registry enables automatic discovery of GAIA agents installed via `pip install`. Agents register themselves using setuptools entry points, and GAIA discovers them at runtime without requiring framework modifications.
+
+**What it does:**
+- Discovers agents from `gaia.agents` entry point group
+- Registers built-in and third-party agents
+- Provides agent lookup by name
+- Manages metadata (description, version, package)
+- Supports runtime registration for testing
+
+**Why use it:**
+- Zero-config agent discovery after `pip install`
+- Consistent interface for all agents
+- Enables plugin ecosystem
+
+---
+
+## Purpose and Use Cases
+
+### When to Use
+
+1. **Installing Third-Party Agents**
+   - `pip install` makes agents available automatically
+   - No manual registration required
+
+2. **Building Agent Packages**
+   - Register your agent via entry points
+   - Users discover it automatically
+
+3. **Testing**
+   - Runtime registration for test agents
+   - Easy cleanup after tests
+
+### When NOT to Use
+
+- Single-file scripts (just import the agent directly)
+- Development before packaging (use direct imports)
+
+---
+
+## API Specification
+
+### Class Definition
+
+```python
+class AgentRegistry:
+    """Singleton registry for GAIA agent discovery and lookup."""
+
+    _instance: Optional['AgentRegistry'] = None
+    _agents: Dict[str, Dict] = {}
+```
+
+### Constructor
+
+```python
+def __new__(cls) -> 'AgentRegistry':
+    """
+    Singleton pattern - returns the same instance on every call.
+
+    On first call, triggers agent discovery from entry points.
+    """
+```
+
+### Core Methods
+
+```python
+def get_agent_class(self, name: str) -> Type:
+    """
+    Get agent class by name.
+
+    Args:
+        name: Agent name (e.g., "medical-intake")
+
+    Returns:
+        Agent class
+
+    Raises:
+        ValueError: If agent not found
+    """
+
+def list_agents(self) -> Dict[str, Dict[str, str]]:
+    """
+    List all registered agents.
+
+    Returns:
+        Dictionary mapping agent name to metadata:
+        {
+            "agent-name": {
+                "description": str,
+                "module": str,
+                "package": str,
+                "version": str
+            }
+        }
+    """
+
+def get_agent_info(self, name: str) -> Dict[str, str]:
+    """
+    Get detailed information about an agent.
+
+    Args:
+        name: Agent name
+
+    Returns:
+        Agent metadata dictionary
+
+    Raises:
+        ValueError: If agent not found
+    """
+
+def register(
+    self,
+    name: str,
+    agent_class: Type,
+    description: str = "",
+    package: str = "runtime",
+    version: str = "unknown"
+) -> None:
+    """
+    Manually register an agent at runtime.
+
+    Args:
+        name: Agent identifier
+        agent_class: Agent class to register
+        description: Optional description
+        package: Package name (default: "runtime")
+        version: Version string (default: "unknown")
+    """
+
+def unregister(self, name: str) -> None:
+    """
+    Remove an agent from the registry.
+
+    Args:
+        name: Agent identifier
+    """
+```
+
+### Module Function
+
+```python
+def get_registry() -> AgentRegistry:
+    """
+    Get the global agent registry instance.
+
+    Returns:
+        Singleton AgentRegistry
+    """
+```
+
+---
+
+## Entry Point Format
+
+### Third-Party Agent Registration
+
+Agents register via `pyproject.toml`:
+
+```toml
+[project]
+name = "medical-intake-agent"
+version = "0.1.0"
+dependencies = ["amd-gaia>=1.0.0"]
+
+[project.entry-points."gaia.agents"]
+medical-intake = "emr_intake.agent:MedicalIntakeAgent"
+```
+
+### Multiple Agents in One Package
+
+```toml
+[project.entry-points."gaia.agents"]
+medical-intake = "emr_intake.agent:MedicalIntakeAgent"
+medical-review = "emr_intake.review_agent:ReviewAgent"
+```
+
+---
+
+## Code Examples
+
+### Example 1: Discover and Use Agent
+
+```python
+from gaia import get_registry
+
+registry = get_registry()
+
+# List all available agents
+agents = registry.list_agents()
+for name, info in agents.items():
+    print(f"{name}: {info['description']}")
+
+# Get and instantiate an agent
+AgentClass = registry.get_agent_class("medical-intake")
+agent = AgentClass()
+result = agent.process_query("Patient complaint: headache")
+```
+
+### Example 2: Runtime Registration (Testing)
+
+```python
+from gaia import Agent, get_registry, SilentConsole
+
+class TestAgent(Agent):
+    """Test agent for unit tests."""
+    def _get_system_prompt(self): return "Test"
+    def _create_console(self): return SilentConsole()
+    def _register_tools(self): pass
+
+# Register
+registry = get_registry()
+registry.register("test-agent", TestAgent, "For testing")
+
+# Use
+AgentClass = registry.get_agent_class("test-agent")
+agent = AgentClass()
+
+# Cleanup
+registry.unregister("test-agent")
+```
+
+---
+
+## CLI Integration
+
+The registry integrates with the GAIA CLI:
+
+```bash
+# List all discovered agents
+gaia agents list
+
+# Get info about specific agent
+gaia agents info medical-intake
+```
+
+---
+
+## Testing Requirements
+
+### Unit Tests
+
+**File:** `tests/sdk/test_plugin_registry.py`
+
+```python
+def test_registry_is_singleton():
+    """Verify registry returns same instance."""
+
+def test_list_agents():
+    """Test listing all agents."""
+
+def test_register_and_unregister():
+    """Test runtime registration and cleanup."""
+
+def test_get_agent_class():
+    """Test retrieving agent class by name."""
+
+def test_get_nonexistent_agent_raises_error():
+    """Test ValueError for unknown agent."""
+
+def test_entry_point_discovery():
+    """Test discovery doesn't crash (even with no agents)."""
+```
+
+---
+
+## Dependencies
+
+```toml
+[project]
+dependencies = [
+    "importlib-metadata>=4.0; python_version < '3.10'",
+]
+```
+
+---
+
+**Status:** In Development
+**Last Updated:** December 2025
+**Specification Version:** 1.0.0
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

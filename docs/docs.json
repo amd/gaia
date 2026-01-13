@@ -1,0 +1,355 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "GAIA SDK",
+  "metadata": {
+    "og:site_name": "GAIA SDK",
+    "og:title": "Build AI PC agents",
+    "og:description": "Open-source Python SDK. Build free, private, AMD-accelerated AI PC agents.",
+    "og:image": "https://amd-gaia.ai/assets/logo/dark.png",
+    "twitter:card": "summary_large_image",
+    "twitter:title": "Build AI PC agents",
+    "twitter:description": "Open-source Python SDK. Build free, private, AMD-accelerated AI PC agents.",
+    "twitter:image": "https://amd-gaia.ai/assets/logo/dark.png"
+  },
+  "colors": {
+    "primary": "#ED1C24",
+    "light": "#F4484D",
+    "dark": "#C8171E"
+  },
+  "favicon": "/assets/favicon.ico",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "index",
+              "setup",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "User Guides",
+            "pages": [
+              "guides/index",
+              "guides/hardware-advisor",
+              "guides/chat",
+              "guides/talk",
+              "guides/code",
+              "guides/emr",
+              "guides/blender",
+              "guides/jira",
+              "guides/docker",
+              "guides/routing"
+            ]
+          },
+          {
+            "group": "Playbooks",
+            "pages": [
+              "playbooks/index",
+              {
+                "group": "Hardware Advisor Agent",
+                "pages": [
+                  "playbooks/hardware-advisor/part-1-getting-started"
+                ]
+              },
+              {
+                "group": "Document Q&A Agent",
+                "pages": [
+                  "playbooks/chat-agent/part-1-getting-started",
+                  "playbooks/chat-agent/part-2-advanced-features",
+                  "playbooks/chat-agent/part-3-deployment"
+                ]
+              },
+              {
+                "group": "Code Generation Agent",
+                "pages": [
+                  "playbooks/code-agent/part-1-introduction",
+                  "playbooks/code-agent/part-2-app-creation",
+                  "playbooks/code-agent/part-3-validation-building"
+                ]
+              },
+              {
+                "group": "Medical Intake Agent",
+                "pages": [
+                  "playbooks/emr-agent/part-1-getting-started",
+                  "playbooks/emr-agent/part-2-dashboard",
+                  "playbooks/emr-agent/part-3-architecture"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "SDK Reference",
+            "pages": [
+              "sdk/index",
+              {
+                "group": "Core Concepts",
+                "pages": [
+                  "sdk/core/agent-system",
+                  "sdk/core/tools",
+                  "sdk/core/console"
+                ]
+              },
+              {
+                "group": "SDKs",
+                "pages": [
+                  "sdk/sdks/chat",
+                  "sdk/sdks/rag",
+                  "sdk/sdks/llm",
+                  "sdk/sdks/vlm",
+                  "sdk/sdks/audio"
+                ]
+              },
+              {
+                "group": "Infrastructure",
+                "pages": [
+                  "sdk/infrastructure/api-server",
+                  "sdk/infrastructure/mcp"
+                ]
+              },
+              {
+                "group": "Mixins & Utilities",
+                "pages": [
+                  "sdk/mixins/tool-mixins",
+                  "sdk/mixins/code-mixins",
+                  "sdk/utils/file-watcher"
+                ]
+              },
+              {
+                "group": "Agents",
+                "pages": [
+                  "sdk/agents/talk",
+                  "sdk/agents/routing",
+                  "sdk/agents/specialized"
+                ]
+              },
+              {
+                "group": "Guides",
+                "pages": [
+                  "sdk/packaging",
+                  "sdk/applications",
+                  "sdk/configuration",
+                  "sdk/testing",
+                  "sdk/performance-analysis-plotter",
+                  "sdk/security",
+                  "sdk/best-practices"
+                ]
+              },
+              {
+                "group": "Resources",
+                "pages": [
+                  "sdk/examples",
+                  "sdk/advanced-patterns",
+                  "sdk/api-reference",
+                  "sdk/migration",
+                  "sdk/troubleshooting"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Specifications",
+        "groups": [
+          {
+            "group": "Core Framework",
+            "pages": [
+              "spec/agent-base",
+              "spec/tool-decorator",
+              "spec/console",
+              "spec/file-change-handler"
+            ]
+          },
+          {
+            "group": "SDKs",
+            "pages": [
+              "spec/chat-sdk",
+              "spec/rag-sdk",
+              "spec/talk-sdk",
+              "spec/llm-client",
+              "spec/vlm-client",
+              "spec/audio-client"
+            ]
+          },
+          {
+            "group": "Infrastructure",
+            "pages": [
+              "spec/plugin-registry",
+              "spec/routing-agent",
+              "spec/test-utilities",
+              "spec/api-agent",
+              "spec/mcp-agent",
+              "spec/api-server",
+              "spec/mcp-server"
+            ]
+          },
+          {
+            "group": "Code Infrastructure",
+            "pages": [
+              "spec/code-models",
+              "spec/orchestrator",
+              "spec/validators",
+              "spec/prompts"
+            ]
+          },
+          {
+            "group": "Tool Mixins",
+            "pages": [
+              "spec/database-mixin",
+              "spec/cli-tools-mixin",
+              "spec/code-tools-mixin",
+              "spec/file-io-tools-mixin",
+              "spec/validation-tools-mixin",
+              "spec/error-fixing-mixin",
+              "spec/testing-mixin",
+              "spec/file-tools-mixin",
+              "spec/rag-tools-mixin",
+              "spec/shell-tools-mixin",
+              "spec/file-search-mixin",
+              "spec/code-formatting-mixin",
+              "spec/project-management-mixin",
+              "spec/prisma-tools-mixin",
+              "spec/typescript-tools-mixin",
+              "spec/external-tools-mixin",
+              "spec/web-tools-mixin"
+            ]
+          },
+          {
+            "group": "Packaging",
+            "pages": [
+              "spec/web-ui-packaging",
+              "spec/nsis-installer",
+              "spec/electron-integration"
+            ]
+          },
+          {
+            "group": "Agents & Apps",
+            "pages": [
+              "spec/chat-agent",
+              "spec/docker-agent",
+              "spec/jira-agent",
+              "spec/blender-agent",
+              "spec/summarizer-app",
+              "spec/component-status"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Command Line",
+            "pages": [
+              "reference/cli",
+              "reference/features"
+            ]
+          },
+          {
+            "group": "API & Development",
+            "pages": [
+              "reference/api",
+              "reference/api-spec",
+              "reference/dev",
+              "reference/eval",
+              "reference/dependency-management"
+            ]
+          },
+          {
+            "group": "Help",
+            "pages": [
+              "glossary",
+              "reference/faq"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Deployment",
+        "groups": [
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/vscode",
+              "integrations/mcp",
+              "integrations/n8n"
+            ]
+          },
+          {
+            "group": "Packaging & Distribution",
+            "pages": [
+              "deployment/installer",
+              "deployment/ui",
+              "deployment/testing-electron"
+            ]
+          }
+        ]
+      }
+    ],
+    "global": {
+      "anchors": [
+        {
+          "anchor": "GitHub",
+          "href": "https://github.com/amd/gaia",
+          "icon": "github"
+        },
+        {
+          "anchor": "Discord",
+          "href": "https://discord.com/channels/1392562559122407535/1402013282495102997",
+          "icon": "discord"
+        },
+        {
+          "anchor": "PyPI",
+          "href": "https://pypi.org/project/amd-gaia/",
+          "icon": "python"
+        }
+      ]
+    }
+  },
+  "logo": {
+    "light": "/assets/favicon.ico",
+    "dark": "/assets/favicon.ico",
+    "href": "https://github.com/amd/gaia"
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Main Site",
+        "href": "https://gaia.amd.com"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Download",
+      "href": "https://github.com/amd/gaia/releases"
+    }
+  },
+  "modeToggle": {
+    "default": "dark",
+    "isHidden": true
+  },
+  "contextual": {
+    "options": [
+      "copy",
+      "view",
+      "chatgpt",
+      "claude",
+      "cursor",
+      "vscode"
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/amd/gaia",
+      "discord": "https://discord.com/channels/1392562559122407535/1402013282495102997",
+      "twitter": "https://twitter.com/amd",
+      "linkedin": "https://linkedin.com/company/amd"
+    },
+    "copyright": "Copyright © 2024-2025 Advanced Micro Devices, Inc."
+  }
+}

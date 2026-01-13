@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """Code formatting tools mixin for Code Agent."""
 
@@ -148,7 +148,7 @@ class CodeFormattingMixin:
             except ImportError:
                 return {
                     "status": "error",
-                    "error": "black is not installed. Install with: pip install black",
+                    "error": "black is not installed. Install with: uv pip install black",
                 }
             except Exception as e:
                 return {"status": "error", "error": str(e)}

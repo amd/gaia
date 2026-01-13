@@ -1,0 +1,501 @@
+---
+title: "DockerAgent"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/docker/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/docker/agent.py)
+</Info>
+
+<Note>
+**Component:** DockerAgent - Intelligent Docker Containerization
+**Module:** `gaia.agents.docker.agent`
+**Inherits:** MCPAgent
+**Model:** Qwen3-Coder-30B-A3B-Instruct-GGUF (default)
+</Note>
+
+---
+
+## Overview
+
+DockerAgent helps developers containerize applications through natural language. It analyzes application structure, generates optimized Dockerfiles using LLM intelligence, and manages Docker image builds and container runs.
+
+**Key Features:**
+- Automatic application analysis (Python/Flask, Node/Express, etc.)
+- LLM-generated Dockerfiles following best practices
+- Docker build/run orchestration
+- MCP server integration for external tool access
+- Security: path validation
+
+---
+
+## Requirements
+
+### Functional Requirements
+
+1. **Application Analysis**
+   - Detect app type (Flask, Django, FastAPI, Express, React)
+   - Find entry points (app.py, server.js, etc.)
+   - Parse dependencies (requirements.txt, package.json)
+   - Suggest appropriate ports
+
+2. **Dockerfile Generation**
+   - Use LLM to generate content based on analysis
+   - Follow best practices (layer caching, non-root users)
+   - Include copyright headers
+   - Support custom base images
+
+3. **Docker Operations**
+   - Build images with tagging
+   - Run containers with port mapping
+   - Capture build/run output
+   - Report success/failure
+
+4. **MCP Integration**
+   - Expose `dockerize` tool via MCP
+   - Accept absolute paths only
+   - Validate inputs
+   - Return structured results
+
+---
+
+## API Specification
+
+### DockerAgent Class
+
+```python
+class DockerAgent(MCPAgent):
+    """
+    Intelligent Docker agent for containerization.
+    """
+
+    DEFAULT_MODEL = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+    DEFAULT_MAX_STEPS = 10
+    DEFAULT_PORT = 8080
+
+    def __init__(
+        self,
+        allowed_paths: List[str] = None,
+        **kwargs
+    ):
+        """
+        Initialize Docker agent.
+
+        Args:
+            allowed_paths: List of allowed directories for security
+            **kwargs: max_steps, model_id, silent_mode, debug, show_prompts
+        """
+        pass
+
+    # Tools
+    @tool
+    def analyze_directory(path: str = ".") -> Dict[str, Any]:
+        """
+        Analyze application to determine type and dependencies.
+
+        Returns:
+            {
+                "app_type": "flask"|"django"|"node"|"express"|"react",
+                "entry_point": "app.py"|"server.js",
+                "dependencies": "requirements.txt"|"package.json",
+                "port": 5000,
+                "additional_files": [".env.example", "docker-compose.yml"]
+            }
+        """
+        pass
+
+    @tool
+    def save_dockerfile(
+        dockerfile_content: str,
+        path: str = ".",
+        port: int = 5000
+    ) -> Dict[str, Any]:
+        """
+        Save LLM-generated Dockerfile.
+
+        Args:
+            dockerfile_content: Complete Dockerfile content from LLM
+            path: Directory to save in
+            port: Exposed port
+
+        Returns:
+            {
+                "status": "success",
+                "path": "/path/to/Dockerfile",
+                "next_steps": ["Build command...", "Run command..."]
+            }
+        """
+        pass
+
+    @tool
+    def build_image(path: str = ".", tag: str = "app:latest") -> Dict[str, Any]:
+        """
+        Build Docker image.
+
+        Returns:
+            {
+                "status": "success"|"error",
+                "success": True|False,
+                "image": "app:latest",
+                "output": "build logs..."
+            }
+        """
+        pass
+
+    @tool
+    def run_container(
+        image: str,
+        port: str = None,
+        name: str = None
+    ) -> Dict[str, Any]:
+        """
+        Run Docker container.
+
+        Returns:
+            {
+                "status": "success",
+                "container_id": "abc123",
+                "url": "http://localhost:5000"
+            }
+        """
+        pass
+
+    # MCP Interface
+    def get_mcp_tool_definitions(self) -> list[Dict[str, Any]]:
+        """Return MCP tool definitions."""
+        pass
+
+    def execute_mcp_tool(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Execute MCP tool (currently only 'dockerize')."""
+        pass
+```
+
+### MCP Tool Definition
+
+```json
+{
+  "name": "dockerize",
+  "description": "Containerize an application: analyze → generate Dockerfile → build → run",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "appPath": {
+        "type": "string",
+        "description": "Absolute path to application root (e.g., C:/Users/name/myapp)"
+      },
+      "port": {
+        "type": "integer",
+        "description": "Application port (default: 5000)",
+        "default": 5000
+      }
+    },
+    "required": ["appPath"]
+  }
+}
+```
+
+---
+
+## Implementation Details
+
+### Application Analysis
+
+```python
+def _analyze_directory(self, path: str) -> Dict[str, Any]:
+    """Analyze application structure."""
+
+    path_obj = Path(path).resolve()
+
+    result = {
+        "path": str(path_obj),
+        "app_type": "unknown",
+        "entry_point": None,
+        "dependencies": None,
+        "port": 8080,
+        "additional_files": [],
+    }
+
+    # Check for Python app
+    requirements = path_obj / "requirements.txt"
+    if requirements.exists():
+        result["app_type"] = "python"
+        result["dependencies"] = "requirements.txt"
+
+        # Detect framework from requirements
+        content = requirements.read_text().lower()
+        if "flask" in content:
+            result["app_type"] = "flask"
+            result["port"] = 5000
+        elif "django" in content:
+            result["app_type"] = "django"
+        elif "fastapi" in content:
+            result["app_type"] = "fastapi"
+
+        # Find entry point
+        for entry in ["app.py", "main.py", "run.py"]:
+            if (path_obj / entry).exists():
+                result["entry_point"] = entry
+                break
+
+    # Check for Node.js app
+    package_json = path_obj / "package.json"
+    if package_json.exists():
+        result["app_type"] = "node"
+        result["dependencies"] = "package.json"
+
+        pkg_data = json.loads(package_json.read_text())
+
+        # Detect framework
+        deps = pkg_data.get("dependencies", {})
+        if "express" in deps:
+            result["app_type"] = "express"
+        elif "next" in deps:
+            result["app_type"] = "nextjs"
+
+        # Entry point
+        result["entry_point"] = pkg_data.get("main", "index.js")
+
+    return result
+```
+
+### Dockerfile Generation (LLM)
+
+**System Prompt teaches LLM best practices:**
+```python
+def _get_system_prompt(self) -> str:
+    return """You are a Docker expert that generates optimized Dockerfiles.
+
+**Best Practices:**
+- Use slim/alpine base images
+- Copy dependency files first for caching
+- Combine RUN commands to minimize layers
+- Use non-root users when possible
+- Expose appropriate ports
+
+**Example Dockerfiles:**
+
+Python/Flask:
+```
+FROM python:3.9-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+EXPOSE 5000
+CMD ["python", "app.py"]
+```
+
+Node.js/Express:
+```
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY . .
+EXPOSE 3000
+CMD ["npm", "start"]
+```
+
+**Workflow:**
+1. analyze_directory → understand app
+2. save_dockerfile → save generated content
+3. build_image → docker build
+4. run_container → docker run
+"""
+```
+
+### Security: Path Validation
+
+```python
+def _analyze_directory(self, path: str) -> Dict[str, Any]:
+    # Security check
+    if not self.path_validator.is_path_allowed(path):
+        return {
+            "status": "error",
+            "error": f"Access denied: {path} not in allowed paths"
+        }
+
+    path_obj = Path(path).resolve()
+    if not path_obj.exists():
+        return {"status": "error", "error": f"Directory does not exist: {path}"}
+
+    # Continue with analysis...
+```
+
+---
+
+## Testing Requirements
+
+### Unit Tests
+
+```python
+# tests/agents/test_docker_agent.py
+
+def test_analyze_flask_app(tmp_path):
+    """Test Flask app detection."""
+    # Create Flask app structure
+    (tmp_path / "requirements.txt").write_text("flask==2.0.0")
+    (tmp_path / "app.py").write_text("from flask import Flask")
+
+    agent = DockerAgent(allowed_paths=[str(tmp_path)])
+    result = agent._analyze_directory(str(tmp_path))
+
+    assert result["app_type"] == "flask"
+    assert result["entry_point"] == "app.py"
+    assert result["port"] == 5000
+
+def test_analyze_node_app(tmp_path):
+    """Test Node.js app detection."""
+    (tmp_path / "package.json").write_text(json.dumps({
+        "main": "server.js",
+        "dependencies": {"express": "^4.18.0"}
+    }))
+    (tmp_path / "server.js").write_text("const express = require('express')")
+
+    agent = DockerAgent(allowed_paths=[str(tmp_path)])
+    result = agent._analyze_directory(str(tmp_path))
+
+    assert result["app_type"] == "express"
+    assert result["entry_point"] == "server.js"
+
+def test_dockerfile_generation(tmp_path):
+    """Test Dockerfile is saved."""
+    agent = DockerAgent(allowed_paths=[str(tmp_path)], silent_mode=True)
+
+    dockerfile_content = """FROM python:3.9-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+EXPOSE 5000
+CMD ["python", "app.py"]
+"""
+
+    result = agent._save_dockerfile(dockerfile_content, str(tmp_path), 5000)
+
+    assert result["status"] == "success"
+    assert (tmp_path / "Dockerfile").exists()
+    assert "Build the Docker image" in result["next_steps"][0]
+
+def test_mcp_dockerize_validates_absolute_path(tmp_path):
+    """Test MCP tool rejects relative paths."""
+    agent = DockerAgent(allowed_paths=[str(tmp_path)])
+
+    # Relative path should fail
+    result = agent.execute_mcp_tool("dockerize", {"appPath": "./myapp"})
+
+    assert result["success"] is False
+    assert "must be an absolute path" in result["error"]
+
+def test_security_path_validation(tmp_path):
+    """Test path validation prevents unauthorized access."""
+    agent = DockerAgent(allowed_paths=[str(tmp_path)])
+
+    # Try to access outside allowed paths
+    result = agent._analyze_directory("/etc/passwd")
+
+    assert result["status"] == "error"
+    assert "Access denied" in result["error"]
+```
+
+---
+
+## Dependencies
+
+```python
+# Built-in modules used
+import json
+import subprocess
+from pathlib import Path
+from typing import Any, Dict
+
+# GAIA dependencies
+from gaia.agents.base.mcp_agent import MCPAgent
+from gaia.agents.base.tools import tool
+from gaia.security import PathValidator
+```
+
+---
+
+## Usage Examples
+
+### Example 1: CLI Usage
+
+```bash
+# Start Docker agent
+gaia docker "Containerize my Flask app in ./myapp"
+```
+
+### Example 2: Python API
+
+```python
+from gaia.agents.docker.agent import DockerAgent
+
+# Initialize agent
+agent = DockerAgent(
+    allowed_paths=["/home/user/projects"],
+    silent_mode=False
+)
+
+# Dockerize app
+result = agent.process_query(
+    "Dockerize the Flask app at /home/user/projects/myapp and run it on port 5000"
+)
+
+print(result["result"])
+```
+
+### Example 3: MCP Integration
+
+```python
+from gaia.mcp.agent_mcp_server import AgentMCPServer
+from gaia.agents.docker.agent import DockerAgent
+
+# Start MCP server
+server = AgentMCPServer(
+    agent_class=DockerAgent,
+    name="Docker Agent MCP",
+    port=8080,
+    verbose=True
+)
+
+server.start()
+```
+
+**Call from MCP client:**
+```json
+{
+  "tool": "dockerize",
+  "arguments": {
+    "appPath": "C:/Users/john/myflaskapp",
+    "port": 5000
+  }
+}
+```
+
+---
+
+## Related Specifications
+
+- [agent-base](/spec/agent-base) - Agent architecture
+- [mcp-server](/spec/mcp-server) - MCP server system
+- [jira-agent](/spec/jira-agent) - Similar agent pattern
+
+---
+
+*DockerAgent Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

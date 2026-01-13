@@ -11,7 +11,7 @@ inherited by agents that need file manipulation capabilities.
 import ast
 import difflib
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from gaia.agents.base.tools import tool
 
@@ -50,6 +50,13 @@ class FileIOToolsMixin:
                 Dictionary with file content and type-specific metadata
             """
             try:
+                # Security check
+                if not self.path_validator.is_path_allowed(file_path):
+                    return {
+                        "status": "error",
+                        "error": f"Access denied: {file_path} is not in allowed paths",
+                    }
+
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
 
@@ -187,6 +194,13 @@ class FileIOToolsMixin:
                             "syntax_errors": validation.get("errors", []),
                         }
 
+                # Security check
+                if not self.path_validator.is_path_allowed(file_path):
+                    return {
+                        "status": "error",
+                        "error": f"Access denied: {file_path} is not in allowed paths",
+                    }
+
                 # Create parent directories if needed
                 if create_dirs and os.path.dirname(file_path):
                     os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -225,6 +239,13 @@ class FileIOToolsMixin:
                 Dictionary with edit operation results
             """
             try:
+                # Security check
+                if not self.path_validator.is_path_allowed(file_path):
+                    return {
+                        "status": "error",
+                        "error": f"Access denied: {file_path} is not in allowed paths",
+                    }
+
                 # Read current content
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
@@ -307,6 +328,13 @@ class FileIOToolsMixin:
                 Dictionary with search results
             """
             try:
+                # Security check
+                if not self.path_validator.is_path_allowed(directory):
+                    return {
+                        "status": "error",
+                        "error": f"Access denied: {directory} is not in allowed paths",
+                    }
+
                 results = []
                 files_searched = 0
                 files_with_matches = 0
@@ -376,6 +404,13 @@ class FileIOToolsMixin:
                 Dictionary with diff information
             """
             try:
+                # Security check
+                if not self.path_validator.is_path_allowed(file_path):
+                    return {
+                        "status": "error",
+                        "error": f"Access denied: {file_path} is not in allowed paths",
+                    }
+
                 # Read original content
                 if os.path.exists(file_path):
                     with open(file_path, "r", encoding="utf-8") as f:
@@ -432,6 +467,13 @@ class FileIOToolsMixin:
                 Dictionary with write operation results
             """
             try:
+                # Security check
+                if not self.path_validator.is_path_allowed(file_path):
+                    return {
+                        "status": "error",
+                        "error": f"Access denied: {file_path} is not in allowed paths",
+                    }
+
                 # Create parent directories if needed
                 if create_dirs:
                     os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -445,6 +487,142 @@ class FileIOToolsMixin:
                     "file_path": file_path,
                     "bytes_written": len(content.encode("utf-8")),
                     "line_count": len(content.splitlines()),
+                }
+            except Exception as e:
+                return {"status": "error", "error": str(e)}
+
+        @tool
+        def write_file(
+            file_path: str,
+            content: str,
+            create_dirs: bool = True,
+            project_dir: Optional[str] = None,
+        ) -> Dict[str, Any]:
+            """Write content to any file (TypeScript, JavaScript, JSON, etc.) without syntax validation.
+
+            Use this tool for non-Python files like .tsx, .ts, .js, .json, etc.
+
+            Args:
+                file_path: Path where to write the file
+                content: Content to write to the file
+                create_dirs: Whether to create parent directories if they don't exist
+                project_dir: Project root directory for resolving relative paths
+
+            Returns:
+                dict: Status and file information
+            """
+            try:
+                from pathlib import Path
+
+                path = Path(file_path)
+                if project_dir:
+                    base = Path(project_dir).resolve()
+                    if not path.is_absolute():
+                        path = base / path
+                path = path.resolve()
+
+                # Create parent directories if requested
+                if create_dirs and not path.parent.exists():
+                    path.parent.mkdir(parents=True, exist_ok=True)
+
+                # Write content to file
+                path.write_text(content, encoding="utf-8")
+
+                console = getattr(self, "console", None)
+                if console:
+                    if content.strip():
+                        console.print_prompt(
+                            content,
+                            title=f"✏️ write_file → {path}",
+                        )
+                    else:
+                        console.print_info(
+                            f"write_file: {path} was created but no content was written."
+                        )
+
+                return {
+                    "status": "success",
+                    "file_path": str(path),
+                    "size_bytes": len(content),
+                    "file_type": path.suffix[1:] if path.suffix else "unknown",
+                }
+            except Exception as e:
+                return {"status": "error", "error": str(e)}
+
+        @tool
+        def edit_file(
+            file_path: str,
+            old_content: str,
+            new_content: str,
+            project_dir: Optional[str] = None,
+        ) -> Dict[str, Any]:
+            """Edit any file by replacing old content with new content (no syntax validation).
+
+            Use this tool for non-Python files like .tsx, .ts, .js, .json, etc.
+
+            Args:
+                file_path: Path to the file to edit
+                old_content: Exact content to find and replace
+                new_content: New content to replace with
+                project_dir: Project root directory for resolving relative paths
+
+            Returns:
+                dict: Status and edit information
+            """
+            try:
+                from pathlib import Path
+
+                path = Path(file_path)
+                if project_dir:
+                    base = Path(project_dir).resolve()
+                    if not path.is_absolute():
+                        path = base / path
+                path = path.resolve()
+
+                if not path.exists():
+                    return {"status": "error", "error": f"File not found: {file_path}"}
+
+                # Read current content
+                current_content = path.read_text(encoding="utf-8")
+
+                # Check if old_content exists in file
+                if old_content not in current_content:
+                    return {
+                        "status": "error",
+                        "error": f"Content to replace not found in {file_path}",
+                    }
+
+                # Replace content
+                updated_content = current_content.replace(old_content, new_content, 1)
+
+                # Generate diff before writing
+                diff = "\n".join(
+                    difflib.unified_diff(
+                        current_content.splitlines(keepends=True),
+                        updated_content.splitlines(keepends=True),
+                        fromfile=f"a/{os.path.basename(str(path))}",
+                        tofile=f"b/{os.path.basename(str(path))}",
+                        lineterm="",
+                    )
+                )
+
+                # Write updated content
+                path.write_text(updated_content, encoding="utf-8")
+
+                console = getattr(self, "console", None)
+                if console:
+                    if diff.strip():
+                        console.print_diff(diff, os.path.basename(str(path)))
+                    else:
+                        console.print_info(f"edit_file: No changes were made to {path}")
+
+                return {
+                    "status": "success",
+                    "file_path": str(path),
+                    "old_size": len(current_content),
+                    "new_size": len(updated_content),
+                    "file_type": path.suffix[1:] if path.suffix else "unknown",
+                    "diff": diff,
                 }
             except Exception as e:
                 return {"status": "error", "error": str(e)}
@@ -473,6 +651,13 @@ class FileIOToolsMixin:
                 from datetime import datetime
 
                 gaia_path = os.path.join(project_root, "GAIA.md")
+
+                # Security check
+                if not self.path_validator.is_path_allowed(gaia_path):
+                    return {
+                        "status": "error",
+                        "error": f"Access denied: {gaia_path} is not in allowed paths",
+                    }
 
                 # Start building content
                 content = "# GAIA.md\n\n"
@@ -550,6 +735,13 @@ class FileIOToolsMixin:
                 Dictionary with replacement result
             """
             try:
+                # Security check
+                if not self.path_validator.is_path_allowed(file_path):
+                    return {
+                        "status": "error",
+                        "error": f"Access denied: {file_path} is not in allowed paths",
+                    }
+
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
 

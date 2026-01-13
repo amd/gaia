@@ -1,0 +1,735 @@
+---
+title: "ApiAgent"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/base/api_agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/api_agent.py)
+</Info>
+
+<Note>
+**Component:** ApiAgent
+**Module:** `gaia.agents.base.api_agent`
+**Import:** `from gaia.agents.base import ApiAgent`
+</Note>
+---
+
+## Overview
+
+ApiAgent is an optional mixin class for GAIA agents that want to be exposed via the OpenAI-compatible API with custom behavior. It provides methods for model metadata, token estimation, and response formatting. Agents can inherit from ApiAgent to customize their API representation while maintaining full agent functionality.
+
+**Key Features:**
+- OpenAI-compatible model ID generation
+- Model metadata customization
+- Token counting interface
+- Optional mixin pattern (works with any Agent)
+- Multiple inheritance support (with MCPAgent)
+
+---
+
+## Requirements
+
+### Functional Requirements
+
+1. **Model Identification**
+   - `get_model_id()` - Generate OpenAI-compatible model ID
+   - Default naming: `gaia-{classname}` (strips "Agent" suffix)
+   - Custom override support
+
+2. **Model Metadata**
+   - `get_model_info()` - Provide model capabilities metadata
+   - Token limits (input/output)
+   - Optional description
+   - Extensible custom fields
+
+3. **Token Counting**
+   - `estimate_tokens()` - Estimate token count for text
+   - Default: Simple char/4 heuristic
+   - Override for model-specific tokenization
+
+4. **Inheritance Patterns**
+   - Single inheritance: `class MyAgent(ApiAgent, Agent)`
+   - Multiple: `class MyAgent(MCPAgent, ApiAgent, Agent)`
+   - Order: Protocol mixins before Agent base class
+
+### Non-Functional Requirements
+
+1. **Compatibility**
+   - Works with any Agent subclass
+   - No required methods (all optional)
+   - Backwards compatible with non-API agents
+
+2. **Flexibility**
+   - All methods can be overridden
+   - Sensible defaults provided
+   - Extensible metadata
+
+3. **Simplicity**
+   - Minimal interface (3 methods)
+   - Clear documentation
+   - Easy to implement
+
+---
+
+## API Specification
+
+### File Location
+
+```
+src/gaia/agents/base/api_agent.py
+```
+
+### Public Interface
+
+```python
+from typing import Any, Dict
+from .agent import Agent
+
+class ApiAgent(Agent):
+    """
+    Optional mixin for agents exposed via OpenAI-compatible API.
+
+    Agents that inherit from ApiAgent can customize:
+    - Model ID and metadata (get_model_id, get_model_info)
+    - Token counting (estimate_tokens)
+    - Response formatting (format_for_api) [future]
+
+    The API server can work with ANY Agent subclass via process_query().
+    ApiAgent is only needed for customization beyond the defaults.
+
+    Usage:
+        class MyAgent(ApiAgent, Agent):
+            '''Agent exposed via API with custom behavior'''
+            pass
+
+        class MyMultiAgent(MCPAgent, ApiAgent, Agent):
+            '''Agent exposed via BOTH MCP and API protocols'''
+            pass
+
+    Example:
+        >>> class CodeAgent(ApiAgent, Agent):
+        ...     def get_model_id(self) -> str:
+        ...         return "gaia-code-agent"
+        ...
+        ...     def get_model_info(self) -> Dict:
+        ...         return {
+        ...             "max_input_tokens": 32768,
+        ...             "max_output_tokens": 8192,
+        ...             "description": "Autonomous Python coding agent"
+        ...         }
+    """
+
+    def get_model_id(self) -> str:
+        """
+        Get the OpenAI-compatible model ID for this agent.
+
+        Override to customize model ID.
+        Default: gaia-{classname} (with 'Agent' suffix removed)
+
+        Returns:
+            Model ID string (e.g., "gaia-code", "gaia-jira")
+
+        Example:
+            CodeAgent -> gaia-code
+            JiraAgent -> gaia-jira
+            DockerAgent -> gaia-docker
+
+        Note:
+            Model IDs should be lowercase with hyphens, following OpenAI convention.
+        """
+        # All agents follow *Agent naming convention, strip "Agent" suffix
+        class_name = self.__class__.__name__[:-5].lower()  # Remove "Agent"
+        return f"gaia-{class_name}"
+
+    def get_model_info(self) -> Dict[str, Any]:
+        """
+        Get model metadata for /v1/models endpoint.
+
+        Override to provide custom metadata about the model's capabilities.
+
+        Returns:
+            Dictionary with model metadata:
+                - max_input_tokens: Maximum input context size
+                - max_output_tokens: Maximum output length
+                - description (optional): Human-readable description
+                - Any other custom metadata
+
+        Default:
+            - max_input_tokens: 8192
+            - max_output_tokens: 4096
+
+        Example:
+            >>> def get_model_info(self):
+            ...     return {
+            ...         "max_input_tokens": 32768,
+            ...         "max_output_tokens": 8192,
+            ...         "description": "Autonomous Python coding agent",
+            ...         "supports_tools": True,
+            ...         "supports_vision": False
+            ...     }
+
+        Note:
+            All fields are optional except max_input_tokens and max_output_tokens.
+            Custom fields are preserved and returned in API responses.
+        """
+        return {
+            "max_input_tokens": 8192,
+            "max_output_tokens": 4096,
+        }
+
+    def estimate_tokens(self, text: str) -> int:
+        """
+        Estimate token count for text.
+
+        Override for model-specific tokenization.
+        Default: Simple char count / 4 heuristic (works reasonably for English)
+
+        Args:
+            text: Input text to count tokens for
+
+        Returns:
+            Estimated token count
+
+        Default Heuristic:
+            - 1 token ≈ 4 characters (English)
+            - Reasonably accurate for most use cases
+            - Override for exact counting
+
+        Example (using tiktoken):
+            >>> def estimate_tokens(self, text: str) -> int:
+            ...     # Use tiktoken for accurate GPT-style counting
+            ...     import tiktoken
+            ...     enc = tiktoken.get_encoding("cl100k_base")
+            ...     return len(enc.encode(text))
+
+        Example (using transformers):
+            >>> def estimate_tokens(self, text: str) -> int:
+            ...     # Use transformers tokenizer
+            ...     from transformers import AutoTokenizer
+            ...     tokenizer = AutoTokenizer.from_pretrained("gpt2")
+            ...     return len(tokenizer.encode(text))
+
+        Note:
+            This is used for token usage reporting in API responses.
+            Accuracy is not critical, but should be roughly correct.
+        """
+        return len(text) // 4
+```
+
+---
+
+## Implementation Details
+
+### Default Model ID Generation
+
+```python
+def get_model_id(self) -> str:
+    # Extract class name and remove "Agent" suffix
+    # Examples:
+    #   CodeAgent -> code
+    #   JiraAgent -> jira
+    #   DockerAgent -> docker
+    class_name = self.__class__.__name__[:-5].lower()
+    return f"gaia-{class_name}"
+```
+
+### Default Model Info
+
+```python
+def get_model_info(self) -> Dict[str, Any]:
+    # Conservative defaults
+    # Most local models handle 8K context comfortably
+    return {
+        "max_input_tokens": 8192,
+        "max_output_tokens": 4096,
+    }
+```
+
+### Token Estimation Heuristic
+
+```python
+def estimate_tokens(self, text: str) -> int:
+    # Simple heuristic: 1 token ≈ 4 characters
+    # This works reasonably well for:
+    # - English text
+    # - Code (slightly conservative)
+    # - Mixed content
+    #
+    # Not accurate for:
+    # - Non-English (esp. Chinese, Japanese, Korean)
+    # - Special tokens
+    # - Exact billing
+    return len(text) // 4
+```
+
+### Inheritance Pattern
+
+```python
+# Single protocol (API only)
+class CodeAgent(ApiAgent, Agent):
+    def get_model_id(self) -> str:
+        return "gaia-code-agent"
+
+# Multiple protocols (MCP + API)
+class JiraAgent(MCPAgent, ApiAgent, Agent):
+    def get_model_id(self) -> str:
+        return "gaia-jira"
+
+    def get_mcp_tool_definitions(self) -> List[Dict]:
+        return [...]  # MCP tools
+
+    def execute_mcp_tool(self, tool_name: str, args: Dict) -> Dict:
+        pass  # MCP execution
+
+# Order matters: MCPAgent, ApiAgent, then Agent
+# This ensures proper MRO (Method Resolution Order)
+```
+
+---
+
+## Testing Requirements
+
+### Unit Tests
+
+**File:** `tests/agents/test_api_agent.py`
+
+```python
+import pytest
+from gaia.agents.base import Agent, ApiAgent
+
+class TestApiAgent(ApiAgent, Agent):
+    """Test agent for ApiAgent mixin."""
+    def _get_system_prompt(self):
+        return "Test agent"
+
+    def _create_console(self):
+        from gaia import SilentConsole
+        return SilentConsole()
+
+    def _register_tools(self):
+        pass
+
+def test_api_agent_can_be_imported():
+    """Verify ApiAgent can be imported."""
+    from gaia.agents.base import ApiAgent
+    assert ApiAgent is not None
+
+def test_get_model_id_default():
+    """Test default model ID generation."""
+    agent = TestApiAgent(silent_mode=True)
+    model_id = agent.get_model_id()
+
+    # TestApiAgent -> gaia-testapi (removes "Agent" suffix)
+    assert model_id == "gaia-testapi"
+    assert model_id.startswith("gaia-")
+
+def test_get_model_id_custom():
+    """Test custom model ID override."""
+    class CustomAgent(ApiAgent, Agent):
+        def _get_system_prompt(self):
+            return "Custom"
+
+        def _create_console(self):
+            from gaia import SilentConsole
+            return SilentConsole()
+
+        def _register_tools(self):
+            pass
+
+        def get_model_id(self) -> str:
+            return "my-custom-model"
+
+    agent = CustomAgent(silent_mode=True)
+    assert agent.get_model_id() == "my-custom-model"
+
+def test_get_model_info_default():
+    """Test default model info."""
+    agent = TestApiAgent(silent_mode=True)
+    info = agent.get_model_info()
+
+    assert "max_input_tokens" in info
+    assert "max_output_tokens" in info
+    assert info["max_input_tokens"] == 8192
+    assert info["max_output_tokens"] == 4096
+
+def test_get_model_info_custom():
+    """Test custom model info."""
+    class CustomAgent(ApiAgent, Agent):
+        def _get_system_prompt(self):
+            return "Custom"
+
+        def _create_console(self):
+            from gaia import SilentConsole
+            return SilentConsole()
+
+        def _register_tools(self):
+            pass
+
+        def get_model_info(self):
+            return {
+                "max_input_tokens": 32768,
+                "max_output_tokens": 8192,
+                "description": "Custom agent",
+                "custom_field": "custom_value"
+            }
+
+    agent = CustomAgent(silent_mode=True)
+    info = agent.get_model_info()
+
+    assert info["max_input_tokens"] == 32768
+    assert info["max_output_tokens"] == 8192
+    assert info["description"] == "Custom agent"
+    assert info["custom_field"] == "custom_value"
+
+def test_estimate_tokens_default():
+    """Test default token estimation."""
+    agent = TestApiAgent(silent_mode=True)
+
+    # Simple heuristic: len(text) // 4
+    text = "Hello world"  # 11 chars
+    tokens = agent.estimate_tokens(text)
+    assert tokens == 11 // 4  # 2 tokens
+
+    text = "This is a longer text for testing"  # 34 chars
+    tokens = agent.estimate_tokens(text)
+    assert tokens == 34 // 4  # 8 tokens
+
+def test_estimate_tokens_custom():
+    """Test custom token estimation."""
+    class CustomAgent(ApiAgent, Agent):
+        def _get_system_prompt(self):
+            return "Custom"
+
+        def _create_console(self):
+            from gaia import SilentConsole
+            return SilentConsole()
+
+        def _register_tools(self):
+            pass
+
+        def estimate_tokens(self, text: str) -> int:
+            # Custom: 1 token per word
+            return len(text.split())
+
+    agent = CustomAgent(silent_mode=True)
+    tokens = agent.estimate_tokens("Hello world test")
+    assert tokens == 3  # 3 words
+
+def test_inheritance_single_protocol():
+    """Test single protocol inheritance."""
+    class MyAgent(ApiAgent, Agent):
+        def _get_system_prompt(self):
+            return "Test"
+
+        def _create_console(self):
+            from gaia import SilentConsole
+            return SilentConsole()
+
+        def _register_tools(self):
+            pass
+
+    agent = MyAgent(silent_mode=True)
+    assert isinstance(agent, ApiAgent)
+    assert isinstance(agent, Agent)
+
+def test_inheritance_multiple_protocols():
+    """Test multiple protocol inheritance."""
+    from gaia.agents.base import MCPAgent
+
+    class MyAgent(MCPAgent, ApiAgent, Agent):
+        def _get_system_prompt(self):
+            return "Test"
+
+        def _create_console(self):
+            from gaia import SilentConsole
+            return SilentConsole()
+
+        def _register_tools(self):
+            pass
+
+        def get_mcp_tool_definitions(self):
+            return []
+
+        def execute_mcp_tool(self, tool_name, arguments):
+            return {}
+
+    agent = MyAgent(silent_mode=True)
+    assert isinstance(agent, MCPAgent)
+    assert isinstance(agent, ApiAgent)
+    assert isinstance(agent, Agent)
+
+def test_api_agent_works_without_overrides():
+    """Test ApiAgent works with default implementations."""
+    # Agent that doesn't override anything
+    agent = TestApiAgent(silent_mode=True)
+
+    # Should work with defaults
+    model_id = agent.get_model_id()
+    assert isinstance(model_id, str)
+    assert len(model_id) > 0
+
+    info = agent.get_model_info()
+    assert isinstance(info, dict)
+    assert "max_input_tokens" in info
+
+    tokens = agent.estimate_tokens("test")
+    assert isinstance(tokens, int)
+    assert tokens >= 0
+
+def test_naming_conventions():
+    """Test model ID naming conventions."""
+    class CodeAgent(ApiAgent, Agent):
+        def _get_system_prompt(self):
+            return "Code"
+
+        def _create_console(self):
+            from gaia import SilentConsole
+            return SilentConsole()
+
+        def _register_tools(self):
+            pass
+
+    class JiraAgent(ApiAgent, Agent):
+        def _get_system_prompt(self):
+            return "Jira"
+
+        def _create_console(self):
+            from gaia import SilentConsole
+            return SilentConsole()
+
+        def _register_tools(self):
+            pass
+
+    code_agent = CodeAgent(silent_mode=True)
+    jira_agent = JiraAgent(silent_mode=True)
+
+    assert code_agent.get_model_id() == "gaia-code"
+    assert jira_agent.get_model_id() == "gaia-jira"
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Basic API Agent
+
+```python
+from gaia.agents.base import Agent, ApiAgent
+from gaia import tool
+
+class MyAgent(ApiAgent, Agent):
+    """Agent exposed via OpenAI-compatible API."""
+
+    def _get_system_prompt(self) -> str:
+        return "You are a helpful assistant."
+
+    def _create_console(self):
+        from gaia import AgentConsole
+        return AgentConsole()
+
+    def _register_tools(self):
+        @tool
+        def hello(name: str) -> str:
+            """Say hello."""
+            return f"Hello, {name}!"
+
+# Agent automatically gets model ID: gaia-my
+# Can be called via API: POST /v1/chat/completions with model="gaia-my"
+```
+
+### Example 2: Custom Model ID and Metadata
+
+```python
+from gaia.agents.base import Agent, ApiAgent
+from typing import Dict, Any
+
+class CodeAgent(ApiAgent, Agent):
+    """Autonomous Python coding agent."""
+
+    def _get_system_prompt(self) -> str:
+        return "You are an autonomous Python coding agent."
+
+    def _create_console(self):
+        from gaia import AgentConsole
+        return AgentConsole()
+
+    def _register_tools(self):
+        # Register code-related tools
+        pass
+
+    def get_model_id(self) -> str:
+        return "gaia-code-agent"
+
+    def get_model_info(self) -> Dict[str, Any]:
+        return {
+            "max_input_tokens": 32768,
+            "max_output_tokens": 8192,
+            "description": "Autonomous Python coding agent with file operations",
+            "supports_tools": True,
+            "supports_streaming": True,
+            "languages": ["python"],
+        }
+
+# Usage via API:
+# POST /v1/chat/completions
+# {"model": "gaia-code-agent", "messages": [...]}
+```
+
+### Example 3: Custom Token Estimation
+
+```python
+from gaia.agents.base import Agent, ApiAgent
+import tiktoken
+
+class PreciseAgent(ApiAgent, Agent):
+    """Agent with accurate token counting."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Initialize tokenizer
+        self.tokenizer = tiktoken.get_encoding("cl100k_base")
+
+    def _get_system_prompt(self) -> str:
+        return "Precise agent"
+
+    def _create_console(self):
+        from gaia import SilentConsole
+        return SilentConsole()
+
+    def _register_tools(self):
+        pass
+
+    def estimate_tokens(self, text: str) -> int:
+        """Use tiktoken for accurate token counting."""
+        return len(self.tokenizer.encode(text))
+
+# Token counts will match OpenAI's billing
+```
+
+### Example 4: Multi-Protocol Agent (MCP + API)
+
+```python
+from gaia.agents.base import Agent, MCPAgent, ApiAgent
+from typing import List, Dict, Any
+
+class JiraAgent(MCPAgent, ApiAgent, Agent):
+    """Jira agent exposed via both MCP and OpenAI API."""
+
+    def _get_system_prompt(self) -> str:
+        return "You are a Jira project management assistant."
+
+    def _create_console(self):
+        from gaia import AgentConsole
+        return AgentConsole()
+
+    def _register_tools(self):
+        pass
+
+    # ApiAgent methods
+    def get_model_id(self) -> str:
+        return "gaia-jira"
+
+    def get_model_info(self) -> Dict[str, Any]:
+        return {
+            "max_input_tokens": 16384,
+            "max_output_tokens": 4096,
+            "description": "Jira project management agent",
+        }
+
+    # MCPAgent methods
+    def get_mcp_tool_definitions(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "name": "create-issue",
+                "description": "Create a Jira issue",
+                "inputSchema": {...}
+            }
+        ]
+
+    def execute_mcp_tool(self, tool_name: str, arguments: Dict) -> Dict:
+        if tool_name == "create-issue":
+            # Create issue logic
+            return {"status": "created"}
+        raise ValueError(f"Unknown tool: {tool_name}")
+
+# Can be used via:
+# 1. MCP: VSCode extension
+# 2. API: POST /v1/chat/completions
+```
+
+### Example 5: Agent Without API Customization
+
+```python
+from gaia.agents.base import Agent, ApiAgent
+
+class SimpleAgent(ApiAgent, Agent):
+    """Agent using all default API behavior."""
+
+    def _get_system_prompt(self) -> str:
+        return "Simple agent"
+
+    def _create_console(self):
+        from gaia import AgentConsole
+        return AgentConsole()
+
+    def _register_tools(self):
+        pass
+
+# Gets automatic model ID: gaia-simple
+# Uses default token limits: 8192 input, 4096 output
+# Uses char/4 token estimation
+# No custom behavior needed!
+```
+
+---
+
+## Documentation Updates Required
+
+### SDK.md
+
+Add to Agent Section:
+
+```markdown
+### ApiAgent Mixin
+
+**Purpose:** Optional mixin for exposing agents via OpenAI-compatible API.
+
+**Features:**
+- Automatic model ID generation
+- Customizable model metadata
+- Token counting interface
+- Works with any Agent
+
+**Quick Start:**
+```python
+from gaia.agents.base import Agent, ApiAgent
+
+class MyAgent(ApiAgent, Agent):
+    def _get_system_prompt(self):
+        return "My agent"
+
+    def get_model_id(self):
+        return "gaia-my-agent"
+
+    def get_model_info(self):
+        return {
+            "max_input_tokens": 32768,
+            "max_output_tokens": 8192,
+            "description": "My custom agent"
+        }
+```
+
+---
+
+*ApiAgent Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>
