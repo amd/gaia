@@ -1,0 +1,352 @@
+---
+title: "ProjectManagementMixin"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/code/tools/project_management.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code/tools/project_management.py)
+</Info>
+
+<Note>
+**Component:** ProjectManagementMixin
+**Module:** `gaia.agents.code.tools.project_management`
+**Import:** `from gaia.agents.code.tools.project_management import ProjectManagementMixin`
+</Note>
+---
+
+## Overview
+
+ProjectManagementMixin provides comprehensive project-level operations for the Code Agent, including intelligent project generation with LLM-driven architecture planning, iterative implementation, and multi-language validation.
+
+**Key Features:**
+- End-to-end project generation from natural language
+- LLM-driven architectural planning with JSON schemas
+- Iterative file implementation with validation
+- Comprehensive multi-language validation (Python, JS/TS, CSS, HTML)
+- Test generation and execution with auto-fix
+- Anti-pattern detection and structure validation
+
+**Project Generation Workflow:**
+1. Generate detailed architectural plan (JSON schema)
+2. Create PLAN.md with structured task breakdown
+3. Implement modules one-by-one with validation
+4. Generate comprehensive test suite
+5. Apply Black formatting
+6. Run tests and auto-fix failures
+7. Final project validation with quality metrics
+
+---
+
+## API Specification
+
+```python
+class ProjectManagementMixin:
+    """
+    Mixin providing project-level management tools.
+
+    Tools provided:
+    - list_files: List files and directories
+    - validate_project: Multi-language project validation
+    - create_project: Generate complete project from requirements
+    """
+
+    @tool
+    def list_files(path: str = ".") -> Dict[str, Any]:
+        """
+        List files and directories in path.
+
+        Args:
+            path: Directory path (default: current directory)
+
+        Returns:
+            {
+                "status": "success" | "error",
+                "path": str,
+                "files": List[str],
+                "directories": List[str],
+                "total": int,
+                "error": str  # If error
+            }
+        """
+        pass
+
+    @tool
+    def validate_project(
+        project_path: str,
+        fix: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Comprehensive multi-language project validation.
+
+        Checks:
+        - Project structure (entry points, essential files)
+        - Requirements.txt (hallucination detection)
+        - Python files (pylint, anti-patterns, Black)
+        - JavaScript/TypeScript (ESLint if available)
+        - CSS/HTML (basic validation)
+
+        Args:
+            project_path: Path to project directory
+            fix: Auto-fix issues where possible (default: False)
+
+        Returns:
+            {
+                "status": "success" | "error",
+                "project": str,
+                "validations": {
+                    "structure": {
+                        "is_valid": bool,
+                        "errors": List[str],
+                        "warnings": List[str]
+                    },
+                    "requirements": {...},
+                    "python": {
+                        "total_errors": int,
+                        "total_warnings": int,
+                        ...
+                    },
+                    "javascript": {...},
+                    "css": {...},
+                    "html": {...}
+                },
+                "total_errors": int,
+                "total_warnings": int,
+                "is_valid": bool,
+                "message": str
+            }
+        """
+        pass
+
+    @tool
+    def create_project(query: str) -> Dict[str, Any]:
+        """
+        Create complete project from natural language requirements.
+
+        Phase 1: Architectural Planning
+        - Generate JSON architectural plan with LLM
+        - Validate and sanitize project name
+        - Create detailed PLAN.md with module specifications
+
+        Phase 2: Implementation
+        - Implement modules one-by-one with validation
+        - Apply Black formatting
+        - Check anti-patterns
+
+        Phase 3: Testing
+        - Generate comprehensive test suite
+        - Handle timeout (180s per test file)
+        - Placeholder tests on failure
+
+        Phase 4: Quality Assurance
+        - Run tests and auto-fix failures (max 2 attempts)
+        - Apply Black formatting to all files
+        - Final validation with fix=True
+
+        Phase 5: Summary
+        - Generate structured summary report
+        - Quality metrics and next steps
+
+        Args:
+            query: Project requirements/description
+
+        Returns:
+            {
+                "status": "success" | "error",
+                "project_name": str,
+                "files_created": List[str],
+                "validation": {...},
+                "test_results": {
+                    "status": "passed" | "partial" | "error",
+                    "details": str,
+                    "stderr": str,
+                    "stdout": str
+                },
+                "implementation_issues": List[{
+                    "file": str,
+                    "type": "syntax" | "antipattern",
+                    "issues": List[str]
+                }],
+                "summary": str,  # Markdown summary
+                "message": str
+            }
+        """
+        pass
+
+    def _validate_project_structure(
+        self,
+        project_path: Path,
+        files: List[Path]
+    ) -> Dict[str, Any]:
+        """
+        Validate project structure for consistency.
+
+        Checks:
+        - Multiple entry points (error if >1 of main.py, app.py, run.py)
+        - Missing essential files (README.md, requirements.txt)
+        - Missing PLAN.md (warning)
+        - Duplicate model files (warning if >2)
+
+        Returns:
+            {
+                "is_valid": bool,
+                "errors": List[str],
+                "warnings": List[str]
+            }
+        """
+        pass
+```
+
+---
+
+## Implementation Highlights
+
+### LLM-Driven Architecture Planning
+
+```python
+plan_prompt = f"""Create detailed architectural plan for: {query}
+
+Generate JSON:
+{{
+  "project_name": "snake_case_name",
+  "architecture": {{
+    "overview": str,
+    "patterns": List[str],
+    "technologies": List[str]
+  }},
+  "modules": [{{
+    "name": "filename.py",
+    "purpose": str,
+    "classes": [{{"name": str, "purpose": str, "methods": List[str]}}],
+    "functions": [{{"name": str, "signature": str, "purpose": str}}]
+  }}],
+  "tests": [{{"name": "test_file.py", "coverage": str}}]
+}}
+"""
+
+plan_data = json.loads(self.chat.send(plan_prompt).text)
+```
+
+### Project Name Validation with Retry
+
+```python
+max_retries = 3
+for retry in range(max_retries):
+    issues = []
+
+    if os.path.exists(project_name):
+        issues.append(f"folder '{project_name}' already exists")
+    if len(project_name) > 30:
+        issues.append("name too long")
+    if not project_name.replace("_", "").isalnum():
+        issues.append("invalid characters")
+
+    if not issues:
+        break
+
+    # Ask LLM to fix name
+    fix_prompt = f"The name '{project_name}' has issues: {issues}. Provide new valid name."
+    project_name = self.chat.send(fix_prompt).text.strip().lower()
+```
+
+### Iterative File Implementation
+
+```python
+for module in modules_sorted:
+    # Re-read PLAN.md for latest updates
+    plan_context = Path(plan_path).read_text()
+
+    # Generate code with context
+    code = self._generate_code_for_file(
+        filename=module["name"],
+        purpose=module["purpose"],
+        context=f"{query}\n\nPlan:\n{plan_context}\n\nModule:\n{json.dumps(module)}"
+    )
+
+    # Validate and fix (max 3 attempts)
+    for attempt in range(3):
+        try:
+            ast.parse(code)  # Syntax check
+            antipattern_result = self._check_antipatterns(Path(file_path), code)
+            break
+        except SyntaxError as e:
+            code = self._fix_code_with_llm(code, file_path, str(e))
+```
+
+### Test Generation with Timeout
+
+```python
+def generate_with_timeout(test_filename, test, test_context):
+    nonlocal test_code
+    test_code = self._generate_code_for_file(
+        filename=test_filename,
+        purpose=f"Unit tests for {test['coverage']}",
+        context=test_context
+    )
+
+gen_thread = threading.Thread(target=generate_with_timeout, args=(...))
+gen_thread.start()
+gen_thread.join(timeout=180)  # 3 minute timeout
+
+if gen_thread.is_alive():
+    # Placeholder test on timeout
+    test_code = '''import unittest
+class TestPlaceholder(unittest.TestCase):
+    def test_placeholder(self):
+        self.skipTest("Test generation timed out")
+'''
+```
+
+---
+
+## Testing Requirements
+
+**File:** `tests/agents/code/test_project_management_mixin.py`
+
+Key tests:
+- Project generation from various requirements
+- Name validation and sanitization
+- Module implementation validation
+- Test suite generation
+- Multi-language validation
+- Structure validation (entry points, essentials)
+- Auto-fix workflow
+- Timeout handling
+
+---
+
+## Usage Examples
+
+```python
+# Generate project
+result = agent.create_project("Build a FastAPI todo app with SQLite database")
+print(f"Created: {result['project_name']}")
+print(f"Files: {len(result['files_created'])}")
+print(f"Tests: {result['test_results']['status']}")
+print(result['summary'])
+
+# Validate existing project
+result = agent.validate_project("/path/to/project", fix=True)
+print(f"Valid: {result['is_valid']}")
+print(f"Errors: {result['total_errors']}")
+print(f"Warnings: {result['total_warnings']}")
+
+# List project files
+result = agent.list_files("/path/to/project")
+print(f"Files: {result['files']}")
+print(f"Directories: {result['directories']}")
+```
+
+---
+
+*ProjectManagementMixin Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 # This workflow tests the GAIA Code Agent functionality
@@ -9,20 +9,11 @@ name: Code Agent Tests
 on:
   workflow_call:
   push:
-    branches: ["main"]
-    paths:
-      - "src/gaia/agents/code/**"
-      - "tests/test_code_agent.py"
-      - "tests/test_code_agent_mixins.py"
-      - ".github/workflows/test_code_agent.yml"
+    branches: [ main ]
   pull_request:
-    branches: ["main"]
+    branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "src/gaia/agents/code/**"
-      - "tests/test_code_agent.py"
-      - "tests/test_code_agent_mixins.py"
-      - ".github/workflows/test_code_agent.yml"
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -35,20 +26,24 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.10"
-          cache: "pip"
+          python-version: '3.12'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e .[dev]
+          uv pip install --system -e .[dev]
           # Install optional dependencies for code agent
-          pip install black pylint
+          uv pip install --system black pylint
 
       - name: Run Code Agent Mixin Architecture Tests
         run: |

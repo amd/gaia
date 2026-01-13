@@ -1,0 +1,457 @@
+---
+title: "FileIOToolsMixin"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/code/tools/file_io.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code/tools/file_io.py)
+</Info>
+
+<Note>
+**Component:** FileIOToolsMixin
+**Module:** `gaia.agents.code.tools.file_io`
+**Import:** `from gaia.agents.code.tools.file_io import FileIOToolsMixin`
+</Note>
+---
+
+## Overview
+
+FileIOToolsMixin provides comprehensive file I/O operations with intelligent file type detection, syntax validation, and security controls. It handles Python files with full AST analysis, markdown with structure extraction, and generic text files with appropriate encoding.
+
+**Key Features:**
+- Read files with automatic type detection and analysis
+- Write Python files with syntax validation
+- Edit files with diff generation
+- Search code across directories
+- Generate diffs for changes
+- Markdown file operations
+- Generic file operations without validation
+- Security through path validation
+
+---
+
+## Tool Specifications
+
+### 1. read_file
+
+Read any file and intelligently analyze based on file type.
+
+**Parameters:**
+- `file_path` (str, required): Path to the file to read
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "file_path": str,
+    "content": str,
+    "file_type": "python" | "markdown" | "binary" | "text",
+    "line_count": int,
+    "size_bytes": int,
+
+    # Python files only
+    "is_valid": bool,
+    "errors": List[str],
+    "symbols": [{"name": str, "type": str, "line": int}],
+
+    # Markdown files only
+    "headers": List[str],
+    "code_blocks": [{"language": str, "code": str}],
+    "links": [{"text": str, "url": str}],
+
+    # Binary files only
+    "is_binary": bool
+}
+```
+
+### 2. write_python_file
+
+Write Python code to a file with syntax validation.
+
+**Parameters:**
+- `file_path` (str, required): Path where to write the file
+- `content` (str, required): Python code content
+- `validate` (bool, optional): Validate syntax before writing (default: True)
+- `create_dirs` (bool, optional): Create parent directories (default: True)
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "file_path": str,
+    "bytes_written": int,
+    "line_count": int
+}
+```
+
+### 3. edit_python_file
+
+Edit a Python file by replacing content with validation.
+
+**Parameters:**
+- `file_path` (str, required): Path to the file
+- `old_content` (str, required): Content to find and replace
+- `new_content` (str, required): New content to insert
+- `backup` (bool, optional): Create backup (default: True)
+- `dry_run` (bool, optional): Only simulate (default: False)
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "file_path": str,
+    "diff": str,
+    "backup_created": bool,
+    "would_change": bool  # For dry_run
+}
+```
+
+### 4. search_code
+
+Search for patterns in code files.
+
+**Parameters:**
+- `directory` (str, optional): Directory to search (default: ".")
+- `pattern` (str, optional): Pattern to search for
+- `file_extension` (str, optional): File extension filter (default: ".py")
+- `max_results` (int, optional): Maximum results (default: 100)
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "pattern": str,
+    "directory": str,
+    "files_searched": int,
+    "files_with_matches": int,
+    "results": [
+        {
+            "file": str,
+            "matches": [
+                {"line": int, "content": str}
+            ]
+        }
+    ]
+}
+```
+
+### 5. generate_diff
+
+Generate a unified diff for a file.
+
+**Parameters:**
+- `file_path` (str, required): Path to original file
+- `new_content` (str, required): New content to compare
+- `context_lines` (int, optional): Context lines in diff (default: 3)
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "file_path": str,
+    "diff": str,
+    "additions": int,
+    "deletions": int,
+    "has_changes": bool
+}
+```
+
+### 6. write_file
+
+Write content to any file without syntax validation.
+
+**Parameters:**
+- `file_path` (str, required): Path where to write
+- `content` (str, required): Content to write
+- `create_dirs` (bool, optional): Create parent directories (default: True)
+- `project_dir` (str, optional): Project root for resolving relative paths
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "file_path": str,
+    "size_bytes": int,
+    "file_type": str
+}
+```
+
+### 7. edit_file
+
+Edit any file by replacing content without validation.
+
+**Parameters:**
+- `file_path` (str, required): Path to file
+- `old_content` (str, required): Exact content to find and replace
+- `new_content` (str, required): New content to replace with
+- `project_dir` (str, optional): Project root for resolving paths
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "file_path": str,
+    "old_size": int,
+    "new_size": int,
+    "file_type": str,
+    "diff": str
+}
+```
+
+### 8. replace_function
+
+Replace a specific function in a Python file.
+
+**Parameters:**
+- `file_path` (str, required): Path to Python file
+- `function_name` (str, required): Name of function to replace
+- `new_implementation` (str, required): New function implementation
+- `backup` (bool, optional): Create backup (default: True)
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "file_path": str,
+    "function_replaced": str,
+    "backup_path": str,
+    "diff": str
+}
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Read and Analyze Python File
+
+```python
+from gaia import CodeAgent
+
+agent = CodeAgent()
+
+result = agent.read_file("calculator.py")
+
+if result["file_type"] == "python":
+    print(f"Valid Python: {result['is_valid']}")
+    print(f"Symbols found:")
+    for symbol in result["symbols"]:
+        print(f"  {symbol['type']} {symbol['name']} at line {symbol['line']}")
+```
+
+### Example 2: Write Validated Python Code
+
+```python
+code = '''
+def calculate_sum(a: int, b: int) -> int:
+    """Calculate the sum of two integers."""
+    return a + b
+'''
+
+result = agent.write_python_file(
+    file_path="src/calculator.py",
+    content=code,
+    validate=True,
+    create_dirs=True
+)
+
+if result["status"] == "success":
+    print(f"Wrote {result['bytes_written']} bytes to {result['file_path']}")
+```
+
+### Example 3: Edit File with Diff
+
+```python
+result = agent.edit_python_file(
+    file_path="src/calculator.py",
+    old_content="return a + b",
+    new_content="return int(a) + int(b)  # Ensure integers",
+    backup=True
+)
+
+print("Changes:")
+print(result["diff"])
+```
+
+### Example 4: Search Codebase
+
+```python
+result = agent.search_code(
+    directory="src",
+    pattern="TODO",
+    file_extension=".py",
+    max_results=50
+)
+
+print(f"Found {result['files_with_matches']} files with TODOs:")
+for file_result in result["results"]:
+    print(f"\n{file_result['file']}:")
+    for match in file_result["matches"]:
+        print(f"  Line {match['line']}: {match['content']}")
+```
+
+### Example 5: TypeScript/Generic File Operations
+
+```python
+# Write TypeScript without validation
+result = agent.write_file(
+    file_path="src/components/Button.tsx",
+    content=tsx_code,
+    create_dirs=True
+)
+
+# Edit TypeScript file
+result = agent.edit_file(
+    file_path="src/components/Button.tsx",
+    old_content="export default Button",
+    new_content="export { Button }"
+)
+```
+
+---
+
+## Security Model
+
+### Path Validation
+
+All file operations check paths against allowed directories:
+
+```python
+if not self.path_validator.is_path_allowed(file_path):
+    return {
+        "status": "error",
+        "error": f"Access denied: {file_path} is not in allowed paths"
+    }
+```
+
+### Allowed Paths Configuration
+
+```python
+# Typically configured in CodeAgent
+path_validator = PathValidator(
+    allowed_paths=[
+        "/path/to/workspace",
+        "/path/to/project"
+    ],
+    blocked_paths=[
+        "/etc",
+        "/var",
+        "~/.ssh"
+    ]
+)
+```
+
+---
+
+## File Type Detection
+
+### Python Files (.py)
+
+- Full AST parsing
+- Syntax validation
+- Symbol extraction (functions, classes)
+- Error reporting with line numbers
+
+### Markdown Files (.md)
+
+- Header extraction (# patterns)
+- Code block extraction with language tags
+- Link extraction ([text](url) patterns)
+
+### Binary Files
+
+- Detected via UnicodeDecodeError
+- Returns size and binary flag
+- No content parsing
+
+### Text Files
+
+- Raw content reading
+- Line count and size reporting
+- No special analysis
+
+---
+
+## Dependencies
+
+```python
+import ast
+import difflib
+import os
+from typing import Any, Dict, Optional
+
+from gaia.agents.base.tools import tool
+```
+
+---
+
+## Testing Requirements
+
+**File:** `tests/agents/code/test_file_io.py`
+
+```python
+def test_read_python_file(tmp_path):
+    """Test reading Python file with analysis."""
+    file_path = tmp_path / "test.py"
+    file_path.write_text("def hello(): pass")
+
+    result = read_file(str(file_path))
+
+    assert result["status"] == "success"
+    assert result["file_type"] == "python"
+    assert result["is_valid"]
+    assert len(result["symbols"]) == 1
+    assert result["symbols"][0]["name"] == "hello"
+
+def test_write_python_with_validation(tmp_path):
+    """Test writing with syntax validation."""
+    file_path = tmp_path / "test.py"
+
+    # Valid code
+    result = write_python_file(
+        str(file_path),
+        "x = 1 + 2",
+        validate=True
+    )
+    assert result["status"] == "success"
+
+    # Invalid code
+    result = write_python_file(
+        str(file_path),
+        "x = 1 +",
+        validate=True
+    )
+    assert result["status"] == "error"
+    assert "syntax_errors" in result
+
+def test_search_code(tmp_path):
+    """Test code search."""
+    # Create test files
+    (tmp_path / "file1.py").write_text("# TODO: fix this\ndef func(): pass")
+    (tmp_path / "file2.py").write_text("x = 1")
+
+    result = search_code(
+        str(tmp_path),
+        "TODO",
+        ".py"
+    )
+
+    assert result["status"] == "success"
+    assert result["files_with_matches"] == 1
+    assert "file1.py" in result["results"][0]["file"]
+```
+
+---
+
+*FileIOToolsMixin Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

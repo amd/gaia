@@ -1,0 +1,364 @@
+---
+title: "PrismaToolsMixin"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/code/tools/prisma_tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code/tools/prisma_tools.py)
+</Info>
+
+<Note>
+**Component:** PrismaToolsMixin
+**Module:** `gaia.agents.code.tools.prisma_tools`
+**Import:** `from gaia.agents.code.tools.prisma_tools import PrismaToolsMixin`
+</Note>
+---
+
+## Overview
+
+PrismaToolsMixin provides Prisma database setup and management tools for the Code Agent, enforcing the correct workflow to prevent common errors in Next.js projects.
+
+**Key Features:**
+- Automated Prisma Client generation
+- Database schema push (prisma db push)
+- Singleton pattern implementation for Next.js
+- Correct import path guidance
+- Error categorization (client, schema, migration, runtime)
+
+**Enforced Workflow:**
+1. Validate schema.prisma exists
+2. Generate Prisma Client (TypeScript types)
+3. Push schema to database
+4. Create singleton file (src/lib/prisma.ts)
+5. Return correct import patterns
+
+---
+
+## API Specification
+
+```python
+class PrismaToolsMixin:
+    """Mixin providing Prisma database management tools."""
+
+    @tool
+    def setup_prisma(
+        project_dir: str,
+        regenerate: bool = True,
+        push_db: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Set up or update Prisma client after schema changes.
+
+        Workflow:
+        1. Validate schema.prisma exists
+        2. Run `prisma generate` (create TypeScript types)
+        3. Run `prisma db push` (sync database)
+        4. Create singleton file if missing
+        5. Return import patterns
+
+        Call this tool:
+        - After creating/modifying prisma/schema.prisma
+        - When seeing "Cannot find name 'Todo'" type errors
+        - When seeing "@prisma/client has no exported member" errors
+
+        Args:
+            project_dir: Path to Next.js project
+            regenerate: Run prisma generate (default: True)
+            push_db: Run prisma db push (default: True)
+
+        Returns:
+            {
+                "success": bool,
+                "generated": bool,
+                "pushed": bool,
+                "singleton_created": bool,
+                "singleton_path": str,  # Relative path
+                "import_patterns": {
+                    "client_instance": "import { prisma } from '@/lib/prisma'",
+                    "model_types": "import { Todo, User } from '@prisma/client'",
+                    "prisma_namespace": "import { Prisma } from '@prisma/client'"
+                },
+                "output": str,  # Command output
+                "error": str,  # If failed
+                "error_type": "validation_error" | "schema_error" |
+                             "client_error" | "migration_error" | "runtime_error"
+            }
+        """
+        pass
+```
+
+---
+
+## Implementation Details
+
+### Prisma Singleton Template
+
+```typescript
+// src/lib/prisma.ts
+import { PrismaClient } from "@prisma/client";
+
+const globalForPrisma = globalThis as unknown as {
+  prisma: PrismaClient | undefined;
+};
+
+export const prisma = globalForPrisma.prisma ?? new PrismaClient();
+
+if (process.env.NODE_ENV !== "production") {
+  globalForPrisma.prisma = prisma;
+}
+```
+
+**Why Singleton?**
+- Prevents connection pool exhaustion in Next.js development
+- Hot reload causes multiple PrismaClient instances without singleton
+- Production builds don't have this issue (single instance)
+
+### Workflow Implementation
+
+```python
+def setup_prisma(project_dir, regenerate=True, push_db=True):
+    project_path = Path(project_dir).resolve()
+    schema_path = project_path / "prisma" / "schema.prisma"
+
+    # Validate schema exists
+    if not schema_path.exists():
+        return {
+            "success": False,
+            "error": f"Schema not found at {schema_path}. Run 'npx prisma init' first.",
+            "error_type": "schema_error"
+        }
+
+    output_lines = []
+
+    # Step 1: Generate Prisma Client
+    if regenerate:
+        result = subprocess.run(
+            ["npx", "prisma", "generate"],
+            cwd=str(project_path),
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        output_lines.append("=== prisma generate ===")
+        output_lines.append(result.stdout)
+
+        if result.returncode != 0:
+            return {
+                "success": False,
+                "generated": False,
+                "error": f"prisma generate failed: {result.stderr}",
+                "error_type": "client_error"
+            }
+
+    # Step 2: Push schema to database
+    if push_db:
+        result = subprocess.run(
+            ["npx", "prisma", "db", "push"],
+            cwd=str(project_path),
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        output_lines.append("=== prisma db push ===")
+        output_lines.append(result.stdout)
+
+        if result.returncode != 0:
+            return {
+                "success": False,
+                "pushed": False,
+                "error": f"prisma db push failed: {result.stderr}",
+                "error_type": "migration_error"
+            }
+
+    # Step 3: Create singleton if missing
+    singleton_path = project_path / "src" / "lib" / "prisma.ts"
+    if not singleton_path.exists():
+        singleton_path.parent.mkdir(parents=True, exist_ok=True)
+        singleton_path.write_text(PRISMA_SINGLETON_TEMPLATE)
+        singleton_created = True
+
+    return {
+        "success": True,
+        "generated": regenerate,
+        "pushed": push_db,
+        "singleton_created": singleton_created,
+        "singleton_path": str(singleton_path.relative_to(project_path)),
+        "import_patterns": {
+            "client_instance": "import { prisma } from '@/lib/prisma'",
+            "model_types": "import { Todo, User } from '@prisma/client'",
+            "prisma_namespace": "import { Prisma } from '@prisma/client'"
+        },
+        "output": "\n".join(output_lines)
+    }
+```
+
+---
+
+## Error Handling
+
+### Error Types
+
+1. **validation_error**: Invalid project directory
+2. **schema_error**: Missing schema.prisma file
+3. **client_error**: `prisma generate` failed
+4. **migration_error**: `prisma db push` failed
+5. **runtime_error**: Timeout or unexpected exception
+
+### Common Errors
+
+```python
+# Project not found
+if not project_path.exists():
+    return {
+        "success": False,
+        "error": f"Project directory does not exist: {project_dir}",
+        "error_type": "validation_error"
+    }
+
+# Schema not found
+if not schema_path.exists():
+    return {
+        "success": False,
+        "error": f"Prisma schema not found. Run 'npx prisma init' first.",
+        "error_type": "schema_error"
+    }
+
+# Timeout
+except subprocess.TimeoutExpired:
+    return {
+        "success": False,
+        "error": "Prisma command timed out (exceeded 120 seconds)",
+        "error_type": "runtime_error"
+    }
+```
+
+---
+
+## Testing Requirements
+
+**File:** `tests/agents/code/test_prisma_tools_mixin.py`
+
+```python
+def test_setup_prisma_success(tmp_path):
+    """Test successful Prisma setup."""
+    # Create project structure
+    project = tmp_path / "nextjs-app"
+    schema_dir = project / "prisma"
+    schema_dir.mkdir(parents=True)
+
+    # Create minimal schema
+    (schema_dir / "schema.prisma").write_text("""
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+generator client {
+  provider = "prisma-client-js"
+}
+model Todo {
+  id    Int    @id @default(autoincrement())
+  title String
+}
+""")
+
+    result = agent.setup_prisma(str(project))
+    assert result["success"] is True
+    assert result["generated"] is True
+    assert result["pushed"] is True
+    assert (project / "src" / "lib" / "prisma.ts").exists()
+
+def test_setup_prisma_missing_schema(tmp_path):
+    """Test error when schema is missing."""
+    project = tmp_path / "nextjs-app"
+    project.mkdir()
+
+    result = agent.setup_prisma(str(project))
+    assert result["success"] is False
+    assert result["error_type"] == "schema_error"
+
+def test_setup_prisma_singleton_creation(tmp_path):
+    """Test singleton file is created."""
+    # Setup project...
+    result = agent.setup_prisma(str(project))
+
+    singleton = project / "src" / "lib" / "prisma.ts"
+    assert singleton.exists()
+    assert "globalForPrisma" in singleton.read_text()
+
+def test_setup_prisma_import_patterns(tmp_path):
+    """Test correct import patterns are returned."""
+    # Setup project...
+    result = agent.setup_prisma(str(project))
+
+    assert "client_instance" in result["import_patterns"]
+    assert "@/lib/prisma" in result["import_patterns"]["client_instance"]
+    assert "@prisma/client" in result["import_patterns"]["model_types"]
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Initial Prisma Setup
+
+```python
+# After creating schema.prisma
+result = agent.setup_prisma("/path/to/nextjs-project")
+
+if result["success"]:
+    print("✓ Prisma setup complete!")
+    print(f"Generated: {result['generated']}")
+    print(f"Database pushed: {result['pushed']}")
+    print(f"Singleton created: {result['singleton_created']}")
+
+    print("\nUse these imports:")
+    for key, pattern in result["import_patterns"].items():
+        print(f"  {pattern}")
+else:
+    print(f"✗ Error ({result['error_type']}): {result['error']}")
+```
+
+### Example 2: Regenerate After Schema Changes
+
+```python
+# After modifying schema.prisma
+result = agent.setup_prisma(
+    "/path/to/nextjs-project",
+    regenerate=True,
+    push_db=True
+)
+
+# Check output for migration warnings
+print(result["output"])
+```
+
+### Example 3: Type Error Resolution
+
+```python
+# When seeing "Cannot find name 'Todo'" errors
+result = agent.setup_prisma("/path/to/project")
+
+# This will:
+# 1. Regenerate TypeScript types (prisma generate)
+# 2. Sync database (prisma db push)
+# 3. Ensure singleton exists
+
+# Then use:
+# import { prisma } from '@/lib/prisma'
+# import { Todo } from '@prisma/client'
+```
+
+---
+
+*PrismaToolsMixin Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

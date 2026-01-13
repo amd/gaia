@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 name: Publish GAIA Installer
@@ -6,19 +6,11 @@ name: Publish GAIA Installer
 on:
   push:
     branches: ["main"]
-    paths:
-      - "installer/**"
-      - "src/**"
-      - "setup.py"
     tags:
       - v*
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "installer/**"
-      - "src/**"
-      - "setup.py"
   merge_group:
   workflow_dispatch:
 
@@ -38,7 +30,7 @@ jobs:
     needs: [build-installer, build-electron-apps]
     if: always() && needs.build-installer.result == 'success' && (needs.build-electron-apps.result == 'success' || needs.build-electron-apps.result == 'skipped')
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0  # Fetch all history for release notes generation
 

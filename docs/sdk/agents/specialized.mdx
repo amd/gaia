@@ -1,0 +1,187 @@
+---
+title: "Specialized"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/chat/`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/), [`src/gaia/agents/docker/`](https://github.com/amd/gaia/blob/main/src/gaia/agents/docker/), [`src/gaia/agents/jira/`](https://github.com/amd/gaia/blob/main/src/gaia/agents/jira/), [`src/gaia/agents/blender/`](https://github.com/amd/gaia/blob/main/src/gaia/agents/blender/)
+</Info>
+
+<Note>
+**Import:** `from gaia.agents.chat.agent import ChatAgent`
+</Note>
+---
+
+<Badge text="development" color="orange" />
+
+## 12.1 ChatAgent (Conversational AI with RAG)
+
+**Detailed Spec:** [spec/chat-agent](/spec/chat-agent)
+
+**Purpose:** General-purpose conversational agent with file operations, RAG, and shell command capabilities.
+
+```python
+from gaia.agents.chat.agent import ChatAgent
+
+# Create chat agent with RAG enabled
+agent = ChatAgent(
+    documents_path="./docs",  # Auto-index PDFs in this directory
+    silent_mode=False
+)
+
+# Agent has built-in tools:
+# - File operations (read/write/list)
+# - Document search (RAG)
+# - Shell commands
+
+result = agent.process_query(
+    "What does the user manual say about configuration? "
+    "Then create a config.yaml file with those settings."
+)
+
+# Agent automatically:
+# 1. Searches indexed documents
+# 2. Extracts configuration info
+# 3. Creates the file with proper settings
+```
+
+---
+
+## 12.2 DockerAgent (Containerization)
+
+**Import:** `from gaia.agents.docker.agent import DockerAgent`
+
+**Detailed Spec:** [spec/docker-agent](/spec/docker-agent)
+
+**Purpose:** Intelligent Docker assistance for containerizing applications with LLM-generated Dockerfiles.
+
+```python
+from gaia.agents.docker.agent import DockerAgent
+from pathlib import Path
+
+# Create Docker agent
+agent = DockerAgent(
+    model_id="Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    max_steps=10,
+    allowed_paths=["/home/user/projects"]  # Security: restrict access
+)
+
+# Analyze app and generate Dockerfile
+result = agent.process_query(
+    "Analyze this Python Flask app and create an optimized Dockerfile"
+)
+
+# Agent:
+# 1. Analyzes app structure (finds requirements.txt, main.py, etc.)
+# 2. Detects dependencies and runtime needs
+# 3. Generates production-ready Dockerfile
+# 4. Suggests best practices (multi-stage builds, security)
+
+# Build and run
+result = agent.process_query(
+    "Build the Docker image and run it on port 5000"
+)
+```
+
+---
+
+## 12.3 JiraAgent (Issue Tracking)
+
+**Import:** `from gaia.agents.jira.agent import JiraAgent`
+
+**Detailed Spec:** [spec/jira-agent](/spec/jira-agent)
+
+**Purpose:** Natural language interface to Jira with automatic configuration discovery and JQL generation.
+
+```python
+from gaia.agents.jira.agent import JiraAgent
+import os
+
+# Set credentials
+os.environ["ATLASSIAN_SITE_URL"] = "https://company.atlassian.net"
+os.environ["ATLASSIAN_API_KEY"] = "your-api-token"
+os.environ["ATLASSIAN_USER_EMAIL"] = "you@company.com"
+
+# Create Jira agent with auto-discovery
+agent = JiraAgent()
+config = agent.initialize()  # Discovers projects, issue types, etc.
+
+# Natural language queries
+result = agent.process_query(
+    "Show me all high priority bugs assigned to me"
+)
+
+# Create issues
+result = agent.process_query(
+    "Create a new story called 'Add user authentication' in the AUTH project"
+)
+
+# Update issues
+result = agent.process_query(
+    "Update PROJ-123 status to In Progress and add comment 'Working on it'"
+)
+
+# Agent features:
+# - Automatic Jira instance discovery
+# - Natural language to JQL translation
+# - Handles project names, issue types, statuses
+# - Robust error handling
+```
+
+---
+
+## 12.4 BlenderAgent (3D Graphics)
+
+**Import:** `from gaia.agents.blender.agent import BlenderAgent`
+
+**Detailed Spec:** [spec/blender-agent](/spec/blender-agent)
+
+**Purpose:** Natural language interface for Blender 3D modeling, scene creation, and rendering.
+
+```python
+from gaia.agents.blender.agent import BlenderAgent
+
+# Create Blender agent
+agent = BlenderAgent(
+    model_id="Qwen3-Coder-30B-A3B-Instruct-GGUF"
+)
+
+# Natural language 3D modeling
+result = agent.process_query(
+    "Create a blue sphere at position (0, 0, 5) with radius 2"
+)
+
+# Complex scenes
+result = agent.process_query(
+    "Create a simple room with a table and chair. "
+    "Add a camera looking at the table. "
+    "Render the scene with good lighting."
+)
+
+# Agent capabilities:
+# - Object creation (cubes, spheres, meshes)
+# - Material/texture application
+# - Camera and lighting setup
+# - Scene composition
+# - Rendering operations
+```
+
+---
+
+## Related Topics
+
+- [Core Agent System](../core/agent-system) - Learn about the base Agent class
+- [Routing Agent](./routing) - Multi-agent orchestration
+- [Tool Mixins](../mixins/tool-mixins) - Reusable tool collections
+- [Code Development Mixins](../mixins/code-mixins) - Code-specific tools
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

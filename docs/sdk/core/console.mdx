@@ -1,0 +1,99 @@
+---
+title: "Output Handlers"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/base/console.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/console.py)
+</Info>
+
+<Note>
+**Import:** `from gaia.agents.base.console import AgentConsole, SilentConsole`
+</Note>
+---
+
+<Badge text="development" color="orange" />
+
+**Detailed Spec:** [spec/console](/spec/console)
+
+**Purpose:** Control agent output display.
+
+---
+
+## AgentConsole (Rich CLI Output)
+
+```python
+from gaia.agents.base.console import AgentConsole
+
+class MyAgent(Agent):
+    def _create_console(self):
+        # Rich console with syntax highlighting
+        return AgentConsole()
+
+# Displays:
+# - Colored step headers
+# - Syntax-highlighted tool calls
+# - Progress indicators
+# - Formatted results
+```
+
+---
+
+## SilentConsole (No Output)
+
+```python
+from gaia.agents.base.console import SilentConsole
+
+class MyAgent(Agent):
+    def _create_console(self):
+        # No console output (for API/testing)
+        return SilentConsole()
+
+# Use for:
+# - API servers
+# - Background processing
+# - Unit tests
+# - JSON-only responses
+```
+
+---
+
+## SSEOutputHandler (Streaming API)
+
+```python
+from gaia.api.sse_handler import SSEOutputHandler
+
+# For API endpoints
+handler = SSEOutputHandler()
+agent = MyAgent(console=handler)
+
+# Output is formatted as Server-Sent Events
+# Compatible with OpenAI streaming API
+```
+
+---
+
+## When to Use Each Handler
+
+| Handler | Use Case | Output | Best For |
+|---------|----------|--------|----------|
+| `AgentConsole` | Interactive CLI | Rich, colored text | Development, debugging |
+| `SilentConsole` | Headless operation | None | APIs, tests, background |
+| `SSEOutputHandler` | Streaming API | Server-Sent Events | Web applications |
+
+---
+
+## Related Topics
+
+- **[Agent System](./agent-system)** - Learn about the agent foundation
+- **[API Server](../infrastructure/api-server)** - Using agents in web applications
+- **[Testing](../testing)** - Testing agents with SilentConsole
+
+---
+
+<small style="color: #666;">
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 name: Test Electron Framework and Apps
@@ -7,21 +7,9 @@ on:
   workflow_call:
   push:
     branches: ["main"]
-    paths:
-      - 'src/gaia/electron/**'
-      - 'src/gaia/apps/**/webui/**'
-      - 'tests/electron/**'
-      - 'tests/apps/**'
-      - '.github/workflows/test_electron.yml'
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - 'src/gaia/electron/**'
-      - 'src/gaia/apps/**/webui/**'
-      - 'tests/electron/**'
-      - 'tests/apps/**'
-      - '.github/workflows/test_electron.yml'
   merge_group:
   workflow_dispatch:
 
@@ -33,10 +21,13 @@ jobs:
   test-electron-framework:
     name: Test Electron Framework
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -66,10 +57,13 @@ jobs:
   test-apps-integration:
     name: Test Apps Integration
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -100,11 +94,14 @@ jobs:
   test-apps-functional:
     name: Test Apps Functionality
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     timeout-minutes: 20
-    
+
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -134,7 +131,7 @@ jobs:
   test-apps-build:
     name: Test Apps Build (${{ matrix.app.name }})
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     strategy:
       fail-fast: false
       matrix:
@@ -145,7 +142,10 @@ jobs:
             path: src/gaia/apps/example/webui
     
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -203,7 +203,7 @@ jobs:
   dependency-audit:
     name: Audit Dependencies
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     strategy:
       matrix:
         package:
@@ -213,9 +213,12 @@ jobs:
             path: src/gaia/apps/jira/webui
           - name: example-app
             path: src/gaia/apps/example/webui
-    
+
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
 
       - name: Setup Node.js
         uses: actions/setup-node@v6

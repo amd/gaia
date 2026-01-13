@@ -1,0 +1,131 @@
+# Best Practices
+
+<Badge text="development" color="orange" />
+
+## 19.1 Agent Project Structure
+
+```
+my-gaia-agent/
+├── src/my_agent/
+│   ├── __init__.py           # Export agent class
+│   ├── agent.py              # Agent implementation
+│   ├── tools/                # Custom tools (optional)
+│   │   ├── __init__.py
+│   │   └── database_tools.py
+│   └── config.py             # Configuration (optional)
+├── tests/
+│   ├── __init__.py
+│   └── test_agent.py
+├── pyproject.toml            # Package configuration
+├── README.md
+└── .gitignore
+```
+
+---
+
+## 19.2 Entry Point Registration
+
+```toml
+# pyproject.toml
+[project]
+name = "my-gaia-agent"
+version = "0.1.0"
+dependencies = [
+    "amd-gaia>=0.14.0,<1.0.0"
+]
+
+[project.entry-points."gaia.agents"]
+my-agent = "my_agent.agent:MyAgent"
+```
+
+---
+
+## 19.3 Error Handling in Tools
+
+```python
+@tool
+def risky_operation(param: str) -> dict:
+    """Operation that might fail."""
+    try:
+        result = perform_operation(param)
+        return {
+            "status": "success",
+            "result": result
+        }
+    except FileNotFoundError:
+        return {
+            "status": "error",
+            "error": "File not found",
+            "param": param,
+            "suggestion": "Check that the file exists"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "param": param
+        }
+```
+
+---
+
+## 19.4 Resource Cleanup
+
+```python
+class MyAgent(Agent):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.resources = []
+
+    def __del__(self):
+        """Clean up resources."""
+        for resource in self.resources:
+            try:
+                resource.close()
+            except:
+                pass
+```
+
+---
+
+## 19.5 Logging
+
+```python
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
+
+class MyAgent(Agent):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        logger.info(f"Initialized {self.__class__.__name__}")
+
+    def _register_tools(self):
+        @tool
+        def my_tool(param: str) -> dict:
+            logger.debug(f"Tool called with: {param}")
+            result = process(param)
+            logger.info(f"Tool completed: {result}")
+            return result
+```
+
+---
+
+## Related Topics
+
+- [Core Agent System](./core/agent-system) - Agent architecture
+- [Testing](./testing) - Testing strategies
+- [Security](./security) - Security guidelines
+- [Examples](./examples) - Complete working examples
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

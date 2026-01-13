@@ -1,0 +1,857 @@
+---
+title: "MCP Agent"
+description: "Model Context Protocol agent for standardized tool integration and external service communication"
+icon: "sitemap"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/base/mcp_agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/mcp_agent.py)
+</Info>
+
+<Note>
+**Component:** MCPAgent
+**Module:** `gaia.agents.base.mcp_agent`
+**Import:** `from gaia.agents.base import MCPAgent`
+</Note>
+
+---
+
+## Overview
+
+MCPAgent is a base class for agents that support the Model Context Protocol (MCP). It provides the interface for exposing agent tools, prompts, and resources via MCP servers, allowing external tools like VSCode to interact with GAIA agents. MCPAgent defines abstract methods that subclasses must implement to provide MCP functionality.
+
+**Key Features:**
+- MCP tool definition and execution
+- Optional prompt templates
+- Optional resource providers
+- Server metadata
+- Abstract interface for protocol compliance
+- Multiple inheritance support (with ApiAgent)
+
+---
+
+## Requirements
+
+### Functional Requirements
+
+1. **Tool Management (Required)**
+   - `get_mcp_tool_definitions()` - Return list of MCP tool definitions
+   - `execute_mcp_tool()` - Execute an MCP tool call
+   - JSON Schema for tool parameters
+
+2. **Prompt Templates (Optional)**
+   - `get_mcp_prompts()` - Return list of prompt templates
+   - Pre-defined templates for common tasks
+   - Default: empty list
+
+3. **Resource Providers (Optional)**
+   - `get_mcp_resources()` - Return list of data resources
+   - Agent-specific data sources
+   - Default: empty list
+
+4. **Server Metadata**
+   - `get_mcp_server_info()` - Return server name and version
+   - Default: "GAIA {ClassName}" v2.0.0
+
+5. **Error Handling**
+   - ValueError for unknown tools
+   - Clear error messages
+   - JSON-serializable responses
+
+### Non-Functional Requirements
+
+1. **Compatibility**
+   - MCP protocol compliance
+   - JSON serialization support
+   - Works with mcp_bridge
+
+2. **Flexibility**
+   - Abstract methods enforce implementation
+   - Optional methods have defaults
+   - Extensible for custom behavior
+
+3. **Simplicity**
+   - Clear interface
+   - Minimal required methods
+   - Easy to implement
+
+---
+
+## API Specification
+
+### File Location
+
+```
+src/gaia/agents/base/mcp_agent.py
+```
+
+### Public Interface
+
+```python
+from abc import abstractmethod
+from typing import Any, Dict, List
+from .agent import Agent
+
+class MCPAgent(Agent):
+    """
+    Base class for agents that support MCP.
+
+    Agents that inherit from MCPAgent can be exposed via MCP servers,
+    allowing external tools (like VSCode) to interact with them.
+
+    Usage:
+        class MyAgent(MCPAgent, Agent):
+            '''Agent exposed via MCP'''
+
+            def get_mcp_tool_definitions(self) -> List[Dict[str, Any]]:
+                return [...]
+
+            def execute_mcp_tool(self, tool_name: str, arguments: Dict) -> Dict:
+                ...
+
+    Example:
+        >>> class CodeAgent(MCPAgent, Agent):
+        ...     def get_mcp_tool_definitions(self):
+        ...         return [{
+        ...             "name": "create-file",
+        ...             "description": "Create a file",
+        ...             "inputSchema": {
+        ...                 "type": "object",
+        ...                 "properties": {
+        ...                     "path": {"type": "string"},
+        ...                     "content": {"type": "string"}
+        ...                 },
+        ...                 "required": ["path", "content"]
+        ...             }
+        ...         }]
+        ...
+        ...     def execute_mcp_tool(self, tool_name, arguments):
+        ...         if tool_name == "create-file":
+        ...             # Create file logic
+        ...             return {"status": "created"}
+        ...         raise ValueError(f"Unknown tool: {tool_name}")
+    """
+
+    @abstractmethod
+    def get_mcp_tool_definitions(self) -> List[Dict[str, Any]]:
+        """
+        Return MCP tool definitions for this agent.
+
+        Each tool definition should include:
+        - name: Tool name (lowercase, dashes allowed)
+        - description: What the tool does
+        - inputSchema: JSON schema for parameters
+
+        Returns:
+            List of tool definition dictionaries
+
+        Example:
+            >>> def get_mcp_tool_definitions(self):
+            ...     return [
+            ...         {
+            ...             "name": "search-code",
+            ...             "description": "Search for code patterns",
+            ...             "inputSchema": {
+            ...                 "type": "object",
+            ...                 "properties": {
+            ...                     "pattern": {
+            ...                         "type": "string",
+            ...                         "description": "Regex pattern to search"
+            ...                     },
+            ...                     "file_type": {
+            ...                         "type": "string",
+            ...                         "enum": ["py", "js", "ts"],
+            ...                         "description": "File type to search"
+            ...                     }
+            ...                 },
+            ...                 "required": ["pattern"]
+            ...             }
+            ...         }
+            ...     ]
+
+        Note:
+            - Tool names should use lowercase with dashes (e.g., "create-file")
+            - inputSchema must be valid JSON Schema
+            - All tools must be implemented in execute_mcp_tool()
+        """
+        pass
+
+    @abstractmethod
+    def execute_mcp_tool(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Execute an MCP tool call.
+
+        Args:
+            tool_name: Name of the tool to execute
+            arguments: Tool arguments from MCP client
+
+        Returns:
+            Result dictionary (will be JSON-serialized)
+
+        Raises:
+            ValueError: If tool_name is unknown
+
+        Example:
+            >>> def execute_mcp_tool(self, tool_name, arguments):
+            ...     if tool_name == "create-file":
+            ...         path = arguments["path"]
+            ...         content = arguments["content"]
+            ...         with open(path, "w") as f:
+            ...             f.write(content)
+            ...         return {
+            ...             "status": "created",
+            ...             "path": path,
+            ...             "size": len(content)
+            ...         }
+            ...     elif tool_name == "read-file":
+            ...         path = arguments["path"]
+            ...         with open(path) as f:
+            ...             content = f.read()
+            ...         return {
+            ...             "status": "success",
+            ...             "content": content
+            ...         }
+            ...     else:
+            ...         raise ValueError(f"Unknown tool: {tool_name}")
+
+        Note:
+            - Return values must be JSON-serializable
+            - Errors should be returned as {"error": "message"} or raise ValueError
+            - Tool execution should be synchronous
+        """
+        pass
+
+    def get_mcp_prompts(self) -> List[Dict[str, Any]]:
+        """
+        Optional: Return MCP prompts.
+
+        Prompts are pre-defined templates that clients can use.
+        Override this method if your agent provides prompts.
+
+        Returns:
+            List of prompt definitions (empty by default)
+
+        Example:
+            >>> def get_mcp_prompts(self):
+            ...     return [
+            ...         {
+            ...             "name": "analyze-code",
+            ...             "description": "Analyze code quality",
+            ...             "arguments": [
+            ...                 {
+            ...                     "name": "file_path",
+            ...                     "description": "Path to file",
+            ...                     "required": True
+            ...                 }
+            ...             ]
+            ...         }
+            ...     ]
+
+        Note:
+            Most agents don't need prompts - they're optional.
+            Prompts are typically used for common workflows.
+        """
+        return []
+
+    def get_mcp_resources(self) -> List[Dict[str, Any]]:
+        """
+        Optional: Return MCP resources.
+
+        Resources are data sources the agent can provide.
+        Override this method if your agent exposes resources.
+
+        Returns:
+            List of resource definitions (empty by default)
+
+        Example:
+            >>> def get_mcp_resources(self):
+            ...     return [
+            ...         {
+            ...             "uri": "project://status",
+            ...             "name": "Project Status",
+            ...             "description": "Current project status",
+            ...             "mimeType": "application/json"
+            ...         }
+            ...     ]
+
+        Note:
+            Most agents don't need resources - they're optional.
+            Resources are typically used for exposing agent state.
+        """
+        return []
+
+    def get_mcp_server_info(self) -> Dict[str, Any]:
+        """
+        Get MCP server metadata for this agent.
+
+        Returns:
+            Server info dictionary with name and version
+
+        Default:
+            {"name": "GAIA {ClassName}", "version": "2.0.0"}
+
+        Example:
+            >>> def get_mcp_server_info(self):
+            ...     return {
+            ...         "name": "GAIA Code Agent",
+            ...         "version": "2.1.0",
+            ...         "description": "Autonomous coding agent"
+            ...     }
+
+        Note:
+            Override to customize server metadata.
+        """
+        return {"name": f"GAIA {self.__class__.__name__}", "version": "2.0.0"}
+```
+
+---
+
+## Implementation Details
+
+### Tool Definition Format
+
+```python
+{
+    "name": "tool-name",           # Lowercase with dashes
+    "description": "What it does", # Clear description
+    "inputSchema": {               # JSON Schema
+        "type": "object",
+        "properties": {
+            "param1": {
+                "type": "string",
+                "description": "Parameter description"
+            },
+            "param2": {
+                "type": "integer",
+                "minimum": 0
+            }
+        },
+        "required": ["param1"]     # Required parameters
+    }
+}
+```
+
+### Tool Execution Pattern
+
+```python
+def execute_mcp_tool(self, tool_name: str, arguments: Dict) -> Dict:
+    # Dispatch based on tool name
+    if tool_name == "tool-1":
+        return self._execute_tool_1(**arguments)
+    elif tool_name == "tool-2":
+        return self._execute_tool_2(**arguments)
+    else:
+        raise ValueError(f"Unknown tool: {tool_name}")
+
+def _execute_tool_1(self, param1: str, param2: int) -> Dict:
+    """Helper method for tool execution."""
+    # Tool logic here
+    return {"status": "success", "result": ...}
+```
+
+### Multiple Inheritance Pattern
+
+```python
+# Single protocol (MCP only)
+class DockerAgent(MCPAgent, Agent):
+    def get_mcp_tool_definitions(self):
+        return [...]
+
+    def execute_mcp_tool(self, tool_name, arguments):
+        pass
+
+# Multiple protocols (MCP + API)
+class JiraAgent(MCPAgent, ApiAgent, Agent):
+    # MCP methods
+    def get_mcp_tool_definitions(self):
+        return [...]
+
+    def execute_mcp_tool(self, tool_name, arguments):
+        pass
+
+    # API methods
+    def get_model_id(self):
+        return "gaia-jira"
+
+# Order: MCPAgent, ApiAgent, then Agent
+```
+
+---
+
+## Testing Requirements
+
+### Unit Tests
+
+**File:** `tests/agents/test_mcp_agent.py`
+
+```python
+import pytest
+from gaia.agents.base import Agent, MCPAgent
+
+class TestMCPAgent(MCPAgent, Agent):
+    """Test agent for MCPAgent base class."""
+
+    def _get_system_prompt(self):
+        return "Test MCP agent"
+
+    def _create_console(self):
+        from gaia import SilentConsole
+        return SilentConsole()
+
+    def _register_tools(self):
+        pass
+
+    def get_mcp_tool_definitions(self):
+        return [
+            {
+                "name": "test-tool",
+                "description": "Test tool",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "param": {"type": "string"}
+                    },
+                    "required": ["param"]
+                }
+            }
+        ]
+
+    def execute_mcp_tool(self, tool_name, arguments):
+        if tool_name == "test-tool":
+            return {"result": arguments["param"].upper()}
+        raise ValueError(f"Unknown tool: {tool_name}")
+
+def test_mcp_agent_can_be_imported():
+    """Verify MCPAgent can be imported."""
+    from gaia.agents.base import MCPAgent
+    assert MCPAgent is not None
+
+def test_mcp_agent_is_abstract():
+    """Test MCPAgent requires implementation of abstract methods."""
+    with pytest.raises(TypeError):
+        # Cannot instantiate without implementing abstract methods
+        class IncompleteAgent(MCPAgent, Agent):
+            def _get_system_prompt(self):
+                return "Test"
+            def _create_console(self):
+                from gaia import SilentConsole
+                return SilentConsole()
+            def _register_tools(self):
+                pass
+            # Missing: get_mcp_tool_definitions, execute_mcp_tool
+
+        agent = IncompleteAgent(silent_mode=True)
+
+def test_get_mcp_tool_definitions():
+    """Test tool definitions retrieval."""
+    agent = TestMCPAgent(silent_mode=True)
+    tools = agent.get_mcp_tool_definitions()
+
+    assert isinstance(tools, list)
+    assert len(tools) == 1
+    assert tools[0]["name"] == "test-tool"
+    assert "inputSchema" in tools[0]
+
+def test_execute_mcp_tool():
+    """Test tool execution."""
+    agent = TestMCPAgent(silent_mode=True)
+
+    result = agent.execute_mcp_tool("test-tool", {"param": "hello"})
+
+    assert result["result"] == "HELLO"
+
+def test_execute_unknown_tool():
+    """Test unknown tool raises ValueError."""
+    agent = TestMCPAgent(silent_mode=True)
+
+    with pytest.raises(ValueError) as exc_info:
+        agent.execute_mcp_tool("nonexistent-tool", {})
+
+    assert "Unknown tool" in str(exc_info.value)
+
+def test_get_mcp_prompts_default():
+    """Test default prompts (empty)."""
+    agent = TestMCPAgent(silent_mode=True)
+    prompts = agent.get_mcp_prompts()
+
+    assert isinstance(prompts, list)
+    assert len(prompts) == 0
+
+def test_get_mcp_prompts_custom():
+    """Test custom prompts."""
+    class CustomAgent(TestMCPAgent):
+        def get_mcp_prompts(self):
+            return [
+                {
+                    "name": "custom-prompt",
+                    "description": "Custom prompt"
+                }
+            ]
+
+    agent = CustomAgent(silent_mode=True)
+    prompts = agent.get_mcp_prompts()
+
+    assert len(prompts) == 1
+    assert prompts[0]["name"] == "custom-prompt"
+
+def test_get_mcp_resources_default():
+    """Test default resources (empty)."""
+    agent = TestMCPAgent(silent_mode=True)
+    resources = agent.get_mcp_resources()
+
+    assert isinstance(resources, list)
+    assert len(resources) == 0
+
+def test_get_mcp_resources_custom():
+    """Test custom resources."""
+    class CustomAgent(TestMCPAgent):
+        def get_mcp_resources(self):
+            return [
+                {
+                    "uri": "test://resource",
+                    "name": "Test Resource"
+                }
+            ]
+
+    agent = CustomAgent(silent_mode=True)
+    resources = agent.get_mcp_resources()
+
+    assert len(resources) == 1
+    assert resources[0]["uri"] == "test://resource"
+
+def test_get_mcp_server_info_default():
+    """Test default server info."""
+    agent = TestMCPAgent(silent_mode=True)
+    info = agent.get_mcp_server_info()
+
+    assert "name" in info
+    assert "version" in info
+    assert "TestMCPAgent" in info["name"]
+    assert info["version"] == "2.0.0"
+
+def test_get_mcp_server_info_custom():
+    """Test custom server info."""
+    class CustomAgent(TestMCPAgent):
+        def get_mcp_server_info(self):
+            return {
+                "name": "Custom MCP Server",
+                "version": "3.0.0",
+                "description": "Custom server"
+            }
+
+    agent = CustomAgent(silent_mode=True)
+    info = agent.get_mcp_server_info()
+
+    assert info["name"] == "Custom MCP Server"
+    assert info["version"] == "3.0.0"
+    assert info["description"] == "Custom server"
+
+def test_multiple_tools():
+    """Test agent with multiple tools."""
+    class MultiToolAgent(MCPAgent, Agent):
+        def _get_system_prompt(self):
+            return "Multi-tool agent"
+
+        def _create_console(self):
+            from gaia import SilentConsole
+            return SilentConsole()
+
+        def _register_tools(self):
+            pass
+
+        def get_mcp_tool_definitions(self):
+            return [
+                {"name": "tool-1", "description": "Tool 1", "inputSchema": {}},
+                {"name": "tool-2", "description": "Tool 2", "inputSchema": {}},
+                {"name": "tool-3", "description": "Tool 3", "inputSchema": {}},
+            ]
+
+        def execute_mcp_tool(self, tool_name, arguments):
+            if tool_name in ["tool-1", "tool-2", "tool-3"]:
+                return {"tool": tool_name}
+            raise ValueError(f"Unknown tool: {tool_name}")
+
+    agent = MultiToolAgent(silent_mode=True)
+    tools = agent.get_mcp_tool_definitions()
+
+    assert len(tools) == 3
+    assert agent.execute_mcp_tool("tool-1", {})["tool"] == "tool-1"
+    assert agent.execute_mcp_tool("tool-2", {})["tool"] == "tool-2"
+    assert agent.execute_mcp_tool("tool-3", {})["tool"] == "tool-3"
+
+def test_inheritance_with_api_agent():
+    """Test multiple inheritance with ApiAgent."""
+    from gaia.agents.base import ApiAgent
+
+    class DualAgent(MCPAgent, ApiAgent, Agent):
+        def _get_system_prompt(self):
+            return "Dual agent"
+
+        def _create_console(self):
+            from gaia import SilentConsole
+            return SilentConsole()
+
+        def _register_tools(self):
+            pass
+
+        def get_mcp_tool_definitions(self):
+            return [{"name": "test", "inputSchema": {}}]
+
+        def execute_mcp_tool(self, tool_name, arguments):
+            return {"status": "ok"}
+
+    agent = DualAgent(silent_mode=True)
+
+    assert isinstance(agent, MCPAgent)
+    assert isinstance(agent, ApiAgent)
+    assert isinstance(agent, Agent)
+
+    # MCP methods work
+    tools = agent.get_mcp_tool_definitions()
+    assert len(tools) > 0
+
+    # API methods work
+    model_id = agent.get_model_id()
+    assert isinstance(model_id, str)
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Basic MCP Agent
+
+```python
+from gaia.agents.base import Agent, MCPAgent
+from typing import List, Dict, Any
+
+class FileAgent(MCPAgent, Agent):
+    """Agent for file operations via MCP."""
+
+    def _get_system_prompt(self) -> str:
+        return "You are a file management agent."
+
+    def _create_console(self):
+        from gaia import AgentConsole
+        return AgentConsole()
+
+    def _register_tools(self):
+        pass
+
+    def get_mcp_tool_definitions(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "name": "read-file",
+                "description": "Read a file",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"}
+                    },
+                    "required": ["path"]
+                }
+            },
+            {
+                "name": "write-file",
+                "description": "Write to a file",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"}
+                    },
+                    "required": ["path", "content"]
+                }
+            }
+        ]
+
+    def execute_mcp_tool(self, tool_name: str, arguments: Dict) -> Dict:
+        if tool_name == "read-file":
+            with open(arguments["path"]) as f:
+                return {"content": f.read()}
+
+        elif tool_name == "write-file":
+            with open(arguments["path"], "w") as f:
+                f.write(arguments["content"])
+            return {"status": "written"}
+
+        else:
+            raise ValueError(f"Unknown tool: {tool_name}")
+```
+
+### Example 2: Agent with Prompts and Resources
+
+```python
+from gaia.agents.base import Agent, MCPAgent
+from typing import List, Dict, Any
+
+class ProjectAgent(MCPAgent, Agent):
+    """Agent with prompts and resources."""
+
+    def _get_system_prompt(self) -> str:
+        return "You are a project management agent."
+
+    def _create_console(self):
+        from gaia import AgentConsole
+        return AgentConsole()
+
+    def _register_tools(self):
+        pass
+
+    def get_mcp_tool_definitions(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "name": "get-status",
+                "description": "Get project status",
+                "inputSchema": {"type": "object", "properties": {}}
+            }
+        ]
+
+    def execute_mcp_tool(self, tool_name: str, arguments: Dict) -> Dict:
+        if tool_name == "get-status":
+            return {
+                "status": "active",
+                "tasks": 42,
+                "completed": 30
+            }
+        raise ValueError(f"Unknown tool: {tool_name}")
+
+    def get_mcp_prompts(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "name": "daily-standup",
+                "description": "Generate daily standup report",
+                "arguments": []
+            }
+        ]
+
+    def get_mcp_resources(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "uri": "project://dashboard",
+                "name": "Project Dashboard",
+                "description": "Current project metrics",
+                "mimeType": "application/json"
+            }
+        ]
+```
+
+### Example 3: Multi-Protocol Agent
+
+```python
+from gaia.agents.base import Agent, MCPAgent, ApiAgent
+from typing import List, Dict, Any
+
+class CodeAgent(MCPAgent, ApiAgent, Agent):
+    """Code agent exposed via MCP and OpenAI API."""
+
+    def _get_system_prompt(self) -> str:
+        return "You are an autonomous coding agent."
+
+    def _create_console(self):
+        from gaia import AgentConsole
+        return AgentConsole()
+
+    def _register_tools(self):
+        pass
+
+    # MCP methods
+    def get_mcp_tool_definitions(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "name": "analyze-code",
+                "description": "Analyze code quality",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string"}
+                    },
+                    "required": ["file_path"]
+                }
+            }
+        ]
+
+    def execute_mcp_tool(self, tool_name: str, arguments: Dict) -> Dict:
+        if tool_name == "analyze-code":
+            # Analysis logic
+            return {
+                "quality_score": 85,
+                "issues": 3,
+                "suggestions": ["Add type hints", "Add docstrings"]
+            }
+        raise ValueError(f"Unknown tool: {tool_name}")
+
+    # API methods
+    def get_model_id(self) -> str:
+        return "gaia-code"
+
+    def get_model_info(self) -> Dict[str, Any]:
+        return {
+            "max_input_tokens": 32768,
+            "max_output_tokens": 8192,
+            "description": "Autonomous Python coding agent"
+        }
+
+# Can be used via:
+# 1. MCP: VSCode extension -> execute_mcp_tool("analyze-code", ...)
+# 2. API: POST /v1/chat/completions with model="gaia-code"
+```
+
+---
+
+## Documentation Updates Required
+
+### SDK.md
+
+Add to Agent Section:
+
+```markdown
+### MCPAgent Base Class
+
+**Import:** `from gaia.agents.base import MCPAgent`
+
+**Purpose:** Base class for agents exposed via Model Context Protocol (MCP).
+
+**Features:**
+- Tool definition and execution
+- Optional prompts and resources
+- Server metadata
+- VSCode integration
+
+**Quick Start:**
+```python
+from gaia.agents.base import Agent, MCPAgent
+
+class MyAgent(MCPAgent, Agent):
+    def get_mcp_tool_definitions(self):
+        return [{
+            "name": "my-tool",
+            "description": "Does something",
+            "inputSchema": {...}
+        }]
+
+    def execute_mcp_tool(self, tool_name, arguments):
+        if tool_name == "my-tool":
+            return {"result": ...}
+        raise ValueError(f"Unknown tool: {tool_name}")
+```
+
+---
+
+*MCPAgent Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

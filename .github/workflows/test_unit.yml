@@ -1,0 +1,82 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Fast unit tests that don't require Lemonade server or external dependencies
+# These tests run first to provide quick feedback on core SDK components
+# Platform: Ubuntu (pure Python tests, no platform-specific code)
+
+name: Unit Tests
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system pytest pytest-cov
+          uv pip install --system -e ".[api]"
+
+      - name: Run unit tests
+        run: |
+          echo "=== Running Unit Tests ==="
+          echo "These are fast tests for core SDK components"
+          echo ""
+          pytest tests/unit/ -v --tb=short --cov=src/gaia --cov-report=term-missing
+
+      - name: Run DatabaseMixin integration tests
+        run: |
+          echo "=== Running DatabaseMixin Integration Tests ==="
+          echo "Testing DatabaseMixin with Agent class"
+          echo ""
+          pytest tests/integration/test_database_mixin_integration.py -v --tb=short
+
+      - name: Run DatabaseAgent integration tests
+        run: |
+          echo "=== Running DatabaseAgent Integration Tests ==="
+          echo "Testing DatabaseAgent with auto-registered tools"
+          echo ""
+          pytest tests/integration/test_database_agent.py -v --tb=short
+
+      - name: Unit test summary
+        if: always()
+        run: |
+          echo ""
+          echo "=== Test Coverage ==="
+          echo "Unit Tests:"
+          echo "  - DatabaseMixin: SQLite database access for agents"
+          echo "  - FileWatcher: File system monitoring utilities"
+          echo "  - Testing Utilities: MockLLMProvider, MockVLMClient, fixtures"
+          echo "  - EMR Agent: Medical intake form processing"
+          echo "  - EMR CLI: Command-line interface for EMR agent"
+          echo "  - LLM Client: Language model client utilities"
+          echo "  - ASR: Automatic speech recognition utilities"
+          echo "  - TTS: Text-to-speech utilities"
+          echo ""
+          echo "Integration Tests:"
+          echo "  - DatabaseMixin + Agent: Full agent lifecycle with database"
+          echo "  - DatabaseAgent: Auto-registered database tools"

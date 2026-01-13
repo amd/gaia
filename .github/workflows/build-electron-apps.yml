@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 name: Build Electron Apps
@@ -12,13 +12,13 @@ on:
       has_apps:
         description: "Whether any apps were discovered"
         value: ${{ jobs.discover-apps.outputs.has_apps }}
-  workflow_dispatch:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
-    paths:
-      - 'src/gaia/apps/**/webui/**'
-      - '.github/workflows/build-electron-apps.yml'
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -26,11 +26,15 @@ permissions:
 jobs:
   discover-apps:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     outputs:
       matrix: ${{ steps.discover.outputs.matrix }}
       has_apps: ${{ steps.discover.outputs.has_apps }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
 
       - name: Discover Electron apps
         id: discover
@@ -85,7 +89,7 @@ jobs:
         app: ${{ fromJson(needs.discover-apps.outputs.matrix).app }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Setup Node.js
         uses: actions/setup-node@v6

@@ -7,7 +7,7 @@
         "gaia.mcp.mcp_bridge"
       ],
       "env": {
-        "LEMONADE_BASE_URL": "http://localhost:8000/api/v0",
+        "LEMONADE_BASE_URL": "http://localhost:8000/api/v1",
         "GAIA_MCP_HOST": "localhost",
         "GAIA_MCP_PORT": "8765"
       },

@@ -1,0 +1,56 @@
+# Migration Guide
+
+<Badge text="development" color="orange" />
+
+## From Internal Agent to External Package
+
+**Before** (internal GAIA agent):
+```python
+# src/gaia/agents/my_agent/agent.py
+from gaia.agents.base.agent import Agent
+
+class MyAgent(Agent):
+    # Implementation
+    pass
+```
+
+**After** (external package):
+```python
+# my-gaia-agent/src/my_agent/agent.py
+from gaia.agents.base.agent import Agent
+
+class MyAgent(Agent):
+    # Same implementation
+    pass
+
+# pyproject.toml
+[project.entry-points."gaia.agents"]
+my-agent = "my_agent.agent:MyAgent"
+```
+
+Installation:
+```bash
+pip install my-gaia-agent
+# Agent auto-discovered by GAIA!
+```
+
+---
+
+## Related Topics
+
+- [Core Agent System](./core/agent-system) - Agent architecture
+- [Application Packaging](./packaging) - Package agents for distribution
+- [Best Practices](./best-practices) - Development guidelines
+- [Developer Guide](/reference/dev) - Development environment setup
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

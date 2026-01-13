@@ -1,0 +1,305 @@
+---
+title: FAQ
+description: Frequently asked questions about GAIA installation, setup, and usage
+---
+
+## Installation and Setup
+
+<AccordionGroup>
+  <Accordion title="Can I reinstall GAIA?" icon="rotate">
+    Yes, you can reinstall GAIA. The installer provides an option to remove your existing installation before reinstalling.
+  </Accordion>
+
+  <Accordion title="How do I run GAIA in silent/headless mode?" icon="terminal">
+    Run the installer from command-line with parameters for CI/CD or silent installations:
+
+    ```bash
+    gaia-windows-setup.exe /S
+    ```
+
+    **Available parameters:**
+    - `/S` - Silent installation (no UI)
+    - `/D=<path>` - Set installation directory (must be last parameter)
+  </Accordion>
+
+  <Accordion title="What are the system requirements?" icon="computer">
+    GAIA is designed for AMD Ryzen AI systems:
+
+    | Component | Requirement |
+    |-----------|-------------|
+    | **Processor** | AMD Ryzen AI 300-series (for optimal performance) |
+    | **RAM** | 16GB minimum, 64GB recommended |
+    | **Storage** | 20GB free space |
+    | **OS** | Windows 11 Pro 24H2 or Ubuntu 22.04+ |
+
+    **Driver Requirements:**
+    - Radeon iGPU: `32.0.22029.1019` or later
+    - NPU: `32.0.203.314` or later
+  </Accordion>
+
+  <Accordion title="What platforms does GAIA support?" icon="desktop">
+    - **Windows 11:** ✅ Fully supported with complete UI and CLI functionality
+    - **Linux (Ubuntu/Debian):** ✅ Fully supported with complete UI and CLI functionality
+  </Accordion>
+
+  <Accordion title="How do I install additional models?" icon="download">
+    Additional models can be installed through Lemonade Server's model management interface:
+
+    - **System Tray Icon:** Access the Lemonade model manager from the system tray
+    - **Web UI:** Manage models through the Lemonade web interface
+
+    [→ Installing Additional Models](/reference/features#installing-additional-models)
+
+    [→ Lemonade Model Management](https://lemonade-server.ai/docs/server/server_models/)
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Demo and Capabilities
+
+<Info>
+Discover the capabilities of Ryzen AI with GAIA - an innovative generative AI application that runs private, local LLMs on the Neural Processing Unit (NPU).
+</Info>
+
+<AccordionGroup>
+  <Accordion title="What is GAIA, and how does it integrate with Ryzen AI?" icon="microchip">
+    GAIA is AMD's generative AI application that runs local, private LLMs on Ryzen AI's NPU hardware. It leverages the power of the NPU for faster, more efficient processing, allowing users to keep their data local without relying on cloud infrastructure.
+
+    GAIA uses the [Lemonade Server](https://lemonade-server.ai/) to load and run LLM inference optimally on AMD hardware.
+
+    **Key Benefits:**
+    - Local execution (no cloud dependency)
+    - Enhanced privacy
+    - Optimized for AMD NPU hardware
+    - Lower power consumption
+  </Accordion>
+
+  <Accordion title="How does the agent RAG pipeline work?" icon="brain">
+    The RAG (Retrieval-Augmented Generation) pipeline combines an LLM with a knowledge base:
+
+    **Components:**
+    - **Agent:** Capable of retrieving relevant information
+    - **Reasoning:** Plans and executes multi-step tasks
+    - **Tool Use:** Accesses external tools and APIs
+    - **Interactive Chat:** Real-time conversation interface
+
+    This enables more accurate and contextually aware responses by grounding the LLM in your specific documents and data.
+  </Accordion>
+
+  <Accordion title="What LLMs are supported?" icon="list">
+    GAIA supports various local LLMs optimized for Ryzen AI NPU hardware, including:
+
+    **Hybrid Mode (NPU + iGPU) - Ryzen AI 300 series:**
+    - Phi-3.5 Mini Instruct
+    - Phi-3 Mini Instruct
+    - Llama-2 7B Chat
+    - Llama-3.2 1B/3B Instruct
+    - Qwen 1.5 7B Chat
+    - Mistral 7B Instruct
+
+    These models are tailored for different use cases like Q&A, summarization, and complex reasoning tasks.
+
+    [→ Full Model List](/reference/features#supported-llms)
+  </Accordion>
+
+  <Accordion title="How does the NPU enhance LLM performance?" icon="gauge-high">
+    The NPU (Neural Processing Unit) in Ryzen AI is specialized for AI workloads, specifically the matrix multiplications (GEMMs) in the model:
+
+    **Benefits:**
+    - **Faster Inference:** Optimized hardware acceleration
+    - **Lower Power:** More efficient than CPU/iGPU
+    - **System Offload:** Reduces load on main processor
+
+    This results in significant performance gains for local AI processing.
+  </Accordion>
+
+  <Accordion title="Can this scale to larger LLMs or enterprise applications?" icon="chart-line">
+    Absolutely. While GAIA showcases local, private implementation:
+
+    - **Architecture scales** to larger models
+    - **NPU optimization** ensures efficient scaling
+    - **Enterprise deployments** supported
+    - **Hybrid cloud/local** configurations possible
+
+    The same architecture works for both small-scale and enterprise-level deployments.
+  </Accordion>
+
+  <Accordion title="What are the benefits of running LLMs locally on the NPU?" icon="shield-check">
+    **Privacy:**
+    - No data leaves your machine
+    - Complete control over sensitive information
+
+    **Performance:**
+    - Reduced latency (no cloud communication)
+    - Faster response times with NPU acceleration
+
+    **Cost:**
+    - No ongoing cloud API costs
+    - Lower power consumption
+  </Accordion>
+
+  <Accordion title="NPU vs iGPU: What's the difference?" icon="scale-balanced">
+    **NPU (Neural Processing Unit):**
+    - Optimized specifically for AI inference
+    - Lower power consumption
+    - Faster for LLM workloads
+    - AI-focused architecture
+
+    **iGPU (Integrated GPU):**
+    - General-purpose graphics/compute
+    - Higher power consumption for AI
+    - Slower inference for LLMs
+    - Graphics-focused architecture
+
+    The NPU provides better efficiency and speed for generative AI tasks.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Demo Components and Workflow
+
+<Info>
+The GAIA demo consists of two main components working together to provide powerful local AI capabilities.
+</Info>
+
+### System Architecture
+
+**1. GAIA Backend**
+
+Powered by the Ryzen AI platform through Lemonade Server:
+
+- **NPU/iGPU Acceleration:** Leverages Ryzen AI hardware
+- **Multiple Models:** Supports various LLMs including Llama-3.2-3B-Instruct-Hybrid
+- **Agent System:** Specialized tasks and workflows
+- **WebSocket Streaming:** Real-time response delivery
+- **Dual Interfaces:** Both CLI and GUI available
+
+**2. Agent Interface**
+
+Works with the [Lemonade SDK](https://github.com/lemonade-sdk/lemonade):
+
+- **Repository Vectorization:** Fetches and indexes code repositories
+- **Local Vector Storage:** Fast, local similarity search
+- **Fast Indexing:** ~10 seconds for 40,000 lines of code (typical laptop)
+- **Ready for Queries:** Instant access to indexed knowledge
+
+### Query Process
+
+<Steps>
+  <Step title="User Input">
+    Query sent to GAIA (e.g., "How do I install dependencies?")
+  </Step>
+
+  <Step title="Embedding Generation">
+    For RAG queries, input transformed into embeddings
+  </Step>
+
+  <Step title="Context Retrieval">
+    Relevant content retrieved from local repositories/documents
+  </Step>
+
+  <Step title="LLM Processing">
+    Context passed to LLM via Lemonade Server for generation
+  </Step>
+
+  <Step title="Response Streaming">
+    Generated response streamed back in real-time through GAIA interfaces
+  </Step>
+</Steps>
+
+---
+
+## Use Cases and Applications
+
+<AccordionGroup>
+  <Accordion title="What applications or industries could benefit?" icon="briefcase">
+    GAIA's local AI capabilities are ideal for industries requiring high performance and privacy:
+
+    **Healthcare:**
+    - Patient data privacy compliance
+    - Medical record analysis
+    - Clinical decision support
+
+    **Finance:**
+    - Sensitive financial data processing
+    - Compliance and audit trails
+    - Risk analysis
+
+    **Enterprise:**
+    - Internal document Q&A
+    - Code analysis and generation
+    - Knowledge management
+
+    **Content Creation:**
+    - Writing assistance
+    - Code generation
+    - Document summarization
+
+    **Customer Service:**
+    - Automated support systems
+    - Intent classification
+    - Response generation
+  </Accordion>
+
+  <Accordion title="How does this address data privacy concerns?" icon="lock">
+    GAIA emphasizes running LLMs locally, meaning:
+
+    - **All data remains on your device**
+    - **No cloud transmission** of sensitive information
+    - **Complete control** over data and models
+    - **Compliance-friendly** for regulated industries
+    - **High-performance** AI without privacy trade-offs
+
+    This eliminates the need to send sensitive information to the cloud while still delivering powerful AI capabilities.
+  </Accordion>
+
+  <Accordion title="What toolset do I need to replicate this?" icon="toolbox">
+    To run GAIA, you need:
+
+    **Hardware:**
+    - Ryzen AI processor (300-series recommended)
+
+    **Software:**
+    - [Lemonade Server](https://lemonade-server.ai/) for managing LLMs
+    - GAIA framework (available on Windows and Linux)
+
+    **Interfaces:**
+    - Command-line interface (CLI) for scripting and automation
+    - Graphical user interface (GUI) for interactive use
+
+    Both Windows and Linux platforms are fully supported.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Development Guide" icon="wrench" href="/reference/dev">
+    Setup and installation instructions
+  </Card>
+  <Card title="Features" icon="sparkles" href="/reference/features">
+    Complete feature overview
+  </Card>
+  <Card title="CLI Reference" icon="terminal" href="/reference/cli">
+    Command-line interface guide
+  </Card>
+  <Card title="Supported Models" icon="list" href="/reference/features#supported-llms">
+    Available LLM models
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
 Main application entry point for the Blender Agent.
@@ -84,7 +84,7 @@ def run_examples(agent, selected_example=None, print_result=True):
         if example.get("use_interactive_scene", False):
             agent.create_interactive_scene(example["query"])
         else:
-            agent.process_query(example["query"], output_to_file=True)
+            agent.process_query(example["query"], trace=True)
 
         agent.display_result(print_result=print_result)
 

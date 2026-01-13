@@ -1,0 +1,710 @@
+---
+title: "Part 3: Deployment & Optimization"
+description: "Deploy as API/CLI, optimize performance, and master advanced patterns"
+icon: "graduation-cap"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/chat/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/chat/sdk.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
+</Info>
+
+<Badge text="development" color="orange" />
+
+<Note>
+**This is Part 3 of 3.** Complete Part 1 and Part 2 first: [Part 1](./part-1-getting-started) | [Part 2](./part-2-advanced-features)
+</Note>
+
+- **Time to complete:** 15-20 minutes
+- **What you'll learn:** Agent intelligence, advanced patterns, production deployment, and performance optimization
+
+---
+
+## Understanding the Agent's Intelligence
+
+### How the Agent "Thinks"
+
+When you ask a question, the agent goes through a reasoning loop. Here's a real example:
+
+**User:** *"Find the oil manual on my drive and tell me the vision statement"*
+
+**Agent's Internal Reasoning** (this is what the LLM decides):
+
+```json
+// Step 1: Analyze what's needed
+{
+  "thought": "User wants oil manual. Need to find it first.",
+  "goal": "Locate oil manual on drive",
+  "tool": "search_file",
+  "tool_args": {"file_pattern": "oil manual"}
+}
+
+// Result: Found "Oil-Gas-Regulatory-Manual.pdf"
+
+// Step 2: Index it
+{
+  "thought": "Found the file. Need to index before querying.",
+  "goal": "Index the oil manual",
+  "tool": "index_document",
+  "tool_args": {"file_path": "C:/Users/user/Documents/Oil-Gas-Regulatory-Manual.pdf"}
+}
+
+// Result: Successfully indexed, 150 chunks created
+
+// Step 3: Search for vision
+{
+  "thought": "Document indexed. Now search for vision statement.",
+  "goal": "Find vision statement in oil manual",
+  "tool": "query_specific_file",
+  "tool_args": {
+    "file_path": "C:/Users/user/Documents/Oil-Gas-Regulatory-Manual.pdf",
+    "query": "vision statement"
+  }
+}
+
+// Result: Retrieved 5 chunks, top score: 0.92
+// Chunk: "The vision is to be recognized as..."
+
+// Step 4: Formulate answer
+{
+  "thought": "I have the vision statement from the document",
+  "goal": "Provide answer with citation",
+  "answer": "According to the Oil & Gas Regulatory Manual, the vision is to be recognized as the leading regulatory authority in energy sector governance... (Page 3)"
+}
+```
+
+**Note:** This orchestration is handled by the LLM at runtime based on:
+1. System prompt (defines agent behavior)
+2. Tool schemas (available functions and their parameters)
+3. User input (the query to process)
+
+---
+
+### Search Key Generation (Smart Retrieval)
+
+The agent generates multiple variations of your query to improve retrieval.
+
+**User asks:** *"What is the vision of the oil & gas regulator?"*
+
+**Agent generates multiple search keys:**
+1. Original: *"What is the vision of the oil & gas regulator?"*
+2. Keywords: *"vision oil gas regulator"*
+3. Reformulated: *"oil gas regulator vision definition"*
+4. Alternate: *"oil gas regulator vision explanation"*
+
+**Then searches with ALL of them and combines results!**
+
+```python
+# This happens in _generate_search_keys method
+def _generate_search_keys(self, query: str) -> List[str]:
+    keys = [query]  # Original
+
+    # Extract keywords (remove stop words)
+    words = query.lower().split()
+    keywords = [w for w in words if w not in STOP_WORDS and len(w) > 2]
+    keys.append(" ".join(keywords))
+
+    # Add reformulations
+    if query.lower().startswith("what is"):
+        topic = query[8:].strip("?").strip()
+        keys.append(f"{topic} definition")
+        keys.append(f"{topic} explanation")
+
+    return keys
+```
+
+**Impact on retrieval:**
+- Increases recall by matching different phrasings
+- Compensates for keyword mismatches
+- Trade-off: More compute (multiple searches) for better coverage
+
+---
+
+## Advanced Patterns
+
+### Pattern 1: Multi-Document Synthesis
+
+<Tabs>
+  <Tab title="Example">
+    ```python
+    agent.process_query(
+        "Compare safety protocols in oil manual vs gas manual. "
+        "What are the key differences?"
+    )
+    ```
+  </Tab>
+
+  <Tab title="Execution">
+    ```
+    Agent reasoning:
+    1. Query both documents for "safety protocols"
+    2. Extract relevant sections from each
+    3. Synthesize comparative analysis
+    4. Cite both sources in response
+    ```
+  </Tab>
+
+  <Tab title="Implementation">
+    The `query_documents` tool searches across ALL indexed documents by default. The LLM receives chunks from multiple sources and synthesizes them.
+
+    For more control:
+    ```python
+    # Query specific files
+    result = agent.execute_tool("query_specific_file", {
+        "file_path": "oil-manual.pdf",
+        "query": "safety protocols"
+    })
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+### Pattern 2: Contextual Follow-ups
+
+<Tabs>
+  <Tab title="Example">
+    ```python
+    # Initial query
+    agent.process_query("What are the installation requirements?")
+    # Response: "Python 3.10+, 8GB RAM, 50GB disk..."
+
+    # Follow-up (implicit context)
+    agent.process_query("What about for production?")
+    # Agent understands context: still discussing installation
+    # Retrieves production-specific requirements
+    ```
+  </Tab>
+
+  <Tab title="How It Works">
+    The agent's `process_query` maintains conversation state:
+    ```python
+    # Conversation history is maintained
+    self.conversation_history = [
+        {"role": "user", "content": "What are install requirements?"},
+        {"role": "assistant", "content": "Python 3.10+..."},
+        {"role": "user", "content": "What about for production?"}
+    ]
+    # LLM receives full history as context
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+### Pattern 3: Progressive Discovery
+
+<Tabs>
+  <Tab title="Example">
+    ```python
+    # Query 1
+    agent.process_query("What documents do you have about AI?")
+    # Agent: Searches filesystem, finds AI PDFs, indexes them
+
+    # Query 2
+    agent.process_query("Tell me about neural networks")
+    # Agent: Searches newly-indexed AI documents
+
+    # Query 3
+    agent.process_query("Are there any documents about transformers?")
+    # Agent: Searches again, finds more, indexes on-demand
+    ```
+  </Tab>
+
+  <Tab title="Pattern">
+    **Lazy indexing strategy:**
+    - Don't index everything upfront
+    - Let user queries drive discovery
+    - Index documents as they're needed
+    - Builds index progressively
+
+    **Benefits:**
+    - Faster startup
+    - Lower initial memory usage
+    - User-driven relevance
+  </Tab>
+</Tabs>
+
+---
+
+## Deployment Options
+
+### As a Web API
+
+<Tabs>
+  <Tab title="Server">
+    ```python title="api_server.py"
+    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+    from gaia.api.openai_server import create_app
+    from gaia.api.agent_registry import registry
+    import uvicorn
+
+    # Configure agent
+    config = ChatAgentConfig(
+        watch_directories=["./company_docs"],
+        silent_mode=True  # Disable console output for API
+    )
+
+    agent = ChatAgent(config)
+
+    # Create OpenAI-compatible API
+    app = create_app()
+
+    # Register agent
+    registry.register("doc-qa", lambda: agent)
+
+    # Run server
+    if __name__ == "__main__":
+        uvicorn.run(app, host="0.0.0.0", port=8080)
+    ```
+  </Tab>
+
+  <Tab title="Client">
+    ```python title="client.py"
+    from openai import OpenAI
+
+    # Connect to your agent API
+    client = OpenAI(
+        base_url="http://localhost:8080/v1",
+        api_key="dummy"  # Not validated in local mode
+    )
+
+    # Query the agent
+    response = client.chat.completions.create(
+        model="doc-qa",
+        messages=[
+            {"role": "user", "content": "What's in the manual?"}
+        ]
+    )
+
+    print(response.choices[0].message.content)
+    ```
+  </Tab>
+
+  <Tab title="Deploy">
+    ```bash
+    # Production with gunicorn
+    gunicorn api_server:app \
+        --workers 4 \
+        --bind 0.0.0.0:8080 \
+        --timeout 120
+
+    # With Docker (on AI PC)
+    docker build -t doc-qa-agent .
+    docker run -p 8080:8080 doc-qa-agent
+    ```
+
+    <Note>
+    **Deployment on AI PCs:** The agent runs entirely locally on Ryzen AI hardware. No cloud dependencies, ensuring data privacy and low latency.
+    </Note>
+  </Tab>
+</Tabs>
+
+---
+
+### As a CLI Tool
+
+<Tabs>
+  <Tab title="Implementation">
+    ```python title="cli.py"
+    #!/usr/bin/env python3
+    import sys
+    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+    def main():
+        if len(sys.argv) < 2:
+            print("Usage: doc-qa <question>")
+            print("       doc-qa --interactive")
+            sys.exit(1)
+
+        config = ChatAgentConfig(
+            watch_directories=["./documents"],
+            silent_mode=False
+        )
+        agent = ChatAgent(config)
+
+        if sys.argv[1] == "--interactive":
+            # Interactive mode
+            while True:
+                question = input("You: ")
+                if question.lower() in ['quit', 'exit']:
+                    break
+                result = agent.process_query(question)
+                print(f"Agent: {result.get('answer')}\n")
+        else:
+            # One-shot query
+            question = " ".join(sys.argv[1:])
+            result = agent.process_query(question)
+            print(result.get('answer'))
+
+    if __name__ == "__main__":
+        main()
+    ```
+  </Tab>
+
+  <Tab title="Package Config">
+    ```toml title="pyproject.toml"
+    [project]
+    name = "doc-qa-agent"
+    version = "1.0.0"
+    dependencies = ["amd-gaia>=0.14.0"]
+
+    [project.scripts]
+    doc-qa = "my_agent.cli:main"
+    ```
+
+    Install with: `uv pip install -e .`
+  </Tab>
+
+  <Tab title="Usage">
+    ```bash
+    # One-shot query
+    doc-qa "What does the manual say about installation?"
+
+    # Interactive mode
+    doc-qa --interactive
+
+    # From anywhere after install
+    cd ~/projects
+    doc-qa "Search my indexed docs for API examples"
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="No documents indexed" icon="circle-xmark">
+    **Symptom:** Agent responds with "No documents indexed"
+
+    **Debugging:**
+    ```python
+    # Verify RAG dependencies
+    uv pip install -e ".[rag]"
+
+    # Check document exists
+    import os
+    print(os.path.exists("./manual.pdf"))  # Should be True
+
+    # Check indexed state
+    print(f"Indexed: {agent.indexed_files}")
+    print(f"RAG files: {agent.rag.indexed_files}")
+    ```
+
+    **Common causes:**
+    - Missing RAG dependencies (`uv pip install -e ".[rag]"`)
+    - Incorrect file path
+    - File not readable
+  </Accordion>
+
+  <Accordion title="Poor retrieval quality" icon="magnifying-glass">
+    **Symptom:** Agent returns irrelevant information
+
+    **Tuning options:**
+    ```python
+    # Retrieve more chunks
+    config = ChatAgentConfig(max_chunks=10)
+
+    # Use semantic chunking (slower, more accurate)
+    config = ChatAgentConfig(use_llm_chunking=True)
+
+    # Larger chunks for more context
+    config = ChatAgentConfig(chunk_size=800)
+
+    # Debug what's being retrieved
+    config = ChatAgentConfig(debug=True)
+    ```
+
+    **Check retrieval scores:**
+    ```python
+    response = agent.rag.query("your question")
+    print(f"Scores: {response.chunk_scores}")
+    # Scores < 0.5 indicate weak matches
+    ```
+  </Accordion>
+
+  <Accordion title="File watching not working" icon="eye-slash">
+    **Symptom:** New files not auto-indexed
+
+    **Solution:**
+    ```bash
+    # Install watchdog dependency
+    uv pip install "watchdog>=2.1.0"
+    ```
+
+    **Verify:**
+    ```python
+    # Check watchers are active
+    print(f"Watching: {agent.watch_directories}")
+    print(f"Observers: {len(agent.observers)}")  # Should be > 0
+
+    # Check file handler telemetry
+    if agent.file_handlers:
+        telemetry = agent.file_handlers[0].get_telemetry()
+        print(f"Events: {telemetry}")
+    ```
+  </Accordion>
+
+  <Accordion title="Slow indexing performance" icon="hourglass">
+    **Symptom:** Indexing takes excessive time
+
+    **Optimizations:**
+    ```python
+    # Smaller chunks = faster indexing
+    config = ChatAgentConfig(chunk_size=300)
+
+    # Disable LLM chunking (use fast heuristic)
+    config = ChatAgentConfig(use_llm_chunking=False)
+
+    # Index incrementally, not all at once
+    # Let file watching handle gradual indexing
+    ```
+
+    **Benchmark:**
+    ```python
+    import time
+    start = time.time()
+    agent.rag.index_document("large.pdf")
+    print(f"Indexing took: {time.time() - start:.2f}s")
+    ```
+
+    **Typical performance on AI PC with Ryzen AI:**
+    - Small PDF (10 pages): ~2-3 seconds
+    - Medium PDF (50 pages): ~8-12 seconds
+    - Large PDF (200 pages): ~30-45 seconds
+    - Embedding generation: ~50-100 chunks/second on NPU
+  </Accordion>
+</AccordionGroup>
+
+---
+
+### Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Start Small" icon="seedling">
+    Index a few representative documents first, then scale. Full drive indexing is rarely necessary.
+  </Card>
+
+  <Card title="Tune for Document Type" icon="sliders">
+    Technical docs need larger chunks (600-800 tokens). FAQs work well with smaller chunks (300-400 tokens).
+  </Card>
+
+  <Card title="Use Sessions" icon="floppy-disk">
+    Session persistence avoids re-indexing on every restart. Critical for large document sets.
+  </Card>
+
+  <Card title="Monitor Selectively" icon="eye">
+    Watch only actively changing directories. Static archives don't benefit from monitoring.
+  </Card>
+
+  <Card title="Security" icon="lock">
+    Set `allowed_paths` in production. Prevents path traversal and unauthorized access.
+  </Card>
+
+  <Card title="Incremental Development" icon="vial">
+    Build step-by-step. Test each component before combining them.
+  </Card>
+</CardGroup>
+
+---
+
+## Performance Tuning
+
+<Tabs>
+  <Tab title="Indexing Speed">
+    | Profile | chunk_size | max_chunks | use_llm_chunking | Use Case | AI PC Performance |
+    |---------|-----------|------------|------------------|----------|-------------------|
+    | Fast | 300 | 3 | False | Development, quick FAQs | ~2-3s per PDF (NPU) |
+    | Balanced | 500 | 5 | False | Production default | ~5-7s per PDF (NPU) |
+    | Accurate | 800 | 7 | True | Complex technical queries | ~10-15s per PDF (NPU+LLM) |
+
+    ```python
+    # Development (fast)
+    config = ChatAgentConfig(
+        chunk_size=300,
+        max_chunks=3,
+        use_llm_chunking=False
+    )
+
+    # Production (balanced)
+    config = ChatAgentConfig(
+        chunk_size=500,
+        max_chunks=5,
+        use_llm_chunking=False
+    )
+
+    # Research (accurate)
+    config = ChatAgentConfig(
+        chunk_size=800,
+        max_chunks=7,
+        use_llm_chunking=True
+    )
+    ```
+  </Tab>
+
+  <Tab title="Memory Management">
+    ```python
+    # Limit indexed files
+    config = ChatAgentConfig(
+        max_indexed_files=100,   # Cap at 100 files
+        max_file_size_mb=50      # Skip files > 50MB
+    )
+
+    # Manual cleanup
+    agent.rag.clear_index()      # Clear vector index
+    agent.stop_watching()        # Stop file observers
+    ```
+
+    **Memory usage estimates:**
+    - ~1MB per 100 chunks (embeddings)
+    - ~500KB per PDF (extracted text cache)
+    - ~10KB per file watcher event
+
+    <Tip>
+    **AI PC Performance:** On Ryzen AI systems, NPU handles embedding generation offloading work from CPU/RAM, improving overall system responsiveness.
+    </Tip>
+  </Tab>
+
+  <Tab title="Query Optimization">
+    ```python
+    # Reduce max_steps for faster responses
+    config = ChatAgentConfig(max_steps=5)
+
+    # Disable stats for production
+    config = ChatAgentConfig(
+        show_stats=False,
+        debug=False
+    )
+
+    # Use smaller model for speed (efficient on NPU)
+    config = ChatAgentConfig(
+        model_id="Qwen2.5-0.5B-Instruct-CPU"
+    )
+    ```
+
+    <Tip>
+    **AMD Ryzen AI Optimization:** Smaller models like Qwen2.5-0.5B are optimized for NPU execution, providing fast inference with minimal power consumption on AI PCs.
+    </Tip>
+  </Tab>
+</Tabs>
+
+---
+
+## What You've Learned
+
+<CardGroup cols={2}>
+  <Card title="Agent Architecture" icon="diagram-project">
+    The reasoning loop pattern: query → tool selection → execution → synthesis
+  </Card>
+
+  <Card title="Tool System" icon="wrench">
+    Using `@tool` decorator to register Python functions as LLM-invocable capabilities
+  </Card>
+
+  <Card title="RAG Integration" icon="database">
+    Vector embeddings, FAISS indexing, and semantic retrieval
+  </Card>
+
+  <Card title="Mixin Pattern" icon="puzzle-piece">
+    Composing agent functionality via multiple inheritance
+  </Card>
+
+  <Card title="File Monitoring" icon="folder-open">
+    Watchdog-based reactive indexing with debouncing
+  </Card>
+
+  <Card title="Session Management" icon="floppy-disk">
+    JSON serialization for state persistence
+  </Card>
+
+  <Card title="Security" icon="shield">
+    Path validation, symlink detection, and access control
+  </Card>
+
+  <Card title="Performance" icon="gauge">
+    Tuning chunk size, retrieval count, and chunking strategies
+  </Card>
+</CardGroup>
+
+---
+
+## Next Steps
+
+<Steps>
+  <Step title="Extend with Voice" icon="microphone">
+    Add Whisper (ASR) and Kokoro (TTS) for voice interaction.
+
+    See: [Voice-Enabled Assistant](/playbooks/voice-agent) *(coming soon)*
+  </Step>
+
+  <Step title="Build Code Agent" icon="code">
+    Create an agent with code generation and debugging capabilities.
+
+    See: [Code Generation Agent](/playbooks/code-agent) *(coming soon)*
+  </Step>
+
+  <Step title="Multi-Agent Orchestration" icon="users">
+    Route queries to specialized agents based on intent.
+
+    See: [Multi-Agent System](/playbooks/multi-agent) *(coming soon)*
+  </Step>
+
+  <Step title="Package for Distribution" icon="rocket">
+    Package as Windows installer or Electron app.
+
+    See: [Deployment Guide](/deployment/installer)
+  </Step>
+</Steps>
+
+---
+
+## Source Code Reference
+
+<CardGroup cols={2}>
+  <Card title="ChatAgent" icon="code" href="https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/agent.py">
+    Main agent implementation with session management and file monitoring
+  </Card>
+
+  <Card title="RAGToolsMixin" icon="database" href="https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tools/rag_tools.py">
+    Document indexing and query tools
+  </Card>
+
+  <Card title="FileToolsMixin" icon="folder" href="https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tools/file_tools.py">
+    Directory monitoring implementation
+  </Card>
+
+  <Card title="FileSearchToolsMixin" icon="magnifying-glass" href="https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/file_search.py">
+    Multi-phase file discovery across drives
+  </Card>
+</CardGroup>
+
+---
+
+## Resources
+
+<CardGroup cols={3}>
+  <Card title="GitHub" icon="github" href="https://github.com/amd/gaia">
+    Source code, issues, and discussions
+  </Card>
+
+  <Card title="Discord" icon="discord" href="https://discord.com/channels/1392562559122407535/1402013282495102997">
+    Developer community chat
+  </Card>
+
+  <Card title="Email" icon="envelope" href="mailto:gaia@amd.com">
+    gaia@amd.com
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

@@ -1,0 +1,460 @@
+---
+title: "TestingMixin"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/code/tools/testing.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code/tools/testing.py)
+</Info>
+
+<Note>
+**Component:** TestingMixin
+**Module:** `gaia.agents.code.tools.testing`
+**Import:** `from gaia.agents.code.tools.testing import TestingMixin`
+</Note>
+---
+
+## Overview
+
+TestingMixin provides Python code execution and testing tools with timeout management and output capture. It enables running Python scripts and pytest test suites with proper isolation and error handling.
+
+**Key Features:**
+- Execute Python files as subprocesses
+- Run pytest test suites
+- Capture stdout and stderr
+- Timeout management
+- Environment variable injection
+- Working directory control
+- Test result parsing
+
+---
+
+## Tool Specifications
+
+### 1. execute_python_file
+
+Execute a Python file as a subprocess with full control.
+
+**Parameters:**
+- `file_path` (str, required): Path to Python file
+- `args` (List[str] | str, optional): CLI arguments
+- `timeout` (int, optional): Timeout in seconds (default: 60)
+- `working_directory` (str, optional): Working directory
+- `env_vars` (Dict[str, str], optional): Environment variables
+
+**Returns:**
+```python
+{
+    "status": "success" | "error",
+    "file_path": str,
+    "command": str,
+    "stdout": str,
+    "stderr": str,
+    "return_code": int,
+    "has_errors": bool,
+    "duration_seconds": float,
+    "timeout": int,
+    "cwd": str,
+    "output_truncated": bool,
+
+    # On timeout
+    "timed_out": bool
+}
+```
+
+**Example:**
+```python
+result = execute_python_file(
+    file_path="/path/to/script.py",
+    args=["--input", "data.txt"],
+    timeout=120,
+    working_directory="/path/to/project",
+    env_vars={"DEBUG": "1"}
+)
+
+if result["has_errors"]:
+    print(f"Script failed with code {result['return_code']}")
+    print(result["stderr"])
+else:
+    print("Success!")
+    print(result["stdout"])
+```
+
+### 2. run_tests
+
+Run pytest test suite for a project.
+
+**Parameters:**
+- `project_path` (str, optional): Project directory (default: ".")
+- `pytest_args` (List[str] | str, optional): Pytest arguments
+- `timeout` (int, optional): Timeout in seconds (default: 120)
+- `env_vars` (Dict[str, str], optional): Environment variables
+
+**Returns:**
+```python
+{
+    "status": "success" | "error",
+    "project_path": str,
+    "command": str,
+    "stdout": str,
+    "stderr": str,
+    "return_code": int,
+    "tests_passed": bool,
+    "failure_summary": str,  # If failed
+    "duration_seconds": float,
+    "timeout": int,
+    "output_truncated": bool,
+
+    # On timeout
+    "timed_out": bool
+}
+```
+
+**Example:**
+```python
+result = run_tests(
+    project_path="/path/to/project",
+    pytest_args=["-v", "tests/test_calculator.py"],
+    timeout=300
+)
+
+if result["tests_passed"]:
+    print("All tests passed!")
+else:
+    print(f"Tests failed: {result['failure_summary']}")
+    print(result["stdout"])
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Execute Python Script
+
+```python
+from gaia import CodeAgent
+
+agent = CodeAgent()
+
+# Run a data processing script
+result = agent.execute_python_file(
+    file_path="scripts/process_data.py",
+    args=["--input", "data/raw.csv", "--output", "data/processed.csv"],
+    timeout=600,
+    working_directory="/path/to/project"
+)
+
+if result["status"] == "success":
+    if result["return_code"] == 0:
+        print("Processing completed successfully")
+        print(result["stdout"])
+    else:
+        print(f"Script failed with exit code {result['return_code']}")
+        print("Error output:")
+        print(result["stderr"])
+else:
+    if result.get("timed_out"):
+        print(f"Script timed out after {result['timeout']} seconds")
+    else:
+        print(f"Error: {result['error']}")
+```
+
+### Example 2: Run Full Test Suite
+
+```python
+# Run all tests with verbose output
+result = agent.run_tests(
+    project_path="/path/to/project",
+    pytest_args=["-v", "--tb=short"],
+    timeout=300
+)
+
+print(f"Tests completed in {result['duration_seconds']:.2f}s")
+
+if result["tests_passed"]:
+    print("✓ All tests passed!")
+else:
+    print(f"✗ Tests failed")
+    print(result["failure_summary"])
+```
+
+### Example 3: Run Specific Test File
+
+```python
+# Run specific test file with coverage
+result = agent.run_tests(
+    project_path="/path/to/project",
+    pytest_args=["tests/test_calculator.py", "--cov=src", "--cov-report=term"],
+    timeout=60
+)
+
+if result["tests_passed"]:
+    # Parse coverage from output
+    print("Tests passed with coverage:")
+    print(result["stdout"])
+```
+
+### Example 4: Environment Variables
+
+```python
+# Run tests with custom environment
+result = agent.run_tests(
+    project_path="/path/to/project",
+    pytest_args=["-v"],
+    env_vars={
+        "DATABASE_URL": "sqlite:///test.db",
+        "DEBUG": "1",
+        "TEST_MODE": "integration"
+    }
+)
+```
+
+### Example 5: Handle Timeouts
+
+```python
+result = agent.execute_python_file(
+    file_path="scripts/long_process.py",
+    timeout=30
+)
+
+if result.get("timed_out"):
+    print(f"Process timed out after {result['timeout']}s")
+    print("Partial output:")
+    print(result["stdout"])
+    print("\nConsider:")
+    print("1. Increasing timeout")
+    print("2. Optimizing the script")
+    print("3. Running in background mode")
+```
+
+---
+
+## Output Handling
+
+### Truncation
+
+Output is truncated to prevent memory issues:
+
+```python
+MAX_OUTPUT = 10_000  # characters
+
+if len(stdout) > MAX_OUTPUT:
+    stdout = stdout[:MAX_OUTPUT] + "\n...output truncated (stdout)..."
+    truncated = True
+
+if len(stderr) > MAX_OUTPUT:
+    stderr = stderr[:MAX_OUTPUT] + "\n...output truncated (stderr)..."
+    truncated = True
+```
+
+### Failure Summary Parsing
+
+For pytest, extract failure count from output:
+
+```python
+import re
+
+summary_match = re.search(r"(\d+)\s+failed", stdout)
+if summary_match:
+    num_failed = summary_match.group(1)
+    failure_summary = f"{num_failed} test(s) failed - check stdout for details"
+```
+
+---
+
+## Environment Configuration
+
+### PYTHONPATH Management
+
+Automatically adds project directory to PYTHONPATH:
+
+```python
+env = os.environ.copy()
+if env_vars:
+    env.update({key: str(value) for key, value in env_vars.items()})
+
+existing_pythonpath = env.get("PYTHONPATH")
+project_pythonpath = str(project_dir)
+
+if existing_pythonpath:
+    env["PYTHONPATH"] = f"{project_pythonpath}{os.pathsep}{existing_pythonpath}"
+else:
+    env["PYTHONPATH"] = project_pythonpath
+```
+
+---
+
+## Testing Requirements
+
+**File:** `tests/agents/code/test_testing.py`
+
+```python
+import pytest
+from gaia.agents.code.tools.testing import TestingMixin
+
+def test_execute_python_file(tmp_path):
+    """Test Python file execution."""
+    # Create test script
+    script = tmp_path / "test_script.py"
+    script.write_text("print('Hello World')\nprint('Success')")
+
+    mixin = TestingMixin()
+    result = mixin.execute_python_file(
+        file_path=str(script),
+        timeout=10
+    )
+
+    assert result["status"] == "success"
+    assert result["return_code"] == 0
+    assert "Hello World" in result["stdout"]
+    assert not result["has_errors"]
+
+def test_execute_with_args(tmp_path):
+    """Test execution with CLI arguments."""
+    script = tmp_path / "args_script.py"
+    script.write_text("""
+import sys
+print(f"Args: {sys.argv[1:]}")
+""")
+
+    result = execute_python_file(
+        str(script),
+        args=["--input", "test.txt", "--output", "out.txt"]
+    )
+
+    assert "--input" in result["stdout"]
+    assert "test.txt" in result["stdout"]
+
+def test_timeout_handling(tmp_path):
+    """Test timeout behavior."""
+    script = tmp_path / "slow_script.py"
+    script.write_text("""
+import time
+time.sleep(10)
+print("Done")
+""")
+
+    result = execute_python_file(str(script), timeout=2)
+
+    assert result["status"] == "error"
+    assert result.get("timed_out")
+    assert result["timeout"] == 2
+
+def test_run_tests(tmp_path):
+    """Test pytest execution."""
+    # Create test file
+    test_file = tmp_path / "test_example.py"
+    test_file.write_text("""
+def test_pass():
+    assert True
+
+def test_also_pass():
+    assert 1 + 1 == 2
+""")
+
+    result = run_tests(str(tmp_path), pytest_args=["-v"])
+
+    assert result["status"] == "success"
+    assert result["tests_passed"]
+    assert result["return_code"] == 0
+
+def test_run_tests_with_failure(tmp_path):
+    """Test pytest with failures."""
+    test_file = tmp_path / "test_fail.py"
+    test_file.write_text("""
+def test_will_fail():
+    assert False, "This test is designed to fail"
+""")
+
+    result = run_tests(str(tmp_path))
+
+    assert result["status"] == "success"  # Command ran
+    assert not result["tests_passed"]  # But tests failed
+    assert result["return_code"] != 0
+    assert result["failure_summary"]
+```
+
+---
+
+## Error Handling
+
+### File Not Found
+
+```python
+if not path.exists():
+    return {
+        "status": "error",
+        "error": f"File not found: {file_path}",
+        "has_errors": True
+    }
+```
+
+### Invalid Arguments
+
+```python
+if not isinstance(args, (str, list)):
+    return {
+        "status": "error",
+        "error": "args must be a list of strings or a string",
+        "has_errors": True
+    }
+```
+
+### Timeout Handling
+
+```python
+try:
+    result = subprocess.run(
+        cmd,
+        timeout=timeout,
+        ...
+    )
+except subprocess.TimeoutExpired as exc:
+    return {
+        "status": "error",
+        "error": f"Execution timed out after {timeout} seconds",
+        "stdout": decode_output(exc.stdout),
+        "stderr": decode_output(exc.stderr),
+        "timed_out": True,
+        "timeout": timeout
+    }
+```
+
+---
+
+## Performance Characteristics
+
+- **Script Execution:** Depends on script complexity
+- **Test Suite:** Depends on test count and complexity
+- **Timeout Precision:** ±0.1 seconds
+- **Output Truncation:** 10,000 characters per stream
+- **Environment Setup:** ~10ms overhead
+
+---
+
+## Dependencies
+
+```python
+import os
+import shlex
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+```
+
+---
+
+*TestingMixin Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

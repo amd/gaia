@@ -1,0 +1,165 @@
+---
+title: "Chat SDK"
+---
+
+<Note>
+⚡ **You are viewing:** Quick Reference - Code examples for rapid development
+
+**See also:** [User Guide](/guides/chat) · [API Specification](/spec/chat-sdk)
+</Note>
+
+<Info>
+  **Source Code:** [`src/gaia/chat/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/chat/sdk.py)
+</Info>
+
+<Note>
+**Import:** `from gaia.chat.sdk import ChatSDK, ChatConfig, quick_chat`
+</Note>
+---
+
+<Badge text="development" color="orange" />
+
+**Purpose:** Simplified chat interface with conversation history and LLM integration.
+
+---
+
+## Quick Chat (One-Off)
+
+```python
+from gaia.chat.sdk import quick_chat
+
+# Single query
+response = quick_chat("What is machine learning?")
+print(response.text)
+
+# With options
+response = quick_chat(
+    "Explain quantum computing",
+    model="Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    max_tokens=500,
+    show_stats=True
+)
+print(response.text)
+if response.stats:
+    print(f"Tokens: {response.stats['total_tokens']}")
+```
+
+---
+
+## Chat with Memory
+
+```python
+from gaia.chat.sdk import ChatSDK, ChatConfig
+
+# Configure chat
+config = ChatConfig(
+    model="Qwen2.5-0.5B-Instruct-CPU",
+    max_tokens=512,
+    max_history_length=4,  # Keep 4 conversation pairs
+    system_prompt="You are a helpful coding assistant.",
+    assistant_name="CodeBot"
+)
+
+# Create chat instance
+chat = ChatSDK(config)
+
+# Multi-turn conversation
+response1 = chat.send("What is Python?")
+print(response1.text)
+
+response2 = chat.send("Show me an example")
+print(response2.text)
+# LLM remembers context from first question!
+
+# Check history
+history = chat.get_history()
+print(f"Conversation turns: {len(history)}")
+
+# Clear history
+chat.clear_history()
+```
+
+---
+
+## Streaming Chat
+
+```python
+from gaia.chat.sdk import ChatSDK, ChatConfig
+
+config = ChatConfig(streaming=True)
+chat = ChatSDK(config)
+
+# Stream response token by token
+for chunk in chat.send_stream("Tell me a story"):
+    print(chunk, end="", flush=True)
+```
+
+---
+
+## Chat with RAG
+
+```python
+from gaia.chat.sdk import ChatSDK, ChatConfig
+from gaia.rag.sdk import RAGSDK, RAGConfig
+
+# Set up RAG
+rag_config = RAGConfig()
+rag = RAGSDK(rag_config)
+rag.index_document("manual.pdf")
+rag.index_document("documentation.pdf")
+
+# Create chat with RAG enabled
+chat_config = ChatConfig()
+chat = ChatSDK(chat_config)
+chat.enable_rag(rag)
+
+# Now chat uses document context automatically
+response = chat.send("What does the manual say about installation?")
+print(response.text)
+# LLM has access to indexed documents!
+
+# Disable RAG
+chat.disable_rag()
+```
+
+---
+
+## Custom Messages
+
+```python
+from gaia.chat.sdk import ChatSDK
+
+chat = ChatSDK()
+
+# Send custom message array
+messages = [
+    {"role": "system", "content": "You are a math tutor."},
+    {"role": "user", "content": "Explain calculus"},
+    {"role": "assistant", "content": "Calculus is..."},
+    {"role": "user", "content": "Give me an example"}
+]
+
+response = chat.send_messages(
+    messages=messages,
+    system_prompt="Be concise and clear"
+)
+print(response.text)
+```
+
+---
+
+## Related Topics
+
+- **[RAG SDK](./rag)** - Add document search to chat
+- **[LLM Integration](./llm)** - Understanding language models
+- **[Talk SDK](../agents/talk)** - Voice-enabled chat
+
+---
+
+<small style="color: #666;">
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

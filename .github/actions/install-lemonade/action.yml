@@ -1,95 +1,65 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 name: 'Install Lemonade Server'
-description: 'Downloads and installs Lemonade Server with hybrid extras'
+description: 'Verifies Lemonade Server is available and exports its path'
+
+# Note: This action uses the pre-installed lemonade-server on the runner.
+# It does NOT install a new version to avoid conflicts.
+
+outputs:
+  lemonade-path:
+    description: 'Full path to the lemonade-server executable'
+    value: ${{ steps.verify.outputs.lemonade_path }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Get Lemonade Version
+    - name: Get Expected Lemonade Version
       shell: powershell
       run: |
-        $lemonadeVersion = python -c "import sys; sys.path.append('src'); from gaia.version import LEMONADE_VERSION; print(LEMONADE_VERSION)"
+        # Import directly from version module to avoid triggering gaia/__init__.py
+        $lemonadeVersion = python -c "import sys; sys.path.insert(0, 'src/gaia'); from version import LEMONADE_VERSION; print(LEMONADE_VERSION)"
         echo "LEMONADE_VERSION=$lemonadeVersion" >> $env:GITHUB_ENV
-        Write-Host "Using Lemonade version: $lemonadeVersion"
+        Write-Host "Expected Lemonade version: $lemonadeVersion"
 
-    - name: Install Lemonade Server
+    - name: Verify Lemonade Server
+      id: verify
       shell: powershell
       run: |
-        Write-Host "=== Installing Lemonade Server ==="
+        Write-Host "=== Checking for Lemonade Server ==="
 
-        # Add exclusions for the installer and install directory
-        Add-MpPreference -ExclusionPath "C:\temp\Lemonade_Server_Installer.exe"
-        Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\lemonade_server"
-        Add-MpPreference -ExclusionProcess "Lemonade_Server_Installer.exe"
-
-        # Download and run installer
-        $installerPath = "C:\temp\Lemonade_Server_Installer.exe"
-        
-        # Remove existing file if it exists
-        if (Test-Path $installerPath) {
-          Write-Host "Removing existing installer file"
-          Remove-Item $installerPath -Force
-        }
-        
-        Invoke-WebRequest -Uri "https://github.com/lemonade-sdk/lemonade/releases/download/v$env:LEMONADE_VERSION/Lemonade_Server_Installer.exe" -OutFile $installerPath -UseBasicParsing
-        
-        # Check downloaded file
-        if (Test-Path $installerPath) {
-          $fileInfo = Get-Item $installerPath
-          Write-Host "Downloaded installer: $($fileInfo.Length) bytes"
-          
-          # Basic sanity check - installer should be at least 100KB
-          if ($fileInfo.Length -lt 100000) {
-            Write-Host "ERROR: Downloaded file is suspiciously small ($($fileInfo.Length) bytes)"
-            Write-Host "This suggests we downloaded an error page instead of the installer"
-            
-            # Check if we got HTML error page (without -Raw and -TotalCount together)
-            $firstBytes = Get-Content $installerPath -Encoding Byte -TotalCount 200
-            $firstText = [System.Text.Encoding]::ASCII.GetString($firstBytes)
-            Write-Host "First 200 characters of downloaded file:"
-            Write-Host $firstText
-            exit 1
-          }
-        } else {
-          Write-Host "ERROR: Installer file not found after download"
-          exit 1
-        }
-
-    - name: Run Lemonade Installer
-      shell: powershell
-      run: |
-        Write-Host "Installing Lemonade Server..."
-        cd C:\temp
-        Start-Process -FilePath ".\Lemonade_Server_Installer.exe" -ArgumentList "/S /Extras=hybrid /Models=Llama-3.2-3B-Instruct-Hybrid /D=C:\Users\nimbys\AppData\Local\lemonade_server" -Wait
-        Write-Host "Installer completed"
-
-    - name: Verify Installation
-      shell: powershell  
-      run: |
-        $installPath = "C:\Users\nimbys\AppData\Local\lemonade_server"
-        
-        # Remove exclusions after installation
-        Remove-MpPreference -ExclusionPath "C:\temp\Lemonade_Server_Installer.exe"
-        Remove-MpPreference -ExclusionProcess "Lemonade_Server_Installer.exe"
-
-        # Basic verification
-        if (-not (Test-Path $installPath)) {
-            Write-Host "Installation directory not found"
+        $lemonadeCmd = Get-Command lemonade-server -ErrorAction SilentlyContinue
+        if (-not $lemonadeCmd) {
+            Write-Host "ERROR: lemonade-server not found in PATH"
+            Write-Host "Please ensure Lemonade Server is installed on this runner"
             exit 1
         }
 
-        # Test lemonade-server command
-        $lemonadeExe = "$installPath\python\Scripts\lemonade-server-dev.exe"
-        if (Test-Path $lemonadeExe) {
-            & $lemonadeExe --version
-            Write-Host "Lemonade Server installed successfully"
-        } else {
-            Write-Host "Lemonade server executable not found at: $lemonadeExe"
-            if (Test-Path "$installPath\python\Scripts") {
-                Write-Host "Scripts directory contents:"
-                Get-ChildItem "$installPath\python\Scripts" | ForEach-Object { Write-Host "  - $($_.Name)" }
+        $lemonadePath = $lemonadeCmd.Source
+        Write-Host "Found lemonade-server at: $lemonadePath"
+
+        $versionOutput = & lemonade-server --version 2>&1
+        Write-Host $versionOutput
+
+        # Extract version and compare
+        if ($versionOutput -match "(\d+\.\d+\.\d+)") {
+            $installedVersion = $matches[1]
+            Write-Host ""
+            Write-Host "Installed version: $installedVersion"
+            Write-Host "Expected version:  $env:LEMONADE_VERSION"
+
+            if ($installedVersion -ne $env:LEMONADE_VERSION) {
+                Write-Host ""
+                Write-Host "WARNING: Version mismatch!"
+                Write-Host "The runner has v$installedVersion but GAIA expects v$env:LEMONADE_VERSION"
+                Write-Host "Tests will proceed with v$installedVersion"
             }
-            exit 1
         }
+
+        # Export path for use by other steps
+        echo "lemonade_path=$lemonadePath" >> $env:GITHUB_OUTPUT
+        echo "LEMONADE_SERVER_PATH=$lemonadePath" >> $env:GITHUB_ENV
+
+        Write-Host ""
+        Write-Host "Lemonade Server ready"

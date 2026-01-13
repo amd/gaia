@@ -1,0 +1,759 @@
+---
+title: "Jira Agent"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/jira/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/jira/agent.py) · [`src/gaia/apps/jira/app.py`](https://github.com/amd/gaia/blob/main/src/gaia/apps/jira/app.py)
+</Info>
+
+## Overview
+
+The GAIA Jira Agent provides a natural language interface for interacting with Atlassian Jira. The agent communicates directly with the Atlassian REST API - no intermediary services or MCP bridge required. It automatically discovers your Jira instance configuration and allows you to search, create, and update issues using plain English commands.
+
+> **First time here?** Complete the [Setup](/setup) guide first to install GAIA and its dependencies.
+
+> **Desktop WebUI**: GAIA includes a JIRA WebUI as an Electron desktop application. See the [WebUI Configuration](#webui-configuration) section below for setup instructions.
+
+## Quick Start
+
+### Prerequisites
+
+1. **GAIA Installation**:
+   Follow the [Setup](/setup) guide to install GAIA. The base installation includes all dependencies needed for the Jira agent.
+
+2. **Download Required Model**:
+   The Jira agent uses the `Qwen3-Coder-30B-A3B-Instruct-GGUF` model for reliable JSON parsing and JQL generation.
+
+   Use the Lemonade server's model manager to download it:
+   1. Start Lemonade server: `lemonade-server serve`
+   2. Open the model manager in your browser (typically http://localhost:8000)
+   3. Search for and download: `Qwen3-Coder-30B-A3B-Instruct-GGUF`
+
+   Note: The model is over 17GB and can take a while to download depending on your internet connection. Due to its size, it should be run on a Strix Halo device or similar high-performance hardware with sufficient memory. It provides the best results for complex Jira queries and will be automatically selected when you run Jira commands.
+
+3. **Set Jira Credentials**:
+
+   Required - Your Jira credentials:
+
+   ```bash
+   export ATLASSIAN_SITE_URL=https://your-domain.atlassian.net
+   ```
+
+   ```bash
+   export ATLASSIAN_API_KEY=your-api-token
+   ```
+
+   ```bash
+   export ATLASSIAN_USER_EMAIL=your-email@example.com
+   ```
+
+   Or create a `.env` file in the project root (see `.env.example` for template)
+
+### Verify Installation
+
+Check that GAIA is installed correctly:
+
+```bash
+gaia --version
+```
+
+Test Jira credentials (will auto-discover your instance):
+
+```bash
+gaia jira "show all projects"
+```
+
+### Basic Usage
+
+<CodeGroup>
+```bash Interactive
+gaia jira --interactive
+```
+
+```bash Direct Query
+gaia jira "show my open issues"
+```
+
+```bash Search
+gaia jira "find critical bugs from last week"
+```
+
+```bash Create
+gaia jira "create a task: Update documentation"
+```
+
+```bash Update
+gaia jira "set MDP-6 priority to high"
+```
+</CodeGroup>
+
+## Important Note
+
+The Jira agent was developed and tested using a dummy Jira project. Different Jira projects may have varying configurations, custom fields, workflows, and permissions that could affect the agent's behavior. You may encounter errors or unexpected results depending on your specific Jira instance setup. The agent's auto-discovery feature helps adapt to different configurations, but some manual adjustments may be needed for complex or highly customized Jira environments.
+
+## Architecture Overview
+
+### Key Components
+
+1. **JiraAgent** (`src/gaia/agents/jira/agent.py`)
+
+   - Core agent that processes natural language queries
+   - Automatically discovers Jira instance configuration (projects, issue types, statuses, priorities)
+   - Uses LLM to translate natural language to JQL and execute operations
+   - Registers three main tools: `jira_search`, `jira_create`, `jira_update`
+
+2. **JiraApp** (`src/gaia/apps/jira/app.py`)
+
+   - Application wrapper for the JiraAgent
+   - Provides high-level methods for common operations
+   - Handles interactive mode
+   - Formats output for user display
+
+3. **GAIA Jira CLI** (`gaia jira` command)
+
+   - Easy command-line interface for Jira operations
+   - Supports both direct queries and interactive mode
+   - Automatically manages agent lifecycle
+   - No coding required - just natural language commands
+
+### How It Works
+
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+graph LR
+    User(["User Query"]) --> Agent(["JiraAgent"])
+    Agent --> Discover(["Auto-Discovery"])
+    Discover --> Config(["Jira Config"])
+    Config --> LLM(["LLM Processing"])
+    LLM --> Tools(["Tool Execution"])
+    Tools --> API(["Jira REST API"])
+    API --> Result(["Formatted Result"])
+
+    style User fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
+    style Agent fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style Discover fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Config fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+    style LLM fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    style Tools fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style API fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+    style Result fill:#28a745,stroke:#1e7e34,stroke-width:2px,color:#fff
+
+    linkStyle 0,1,2,3,4,5,6 stroke:#ED1C24,stroke-width:2px
+```
+
+1. **Automatic Discovery**: On first use, the agent discovers your Jira instance configuration
+2. **Dynamic Prompting**: Uses discovered config to teach the LLM about your specific Jira setup
+3. **Natural Language Processing**: LLM converts queries to structured tool calls
+4. **Tool Execution**: Executes appropriate Jira operations via REST API
+5. **Result Formatting**: Returns user-friendly responses
+
+## Usage Examples
+
+### Natural Language Commands
+
+#### Search Operations
+
+Find your assigned issues:
+
+```bash
+gaia jira "show my issues"
+```
+
+```bash
+gaia jira "what am I working on"
+```
+
+Search by priority and type:
+
+```bash
+gaia jira "find high priority ideas"
+```
+
+```bash
+gaia jira "show medium priority ideas from this week"
+```
+
+Search by project:
+
+```bash
+gaia jira "issues in project MDP"
+```
+
+```bash
+gaia jira "what's happening in MDP"
+```
+
+Time-based searches:
+
+```bash
+gaia jira "issues created today"
+```
+
+```bash
+gaia jira "bugs fixed last week"
+```
+
+```bash
+gaia jira "what changed yesterday"
+```
+
+Sprint queries:
+
+```bash
+gaia jira "current sprint ideas"
+```
+
+```bash
+gaia jira "unfinished ideas in active sprint"
+```
+
+#### Creating Issues
+
+Simple idea creation:
+
+```bash
+gaia jira "create idea: Explore VR travel features"
+```
+
+Create with details:
+
+```bash
+gaia jira "create an idea: Implement AI chatbot, high priority"
+```
+
+```bash
+gaia jira "new idea: Add user analytics dashboard"
+```
+
+Specify project:
+
+```bash
+gaia jira "create idea in MDP: Refactor user profile data"
+```
+
+#### Updating Issues
+
+Change priority:
+
+```bash
+gaia jira "update MDP-5 set priority to High"
+```
+
+Change status:
+
+```bash
+gaia jira "move MDP-6 to Discovery"
+```
+
+```bash
+gaia jira "move MDP-5 to Parking lot"
+```
+
+Update multiple fields:
+
+```bash
+gaia jira "update JKL-012 priority High and assign to me"
+```
+
+### Interactive Mode
+
+```bash
+gaia jira --interactive
+```
+
+You'll see:
+
+```
+🚀 GAIA Jira App - Interactive Mode
+Type 'help' for commands, 'exit' to quit
+
+jira> show my open issues
+[Agent processes your request...]
+🎫 Found 2 issues
+• MDP-6 - Explore VR travel features
+  Status: Parking lot | Priority: Medium | Assignee: You
+• MDP-5 - Refactor user profile data
+  Status: Parking lot | Priority: Medium | Assignee: You
+...
+```
+
+## Integration Methods
+
+GAIA provides two methods for third-party applications to integrate with the Jira agent:
+
+### 1. Python API (Direct Integration)
+
+Use the JiraAgent directly in your Python applications:
+
+```python
+from gaia.agents.jira.agent import JiraAgent
+
+# Initialize the agent
+agent = JiraAgent(
+    model_id="Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    silent_mode=True  # Suppress console output for API usage
+)
+
+# Discover Jira configuration (do this once)
+config = agent.initialize()
+print(f"Connected to Jira with {len(config['projects'])} projects")
+
+# Execute natural language queries
+result = agent.process_query("show my high priority ideas in MDP")
+
+if result['status'] == 'success':
+    print(f"Result: {result['final_answer']}")
+    print(f"Steps taken: {result['steps_taken']}")
+
+    # Access detailed conversation history if needed
+    for msg in result.get('conversation', []):
+        if msg['role'] == 'system' and 'issues' in msg.get('content', {}):
+            issues = msg['content']['issues']
+            for issue in issues:
+                print(f"  - {issue['key']}: {issue['summary']}")
+
+# Create a new issue
+result = agent.process_query("create an idea: Implement AI chatbot with medium priority")
+
+# Update an existing issue
+result = agent.process_query("update MDP-5 set priority to High")
+
+# Complex queries
+result = agent.process_query(
+    "find all ideas in Parking lot status and show their priorities"
+)
+```
+
+### 2. MCP Server (HTTP/JSON-RPC Integration)
+
+For non-Python applications, use the MCP bridge to access the Jira agent via HTTP.
+
+Start the MCP bridge (if needed for external integrations):
+
+```bash
+gaia mcp start --port 8765
+```
+
+Then integrate from any language:
+
+**JavaScript/Node.js Example:**
+```javascript
+async function queryJira(query) {
+    const response = await fetch('http://localhost:8765/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: '1',
+            method: 'tools/call',
+            params: {
+                name: 'gaia.jira',
+                arguments: {
+                    query: query,
+                    operation: 'query'
+                }
+            }
+        })
+    });
+
+    const result = await response.json();
+    if (result.result) {
+        const content = JSON.parse(result.result.content[0].text);
+        return content;
+    }
+    throw new Error(result.error || 'Unknown error');
+}
+
+// Usage examples
+const issues = await queryJira('show my open ideas');
+const newIssue = await queryJira('create idea: Add VR support');
+const update = await queryJira('update MDP-6 to high priority');
+```
+
+**Python with HTTP (alternative to direct API):**
+```python
+import requests
+
+def query_jira_via_mcp(query):
+    response = requests.post('http://localhost:8765/', json={
+        'jsonrpc': '2.0',
+        'id': '1',
+        'method': 'tools/call',
+        'params': {
+            'name': 'gaia.jira',
+            'arguments': {
+                'query': query,
+                'operation': 'query'
+            }
+        }
+    })
+
+    result = response.json()
+    if 'result' in result:
+        import json
+        content = json.loads(result['result']['content'][0]['text'])
+        return content
+    raise Exception(result.get('error', 'Unknown error'))
+
+# Usage
+issues = query_jira_via_mcp('show ideas in MDP project')
+print(f"Success: {issues['success']}")
+print(f"Result: {issues['result']}")
+```
+
+**cURL Example:**
+```bash
+curl -X POST http://localhost:8765/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "1",
+    "method": "tools/call",
+    "params": {
+      "name": "gaia.jira",
+      "arguments": {
+        "query": "show my ideas in Parking lot status"
+      }
+    }
+  }'
+```
+
+For detailed MCP integration with workflow tools, see:
+- **[MCP Documentation](/integrations/mcp)** - Complete MCP bridge reference
+- **[n8n Integration Guide](/integrations/n8n)** - Workflow automation examples
+
+## Key Features
+
+### Automatic Configuration Discovery
+
+The agent automatically discovers your Jira instance configuration on first use.
+
+The agent learns about:
+- Available projects and their keys
+- Issue types (Bug, Task, Story, Epic, etc.)
+- Valid statuses (To Do, In Progress, Done, etc.)
+- Priority levels (Highest, High, Medium, Low, Lowest)
+- Custom fields and values specific to your instance
+
+This means the agent adapts to YOUR Jira setup without any configuration files.
+
+### Intelligent Query Translation
+
+The agent uses an LLM to understand context and intent:
+
+- **"my issues"** → Knows to use `assignee = currentUser()`
+- **"critical"** → Maps to your instance's priority values
+- **"this week"** → Calculates correct date ranges
+- **"in progress"** → Uses your actual status names (even if custom)
+
+### Robust Error Handling and Recovery
+
+- **Error Recovery**: Automatically retries failed operations with exponential backoff
+- **Intelligent Fallbacks**: When operations fail, the agent attempts alternative approaches
+- **Credential Validation**: Validates credentials before operations to prevent unnecessary API calls
+- **Helpful Error Messages**: Provides specific, actionable error messages for invalid queries
+- **Smart Suggestions**: Suggests corrections for common mistakes (e.g., invalid issue types, wrong field names)
+- **Network Resilience**: Handles network issues gracefully with automatic reconnection attempts
+- **State Recovery**: Maintains conversation context even after errors, allowing users to continue without starting over
+
+## Configuration
+
+### Getting Your Jira API Token
+
+1. Log into your Atlassian account
+2. Go to [Account Settings &gt; Security &gt; API tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
+3. Click "Create API token"
+4. Give it a name (e.g., "GAIA Integration")
+5. Copy the token and save it securely
+
+### Setting Environment Variables
+
+#### Windows
+
+```cmd
+set ATLASSIAN_SITE_URL=https://your-domain.atlassian.net
+```
+
+```cmd
+set ATLASSIAN_API_KEY=your-api-token
+```
+
+```cmd
+set ATLASSIAN_USER_EMAIL=your-email@example.com
+```
+
+#### Linux/Mac
+
+```bash
+export ATLASSIAN_SITE_URL=https://your-domain.atlassian.net
+```
+
+```bash
+export ATLASSIAN_API_KEY=your-api-token
+```
+
+```bash
+export ATLASSIAN_USER_EMAIL=your-email@example.com
+```
+
+#### Using .env file
+
+Create a .env file in your project root:
+
+```bash
+ATLASSIAN_SITE_URL=https://your-domain.atlassian.net
+ATLASSIAN_API_KEY=your-api-token
+ATLASSIAN_USER_EMAIL=your-email@example.com
+```
+
+## Advanced Usage
+
+### Custom Model Selection
+
+Use a different LLM model for specific use cases:
+
+```python
+agent = JiraAgent(
+    model_id="gpt-4",
+    debug=True,
+    show_prompts=True
+)
+```
+
+### Saving Query History
+
+Save query results to file for audit/analysis:
+
+```python
+result = agent.process_query(
+    "show all security-related issues",
+    output_to_file=True,
+    filename="security_audit.json"
+)
+
+print(f"Results saved to: {result.get('output_file')}")
+```
+
+## Troubleshooting
+
+### Common Issues and Solutions
+
+#### "Missing Jira credentials"
+
+Check if environment variables are set:
+
+```bash
+echo $ATLASSIAN_SITE_URL
+```
+
+```bash
+echo $ATLASSIAN_API_KEY
+```
+
+```bash
+echo $ATLASSIAN_USER_EMAIL
+```
+
+Verify API token is valid by testing with curl:
+
+```bash
+curl -u your-email@example.com:your-api-token \
+  https://your-domain.atlassian.net/rest/api/2/myself
+```
+
+#### "No issues found" when you know they exist
+
+Enable debug mode to see the generated JQL:
+
+```bash
+gaia jira --debug "your query"
+```
+
+Check if you have permission to view the project:
+
+```bash
+gaia jira "show all projects"
+```
+
+#### "Invalid issue type" errors
+
+Discover what issue types are available:
+
+```python
+agent = JiraAgent()
+config = agent.initialize()
+print("Available issue types:", config['issue_types'])
+```
+
+Note: The dummy project uses "Idea" and "Epic" as issue types, not "Bug"/"Task"/"Story"
+
+#### MCP Bridge Connection Issues
+
+Check if MCP bridge is running:
+
+```bash
+gaia mcp status
+```
+
+Restart the bridge if needed:
+
+```bash
+gaia mcp stop
+```
+
+```bash
+gaia mcp start
+```
+
+Test the bridge directly:
+
+```bash
+curl -X POST http://localhost:8765/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+## Best Practices
+
+### 1. Use Specific Queries
+
+Good - specific and actionable:
+
+```bash
+gaia jira "show my high priority ideas in project MDP"
+```
+
+Less effective - too vague:
+
+```bash
+gaia jira "show issues"
+```
+
+### 2. Leverage Auto-Discovery
+
+Let the agent discover your setup first:
+
+```python
+agent = JiraAgent()
+config = agent.initialize()
+```
+
+Now the agent knows your specific configuration:
+
+```python
+result = agent.process_query("create an Idea")
+```
+
+### 3. Use Interactive Mode for Exploration
+
+Best for iterative queries and exploration:
+
+```bash
+gaia jira --interactive
+```
+
+### 4. Create Related Ideas
+
+Create multiple related ideas efficiently:
+
+```python
+for idea in ["AI chatbot", "VR features", "Analytics dashboard"]:
+    agent.process_query(f"create idea: {idea}")
+```
+
+## Testing Your Integration
+
+### Quick Test Script
+
+```python
+#!/usr/bin/env python
+"""Test your Jira integration"""
+
+from gaia.agents.jira.agent import JiraAgent
+import os
+
+if not os.getenv("ATLASSIAN_SITE_URL"):
+    print("❌ Missing ATLASSIAN_SITE_URL")
+    exit(1)
+
+print("✅ Credentials found")
+
+agent = JiraAgent(silent_mode=True)
+config = agent.initialize()
+
+if config['projects']:
+    print(f"✅ Connected! Found {len(config['projects'])} projects")
+    print(f"   Projects: {', '.join([p['key'] for p in config['projects'][:3]])}...")
+else:
+    print("❌ No projects found - check permissions")
+    exit(1)
+
+result = agent.process_query("show 3 recent issues")
+if result['status'] == 'success':
+    print("✅ Query successful!")
+    print(f"   Result: {result['final_answer'][:100]}...")
+else:
+    print(f"❌ Query failed: {result.get('error_history', [])}")
+```
+
+### Running Agent Tests
+
+Run the test suite:
+
+```bash
+python tests/test_jira.py
+```
+
+Run with specific options - choose tests interactively:
+
+```bash
+python tests/test_jira.py --interactive
+```
+
+Show debug output:
+
+```bash
+python tests/test_jira.py --debug
+```
+
+Display LLM prompts:
+
+```bash
+python tests/test_jira.py --show-prompts
+```
+
+## Limitations
+
+- **API Rate Limits**: Atlassian enforces rate limits on API calls
+- **Field Permissions**: Can only access/modify fields you have permission for
+- **Bulk Operations**: Currently processes items sequentially, not in parallel
+- **Attachment Support**: Does not currently support file attachments
+- **Workflow Transitions**: Limited support for complex workflow transitions
+
+## WebUI Configuration
+
+The JIRA WebUI provides an in-app configuration screen where you can:
+- Enter your JIRA server URL
+- Set your username/email
+- Configure your API token
+
+Configuration is stored locally and persists between sessions.
+
+## See Also
+
+- [GAIA CLI Documentation](/reference/cli) - Full command line interface guide
+- [MCP Server Documentation](/integrations/mcp) - External integration details
+- [Agent Development Guide](/reference/dev) - Build your own agents
+- [Features Overview](/reference/features) - Complete GAIA capabilities
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

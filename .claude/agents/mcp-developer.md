@@ -2,7 +2,7 @@
 name: mcp-developer
 description: MCP (Model Context Protocol) server development. Use PROACTIVELY for creating MCP servers, implementing MCP tools/resources/prompts, WebSocket protocols, or integrating external services via MCP.
 tools: Read, Write, Edit, Bash, Grep
-model: sonnet
+model: opus
 ---
 
 You are an MCP server development specialist for the GAIA framework.

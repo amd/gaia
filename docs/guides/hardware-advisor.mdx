@@ -1,0 +1,133 @@
+---
+title: "Hardware Advisor"
+description: "Determine what LLMs your system can run based on actual hardware"
+---
+
+<Info>
+  **Source Code:** [`examples/hardware_advisor_agent.py`](https://github.com/amd/gaia/blob/main/examples/hardware_advisor_agent.py)
+</Info>
+
+The Hardware Advisor agent helps you figure out what size LLM your system can run by detecting your actual hardware capabilities.
+
+<Info>
+**Privacy-First:** All hardware detection runs locally on your machine. No data leaves your system.
+</Info>
+
+---
+
+## Quick Start
+
+```bash
+python examples/hardware_advisor_agent.py
+```
+
+This starts an interactive session where you can ask about your hardware and get language model recommendations.
+
+---
+
+## Example Interactions
+
+**Check your hardware:**
+```
+You: Show me my system specs
+
+Agent: Let me check your hardware...
+- RAM: 32 GB
+- GPU: AMD Radeon RX 7900 XTX (24 GB VRAM)
+- NPU: Ryzen AI NPU (Available)
+- Processor: AMD Ryzen 9 7950X
+```
+
+**Get recommendations:**
+```
+You: What size LLM can I run?
+
+Agent: With 32 GB RAM, you can safely run models up to ~22 GB.
+Top recommendations:
+- Qwen3-Coder-30B (18.5 GB) - Best for coding
+- Llama-3.1-8B (4.7 GB) - Great general purpose
+```
+
+**Check specific models:**
+```
+You: Can I run a 70B model?
+
+Agent: A 70B model typically requires ~42 GB, which exceeds your
+32 GB RAM. I'd recommend the 30B variant instead, which fits
+comfortably in your available memory.
+```
+
+---
+
+## How It Works
+
+The agent uses three tools:
+
+| Tool | Purpose |
+|------|---------|
+| `get_hardware_info()` | Detects RAM, GPU, NPU via Lemonade Server |
+| `list_available_models()` | Queries model catalog with size estimates |
+| `recommend_models()` | Filters models using the 70% RAM rule |
+
+**The 70% Rule:** Models should use less than 70% of available RAM to leave 30% overhead for inference operations (KV cache, context window, etc.).
+
+---
+
+## Requirements
+
+- **Lemonade Server** must be running for hardware detection
+- **GAIA** installed: `uv pip install amd-gaia`
+
+<Tip>
+GAIA auto-starts Lemonade Server on first use if it's not already running.
+</Tip>
+
+---
+
+## Troubleshooting
+
+<Accordion title="Lemonade Server not running">
+**Error:** `Failed to get hardware information from Lemonade Server`
+
+**Solution:** Start Lemonade Server:
+```bash
+lemonade-server serve
+```
+</Accordion>
+
+<Accordion title="GPU not detected">
+**Possible causes:**
+- **Windows:** PowerShell may be restricted. Run as administrator.
+- **Linux:** `lspci` not installed. Install with: `sudo apt install pciutils`
+
+**Note:** The agent continues with CPU-only recommendations if GPU detection fails.
+</Accordion>
+
+<Accordion title="NPU shows as unavailable">
+**Requirements for NPU:**
+- Ryzen AI processor (8000/9000 series)
+- NPU drivers installed
+- Lemonade Server configured for NPU
+
+The agent works without NPU - it just won't recommend NPU-accelerated models.
+</Accordion>
+
+---
+
+## Learn More
+
+<Card title="Build Your Own" icon="hammer" href="/playbooks/hardware-advisor/part-1-getting-started">
+  Want to understand how this agent works or build something similar? Follow the step-by-step Hardware Advisor Playbook.
+</Card>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

@@ -1,0 +1,26 @@
+# Dependencies
+node_modules
+
+# Git
+.git
+.gitignore
+
+# Environment files (secrets)
+.env
+.env.*
+!.env.example
+
+# Build artifacts (rebuilt in container)
+.mintlify
+
+# Documentation files not needed in image
+*.md
+!README.md
+
+# IDE
+.vscode
+.idea
+
+# OS files
+.DS_Store
+Thumbs.db

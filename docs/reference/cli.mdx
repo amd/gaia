@@ -1,0 +1,926 @@
+---
+title: CLI Reference
+description: Complete command-line interface reference for GAIA with examples and options
+---
+
+<Info>
+  **Source Code:** [`src/gaia/cli.py`](https://github.com/amd/gaia/blob/main/src/gaia/cli.py)
+</Info>
+
+GAIA provides a comprehensive command-line interface (CLI) for interacting with AI models and agents. The CLI allows you to query models directly, manage chat sessions, and access various utilities without writing code.
+
+## Platform Support
+
+<CardGroup cols={2}>
+  <Card title="Windows 11" icon="windows">
+    Full GUI and CLI support with installer and desktop shortcuts
+  </Card>
+  <Card title="Linux" icon="linux">
+    Full GUI and CLI support via source installation (Ubuntu/Debian)
+  </Card>
+</CardGroup>
+
+## Quick Start
+
+<Tabs>
+  <Tab title="Windows">
+    1. Follow the [Getting Started Guide](/quickstart) to install `gaia` CLI and `lemonade` LLM server
+    2. Double click the **GAIA-CLI** desktop icon to launch the command-line shell
+    3. GAIA automatically starts Lemonade Server when needed, or start manually:
+
+    ```bash
+    lemonade-server serve
+    ```
+  </Tab>
+
+  <Tab title="Linux">
+    1. Install from source: Follow [Linux Installation](/quickstart)
+    2. Install Lemonade Server from [lemonade-server.ai](https://www.lemonade-server.ai)
+    3. Start the server:
+
+    ```bash
+    lemonade-server serve
+    ```
+
+    4. Verify installation:
+
+    ```bash
+    gaia -v
+    gaia llm "Hello, world!"
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Core Commands
+
+### LLM Direct Query
+
+<Note>
+The fastest way to interact with AI models - no server management required.
+</Note>
+
+```bash
+gaia llm QUERY [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--model` | string | Client default | Specify the model to use |
+| `--max-tokens` | integer | 512 | Maximum tokens to generate |
+| `--no-stream` | flag | false | Disable streaming response |
+
+**Examples:**
+
+<CodeGroup>
+```bash Basic Query
+gaia llm "What is machine learning?"
+```
+
+```bash Specify Model
+gaia llm "Explain quantum computing" \
+  --model Qwen2.5-0.5B-Instruct-CPU \
+  --max-tokens 200
+```
+
+```bash No Streaming
+gaia llm "Write a short poem about AI" --no-stream
+```
+</CodeGroup>
+
+<Warning>
+The lemonade server must be running. If not available, the command will provide instructions on how to start it.
+</Warning>
+
+---
+
+### Chat Command
+
+Start an interactive conversation or send a single message with conversation history.
+
+```bash
+gaia chat [MESSAGE] [OPTIONS]
+```
+
+**Modes:**
+- **No message**: Starts interactive chat session
+- **Message provided**: Sends single message and exits
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--query, -q` | string | - | Single query to execute |
+| `--model` | string | Qwen3-Coder-30B-A3B-Instruct-GGUF | Model name to use |
+| `--max-steps` | integer | 10 | Maximum conversation steps |
+| `--index, -i` | path(s) | - | PDF document(s) to index for RAG |
+| `--watch, -w` | path(s) | - | Directories to monitor for new documents |
+| `--chunk-size` | integer | 500 | Document chunk size for RAG |
+| `--max-chunks` | integer | 3 | Maximum chunks to retrieve for RAG |
+| `--stats` | flag | false | Show performance statistics |
+| `--streaming` | flag | false | Enable streaming responses |
+| `--show-prompts` | flag | false | Display prompts sent to LLM |
+| `--debug` | flag | false | Enable debug output |
+| `--list-tools` | flag | false | List available tools and exit |
+
+**Examples:**
+
+<CodeGroup>
+```bash Interactive Mode
+gaia chat
+```
+
+```bash Single Message
+gaia chat --query "What is machine learning?"
+```
+
+```bash Single Document
+gaia chat --index manual.pdf
+```
+
+```bash Multiple Documents
+gaia chat --index doc1.pdf doc2.pdf doc3.pdf
+```
+
+```bash Index and Query
+gaia chat --index report.pdf --query "Summarize the report"
+```
+
+```bash Custom Settings
+gaia chat \
+  --model Qwen3-Coder-30B-A3B-Instruct-GGUF \
+  --streaming \
+  --show-stats
+```
+</CodeGroup>
+
+**Interactive Commands:**
+
+During a chat session, use these special commands:
+
+| Command | Description |
+|---------|-------------|
+| `/clear` | Clear conversation history |
+| `/history` | Show conversation history |
+| `/system` | Show current system prompt configuration |
+| `/model` | Show current model information |
+| `/prompt` | Show complete formatted prompt sent to LLM |
+| `/stats` | Show performance statistics (tokens/sec, latency, token counts) |
+| `/help` | Show available commands |
+| `quit`, `exit`, `bye` | End the chat session |
+
+---
+
+### Prompt Command
+
+Send a single prompt to a GAIA agent.
+
+```bash
+gaia prompt "MESSAGE" [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--model` | string | Qwen2.5-0.5B-Instruct-CPU | Model to use for the agent |
+| `--max-tokens` | integer | 512 | Maximum tokens to generate |
+| `--stats` | flag | false | Show performance statistics |
+
+**Examples:**
+
+<CodeGroup>
+```bash Basic
+gaia prompt "What is the weather like today?"
+```
+
+```bash With Stats
+gaia prompt "Create a poem about AI" \
+  --model Qwen2.5-0.5B-Instruct-CPU \
+  --stats
+```
+
+```bash Custom Tokens
+gaia prompt "Write a story" \
+  --model Qwen2.5-0.5B-Instruct-CPU \
+  --max-tokens 1000
+```
+</CodeGroup>
+
+---
+
+## Specialized Agents
+
+### Code Agent
+
+<Card title="Code Development" icon="code" href="/guides/code">
+  AI-powered code generation, analysis, and linting for Python/TypeScript
+</Card>
+
+<Tip>
+The Code Agent requires extended context. Start Lemonade with:
+
+```bash
+lemonade-server serve --ctx-size 32768
+```
+</Tip>
+
+**Features:**
+- Intelligent Language Detection (Python/TypeScript)
+- Code Generation (functions, classes, unit tests)
+- Autonomous Workflow (planning → implementation → testing → verification)
+- Automatic Test Generation
+- Iterative Error Correction
+- Code Analysis with AST
+- Linting & Formatting
+
+**Quick Examples:**
+
+Routing detects "Express" and uses TypeScript:
+<CodeGroup>
+```bash TypeScript/Express
+gaia-code "Create a REST API with Express and SQLite for managing products"
+```
+</CodeGroup>
+
+Routing detects "Django" and uses Python:
+<CodeGroup>
+```bash Python/Django
+gaia-code "Create a Django REST API with authentication"
+```
+</CodeGroup>
+
+Routing detects "React" and uses TypeScript frontend:
+<CodeGroup>
+```bash React Frontend
+gaia-code "Create a React dashboard with user management"
+```
+</CodeGroup>
+
+<CodeGroup>
+```bash Interactive Mode
+gaia-code --interactive
+```
+
+```bash Cloud LLM
+gaia-code "Create a REST API" --use-claude
+```
+</CodeGroup>
+
+[→ Full Code Agent Documentation](/guides/code)
+
+---
+
+### Blender Agent
+
+<Card title="3D Scene Creation" icon="cube" href="/guides/blender">
+  Natural language 3D modeling and scene manipulation
+</Card>
+
+**Features:**
+- Natural Language 3D Modeling
+- Interactive Planning
+- Object Management
+- Material Assignment
+- MCP Integration
+
+**Examples:**
+
+Interactive Blender mode:
+```bash
+gaia blender --interactive
+```
+
+Create specific objects:
+```bash
+gaia blender --query "Create a red cube and blue sphere arranged in a line"
+```
+
+Run built-in examples:
+```bash
+gaia blender --example 2
+```
+
+[→ Full Blender Agent Documentation](/guides/blender)
+
+---
+
+### Talk Command
+
+<Card title="Voice Interaction" icon="microphone" href="/guides/talk">
+  Speech-to-speech conversation with optional document Q&A
+</Card>
+
+```bash
+gaia talk [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--model` | string | Qwen2.5-0.5B-Instruct-CPU | Model to use |
+| `--max-tokens` | integer | 512 | Maximum tokens to generate |
+| `--no-tts` | flag | false | Disable text-to-speech |
+| `--audio-device-index` | integer | auto-detect | Audio input device index |
+| `--whisper-model-size` | string | base | Whisper model [tiny, base, small, medium, large] |
+| `--silence-threshold` | float | 0.5 | Silence threshold in seconds |
+| `--stats` | flag | false | Show performance statistics |
+| `--index, -i` | path | - | PDF document for voice Q&A |
+
+**Examples:**
+
+<CodeGroup>
+```bash Basic
+gaia talk
+```
+
+```bash With Document
+gaia talk --index manual.pdf
+```
+
+```bash No TTS
+gaia talk -i guide.pdf --no-tts
+```
+</CodeGroup>
+
+[→ Full Voice Interaction Guide](/guides/talk)
+
+---
+
+## API Server
+
+<Card title="API Server" icon="server" href="/reference/api">
+  OpenAI-compatible REST API for VSCode and IDE integrations
+</Card>
+
+### Quick Start
+
+1. Start Lemonade with extended context:
+```bash
+lemonade-server serve --ctx-size 32768
+```
+
+2. Start GAIA API server:
+```bash
+gaia api start
+```
+
+3. Test the server:
+```bash
+curl http://localhost:8080/health
+```
+
+### Commands
+
+<Tabs>
+  <Tab title="Start">
+    ```bash
+    gaia api start [OPTIONS]
+    ```
+
+    **Options:**
+    - `--host` - Server host (default: localhost)
+    - `--port` - Server port (default: 8080)
+    - `--background` - Run in background
+    - `--debug` - Enable debug logging
+
+    **Examples:**
+
+    Foreground:
+    ```bash
+    gaia api start
+    ```
+
+    Background with debug:
+    ```bash
+    gaia api start --background --debug
+    ```
+
+    Custom host/port:
+    ```bash
+    gaia api start --host 0.0.0.0 --port 8888
+    ```
+  </Tab>
+
+  <Tab title="Status">
+    ```bash
+    gaia api status
+    ```
+
+    Shows whether the API server is running and displays connection information.
+  </Tab>
+
+  <Tab title="Stop">
+    ```bash
+    gaia api stop
+    ```
+
+    Stops the running API server gracefully.
+  </Tab>
+</Tabs>
+
+[→ Full API Server Documentation](/reference/api)
+
+---
+
+## MCP Bridge
+
+<Card title="MCP Integration" icon="plug" href="/integrations/mcp">
+  Model Context Protocol for external integrations
+</Card>
+
+### Quick Start
+
+Install MCP support:
+```bash
+uv pip install -e ".[mcp]"
+```
+
+Start MCP bridge:
+```bash
+gaia mcp start
+```
+
+Test basic functionality:
+```bash
+gaia mcp test --query "Hello from GAIA MCP!"
+```
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `start` | Start the MCP bridge server |
+| `status` | Check MCP server status |
+| `stop` | Stop background MCP bridge server |
+| `test` | Test MCP bridge functionality |
+| `agent` | Test MCP orchestrator agent |
+| `docker` | Start Docker MCP server |
+
+[→ Full MCP Integration Guide](/integrations/mcp)
+
+---
+
+## Model Management
+
+### Download Command
+
+Download all models required for GAIA agents with streaming progress.
+
+```bash
+gaia download [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--agent` | string | all | Agent to download models for |
+| `--list` | flag | false | List required models without downloading |
+| `--timeout` | integer | 1800 | Timeout per model in seconds |
+| `--host` | string | localhost | Lemonade server host |
+| `--port` | integer | 8000 | Lemonade server port |
+
+**Available Agents:**
+chat, code, talk, rag, blender, jira, docker, vlm, minimal, mcp
+
+**Examples:**
+
+List all models:
+<CodeGroup>
+```bash List All Models
+gaia download --list
+```
+</CodeGroup>
+
+List models for specific agent:
+<CodeGroup>
+```bash List Agent Models
+gaia download --list --agent chat
+```
+</CodeGroup>
+
+Download all models:
+<CodeGroup>
+```bash Download All
+gaia download
+```
+</CodeGroup>
+
+Download for specific agent:
+<CodeGroup>
+```bash Download Agent Models
+gaia download --agent code
+```
+</CodeGroup>
+
+**Example Output:**
+
+```
+📥 Downloading 3 model(s) for 'chat'...
+
+📥 Qwen3-Coder-30B-A3B-Instruct-GGUF
+   ⏳ [1/31] Qwen3-Coder-30B-A3B-Q4_K_M.gguf: 3.5 GB/17.7 GB (20%)
+   ...
+   ✅ Download complete
+
+✅ nomic-embed-text-v2-moe-GGUF (already downloaded)
+
+==================================================
+📊 Download Summary:
+   ✅ Downloaded: 2
+   ⏭️  Skipped (already available): 1
+==================================================
+```
+
+---
+
+### Pull Command
+
+Download/install a specific model from the Lemonade Server registry.
+
+```bash
+gaia pull MODEL_NAME [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `--checkpoint` | string | HuggingFace checkpoint (e.g., unsloth/Model-GGUF:Q4_K_M) |
+| `--recipe` | string | Lemonade recipe (e.g., llamacpp, oga-cpu) |
+| `--reasoning` | flag | Mark as reasoning model (like DeepSeek) |
+| `--vision` | flag | Mark as having vision capabilities |
+| `--embedding` | flag | Mark as embedding model |
+| `--reranking` | flag | Mark as reranking model |
+| `--mmproj` | string | Multimodal projector file for vision models |
+| `--timeout` | integer | Timeout in seconds (default: 1200) |
+| `--host` | string | Lemonade server host (default: localhost) |
+| `--port` | integer | Lemonade server port (default: 8000) |
+
+**Examples:**
+
+<CodeGroup>
+```bash Pull Registered Model
+gaia pull Qwen3-0.6B-GGUF
+```
+
+```bash Custom Model
+gaia pull user.Custom-Model-GGUF \
+  --checkpoint unsloth/Custom-Model-GGUF:Q4_K_M \
+  --recipe llamacpp
+```
+
+```bash Reasoning Model
+gaia pull user.DeepSeek-GGUF \
+  --checkpoint unsloth/DeepSeek-R1-GGUF \
+  --recipe llamacpp \
+  --reasoning
+```
+
+```bash Vision Model
+gaia pull user.Vision-Model \
+  --checkpoint model/vision:Q4 \
+  --recipe llamacpp \
+  --vision \
+  --mmproj mmproj.gguf
+```
+</CodeGroup>
+
+<Note>
+Use the `user.` prefix for custom models not in the official registry. Custom models require both `--checkpoint` and `--recipe` parameters.
+</Note>
+
+---
+
+## Evaluation Commands
+
+<Card title="Evaluation Framework" icon="chart-bar" href="/reference/eval">
+  Systematic testing, benchmarking, and model comparison
+</Card>
+
+**Tools for:**
+- Ground Truth Generation
+- Automated Evaluation
+- Batch Experimentation
+- Performance Analysis
+- Transcript Testing
+
+**Quick Examples:**
+
+Generate evaluation data:
+```bash
+gaia groundtruth -f ./data/document.html
+```
+
+Create sample experiment configuration:
+```bash
+gaia batch-experiment --create-sample-config experiments.json
+```
+
+Run systematic experiments:
+```bash
+gaia batch-experiment -c experiments.json -i ./data -o ./results
+```
+
+Evaluate results:
+```bash
+gaia eval -f ./results/experiment.json
+```
+
+Generate report:
+```bash
+gaia report -d ./eval_results
+```
+
+Launch visualizer:
+```bash
+gaia visualize
+```
+
+[→ Full Evaluation Guide](/reference/eval)
+
+---
+
+### Visualize Command
+
+Launch interactive web-based visualizer for comparing evaluation results.
+
+```bash
+gaia visualize [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--port` | integer | 3000 | Visualizer server port |
+| `--experiments-dir` | path | ./output/experiments | Experiments directory |
+| `--evaluations-dir` | path | ./output/evaluations | Evaluations directory |
+| `--workspace` | path | current directory | Base workspace directory |
+| `--no-browser` | flag | false | Don't auto-open browser |
+| `--host` | string | localhost | Host address |
+
+**Examples:**
+
+<CodeGroup>
+```bash Default
+gaia visualize
+```
+
+```bash Custom Directories
+gaia visualize \
+  --experiments-dir ./my_experiments \
+  --evaluations-dir ./my_evaluations
+```
+
+```bash Custom Port
+gaia visualize --port 8080 --no-browser
+```
+</CodeGroup>
+
+**Features:**
+- Interactive Comparison (side-by-side)
+- Key Metrics Dashboard
+- Quality Analysis
+- Real-time Updates
+- Responsive Design
+
+<Note>
+Node.js must be installed. Dependencies are automatically installed on first run.
+</Note>
+
+---
+
+## Utility Commands
+
+### Stats Command
+
+View performance statistics from the most recent model run.
+
+```bash
+gaia stats [OPTIONS]
+```
+
+---
+
+### Test Commands
+
+Run various tests for development and troubleshooting.
+
+```bash
+gaia test --test-type TYPE [OPTIONS]
+```
+
+<Tabs>
+  <Tab title="TTS Tests">
+    **Test Types:**
+    - `tts-preprocessing` - Test TTS text preprocessing
+    - `tts-streaming` - Test TTS streaming playback
+    - `tts-audio-file` - Test TTS audio file generation
+
+    **Options:**
+    - `--test-text` - Text to use for TTS tests
+    - `--output-audio-file` - Output file path (default: output.wav)
+
+    **Examples:**
+
+    Test preprocessing:
+    ```bash
+    gaia test --test-type tts-preprocessing --test-text "Hello, world!"
+    ```
+
+    Test streaming:
+    ```bash
+    gaia test --test-type tts-streaming --test-text "Testing streaming"
+    ```
+
+    Generate audio file:
+    ```bash
+    gaia test --test-type tts-audio-file \
+      --test-text "Save this as audio" \
+      --output-audio-file speech.wav
+    ```
+  </Tab>
+
+  <Tab title="ASR Tests">
+    **Test Types:**
+    - `asr-file-transcription` - Test ASR file transcription
+    - `asr-microphone` - Test ASR microphone input
+    - `asr-list-audio-devices` - List audio input devices
+
+    **Options:**
+    - `--input-audio-file` - Input audio file path
+    - `--recording-duration` - Recording duration (default: 10s)
+    - `--audio-device-index` - Audio input device index
+    - `--whisper-model-size` - Whisper model size (default: base)
+
+    **Examples:**
+
+    Test file transcription:
+    ```bash
+    gaia test --test-type asr-file-transcription \
+      --input-audio-file ./data/audio/test.m4a
+    ```
+
+    Test microphone (30 seconds):
+    ```bash
+    gaia test --test-type asr-microphone --recording-duration 30
+    ```
+
+    List audio devices:
+    ```bash
+    gaia test --test-type asr-list-audio-devices
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+### YouTube Utilities
+
+Download transcripts from YouTube videos.
+
+```bash
+gaia youtube --download-transcript URL [--output-path PATH]
+```
+
+**Options:**
+- `--download-transcript` - YouTube URL to download transcript from
+- `--output-path` - Output file path (defaults to transcript_{video_id}.txt)
+
+**Example:**
+
+```bash
+gaia youtube \
+  --download-transcript "https://youtube.com/watch?v=..." \
+  --output-path transcript.txt
+```
+
+---
+
+### Kill Command
+
+Terminate processes running on specific ports.
+
+```bash
+gaia kill --port PORT_NUMBER
+```
+
+**Example:**
+
+Kill process on port 8000:
+```bash
+gaia kill --port 8000
+```
+
+This command will:
+- Find the process ID (PID) bound to the specified port
+- Forcefully terminate that process
+- Provide feedback about success or failure
+
+---
+
+## Global Options
+
+All commands support these global options:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--logging-level` | string | INFO | Logging verbosity [DEBUG, INFO, WARNING, ERROR, CRITICAL] |
+| `-v, --version` | flag | - | Show program's version and exit |
+
+---
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Connection Errors" icon="link-slash">
+    If you get connection errors, ensure Lemonade server is running:
+
+    ```bash
+    lemonade-server serve
+    ```
+  </Accordion>
+
+  <Accordion title="Model Issues" icon="circle-exclamation">
+    **Check available system memory** (16GB+ recommended)
+
+    **Verify model compatibility:**
+    ```bash
+    gaia download --list
+    ```
+
+    **Pre-download models:**
+    ```bash
+    gaia download
+    ```
+
+    **Install additional models:** See [Features Guide](/reference/features#installing-additional-models)
+  </Accordion>
+
+  <Accordion title="Audio Issues" icon="microphone-slash">
+    **List available devices:**
+    ```bash
+    gaia test --test-type asr-list-audio-devices
+    ```
+
+    **Verify microphone permissions** in Windows settings
+
+    **Try different audio device indices** if default doesn't work
+  </Accordion>
+
+  <Accordion title="Performance" icon="gauge-high">
+    **For optimal NPU performance:**
+    - Disable discrete GPUs in Device Manager
+    - Ensure NPU drivers are up to date
+    - Monitor system resources during execution
+  </Accordion>
+</AccordionGroup>
+
+For more help, see:
+- [Development Guide](/reference/dev#troubleshooting)
+- [FAQ](/reference/faq)
+
+---
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Code Agent" icon="code" href="/guides/code">
+    Python/TypeScript development
+  </Card>
+  <Card title="Blender Agent" icon="cube" href="/guides/blender">
+    3D scene creation
+  </Card>
+  <Card title="Voice Interaction" icon="microphone" href="/guides/talk">
+    Speech-to-speech conversation
+  </Card>
+  <Card title="API Server" icon="server" href="/reference/api">
+    OpenAI-compatible REST API
+  </Card>
+  <Card title="MCP Integration" icon="plug" href="/integrations/mcp">
+    Model Context Protocol
+  </Card>
+  <Card title="Evaluation Framework" icon="chart-bar" href="/reference/eval">
+    Testing and benchmarking
+  </Card>
+</CardGroup>
+
+---
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

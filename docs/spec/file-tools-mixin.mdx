@@ -1,0 +1,575 @@
+---
+title: "FileToolsMixin"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/chat/tools/file_tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tools/file_tools.py)
+</Info>
+
+<Note>
+**Component:** FileToolsMixin
+**Module:** `gaia.agents.chat.tools.file_tools`
+**Import:** `from gaia.agents.chat.tools.file_tools import FileToolsMixin`
+</Note>
+---
+
+## Overview
+
+FileToolsMixin provides directory monitoring capabilities for the Chat Agent, enabling automatic document indexing when files are created or modified. This mixin focuses on watch directory functionality, with file search operations delegated to ShellToolsMixin for maximum flexibility.
+
+**Key Features:**
+- Directory monitoring with automatic document indexing
+- Path validation with user confirmation
+- Auto-save session state after directory changes
+- Integration with RAG system for document processing
+
+---
+
+## Requirements
+
+### Functional Requirements
+
+1. **Directory Monitoring**
+   - Add directories to watch list
+   - Automatically index new documents (PDF files)
+   - Track indexed files to prevent duplicates
+
+2. **Path Validation**
+   - Validate directory paths before adding to watch list
+   - Check for path access permissions
+   - Prompt user for confirmation on new paths
+
+3. **Auto-Indexing**
+   - Scan directory for existing PDF files
+   - Index all found documents automatically
+   - Report indexing statistics (total found, successfully indexed)
+
+4. **Session Management**
+   - Auto-save session after adding watch directory
+   - Persist watch directory list across sessions
+   - Track indexed files in session state
+
+### Non-Functional Requirements
+
+1. **Performance**
+   - Efficient directory scanning with Path.glob()
+   - Batch indexing of existing documents
+   - Non-blocking file operations
+
+2. **Error Handling**
+   - Graceful handling of missing directories
+   - Individual file indexing errors don't block batch operation
+   - Clear error messages for validation failures
+
+3. **Integration**
+   - Seamless integration with PathValidator
+   - Works with RAG system for document processing
+   - Compatible with session management system
+
+---
+
+## API Specification
+
+### File Location
+
+```
+src/gaia/agents/chat/tools/file_tools.py
+```
+
+### Public Interface
+
+```python
+from typing import Any, Dict
+from pathlib import Path
+
+class FileToolsMixin:
+    """
+    Mixin providing directory monitoring for auto-indexing.
+
+    Requires the agent to have:
+    - self.path_validator: PathValidator instance
+    - self.rag: RAG system instance
+    - self.watch_directories: List of monitored directories
+    - self.indexed_files: Set of indexed file paths
+    - self._watch_directory(): Method to start watching
+    - self._auto_save_session(): Method to save session state
+
+    Tools provided:
+    - add_watch_directory: Monitor directory for file changes and auto-index
+    """
+
+    def register_file_tools(self) -> None:
+        """
+        Register file operation tools.
+
+        This registers the add_watch_directory tool with the agent's
+        tool registry.
+        """
+        pass
+
+    # Tool: add_watch_directory
+    def add_watch_directory(directory: str) -> Dict[str, Any]:
+        """
+        Add a directory to monitor for new documents.
+
+        Files will be automatically indexed when created or modified.
+
+        Args:
+            directory: Directory path to watch
+
+        Returns:
+            Dictionary with status, message, and indexing statistics:
+            {
+                "status": "success" | "error",
+                "message": "Now watching: /path/to/dir",
+                "total_files_found": 10,
+                "files_indexed": 8,
+                "error": "Error message if failed"
+            }
+
+        Example:
+            result = add_watch_directory("/home/user/Documents/medical")
+            print(f"Indexed {result['files_indexed']} files")
+
+        Raises:
+            No exceptions - all errors returned in result dict
+        """
+        pass
+```
+
+---
+
+## Implementation Details
+
+### Path Validation
+
+```python
+def add_watch_directory(directory: str) -> Dict[str, Any]:
+    try:
+        # Validate path with PathValidator (handles user prompting)
+        if not self.path_validator.is_path_allowed(directory):
+            return {"status": "error", "error": f"Access denied: {directory}"}
+
+        # Check if directory exists
+        if not os.path.exists(directory):
+            return {
+                "status": "error",
+                "error": f"Directory not found: {directory}",
+            }
+```
+
+### Directory Scanning and Indexing
+
+```python
+        # Add to watch list if not already watching
+        if directory not in self.watch_directories:
+            self.watch_directories.append(directory)
+            self._watch_directory(directory)
+
+            # Index existing files in the directory
+            path = Path(directory)
+            pdf_files = list(path.glob("*.pdf"))
+            indexed_count = 0
+
+            for pdf_file in pdf_files:
+                try:
+                    if self.rag.index_document(str(pdf_file)):
+                        self.indexed_files.add(str(pdf_file))
+                        indexed_count += 1
+                        if hasattr(self, "debug") and self.debug:
+                            logger.debug(f"Auto-indexed: {pdf_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to index {pdf_file}: {e}")
+
+            # Auto-save session after adding watch directory
+            self._auto_save_session()
+
+            return {
+                "status": "success",
+                "message": f"Now watching: {directory}",
+                "total_files_found": len(pdf_files),
+                "files_indexed": indexed_count,
+            }
+```
+
+### Duplicate Prevention
+
+```python
+        else:
+            return {
+                "status": "success",
+                "message": f"Already watching: {directory}",
+            }
+```
+
+### Error Handling
+
+```python
+    except Exception as e:
+        logger.error(f"Error adding watch directory: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "has_errors": True,
+            "operation": "add_watch_directory",
+            "directory": directory,
+            "hint": "Failed to start watching directory. Check if directory exists and is readable.",
+        }
+```
+
+---
+
+## Testing Requirements
+
+### Unit Tests
+
+**File:** `tests/agents/chat/test_file_tools_mixin.py`
+
+```python
+import pytest
+from pathlib import Path
+from gaia.agents.chat.tools.file_tools import FileToolsMixin
+from gaia.agents.base import Agent
+
+class MockChatAgent(Agent, FileToolsMixin):
+    """Mock Chat Agent for testing."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.watch_directories = []
+        self.indexed_files = set()
+        self.path_validator = MockPathValidator()
+        self.rag = MockRAG()
+
+    def _get_system_prompt(self):
+        return "Test agent"
+
+    def _create_console(self):
+        from gaia import SilentConsole
+        return SilentConsole()
+
+    def _register_tools(self):
+        self.register_file_tools()
+
+    def _watch_directory(self, directory):
+        """Mock implementation."""
+        pass
+
+    def _auto_save_session(self):
+        """Mock implementation."""
+        pass
+
+def test_add_watch_directory_success(tmp_path):
+    """Test successfully adding a watch directory."""
+    agent = MockChatAgent(silent_mode=True)
+
+    # Create test PDF files
+    (tmp_path / "doc1.pdf").touch()
+    (tmp_path / "doc2.pdf").touch()
+
+    result = agent._execute_tool("add_watch_directory", {"directory": str(tmp_path)})
+
+    assert result["status"] == "success"
+    assert str(tmp_path) in agent.watch_directories
+    assert result["total_files_found"] == 2
+
+def test_add_watch_directory_not_found():
+    """Test adding non-existent directory."""
+    agent = MockChatAgent(silent_mode=True)
+
+    result = agent._execute_tool("add_watch_directory", {"directory": "/nonexistent/path"})
+
+    assert result["status"] == "error"
+    assert "not found" in result["error"].lower()
+
+def test_add_watch_directory_access_denied():
+    """Test adding directory with denied access."""
+    agent = MockChatAgent(silent_mode=True)
+    agent.path_validator.allowed = False
+
+    result = agent._execute_tool("add_watch_directory", {"directory": "/some/path"})
+
+    assert result["status"] == "error"
+    assert "denied" in result["error"].lower()
+
+def test_add_watch_directory_already_watching(tmp_path):
+    """Test adding directory that's already being watched."""
+    agent = MockChatAgent(silent_mode=True)
+
+    # Add directory first time
+    agent._execute_tool("add_watch_directory", {"directory": str(tmp_path)})
+
+    # Add same directory again
+    result = agent._execute_tool("add_watch_directory", {"directory": str(tmp_path)})
+
+    assert result["status"] == "success"
+    assert "already watching" in result["message"].lower()
+
+def test_add_watch_directory_indexing_failure(tmp_path, monkeypatch):
+    """Test handling of indexing failures."""
+    agent = MockChatAgent(silent_mode=True)
+
+    # Create test PDF
+    (tmp_path / "doc.pdf").touch()
+
+    # Make RAG indexing fail
+    def mock_index_fail(path):
+        raise Exception("Indexing failed")
+
+    monkeypatch.setattr(agent.rag, "index_document", mock_index_fail)
+
+    result = agent._execute_tool("add_watch_directory", {"directory": str(tmp_path)})
+
+    assert result["status"] == "success"
+    assert result["files_indexed"] == 0
+    assert result["total_files_found"] == 1
+
+def test_add_watch_directory_auto_save_called(tmp_path, monkeypatch):
+    """Test that auto-save is called after adding directory."""
+    agent = MockChatAgent(silent_mode=True)
+
+    save_called = False
+    def mock_save():
+        nonlocal save_called
+        save_called = True
+
+    monkeypatch.setattr(agent, "_auto_save_session", mock_save)
+
+    agent._execute_tool("add_watch_directory", {"directory": str(tmp_path)})
+
+    assert save_called
+
+def test_file_tools_mixin_integration():
+    """Test FileToolsMixin can be mixed into Chat Agent."""
+    from gaia.agents.chat import ChatAgent
+
+    # Verify ChatAgent has FileToolsMixin
+    assert hasattr(ChatAgent, "register_file_tools")
+```
+
+---
+
+## Dependencies
+
+### Required Packages
+
+```toml
+# pyproject.toml
+[project]
+dependencies = [
+    # No additional dependencies - uses Python standard library
+]
+```
+
+### Import Dependencies
+
+```python
+import logging
+import os
+from pathlib import Path
+from typing import Any, Dict
+
+logger = logging.getLogger(__name__)
+```
+
+### Internal Dependencies
+
+- `gaia.agents.base.tools.tool`: Tool decorator
+- `PathValidator`: For path validation and user confirmation
+- `RAG`: For document indexing
+- `SessionManager`: For persisting watch directories
+
+---
+
+## Error Handling
+
+### Common Errors and Responses
+
+```python
+# Directory not found
+if not os.path.exists(directory):
+    return {
+        "status": "error",
+        "error": f"Directory not found: {directory}",
+    }
+
+# Access denied
+if not self.path_validator.is_path_allowed(directory):
+    return {"status": "error", "error": f"Access denied: {directory}"}
+
+# Indexing failure (individual file)
+try:
+    if self.rag.index_document(str(pdf_file)):
+        self.indexed_files.add(str(pdf_file))
+        indexed_count += 1
+except Exception as e:
+    logger.warning(f"Failed to index {pdf_file}: {e}")
+    # Continue with next file
+
+# General error
+except Exception as e:
+    logger.error(f"Error adding watch directory: {e}")
+    return {
+        "status": "error",
+        "error": str(e),
+        "has_errors": True,
+        "operation": "add_watch_directory",
+        "directory": directory,
+        "hint": "Failed to start watching directory. Check if directory exists and is readable.",
+    }
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Adding Watch Directory
+
+```python
+from gaia.agents.chat import ChatAgent
+
+# Create Chat Agent
+agent = ChatAgent(model="Qwen2.5-0.5B-Instruct-CPU")
+
+# Add directory to watch list
+result = agent.add_watch_directory("/home/user/Documents/medical")
+
+if result["status"] == "success":
+    print(f"✅ {result['message']}")
+    print(f"Found {result['total_files_found']} PDF files")
+    print(f"Indexed {result['files_indexed']} documents")
+else:
+    print(f"❌ Error: {result['error']}")
+```
+
+### Example 2: Monitoring Multiple Directories
+
+```python
+# Add multiple directories
+directories = [
+    "/home/user/Documents/medical",
+    "/home/user/Documents/research",
+    "/home/user/Downloads/papers"
+]
+
+for directory in directories:
+    result = agent.add_watch_directory(directory)
+    if result["status"] == "success":
+        print(f"✓ Watching {directory}")
+        print(f"  Indexed {result['files_indexed']}/{result['total_files_found']} files")
+```
+
+### Example 3: Chat Integration
+
+```python
+# User asks agent to monitor a directory
+agent.chat("Please watch my Documents/medical folder for new PDFs")
+
+# Agent will:
+# 1. Validate the path
+# 2. Add to watch list
+# 3. Index existing PDFs
+# 4. Report statistics
+
+# Output:
+# "I've added Documents/medical to my watch list. I found 15 PDF files
+# and successfully indexed 14 of them. I'll automatically index any new
+# documents you add to this folder."
+```
+
+---
+
+## Integration Notes
+
+### PathValidator Integration
+
+FileToolsMixin requires a PathValidator instance for security:
+
+```python
+# In ChatAgent.__init__()
+from gaia.agents.chat.path_validator import PathValidator
+
+self.path_validator = PathValidator(
+    session_manager=self.session_manager,
+    console=self.console
+)
+```
+
+### RAG System Integration
+
+The mixin delegates document indexing to the RAG system:
+
+```python
+# RAG.index_document() must return success/failure
+if self.rag.index_document(str(pdf_file)):
+    self.indexed_files.add(str(pdf_file))
+    indexed_count += 1
+```
+
+### Session Management Integration
+
+Watch directories are persisted across sessions:
+
+```python
+# Auto-save after adding watch directory
+self._auto_save_session()
+
+# Session data includes:
+{
+    "watch_directories": ["/path/to/dir1", "/path/to/dir2"],
+    "indexed_documents": ["doc1.pdf", "doc2.pdf"]
+}
+```
+
+---
+
+## Implementation Checklist
+
+### Step 1: Core Implementation
+- [x] Create FileToolsMixin class
+- [x] Implement register_file_tools()
+- [x] Implement add_watch_directory tool
+- [x] Add path validation logic
+- [x] Add directory scanning logic
+- [x] Add auto-indexing logic
+
+### Step 2: Integration
+- [x] Integrate with PathValidator
+- [x] Integrate with RAG system
+- [x] Integrate with session management
+- [x] Add to ChatAgent
+
+### Step 3: Error Handling
+- [x] Handle missing directories
+- [x] Handle access denied
+- [x] Handle indexing failures
+- [x] Provide clear error messages
+
+### Step 4: Testing
+- [x] Write unit tests
+- [x] Test path validation
+- [x] Test indexing workflow
+- [x] Test error cases
+- [x] Test integration with ChatAgent
+
+### Step 5: Documentation
+- [x] Add docstrings
+- [x] Add usage examples
+- [x] Document integration points
+- [x] Update this specification
+
+---
+
+*FileToolsMixin Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

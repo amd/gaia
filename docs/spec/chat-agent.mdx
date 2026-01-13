@@ -1,0 +1,491 @@
+---
+title: "ChatAgent"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/chat/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/agent.py)
+</Info>
+
+<Note>
+**Component:** ChatAgent - Reference Conversational AI Implementation
+**Module:** `gaia.agents.chat.agent`
+**Inherits:** Agent, RAGToolsMixin, FileToolsMixin, ShellToolsMixin, FileSearchToolsMixin
+</Note>
+
+---
+
+## Overview
+
+ChatAgent is GAIA's reference implementation for conversational AI with document Q&A (RAG), file operations, and shell command execution. It demonstrates best practices for agent development and serves as the foundation for specialized agents.
+
+**Key Features:**
+- Document Q&A using RAG (Retrieval-Augmented Generation)
+- Automatic file indexing with file system monitoring
+- Multi-drive file search (intelligent phase-based search)
+- Shell command execution
+- Session persistence with auto-save
+- Security: Path validation, symlink protection
+
+---
+
+## Requirements
+
+### Functional Requirements
+
+1. **RAG System**
+   - Index documents (PDF, TXT, MD, code files)
+   - Query indexed documents
+   - File-specific queries
+   - Adaptive chunk retrieval
+   - Semantic/heuristic chunking
+
+2. **File Operations**
+   - Search files across drives (phase-based: fast → thorough)
+   - Search directories
+   - Read/write files with security validation
+   - Directory monitoring (watchdog)
+   - Auto-reindexing on file changes
+
+3. **Shell Integration**
+   - Execute shell commands safely
+   - Capture stdout/stderr
+   - Timeout management
+
+4. **Session Management**
+   - Create/load/save sessions
+   - Persist conversation history
+   - Track indexed documents
+   - Auto-save after operations
+
+### Non-Functional Requirements
+
+1. **Security**
+   - Path validation (no path traversal)
+   - Symlink protection (O_NOFOLLOW)
+   - Configurable allowed paths
+   - No arbitrary code execution
+
+2. **Performance**
+   - File search: Phase 1 (fast) → Phase 2 (deep)
+   - Debounced file change detection
+   - LRU cache for file monitoring
+   - Streaming for large queries
+
+3. **Usability**
+   - Context inference (single doc auto-query)
+   - Smart discovery (find+index workflow)
+   - Progress indicators
+   - Clear error messages
+
+---
+
+## API Specification
+
+### ChatAgentConfig
+
+```python
+@dataclass
+class ChatAgentConfig:
+    """Configuration for ChatAgent."""
+
+    # LLM settings
+    use_claude: bool = False
+    use_chatgpt: bool = False
+    claude_model: str = "claude-sonnet-4-20250514"
+    base_url: str = "http://localhost:8000/api/v1"
+    model_id: Optional[str] = None  # Default: Qwen3-Coder-30B
+
+    # Execution
+    max_steps: int = 10
+    streaming: bool = False
+
+    # Debug/output
+    debug: bool = False
+    show_prompts: bool = False
+    show_stats: bool = False
+    silent_mode: bool = False
+    output_dir: Optional[str] = None
+
+    # RAG settings
+    rag_documents: List[str] = field(default_factory=list)
+    watch_directories: List[str] = field(default_factory=list)
+    chunk_size: int = 500
+    chunk_overlap: int = 100
+    max_chunks: int = 5
+    use_llm_chunking: bool = False  # False = fast heuristic
+
+    # Security
+    allowed_paths: Optional[List[str]] = None
+```
+
+### Public API
+
+```python
+class ChatAgent(Agent, RAGToolsMixin, FileToolsMixin, ShellToolsMixin, FileSearchToolsMixin):
+    """
+    Chat agent with RAG, file operations, and shell capabilities.
+    """
+
+    SIMPLE_TOOLS = [
+        "list_indexed_documents",
+        "rag_status",
+        "query_documents",
+        "query_specific_file",
+        "search_indexed_chunks",
+        "dump_document",
+        "search_file_content",
+        "search_file",
+        "search_directory",
+        "read_file",
+        "write_file",
+        "index_directory",
+        "run_shell_command",
+    ]
+
+    def __init__(self, config: Optional[ChatAgentConfig] = None):
+        """Initialize Chat Agent with config."""
+        pass
+
+    def load_session(self, session_id: str) -> bool:
+        """Load saved session, restoring indexed docs and history."""
+        pass
+
+    def save_current_session(self) -> bool:
+        """Save current session state."""
+        pass
+
+    def reindex_file(self, file_path: str) -> None:
+        """Reindex modified/created file (auto-called by file watcher)."""
+        pass
+
+    def stop_watching(self) -> None:
+        """Stop all file system observers."""
+        pass
+```
+
+### Tool Examples
+
+**RAG Tools (from RAGToolsMixin):**
+```python
+@tool
+def query_documents(query: str, max_chunks: int = 5) -> Dict[str, Any]:
+    """Search all indexed documents for relevant content."""
+    pass
+
+@tool
+def index_document(file_path: str) -> Dict[str, Any]:
+    """Index a document for RAG search."""
+    pass
+```
+
+**File Tools (from FileSearchToolsMixin):**
+```python
+@tool
+def search_file(file_pattern: str, directory: str = None) -> Dict[str, Any]:
+    """
+    Search for files matching pattern across drives.
+    Phase 1: Common locations (Documents, Downloads, Desktop)
+    Phase 2: Deep search entire drive if not found
+    """
+    pass
+
+@tool
+def read_file(file_path: str) -> Dict[str, Any]:
+    """Read file content with security validation."""
+    pass
+```
+
+**Shell Tools (from ShellToolsMixin):**
+```python
+@tool
+def run_shell_command(command: str, timeout: int = 30) -> Dict[str, Any]:
+    """Execute shell command and return output."""
+    pass
+```
+
+---
+
+## Implementation Details
+
+### Smart Discovery Workflow
+
+**User asks domain-specific question without indexed docs:**
+
+```python
+# System prompt teaches agent this workflow:
+# 1. Check if relevant documents indexed
+# 2. If NO:
+#    a. Extract key terms from question
+#    b. Search for files: search_file(file_pattern="key terms")
+#    c. Index found files: index_document(file_path)
+#    d. Provide status: "Found and indexed X file(s)"
+#    e. Query to answer: query_specific_file(...)
+# 3. If YES: query directly
+```
+
+**Example:**
+```
+User: "what is the vision of the oil & gas regulator?"
+
+Agent: {"tool": "list_indexed_documents", "tool_args": {}}
+Result: {"documents": [], "count": 0}
+
+Agent: {"tool": "search_file", "tool_args": {"file_pattern": "oil gas regulator"}}
+Result: {"files": ["/docs/Oil-Gas-Manual.pdf"], "count": 1}
+
+Agent: {"tool": "index_document", "tool_args": {"file_path": "/docs/Oil-Gas-Manual.pdf"}}
+Result: {"status": "success", "chunks": 150}
+
+Agent: {"tool": "query_specific_file", "tool_args": {"file_path": "/docs/Oil-Gas-Manual.pdf", "query": "vision"}}
+Result: {"chunks": ["The vision is to be recognized..."], "scores": [0.92]}
+
+Agent: {"answer": "According to the Oil & Gas Manual, the vision is..."}
+```
+
+### File Change Monitoring
+
+**Implementation:**
+```python
+class FileChangeHandler(FileSystemEventHandler):
+    """Handler for file system changes to trigger re-indexing."""
+
+    def __init__(self, agent):
+        self.agent = agent
+        self.last_indexed = {}  # LRU cache
+        self.debounce_time = 2.0  # seconds
+
+    def on_modified(self, event):
+        """Handle file modification."""
+        if not event.is_directory and self._should_index(event.src_path):
+            self._schedule_reindex(event.src_path)
+
+    def _schedule_reindex(self, file_path: str):
+        """Debounced reindexing with LRU eviction."""
+        current_time = time.time()
+        last_time = self.last_indexed.get(file_path, 0)
+
+        if current_time - last_time > self.debounce_time:
+            self.last_indexed[file_path] = current_time
+            self.agent.reindex_file(file_path)
+
+            # LRU eviction (max 1000 entries)
+            if len(self.last_indexed) > 1000:
+                oldest = sorted(self.last_indexed.items(), key=lambda x: x[1])[:100]
+                for path, _ in oldest:
+                    del self.last_indexed[path]
+```
+
+### Security: Path Validation
+
+**Prevents TOCTOU attacks using O_NOFOLLOW:**
+```python
+def _validate_and_open_file(self, file_path: str, mode: str = "r"):
+    """
+    Safely open file with TOCTOU protection.
+
+    Uses O_NOFOLLOW flag to reject symlinks.
+    """
+    import stat
+
+    # Determine flags
+    flags = os.O_RDONLY if 'r' in mode else os.O_WRONLY | os.O_CREAT
+
+    # CRITICAL: Add O_NOFOLLOW
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+
+    # Open file descriptor
+    try:
+        fd = os.open(file_path, flags)
+    except OSError as e:
+        if e.errno == 40:  # ELOOP (symlink)
+            raise PermissionError(f"Symlinks not allowed: {file_path}")
+        raise
+
+    # Verify it's a regular file
+    file_stat = os.fstat(fd)
+    if not stat.S_ISREG(file_stat.st_mode):
+        os.close(fd)
+        raise PermissionError(f"Not a regular file: {file_path}")
+
+    # Validate against allowed paths
+    real_path = Path(os.readlink(f"/proc/self/fd/{fd}")).resolve()
+    if not self._is_path_allowed(real_path):
+        os.close(fd)
+        raise PermissionError(f"Access denied: {real_path}")
+
+    return os.fdopen(fd, mode)
+```
+
+---
+
+## Testing Requirements
+
+### Unit Tests
+
+```python
+# tests/agents/test_chat_agent.py
+
+def test_chat_agent_initialization(tmp_path):
+    """Test ChatAgent initializes correctly."""
+    config = ChatAgentConfig(
+        rag_documents=[],
+        allowed_paths=[str(tmp_path)],
+        silent_mode=True
+    )
+    agent = ChatAgent(config)
+    assert agent is not None
+
+def test_smart_discovery_workflow(tmp_path):
+    """Test smart discovery finds and indexes files."""
+    # Create test document
+    doc = tmp_path / "manual.pdf"
+    doc.write_text("The vision is...")
+
+    config = ChatAgentConfig(
+        allowed_paths=[str(tmp_path)],
+        silent_mode=True
+    )
+    agent = ChatAgent(config)
+
+    # Query should trigger discovery
+    result = agent.process_query("What is the vision in the manual?")
+
+    assert result["status"] == "success"
+    assert agent.rag.indexed_files
+    assert str(doc) in agent.rag.indexed_files
+
+def test_file_security_symlink_rejection(tmp_path):
+    """Test that symlinks are rejected."""
+    real_file = tmp_path / "real.txt"
+    real_file.write_text("content")
+
+    symlink = tmp_path / "link.txt"
+    symlink.symlink_to(real_file)
+
+    config = ChatAgentConfig(allowed_paths=[str(tmp_path)], silent_mode=True)
+    agent = ChatAgent(config)
+
+    with pytest.raises(PermissionError, match="Symlinks not allowed"):
+        agent._validate_and_open_file(str(symlink))
+
+def test_session_persistence(tmp_path):
+    """Test session save/load."""
+    config = ChatAgentConfig(
+        rag_documents=[],
+        allowed_paths=[str(tmp_path)],
+        silent_mode=True
+    )
+    agent = ChatAgent(config)
+
+    # Index a document
+    doc = tmp_path / "test.txt"
+    doc.write_text("test content")
+    agent.rag.index_document(str(doc))
+
+    # Save session
+    assert agent.save_current_session()
+    session_id = agent.current_session.session_id
+
+    # Load in new agent
+    agent2 = ChatAgent(config)
+    assert agent2.load_session(session_id)
+    assert str(doc) in agent2.indexed_files
+```
+
+---
+
+## Dependencies
+
+```toml
+[project.optional-dependencies]
+rag = [
+    "sentence-transformers>=2.0.0",
+    "faiss-cpu>=1.7.0",
+    "pypdf>=3.0.0",
+]
+
+chat = [
+    "watchdog>=2.1.0",  # File monitoring
+    "aiohttp>=3.8.0",   # Async HTTP
+]
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Basic Chat with RAG
+
+```python
+from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+# Configure agent
+config = ChatAgentConfig(
+    rag_documents=["./docs/manual.pdf"],
+    chunk_size=500,
+    max_chunks=5
+)
+
+# Create agent
+agent = ChatAgent(config)
+
+# Query document
+result = agent.process_query("What are the safety guidelines?")
+print(result["result"])
+```
+
+### Example 2: File Monitoring
+
+```python
+config = ChatAgentConfig(
+    watch_directories=["./watched_dir"],
+    rag_documents=[]  # Will auto-index files found in watched_dir
+)
+
+agent = ChatAgent(config)
+
+# Files in watched_dir are auto-indexed when created/modified
+# Query them naturally
+result = agent.process_query("Search the latest report")
+```
+
+### Example 3: Multi-Drive File Search
+
+```python
+config = ChatAgentConfig()
+agent = ChatAgent(config)
+
+# Smart search: Phase 1 (fast) → Phase 2 (deep)
+result = agent.process_query("Find the oil and gas manual on my computer")
+
+# Agent will:
+# 1. Search common locations (Documents, Downloads)
+# 2. If not found, deep search all drives
+# 3. Present results with numbered list
+# 4. Auto-index selected file
+```
+
+---
+
+## Related Specifications
+
+- [agent-base](/spec/agent-base) - Base Agent architecture
+- [database-mixin](/spec/database-mixin) - DatabaseMixin for persistence
+- [tool-decorator](/spec/tool-decorator) - Tool registration system
+
+---
+
+*ChatAgent Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>
