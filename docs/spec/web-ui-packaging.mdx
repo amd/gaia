@@ -80,55 +80,58 @@ The Web UI Packaging System is GAIA's infrastructure for creating standalone des
 
 ### Component Diagram
 
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+flowchart TD
+    A(["NSIS INSTALLER"]) --> B(["PYTHON EMBED"])
+    A --> C(["GAIA PACKAGE"])
+    C --> D(["LAUNCH SCRIPTS"])
+    C --> E(["ELECTRON APPS"])
+
+    style A fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style B fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style C fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style D fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    style E fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+
+    linkStyle 0,1,2,3 stroke:#ED1C24,stroke-width:2px
 ```
-┌─────────────────────────────────────────────────────────┐
-│                   NSIS Installer                         │
-│                  (Installer.nsi)                         │
-└────────────────────┬────────────────────────────────────┘
-                     │
-        ┌────────────┴───────────┐
-        │                        │
-┌───────▼──────────┐    ┌────────▼──────────┐
-│ Python Embedding │    │  GAIA Packaging   │
-│   (install.bat)  │    │  (File Layout)    │
-└──────────────────┘    └────────┬──────────┘
-                                 │
-                    ┌────────────┴───────────┐
-                    │                        │
-           ┌────────▼─────────┐    ┌────────▼─────────┐
-           │ Launch Scripts   │    │  Electron Apps   │
-           │ (launch_gaia.bat)│    │  (src/gaia/apps) │
-           └──────────────────┘    └──────────────────┘
-```
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| **NSIS INSTALLER** | `Installer.nsi` | Main installer script, orchestrates all components |
+| **PYTHON EMBED** | `install.bat` | Downloads and configures embedded Python 3.10.9 |
+| **GAIA PACKAGE** | File Layout | GAIA source code and dependencies |
+| **LAUNCH SCRIPTS** | `launch_gaia.bat` | CLI launcher for embedded Python environment |
+| **ELECTRON APPS** | `src/gaia/apps/` | Desktop UI apps (Jira, Chat, Docker) |
 
 ### Directory Structure
 
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+flowchart TD
+    A[/"INSTALLER"/] --> B(["$LOCALAPPDATA/GAIA/"])
+    B --> C(["bin/"])
+    B --> D(["python/"])
+    B --> E(["src/"])
+    B --> F(["installer/"])
+
+    style A fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
+    style B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style C fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style D fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style E fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style F fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+
+    linkStyle 0,1,2,3,4 stroke:#ED1C24,stroke-width:2px
 ```
-gaia-windows-setup.exe (NSIS installer)
-    │
-    └─→ Extract to: $LOCALAPPDATA\GAIA\
-            ├── bin/
-            │   └── launch_gaia.bat
-            ├── python/
-            │   ├── python.exe (embedded)
-            │   ├── Scripts/
-            │   │   ├── pip.exe
-            │   │   └── gaia.exe
-            │   └── Lib/site-packages/
-            ├── src/
-            │   └── gaia/
-            │       ├── apps/
-            │       │   ├── jira/webui/
-            │       │   ├── chat/webui/
-            │       │   └── docker/webui/
-            │       └── electron/
-            │           ├── package.json
-            │           └── src/main.js
-            └── installer/
-                ├── install.bat
-                ├── launch_gaia.bat
-                └── installer_utils.py
-```
+
+| Directory | Contents |
+|-----------|----------|
+| **bin/** | `launch_gaia.bat` - CLI launcher |
+| **python/** | Embedded Python 3.10.9, `Scripts/` (pip.exe, gaia.exe), `Lib/site-packages/` |
+| **src/gaia/** | GAIA source: `apps/` (jira, chat, docker webui), `electron/` (package.json, main.js) |
+| **installer/** | `install.bat`, `launch_gaia.bat`, `installer_utils.py` |
 
 ---
 
@@ -616,23 +619,6 @@ This directory contains the Windows installer packaging system.
 
 See `docs/spec/web-ui-packaging.md` for complete test procedures.
 ```
-
----
-
-## Acceptance Criteria
-
-- [ ] Installer creates embedded Python environment
-- [ ] GAIA package installs with all dependencies
-- [ ] Launch scripts work from any directory
-- [ ] PATH updated correctly in user environment
-- [ ] Desktop shortcuts created
-- [ ] Silent install mode works
-- [ ] Custom install path supported
-- [ ] Installation logs created
-- [ ] Error messages clear and actionable
-- [ ] Uninstaller removes all files
-- [ ] Upgrade preserves user data
-- [ ] Version checking prevents conflicts
 
 ---
 
