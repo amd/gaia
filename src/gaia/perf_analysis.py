@@ -291,9 +291,7 @@ def run_perf_visualization(log_paths: Sequence[Path], show: bool = False) -> int
             with log_path.open("r", encoding="utf-8", errors="replace") as fh:
                 metric_values = extract_metrics(fh)
         except OSError as exc:
-            print(
-                f"error: failed to read log file {log_path}: {exc}", file=sys.stderr
-            )
+            print(f"error: failed to read log file {log_path}: {exc}", file=sys.stderr)
             return 1
 
         for metric in metrics:
