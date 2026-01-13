@@ -1,15 +1,3 @@
-#!/usr/bin/env python3
-#
-# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
-# SPDX-License-Identifier: MIT
-
-"""
-Generate plots of prompt and response telemetry from one or more llama.cpp server logs.
-
-The script scans the logs for prompt tokens, input tokens, output tokens, TTFT, and TPS values,
-producing line charts per metric with one series per log file.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -19,9 +7,12 @@ import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Sequence, Tuple
 
-import matplotlib.pyplot as plt
+try:
+    import matplotlib.pyplot as plt
+except ImportError:  # pragma: no cover - handled at runtime
+    plt = None  # type: ignore[assignment]
 
 PROMPT_MARKER = "new prompt"
 TOKEN_PATTERN = re.compile(r"n_prompt_tokens\s*=\s*(\d+)")
@@ -29,6 +20,15 @@ INPUT_PATTERN = re.compile(r"Input tokens:\s*(\d+)", re.IGNORECASE)
 OUTPUT_PATTERN = re.compile(r"Output tokens:\s*(\d+)", re.IGNORECASE)
 TTFT_PATTERN = re.compile(r"TTFT\s*\(s\):\s*([0-9]*\.?[0-9]+)", re.IGNORECASE)
 TPS_PATTERN = re.compile(r"TPS:\s*([0-9]*\.?[0-9]+)", re.IGNORECASE)
+
+
+def _require_matplotlib() -> Any:
+    if plt is None:
+        raise RuntimeError(
+            "matplotlib is required for perf-vis. "
+            "Install with `pip install matplotlib` or `pip install -e .[dev]`."
+        )
+    return plt
 
 
 class Metric(str, Enum):
@@ -120,7 +120,8 @@ def build_plot(
     show: bool,
 ) -> None:
     """Create the plot and either save it, display it, or both."""
-    fig, ax = plt.subplots()
+    plt_mod = _require_matplotlib()
+    fig, ax = plt_mod.subplots()
 
     for log_name, metric_values in series:
         x_values = range(1, len(metric_values) + 1)
@@ -141,9 +142,9 @@ def build_plot(
     fig.savefig(output_path)
 
     if show:
-        plt.show()
+        plt_mod.show()
     else:
-        plt.close(fig)
+        plt_mod.close(fig)
 
 
 def build_prefill_decode_pies(
@@ -152,6 +153,8 @@ def build_prefill_decode_pies(
     show: bool,
 ) -> None:
     """Plot per-log prefill vs decode time split as multiple pies."""
+    plt_mod = _require_matplotlib()
+
     if not prefill_decode_times:
         print(
             "No timing data available to build prefill/decode split.", file=sys.stderr
@@ -159,7 +162,7 @@ def build_prefill_decode_pies(
         return
 
     slice_colors = ["#4c78a8", "#f58518"]  # Prefill, decode
-    pie_outline_colors = plt.get_cmap("tab10").colors
+    pie_outline_colors = plt_mod.get_cmap("tab10").colors
     cols = min(len(prefill_decode_times), 3)
     rows = math.ceil(len(prefill_decode_times) / cols)
 
@@ -170,10 +173,10 @@ def build_prefill_decode_pies(
 
         return format_pct
 
-    fig, axes = plt.subplots(rows, cols, figsize=(4 * cols, 4 * rows))
-    axes_flat: List[plt.Axes] = (
+    fig, axes = plt_mod.subplots(rows, cols, figsize=(4 * cols, 4 * rows))
+    axes_flat: List[plt_mod.Axes] = (
         [axes]
-        if isinstance(axes, plt.Axes)
+        if isinstance(axes, plt_mod.Axes)
         else list(axes.ravel() if hasattr(axes, "ravel") else axes)
     )
 
@@ -210,7 +213,7 @@ def build_prefill_decode_pies(
         )
 
         legend_handles.append(
-            plt.Line2D(
+            plt_mod.Line2D(
                 [0],
                 [0],
                 marker="o",
@@ -239,16 +242,16 @@ def build_prefill_decode_pies(
     fig.savefig(output_path)
 
     if show:
-        plt.show()
+        plt_mod.show()
     else:
-        plt.close(fig)
+        plt_mod.close(fig)
 
 
-def parse_cli() -> argparse.Namespace:
+def parse_cli(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Plot telemetry values (prompt/input/output tokens, TTFT, TPS) recorded in "
-            "one or more llama.cpp server logs."
+            "Plot telemetry values (prompt/input/output tokens, TTFT, TPS) "
+            "recorded in one or more llama.cpp server logs."
         )
     )
     parser.add_argument(
@@ -262,11 +265,16 @@ def parse_cli() -> argparse.Namespace:
         action="store_true",
         help="Display the plot window in addition to saving the image.",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> int:
-    args = parse_cli()
+def run_perf_visualization(log_paths: Sequence[Path], show: bool = False) -> int:
+    """Process log files and generate performance plots."""
+    try:
+        _ = _require_matplotlib()
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
     metrics = list(Metric)
     series_by_metric: Dict[Metric, List[Tuple[str, List[float]]]] = {
@@ -274,7 +282,7 @@ def main() -> int:
     }
     prefill_decode_times: List[Tuple[str, float, float]] = []
 
-    for log_path in args.log_paths:
+    for log_path in log_paths:
         if not log_path.is_file():
             print(f"error: log file not found: {log_path}", file=sys.stderr)
             return 1
@@ -283,7 +291,9 @@ def main() -> int:
             with log_path.open("r", encoding="utf-8", errors="replace") as fh:
                 metric_values = extract_metrics(fh)
         except OSError as exc:
-            print(f"error: failed to read log file {log_path}: {exc}", file=sys.stderr)
+            print(
+                f"error: failed to read log file {log_path}: {exc}", file=sys.stderr
+            )
             return 1
 
         for metric in metrics:
@@ -300,7 +310,6 @@ def main() -> int:
             series_by_metric[metric].append((log_name, values))
 
         prefill_total_time = sum(metric_values[Metric.TTFT])
-        # Use paired output token and TPS values; ignore any unmatched trailing values.
         decode_total_time = sum(
             output_tokens / tps
             for output_tokens, tps in zip(
@@ -308,14 +317,16 @@ def main() -> int:
             )
             if tps > 0
         )
-        prefill_decode_times.append((log_name, prefill_total_time, decode_total_time))
+        prefill_decode_times.append(
+            (log_path.name or str(log_path), prefill_total_time, decode_total_time)
+        )
 
     for metric in metrics:
         build_plot(
             series_by_metric[metric],
             metric_config=METRIC_CONFIGS[metric],
             output_path=METRIC_CONFIGS[metric].filename,
-            show=args.show,
+            show=show,
         )
 
         total_points = sum(len(counts) for _, counts in series_by_metric[metric])
@@ -329,7 +340,7 @@ def main() -> int:
     build_prefill_decode_pies(
         prefill_decode_times=prefill_decode_times,
         output_path=prefill_decode_path,
-        show=args.show,
+        show=show,
     )
     if prefill_decode_times:
         print(
@@ -338,6 +349,11 @@ def main() -> int:
         )
 
     return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_cli(argv)
+    return run_perf_visualization(args.log_paths, show=args.show)
 
 
 if __name__ == "__main__":
