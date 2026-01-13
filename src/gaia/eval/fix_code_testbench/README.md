@@ -144,7 +144,7 @@ This tests the model's ability to recognize and fix the common Python anti-patte
 
 ### Real-World Use Case: TypeScript Type Error 
 
-In an earlier version of the web dev agent, we were creating web apps that failed TypeScript validation. For example, the `workout_web_app_component/WorkoutForm.tsx` component had a TypeScript error that could be discovered when running TypeScript validation:
+In an earlier version of the web dev agent, we were creating web apps that failed TypeScript validation. For example, the `examples/workout_web_app_component/WorkoutForm.tsx` component had a TypeScript error that could be discovered when running TypeScript validation:
 
 ```
 src/components/WorkoutForm.tsx:43:9 - error TS2322: Type 'string' is not assignable to type 'never'.
@@ -160,7 +160,7 @@ Sometimes, the agent does not split the errors into multiple different tool call
 
 ```bash
 gaia eval fix-code \
-    workout_web_app_component/WorkoutForm.tsx \
+    examples/workout_web_app_component/WorkoutForm.tsx \
     "src/components/WorkoutForm.tsx:33:21 - error TS7053: Element implicitly has an 'any' type because expression of type 'string' can't be used to index type '{ name: string; duration: number; date: string; goal: string; }'. No index signature with a parameter of type 'string' was found on type '{ name: string; duration: number; date: string; goal: string; }'. 33  const value = normalized[field]; src/components/WorkoutForm.tsx:43:9 - error TS2322: Type 'string' is not assignable to type 'never'. 43 normalized[field as keyof typeof normalized] = parsedValue.toISOString()" \
     ../../../../web-dev-test/workout/src/components/WorkoutForm.tsx
 ``` 
@@ -168,7 +168,7 @@ gaia eval fix-code \
 This will produce the following diff which does not fix the issue:
 
 ```
---- workout_web_app_component/WorkoutForm.tsx:1-184
+--- examples/workout_web_app_component/WorkoutForm.tsx:1-184
 +++ ../../../../web-dev-test/workout/src/components/WorkoutForm.tsx:1-184                                                                                                                                                                                                                                                                                                      
 @@ -40,7 +40,7 @@                                                                                                                                                                                                                                                                                                             
        const parsedValue = new Date(value as string | number | Date);
@@ -185,7 +185,7 @@ Another failure mode was not providing enough specific information to the agent.
 
 ```bash
 gaia eval fix-code \
-    workout_web_app_component/WorkoutForm.tsx \
+    examples/workout_web_app_component/WorkoutForm.tsx \
     "src/components/WorkoutForm.tsx:43:9 - error TS2322: Type 'string' is not assignable to type 'never'. " \
     ../../../../web-dev-test/workout/src/components/WorkoutForm.tsx
 ```
@@ -198,7 +198,7 @@ We can recreate what would happen if we avoid the two previous failure modes whi
 
 ```bash
 gaia eval fix-code \
-    workout_web_app_component/WorkoutForm.tsx \
+    examples/workout_web_app_component/WorkoutForm.tsx \
     "src/components/WorkoutForm.tsx:43:9 - error TS2322: Type 'string' is not assignable to type 'never'. 43 normalized[field as keyof typeof normalized] = parsedValue.toISOString();" \
     ../../../../web-dev-test/workout/src/components/WorkoutForm.tsx
 ```
@@ -207,7 +207,7 @@ This will actually fix the issue ~50% of the time, unfortunately the other ~50% 
 
 ```
 === Diff (cleaned vs original) ===
---- workout_web_app_component/WorkoutForm.tsx:1-184
+--- examples/workout_web_app_component/WorkoutForm.tsx:1-184
 +++ ../../../../web-dev-test/workout/src/components/WorkoutForm.tsx:1-184
 @@ -40,7 +40,7 @@
  
@@ -232,7 +232,7 @@ There is a flag in the testbench called `--use-prompt-engineering` which will ad
 
 ```bash
 gaia eval fix-code \
-    workout_web_app_component/WorkoutForm.tsx \
+    examples/workout_web_app_component/WorkoutForm.tsx \
     "src/components/WorkoutForm.tsx:43:9 - error TS2322: Type 'string' is not assignable to type 'never'. 43 normalized[field as keyof typeof normalized] = parsedValue.toISOString();" \
     ../../../../web-dev-test/workout/src/components/WorkoutForm.tsx \
     --use-prompt-engineering
@@ -244,7 +244,7 @@ Alternatively, the same correct solution can be achieved by focusing the model o
 
 ```bash
 gaia eval fix-code \
-    workout_web_app_component/WorkoutForm.tsx \
+    examples/workout_web_app_component/WorkoutForm.tsx \
     "src/components/WorkoutForm.tsx:43:9 - error TS2322: Type 'string' is not assignable to type 'never'. 43 normalized[field as keyof typeof normalized] = parsedValue.toISOString();" \
     ../../../../web-dev-test/workout/src/components/WorkoutForm.tsx \
     --start-line 35 \
@@ -255,7 +255,7 @@ Both approaches produce the same correct diff:
 
 ```
 === Diff (cleaned vs original) ===
---- workout_web_app_component/WorkoutForm.tsx:1-181
+--- examples/workout_web_app_component/WorkoutForm.tsx:1-181
 +++ ../../../../web-dev-test/workout/src/components/WorkoutForm.tsx:1-181
 @@ -37,7 +37,7 @@
  
