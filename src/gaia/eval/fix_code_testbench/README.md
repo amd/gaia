@@ -1,6 +1,6 @@
 # Fix Code Testbench
 
-A testbench for evaluating code-fixing prompts against LLM models (local or Claude). This tool helps validate and iterate on prompts used by agents to automatically fix code errors.
+A testbench for evaluating code-fixing prompts against LLM models (local or remote). This tool helps validate and iterate on prompts used by agents to automatically fix code errors.
 
 ## Purpose
 
