@@ -60,7 +60,6 @@ Think of RAG as a smart research assistant:
 
 This happens once when you index documents:
 
-<Frame>
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
@@ -77,13 +76,11 @@ flowchart TD
 
     linkStyle 0,1,2,3 stroke:#ED1C24,stroke-width:2px
 ```
-</Frame>
 
 ### Phase 2: Query (Retrieval)
 
 This happens each time you ask a question:
 
-<Frame>
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
@@ -104,7 +101,6 @@ flowchart TD
 
     linkStyle 0,1,2,3,4,5 stroke:#ED1C24,stroke-width:2px
 ```
-</Frame>
 
 <Note>
 **Key Insight:** The magic is in the vectors. Text that has similar *meaning* ends up with similar vectors—even if the words are different. "System requirements" and "hardware needed" would have similar vectors because they mean similar things.
@@ -180,7 +176,6 @@ Chunking is the most important concept in RAG. Let's understand it deeply.
 
 LLMs have limited context windows. You can't send a 500-page PDF directly. Instead:
 
-<Frame>
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
@@ -199,7 +194,6 @@ flowchart TD
 
     linkStyle 0,1,2,3,4 stroke:#ED1C24,stroke-width:2px
 ```
-</Frame>
 
 ### What is `chunk_size`?
 
@@ -388,7 +382,6 @@ Traditional RAG follows a simple pattern: **one question → one search → one 
 
 <Tabs>
 <Tab title="Traditional RAG">
-<Frame>
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart LR
@@ -403,14 +396,12 @@ flowchart LR
 
     linkStyle 0,1,2 stroke:#ED1C24,stroke-width:2px
 ```
-</Frame>
 
 **How it works:** User asks a question, system searches once for relevant chunks, top chunks are sent to LLM, LLM generates answer from those chunks.
 
 **Limitations:** If initial search misses relevant info it's gone, can't handle multi-part questions, no ability to refine or dig deeper, doesn't know when it lacks information.
 </Tab>
 <Tab title="Agentic RAG">
-<Frame>
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
@@ -438,7 +429,6 @@ flowchart TD
     linkStyle 7 stroke:#28a745,stroke-width:2px
     linkStyle 8 stroke:#6c757d,stroke-width:2px
 ```
-</Frame>
 
 **How it works:** Agent analyzes question to understand intent, decides what information is needed, searches and evaluates results, refines query and searches again if insufficient, synthesizes answer from all gathered information, and indicates confidence or admits when info isn't available.
 </Tab>
@@ -494,7 +484,6 @@ result = agent.process_query(
 
 **What happens under the hood:**
 
-<Frame>
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
@@ -517,7 +506,6 @@ flowchart TD
 
     linkStyle 0,1,2,3,4,5,6 stroke:#ED1C24,stroke-width:2px
 ```
-</Frame>
 
 ### The RAG Tool Interface
 

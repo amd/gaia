@@ -134,6 +134,7 @@
                   "sdk/applications",
                   "sdk/configuration",
                   "sdk/testing",
+                  "sdk/performance-analysis-plotter",
                   "sdk/security",
                   "sdk/best-practices"
                 ]

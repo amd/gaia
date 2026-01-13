@@ -23,6 +23,7 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.llm_client import LLMClient
 from gaia.logger import get_logger
+from gaia.perf_analysis import run_perf_visualization
 from gaia.version import version
 
 # Optional imports
@@ -1706,6 +1707,23 @@ Examples:
         "--agent-output-file",
         type=str,
         help="Single agent output JSON file to visualize",
+    )
+
+    perf_vis_parser = subparsers.add_parser(
+        "perf-vis",
+        help="Visualize llama.cpp performance metrics from log files",
+        parents=[parent_parser],
+    )
+    perf_vis_parser.add_argument(
+        "log_paths",
+        type=Path,
+        nargs="+",
+        help="One or more llama.cpp server log files to visualize",
+    )
+    perf_vis_parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Display plots interactively in addition to saving images",
     )
 
     # Add new subparser for generating synthetic test data
@@ -3951,6 +3969,10 @@ Let me know your answer!
         handle_api_command(args)
         return
 
+    if args.action == "perf-vis":
+        handle_perf_vis_command(args)
+        return
+
     # Handle visualize command
     if args.action == "visualize":
         handle_visualize_command(args)
@@ -4371,6 +4393,20 @@ def handle_api_command(args):
         except Exception as e:
             print(f"❌ Error stopping server: {e}")
             sys.exit(1)
+
+
+def handle_perf_vis_command(args):
+    """Generate llama.cpp performance plots from one or more log files."""
+    try:
+        exit_code = run_perf_visualization(args.log_paths, show=args.show)
+    except Exception as exc:
+        log = get_logger(__name__)
+        log.error(f"Error running perf-vis: {exc}")
+        print(f"❌ Error running perf-vis: {exc}")
+        sys.exit(1)
+
+    if exit_code != 0:
+        sys.exit(exit_code)
 
 
 def handle_visualize_command(args):
