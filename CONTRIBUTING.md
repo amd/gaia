@@ -1,7 +1,5 @@
 # Contributing to GAIA
 
-Small change, second change
-
 🚀 **Welcome to the GAIA Community!** 🚀
 
 We're excited that you're interested in making GAIA better! Whether you're reporting an issue, suggesting improvements, or contributing code, your help is valuable to us. Let's work together to make GAIA even more amazing!
