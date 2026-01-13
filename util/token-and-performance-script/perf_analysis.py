@@ -163,7 +163,7 @@ def build_prefill_decode_pies(
     cols = min(len(prefill_decode_times), 3)
     rows = math.ceil(len(prefill_decode_times) / cols)
 
-    def autopct_with_seconds(values: Sequence[float]) -> callable:
+    def autopct_with_seconds(values: Sequence[float]) -> Callable[[float], str]:
         def format_pct(pct: float) -> str:
             seconds = pct / 100 * sum(values)
             return f"{pct:.1f}%\n{seconds:.2f}s"
