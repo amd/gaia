@@ -1,0 +1,383 @@
+---
+title: "SummarizerApp"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/apps/summarize/app.py`](https://github.com/amd/gaia/blob/main/src/gaia/apps/summarize/app.py)
+</Info>
+
+<Note>
+**Component:** SummarizerApp - Meeting and email summarization
+**Module:** `gaia.apps.summarize.app`
+**Import:** `from gaia.apps.summarize.app import SummarizerApp, SummaryConfig`
+</Note>
+---
+
+## Overview
+
+SummarizerApp processes meeting transcripts and emails to generate structured summaries with multiple styles (executive, detailed, bullets, action items, participants). Supports auto-detection of content type and multi-style output in a single LLM call.
+
+**Key Features:**
+- Auto-detect content type (transcript vs email)
+- 6 summary styles (brief, detailed, bullets, executive, participants, action_items)
+- Combined or individual style generation
+- Multi-model support (local, Claude, ChatGPT)
+- Performance statistics tracking
+- Retry logic for reliability
+- File and directory batch processing
+
+---
+
+## API Specification
+
+### SummaryConfig
+
+```python
+@dataclass
+class SummaryConfig:
+    """Configuration for summarization"""
+
+    model: str = DEFAULT_MODEL_NAME
+    max_tokens: int = 1024
+    input_type: Literal["transcript", "email", "auto"] = "auto"
+    styles: List[str] = None  # Defaults to ["executive", "participants", "action_items"]
+    combined_prompt: bool = False  # Generate all styles in one LLM call
+    use_claude: bool = False
+    use_chatgpt: bool = False
+
+    def __post_init__(self):
+        """Validate styles and auto-detect OpenAI models."""
+        if self.styles is None:
+            self.styles = ["executive", "participants", "action_items"]
+
+        # Auto-detect OpenAI models
+        if self.model.lower().startswith("gpt"):
+            self.use_chatgpt = True
+```
+
+### Summary Styles
+
+```python
+SUMMARY_STYLES = {
+    "brief": "Generate a concise 2-3 sentence summary highlighting the most important points.",
+    "detailed": "Generate a comprehensive summary with all key details, context, and nuances.",
+    "bullets": "Generate key points in a clear bullet-point format, focusing on actionable items.",
+    "executive": "Generate a high-level executive summary focusing on decisions, outcomes, and strategic implications.",
+    "participants": "Extract and list all meeting participants with their roles if mentioned.",
+    "action_items": "Extract all action items with owners and deadlines where specified.",
+}
+```
+
+### SummarizerApp
+
+```python
+class SummarizerApp:
+    """Main application class for summarization"""
+
+    def __init__(self, config: Optional[SummaryConfig] = None):
+        """Initialize the summarizer application"""
+        ...
+
+    def detect_content_type(self, content: str) -> str:
+        """
+        Auto-detect if content is a transcript or email using LLM.
+
+        Uses heuristics first (From:/To: headers, speaker labels),
+        falls back to LLM analysis if unclear.
+
+        Returns:
+            "transcript" or "email"
+        """
+        ...
+
+    def generate_summary_prompt(
+        self, content: str, content_type: str, style: str
+    ) -> str:
+        """Generate the prompt for a specific summary style"""
+        ...
+
+    def generate_combined_prompt(
+        self, content: str, content_type: str, styles: List[str]
+    ) -> str:
+        """Generate a single prompt for multiple summary styles"""
+        ...
+
+    def summarize_with_style(
+        self, content: str, content_type: str, style: str
+    ) -> Dict[str, Any]:
+        """
+        Generate a summary for a specific style with retry logic.
+
+        Returns:
+            {
+                "text": str,
+                "items": List[str] (for action_items),
+                "participants": List[str] (for participants),
+                "performance": {
+                    "total_tokens": int,
+                    "prompt_tokens": int,
+                    "completion_tokens": int,
+                    "time_to_first_token_ms": int,
+                    "tokens_per_second": float,
+                    "processing_time_ms": int
+                }
+            }
+        """
+        ...
+
+    def summarize_combined(
+        self, content: str, content_type: str, styles: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Generate summaries for multiple styles in a single LLM call"""
+        ...
+
+    def summarize(
+        self, content: str, input_file: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Main summarization method.
+
+        Returns:
+            For single style:
+            {
+                "metadata": {...},
+                "summary": {...},
+                "performance": {...},
+                "original_content": str
+            }
+
+            For multiple styles:
+            {
+                "metadata": {...},
+                "summaries": {
+                    "executive": {...},
+                    "participants": {...},
+                    "action_items": {...}
+                },
+                "aggregate_performance": {...},
+                "original_content": str
+            }
+        """
+        ...
+
+    def summarize_file(self, file_path: Path) -> Dict[str, Any]:
+        """Summarize a single file"""
+        ...
+
+    def summarize_directory(self, dir_path: Path) -> List[Dict[str, Any]]:
+        """Summarize all text files in a directory"""
+        ...
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Single Meeting Transcript
+
+```python
+from gaia.apps.summarize.app import SummarizerApp, SummaryConfig
+from pathlib import Path
+
+# Configure for executive summary only
+config = SummaryConfig(
+    model="Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    styles=["executive"],
+    input_type="transcript"  # Or "auto" for detection
+)
+
+app = SummarizerApp(config)
+
+# Summarize from file
+result = app.summarize_file(Path("meeting.txt"))
+
+print(result["summary"]["text"])
+print(f"Tokens used: {result['performance']['total_tokens']}")
+```
+
+### Example 2: Multiple Styles
+
+```python
+# Generate multiple styles
+config = SummaryConfig(
+    styles=["executive", "participants", "action_items"],
+    combined_prompt=True  # More efficient - single LLM call
+)
+
+app = SummarizerApp(config)
+result = app.summarize(content)
+
+# Access different summaries
+print("Executive:", result["summaries"]["executive"]["text"])
+print("Participants:", result["summaries"]["participants"]["text"])
+print("Action Items:", result["summaries"]["action_items"]["text"])
+```
+
+### Example 3: Batch Processing
+
+```python
+# Process all files in directory
+config = SummaryConfig(
+    styles=["brief", "action_items"],
+    input_type="auto"
+)
+
+app = SummarizerApp(config)
+results = app.summarize_directory(Path("meetings/"))
+
+for result in results:
+    filename = Path(result["metadata"]["input_file"]).name
+    summary = result["summaries"]["brief"]["text"]
+    print(f"{filename}: {summary}")
+```
+
+### Example 4: Email Summarization
+
+```python
+email_content = """
+From: john@example.com
+To: team@example.com
+Subject: Q4 Planning
+
+Hi team,
+
+We need to finalize Q4 goals by Friday...
+"""
+
+config = SummaryConfig(
+    styles=["executive", "participants"],
+    input_type="email"
+)
+
+app = SummarizerApp(config)
+result = app.summarize(email_content)
+
+# Email-specific participant extraction
+participants = result["summaries"]["participants"]
+print(f"Sender: {participants.get('sender')}")
+print(f"Recipients: {participants.get('recipients')}")
+```
+
+---
+
+## Output Format
+
+### Single Style Output
+
+```json
+{
+  "metadata": {
+    "input_file": "meeting.txt",
+    "input_type": "transcript",
+    "model": "Qwen3-Coder-30B",
+    "timestamp": "2025-01-15T10:30:00",
+    "processing_time_ms": 2500,
+    "summary_style": "executive"
+  },
+  "summary": {
+    "text": "Executive summary text...",
+    "performance": {
+      "total_tokens": 450,
+      "tokens_per_second": 15.2
+    }
+  },
+  "original_content": "..."
+}
+```
+
+### Multiple Styles Output
+
+```json
+{
+  "metadata": {
+    "summary_styles": ["executive", "participants", "action_items"],
+    "...": "..."
+  },
+  "summaries": {
+    "executive": {
+      "text": "...",
+      "performance": {...}
+    },
+    "participants": {
+      "text": "...",
+      "participants": ["Alice", "Bob"],
+      "performance": {...}
+    },
+    "action_items": {
+      "text": "...",
+      "items": ["Task 1", "Task 2"],
+      "performance": {...}
+    }
+  },
+  "aggregate_performance": {
+    "total_tokens": 1200,
+    "total_processing_time_ms": 3500
+  }
+}
+```
+
+---
+
+## Testing Requirements
+
+```python
+def test_content_type_detection():
+    """Test auto-detection of content type."""
+    app = SummarizerApp()
+
+    transcript = "Alice: Hello\nBob: Hi there"
+    assert app.detect_content_type(transcript) == "transcript"
+
+    email = "From: alice@test.com\nTo: bob@test.com\nSubject: Test"
+    assert app.detect_content_type(email) == "email"
+
+def test_single_style_summarization():
+    """Test single style summary."""
+    config = SummaryConfig(styles=["brief"])
+    app = SummarizerApp(config)
+
+    result = app.summarize("Test content")
+    assert "summary" in result
+    assert "text" in result["summary"]
+
+def test_multiple_styles():
+    """Test multiple styles."""
+    config = SummaryConfig(
+        styles=["executive", "action_items"],
+        combined_prompt=True
+    )
+    app = SummarizerApp(config)
+
+    result = app.summarize("Test meeting content")
+    assert "summaries" in result
+    assert "executive" in result["summaries"]
+    assert "action_items" in result["summaries"]
+```
+
+---
+
+## Dependencies
+
+```toml
+[project]
+dependencies = [
+    "gaia.chat.sdk",
+    "gaia.llm.lemonade_client",
+]
+```
+
+---
+
+*SummarizerApp Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

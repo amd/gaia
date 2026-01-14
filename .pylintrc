@@ -28,7 +28,7 @@ persistent = no
 
 # When enabled, pylint would attempt to guess common misconfiguration and emit
 # user-friendly hints instead of false-positive error messages.
-suggestion-mode = yes
+# suggestion-mode = yes  # Disabled - not supported in current pylint version
 
 # Allow loading of arbitrary C extensions. Extensions are imported into the
 # active Python interpreter and may run arbitrary code.

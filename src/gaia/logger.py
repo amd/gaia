@@ -1,12 +1,12 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
+import io
 import logging
+import subprocess
 import sys
 import warnings
 from pathlib import Path
-import io
-import subprocess
 
 
 def configure_console_encoding():
@@ -144,7 +144,7 @@ class GaiaLogger:
 
     def filter_phonemizer(self, record):
         message = record.getMessage()
-        return not "words count mismatch" in message
+        return "words count mismatch" not in message
 
     def get_logger(self, name):
         if name not in self.loggers:
@@ -161,10 +161,23 @@ class GaiaLogger:
         return self.default_level
 
     def set_level(self, name, level):
+        """Set logging level for a logger name or prefix.
+
+        If name matches an existing logger exactly, update that logger.
+        Otherwise, set as default_level for future loggers matching the prefix.
+        Also updates all existing loggers that start with the given name prefix.
+        """
+        # Update exact match if it exists
         if name in self.loggers:
             self.loggers[name].setLevel(level)
-        else:
-            self.default_levels[name] = level
+
+        # Update all existing loggers that start with this prefix
+        for logger_name, logger in self.loggers.items():
+            if logger_name.startswith(name + ".") or logger_name == name:
+                logger.setLevel(level)
+
+        # Set as default for future loggers matching this prefix
+        self.default_levels[name] = level
 
 
 # Create a global instance

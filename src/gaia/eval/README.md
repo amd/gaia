@@ -4,12 +4,13 @@ A comprehensive framework for evaluating Retrieval Augmented Generation (RAG) sy
 
 ## Overview
 
-This evaluation framework consists of four main components:
+This evaluation framework consists of five main components:
 
 1. **Ground Truth Generation** (`groundtruth.py`) - Generates question-answer pairs from documents
 2. **Claude Analysis** (`claude.py`) - Provides AI-powered qualitative analysis
 3. **RAG Evaluation** (`eval.py`) - Evaluates RAG system performance with metrics and analysis
 4. **Summary Reporting** (`eval.py`) - Generates comprehensive reports comparing multiple model evaluations
+5. **Web Visualizer** (`webapp/`) - Interactive web interface for viewing and comparing evaluation results
 
 All components are fully integrated into the Gaia CLI for easy command-line usage, with Python APIs available for programmatic access.
 
@@ -35,9 +36,9 @@ Provides interface to Claude AI for document analysis and evaluation.
 - File analysis with various formats
 - HTML text extraction using BeautifulSoup
 
-### RagEvaluator
+### Evaluator
 
-Evaluates RAG system performance using similarity scores and qualitative analysis.
+Evaluates AI model performance across various use cases (summarization, Q&A, RAG, etc.) using similarity scores and qualitative analysis.
 
 **Features:**
 - Quantitative metrics (similarity scores, pass rates)
@@ -48,6 +49,29 @@ Evaluates RAG system performance using similarity scores and qualitative analysi
 - Automated performance ranking
 - Cost efficiency analysis
 - Strategic investment recommendations
+
+### Web Visualizer
+
+Interactive web interface for exploring and comparing evaluation results visually.
+
+**Features:**
+- Load and compare multiple evaluation reports side-by-side
+- Interactive charts and metrics dashboards
+- Quality score breakdowns and rating distributions
+- Cost and token usage visualization
+- Responsive design for desktop and mobile
+
+**Quick Start:**
+```bash
+# Launch the visualizer (auto-installs dependencies if needed)
+gaia visualize
+
+# Custom options
+gaia visualize --port 8080 --no-browser
+gaia visualize --experiments-dir ./my_experiments --evaluations-dir ./my_evaluations
+```
+
+The visualizer automatically installs required npm dependencies on first run. It requires Node.js (v14+) to be installed.
 
 ## Setup
 
@@ -254,10 +278,10 @@ gaia eval -f ./output/rag/results.json --summary-only
 You can also evaluate programmatically:
 
 ```python
-from gaia.eval.eval import RagEvaluator
+from gaia.eval.eval import Evaluator
 
 # Initialize evaluator
-evaluator = RagEvaluator()
+evaluator = Evaluator()
 
 # Generate comprehensive evaluation
 evaluation_data = evaluator.generate_enhanced_report(
@@ -308,10 +332,10 @@ The generated markdown report includes:
 #### Python API
 
 ```python
-from gaia.eval.eval import RagEvaluator
+from gaia.eval.eval import Evaluator
 
 # Initialize evaluator
-evaluator = RagEvaluator()
+evaluator = Evaluator()
 
 # Generate summary report
 result = evaluator.generate_summary_report(
@@ -425,7 +449,7 @@ The percentage represents the weighted average of all ratings, converted to a 0-
    gaia eval -f ./output/templates/introduction.template.json -o ./output/eval
 
    # Or using Python API
-   # evaluator = RagEvaluator()
+   # evaluator = Evaluator()
    # evaluation = evaluator.generate_enhanced_report("./output/templates/introduction.template.json", "./output/eval")
    ```
 
@@ -435,7 +459,7 @@ The percentage represents the weighted average of all ratings, converted to a 0-
    gaia report -d ./output/eval
 
    # Or using Python API
-   # evaluator = RagEvaluator()
+   # evaluator = Evaluator()
    # result = evaluator.generate_summary_report("./output/eval", "Model_Analysis_Report.md")
    ```
 

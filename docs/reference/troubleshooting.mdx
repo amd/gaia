@@ -1,0 +1,338 @@
+---
+title: Troubleshooting
+description: Solutions for common GAIA issues and errors
+---
+
+## Installation Issues
+
+<AccordionGroup>
+  <Accordion title="Installer fails or hangs" icon="circle-exclamation">
+    **Generate detailed logs:**
+    ```powershell
+    gaia-windows-setup.exe /LOG=install_log.txt
+    ```
+
+    **Common causes:**
+    - **Hardware Compatibility**: The installer detects available hardware capabilities
+    - **Driver Incompatibility**: For Ryzen AI systems, ensure you have compatible NPU drivers
+    - **PATH issues**: If the installer can't update your PATH, a warning will be displayed
+
+    If PATH update fails, add GAIA directories to PATH manually.
+  </Accordion>
+
+  <Accordion title="uv not recognized after install" icon="terminal">
+    Restart your terminal, or manually add to PATH:
+
+    **Windows (PowerShell):**
+    ```powershell
+    $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
+    ```
+
+    **Linux:**
+    ```bash
+    source ~/.bashrc
+    ```
+  </Accordion>
+
+  <Accordion title="PowerShell script execution error" icon="ban">
+    Run this once to allow script execution:
+    ```powershell
+    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+    ```
+    Then retry the activation command.
+  </Accordion>
+
+  <Accordion title="Python version issues" icon="python">
+    GAIA requires Python 3.10-3.12. If `uv venv` fails:
+    ```bash
+    # Specify Python version explicitly
+    uv venv .venv --python 3.12
+    ```
+    uv will automatically download Python if not installed.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Agent & SDK Issues
+
+<AccordionGroup>
+  <Accordion title="Agent not found after install" icon="magnifying-glass">
+    ```bash
+    # Verify package is installed
+    uv pip show amd-gaia
+
+    # Reinstall in editable mode (for developers)
+    uv pip uninstall amd-gaia -y
+    uv pip install -e .
+    ```
+  </Accordion>
+
+  <Accordion title="Module not found errors" icon="file-circle-xmark">
+    Ensure imports use the correct package paths:
+    ```python
+    from gaia.agents.base.agent import Agent  # ✅ Correct
+    from gaia import Agent  # ❌ Won't work unless exported
+    ```
+  </Accordion>
+
+  <Accordion title="Tools not registering" icon="wrench">
+    The `@tool` decorator must be inside `_register_tools()`:
+    ```python
+    # ✅ Correct - inside _register_tools
+    def _register_tools(self):
+        @tool
+        def my_tool():
+            pass
+
+    # ❌ Wrong - at class level
+    @tool
+    def my_tool():
+        pass
+    ```
+  </Accordion>
+
+  <Accordion title="LLM not responding" icon="robot">
+    Check if Lemonade Server is running:
+    ```bash
+    curl http://localhost:8000/api/v1/models
+    ```
+
+    If not running, start it:
+    ```bash
+    lemonade-server serve
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## API Server Issues
+
+<AccordionGroup>
+  <Accordion title="Connection refused" icon="plug-circle-xmark">
+    **Ensure server is running:**
+    ```bash
+    gaia api --port 5000
+    ```
+
+    **Check if port is in use:**
+    ```powershell
+    # Windows
+    netstat -ano | findstr :5000
+    ```
+    ```bash
+    # Linux
+    lsof -i :5000
+    ```
+  </Accordion>
+
+  <Accordion title="Model not found error" icon="circle-question">
+    Use the correct model ID:
+    ```bash
+    curl http://localhost:5000/v1/models
+    ```
+    Default model ID is `gaia-code`.
+  </Accordion>
+
+  <Accordion title="Agent processing failed" icon="triangle-exclamation">
+    Ensure Lemonade is running with sufficient context size:
+    ```bash
+    lemonade-server serve --ctx-size 32768
+    ```
+  </Accordion>
+
+  <Accordion title="Port already in use" icon="ban">
+    Stop existing server or use a different port:
+    ```bash
+    gaia api --port 5001
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Voice & Audio Issues
+
+<AccordionGroup>
+  <Accordion title="Audio device errors" icon="microphone-slash">
+    **List available audio devices:**
+    ```bash
+    gaia test --test-type asr-list-audio-devices
+    ```
+
+    **Try a different device index:**
+    ```bash
+    gaia talk --audio-device-index 1
+    ```
+  </Accordion>
+
+  <Accordion title="Speech not recognized" icon="volume-xmark">
+    - Check microphone permissions in system settings
+    - Ensure microphone is not muted
+    - Try speaking louder/closer to microphone
+    - Check `--audio-device-index` is set correctly
+  </Accordion>
+
+  <Accordion title="TTS not working" icon="volume-slash">
+    Verify Kokoro TTS is installed:
+    ```bash
+    uv pip install kokoro-onnx
+    ```
+
+    Check audio output device is configured correctly.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## RAG & Document Issues
+
+<AccordionGroup>
+  <Accordion title="Missing RAG dependencies" icon="puzzle-piece">
+    Install the RAG extra:
+    ```bash
+    uv pip install "amd-gaia[rag]"
+    ```
+
+    Or for development:
+    ```bash
+    uv pip install -e ".[dev,rag]"
+    ```
+  </Accordion>
+
+  <Accordion title="PDF processing errors" icon="file-pdf">
+    - Ensure PDFs have extractable text (not scanned images)
+    - For scanned PDFs, use OCR preprocessing first
+    - Check file permissions
+  </Accordion>
+
+  <Accordion title="Slow document indexing" icon="clock">
+    - Use `--stats` to monitor progress
+    - Larger documents take more time
+    - Consider chunking very large documents
+  </Accordion>
+
+  <Accordion title="Context not being used" icon="brain">
+    - Verify documents were indexed successfully at startup
+    - Check console output for indexing confirmation
+    - Ensure document path is correct
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Routing Agent Issues
+
+<AccordionGroup>
+  <Accordion title="Routing to wrong language" icon="shuffle">
+    The routing agent may misdetect the language/framework.
+
+    **Solutions:**
+    - Be more specific in your query (mention the language)
+    - Check the routing confidence in logs
+    - Adjust routing thresholds if available
+  </Accordion>
+
+  <Accordion title="Too many clarifying questions" icon="circle-question">
+    **Solutions:**
+    - Include framework/language in initial query
+    - Set default routing preferences
+    - Adjust confidence thresholds
+  </Accordion>
+
+  <Accordion title="Routing agent errors or skips detection" icon="forward">
+    **Check:**
+    - Lemonade Server is running
+    - Routing model is loaded
+    - Query format is valid
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Evaluation Issues
+
+<AccordionGroup>
+  <Accordion title="Evaluation mode confusion" icon="scale-balanced">
+    If `gaia eval` produces inconsistent results:
+    - **Check**: Are you using Comparative Evaluation or Standalone Assessment mode?
+    - **Fix**: Ensure groundtruth data is either embedded or provided via `-g` flag
+    - **Verify**: Look for log message "Loaded ground truth data from:" vs "No ground truth file provided"
+  </Accordion>
+
+  <Accordion title="Q&A experiments failing" icon="clipboard-question">
+    If batch-experiment fails with "No queries found":
+    - **Check**: Are you using groundtruth files as input?
+    - **Fix**: Use `gaia batch-experiment -i ./output/groundtruth/consolidated_qa_groundtruth.json`
+    - **Why**: Q&A groundtruth contains the specific questions models need to answer
+  </Accordion>
+
+  <Accordion title="Dependency compatibility issues" icon="cubes">
+    If you encounter numpy/pandas/sklearn import errors:
+
+    **Symptoms:**
+    - `ValueError: numpy.dtype size changed`
+    - `ImportError: cannot import name 'ComplexWarning'`
+
+    **Fix:**
+    ```bash
+    uv pip uninstall -y numpy pandas scikit-learn
+    uv pip install numpy pandas scikit-learn
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Electron App Issues
+
+<AccordionGroup>
+  <Accordion title="Cannot find module 'electron'" icon="window-restore">
+    **Cause**: Import path is incorrect
+
+    **Fix**: Use proper mocking in tests:
+    ```javascript
+    jest.mock('electron', () => ({...}));
+    ```
+  </Accordion>
+
+  <Accordion title="Tests timeout" icon="stopwatch">
+    **Cause**: Async operations not completing
+
+    **Fix**: Add proper timeout handling:
+    ```javascript
+    test('my test', async () => {
+      // test code
+    }, 10000); // 10 second timeout
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Still Need Help?
+
+<CardGroup cols={3}>
+  <Card title="FAQ" icon="circle-question" href="/reference/faq">
+    Common questions answered
+  </Card>
+  <Card title="GitHub Issues" icon="github" href="https://github.com/amd/gaia/issues">
+    Report bugs or request features
+  </Card>
+  <Card title="Email Support" icon="envelope" href="mailto:gaia@amd.com">
+    Contact the GAIA team
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

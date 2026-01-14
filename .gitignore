@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 # Python compiled files
@@ -55,6 +55,7 @@ coverage.xml
 
 # Django stuff
 *.log
+*.pid
 local_settings.py
 
 # Flask stuff
@@ -88,6 +89,7 @@ celerybeat-schedule
 # virtualenv
 .venv
 venv/
+gaiaenv/
 ENV/
 
 # Spyder project settings
@@ -105,7 +107,6 @@ ENV/
 
 # IDE settings
 .idea/
-.cursor/mcp.json
 
 # Node.js
 node_modules/
@@ -158,6 +159,23 @@ coverage/
 # Custom
 config.ini
 
+# GAIA cache directory
+.gaia/
+.pypirc
+
+# Electron Apps - exclude .env but keep .env.development
+src/gaia/apps/**/.env
+!src/gaia/apps/**/.env.development
+
+# MCP Configuration and runtime files
+.env
+.env.*
+!.env.example
+mcp_server.log
+atlassian_config.json
+*.mcp.json
+.mcp.json
+
 # version files
 version.txt
 installer/version.nsh
@@ -170,5 +188,4 @@ release_info.json
 version.txt
 **/version.nsh
 **/.gaia_servers.json
-.cursor/mcp.json
-.cursor/plan.md
+**/agent_output_*.json

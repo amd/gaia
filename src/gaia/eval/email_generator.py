@@ -1,19 +1,25 @@
-import json
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 import argparse
-import random
-from datetime import datetime, timedelta
+import json
+from datetime import datetime
 from pathlib import Path
-from gaia.logger import get_logger
+
 from gaia.eval.claude import ClaudeClient
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL
+from gaia.logger import get_logger
 
 
 class EmailGenerator:
     """Generates example business emails for testing email processing and summarization."""
 
-    def __init__(self, claude_model="claude-sonnet-4-20250514", max_tokens=8192):
+    def __init__(self, claude_model=None, max_tokens=8192):
         self.log = get_logger(__name__)
 
         # Initialize Claude client for dynamic content generation
+        if claude_model is None:
+            claude_model = DEFAULT_CLAUDE_MODEL
         try:
             self.claude_client = ClaudeClient(model=claude_model, max_tokens=max_tokens)
             self.log.info(f"Initialized Claude client with model: {claude_model}")
@@ -294,7 +300,10 @@ Generate only the additional email content (without repeating the existing conte
     def generate_email_set(self, output_dir, target_tokens=800, count_per_type=1):
         """Generate a set of business emails and save them to the output directory."""
         output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # Create emails subdirectory for organized output
+        emails_dir = output_dir / "emails"
+        emails_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = emails_dir  # Use emails subdirectory as base
 
         generated_files = []
         all_metadata = []
@@ -438,8 +447,8 @@ Examples:
     parser.add_argument(
         "--claude-model",
         type=str,
-        default="claude-sonnet-4-20250514",
-        help="Claude model to use for email generation (default: claude-sonnet-4-20250514)",
+        default=None,
+        help=f"Claude model to use for email generation (default: {DEFAULT_CLAUDE_MODEL})",
     )
 
     args = parser.parse_args()
@@ -453,6 +462,7 @@ Examples:
 
     try:
         # Filter email types if specified
+        original_templates = None
         if args.email_types:
             # Temporarily filter the templates
             original_templates = generator.email_templates.copy()
@@ -488,7 +498,7 @@ Examples:
         print(f"  Claude model: {generation_info['claude_model']}")
 
         # Restore original templates if they were filtered
-        if args.email_types:
+        if args.email_types and original_templates is not None:
             generator.email_templates = original_templates
 
     except Exception as e:

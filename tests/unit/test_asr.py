@@ -1,18 +1,30 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-import os
-import sys
-import unittest
-import threading
-import queue
-import time
 import asyncio
-from unittest.mock import MagicMock, patch, AsyncMock
+import os
+import queue
+import threading
+import time
+import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+# Skip entire module if audio dependencies not available
+try:
+    from gaia.audio.whisper_asr import WhisperAsr
+    from gaia.talk.sdk import TalkConfig, TalkSDK
+
+    HAS_AUDIO_DEPS = True
+except ImportError:
+    HAS_AUDIO_DEPS = False
 
 from gaia.logger import get_logger
-from gaia.audio.whisper_asr import WhisperAsr
-from gaia.talk.sdk import TalkSDK, TalkConfig
+
+pytestmark = pytest.mark.skipif(
+    not HAS_AUDIO_DEPS, reason="Audio dependencies (pyaudio) not available"
+)
 
 
 class TestWhisperAsr(unittest.TestCase):

@@ -1,41 +1,89 @@
-import os
-import anthropic
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 import base64
-from dotenv import load_dotenv
-from bs4 import BeautifulSoup
-from gaia.logger import get_logger
 import json
+import os
 from pathlib import Path
 
-load_dotenv()
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
 
-# Anthropic API pricing (per million tokens) - based on https://www.anthropic.com/pricing
-MODEL_PRICING = {
-    "claude-opus-4": {"input_per_mtok": 15.00, "output_per_mtok": 75.00},
-    "claude-sonnet-4": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
-    "claude-3-7-sonnet-20250219": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
-    "claude-3-5-sonnet-20241022": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
-    "claude-3-5-haiku-20241022": {"input_per_mtok": 0.80, "output_per_mtok": 4.00},
-    "claude-3-opus-20240229": {"input_per_mtok": 15.00, "output_per_mtok": 75.00},
-    "claude-3-haiku-20240307": {"input_per_mtok": 0.25, "output_per_mtok": 1.25},
-    # Default fallback for unknown models (using Sonnet pricing)
-    "default": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
-}
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    BeautifulSoup = None
+
+from dotenv import load_dotenv
+
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
+from gaia.logger import get_logger
+
+load_dotenv()
 
 
 class ClaudeClient:
     log = get_logger(__name__)
 
-    def __init__(self, model="claude-3-7-sonnet-20250219", max_tokens=1024):
+    def __init__(self, model=None, max_tokens=1024, max_retries=3):
+        """
+        Initialize Claude client with retry support.
+
+        Args:
+            model: Claude model to use (defaults to DEFAULT_CLAUDE_MODEL)
+            max_tokens: Maximum tokens in response (default: 1024)
+            max_retries: Maximum number of retry attempts for API calls with exponential backoff (default: 3)
+        """
+        # Check for required dependencies
+        if anthropic is None:
+            error_msg = (
+                "\n❌ Error: Missing required package 'anthropic'\n\n"
+                "Please install the eval dependencies:\n"
+                '  uv pip install -e ".[eval]"\n\n'
+                "Or install anthropic directly:\n"
+                "  uv pip install anthropic\n"
+            )
+            raise ImportError(error_msg)
+
+        if BeautifulSoup is None:
+            error_msg = (
+                "\n❌ Error: Missing required package 'bs4' (BeautifulSoup4)\n\n"
+                "Please install the eval dependencies:\n"
+                '  uv pip install -e ".[eval]"\n\n'
+                "Or install beautifulsoup4 directly:\n"
+                "  uv pip install beautifulsoup4\n"
+            )
+            raise ImportError(error_msg)
+
+        if model is None:
+            model = DEFAULT_CLAUDE_MODEL
         self.log = self.__class__.log  # Use the class-level logger for instances
         self.api_key = os.getenv("ANTHROPIC_API_KEY")
         if not self.api_key:
-            self.log.error("ANTHROPIC_API_KEY not found in environment")
-            raise ValueError("ANTHROPIC_API_KEY not found in environment")
-        self.client = anthropic.Anthropic(api_key=self.api_key)
+            error_msg = (
+                "ANTHROPIC_API_KEY not found in environment.\n"
+                "Please add your Anthropic API key to the .env file:\n"
+                "  ANTHROPIC_API_KEY=your_api_key_here\n"
+                "Alternatively, export it as an environment variable:\n"
+                "  export ANTHROPIC_API_KEY=your_api_key_here\n"
+            )
+            self.log.error(error_msg)
+            raise ValueError(error_msg)
+        # Initialize Anthropic client with retry support
+        # The SDK handles exponential backoff automatically
+        self.client = anthropic.Anthropic(
+            api_key=self.api_key,
+            max_retries=max_retries,
+            timeout=300.0,  # 5 minute timeout for large documents
+        )
         self.model = model
         self.max_tokens = max_tokens
-        self.log.info(f"Initialized ClaudeClient with model: {model}")
+        self.max_retries = max_retries
+        self.log.info(
+            f"Initialized ClaudeClient with model: {model}, max_retries: {max_retries}"
+        )
 
     def calculate_cost(self, input_tokens, output_tokens):
         """
@@ -63,7 +111,7 @@ class ClaudeClient:
         }
 
     def get_completion(self, prompt):
-        self.log.info("Getting completion from Claude")
+        self.log.debug("Getting completion from Claude")
         self.log.debug(f"Prompt token count: {self.count_tokens(prompt)}")
         try:
             message = self.client.messages.create(

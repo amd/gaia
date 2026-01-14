@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 # This workflow builds the Windows installer for GAIA using NSIS
@@ -21,17 +21,9 @@ on:
         value: ${{ jobs.build-installer.outputs.COMMIT_HASH }}
   push:
     branches: ["main"]
-    paths:
-      - "installer/**"
-      - "src/**"
-      - "setup.py"
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "installer/**"
-      - "src/**"
-      - "setup.py"
   merge_group:
   workflow_dispatch:
 
@@ -45,7 +37,7 @@ jobs:
       INSTALLER_HASH: ${{ steps.calculate_hash.outputs.INSTALLER_HASH }}
       COMMIT_HASH: ${{ steps.get_commit.outputs.COMMIT_HASH }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Print Git History and Version Info
         run: |
@@ -69,11 +61,7 @@ jobs:
 
       - name: Install NSIS
         run: |
-          # Download NSIS installer
-          curl -L -o nsis.exe https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10-setup.exe
-
-          # Install NSIS
-          Start-Process nsis.exe -ArgumentList '/S' -Wait
+          choco install nsis -y
 
       - name: Verify NSIS installation
         run: |
@@ -116,7 +104,7 @@ jobs:
           Write-Host "Installer SHA256: $hash"
 
       - name: Upload Windows installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: gaia-windows-installer-${{ steps.extract_version.outputs.VERSION }}-${{ steps.get_commit.outputs.COMMIT_HASH }}
           path: installer\gaia-windows-setup.exe

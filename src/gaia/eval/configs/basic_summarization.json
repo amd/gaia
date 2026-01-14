@@ -2,15 +2,16 @@
   "description": "Basic transcript summarization configuration",
   "experiments": [
     {
-      "name": "Claude-Sonnet-Basic-Summary",
-      "llm_type": "claude",
-      "model": "claude-sonnet-4-20250514",
+      "name": "Qwen3-1.7B-GGUF-Basic-Summary",
+      "llm_type": "lemonade",
+      "model": "Qwen3-1.7B-GGUF",
       "experiment_type": "summarization",
-      "system_prompt": "You are an expert meeting analyst. Analyze the transcript carefully and provide clear, accurate information based on the content.",
+      "system_prompt": "You are a professional meeting analyst. Provide clear, concise summaries based on the transcript content. Do NOT include reasoning or explanations - only provide the requested summary.",
       "max_tokens": 1024,
-      "temperature": 0.1,
+      "temperature": 0.3,
+      "minions": 0,
       "parameters": {
-        "combined_prompt": false
+        "stop": ["<|im_end|>"]
       }
     },
     {
@@ -18,11 +19,15 @@
       "llm_type": "lemonade",
       "model": "Qwen3-0.6B-GGUF",
       "experiment_type": "summarization",
-      "system_prompt": "You are an expert meeting analyst. Analyze the transcript carefully and provide clear, accurate information based on the content.",
+      "system_prompt": "You are a professional meeting analyst. Provide clear, concise summaries based on the transcript content. Do NOT include reasoning or explanations - only provide the requested summary.",
       "max_tokens": 1024,
-      "temperature": 0.1,
+      "temperature": 0.3,
       "minions": 0,
-      "parameters": {}
+      "parameters": {
+        "stop": ["<|im_end|>"]
+      }
     }
-  ]
+  ],
+  "use_case": "summarization",
+  "styles": ["executive", "action_items"]
 }

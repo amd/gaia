@@ -1,0 +1,164 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: Build Electron Apps
+
+on:
+  workflow_call:
+    outputs:
+      matrix:
+        description: "Matrix of discovered apps"
+        value: ${{ jobs.discover-apps.outputs.matrix }}
+      has_apps:
+        description: "Whether any apps were discovered"
+        value: ${{ jobs.discover-apps.outputs.has_apps }}
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  discover-apps:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+      has_apps: ${{ steps.discover.outputs.has_apps }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
+
+      - name: Discover Electron apps
+        id: discover
+        run: |
+          echo "Discovering apps with webui directories..."
+          apps_json='[]'
+
+          for app_dir in src/gaia/apps/*/webui; do
+            if [ -f "$app_dir/app.config.json" ] && [ -f "$app_dir/package.json" ]; then
+              app_name=$(basename $(dirname "$app_dir"))
+
+              # Read app config
+              config=$(cat "$app_dir/app.config.json")
+              display_name=$(echo "$config" | jq -r '.displayName // .name')
+              version=$(echo "$config" | jq -r '.version // "1.0.0"')
+
+              echo "Found app: $app_name v$version ($display_name)"
+
+              # Add to matrix
+              app_entry=$(jq -n \
+                --arg name "$app_name" \
+                --arg path "$app_dir" \
+                --arg display_name "$display_name" \
+                --arg version "$version" \
+                '{name: $name, path: $path, display_name: $display_name, version: $version}')
+
+              apps_json=$(echo "$apps_json" | jq -c ". += [$app_entry]")
+            fi
+          done
+
+          # Check if we found any apps
+          app_count=$(echo "$apps_json" | jq 'length')
+          if [ "$app_count" -eq 0 ]; then
+            echo "No Electron apps found"
+            echo "has_apps=false" >> $GITHUB_OUTPUT
+            echo "matrix={\"app\":[]}" >> $GITHUB_OUTPUT
+          else
+            echo "Found $app_count app(s)"
+            echo "has_apps=true" >> $GITHUB_OUTPUT
+            echo "matrix={\"app\":$(echo $apps_json | jq -c .)}" >> $GITHUB_OUTPUT
+          fi
+
+  build-apps:
+    needs: discover-apps
+    if: needs.discover-apps.outputs.has_apps == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # os: [windows-latest, ubuntu-latest, macos-latest]
+        os: [windows-latest]
+        app: ${{ fromJson(needs.discover-apps.outputs.matrix).app }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Build Electron app
+        run: |
+          cd ${{ matrix.app.path }}
+          npm ci --prefix .
+          npm run make
+        shell: bash
+
+      - name: Get platform info
+        id: platform
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            echo "name=windows" >> $GITHUB_OUTPUT
+            echo "ext=exe" >> $GITHUB_OUTPUT
+          elif [[ "${{ runner.os }}" == "Linux" ]]; then
+            echo "name=linux" >> $GITHUB_OUTPUT
+            echo "ext=deb" >> $GITHUB_OUTPUT
+          fi
+
+      # Find and upload build artifacts for Windows
+      - name: Find Windows artifacts
+        if: runner.os == 'Windows'
+        id: windows_artifacts
+        shell: pwsh
+        run: |
+          $setupFile = Get-ChildItem -Path "${{ matrix.app.path }}\out\make\squirrel.windows\x64" -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($setupFile) {
+            $fileName = "${{ matrix.app.name }}-${{ matrix.app.version }}-setup.exe"
+            Copy-Item $setupFile.FullName -Destination $fileName
+            echo "artifact_path=$fileName" >> $env:GITHUB_OUTPUT
+            echo "found=true" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "found=false" >> $env:GITHUB_OUTPUT
+            echo "::warning::No Windows setup file found for ${{ matrix.app.name }}"
+          }
+
+      # Find and upload build artifacts for Linux
+      - name: Find Linux artifacts
+        if: runner.os == 'Linux'
+        id: linux_artifacts
+        shell: bash
+        run: |
+          deb_file=$(find "${{ matrix.app.path }}/out/make" -name "*.deb" -type f | head -1)
+          if [ -n "$deb_file" ]; then
+            filename="${{ matrix.app.name }}-${{ matrix.app.version }}.deb"
+            cp "$deb_file" "$filename"
+            echo "artifact_path=$filename" >> $GITHUB_OUTPUT
+            echo "found=true" >> $GITHUB_OUTPUT
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+            echo "::warning::No Linux .deb file found for ${{ matrix.app.name }}"
+          fi
+
+      # Upload artifacts for all platforms (PR and regular builds)
+      - name: Upload build artifacts
+        if: |
+          (runner.os == 'Windows' && steps.windows_artifacts.outputs.found == 'true') ||
+          (runner.os == 'Linux' && steps.linux_artifacts.outputs.found == 'true')
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.app.name }}-${{ steps.platform.outputs.name }}-${{ github.event.pull_request.number || github.sha }}
+          path: |
+            ${{ steps.windows_artifacts.outputs.artifact_path }}
+            ${{ steps.linux_artifacts.outputs.artifact_path }}
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}

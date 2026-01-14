@@ -1,0 +1,95 @@
+{
+  "name": "gaia-jax-webui",
+  "version": "1.0.0",
+  "description": "JAX (Jira Agent Experience) - AI-powered JIRA management using GAIA MCP integration",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "publish": "electron-forge publish",
+    "lint": "echo \"add linting rules to package.json later \"",
+    "dev": "electron-forge start"
+  },
+  "keywords": [
+    "JAX",
+    "JIRA",
+    "Agent",
+    "AI",
+    "GAIA",
+    "MCP",
+    "Electron"
+  ],
+  "author": "AMD AI Group",
+  "license": "MIT",
+  "config": {
+    "forge": {
+      "packagerConfig": {
+        "name": "JAX (Jira Agent Experience)",
+        "executableName": "gaia-jax-webui",
+        "appBundleId": "com.amd.gaia-jax-webui",
+        "appCategoryType": "public.app-category.productivity",
+        "icon": "src/assets/icons/icon",
+        "platform": "all"
+      },
+      "makers": [
+        {
+          "name": "@electron-forge/maker-squirrel",
+          "config": {
+            "name": "gaia_jax_webui"
+          },
+          "platforms": [
+            "win32"
+          ]
+        },
+        {
+          "name": "@electron-forge/maker-deb",
+          "config": {},
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "name": "@electron-forge/maker-rpm",
+          "config": {},
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "name": "@electron-forge/maker-zip",
+          "platforms": [
+            "darwin",
+            "linux"
+          ]
+        }
+      ],
+      "publishers": [
+        {
+          "name": "@electron-forge/publisher-github",
+          "config": {
+            "repository": {
+              "owner": "aigdat",
+              "name": "gaia"
+            },
+            "prerelease": false,
+            "draft": true
+          }
+        }
+      ]
+    }
+  },
+  "dependencies": {
+    "electron-squirrel-startup": "^1.0.0",
+    "dotenv": "^16.0.0"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.0.0",
+    "@electron-forge/maker-deb": "^7.0.0",
+    "@electron-forge/maker-rpm": "^7.0.0",
+    "@electron-forge/maker-squirrel": "^7.0.0",
+    "@electron-forge/maker-zip": "^7.0.0",
+    "@electron-forge/publisher-github": "^7.0.0",
+    "electron": "^31.0.0"
+  }
+}

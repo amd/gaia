@@ -1,0 +1,399 @@
+---
+title: "ValidationToolsMixin"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/code/tools/validation_tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code/tools/validation_tools.py)
+</Info>
+
+<Note>
+**Component:** ValidationToolsMixin
+**Module:** `gaia.agents.code.tools.validation_tools`
+**Import:** `from gaia.agents.code.tools.validation_tools import ValidationToolsMixin`
+</Note>
+---
+
+## Overview
+
+ValidationToolsMixin provides comprehensive testing and validation tools for Next.js applications with Prisma. It includes CRUD API testing, TypeScript validation, file structure validation, and CSS integrity checks.
+
+**Key Features:**
+- Test CRUD API endpoints using curl
+- Validate TypeScript compilation
+- Validate CRUD application structure
+- Validate CSS files for common issues
+- Schema-aware test payload generation
+- Automatic dev server management
+- Tier 4 error messaging with rule citations
+
+---
+
+## Tool Specifications
+
+### 1. test_crud_api
+
+Test CRUD API endpoints with automatic payload generation from schema.
+
+**Parameters:**
+- `project_dir` (str, required): Path to Next.js project
+- `model_name` (str, required): Model name (e.g., "Todo", "Post")
+- `port` (int, optional): Dev server port (default: 3000)
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "result": {
+        "tests_passed": int,
+        "tests_failed": int,
+        "results": {
+            "POST": {"status": int, "pass": bool},
+            "GET_LIST": {"status": int, "pass": bool},
+            "GET_SINGLE": {"status": int, "pass": bool},
+            "PATCH": {"status": int, "pass": bool},
+            "DELETE": {"status": int, "pass": bool}
+        }
+    }
+}
+```
+
+**Test Sequence:**
+1. Ensure dev server is running (start if needed)
+2. Read Prisma schema to get field definitions
+3. Generate test payload from schema fields
+4. POST: Create test record (expect 201)
+5. GET_LIST: List all records (expect 200)
+6. GET_SINGLE: Get created record (expect 200)
+7. PATCH: Update record (expect 200)
+8. DELETE: Delete record (expect 200)
+9. Cleanup: Stop dev server if we started it
+
+### 2. validate_typescript
+
+Validate TypeScript code with tier 4 error messaging.
+
+**Parameters:**
+- `project_dir` (str, required): Path to Next.js project
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "message": str,
+
+    # On failure
+    "error": str,
+    "errors": str,  # Full tsc output
+    "violation": str,  # What was violated
+    "rule": str,  # The rule that was violated
+    "fix": str,  # How to fix it
+    "hint": str
+}
+```
+
+**Detected Violations:**
+- Missing type imports
+- Missing Prisma singleton
+- Prisma types not generated
+- Direct prisma import in client component
+
+**Example Error Response:**
+```python
+{
+    "success": False,
+    "error": "TypeScript validation failed",
+    "errors": "src/app/todos/page.tsx(5,10): error TS2304: Cannot find name 'Todo'.",
+    "violation": "Missing type import",
+    "rule": "Client components must use: import type { X } from '@prisma/client'",
+    "fix": "Add the missing type import at the top of the file",
+    "hint": "Fix the type errors listed above, then run validate_typescript again"
+}
+```
+
+### 3. validate_crud_structure
+
+Validate that all required CRUD files exist.
+
+**Parameters:**
+- `project_dir` (str, required): Path to Next.js project
+- `resource_name` (str, required): Resource name (e.g., "todo")
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "missing_files": [
+        {
+            "description": str,
+            "path": str,
+            "create_with": str  # Tool command to create
+        }
+    ],
+    "existing_files": List[str],
+    "details": str,  # Human-readable report
+    "hint": str
+}
+```
+
+**Checked Files:**
+- List page: `src/app/{resource_plural}/page.tsx`
+- New page: `src/app/{resource_plural}/new/page.tsx`
+- Detail page: `src/app/{resource_plural}/[id]/page.tsx`
+- Form component: `src/components/{Resource}Form.tsx`
+- Actions component: `src/components/{Resource}Actions.tsx`
+- Collection API: `src/app/api/{resource_plural}/route.ts`
+- Item API: `src/app/api/{resource_plural}/[id]/route.ts`
+
+### 4. validate_styles
+
+Validate CSS files and design system consistency.
+
+**Parameters:**
+- `project_dir` (str, required): Path to Next.js project
+- `resource_name` (str, optional): Resource name for component checks
+
+**Returns:**
+```python
+{
+    "success": bool,
+    "is_valid": bool,
+    "errors": List[str],  # CRITICAL errors
+    "warnings": List[str],  # Non-blocking warnings
+    "files_checked": List[str],
+    "hint": str
+}
+```
+
+**Validates:**
+1. CSS files contain valid CSS (not TypeScript) - CRITICAL
+2. globals.css has Tailwind directives
+3. layout.tsx imports globals.css
+4. Balanced braces in CSS files
+
+**TypeScript Detection Patterns:**
+```python
+[
+    r"^\s*import\s+.*from",  # import statement
+    r"^\s*export\s+",  # export statement
+    r'"use client"|\'use client\'',  # React directive
+    r"^\s*interface\s+\w+",  # TypeScript interface
+    r"^\s*type\s+\w+\s*=",  # Type alias
+    r"^\s*const\s+\w+\s*[=:]",  # const declaration
+    r"<[A-Z][a-zA-Z]*[\s/>]",  # JSX component
+    r"useState|useEffect|useRouter",  # React hooks
+]
+```
+
+---
+
+## Helper Functions
+
+### generate_test_payload
+
+Generate test data from Prisma field definitions.
+
+**Parameters:**
+- `fields` (Dict[str, str]): Field names to types
+
+**Returns:**
+```python
+Dict[str, Any]  # Test values for each field
+```
+
+**Type Mappings:**
+```python
+{
+    "String" | "Text": "Test Field Name",
+    "Int" | "Number": 42,
+    "Float": 3.14,
+    "Boolean": True (for active/enabled) | False,
+    "DateTime": "2025-01-01T00:00:00.000Z"
+}
+```
+
+### _get_create_command
+
+Generate tool command to create missing CRUD file.
+
+**Parameters:**
+- `description` (str): File description
+- `resource_name` (str): Resource name
+
+**Returns:**
+```python
+str  # Tool command (e.g., 'manage_react_component(variant="form", ...)')
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Test CRUD API
+
+```python
+from gaia import CodeAgent
+
+agent = CodeAgent()
+
+# Test Todo CRUD API
+result = agent.test_crud_api(
+    project_dir="/path/to/nextjs-app",
+    model_name="Todo",
+    port=3000
+)
+
+if result["success"]:
+    print(f"✓ All {result['result']['tests_passed']} tests passed!")
+else:
+    print(f"✗ {result['result']['tests_failed']} tests failed:")
+    for test, outcome in result["result"]["results"].items():
+        if not outcome["pass"]:
+            print(f"  {test}: HTTP {outcome['status']}")
+```
+
+### Example 2: Validate TypeScript
+
+```python
+result = agent.validate_typescript(
+    project_dir="/path/to/nextjs-app"
+)
+
+if result["success"]:
+    print("✓ TypeScript validation passed")
+else:
+    print(f"✗ {result['error']}")
+    print(f"\nViolation: {result.get('violation', 'Unknown')}")
+    print(f"Rule: {result.get('rule', 'N/A')}")
+    print(f"Fix: {result.get('fix', 'See errors above')}")
+    print(f"\nErrors:\n{result.get('errors', '')}")
+```
+
+### Example 3: Validate CRUD Structure
+
+```python
+result = agent.validate_crud_structure(
+    project_dir="/path/to/nextjs-app",
+    resource_name="todo"
+)
+
+if result["success"]:
+    print("✓ Complete CRUD structure validated")
+else:
+    print("✗ Missing files:")
+    for missing in result["missing_files"]:
+        print(f"\n  {missing['description']}")
+        print(f"  Path: {missing['path']}")
+        print(f"  Create: {missing['create_with']}")
+```
+
+### Example 4: Validate Styles
+
+```python
+result = agent.validate_styles(
+    project_dir="/path/to/nextjs-app",
+    resource_name="todo"
+)
+
+if result["is_valid"]:
+    print("✓ Styling validated successfully")
+    if result.get("warnings"):
+        print(f"  Warnings: {len(result['warnings'])}")
+else:
+    print("✗ Style validation failed:")
+    for error in result["errors"]:
+        print(f"  - {error}")
+    print(f"\nHint: {result.get('hint', '')}")
+```
+
+---
+
+## Testing Requirements
+
+**File:** `tests/agents/code/test_validation_tools.py`
+
+```python
+def test_generate_test_payload():
+    """Test payload generation from schema fields."""
+    fields = {
+        "title": "String",
+        "count": "Int",
+        "price": "Float",
+        "active": "Boolean",
+        "createdAt": "DateTime"
+    }
+
+    payload = generate_test_payload(fields)
+
+    assert isinstance(payload["title"], str)
+    assert isinstance(payload["count"], int)
+    assert isinstance(payload["price"], float)
+    assert isinstance(payload["active"], bool)
+    assert isinstance(payload["createdAt"], str)
+
+def test_validate_crud_structure():
+    """Test CRUD structure validation."""
+    # Create temporary project with incomplete structure
+    result = validate_crud_structure(project_dir, "todo")
+
+    assert not result["success"]
+    assert len(result["missing_files"]) > 0
+    assert "create_with" in result["missing_files"][0]
+
+def test_validate_styles_detects_typescript():
+    """Test TypeScript detection in CSS files."""
+    # Create CSS file with TypeScript content
+    css_file = project_dir / "src/app/globals.css"
+    css_file.write_text('import React from "react"')
+
+    result = validate_styles(str(project_dir))
+
+    assert not result["is_valid"]
+    assert any("TypeScript" in error for error in result["errors"])
+```
+
+---
+
+## Dependencies
+
+```python
+import json
+import logging
+import re
+import subprocess
+import time
+from pathlib import Path
+from typing import Any, Dict
+
+from gaia.agents.base.tools import tool
+from gaia.agents.code.prompts.code_patterns import pluralize
+from gaia.agents.code.tools.cli_tools import is_port_available
+from gaia.agents.code.tools.web_dev_tools import read_prisma_model
+```
+
+---
+
+## Integration with Other Mixins
+
+### Requires CLIToolsMixin
+- `_run_foreground_command`: Execute curl commands
+- `_run_background_command`: Start dev server
+- `_stop_process`: Stop dev server
+
+### Requires WebToolsMixin
+- `read_prisma_model`: Read schema for field definitions
+
+---
+
+*ValidationToolsMixin Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

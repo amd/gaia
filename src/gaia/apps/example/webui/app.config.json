@@ -1,0 +1,13 @@
+{
+  "name": "example",
+  "displayName": "Example App - MCP Demo",
+  "version": "1.0.0",
+  "description": "Example GAIA app demonstrating MCP integration",
+  "window": {
+    "width": 1200,
+    "height": 800
+  },
+  "devServer": {
+    "port": 5007
+  }
+}

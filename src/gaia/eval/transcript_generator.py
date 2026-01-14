@@ -1,19 +1,25 @@
-import json
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 import argparse
-import random
-from datetime import datetime, timedelta
+import json
+from datetime import datetime
 from pathlib import Path
-from gaia.logger import get_logger
+
 from gaia.eval.claude import ClaudeClient
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL
+from gaia.logger import get_logger
 
 
 class TranscriptGenerator:
     """Generates example meeting transcripts for testing transcript summarization."""
 
-    def __init__(self, claude_model="claude-sonnet-4-20250514", max_tokens=8192):
+    def __init__(self, claude_model=None, max_tokens=8192):
         self.log = get_logger(__name__)
 
         # Initialize Claude client for dynamic content generation
+        if claude_model is None:
+            claude_model = DEFAULT_CLAUDE_MODEL
         try:
             self.claude_client = ClaudeClient(model=claude_model, max_tokens=max_tokens)
             self.log.info(f"Initialized Claude client with model: {claude_model}")
@@ -119,6 +125,46 @@ class TranscriptGenerator:
         """Rough token estimation (approximately 4 characters per token)."""
         return len(text) // 4
 
+    def _validate_transcript_format(self, content):
+        """
+        Validate that the transcript doesn't contain forbidden sections.
+        Returns (is_valid, warnings) tuple.
+        """
+        warnings = []
+        content_lower = content.lower()
+
+        # Check for common summary section headers
+        forbidden_patterns = [
+            ("summary:", "Summary section"),
+            ("action items:", "Action items section"),
+            ("action item:", "Action items section"),
+            ("key decisions:", "Key decisions section"),
+            ("decisions:", "Decisions section"),
+            ("next steps:", "Next steps section"),
+            ("follow-up:", "Follow-up section"),
+            ("follow up:", "Follow-up section"),
+            ("takeaways:", "Takeaways section"),
+            ("conclusions:", "Conclusions section"),
+            ("meeting notes:", "Meeting notes section"),
+            ("key points:", "Key points section"),
+        ]
+
+        for pattern, description in forbidden_patterns:
+            if pattern in content_lower:
+                # Check if it's not just part of dialogue (should have newline before it)
+                lines = content.split("\n")
+                for line in lines:
+                    line_lower = line.lower().strip()
+                    # If line starts with the pattern (not just mentioned in dialogue)
+                    if line_lower.startswith(pattern) or line_lower.startswith(
+                        "**" + pattern
+                    ):
+                        warnings.append(f"Found forbidden section: {description}")
+                        break
+
+        is_valid = len(warnings) == 0
+        return is_valid, warnings
+
     def _generate_transcript_with_claude(self, meeting_type, target_tokens):
         """Generate a meeting transcript using Claude based on the meeting type and target token count."""
         if meeting_type not in self.meeting_templates:
@@ -135,19 +181,37 @@ Participants: {', '.join(template['participants'])}
 Duration: {template['duration_minutes']} minutes
 Target Length: Approximately {target_tokens} tokens (about {target_tokens * 4} characters)
 
-Please create a detailed, realistic meeting transcript that includes:
-1. Meeting header with date, time, and participants
-2. Natural dialogue between the participants that reflects their roles
-3. Realistic conversation flow appropriate for this type of meeting
-4. Specific technical details, decisions, and action items where relevant
-5. Natural interruptions, clarifications, and back-and-forth discussion
+CRITICAL FORMATTING REQUIREMENTS - The transcript MUST contain ONLY these three sections:
 
-Format the transcript with speaker names followed by colons, like:
-"Speaker Name: What they said"
+1. **Meeting Header** - Include:
+   - Meeting title/type
+   - Date and time
+   - Location (can be virtual/in-person/hybrid)
 
-Make the conversation feel authentic and professional, with each participant contributing meaningfully based on their role. The transcript should be approximately {target_tokens} tokens long.
+2. **Participant List** - List all participants with their roles
 
-Generate only the transcript content, no additional commentary."""
+3. **Transcript** - The actual meeting dialogue with:
+   - Natural dialogue between the participants that reflects their roles
+   - Realistic conversation flow appropriate for this type of meeting
+   - Specific technical details, decisions, and action items MENTIONED IN DIALOGUE (not as separate sections)
+   - Natural interruptions, clarifications, and back-and-forth discussion
+   - Format: "Speaker Name: What they said"
+
+CRITICAL: You MUST NOT include any of the following:
+- Summary or overview sections (DO NOT end with "Summary:" or "In summary:")
+- Action items section (decisions/tasks should only be mentioned within the dialogue)
+- Key decisions section
+- Next steps section
+- Follow-up items section
+- Takeaways or conclusions section
+- Meeting notes section
+- Any other meta-commentary or analysis AFTER the dialogue ends
+
+The transcript should end naturally with the last line of dialogue from a participant. Do not add any commentary, summary, or analysis after the dialogue ends.
+
+The transcript should be approximately {target_tokens} tokens long and feel authentic and professional, with each participant contributing meaningfully based on their role.
+
+Generate ONLY the three sections listed above (header, participants, transcript dialogue). The file should end when the dialogue ends."""
 
         try:
             # Generate the transcript using Claude with usage tracking
@@ -197,7 +261,19 @@ Please add more realistic dialogue that:
 4. Includes meaningful discussion relevant to a {template['description']}
 5. Maintains the same participants and their roles
 
-Generate only the additional transcript content (without repeating the existing content)."""
+CRITICAL REQUIREMENTS:
+- Generate ONLY additional dialogue in the format "Speaker Name: What they said"
+- DO NOT conclude or wrap up the meeting
+- DO NOT add summary sections (no "Summary:", "In summary:", etc.)
+- DO NOT add action items sections (no "Action Items:", etc.)
+- DO NOT add key decisions, next steps, or takeaways sections
+- DO NOT add any meta-commentary or analysis
+- Just continue the natural, ongoing conversation between participants
+- The meeting should feel like it's still in progress, not ending
+
+Even though you're extending the transcript, do NOT treat this as the end of the meeting. The conversation should continue naturally without any concluding sections.
+
+Generate only the additional transcript dialogue (without repeating the existing content)."""
 
         try:
             self.log.info(f"Extending transcript by ~{needed_tokens} tokens")
@@ -286,7 +362,10 @@ Generate only the additional transcript content (without repeating the existing 
     def generate_transcript_set(self, output_dir, target_tokens=1000, count_per_type=1):
         """Generate a set of meeting transcripts and save them to the output directory."""
         output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # Create meetings subdirectory for organized output
+        meetings_dir = output_dir / "meetings"
+        meetings_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = meetings_dir  # Use meetings subdirectory as base
 
         generated_files = []
         all_metadata = []
@@ -436,8 +515,8 @@ Examples:
     parser.add_argument(
         "--claude-model",
         type=str,
-        default="claude-sonnet-4-20250514",
-        help="Claude model to use for transcript generation (default: claude-sonnet-4-20250514)",
+        default=None,
+        help=f"Claude model to use for transcript generation (default: {DEFAULT_CLAUDE_MODEL})",
     )
 
     args = parser.parse_args()
@@ -451,6 +530,7 @@ Examples:
 
     try:
         # Filter meeting types if specified
+        original_templates = None
         if args.meeting_types:
             # Temporarily filter the templates
             original_templates = generator.meeting_templates.copy()
@@ -488,7 +568,7 @@ Examples:
         print(f"  Claude model: {generation_info['claude_model']}")
 
         # Restore original templates if they were filtered
-        if args.meeting_types:
+        if args.meeting_types and original_templates is not None:
             generator.meeting_templates = original_templates
 
     except Exception as e:

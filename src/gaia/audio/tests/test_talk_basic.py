@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
+#
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """
 Basic talk mode test - minimal complexity for debugging
 """
 
+import time
+
 import numpy as np
 import pyaudio
 import whisper
-import time
-import sys
 
 
 def test_basic_talk():

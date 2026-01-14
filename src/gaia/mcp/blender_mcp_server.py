@@ -1,13 +1,17 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 # This Blender MCP client is a simplified and modified version of the BlenderMCP project from https://github.com/BlenderMCP/blender-mcp
+
+import json
+import socket
+import threading
+import time
+import traceback
 
 import bpy
 import mathutils
-import json
-import threading
-import socket
-import time
-import traceback
-from bpy.props import IntProperty, BoolProperty
+from bpy.props import BoolProperty, IntProperty
 
 bl_info = {
     "name": "Simple Blender MCP",
@@ -59,8 +63,8 @@ class SimpleBlenderMCPServer:
         if self.socket:
             try:
                 self.socket.close()
-            except:
-                pass
+            except Exception as e:
+                print(f"Error closing socket: {e}")
             self.socket = None
 
         # Wait for thread to finish
@@ -68,8 +72,8 @@ class SimpleBlenderMCPServer:
             try:
                 if self.server_thread.is_alive():
                     self.server_thread.join(timeout=1.0)
-            except:
-                pass
+            except Exception as e:
+                print(f"Error joining server thread: {e}")
             self.server_thread = None
 
         print("SimpleMCP server stopped")
@@ -134,9 +138,9 @@ class SimpleBlenderMCPServer:
                                 response_json = json.dumps(response)
                                 try:
                                     client.sendall(response_json.encode("utf-8"))
-                                except:
+                                except Exception as e:
                                     print(
-                                        "Failed to send response - client disconnected"
+                                        f"Failed to send response - client disconnected: {e}"
                                     )
                             except Exception as e:
                                 print(f"Error executing command: {str(e)}")
@@ -149,15 +153,17 @@ class SimpleBlenderMCPServer:
                                     client.sendall(
                                         json.dumps(error_response).encode("utf-8")
                                     )
-                                except:
-                                    pass
+                                except Exception as send_err:
+                                    print(
+                                        f"Failed to send error response - client disconnected: {send_err}"
+                                    )
                             return None
 
                         # Schedule execution in main thread
                         bpy.app.timers.register(execute_wrapper, first_interval=0.0)
                     except json.JSONDecodeError:
-                        # Incomplete data, wait for more
-                        pass
+                        # Incomplete JSON data received, continue buffering
+                        continue
                 except Exception as e:
                     print(f"Error receiving data: {str(e)}")
                     break
@@ -166,8 +172,8 @@ class SimpleBlenderMCPServer:
         finally:
             try:
                 client.close()
-            except:
-                pass
+            except Exception as e:
+                print(f"Error closing client connection: {e}")
             print("Client handler stopped")
 
     def execute_command(self, command):
@@ -462,7 +468,7 @@ class SimpleBlenderMCPServer:
             # Create a namespace for execution and a buffer to capture output
             import io
             import sys
-            from contextlib import redirect_stdout, redirect_stderr
+            from contextlib import redirect_stderr, redirect_stdout
 
             namespace = {"bpy": bpy}
             stdout_buffer = io.StringIO()

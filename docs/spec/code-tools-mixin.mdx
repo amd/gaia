@@ -1,0 +1,693 @@
+---
+title: "CodeToolsMixin"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/code/tools/code_tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code/tools/code_tools.py)
+</Info>
+
+<Note>
+**Component:** CodeToolsMixin
+**Module:** `gaia.agents.code.tools.code_tools`
+**Import:** `from gaia.agents.code.tools.code_tools import CodeToolsMixin`
+</Note>
+---
+
+## Overview
+
+CodeToolsMixin provides comprehensive code generation, analysis, and helper methods for Python development. It combines AI-powered code generation with Python AST analysis to create well-structured, validated code with proper documentation and type hints.
+
+**Key Features:**
+- Generate Python functions, classes, and tests
+- Parse and analyze Python code structure
+- Validate Python syntax
+- Extract code symbols (functions, classes, imports)
+- Run pylint analysis on code
+- LLM-powered code generation with streaming
+- Automatic error recovery and retry logic
+
+---
+
+## Requirements
+
+### Functional Requirements
+
+1. **Code Generation**
+   - Generate Python functions with docstrings
+   - Generate Python classes with methods
+   - Generate comprehensive unit tests
+   - Support type hints and return types
+   - Validate generated code syntax
+   - Optional file output
+
+2. **Code Analysis**
+   - Parse Python code using AST
+   - Extract functions, classes, and imports
+   - Validate Python syntax
+   - List symbols with line numbers
+   - Generate code structure reports
+
+3. **Code Quality**
+   - Run pylint analysis with confidence filtering
+   - Parse and categorize pylint issues
+   - Generate actionable error reports
+   - Support file and directory analysis
+
+4. **LLM Integration**
+   - Stream code generation with live preview
+   - Automatic retry on timeout
+   - Progressive token reduction on failure
+   - Fallback to placeholder code
+   - Markdown code block extraction
+
+### Non-Functional Requirements
+
+1. **Code Quality**
+   - All generated code must be syntactically valid
+   - Proper indentation (4 spaces)
+   - Comprehensive docstrings
+   - Type hints where appropriate
+
+2. **Performance**
+   - Streaming generation for large files
+   - Maximum 3 retry attempts
+   - Progressive timeout reduction
+   - Efficient AST parsing
+
+3. **Reliability**
+   - Syntax validation before file write
+   - Graceful degradation on LLM timeout
+   - Clear error messages
+
+---
+
+## API Specification
+
+### File Location
+
+```
+src/gaia/agents/code/tools/code_tools.py
+```
+
+### Public Interface
+
+```python
+from typing import Any, Dict, List, Optional
+
+class CodeToolsMixin:
+    """
+    Consolidated mixin providing code generation, analysis, and helper methods.
+
+    Provides tools for:
+    - Generating Python functions, classes, and tests
+    - Parsing and analyzing Python code structure
+    - Validating Python syntax
+    - Extracting code symbols
+    - Running pylint analysis
+    """
+
+    def register_code_tools(self) -> None:
+        """
+        Register all code-related tools.
+
+        Registers:
+            - generate_function: Generate Python function
+            - generate_class: Generate Python class
+            - generate_test: Generate unit tests
+            - parse_python_code: Parse code structure
+            - validate_syntax: Validate Python syntax
+            - list_symbols: List code symbols
+            - analyze_with_pylint: Run pylint analysis
+        """
+        pass
+
+    def _generate_code_for_file(
+        self, filename: str, purpose: str, context: str = ""
+    ) -> str:
+        """
+        Generate code for a specific file using LLM with streaming preview.
+
+        Args:
+            filename: Name of the file to generate
+            purpose: Description of what this file should do
+            context: Additional context about the project
+
+        Returns:
+            Generated code as string
+
+        Implementation:
+            - Uses streaming for live console preview
+            - Retries up to MAX_CODE_RETRIES times
+            - Reduces max_tokens on retry
+            - Falls back to placeholder on failure
+            - Extracts code from markdown blocks
+        """
+        pass
+
+    def _fix_code_with_llm(
+        self,
+        code: str,
+        file_path: str,
+        error_msg: str,
+        context: str = "",
+        max_attempts: int = 3,
+    ) -> Optional[str]:
+        """
+        Fix code using LLM based on error message.
+
+        Args:
+            code: Code with errors
+            file_path: Path to the file (for language detection)
+            error_msg: Error message from linting/execution
+            context: Additional context
+            max_attempts: Maximum number of fix attempts
+
+        Returns:
+            Fixed code or None if unable to fix
+
+        Supports:
+            - Python (.py files)
+            - TypeScript (.ts, .tsx files)
+            - Syntax validation for Python
+            - Multiple fix attempts
+        """
+        pass
+```
+
+---
+
+## Tool Specifications
+
+### 1. generate_function
+
+Generate a Python function with docstring and body.
+
+**Parameters:**
+- `name` (str, required): Function name
+- `params` (str, optional): Parameter list (e.g., "x, y=0")
+- `docstring` (str, optional): Function documentation
+- `body` (str, optional): Function implementation
+- `return_type` (str, optional): Return type hint
+- `write_to_file` (bool, optional): Save to file (default: True)
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "is_valid": bool,
+    "errors": List[str],
+    "code": str,
+    "file_path": str,  # If write_to_file=True
+    "message": str
+}
+```
+
+**Example:**
+```python
+result = generate_function(
+    name="calculate_sum",
+    params="a: int, b: int",
+    docstring="Calculate the sum of two integers.",
+    body="return a + b",
+    return_type="int",
+    write_to_file=True
+)
+```
+
+### 2. generate_class
+
+Generate a Python class with methods.
+
+**Parameters:**
+- `name` (str, required): Class name
+- `docstring` (str, optional): Class documentation
+- `base_classes` (str, optional): Base classes (e.g., "BaseClass, Mixin")
+- `methods` (List[Dict], optional): Methods to include
+- `write_to_file` (bool, optional): Save to file (default: True)
+
+**Method Dict Format:**
+```python
+{
+    "name": str,
+    "params": str,
+    "docstring": str,
+    "body": str
+}
+```
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "is_valid": bool,
+    "errors": List[str],
+    "code": str,
+    "file_path": str,
+    "message": str
+}
+```
+
+### 3. generate_test
+
+Generate comprehensive Python unit tests.
+
+**Parameters:**
+- `class_name` (str, optional): Test class name
+- `module_name` (str, optional): Module being tested
+- `function_name` (str, optional): Specific function to test
+- `source_code` (str, optional): Source code to analyze
+- `test_cases` (List[str], optional): Manual test case names
+- `source_file` (str, optional): Path to source file
+- `write_to_file` (bool, optional): Save to file (default: True)
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "is_valid": bool,
+    "errors": List[str],
+    "code": str,
+    "functions_tested": List[str],
+    "test_class": str,
+    "file_path": str,
+    "message": str
+}
+```
+
+**Generated Test Structure:**
+```python
+import unittest
+from unittest.mock import patch, MagicMock
+
+class TestFunctionName(unittest.TestCase):
+    def setUp(self):
+        """Set up test fixtures."""
+        pass
+
+    def test_function_basic(self):
+        """Test basic functionality."""
+        pass
+
+    def test_function_edge_cases(self):
+        """Test edge cases."""
+        pass
+
+    def test_function_invalid_input(self):
+        """Test error handling."""
+        pass
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+```
+
+### 4. parse_python_code
+
+Parse Python code and extract structure.
+
+**Parameters:**
+- `code` (str, required): Python source code
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "is_valid": bool,
+    "symbols": [
+        {
+            "name": str,
+            "type": "function" | "class" | "variable",
+            "line": int,
+            "signature": str,
+            "docstring": str
+        }
+    ],
+    "imports": List[str],
+    "errors": List[str]
+}
+```
+
+### 5. validate_syntax
+
+Validate Python code syntax.
+
+**Parameters:**
+- `code` (str, required): Python code to validate
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "is_valid": bool,
+    "errors": List[str]
+}
+```
+
+### 6. list_symbols
+
+List symbols (functions, classes, variables) in Python code.
+
+**Parameters:**
+- `code` (str, required): Python source code
+- `symbol_type` (str, optional): Filter by type ('function', 'class', 'variable', 'import')
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "total_symbols": int,
+    "symbols": [
+        {
+            "name": str,
+            "type": str,
+            "line": int,
+            "signature": str,
+            "docstring": str
+        }
+    ]
+}
+```
+
+### 7. analyze_with_pylint
+
+Analyze Python code with pylint.
+
+**Parameters:**
+- `file_path` (str, optional): Path to Python file
+- `code` (str, optional): Python code string
+- `confidence` (str, optional): Minimum confidence level (default: "HIGH")
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "total_issues": int,
+    "errors": int,
+    "warnings": int,
+    "conventions": int,
+    "refactors": int,
+    "issues": [
+        {
+            "type": "error" | "warning" | "convention" | "refactor",
+            "symbol": str,
+            "message": str,
+            "line": int,
+            "column": int,
+            "confidence": str
+        }
+    ],
+    "clean": bool,
+    "command": str,
+    "stdout": str,
+    "stderr": str,
+    "return_code": int
+}
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Generate a Function
+
+```python
+from gaia import CodeAgent
+
+agent = CodeAgent()
+
+result = agent.generate_function(
+    name="fibonacci",
+    params="n: int",
+    docstring="Calculate the nth Fibonacci number.",
+    body="""
+if n <= 0:
+    return 0
+elif n == 1:
+    return 1
+else:
+    return fibonacci(n-1) + fibonacci(n-2)
+""",
+    return_type="int",
+    write_to_file=True
+)
+
+print(f"Generated {result['file_path']}")
+print(result['code'])
+```
+
+### Example 2: Generate a Class with Methods
+
+```python
+result = agent.generate_class(
+    name="Calculator",
+    docstring="A simple calculator class.",
+    methods=[
+        {
+            "name": "add",
+            "params": "a: int, b: int",
+            "docstring": "Add two numbers.",
+            "body": "return a + b"
+        },
+        {
+            "name": "subtract",
+            "params": "a: int, b: int",
+            "docstring": "Subtract two numbers.",
+            "body": "return a - b"
+        }
+    ],
+    write_to_file=True
+)
+```
+
+### Example 3: Generate Unit Tests
+
+```python
+source_code = '''
+def multiply(a: int, b: int) -> int:
+    """Multiply two numbers."""
+    return a * b
+
+def divide(a: int, b: int) -> float:
+    """Divide two numbers."""
+    if b == 0:
+        raise ValueError("Cannot divide by zero")
+    return a / b
+'''
+
+result = agent.generate_test(
+    source_code=source_code,
+    module_name="calculator",
+    write_to_file=True
+)
+
+print(f"Generated test file: {result['file_path']}")
+print(f"Functions tested: {result['functions_tested']}")
+```
+
+### Example 4: Analyze Code with Pylint
+
+```python
+result = agent.analyze_with_pylint(
+    file_path="/path/to/module.py",
+    confidence="HIGH"
+)
+
+if result["clean"]:
+    print("Code passes pylint checks!")
+else:
+    print(f"Found {result['total_issues']} issues:")
+    for issue in result["issues"]:
+        print(f"  Line {issue['line']}: [{issue['symbol']}] {issue['message']}")
+```
+
+### Example 5: Parse Code Structure
+
+```python
+code = '''
+import os
+from typing import List
+
+class DataProcessor:
+    """Process data from files."""
+
+    def __init__(self, path: str):
+        self.path = path
+
+    def load_data(self) -> List[str]:
+        """Load data from file."""
+        with open(self.path) as f:
+            return f.readlines()
+'''
+
+result = agent.parse_python_code(code)
+
+print(f"Valid: {result['is_valid']}")
+print(f"Imports: {result['imports']}")
+for symbol in result["symbols"]:
+    print(f"  {symbol['type']} {symbol['name']} at line {symbol['line']}")
+```
+
+---
+
+## Code Generation Constants
+
+```python
+# Maximum number of retry attempts for code generation
+MAX_CODE_RETRIES = 2
+
+# Token limits for generation attempts
+FIRST_ATTEMPT_MAX_TOKENS = 4096
+RETRY_MAX_TOKENS = 2048
+```
+
+---
+
+## Testing Requirements
+
+### Unit Tests
+
+**File:** `tests/agents/code/test_code_tools.py`
+
+```python
+import pytest
+from gaia.agents.code.tools.code_tools import CodeToolsMixin
+
+def test_generate_function():
+    """Test function generation."""
+    mixin = CodeToolsMixin()
+    result = mixin.generate_function(
+        name="test_func",
+        params="x: int",
+        body="return x * 2",
+        return_type="int",
+        write_to_file=False
+    )
+
+    assert result["status"] == "success"
+    assert result["is_valid"]
+    assert "def test_func(x: int) -> int:" in result["code"]
+
+def test_validate_syntax():
+    """Test syntax validation."""
+    mixin = CodeToolsMixin()
+
+    # Valid code
+    result = mixin.validate_syntax("x = 1 + 2")
+    assert result["is_valid"]
+
+    # Invalid code
+    result = mixin.validate_syntax("x = 1 +")
+    assert not result["is_valid"]
+    assert len(result["errors"]) > 0
+
+def test_list_symbols():
+    """Test symbol extraction."""
+    code = '''
+def func1():
+    pass
+
+class Class1:
+    def method1(self):
+        pass
+'''
+
+    mixin = CodeToolsMixin()
+    result = mixin.list_symbols(code)
+
+    assert result["total_symbols"] == 3  # func1, Class1, method1
+    assert any(s["name"] == "func1" and s["type"] == "function" for s in result["symbols"])
+    assert any(s["name"] == "Class1" and s["type"] == "class" for s in result["symbols"])
+```
+
+---
+
+## Dependencies
+
+### Required Packages
+
+```toml
+# pyproject.toml
+[project]
+dependencies = [
+    "pylint>=2.0",
+]
+```
+
+### Import Dependencies
+
+```python
+import ast
+import json
+import logging
+import os
+import shlex
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+```
+
+---
+
+## LLM Integration
+
+### Code Generation Prompt Template
+
+```python
+prompt = f"""Generate complete, production-ready Python code for: {filename}
+
+Purpose: {purpose}
+
+{context}
+
+Requirements:
+1. Include proper copyright header
+2. Add comprehensive docstrings
+3. Use type hints
+4. Follow best practices
+5. Include error handling
+6. Make it complete and runnable
+
+Generate ONLY the code, no explanations."""
+```
+
+### Streaming with Retry Logic
+
+```python
+retry_count = 0
+while retry_count <= MAX_CODE_RETRIES:
+    try:
+        max_tokens = FIRST_ATTEMPT_MAX_TOKENS if retry_count == 0 else RETRY_MAX_TOKENS
+
+        for chunk in self.chat.send_stream(prompt, max_tokens=max_tokens):
+            if chunk.is_complete:
+                continue
+            code_chunks.append(chunk.text)
+            self.console.update_file_preview(chunk.text)
+
+        break  # Success
+
+    except Exception as e:
+        retry_count += 1
+        if "timeout" in str(e).lower():
+            if retry_count <= MAX_CODE_RETRIES:
+                self.console.print_warning(f"⚠️ Timeout, retrying ({retry_count}/{MAX_CODE_RETRIES})...")
+            else:
+                code_chunks = [self._get_timeout_placeholder(filename, purpose)]
+                break
+```
+
+---
+
+*CodeToolsMixin Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

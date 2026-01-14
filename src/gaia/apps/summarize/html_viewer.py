@@ -6,11 +6,10 @@
 HTML Viewer for summarizer JSON output
 """
 
-from pathlib import Path
-from typing import Dict, Any
 import json
 import webbrowser
-import os
+from pathlib import Path
+from typing import Any, Dict
 
 # Template path - will be loaded from file
 TEMPLATE_PATH = Path(__file__).parent / "templates" / "summary_report.html"

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JAX - Jira Agent Experience</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Left Column: Sidebar -->
+        <aside id="sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <h2>JAX</h2>
+                <span class="version">v1.0.0</span>
+            </div>
+
+            <nav class="sidebar-nav">
+                <button class="nav-btn" data-command="What are my assigned issues?">
+                    <span class="icon">📋</span>
+                    <span>My Issues</span>
+                </button>
+                <button class="nav-btn" data-command="Show all open issues">
+                    <span class="icon">🔓</span>
+                    <span>Open Issues</span>
+                </button>
+                <button class="nav-btn" data-command="Show issues updated in the last 7 days">
+                    <span class="icon">🕐</span>
+                    <span>Recent Issues</span>
+                </button>
+                <button class="nav-btn" data-view="settings">
+                    <span class="icon">⚙️</span>
+                    <span>Settings</span>
+                </button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="connection-status" id="connection-status">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Disconnected</span>
+                </div>
+                <button id="theme-toggle" class="theme-toggle-inline" aria-label="Toggle dark mode">
+                    <svg class="theme-icon sun-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                    <svg class="theme-icon moon-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: none;">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Middle Column: Main Content/Results -->
+        <main class="main-content" id="results-pane">
+            <div class="content-header">
+                <h3>Issues & Results</h3>
+                <div class="content-actions">
+                    <div class="results-tabs">
+                        <button class="results-tab active" data-tab="overview">Overview</button>
+                        <button class="results-tab" data-tab="details">Details</button>
+                        <button class="results-tab" data-tab="raw">Raw Data</button>
+                    </div>
+                    <button id="refresh-btn" class="btn-secondary">Refresh</button>
+                </div>
+            </div>
+
+            <div class="content-body">
+                <div id="results-content" class="results-tab-content active">
+                <div class="welcome-message">
+                    <h2>Welcome to JAX</h2>
+                    <h4>JIRA Agent User Experience</h4>
+                    <br><br>
+                    <p>Select an option from the sidebar or use the chat to interact with your JIRA instance.</p>
+                    <div class="quick-actions">
+                        <button class="action-card" data-command="What are my assigned issues?">
+                            <span class="icon">📋</span>
+                            <h4>My Issues</h4>
+                            <p>View issues assigned to you</p>
+                        </button>
+                        <button class="action-card" data-command="Show all open issues">
+                            <span class="icon">🔓</span>
+                            <h4>Open Issues</h4>
+                            <p>Browse all open issues</p>
+                        </button>
+                        <button class="action-card" data-command="Show issues updated in the last 7 days">
+                            <span class="icon">🕐</span>
+                            <h4>Recent Issues</h4>
+                            <p>View recently updated issues</p>
+                        </button>
+                    </div>
+                </div>
+                </div>
+                <div id="results-details" class="results-tab-content">
+                    <!-- Details content will be added dynamically -->
+                </div>
+                <div id="results-raw" class="results-tab-content">
+                    <!-- Raw data content will be added dynamically -->
+                </div>
+            </div>
+        </main>
+
+        <!-- Right Column: Chat -->
+        <aside class="chat-pane" id="chat-pane">
+            <div class="chat-header">
+                <h3>JAX Assistant</h3>
+                <button id="clear-chat" class="btn-icon" title="Clear Chat">🗑️</button>
+            </div>
+
+            <div class="messages-container" id="messages"></div>
+
+            <div class="input-container">
+                <textarea
+                    id="message-input"
+                    class="message-input"
+                    placeholder="Ask about JIRA issues, projects, or perform actions..."
+                    rows="3"
+                ></textarea>
+                <button id="send-btn" class="send-btn">
+                    <span class="btn-text">Send</span>
+                    <span class="btn-spinner" style="display: none;"></span>
+                </button>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Configuration -->
+    <script src="js/config.js"></script>
+    <!-- Optional local configuration (user overrides) -->
+    <script>
+        // Load config and then initialize app
+        (async function() {
+            try {
+                const response = await fetch('js/config.local.js');
+                if (response.ok) {
+                    const script = document.createElement('script');
+                    script.textContent = await response.text();
+                    document.head.appendChild(script);
+                    console.log('Local config loaded');
+                } else {
+                    console.log('No local config found, using defaults');
+                }
+            } catch (error) {
+                console.log('No local config found, using defaults');
+            }
+
+            // Now load the app after config is ready
+            const appScript = document.createElement('script');
+            appScript.src = 'js/app.js';
+            appScript.type = 'module';
+            document.body.appendChild(appScript);
+        })();
+    </script>
+</body>
+</html>

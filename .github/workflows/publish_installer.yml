@@ -1,21 +1,16 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 name: Publish GAIA Installer
 
 on:
   push:
     branches: ["main"]
-    paths:
-      - "installer/**"
-      - "src/**"
-      - "setup.py"
     tags:
       - v*
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "installer/**"
-      - "src/**"
-      - "setup.py"
   merge_group:
   workflow_dispatch:
 
@@ -26,11 +21,16 @@ jobs:
   build-installer:
     uses: ./.github/workflows/build_installer.yml
 
+  build-electron-apps:
+    uses: ./.github/workflows/build-electron-apps.yml
+    if: startsWith(github.ref, 'refs/tags/v')
+
   publish-installer:
     runs-on: windows-latest
-    needs: build-installer
+    needs: [build-installer, build-electron-apps]
+    if: always() && needs.build-installer.result == 'success' && (needs.build-electron-apps.result == 'success' || needs.build-electron-apps.result == 'skipped')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0  # Fetch all history for release notes generation
 
@@ -53,16 +53,34 @@ jobs:
           echo "EOF" >> $env:GITHUB_OUTPUT
 
       - name: Download GAIA Installer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: gaia-windows-installer-${{ needs.build-installer.outputs.VERSION }}-${{ needs.build-installer.outputs.COMMIT_HASH }}
-          path: installer
+          path: release-assets
+
+      - name: Download Electron App Artifacts (Windows)
+        if: needs.build-electron-apps.outputs.has_apps == 'true'
+        uses: actions/download-artifact@v7
+        with:
+          pattern: "*-windows-${{ github.sha }}"
+          path: release-assets
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Download Electron App Artifacts (Linux)
+        if: needs.build-electron-apps.outputs.has_apps == 'true'
+        uses: actions/download-artifact@v7
+        with:
+          pattern: "*-linux-${{ github.sha }}"
+          path: release-assets
+          merge-multiple: true
+        continue-on-error: true
 
       - name: Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
-          files: installer/gaia-windows-setup.exe
+          files: release-assets/*
           body: |
             ## What's Changed
             ${{ steps.release_notes.outputs.CHANGELOG }}

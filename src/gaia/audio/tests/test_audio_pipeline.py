@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
+#
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """
 Audio Pipeline Diagnostic Tool
 Tests each component of the audio recording and transcription pipeline
 """
 
+import sys
+import time
+
 import numpy as np
 import pyaudio
-import time
-import sys
-import queue
-import threading
 
 
 def test_microphone_basics():
@@ -155,8 +158,9 @@ def test_whisper_asr():
     print("\n=== TEST 3: WhisperAsr Class Test ===")
 
     try:
-        from gaia.audio.whisper_asr import WhisperAsr
         import queue
+
+        from gaia.audio.whisper_asr import WhisperAsr
 
         print("Loading Whisper model (this may take a moment)...")
         transcription_queue = queue.Queue()

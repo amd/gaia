@@ -1,21 +1,28 @@
-from pathlib import Path
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 import json
-import numpy as np
+import re
 import time
-from typing import Dict, List, Optional
-from gaia.logger import get_logger
-from gaia.eval.claude import ClaudeClient
 from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
+from gaia.eval.claude import ClaudeClient
+from gaia.logger import get_logger
 
-class RagEvaluator:
-    """Evaluates RAG system performance using test results."""
+
+class Evaluator:
+    """Evaluates AI model performance across various use cases (summarization, Q&A, RAG, etc.)."""
 
     def __init__(self, model="claude-sonnet-4-20250514"):
         self.log = get_logger(__name__)
-        self.claude = ClaudeClient(model=model)
+        # Increase max_tokens to 4096 to avoid truncation of complex JSON responses
+        self.claude = ClaudeClient(model=model, max_tokens=4096)
 
     def calculate_similarity(self, text1: str, text2: str) -> float:
         """
@@ -996,11 +1003,48 @@ class RagEvaluator:
                                     transcript_id = source_mapping.get("transcript_id")
                                     break
 
-                            # If no match found, use first available transcript
-                            if not transcript_id and gt_summaries:
-                                transcript_id = list(gt_summaries.keys())[0]
-                                self.log.warning(
-                                    f"No exact match found for source {source_file}, using {transcript_id}"
+                            # If no match found, fail loudly - DO NOT use fallback
+                            if not transcript_id:
+                                available_sources = [
+                                    s.get("source_file", "") for s in source_files
+                                ]
+                                available_ids = (
+                                    list(gt_summaries.keys()) if gt_summaries else []
+                                )
+
+                                error_msg = (
+                                    f"\n{'='*70}\n"
+                                    f"ERROR: No matching ground truth found for experiment result\n"
+                                    f"{'='*70}\n"
+                                    f"Source file in experiment: {source_file}\n"
+                                    f"\nAvailable source files in ground truth:\n"
+                                )
+                                for idx, src in enumerate(available_sources[:10], 1):
+                                    error_msg += f"  {idx}. {src}\n"
+                                if len(available_sources) > 10:
+                                    error_msg += f"  ... and {len(available_sources) - 10} more\n"
+
+                                error_msg += f"\nAvailable transcript IDs:\n"
+                                for idx, tid in enumerate(available_ids[:10], 1):
+                                    error_msg += f"  {idx}. {tid}\n"
+                                if len(available_ids) > 10:
+                                    error_msg += (
+                                        f"  ... and {len(available_ids) - 10} more\n"
+                                    )
+
+                                error_msg += (
+                                    f"\nPossible fixes:\n"
+                                    f"  1. Ensure ground truth source_file paths match experiment paths exactly\n"
+                                    f"  2. Check if ground truth was generated from the same test data\n"
+                                    f"  3. Verify path separators (forward vs backslash) are consistent\n"
+                                    f"  4. Run fix_groundtruth_paths.py to normalize path prefixes\n"
+                                    f"{'='*70}\n"
+                                )
+
+                                self.log.error(error_msg)
+                                raise ValueError(
+                                    f"No matching ground truth found for source: {source_file}. "
+                                    f"Cannot evaluate without correct ground truth data."
                                 )
 
                             if transcript_id and transcript_id in gt_summaries:
@@ -1102,7 +1146,10 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                     5. Participant Information: Are participants properly identified?
                     6. Topic Organization: Are topics well-organized and comprehensive?
 
-                    Return your analysis in this JSON format:
+                    IMPORTANT: Return ONLY valid JSON with no additional text, markdown formatting, or explanations.
+                    Ensure all JSON syntax is correct - no trailing commas, proper quotes, and complete structure.
+
+                    Return your analysis in this exact JSON format:
                     {{
                         "executive_summary_quality": {{
                             "rating": "excellent/good/fair/poor",
@@ -1152,18 +1199,146 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                             else str(response)
                         )
 
-                    # Parse JSON response
-                    json_start = response_text.find("{")
-                    json_end = response_text.rfind("}") + 1
-                    if json_start >= 0 and json_end > json_start:
-                        json_content = response_text[json_start:json_end]
-                        summary_analysis["analysis"] = json.loads(json_content)
-                        summary_analysis["overall_quality"] = summary_analysis[
-                            "analysis"
-                        ].get("overall_quality", "unknown")
+                    # Parse JSON response with improved error handling
+                    # First try to extract from markdown code blocks
+                    markdown_json = re.search(
+                        r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL
+                    )
+                    if markdown_json:
+                        json_content = markdown_json.group(1)
+                    else:
+                        # Fall back to finding raw JSON
+                        json_start = response_text.find("{")
+                        json_end = response_text.rfind("}") + 1
+                        if json_start >= 0 and json_end > json_start:
+                            json_content = response_text[json_start:json_end]
+                        else:
+                            json_content = None
+
+                    if json_content:
+                        try:
+                            # First attempt: direct JSON parsing
+                            summary_analysis["analysis"] = json.loads(json_content)
+                        except json.JSONDecodeError as e:
+                            self.log.warning(f"Initial JSON parse failed: {e}")
+                            # Second attempt: clean up common issues
+                            # Remove any trailing commas before closing braces/brackets
+                            cleaned_json = re.sub(r",\s*([}\]])", r"\1", json_content)
+                            # Replace single quotes with double quotes (if any) - but not within strings
+                            # This is a simple heuristic, not perfect
+                            cleaned_json = cleaned_json.replace("'", '"')
+                            # Remove any control characters except newlines and tabs
+                            cleaned_json = re.sub(
+                                r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]",
+                                "",
+                                cleaned_json,
+                            )
+                            # Fix common escape issues
+                            cleaned_json = cleaned_json.replace(
+                                '\\"', '"'
+                            )  # Remove escaped quotes that might be double-escaped
+                            cleaned_json = re.sub(
+                                r'(?<!\\)\\(?!["\\/bfnrt])', r"\\\\", cleaned_json
+                            )  # Fix unescaped backslashes
+
+                            try:
+                                summary_analysis["analysis"] = json.loads(cleaned_json)
+                                self.log.info("Successfully parsed JSON after cleanup")
+                            except json.JSONDecodeError as e2:
+                                self.log.error(f"JSON parse failed after cleanup: {e2}")
+                                # Third attempt: extract individual fields manually
+                                analysis_dict = {}
+
+                                # Try to extract each field individually
+                                fields = [
+                                    "executive_summary_quality",
+                                    "detail_completeness",
+                                    "action_items_structure",
+                                    "key_decisions_clarity",
+                                    "participant_information",
+                                    "topic_organization",
+                                    "overall_quality",
+                                ]
+
+                                for field in fields:
+                                    # Find the field and extract its rating
+                                    pattern = rf'"{field}":\s*(?:"([^"]+)"|{{[^}}]+}})'
+                                    match = re.search(pattern, json_content)
+                                    if match:
+                                        if field == "overall_quality":
+                                            analysis_dict[field] = (
+                                                match.group(1)
+                                                if match.group(1)
+                                                else "unknown"
+                                            )
+                                        else:
+                                            # Try to extract rating from nested object
+                                            rating_pattern = rf'"{field}":\s*{{[^}}]*"rating":\s*"([^"]+)"'
+                                            rating_match = re.search(
+                                                rating_pattern, json_content
+                                            )
+                                            if rating_match:
+                                                analysis_dict[field] = {
+                                                    "rating": rating_match.group(1),
+                                                    "explanation": "Extracted from partial JSON",
+                                                }
+
+                                if analysis_dict:
+                                    summary_analysis["analysis"] = analysis_dict
+                                    self.log.warning(
+                                        f"PARTIAL RECOVERY - Used fallback field extraction for summary {i}, extracted {len(analysis_dict)} fields"
+                                    )
+                                else:
+                                    # Final fallback: save raw response for debugging
+                                    self.log.error(
+                                        f"FALLBACK VALUES USED - Complete JSON parse failure for summary {i}"
+                                    )
+                                    summary_analysis["analysis"] = {
+                                        "error": f"[FALLBACK - JSON PARSE FAILED] {str(e2)}",
+                                        "raw_response": response_text[
+                                            :1000
+                                        ],  # First 1000 chars for debugging
+                                        "_warning": "This is a fallback response - Claude's analysis could not be parsed",
+                                        "executive_summary_quality": {
+                                            "rating": "error",
+                                            "explanation": "[PARSE ERROR - See raw_response]",
+                                        },
+                                        "detail_completeness": {
+                                            "rating": "error",
+                                            "explanation": "[PARSE ERROR - See raw_response]",
+                                        },
+                                        "action_items_structure": {
+                                            "rating": "error",
+                                            "explanation": "[PARSE ERROR - See raw_response]",
+                                        },
+                                        "key_decisions_clarity": {
+                                            "rating": "error",
+                                            "explanation": "[PARSE ERROR - See raw_response]",
+                                        },
+                                        "participant_information": {
+                                            "rating": "error",
+                                            "explanation": "[PARSE ERROR - See raw_response]",
+                                        },
+                                        "topic_organization": {
+                                            "rating": "error",
+                                            "explanation": "[PARSE ERROR - See raw_response]",
+                                        },
+                                    }
+                                    summary_analysis["overall_quality"] = "error"
+
+                        # Set overall quality if successfully parsed
+                        if "analysis" in summary_analysis and isinstance(
+                            summary_analysis["analysis"], dict
+                        ):
+                            summary_analysis["overall_quality"] = summary_analysis[
+                                "analysis"
+                            ].get("overall_quality", "unknown")
+                        else:
+                            summary_analysis["overall_quality"] = "error"
                     else:
                         summary_analysis["analysis"] = {
-                            "error": "Failed to parse Claude response"
+                            "error": "No JSON content found in Claude response",
+                            "raw_response": response_text[:500],
                         }
                         summary_analysis["overall_quality"] = "error"
 
@@ -1340,6 +1515,9 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                 - Specific failure modes observed
                 - Model characteristics (e.g., if it's Claude, Llama, Qwen, etc.)
                 
+                IMPORTANT: Return ONLY valid JSON with no additional text, markdown formatting, or explanations.
+                Ensure all JSON syntax is correct - no trailing commas, proper quotes, and complete structure.
+
                 Return your analysis in this exact JSON format:
                 {{
                     "overall_analysis": "comprehensive assessment of overall performance",
@@ -1373,11 +1551,77 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                         else str(overall_response)
                     )
 
-                json_start = response_text.find("{")
-                json_end = response_text.rfind("}") + 1
-                if json_start >= 0 and json_end > json_start:
-                    json_content = response_text[json_start:json_end]
-                    claude_analysis = json.loads(json_content)
+                # Try to extract JSON from various formats (markdown, plain, etc.)
+                # First try to extract from markdown code blocks
+                markdown_json = re.search(
+                    r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL
+                )
+                if markdown_json:
+                    json_content = markdown_json.group(1)
+                    json_found = True
+                else:
+                    # Fall back to finding raw JSON
+                    json_start = response_text.find("{")
+                    json_end = response_text.rfind("}") + 1
+                    if json_start >= 0 and json_end > json_start:
+                        json_content = response_text[json_start:json_end]
+                        json_found = True
+                    else:
+                        json_found = False
+
+                if json_found:
+                    try:
+                        # First attempt: direct JSON parsing
+                        claude_analysis = json.loads(json_content)
+                    except json.JSONDecodeError as e:
+                        self.log.warning(
+                            f"Initial JSON parse failed for overall analysis: {e}"
+                        )
+                        # Second attempt: clean up common issues
+                        # Remove trailing commas before closing braces/brackets
+                        cleaned_json = re.sub(r",\s*([}\]])", r"\1", json_content)
+                        # Replace single quotes with double quotes (if any) - simple heuristic
+                        cleaned_json = cleaned_json.replace("'", '"')
+                        # Remove control characters except newlines and tabs
+                        cleaned_json = re.sub(
+                            r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]", "", cleaned_json
+                        )
+                        # Fix common escape issues
+                        cleaned_json = cleaned_json.replace(
+                            '\\"', '"'
+                        )  # Remove escaped quotes that might be double-escaped
+                        cleaned_json = re.sub(
+                            r'(?<!\\)\\(?!["\\/bfnrt])', r"\\\\", cleaned_json
+                        )  # Fix unescaped backslashes
+
+                        try:
+                            claude_analysis = json.loads(cleaned_json)
+                            self.log.info(
+                                "Successfully parsed overall analysis JSON after cleanup"
+                            )
+                        except json.JSONDecodeError as e2:
+                            self.log.error(
+                                f"FALLBACK VALUES USED - Failed to parse Claude's overall analysis response after cleanup: {e2}"
+                            )
+                            self.log.error(
+                                f"Raw response preview: {json_content[:500]}..."
+                            )
+                            # Use fallback values - CLEARLY MARKED
+                            claude_analysis = {
+                                "overall_analysis": f"[FALLBACK - JSON PARSE ERROR] Analyzed {total_summaries} summaries. Quality distribution: {excellent_count} excellent, {good_count} good, {fair_count} fair, {poor_count} poor. NOTE: Claude's detailed analysis could not be parsed due to malformed JSON response.",
+                                "strengths": [
+                                    "[FALLBACK VALUE - Real analysis unavailable due to JSON parse error]"
+                                ],
+                                "weaknesses": [
+                                    "[FALLBACK VALUE - Real analysis unavailable due to JSON parse error]"
+                                ],
+                                "recommendations": [
+                                    "[FALLBACK VALUE - Real analysis unavailable due to JSON parse error]",
+                                    "Review raw Claude response in logs for actual recommendations",
+                                ],
+                                "use_case_fit": "[FALLBACK VALUE - Real analysis unavailable due to JSON parse error]",
+                                "_warning": "These are fallback values - Claude's actual analysis failed to parse. Check logs for details.",
+                            }
 
                     # Add Claude's analysis to our results
                     overall_analysis_text = claude_analysis.get(
@@ -1404,25 +1648,49 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                         time.time() - overall_start_time, 3
                     )
                 else:
-                    self.log.warning(
-                        "Failed to parse Claude's overall analysis response, using fallback"
+                    self.log.error(
+                        "FALLBACK VALUES USED - No JSON content found in Claude's overall analysis response"
                     )
-                    # Fallback to programmatic analysis
-                    overall_analysis_text = f"Analyzed {total_summaries} summaries. Quality distribution: {excellent_count} excellent, {good_count} good, {fair_count} fair, {poor_count} poor."
-                    strengths = ["Summary generation completed successfully"]
-                    weaknesses = ["Manual review recommended"]
-                    recommendations = ["Monitor performance over time"]
-                    use_case_fit = (
-                        "Suitable for meeting summarization with appropriate review"
+                    self.log.error(
+                        f"Raw response preview (first 1000 chars): {response_text[:1000]}"
                     )
+                    # Save full response to debug file
+                    debug_dir = Path("debug_claude_responses")
+                    debug_dir.mkdir(exist_ok=True)
+                    debug_file = (
+                        debug_dir
+                        / f"overall_analysis_no_json_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                    )
+                    with open(debug_file, "w", encoding="utf-8") as f:
+                        f.write(
+                            f"No JSON found in response. JSON start: {json_start}, JSON end: {json_end}\n"
+                        )
+                        f.write(f"Full response:\n{response_text}")
+                    self.log.error(f"Full response saved to: {debug_file}")
+                    # Fallback to programmatic analysis - CLEARLY MARKED
+                    overall_analysis_text = f"[FALLBACK - NO JSON FOUND] Analyzed {total_summaries} summaries. Quality distribution: {excellent_count} excellent, {good_count} good, {fair_count} fair, {poor_count} poor. NOTE: Claude's response contained no parseable JSON."
+                    strengths = [
+                        "[FALLBACK VALUE - Claude response had no JSON content]"
+                    ]
+                    weaknesses = [
+                        "[FALLBACK VALUE - Manual review of logs required to see actual Claude response]"
+                    ]
+                    recommendations = [
+                        "[FALLBACK VALUE - Check logs for Claude's actual response]"
+                    ]
+                    use_case_fit = "[FALLBACK VALUE - Claude's analysis not available]"
 
             except Exception as e:
-                self.log.error(f"Error getting Claude overall analysis: {e}")
-                # Fallback to basic programmatic analysis if Claude fails
-                overall_analysis_text = f"Analyzed {total_summaries} summaries. Quality distribution: {excellent_count} excellent, {good_count} good, {fair_count} fair, {poor_count} poor."
-                strengths = []
-                weaknesses = []
-                recommendations = []
+                self.log.error(
+                    f"FALLBACK VALUES USED - Exception during Claude overall analysis: {e}"
+                )
+                # Fallback to basic programmatic analysis if Claude fails - CLEARLY MARKED
+                overall_analysis_text = f"[FALLBACK - EXCEPTION: {str(e)[:100]}] Analyzed {total_summaries} summaries. Quality distribution: {excellent_count} excellent, {good_count} good, {fair_count} fair, {poor_count} poor."
+                strengths = [f"[FALLBACK VALUE - Claude API error: {str(e)[:100]}]"]
+                weaknesses = ["[FALLBACK VALUE - Analysis failed due to API error]"]
+                recommendations = [
+                    "[FALLBACK VALUE - Check API connectivity and retry]"
+                ]
 
                 # Basic programmatic fallback analysis
                 if excellent_count > 0:
@@ -1596,11 +1864,24 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
             # Calculate total report generation time
             report_generation_time = time.time() - report_start_time
 
+            # Load experiment results to extract tested model info
+            with open(results_path, "r", encoding="utf-8") as f:
+                experiment_results = json.load(f)
+
+            # Extract tested model info from experiment results
+            experiment_metadata = experiment_results.get("metadata", {})
+            tested_model = experiment_metadata.get("model", "unknown")
+            tested_model_type = experiment_metadata.get("llm_type", "unknown")
+            inference_type = experiment_metadata.get("inference_type", "unknown")
+
             # Create evaluation data without depending on threshold_metrics
             evaluation_data = {
                 "metadata": {
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "model": self.claude.model,
+                    "evaluator_model": self.claude.model,  # Model doing the evaluation
+                    "tested_model": tested_model,  # The model being evaluated
+                    "tested_model_type": tested_model_type,  # Provider (lemonade, anthropic, etc.)
+                    "tested_model_inference": inference_type,  # local or cloud
                     "original_results_file": str(results_path),
                     "groundtruth_file": (
                         str(groundtruth_path) if groundtruth_path else None
@@ -1743,17 +2024,25 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                     evaluation_data = json.load(f)
 
                 # For consolidated report, only include summary statistics
+                metadata = evaluation_data.get("metadata", {})
                 eval_info = {
                     "experiment_name": eval_path.stem.replace(".eval", ""),
                     "file_path": str(eval_path.relative_to(output_base_path)),
-                    "timestamp": evaluation_data.get("metadata", {}).get(
-                        "timestamp", ""
-                    ),
-                    "model": evaluation_data.get("metadata", {}).get("model", ""),
+                    "timestamp": metadata.get("timestamp", ""),
+                    "evaluator_model": metadata.get(
+                        "evaluator_model", ""
+                    ),  # Model doing the evaluation
+                    "tested_model": metadata.get(
+                        "tested_model", "unknown"
+                    ),  # Model being tested
+                    "tested_model_type": metadata.get(
+                        "tested_model_type", "unknown"
+                    ),  # Provider
+                    "tested_model_inference": metadata.get(
+                        "tested_model_inference", "unknown"
+                    ),  # Local/cloud
                     "overall_rating": evaluation_data.get("overall_rating", {}),
-                    "original_results_file": evaluation_data.get("metadata", {}).get(
-                        "original_results_file", ""
-                    ),
+                    "original_results_file": metadata.get("original_results_file", ""),
                     "usage": evaluation_data.get("total_usage", {}),
                     "cost": evaluation_data.get(
                         "total_cost", {}
@@ -2469,7 +2758,7 @@ Performance ranking: {ranking_text}
         return report
 
     def generate_summary_report(
-        self, eval_dir: str, output_path: str = "LLM_RAG_Evaluation_Report.md"
+        self, eval_dir: str, output_path: str = "LLM_Evaluation_Report.md"
     ) -> Dict:
         """
         Generate a comprehensive summary report from multiple evaluation files.
@@ -2832,7 +3121,7 @@ Performance ranking: {ranking_text}
 
 if __name__ == "__main__":
     # Example usage
-    evaluator = RagEvaluator()
+    evaluator = Evaluator()
     results_file = "./output/rag/introduction.results.json"
 
     try:

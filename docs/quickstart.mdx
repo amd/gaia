@@ -1,0 +1,457 @@
+---
+title: "Quickstart"
+description: "Build your first AI agent in 5 minutes"
+---
+
+<Info>
+  **First time here?** Complete the [Setup](/setup) guide first to install Lemonade Server and uv.
+</Info>
+
+## Install GAIA
+
+Choose your platform and installation type, then follow the steps below.
+
+<Tabs>
+  <Tab title="Windows">
+    Installs [amd-gaia](https://pypi.org/project/amd-gaia/) from PyPI. **Recommended** for most users on **Windows**.
+
+    ### Step 1: Create Project Directory
+
+    Open **PowerShell** and run:
+    ```powershell
+    mkdir my-gaia-project
+    ```
+    ```powershell
+    cd my-gaia-project
+    ```
+
+    ### Step 2: Create Virtual Environment
+
+    ```powershell
+    uv venv .venv --python 3.12
+    ```
+
+    <Note>uv will automatically download Python 3.12 if not already installed.</Note>
+
+    ### Step 3: Activate the Environment
+
+    Windows users: run:
+    ```powershell
+    .\.venv\Scripts\Activate.ps1
+    ```
+
+    Linux users: `source .venv/bin/activate`
+
+    <Warning>
+      If you see a script execution error, run this once:
+      ```powershell
+      Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+      ```
+      Then retry the activation command.
+    </Warning>
+
+    You should see `(.venv)` in your terminal prompt when activated.
+
+    ### Step 4: Install GAIA
+
+    ```powershell
+    uv pip install amd-gaia
+    ```
+
+    <Tip>
+      **Optional extras:** `uv pip install "amd-gaia[talk,rag]"` for voice and document Q&A features.
+    </Tip>
+
+    ### Step 5: Verify Installation
+
+    ```powershell
+    gaia -v
+    ```
+  </Tab>
+
+  <Tab title="Linux">
+    Installs [amd-gaia](https://pypi.org/project/amd-gaia/) from PyPI. **Recommended** for most users on **Linux**.
+
+    ### Step 1: Create Project Directory
+
+    Open a **terminal** and run:
+    ```bash
+    mkdir my-gaia-project
+    ```
+    ```bash
+    cd my-gaia-project
+    ```
+
+    ### Step 2: Create Virtual Environment
+
+    ```bash
+    uv venv .venv --python 3.12
+    ```
+
+    <Note>uv will automatically download Python 3.12 if not already installed.</Note>
+
+    ### Step 3: Activate the Environment
+
+    ```bash
+    source .venv/bin/activate
+    ```
+
+    You should see `(.venv)` in your terminal prompt when activated.
+
+    ### Step 4: Install GAIA
+
+    ```bash
+    uv pip install amd-gaia
+    ```
+
+    <Tip>
+      **Optional extras:** `uv pip install "amd-gaia[talk,rag]"` for voice and document Q&A features.
+    </Tip>
+
+    ### Step 5: Verify Installation
+
+    ```bash
+    gaia -v
+    ```
+  </Tab>
+
+  <Tab title="Windows (Dev)">
+    For contributors. Clones [amd/gaia](https://github.com/amd/gaia) from GitHub.
+
+    <Note>
+      **Requires:** [Git for Windows](https://git-scm.com/download/win) must be installed.
+    </Note>
+
+    ### Step 1: Clone the Repository
+
+    Open **PowerShell** and run:
+    ```powershell
+    git clone https://github.com/amd/gaia.git
+    ```
+    ```powershell
+    cd gaia
+    ```
+
+    ### Step 2: Create Virtual Environment
+
+    ```powershell
+    uv venv .venv --python 3.12
+    ```
+
+    <Note>uv will automatically download Python 3.12 if not already installed.</Note>
+
+    ### Step 3: Activate the Environment
+
+    Windows users: run:
+    ```powershell
+    .\.venv\Scripts\Activate.ps1
+    ```
+
+    Linux users: `source .venv/bin/activate`
+
+    <Warning>
+      If you see a script execution error, run this once:
+      ```powershell
+      Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+      ```
+      Then retry the activation command.
+    </Warning>
+
+    You should see `(.venv)` in your terminal prompt when activated.
+
+    ### Step 4: Install in Editable Mode
+
+    ```powershell
+    uv pip install -e ".[dev]"
+    ```
+
+    <Tip>
+      **With all extras:** `uv pip install -e ".[dev,talk,rag]"` for voice and document Q&A features.
+    </Tip>
+
+    ### Step 5: Verify Installation
+
+    ```powershell
+    gaia -v
+    ```
+
+    <Note>
+      Changes to GAIA source code will take effect immediately without reinstalling.
+    </Note>
+  </Tab>
+
+  <Tab title="Linux (Dev)">
+    For contributors. Clones [amd/gaia](https://github.com/amd/gaia) from GitHub.
+
+    <Note>
+      **Requires:** Git must be installed (`sudo apt install git`).
+    </Note>
+
+    ### Step 1: Clone the Repository
+
+    Open a **terminal** and run:
+    ```bash
+    git clone https://github.com/amd/gaia.git
+    ```
+    ```bash
+    cd gaia
+    ```
+
+    ### Step 2: Create Virtual Environment
+
+    ```bash
+    uv venv .venv --python 3.12
+    ```
+
+    <Note>uv will automatically download Python 3.12 if not already installed.</Note>
+
+    ### Step 3: Activate the Environment
+
+    ```bash
+    source .venv/bin/activate
+    ```
+
+    You should see `(.venv)` in your terminal prompt when activated.
+
+    ### Step 4: Install in Editable Mode
+
+    ```bash
+    uv pip install -e ".[dev]"
+    ```
+
+    <Tip>
+      **With all extras:** `uv pip install -e ".[dev,talk,rag]"` for voice and document Q&A features.
+    </Tip>
+
+    ### Step 5: Verify Installation
+
+    ```bash
+    gaia -v
+    ```
+
+    <Note>
+      Changes to GAIA source code will take effect immediately without reinstalling.
+    </Note>
+  </Tab>
+</Tabs>
+
+<Tip>
+  **Having issues?** Check the [Troubleshooting](/reference/troubleshooting) guide, [create an issue](https://github.com/amd/gaia/issues) on GitHub, or contact us at gaia@amd.com.
+</Tip>
+
+---
+
+## Build Your First Agent
+
+<Warning>
+  Make sure your virtual environment is still activated (you should see `(.venv)` in your prompt). If commands aren't working as expected, try prefixing them with [`uv run`](https://docs.astral.sh/uv/reference/cli/#uv-run).
+</Warning>
+
+Using your text editor, create a file named `my_agent.py` in your project directory:
+
+```python
+import platform
+from datetime import datetime
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.tools import tool
+
+class MyAgent(Agent):
+    """A simple agent that can report system information."""
+
+    def _get_system_prompt(self) -> str:
+        return """You are a system monitoring assistant.
+When users ask about time or system details, use the get_system_info tool."""
+
+    def _register_tools(self):
+        @tool
+        def get_system_info() -> dict:
+            """Get current time, date, platform, and Python version."""
+            return {
+                "time": datetime.now().strftime("%H:%M:%S"),
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "platform": platform.system(),
+                "python": platform.python_version()
+            }
+
+# Use the agent
+agent = MyAgent()
+result = agent.process_query("What time is it and what system am I on?")
+print(result.get("result"))
+```
+
+<sub>
+  **View full source:** [`agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py) · [`tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tools.py)
+</sub>
+
+**Run it** (in your terminal/PowerShell):
+```
+python my_agent.py
+```
+
+<Note>
+  First run may take a moment while GAIA starts Lemonade Server and loads the LLM.
+</Note>
+
+You'll see the agent thinking, creating a plan, and executing the tool:
+
+```
+🤖 Processing: 'What time is it and what system am I on?'
+...
+🔧 Executing operation
+  Tool: get_system_info
+
+✅ Tool execution complete
+{
+  "time": "15:03:26",
+  "date": "2025-12-17",
+  "platform": "Windows",
+  "python": "3.12.12"
+}
+...
+✨ Processing complete!
+```
+
+Final output (will vary based on your system):
+```
+The current time is 15:03:26 and you are on a Windows system running Python 3.12.12.
+```
+
+<Success>
+  **It works!** The agent called the `get_system_info` tool and returned real data from your system.
+</Success>
+
+<Info>
+  **Tip:** The tool's docstring is how the LLM knows what the tool does. Be descriptive!
+  `"""Get current time, date, platform, and Python version."""` tells the LLM this tool can answer time-related questions.
+</Info>
+
+---
+
+## How It Works
+
+### The Agent Base Class
+
+The `Agent` class handles the core loop: receiving queries, calling the LLM, executing tools, and returning responses. You extend it by defining:
+
+- **`_get_system_prompt()`** — Instructions that shape the agent's behavior
+- **`_register_tools()`** — Functions the agent can call to take actions
+
+### System Prompt
+
+The system prompt tells your agent who it is and how to make decisions. You define it by returning a string:
+
+```python
+def _get_system_prompt(self) -> str:
+    return """You are a system monitoring assistant.
+When users ask about time or system details, use the get_system_info tool."""
+```
+
+For agents, a good prompt includes:
+- **Role**: What the agent specializes in — *"You are a code review assistant..."*
+- **Tool guidance**: When to use tools vs. respond directly — *"Use the search tool for questions about files..."*
+- **Style**: Tone and boundaries — *"Be concise. Only answer questions about this codebase."*
+
+The system prompt and tools work together: the prompt shapes *how* the agent reasons, while tools define *what* it can do.
+
+### Tools
+
+Tools are just Python functions with the `@tool` decorator:
+
+```python
+@tool
+def get_system_info() -> dict:
+    """Get current time, date, platform, and Python version."""
+    return {"time": "14:32:05", "platform": "Windows", ...}
+```
+
+The LLM automatically sees all registered tools and their docstrings. When you ask a question, it decides which tools (if any) to call based on their descriptions. **That's it** — no configuration, no routing logic. Just write functions and the agent knows what it can do.
+
+### The Agent Loop
+
+When you call `agent.process_query("What time is it?")`, GAIA runs an iterative loop:
+
+<Steps>
+  <Step title="Think">
+    The LLM receives your query plus the system prompt and available tools. It decides what to do next.
+  </Step>
+
+  <Step title="Act">
+    If the LLM decides to use a tool, GAIA executes it and captures the result.
+  </Step>
+
+  <Step title="Observe">
+    The tool result is sent back to the LLM, which can then decide to call another tool or respond.
+  </Step>
+
+  <Step title="Respond">
+    When the LLM has enough information, it generates a natural language response for the user.
+  </Step>
+</Steps>
+
+This loop continues until the LLM decides it has a complete answer. Complex tasks may involve multiple tool calls before responding.
+
+---
+
+## What's Next?
+
+You've built a simple agent. Now let's build something practical: an agent that analyzes your system hardware and recommends which LLMs you can run locally.
+
+<Card title="Hardware Advisor Playbook" icon="microchip" href="/playbooks/hardware-advisor/part-1-getting-started">
+  Build an agent that detects your hardware and recommends which LLMs you can run locally.
+</Card>
+
+### More Playbooks
+
+<CardGroup cols={2}>
+  <Card title="Chat Agent" icon="message" href="/playbooks/chat-agent/part-1-getting-started">
+    Build a document Q&A agent with RAG capabilities
+  </Card>
+
+  <Card title="Code Agent" icon="code" href="/playbooks/code-agent/part-1-introduction">
+    Build an agent that generates and validates code projects
+  </Card>
+
+  <Card title="All Playbooks" icon="books" href="/playbooks">
+    Step-by-step tutorials for building real-world agents
+  </Card>
+</CardGroup>
+
+### Guides & Reference
+
+<CardGroup cols={2}>
+  <Card title="All User Guides" icon="book" href="/guides">
+    Pre-built agents for chat, voice, code, Jira, Docker, and more
+  </Card>
+
+  <Card title="SDK Reference" icon="cube" href="/sdk">
+    Complete API documentation for all components
+  </Card>
+
+  <Card title="CLI Reference" icon="terminal" href="/reference/cli">
+    Command-line tools for chat, voice, RAG, and more
+  </Card>
+
+  <Card title="Glossary" icon="book-open" href="/glossary">
+    Learn GAIA terminology: agents, tools, RAG, NPU, and more
+  </Card>
+
+  <Card title="Developer Guide" icon="code" href="/reference/dev">
+    Testing, linting, and contributing to GAIA
+  </Card>
+</CardGroup>
+
+<Tip>
+  **Stuck?** Join our [Discord](https://discord.com/channels/1392562559122407535/1402013282495102997) or [create an issue](https://github.com/amd/gaia/issues) on GitHub.
+</Tip>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

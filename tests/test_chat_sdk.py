@@ -1,24 +1,28 @@
 #!/usr/bin/env python3
+#
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """
 Integration tests for the Chat SDK functionality with real LLM server.
 
 These tests require a running Lemonade server and test actual LLM interactions.
 """
 
-import unittest
-import time
-import requests
 import sys
-from typing import List, Dict, Any
+import time
+import unittest
+
+import requests
 
 # Add src to path for imports
 sys.path.insert(0, "src")
 
 from gaia.chat.sdk import (
-    ChatSDK,
     ChatConfig,
-    SimpleChat,
+    ChatSDK,
     ChatSession,
+    SimpleChat,
     quick_chat,
     quick_chat_with_memory,
 )
@@ -67,8 +71,8 @@ class TestChatSDKIntegration(unittest.TestCase):
                 if response.status_code == 200:
                     print(f"✅ LLM server is ready")
                     return
-            except requests.RequestException:
-                pass
+            except requests.RequestException as e:
+                print(f"Server not ready yet: {e}")
 
             time.sleep(2)
 

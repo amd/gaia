@@ -1,0 +1,545 @@
+---
+title: "RAGToolsMixin"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/chat/tools/rag_tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tools/rag_tools.py)
+</Info>
+
+<Note>
+**Component:** RAGToolsMixin
+**Module:** `gaia.agents.chat.tools.rag_tools`
+**Import:** `from gaia.agents.chat.tools.rag_tools import RAGToolsMixin`
+</Note>
+---
+
+## Overview
+
+RAGToolsMixin provides comprehensive document retrieval and query capabilities for the Chat Agent, implementing hybrid search (semantic + keyword), document summarization, and quality evaluation tools.
+
+**Key Features:**
+- Hybrid semantic + keyword search for optimal retrieval
+- Per-file targeted search for fast lookups
+- Adaptive chunk retrieval based on document size
+- Multi-section iterative summarization for large documents
+- Retrieval quality evaluation
+- Document management (indexing, listing, dumping)
+
+**Search Strategy:**
+1. Semantic embeddings search with multiple query reformulations
+2. Keyword boost for exact term matches
+3. Hash-based deduplication
+4. Adaptive max chunks (5-25) based on document size
+5. Page number extraction with lookback for citation
+
+---
+
+## Requirements
+
+### Functional Requirements
+
+1. **Document Query (query_documents)**
+   - Multi-key semantic search with reformulation
+   - Keyword boost for exact matches
+   - Adaptive chunk limits (5-25 based on doc size)
+   - Page extraction for citations
+   - Debug mode with full retrieval metrics
+
+2. **File-Specific Query (query_specific_file)**
+   - Fast per-file retrieval
+   - Same hybrid search strategy as query_documents
+   - File disambiguation support
+
+3. **Text Search (search_indexed_chunks)**
+   - Exact text pattern matching in RAG chunks
+   - Case-insensitive search
+   - Limited to 100 matches for performance
+
+4. **Retrieval Evaluation (evaluate_retrieval)**
+   - Keyword overlap calculation
+   - Sufficiency assessment
+   - Confidence scoring
+   - Next-step recommendations
+
+5. **Document Management**
+   - Index single documents with statistics
+   - Index entire directories (recursive option)
+   - List indexed documents
+   - Export cached extracted text
+   - RAG system status reporting
+
+6. **Document Summarization (summarize_document)**
+   - Multi-section iterative approach for large docs
+   - Three summary types: brief, detailed, bullets
+   - Page-based section boundaries
+   - Overlap between sections for context
+   - Structured output with metadata
+
+### Non-Functional Requirements
+
+1. **Performance**
+   - Hash-based deduplication (O(1) instead of O(N))
+   - Adaptive chunk limits prevent context overflow
+   - Cached text reuse (no VLM re-extraction)
+   - Timeout handling for long summarizations
+
+2. **Quality**
+   - Citation-ready with page numbers
+   - Structured instruction format for LLM
+   - Debug info for retrieval analysis
+   - Graceful degradation on failures
+
+3. **Usability**
+   - Clear status messages
+   - Numbered chunk IDs for reference
+   - File statistics on indexing
+   - Helpful error hints
+
+---
+
+## API Specification
+
+### File Location
+
+```
+src/gaia/agents/chat/tools/rag_tools.py
+```
+
+### Public Interface
+
+```python
+class RAGToolsMixin:
+    """
+    Mixin providing RAG and document query tools.
+
+    Requires:
+    - self.rag: RAG SDK instance
+    - self.max_chunks: Maximum chunks to retrieve (default: 5)
+    - self.indexed_files: Set of indexed file paths
+    - self.session_manager: For path validation
+    - self.current_session: For document tracking
+
+    Tools provided:
+    - query_documents: Semantic search across all indexed documents
+    - query_specific_file: Semantic search in one specific file
+    - search_indexed_chunks: Exact text search in RAG indexed chunks
+    - evaluate_retrieval: Evaluate if retrieved information is sufficient
+    - index_document: Add document to RAG index
+    - index_directory: Index all files in a directory
+    - list_indexed_documents: List currently indexed documents
+    - summarize_document: Generate document summaries
+    - dump_document: Export cached extracted text
+    - rag_status: Get RAG system status
+    """
+
+    def register_rag_tools(self) -> None:
+        """Register RAG-related tools."""
+        pass
+
+    # === Core Query Tools ===
+
+    @tool
+    def query_documents(query: str, debug: bool = False) -> Dict[str, Any]:
+        """
+        Query indexed documents using RAG.
+
+        Hybrid search strategy:
+        1. Generate multiple search keys (reformulations)
+        2. Semantic embeddings search for each key
+        3. Keyword boost for exact term matches
+        4. Hash-based deduplication
+        5. Sort by score, take adaptive top-N
+
+        Args:
+            query: Question or query to search for
+            debug: Enable detailed retrieval metrics (default: False)
+
+        Returns:
+            {
+                "status": "success" | "no_documents" | "fallback",
+                "message": str,
+                "chunks": List[{
+                    "chunk_id": int,
+                    "page": int | None,
+                    "content": str,
+                    "relevance_score": float,
+                    "_debug_chunk_index": int
+                }],
+                "num_chunks": int,
+                "search_keys_used": List[str],
+                "source_files": List[str],
+                "instruction": str,  # For LLM on how to use chunks
+                "debug_info": {...}  # If debug=True
+            }
+        """
+        pass
+
+    @tool
+    def query_specific_file(file_path: str, query: str) -> Dict[str, Any]:
+        """
+        Query a specific file for fast, targeted retrieval.
+
+        Args:
+            file_path: Name or path of specific file
+            query: Question to ask about this file
+
+        Returns:
+            Similar to query_documents, but file-scoped
+        """
+        pass
+
+    @tool
+    def search_indexed_chunks(pattern: str) -> Dict[str, Any]:
+        """
+        Search for exact text patterns in RAG chunks.
+
+        Args:
+            pattern: Text pattern or keyword to search for
+
+        Returns:
+            {
+                "status": "success" | "error",
+                "pattern": str,
+                "matches": List[str],  # Chunk texts
+                "count": int,
+                "showing": int,  # May be limited to 50
+                "message": str,
+                "debug_info": {...}  # If debug mode
+            }
+        """
+        pass
+
+    # === Evaluation Tool ===
+
+    @tool
+    def evaluate_retrieval(question: str, retrieved_info: str) -> Dict[str, Any]:
+        """
+        Evaluate if retrieved information sufficiently answers question.
+
+        Args:
+            question: Original question
+            retrieved_info: Summary of information retrieved
+
+        Returns:
+            {
+                "status": "success",
+                "sufficient": bool,
+                "confidence": "high" | "medium" | "low",
+                "recommendation": str,
+                "keyword_overlap": float,  # 0.0-1.0
+                "issues": List[str]
+            }
+        """
+        pass
+
+    # === Document Management Tools ===
+
+    @tool
+    def index_document(file_path: str) -> Dict[str, Any]:
+        """
+        Add a document to the RAG index.
+
+        Args:
+            file_path: Path to PDF to index
+
+        Returns:
+            {
+                "status": "success" | "error",
+                "message": str,
+                "file_name": str,
+                "file_type": str,
+                "file_size_mb": float,
+                "num_pages": int,
+                "num_chunks": int,
+                "total_indexed_files": int,
+                "total_chunks": int,
+                "from_cache": bool,
+                "already_indexed": bool,
+                "reindexed": bool
+            }
+        """
+        pass
+
+    @tool
+    def index_directory(
+        directory_path: str,
+        recursive: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Index all supported files in a directory.
+
+        Supported: PDF, TXT, CSV, JSON, code files.
+
+        Args:
+            directory_path: Path to directory
+            recursive: Search subdirectories (default: False)
+
+        Returns:
+            {
+                "status": "success" | "error",
+                "indexed_count": int,
+                "failed_count": int,
+                "skipped_count": int,
+                "indexed_files": List[str],
+                "failed_files": List[str],
+                "message": str
+            }
+        """
+        pass
+
+    @tool
+    def list_indexed_documents() -> Dict[str, Any]:
+        """List all currently indexed documents."""
+        pass
+
+    @tool
+    def dump_document(
+        file_name: str,
+        output_path: str = None
+    ) -> Dict[str, Any]:
+        """
+        Export cached extracted text to markdown.
+
+        Args:
+            file_name: Name/path of indexed document
+            output_path: Output path (default: .gaia/{filename}.md)
+
+        Returns:
+            {
+                "status": "success" | "error",
+                "output_path": str,
+                "text_length": int,
+                "num_pages": int,
+                "vlm_pages": int,
+                "message": str
+            }
+        """
+        pass
+
+    @tool
+    def rag_status() -> Dict[str, Any]:
+        """Get RAG system status including watch directories."""
+        pass
+
+    # === Summarization Tool ===
+
+    @tool
+    def summarize_document(
+        file_path: str,
+        summary_type: str = "detailed",
+        max_words_per_section: int = 20000
+    ) -> Dict[str, Any]:
+        """
+        Generate comprehensive summary of large document.
+
+        Strategy:
+        1. Get full text from cache (no VLM re-extraction)
+        2. Split by page boundaries
+        3. Group pages into sections (with overlap)
+        4. Summarize each section
+        5. Synthesize final summary
+
+        Args:
+            file_path: Document name/path
+            summary_type: "brief" | "detailed" | "bullets"
+            max_words_per_section: Section size limit (default: 20000)
+
+        Returns:
+            {
+                "status": "success" | "error",
+                "summary": str,  # Structured markdown
+                "summary_type": str,
+                "document": str,
+                "total_words": int,
+                "sections_processed": int,
+                "section_summaries": List[{
+                    "section": int,
+                    "summary": str
+                }],
+                "instruction": str
+            }
+        """
+        pass
+
+# === Helper Function ===
+
+def extract_page_from_chunk(
+    chunk_text: str,
+    chunk_index: int = -1,
+    all_chunks: List[str] = None
+) -> int | None:
+    """
+    Extract page number from chunk text or nearby chunks.
+
+    Strategies:
+    1. [Page X] format in chunk
+    2. (Page X) format in chunk
+    3. Look backwards in previous chunks (up to 5)
+
+    Args:
+        chunk_text: Chunk content
+        chunk_index: Global index in all_chunks
+        all_chunks: Full chunks list for lookback
+
+    Returns:
+        Page number as int, or None if not found
+    """
+    pass
+```
+
+---
+
+## Implementation Highlights
+
+### Hybrid Search Architecture
+
+```python
+# 1. Semantic search with multiple keys
+search_keys = self._generate_search_keys(query)
+for search_key in search_keys:
+    chunks, scores = self.rag._retrieve_chunks(search_key)
+    all_chunks.extend(chunks)
+    all_scores.extend(scores)
+
+# 2. Keyword boost
+important_terms = [w for w in query_words if w not in stop_words]
+for chunk_idx, chunk_text in enumerate(self.rag.chunks):
+    matching_terms = [t for t in important_terms if t in chunk_lower]
+    if matching_terms:
+        boost_score = 0.6 + (0.2 * match_ratio)
+        all_chunks.append(chunk_text)
+        all_scores.append(boost_score)
+
+# 3. Hash-based deduplication (O(1))
+unique_chunks = {}
+for chunk, score in zip(all_chunks, all_scores):
+    chunk_hash = hash(chunk)
+    if chunk_hash not in unique_chunks or unique_chunks[chunk_hash][1] < score:
+        unique_chunks[chunk_hash] = (chunk, score)
+
+# 4. Adaptive max chunks
+total_chunks = len(self.rag.chunks)
+if total_chunks > 200:
+    adaptive_max = min(25, self.max_chunks * 5)
+elif total_chunks > 100:
+    adaptive_max = min(20, self.max_chunks * 4)
+else:
+    adaptive_max = self.max_chunks
+```
+
+### Iterative Summarization
+
+```python
+# For documents > max_words_per_section
+sections = []
+for page in pages:
+    if word_count > max_words_per_section and current_section:
+        sections.append(current_section)
+        # Start new section with overlap
+        current_section = previous_pages[-overlap_pages:]
+
+# Summarize each section
+for section_text in sections:
+    summary = self.rag.chat.send(section_prompt).text
+    section_summaries.append(summary)
+
+# Synthesize final summary
+final_summary = self.rag.chat.send(synthesis_prompt).text
+```
+
+---
+
+## Testing Requirements
+
+**File:** `tests/agents/chat/test_rag_tools_mixin.py`
+
+Key test scenarios:
+- Hybrid search with keyword boost
+- Per-file targeted search
+- Exact text search in chunks
+- Retrieval evaluation metrics
+- Document indexing with statistics
+- Directory indexing (recursive)
+- Iterative summarization for large docs
+- Page extraction with lookback
+- Debug mode output validation
+- Graceful degradation on failures
+
+---
+
+## Dependencies
+
+```python
+import logging
+import os
+import re
+from pathlib import Path
+from typing import Any, Dict
+
+from gaia.agents.base.tools import tool
+```
+
+**External:**
+- RAG SDK for indexing and retrieval
+- Chat SDK for summarization
+- SessionManager for path validation
+
+---
+
+## Usage Examples
+
+### Example 1: Query Documents with Debug
+
+```python
+result = agent.query_documents(
+    "What are the contraindications?",
+    debug=True
+)
+
+print(f"Found {result['num_chunks']} chunks")
+print(f"Search keys used: {result['search_keys_used']}")
+print(f"Debug info: {result['debug_info']}")
+
+for chunk in result['chunks']:
+    print(f"Page {chunk['page']}: {chunk['content'][:100]}...")
+```
+
+### Example 2: Summarize Large Document
+
+```python
+result = agent.summarize_document(
+    "medical_manual.pdf",
+    summary_type="detailed",
+    max_words_per_section=20000
+)
+
+print(result['summary'])  # Structured markdown with metadata
+print(f"Processed {result['sections_processed']} sections")
+```
+
+### Example 3: Targeted File Search
+
+```python
+result = agent.query_specific_file(
+    "patient_guide.pdf",
+    "What is the recommended dosage?"
+)
+
+print(f"Found {len(result['chunks'])} chunks in patient_guide.pdf")
+```
+
+---
+
+*RAGToolsMixin Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

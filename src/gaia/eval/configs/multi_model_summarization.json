@@ -1,0 +1,129 @@
+{
+  "description": "Comprehensive transcript summarization evaluation across multiple model sizes and architectures",
+  "experiments": [
+    {
+      "name": "Claude-Sonnet-Basic-Summary",
+      "llm_type": "claude",
+      "model": "claude-sonnet-4-20250514",
+      "experiment_type": "summarization",
+      "system_prompt": "You are a professional meeting analyst. Provide clear, concise summaries based on the transcript content. Do NOT include reasoning or explanations - only provide the requested summary.",
+      "max_tokens": 1024,
+      "temperature": 0.3,
+      "parameters": {
+        "combined_prompt": false
+      }
+    },
+    {
+      "name": "Qwen3-30B-A3B-Instruct-2507-GGUF-Basic-Summary",
+      "llm_type": "lemonade",
+      "model": "Qwen3-30B-A3B-Instruct-2507-GGUF",
+      "experiment_type": "summarization",
+      "system_prompt": "You are a professional meeting analyst. Provide clear, concise summaries based on the transcript content. Do NOT include reasoning or explanations - only provide the requested summary.",
+      "max_tokens": 1024,
+      "temperature": 0.3,
+      "minions": 0,
+      "parameters": {
+        "stop": ["<|im_end|>"]
+      }
+    },
+    {
+      "name": "GPT-OSS-20B-GGUF",
+      "llm_type": "lemonade",
+      "model": "gpt-oss-20b-GGUF",
+      "experiment_type": "summarization",
+      "system_prompt": "You are a professional meeting analyst. Provide clear, concise summaries based on the transcript content. Do NOT include reasoning or explanations - only provide the requested summary.",
+      "max_tokens": 1024,
+      "temperature": 0.3,
+      "parameters": {
+        "stop": ["<|end|>"]
+      }
+    },
+    {
+      "name": "Qwen3-8B-GGUF-Basic-Summary",
+      "llm_type": "lemonade",
+      "model": "Qwen3-8B-GGUF",
+      "experiment_type": "summarization",
+      "system_prompt": "You are a professional meeting analyst. Provide clear, concise summaries based on the transcript content. Do NOT include reasoning or explanations - only provide the requested summary.",
+      "max_tokens": 1024,
+      "temperature": 0.3,
+      "minions": 0,
+      "parameters": {
+        "stop": ["<|im_end|>"]
+      }
+    },
+    {
+      "name": "Lemonade-Mistral-7B-v0.3-Instruct-Hybrid-Basic-Summary",
+      "llm_type": "lemonade",
+      "model": "Mistral-7B-v0.3-Instruct-Hybrid",
+      "experiment_type": "summarization",
+      "system_prompt": "You are a professional meeting analyst. Provide clear, concise summaries based on the transcript content. Do NOT include reasoning or explanations - only provide the requested summary.",
+      "max_tokens": 1024,
+      "temperature": 0.3,
+      "parameters": {
+        "stop": ["</s>"]
+      }
+    },
+    {
+      "name": "Phi-3.5-Mini-Instruct-GGUF-Basic-Summary",
+      "llm_type": "lemonade",
+      "model": "user.Phi-3.5-Mini-Instruct-GGUF",
+      "experiment_type": "summarization",
+      "system_prompt": "You are a professional meeting analyst. Provide clear, concise summaries based on the transcript content. Do NOT include reasoning or explanations - only provide the requested summary.",
+      "max_tokens": 1024,
+      "temperature": 0.3,
+      "parameters": {
+        "stop": ["<|end|>"]
+      }
+    },
+    {
+      "name": "Lemonade-Llama-3.2-3B-Instruct-Hybrid-Basic-Summary",
+      "llm_type": "lemonade",
+      "model": "Llama-3.2-3B-Instruct-Hybrid",
+      "experiment_type": "summarization",
+      "system_prompt": "You are a professional meeting analyst. Provide clear, concise summaries based on the transcript content. Do NOT include reasoning or explanations - only provide the requested summary.",
+      "max_tokens": 1024,
+      "temperature": 0.3,
+      "parameters": {
+        "stop": ["<|eot_id|>"]
+      }
+    },
+    {
+      "name": "Qwen3-1.7B-GGUF-Basic-Summary",
+      "llm_type": "lemonade",
+      "model": "Qwen3-1.7B-GGUF",
+      "experiment_type": "summarization",
+      "system_prompt": "You are a professional meeting analyst. Provide clear, concise summaries based on the transcript content. Do NOT include reasoning or explanations - only provide the requested summary.",
+      "max_tokens": 1024,
+      "temperature": 0.3,
+      "minions": 0,
+      "parameters": {
+        "stop": ["<|im_end|>"]
+      }
+    },
+    {
+      "name": "Lemonade-LFM2-1.2B-Basic-Summary",
+      "llm_type": "lemonade",
+      "model": "user.LFM2-1.2B",
+      "experiment_type": "summarization",
+      "system_prompt": "You are a professional meeting analyst. Provide clear, concise summaries based on the transcript content. Do NOT include reasoning or explanations - only provide the requested summary.",
+      "max_tokens": 1024,
+      "temperature": 0.3,
+      "parameters": {
+        "stop": ["Assistant:"]
+      }
+    },
+    {
+      "name": "Qwen3-0.6B-GGUF-Basic-Summary",
+      "llm_type": "lemonade",
+      "model": "Qwen3-0.6B-GGUF",
+      "experiment_type": "summarization",
+      "system_prompt": "You are a professional meeting analyst. Provide clear, concise summaries based on the transcript content. Do NOT include reasoning or explanations - only provide the requested summary.",
+      "max_tokens": 1024,
+      "temperature": 0.3,
+      "minions": 0,
+      "parameters": {
+        "stop": ["<|im_end|>"]
+      }
+    }
+  ]
+}

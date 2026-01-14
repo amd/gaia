@@ -1,0 +1,208 @@
+---
+title: "RoutingAgent"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/routing/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/routing/agent.py)
+</Info>
+
+<Note>
+**Component:** RoutingAgent - Multi-agent orchestration
+**Module:** `gaia.agents.routing.agent`
+**Import:** `from gaia.agents.routing.agent import RoutingAgent`
+</Note>
+---
+
+## Overview
+
+RoutingAgent intelligently routes user requests to appropriate specialized agents (Code, Jira, Docker) with automatic parameter disambiguation. Uses LLM-based analysis for language/framework detection and interactive clarification when needed.
+
+**Key Features:**
+- LLM-powered request analysis
+- Interactive parameter disambiguation
+- Recursive clarification with conversation history
+- API and CLI mode support
+- Fallback keyword detection
+- Agent configuration and instantiation
+
+---
+
+## API Specification
+
+```python
+class RoutingAgent:
+    """
+    Routes user requests to appropriate agents with intelligent disambiguation.
+
+    Currently handles Code agent routing. Future: Jira, Docker, etc.
+
+    Flow:
+    1. Analyze query with LLM to detect agent and parameters
+    2. If parameters unknown, ask user for clarification
+    3. Recursively re-analyze with user's response as added context
+    4. Once resolved, return configured agent ready to execute
+    """
+
+    def __init__(
+        self,
+        api_mode: bool = False,
+        output_handler=None,
+        **agent_kwargs,
+    ):
+        """
+        Initialize routing agent with LLM client.
+
+        Args:
+            api_mode: If True, skip interactive questions and use defaults/best-guess
+            output_handler: Optional OutputHandler for streaming events
+            **agent_kwargs: Additional kwargs to pass to created agents
+        """
+        ...
+
+    def process_query(
+        self,
+        query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        execute: bool = None,
+        workspace_root: Optional[str] = None,
+        **kwargs,
+    ):
+        """
+        Process query with optional conversation history from disambiguation rounds.
+
+        Args:
+            query: Original user query
+            conversation_history: List of conversation turns
+            execute: If True, execute agent and return result
+                    If False, return agent instance (CLI behavior)
+                    If None, uses api_mode (True for API, False for CLI)
+            workspace_root: Optional workspace directory
+            **kwargs: Additional kwargs passed to agent.process_query()
+
+        Returns:
+            If execute=False: Configured agent instance ready to execute
+            If execute=True: Execution result from agent.process_query()
+        """
+        ...
+
+    def _analyze_with_llm(
+        self, conversation_history: List[Dict[str, str]]
+    ) -> Dict[str, Any]:
+        """
+        Analyze query with LLM to determine agent and parameters.
+
+        Returns:
+            Analysis dict with agent, parameters, confidence, reasoning
+        """
+        ...
+
+    def _has_unknowns(self, analysis: Dict[str, Any]) -> bool:
+        """Check if analysis has unknown parameters that need disambiguation."""
+        ...
+
+    def _generate_clarification_question(self, analysis: Dict[str, Any]) -> str:
+        """Generate natural language clarification question based on unknowns."""
+        ...
+
+    def _create_agent(self, analysis: Dict[str, Any]) -> Agent:
+        """Create configured agent based on analysis."""
+        ...
+```
+
+---
+
+## Usage Examples
+
+### Example 1: CLI Mode with Disambiguation
+
+```python
+from gaia.agents.routing.agent import RoutingAgent
+
+router = RoutingAgent()
+
+# First call - needs clarification
+agent = router.process_query("Create a web app")
+
+# Router asks: "What language/framework would you like to use?"
+# User responds: "Next.js"
+# Recursive call resolves parameters
+
+# Returns configured CodeAgent
+result = agent.process_query("Create a web app")
+```
+
+### Example 2: API Mode (Auto-Execute)
+
+```python
+router = RoutingAgent(api_mode=True, output_handler=sse_handler)
+
+# Auto-executes with defaults, no interactive questions
+result = router.process_query("Create Express API")
+
+# Returns execution result directly
+print(result.status)
+```
+
+### Example 3: Explicit Parameters
+
+```python
+# Clear request, no disambiguation needed
+agent = router.process_query("Create a Next.js blog with TypeScript")
+
+# Router detects: language=typescript, project_type=fullstack
+```
+
+---
+
+## Testing Requirements
+
+```python
+def test_routing_agent_creation():
+    """Test router initialization."""
+    router = RoutingAgent()
+    assert router is not None
+
+def test_language_detection():
+    """Test LLM-based language detection."""
+    router = RoutingAgent(api_mode=True)
+    agent = router.process_query("Create a Python calculator", execute=False)
+
+    assert isinstance(agent, CodeAgent)
+    assert agent.language == "python"
+
+def test_api_mode_defaults():
+    """Test API mode uses defaults without questions."""
+    router = RoutingAgent(api_mode=True)
+    result = router.process_query("Create an app")
+
+    # Should complete without user input
+    assert result is not None
+```
+
+---
+
+## Dependencies
+
+```toml
+[project]
+dependencies = [
+    "gaia.llm.llm_client",
+    "gaia.agents.code.agent",
+]
+```
+
+---
+
+*RoutingAgent Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

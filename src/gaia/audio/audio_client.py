@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 import asyncio
@@ -6,8 +6,8 @@ import queue
 import threading
 import time
 
-from gaia.logger import get_logger
 from gaia.llm.llm_client import LLMClient
+from gaia.logger import get_logger
 
 
 class AudioClient:
@@ -20,7 +20,8 @@ class AudioClient:
         silence_threshold=0.5,
         enable_tts=True,
         logging_level="INFO",
-        use_local_llm=True,
+        use_claude=False,
+        use_chatgpt=False,
         system_prompt=None,
     ):
         self.log = get_logger(__name__)
@@ -41,7 +42,9 @@ class AudioClient:
 
         # Initialize LLM client (base_url handled automatically)
         self.llm_client = LLMClient(
-            use_local=use_local_llm, system_prompt=system_prompt
+            use_claude=use_claude,
+            use_openai=use_chatgpt,  # LLMClient uses use_openai, not use_chatgpt
+            system_prompt=system_prompt,
         )
 
         self.log.info("Audio client initialized.")
@@ -120,7 +123,7 @@ class AudioClient:
 
         except ImportError:
             self.log.error(
-                "WhisperAsr not found. Please install voice support with: pip install .[talk]"
+                'WhisperAsr not found. Please install voice support with: uv pip install ".[talk]"'
             )
             raise
         except Exception as e:
@@ -303,7 +306,7 @@ class AudioClient:
                 self.log.debug("TTS initialized successfully")
             except Exception as e:
                 raise RuntimeError(
-                    f"Failed to initialize TTS:\n{e}\nInstall talk dependencies with: pip install .[talk]\nYou can also use --no-tts option to disable TTS"
+                    f'Failed to initialize TTS:\n{e}\nInstall talk dependencies with: uv pip install ".[talk]"\nYou can also use --no-tts option to disable TTS'
                 )
 
     async def speak_text(self, text: str) -> None:

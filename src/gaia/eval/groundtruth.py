@@ -1,10 +1,15 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+import argparse
 import json
 import time
-import argparse
 from datetime import datetime
-from pathlib import Path
 from enum import Enum
+from pathlib import Path
+
 from gaia.eval.claude import ClaudeClient
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL
 from gaia.logger import get_logger
 
 
@@ -149,8 +154,10 @@ class GroundTruthGenerator:
         else:
             raise ValueError(f"Unsupported use case: {use_case}")
 
-    def __init__(self, model="claude-sonnet-4-20250514", max_tokens=4096):
+    def __init__(self, model=None, max_tokens=4096):
         self.log = get_logger(__name__)
+        if model is None:
+            model = DEFAULT_CLAUDE_MODEL
         self.claude = ClaudeClient(model=model, max_tokens=max_tokens)
 
     def generate(
@@ -306,16 +313,18 @@ class GroundTruthGenerator:
             raise
 
     def generate_batch(
-        self, input_dir, file_pattern="*", use_case=UseCase.RAG, **kwargs
+        self, input_dir, file_pattern="*", use_case=UseCase.RAG, force=False, **kwargs
     ):
         """
         Generate ground truth data for multiple documents in a directory.
         All results are automatically consolidated into a single JSON file.
+        Supports resuming from interrupted runs by skipping files that already have ground truth.
 
         Args:
             input_dir (str): Directory containing input documents
             file_pattern (str): Glob pattern to match input files
             use_case (UseCase): The evaluation use case
+            force (bool): If True, regenerate all ground truth files even if they exist (default: False)
             **kwargs: Additional arguments passed to generate()
 
         Returns:
@@ -330,8 +339,10 @@ class GroundTruthGenerator:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Remove output_dir from kwargs to avoid individual file saves in the generate method
-        generate_kwargs = {k: v for k, v in kwargs.items() if k != "output_dir"}
+        # Remove output_dir and force from kwargs to avoid individual file saves in the generate method
+        generate_kwargs = {
+            k: v for k, v in kwargs.items() if k not in ["output_dir", "force"]
+        }
 
         results = []
         individual_files = []
@@ -358,12 +369,87 @@ class GroundTruthGenerator:
         for match in matching_files:
             self.log.info(f"  Found: {match}")
 
+        # Filter out metadata files
+        filtered_files = []
+        for f in matching_files:
+            # Skip directories (rglob returns both files and directories)
+            if f.is_dir():
+                self.log.info(f"Skipping directory: {f.name}")
+                continue
+            # Skip metadata files
+            if f.name in [
+                "transcript_metadata.json",
+                "metadata.json",
+                "experiment_metadata.json",
+            ]:
+                self.log.info(f"Skipping metadata file: {f.name}")
+                continue
+            # Skip any file with 'metadata' in the name and .json extension
+            if "metadata" in f.name.lower() and f.suffix == ".json":
+                self.log.info(f"Skipping metadata file: {f.name}")
+                continue
+            filtered_files.append(f)
+
+        if not filtered_files:
+            self.log.warning(
+                f"No valid files to process after filtering out metadata files"
+            )
+            return None
+
+        self.log.info(
+            f"Processing {len(filtered_files)} files (excluded {len(matching_files) - len(filtered_files)} metadata files)"
+        )
+
         # Create progress tracking directory
         progress_dir = output_dir / f"groundtruth_{use_case.value}_progress"
         progress_dir.mkdir(parents=True, exist_ok=True)
 
-        for i, file_path in enumerate(matching_files):
-            self.log.info(f"Processing file {i+1}/{len(matching_files)}: {file_path}")
+        # Track statistics
+        skipped_count = 0
+        processed_count = 0
+        error_count = 0
+
+        # Track costs for this run (only newly generated files)
+        run_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        run_cost = {"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0}
+
+        for i, file_path in enumerate(filtered_files):
+            # Calculate the expected output path for this file
+            relative_path = file_path.relative_to(input_dir)
+            relative_dir = relative_path.parent
+            output_subdir = output_dir / relative_dir
+            individual_file_path = (
+                output_subdir / f"{file_path.stem}.{use_case.value}.groundtruth.json"
+            )
+
+            # Check if ground truth already exists and skip if not forced
+            if not force and individual_file_path.exists():
+                self.log.info(
+                    f"Skipping file {i+1}/{len(filtered_files)} (already exists): {file_path}"
+                )
+                self.log.debug(f"  Existing ground truth: {individual_file_path}")
+                skipped_count += 1
+
+                # Load existing result for consolidation
+                try:
+                    with open(individual_file_path, "r", encoding="utf-8") as f:
+                        existing_result = json.load(f)
+                        results.append(existing_result)
+                        individual_files.append(individual_file_path)
+                    # Successfully loaded existing file, skip to next iteration
+                    continue
+                except Exception as e:
+                    self.log.error(
+                        f"Error loading existing ground truth {individual_file_path}: {e}"
+                    )
+                    self.log.warning(
+                        f"Will regenerate ground truth for {file_path} due to load error"
+                    )
+                    # Decrement skip count since we're actually processing this file
+                    skipped_count -= 1
+                    # Fall through to regeneration below
+
+            self.log.info(f"Processing file {i+1}/{len(filtered_files)}: {file_path}")
             file_start_time = time.time()
 
             try:
@@ -372,20 +458,20 @@ class GroundTruthGenerator:
                     file_path, use_case=use_case, save_file=False, **generate_kwargs
                 )
                 results.append(result)
+                processed_count += 1
 
-                # Calculate relative path from input_dir to preserve directory structure
-                relative_path = file_path.relative_to(input_dir)
-                relative_dir = relative_path.parent
+                # Accumulate costs for this run
+                usage = result.get("metadata", {}).get("usage", {})
+                cost = result.get("metadata", {}).get("cost", {})
+                run_usage["input_tokens"] += usage.get("input_tokens", 0)
+                run_usage["output_tokens"] += usage.get("output_tokens", 0)
+                run_usage["total_tokens"] += usage.get("total_tokens", 0)
+                run_cost["input_cost"] += cost.get("input_cost", 0.0)
+                run_cost["output_cost"] += cost.get("output_cost", 0.0)
+                run_cost["total_cost"] += cost.get("total_cost", 0.0)
 
                 # Create output directory structure
-                output_subdir = output_dir / relative_dir
                 output_subdir.mkdir(parents=True, exist_ok=True)
-
-                # Keep track of what would be the individual file path for consolidation
-                individual_file_path = (
-                    output_subdir
-                    / f"{file_path.stem}.{use_case.value}.groundtruth.json"
-                )
 
                 # Save individual file (this provides immediate incremental progress)
                 with open(individual_file_path, "w", encoding="utf-8") as f:
@@ -412,9 +498,9 @@ class GroundTruthGenerator:
                 # Update overall progress
                 overall_progress_file = progress_dir / "overall_progress.json"
                 overall_progress_data = {
-                    "total_files": len(matching_files),
+                    "total_files": len(filtered_files),
                     "completed_files": i + 1,
-                    "progress_percent": round((i + 1) / len(matching_files) * 100, 1),
+                    "progress_percent": round((i + 1) / len(filtered_files) * 100, 1),
                     "use_case": use_case.value,
                     "last_updated": datetime.now().isoformat(),
                 }
@@ -423,11 +509,12 @@ class GroundTruthGenerator:
                     json.dump(overall_progress_data, f, indent=2)
 
                 self.log.info(
-                    f"Ground truth progress: {i+1}/{len(matching_files)} files completed ({overall_progress_data['progress_percent']}%)"
+                    f"Ground truth progress: {i+1}/{len(filtered_files)} files completed ({overall_progress_data['progress_percent']}%)"
                 )
 
             except Exception as e:
                 self.log.error(f"Error processing {file_path}: {e}")
+                error_count += 1
 
                 # Write error progress information
                 progress_file = progress_dir / f"file_{i+1:04d}_progress.json"
@@ -443,6 +530,21 @@ class GroundTruthGenerator:
                     json.dump(progress_data, f, indent=2)
 
                 continue
+
+        # Log summary statistics
+        self.log.info("=" * 60)
+        self.log.info("Ground Truth Generation Summary:")
+        self.log.info(f"  Total files found: {len(filtered_files)}")
+        self.log.info(f"  Processed (new): {processed_count}")
+        self.log.info(f"  Skipped (existing): {skipped_count}")
+        self.log.info(f"  Errors: {error_count}")
+        self.log.info(f"  Total results available: {len(results)}")
+        if processed_count > 0:
+            self.log.info(
+                f"  This run cost: ${run_cost['total_cost']:.4f} "
+                f"({run_usage['total_tokens']:,} tokens)"
+            )
+        self.log.info("=" * 60)
 
         if not results:
             self.log.warning("No files were processed successfully")
@@ -476,6 +578,15 @@ class GroundTruthGenerator:
                 f"Consolidated ground truth data saved to: {consolidated_output_path}"
             )
             self.log.info(f"Total files processed: {len(results)}")
+
+            # Add this run's statistics to consolidated metadata
+            consolidated_data["metadata"]["run_stats"] = {
+                "processed_count": processed_count,
+                "skipped_count": skipped_count,
+                "error_count": error_count,
+                "run_usage": run_usage,
+                "run_cost": run_cost,
+            }
 
             # Return the consolidated data instead of individual results
             return consolidated_data
@@ -683,6 +794,12 @@ Examples:
 
   # Consolidate multiple ground truth files into one
   python -m gaia.eval.groundtruth -d ./output/groundtruth --consolidate
+
+  # Resume generation (skip files that already have ground truth)
+  python -m gaia.eval.groundtruth -d ./data/transcripts -p "*.txt" --use-case summarization
+
+  # Force regeneration of all files (even if ground truth exists)
+  python -m gaia.eval.groundtruth -d ./data/transcripts -p "*.txt" --use-case summarization --force
         """,
     )
 
@@ -722,8 +839,8 @@ Examples:
         "-m",
         "--model",
         type=str,
-        default="claude-3-7-sonnet-20250219",
-        help="Claude model to use (default: claude-3-7-sonnet-20250219)",
+        default=None,
+        help=f"Claude model to use (default: {DEFAULT_CLAUDE_MODEL})",
     )
     parser.add_argument(
         "--max-tokens",
@@ -751,6 +868,11 @@ Examples:
         "--consolidate",
         action="store_true",
         help="Consolidate multiple ground truth files into a single file",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force regeneration of all ground truth files, even if they already exist",
     )
 
     args = parser.parse_args()
@@ -855,10 +977,17 @@ Examples:
                 f"Processing directory: {args.directory} (use case: {use_case.value})"
             )
             print(f"File pattern: {args.pattern}")
+            if args.force:
+                print("Force mode: Regenerating all ground truth files")
+            else:
+                print(
+                    "Resume mode: Skipping files with existing ground truth (use --force to regenerate all)"
+                )
             results = generator.generate_batch(
                 input_dir=args.directory,
                 file_pattern=args.pattern,
                 use_case=use_case,
+                force=args.force,
                 prompt=custom_prompt,
                 save_text=save_text,
                 output_dir=args.output_dir,
@@ -866,53 +995,126 @@ Examples:
             )
 
             if results:
-                total_usage = {
-                    "input_tokens": sum(
-                        r["metadata"]["usage"]["input_tokens"] for r in results
-                    ),
-                    "output_tokens": sum(
-                        r["metadata"]["usage"]["output_tokens"] for r in results
-                    ),
-                    "total_tokens": sum(
-                        r["metadata"]["usage"]["total_tokens"] for r in results
-                    ),
-                }
-                total_cost = {
-                    "input_cost": sum(
-                        r["metadata"]["cost"]["input_cost"] for r in results
-                    ),
-                    "output_cost": sum(
-                        r["metadata"]["cost"]["output_cost"] for r in results
-                    ),
-                    "total_cost": sum(
-                        r["metadata"]["cost"]["total_cost"] for r in results
-                    ),
-                }
-                print(f"✅ Successfully processed {len(results)} files")
-                print(f"  Output: {args.output_dir}")
+                # Handle consolidated dict vs list of results
+                if isinstance(results, dict):
+                    # Consolidated results from generate_batch
+                    # Cumulative totals (all files including existing ones)
+                    cumulative_usage = results["metadata"]["total_usage"]
+                    cumulative_cost = results["metadata"]["total_cost"]
+                    num_files = results["metadata"]["consolidated_from"]
+                    print(f"✅ Successfully processed batch")
+                    print(f"  Output: {args.output_dir}")
+                    print(
+                        f"  Total files: {num_files} ({results['metadata'].get('source_files', []).__len__()} in consolidated output)"
+                    )
+                else:
+                    # Fallback: list of individual results
+                    total_usage = {
+                        "input_tokens": sum(
+                            r["metadata"]["usage"]["input_tokens"] for r in results
+                        ),
+                        "output_tokens": sum(
+                            r["metadata"]["usage"]["output_tokens"] for r in results
+                        ),
+                        "total_tokens": sum(
+                            r["metadata"]["usage"]["total_tokens"] for r in results
+                        ),
+                    }
+                    total_cost = {
+                        "input_cost": sum(
+                            r["metadata"]["cost"]["input_cost"] for r in results
+                        ),
+                        "output_cost": sum(
+                            r["metadata"]["cost"]["output_cost"] for r in results
+                        ),
+                        "total_cost": sum(
+                            r["metadata"]["cost"]["total_cost"] for r in results
+                        ),
+                    }
+                    num_files = len(results)
+                    print(f"✅ Successfully processed {num_files} files")
+                    print(f"  Output: {args.output_dir}")
+
+                # Print this run's cost (if available)
+                if isinstance(results, dict) and "run_stats" in results.get(
+                    "metadata", {}
+                ):
+                    run_stats = results["metadata"]["run_stats"]
+                    run_cost_data = run_stats["run_cost"]
+                    run_usage_data = run_stats["run_usage"]
+                    processed = run_stats["processed_count"]
+
+                    if processed > 0:
+                        print(
+                            f"\n  This run (generated {processed} new file{'s' if processed != 1 else ''}):"
+                        )
+                        print(
+                            f"    Cost: ${run_cost_data['total_cost']:.4f} "
+                            f"({run_usage_data['total_tokens']:,} tokens)"
+                        )
+
+                # Print cumulative totals for dict, or totals for list
+                label = "Cumulative total" if isinstance(results, dict) else "Total"
+                usage_data = (
+                    cumulative_usage if isinstance(results, dict) else total_usage
+                )
+                cost_data = cumulative_cost if isinstance(results, dict) else total_cost
+
+                print(f"\n  {label} (all files):")
                 print(
-                    f"  Total token usage: {total_usage['input_tokens']:,} input + {total_usage['output_tokens']:,} output = {total_usage['total_tokens']:,} total"
+                    f"    Token usage: {usage_data['input_tokens']:,} input + "
+                    f"{usage_data['output_tokens']:,} output = {usage_data['total_tokens']:,} total"
                 )
                 print(
-                    f"  Total cost: ${total_cost['input_cost']:.4f} input + ${total_cost['output_cost']:.4f} output = ${total_cost['total_cost']:.4f} total"
+                    f"    Cost: ${cost_data['input_cost']:.4f} input + "
+                    f"${cost_data['output_cost']:.4f} output = ${cost_data['total_cost']:.4f} total"
                 )
-                print(
-                    f"  Average cost per file: ${total_cost['total_cost']/len(results):.4f}"
-                )
+                if num_files > 0:
+                    print(
+                        f"    Average per file: ${cost_data['total_cost']/num_files:.4f}"
+                    )
 
                 # Different summary stats based on use case
-                if use_case == UseCase.RAG:
-                    total_pairs = sum(len(r["analysis"]["qa_pairs"]) for r in results)
-                    print(f"  Total Q&A pairs: {total_pairs}")
-                    print(
-                        f"  Average cost per Q&A pair: ${total_cost['total_cost']/total_pairs:.4f}"
-                    )
-                elif use_case == UseCase.SUMMARIZATION:
-                    print(
-                        f"  Generated {len(results)} comprehensive transcript summaries"
-                    )
-                elif use_case == UseCase.QA:
-                    print(f"  Generated {len(results)} Q&A pairs")
+                if isinstance(results, dict):
+                    # Consolidated results
+                    if use_case == UseCase.RAG:
+                        # Count total Q&A pairs across all files
+                        total_pairs = sum(
+                            len(qa_pairs)
+                            for qa_pairs in results["analysis"]
+                            .get("qa_pairs", {})
+                            .values()
+                        )
+                        print(f"  Total Q&A pairs: {total_pairs}")
+                        if total_pairs > 0:
+                            print(
+                                f"  Average cost per Q&A pair: ${cumulative_cost['total_cost']/total_pairs:.4f}"
+                            )
+                    elif use_case == UseCase.SUMMARIZATION:
+                        num_summaries = len(results["analysis"].get("summaries", {}))
+                        print(
+                            f"  Generated {num_summaries} comprehensive transcript summaries"
+                        )
+                    elif use_case == UseCase.QA:
+                        num_qa = len(results["analysis"].get("qa_pairs", {}))
+                        print(f"  Generated Q&A for {num_qa} transcripts")
+                else:
+                    # List results
+                    if use_case == UseCase.RAG:
+                        total_pairs = sum(
+                            len(r["analysis"]["qa_pairs"]) for r in results
+                        )
+                        print(f"  Total Q&A pairs: {total_pairs}")
+                        if total_pairs > 0:
+                            print(
+                                f"  Average cost per Q&A pair: ${total_cost['total_cost']/total_pairs:.4f}"
+                            )
+                    elif use_case == UseCase.SUMMARIZATION:
+                        print(
+                            f"  Generated {len(results)} comprehensive transcript summaries"
+                        )
+                    elif use_case == UseCase.QA:
+                        print(f"  Generated {len(results)} Q&A pairs")
             else:
                 print("No files were processed successfully")
                 return 1

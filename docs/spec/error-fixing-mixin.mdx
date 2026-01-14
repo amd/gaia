@@ -1,0 +1,477 @@
+---
+title: "ErrorFixingMixin"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/code/tools/error_fixing.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code/tools/error_fixing.py)
+</Info>
+
+<Note>
+**Component:** ErrorFixingMixin
+**Module:** `gaia.agents.code.tools.error_fixing`
+**Import:** `from gaia.agents.code.tools.error_fixing import ErrorFixingMixin`
+</Note>
+---
+
+## Overview
+
+ErrorFixingMixin provides automatic error detection and fixing capabilities using LLM-driven analysis. It handles syntax errors, linting issues, runtime errors, and includes workflow planning tools for complex projects.
+
+**Key Features:**
+- Automatic syntax error detection and fixing
+- LLM-based code correction
+- Pylint error fixing with iteration
+- Runtime error fixing
+- Architectural plan generation
+- Project structure creation
+- Workflow planning
+- GAIA.md initialization from codebase
+
+---
+
+## Tool Specifications
+
+### 1. auto_fix_syntax_errors
+
+Scan project for syntax errors and fix them automatically.
+
+**Parameters:**
+- `project_path` (str, required): Path to project directory
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "files_fixed": int,
+    "errors_remaining": int,
+    "fixed_files": [
+        {"file": str, "errors_fixed": List[str]}
+    ],
+    "errors_found": [
+        {"file": str, "errors": List[str]}
+    ],
+    "message": str
+}
+```
+
+### 2. fix_code
+
+Fix Python code using LLM analysis.
+
+**Parameters:**
+- `file_path` (str, required): Path to file to fix
+- `error_description` (str, optional): Error description
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "file_modified": bool,
+    "original_lines": int,
+    "fixed_lines": int,
+    "diff": str,
+    "message": str
+}
+```
+
+### 3. fix_linting_errors
+
+Fix pylint issues iteratively.
+
+**Parameters:**
+- `file_path` (str, required): Path to file
+- `lint_issues` (List[Dict], required): Pylint issues
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "fixes_applied": List[str],
+    "file_modified": bool,
+    "total_fixes": int,
+    "iterations": int,
+    "remaining_issues": int,
+    "backup_created": str  # If create_backup=True
+}
+```
+
+### 4. fix_python_errors
+
+Fix runtime errors automatically.
+
+**Parameters:**
+- `file_path` (str, required): Path to file
+- `error_message` (str, required): Runtime error message
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "fixes_applied": List[str],
+    "file_modified": bool
+}
+```
+
+**Handled Errors:**
+- NameError (add missing imports)
+- IndentationError (fix spacing)
+- TypeError (add type checking)
+
+### 5. create_architectural_plan
+
+Generate architectural plan for a project.
+
+**Parameters:**
+- `query` (str, required): Project requirements
+- `project_type` (str, optional): "application", "library", "game", "api"
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "plan_created": bool,
+    "plan_file": str,
+    "project_name": str,
+    "num_files": int,
+    "num_classes": int,
+    "message": str
+}
+```
+
+**Generated Plan Structure:**
+```python
+{
+    "project_name": str,
+    "project_type": str,
+    "description": str,
+    "created": str,  # ISO timestamp
+    "architecture": {
+        "overview": str,
+        "components": List,
+        "folder_structure": Dict,
+        "files": List,
+        "classes": List,
+        "functions": List,
+        "dependencies": List
+    },
+    "implementation_order": List[str],
+    "execution_steps": [
+        {
+            "step": int,
+            "action": str,
+            "description": str,
+            "completed": bool
+        }
+    ]
+}
+```
+
+### 6. create_project_structure
+
+Create folder structure from architectural plan.
+
+**Parameters:** None (uses self.plan)
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "project_root": str,
+    "dirs_created": int,
+    "files_created": int,
+    "created_dirs": List[str],
+    "created_files": List[str],
+    "message": str
+}
+```
+
+### 7. implement_from_plan
+
+Implement components from architectural plan.
+
+**Parameters:**
+- `component` (str, optional): Specific component to implement
+- `auto_implement_all` (bool, optional): Implement all (default: False)
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "implemented": List[Dict],
+    "errors": List[Dict],
+    "total_implemented": int,
+    "total_errors": int,
+    "message": str
+}
+```
+
+### 8. init_gaia_md
+
+Initialize GAIA.md from codebase analysis.
+
+**Parameters:**
+- `project_root` (str, optional): Root directory (default: ".")
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "file_path": str,
+    "project_name": str,
+    "project_type": str,
+    "python_files": int,
+    "classes_found": int,
+    "functions_found": int,
+    "message": str
+}
+```
+
+---
+
+## Usage Examples
+
+### Example 1: Auto-Fix Syntax Errors
+
+```python
+from gaia import CodeAgent
+
+agent = CodeAgent()
+
+result = agent.auto_fix_syntax_errors("/path/to/project")
+
+print(f"Fixed {result['files_fixed']} files")
+print(f"Remaining errors: {result['errors_remaining']}")
+
+for fixed in result["fixed_files"]:
+    print(f"\n✓ {fixed['file']}")
+    for error in fixed["errors_fixed"]:
+        print(f"  - {error}")
+```
+
+### Example 2: Fix Code with LLM
+
+```python
+result = agent.fix_code(
+    file_path="src/calculator.py",
+    error_description="Line 42: SyntaxError: invalid syntax"
+)
+
+if result["file_modified"]:
+    print("Changes made:")
+    print(result["diff"])
+```
+
+### Example 3: Fix Linting Errors
+
+```python
+# Get pylint issues
+lint_result = agent.analyze_with_pylint(file_path="src/app.py")
+
+if not lint_result["clean"]:
+    # Fix issues
+    fix_result = agent.fix_linting_errors(
+        file_path="src/app.py",
+        lint_issues=lint_result["issues"]
+    )
+
+    print(f"Applied {fix_result['total_fixes']} fixes")
+    print(f"Iterations: {fix_result['iterations']}")
+    print(f"Remaining issues: {fix_result['remaining_issues']}")
+```
+
+### Example 4: Create Architectural Plan
+
+```python
+result = agent.create_architectural_plan(
+    query="Create a snake game with pygame",
+    project_type="game"
+)
+
+print(f"Plan created: {result['plan_file']}")
+print(f"Project: {result['project_name']}")
+print(f"Files to create: {result['num_files']}")
+
+# Create structure
+structure_result = agent.create_project_structure()
+print(f"Created {structure_result['dirs_created']} dirs")
+
+# Implement all
+impl_result = agent.implement_from_plan(auto_implement_all=True)
+print(f"Implemented {impl_result['total_implemented']} components")
+```
+
+### Example 5: Initialize GAIA.md
+
+```python
+result = agent.init_gaia_md(project_root="/path/to/project")
+
+print(f"Analyzed {result['python_files']} Python files")
+print(f"Found {result['classes_found']} classes")
+print(f"Found {result['functions_found']} functions")
+print(f"Created: {result['file_path']}")
+```
+
+---
+
+## LLM-Based Fixing
+
+### Fix Code Prompt Template
+
+```python
+prompt = f"""Fix the following {lang_label} code error:
+
+File path: {file_path}
+Error: {error_msg}
+
+Code:
+```{lang}
+{code}
+```
+
+{context}
+
+Return ONLY the corrected code, no explanations."""
+```
+
+### Iterative Linting Fix
+
+```python
+iteration = 0
+while remaining_issues and iteration < max_iterations:
+    iteration += 1
+
+    # Format issues for LLM
+    issues_text = "\n".join([
+        f"Line {issue['line']}: [{issue['symbol']}] {issue['message']}"
+        for issue in remaining_issues[:10]
+    ])
+
+    # Get fixed code from LLM
+    response = self.chat.send(prompt)
+    fixed_code = extract_code(response.text)
+
+    # Validate
+    validation = self.syntax_validator.validate_dict(fixed_code)
+    if not validation["is_valid"]:
+        break
+
+    # Write and re-check
+    path.write_text(fixed_code)
+    remaining_issues = run_pylint(path)
+```
+
+---
+
+## Project Templates
+
+### Game Project Structure
+
+```python
+{
+    "main.py": "Entry point and main loop",
+    "core/": {
+        "__init__.py": "Core package initialization",
+        "game.py": "Main game logic",
+        "entities.py": "Game entities and objects",
+        "physics.py": "Physics and collision detection"
+    },
+    "ui/": {
+        "__init__.py": "UI package initialization",
+        "renderer.py": "Rendering and display",
+        "menu.py": "Menu screens"
+    }
+}
+```
+
+### API Project Structure
+
+```python
+{
+    "main.py": "Application entry point",
+    "api/": {
+        "__init__.py": "API package initialization",
+        "routes.py": "API route definitions",
+        "models.py": "Data models",
+        "handlers.py": "Request handlers"
+    },
+    "core/": {
+        "services.py": "Business logic services",
+        "database.py": "Database connections"
+    }
+}
+```
+
+---
+
+## Testing Requirements
+
+**File:** `tests/agents/code/test_error_fixing.py`
+
+```python
+def test_auto_fix_syntax_errors(tmp_path):
+    """Test automatic syntax error fixing."""
+    # Create file with syntax error
+    file_path = tmp_path / "test.py"
+    file_path.write_text("def hello(\npass")
+
+    result = auto_fix_syntax_errors(str(tmp_path))
+
+    assert result["files_fixed"] > 0
+    assert result["errors_remaining"] == 0
+
+def test_fix_linting_errors():
+    """Test iterative linting fix."""
+    lint_issues = [
+        {
+            "line": 1,
+            "symbol": "missing-docstring",
+            "message": "Missing module docstring"
+        }
+    ]
+
+    result = fix_linting_errors(file_path, lint_issues)
+
+    assert result["file_modified"]
+    assert result["iterations"] > 0
+
+def test_create_architectural_plan():
+    """Test plan generation."""
+    result = create_architectural_plan(
+        query="Create a calculator app",
+        project_type="application"
+    )
+
+    assert result["plan_created"]
+    assert "calculator" in result["project_name"].lower()
+```
+
+---
+
+## Dependencies
+
+```python
+import ast
+import logging
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List
+
+logger = logging.getLogger(__name__)
+```
+
+---
+
+*ErrorFixingMixin Technical Specification*
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

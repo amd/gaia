@@ -1,0 +1,137 @@
+# Application Packaging
+
+<Badge text="development" color="orange" />
+
+![Status](https://img.shields.io/badge/status-in_development-yellow)
+
+**Detailed Spec:** [spec/web-ui-packaging](/spec/web-ui-packaging)
+
+**Purpose:** Package GAIA agents as standalone applications for distribution.
+
+---
+
+## 14.1 Web UI Generation
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.tools import tool
+
+class MyAgent(Agent):
+    """Custom agent for distribution."""
+
+    def _get_system_prompt(self) -> str:
+        return "You are a helpful assistant."
+
+    def _create_console(self):
+        from gaia.agents.base.console import AgentConsole
+        return AgentConsole()
+
+    def _register_tools(self):
+        @tool
+        def my_capability(query: str) -> dict:
+            """Custom tool."""
+            return {"result": f"Processed: {query}"}
+
+# Package as web UI
+# Run: gaia package --agent my_agent.MyAgent --ui web --output ./dist
+
+# Generates:
+# ./dist/
+#   ├── index.html        # Web interface
+#   ├── app.js           # Frontend code
+#   ├── server.py        # FastAPI backend
+#   └── requirements.txt  # Dependencies
+```
+
+---
+
+## 14.2 NSIS Windows Installer
+
+```bash
+# Create Windows installer for your agent
+gaia package \
+    --agent my_package.MyAgent \
+    --installer nsis \
+    --output ./installer \
+    --name "MyAgent" \
+    --version "1.0.0"
+
+# Generates:
+# ./installer/
+#   ├── MyAgent-1.0.0-setup.exe  # Windows installer
+#   └── uninstall.exe             # Uninstaller
+
+# Installer features:
+# - Start menu shortcuts
+# - Desktop icon
+# - Auto-update check
+# - Clean uninstall
+```
+
+---
+
+## 14.3 Electron Desktop App
+
+```bash
+# Package as cross-platform desktop app
+gaia package \
+    --agent my_package.MyAgent \
+    --desktop electron \
+    --output ./desktop \
+    --platforms windows,linux
+
+# Generates:
+# ./desktop/
+#   ├── MyAgent-1.0.0-win.exe     # Windows app
+#   └── MyAgent-1.0.0-linux.AppImage  # Linux app
+
+# Features:
+# - Native desktop integration
+# - System tray support
+# - Auto-updates
+# - Offline mode
+```
+
+---
+
+## 14.4 Deployment Patterns
+
+```python
+# pyproject.toml - Package your agent
+[project]
+name = "my-gaia-agent"
+version = "1.0.0"
+dependencies = ["amd-gaia>=0.14.0"]
+
+[project.entry-points."gaia.agents"]
+my-agent = "my_package.agent:MyAgent"
+
+[project.scripts]
+my-agent = "my_package.cli:main"
+
+# After install, users can:
+# 1. Import: from my_package.agent import MyAgent
+# 2. CLI: my-agent "Do something"
+# 3. API: Start server with `gaia api --agent my-agent`
+```
+
+---
+
+## Related Topics
+
+- [Core Agent System](./core/agent-system) - Learn about the base Agent class
+- [API Server](./infrastructure/api-server) - Expose agents via API
+- [Best Practices](./best-practices) - Development guidelines
+- [Installer Documentation](/deployment/installer) - Windows installer details
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

@@ -6,16 +6,15 @@
 Gaia Talk SDK - Unified voice and text chat integration
 """
 
-import asyncio
 import logging
-from typing import Optional, Callable, Dict, Any, AsyncGenerator
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, AsyncGenerator, Callable, Dict, Optional
 
 from gaia.audio.audio_client import AudioClient
-from gaia.logger import get_logger
-from gaia.chat.sdk import ChatSDK, ChatConfig
+from gaia.chat.sdk import ChatConfig, ChatSDK
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+from gaia.logger import get_logger
 
 
 class TalkMode(Enum):
@@ -45,9 +44,13 @@ class TalkConfig:
     assistant_name: str = "gaia"
 
     # General settings
-    use_local_llm: bool = True
+    use_claude: bool = False  # Use Claude API
+    use_chatgpt: bool = False  # Use ChatGPT/OpenAI API
     show_stats: bool = False
     logging_level: str = "INFO"
+
+    # RAG settings (optional - for document Q&A)
+    rag_documents: Optional[list] = None  # PDF documents to index
 
 
 @dataclass
@@ -82,6 +85,11 @@ class TalkSDK:
         async for chunk in talk.chat_stream("Tell me a story"):
             print(chunk.text, end="", flush=True)
 
+        # Voice chat with document Q&A
+        talk_rag = TalkSDK(TalkConfig(enable_tts=True))
+        talk_rag.enable_rag(documents=["manual.pdf", "guide.pdf"])
+        await talk_rag.start_voice_session()
+
         # Voice chat with callback
         def on_voice_input(text):
             print(f"User said: {text}")
@@ -110,7 +118,8 @@ class TalkSDK:
             assistant_name=self.config.assistant_name,
             show_stats=self.config.show_stats,
             logging_level=self.config.logging_level,
-            use_local_llm=self.config.use_local_llm,
+            use_claude=self.config.use_claude,
+            use_chatgpt=self.config.use_chatgpt,
         )
         self.chat_sdk = ChatSDK(chat_config)
 
@@ -121,12 +130,17 @@ class TalkSDK:
             silence_threshold=self.config.silence_threshold,
             enable_tts=self.config.enable_tts,
             logging_level=self.config.logging_level,
-            use_local_llm=self.config.use_local_llm,
+            use_claude=self.config.use_claude,
+            use_chatgpt=self.config.use_chatgpt,
             system_prompt=self.config.system_prompt,
         )
 
         self.show_stats = self.config.show_stats
         self._voice_session_active = False
+
+        # Enable RAG if documents are provided
+        if self.config.rag_documents:
+            self.enable_rag(documents=self.config.rag_documents)
 
         self.log.info("TalkSDK initialized with ChatSDK integration")
 
@@ -326,6 +340,57 @@ class TalkSDK:
     def get_formatted_history(self) -> list:
         """Get the conversation history in structured format."""
         return self.chat_sdk.get_formatted_history()
+
+    def enable_rag(self, documents: Optional[list] = None, **rag_kwargs) -> bool:
+        """
+        Enable RAG (Retrieval-Augmented Generation) for document-based voice/text chat.
+
+        Args:
+            documents: List of PDF file paths to index
+            **rag_kwargs: Additional RAG configuration options
+
+        Returns:
+            True if RAG was successfully enabled
+        """
+        try:
+            self.chat_sdk.enable_rag(documents=documents, **rag_kwargs)
+            self.log.info(
+                f"RAG enabled with {len(documents) if documents else 0} documents"
+            )
+            return True
+        except ImportError:
+            self.log.warning(
+                'RAG dependencies not available. Install with: uv pip install -e ".[rag]"'
+            )
+            return False
+        except Exception as e:
+            self.log.error(f"Failed to enable RAG: {e}")
+            return False
+
+    def disable_rag(self) -> None:
+        """Disable RAG functionality."""
+        self.chat_sdk.disable_rag()
+        self.log.info("RAG disabled")
+
+    def add_document(self, document_path: str) -> bool:
+        """
+        Add a document to the RAG index.
+
+        Args:
+            document_path: Path to PDF file to index
+
+        Returns:
+            True if document was successfully added
+        """
+        if not self.chat_sdk.rag_enabled:
+            self.log.warning("RAG not enabled. Call enable_rag() first.")
+            return False
+
+        try:
+            return self.chat_sdk.add_document(document_path)
+        except Exception as e:
+            self.log.error(f"Failed to add document {document_path}: {e}")
+            return False
 
     @property
     def is_voice_session_active(self) -> bool:

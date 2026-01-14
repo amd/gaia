@@ -1,3 +1,6 @@
+// Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 class EvaluationVisualizer {
     constructor() {
         console.log('EvaluationVisualizer constructor called');
@@ -9,19 +12,25 @@ class EvaluationVisualizer {
     // Helper method to identify main evaluation entries (skip individual meeting files)
     isMainEvaluationEntry(evalData) {
         const name = evalData.experiment_name || evalData.file_path || '';
-        // Skip entries that are individual meeting files
-        const meetingPatterns = [
-            'all_hands_meeting_', 'standup_meeting_', 'budget_planning_meeting_',
-            'client_call_meeting_', 'design_review_meeting_', 'performance_review_meeting_',
-            'planning_meeting_', 'product_roadmap_meeting_', 'transcript_metadata'
-        ];
         
-        // Check if file_path indicates it's in a subdirectory (meetings/ or misc/)
-        if (evalData.file_path && evalData.file_path.includes('/')) {
+        // Skip entries that are individual meeting/email files (have test data prefix)
+        // Pattern: "testdata_name.Model-Config.experiment" where testdata_name contains _meeting or _email
+        const parts = name.split('.');
+        if (parts.length > 1) {
+            const prefix = parts[0];
+            // If prefix contains meeting/email patterns, it's an individual file
+            if (prefix.includes('_meeting') || prefix.includes('_email')) {
+                return false;
+            }
+        }
+        
+        // Check if file_path indicates it's in a subdirectory (meetings/ or emails/)
+        // Handle both forward slashes (Unix) and backslashes (Windows)
+        if (evalData.file_path && (evalData.file_path.includes('/') || evalData.file_path.includes('\\'))) {
             return false; // It's an individual file in a subdirectory
         }
         
-        return !meetingPatterns.some(pattern => name.includes(pattern));
+        return true;
     }
 
     initializeEventListeners() {
@@ -83,8 +92,9 @@ class EvaluationVisualizer {
         const evaluationSelect = document.getElementById('evaluationSelect');
         const testDataSelect = document.getElementById('testDataSelect');
         const groundtruthSelect = document.getElementById('groundtruthSelect');
+        const agentOutputSelect = document.getElementById('agentOutputSelect');
 
-        if (!experimentSelect || !evaluationSelect || !testDataSelect || !groundtruthSelect) {
+        if (!experimentSelect || !evaluationSelect || !testDataSelect || !groundtruthSelect || !agentOutputSelect) {
             console.error('Select elements not found in DOM');
             return;
         }
@@ -94,6 +104,7 @@ class EvaluationVisualizer {
         evaluationSelect.innerHTML = '';
         testDataSelect.innerHTML = '';
         groundtruthSelect.innerHTML = '';
+        agentOutputSelect.innerHTML = '';
 
         // Populate experiments
         if (data.experiments.length === 0) {
@@ -123,6 +134,14 @@ class EvaluationVisualizer {
             });
         }
 
+        // Display paths
+        if (data.paths) {
+            document.getElementById('testDataPath').textContent = data.paths.testData || '';
+            document.getElementById('groundtruthPath').textContent = data.paths.groundtruth || '';
+            document.getElementById('experimentsPath').textContent = data.paths.experiments || '';
+            document.getElementById('evaluationsPath').textContent = data.paths.evaluations || '';
+        }
+
         // Populate test data
         if (!data.testData || data.testData.directories.length === 0) {
             testDataSelect.innerHTML = '<option disabled>No test data found</option>';
@@ -133,7 +152,9 @@ class EvaluationVisualizer {
                     const option = document.createElement('option');
                     const fullPath = `${dir.name}/${file}`;
                     option.value = fullPath;
-                    option.textContent = `${dir.name}/${file.replace('.txt', '')}`;
+                    // Remove 'test_data' prefix if present (when files are at root)
+                    const displayName = dir.name === 'test_data' ? file.replace('.txt', '') : `${dir.name}/${file.replace('.txt', '')}`;
+                    option.textContent = displayName;
                     option.title = fullPath; // Add tooltip showing full path
                     testDataSelect.appendChild(option);
                 });
@@ -160,6 +181,24 @@ class EvaluationVisualizer {
                 groundtruthSelect.appendChild(option);
             });
         }
+        
+        // Populate agent outputs
+        if (!data.agentOutputs || data.agentOutputs.length === 0) {
+            agentOutputSelect.innerHTML = '<option disabled>No agent outputs found</option>';
+        } else {
+            console.log(`Adding ${data.agentOutputs.length} agent output files`);
+            data.agentOutputs.forEach(file => {
+                const option = document.createElement('option');
+                option.value = file.name;
+                const displayName = file.name
+                    .replace('agent_output_', '')
+                    .replace('.json', '');
+                option.textContent = file.directory === 'single' ? `${displayName} [Single]` : displayName;
+                option.title = file.name; // Add tooltip showing full filename
+                agentOutputSelect.appendChild(option);
+            });
+        }
+        
         console.log('File selects populated successfully');
 
         // Add double-click event listeners to enable direct file loading
@@ -173,8 +212,9 @@ class EvaluationVisualizer {
         const evaluationSelect = document.getElementById('evaluationSelect');
         const testDataSelect = document.getElementById('testDataSelect');
         const groundtruthSelect = document.getElementById('groundtruthSelect');
+        const agentOutputSelect = document.getElementById('agentOutputSelect');
 
-        if (!experimentSelect || !evaluationSelect || !testDataSelect || !groundtruthSelect) {
+        if (!experimentSelect || !evaluationSelect || !testDataSelect || !groundtruthSelect || !agentOutputSelect) {
             console.error('Select elements not found');
             alert('Error: File selection elements not found');
             return;
@@ -184,14 +224,17 @@ class EvaluationVisualizer {
         const selectedEvaluations = Array.from(evaluationSelect.selectedOptions);
         const selectedTestData = Array.from(testDataSelect.selectedOptions);
         const selectedGroundtruth = Array.from(groundtruthSelect.selectedOptions);
+        const selectedAgentOutputs = Array.from(agentOutputSelect.selectedOptions);
 
         console.log('Selected experiments:', selectedExperiments.length);
         console.log('Selected evaluations:', selectedEvaluations.length);
         console.log('Selected test data:', selectedTestData.length);
         console.log('Selected groundtruth:', selectedGroundtruth.length);
+        console.log('Selected agent outputs:', selectedAgentOutputs.length);
 
         if (selectedExperiments.length === 0 && selectedEvaluations.length === 0 &&
-            selectedTestData.length === 0 && selectedGroundtruth.length === 0) {
+            selectedTestData.length === 0 && selectedGroundtruth.length === 0 && 
+            selectedAgentOutputs.length === 0) {
             alert('Please select at least one file to load');
             return;
         }
@@ -216,11 +259,17 @@ class EvaluationVisualizer {
             await this.loadGroundtruth(option.value);
         }
 
+        // Load selected agent outputs
+        for (const option of selectedAgentOutputs) {
+            await this.loadAgentOutput(option.value);
+        }
+
         // Clear selections
         experimentSelect.selectedIndex = -1;
         evaluationSelect.selectedIndex = -1;
         testDataSelect.selectedIndex = -1;
         groundtruthSelect.selectedIndex = -1;
+        agentOutputSelect.selectedIndex = -1;
 
         this.updateDisplay();
     }
@@ -230,6 +279,7 @@ class EvaluationVisualizer {
         const evaluationSelect = document.getElementById('evaluationSelect');
         const testDataSelect = document.getElementById('testDataSelect');
         const groundtruthSelect = document.getElementById('groundtruthSelect');
+        const agentOutputSelect = document.getElementById('agentOutputSelect');
 
         if (experimentSelect) {
             experimentSelect.addEventListener('dblclick', (e) => {
@@ -263,6 +313,14 @@ class EvaluationVisualizer {
             });
         }
 
+        if (agentOutputSelect) {
+            agentOutputSelect.addEventListener('dblclick', (e) => {
+                if (e.target.tagName === 'OPTION' && !e.target.disabled) {
+                    this.addSingleReport('agentOutput', e.target.value);
+                }
+            });
+        }
+
         console.log('Double-click handlers added to all select elements');
     }
 
@@ -282,6 +340,9 @@ class EvaluationVisualizer {
                     break;
                 case 'groundtruth':
                     await this.loadGroundtruth(filename);
+                    break;
+                case 'agentOutput':
+                    await this.loadAgentOutput(filename);
                     break;
                 default:
                     console.error(`Unknown report type: ${type}`);
@@ -363,10 +424,12 @@ class EvaluationVisualizer {
             const reportId = `testdata-${type}-${filename.replace('.txt', '')}`;
             this.loadedReports.set(reportId, {
                 testData: {
-                    content: contentData,
+                    content: contentData.content,  // Extract just the content string
                     metadata: metadataData,
                     type: type,
-                    filename: filename
+                    filename: filename,
+                    isPdf: contentData.isPdf,  // Pass through PDF flag
+                    message: contentData.message  // Pass through any message
                 },
                 filename: fileSpec,
                 type: 'testdata'
@@ -396,6 +459,28 @@ class EvaluationVisualizer {
         } catch (error) {
             console.error(`Failed to load groundtruth ${filename}:`, error);
             this.showError(`Failed to load groundtruth ${filename}`);
+        }
+    }
+
+    async loadAgentOutput(filename) {
+        try {
+            const response = await fetch(`/api/agent-output/${filename}`);
+
+            if (!response.ok) {
+                throw new Error(`Failed to load agent output: ${response.status}`);
+            }
+
+            const data = await response.json();
+
+            const reportId = `agent-${filename.replace('agent_output_', '').replace('.json', '')}`;
+            this.loadedReports.set(reportId, {
+                agentOutput: data,
+                filename: filename,
+                type: 'agent_output'
+            });
+        } catch (error) {
+            console.error(`Failed to load agent output ${filename}:`, error);
+            this.showError(`Failed to load agent output ${filename}`);
         }
     }
 
@@ -506,11 +591,17 @@ class EvaluationVisualizer {
         const hasEvaluation = report.evaluation !== undefined;
         const hasTestData = report.testData !== undefined;
         const hasGroundtruth = report.groundtruth !== undefined;
+        const hasAgentOutput = report.agentOutput !== undefined;
         const hasConsolidatedEvaluation = report.consolidatedEvaluation !== undefined;
 
         // Handle consolidated evaluation reports separately
         if (hasConsolidatedEvaluation) {
             return this.generateConsolidatedReportCard(reportId, report.consolidatedEvaluation, report.filename);
+        }
+
+        // Handle agent outputs separately
+        if (hasAgentOutput) {
+            return this.generateAgentOutputReportCard(reportId, report.agentOutput, report.filename);
         }
 
         let title = reportId;
@@ -567,6 +658,96 @@ class EvaluationVisualizer {
                     ${this.generateTimingSection(report)}
                     ${hasExperiment ? this.generateExperimentDetails(report.experiment) : ''}
                     ${hasExperiment ? this.generateExperimentSummaries(report.experiment) : ''}
+                </div>
+            </div>
+        `;
+    }
+
+    generateAgentOutputReportCard(reportId, agentData, filename) {
+        const metadata = agentData.metadata || {};
+        const conversation = agentData.conversation || [];
+        const systemPrompt = agentData.system_prompt || '';
+        const systemPromptTokens = agentData.system_prompt_tokens || null;
+        
+        // Extract performance metrics from conversation
+        const performanceStats = [];
+        let totalInputTokens = 0;
+        let totalOutputTokens = 0;
+        let avgTokensPerSecond = 0;
+        let avgTimeToFirstToken = 0;
+        let stepCount = 0;
+
+        conversation.forEach(msg => {
+            if (msg.role === 'system' && msg.content?.type === 'stats' && msg.content.performance_stats) {
+                const stats = msg.content.performance_stats;
+                performanceStats.push(stats);
+                totalInputTokens += stats.input_tokens || 0;
+                totalOutputTokens += stats.output_tokens || 0;
+                if (stats.tokens_per_second) avgTokensPerSecond += stats.tokens_per_second;
+                if (stats.time_to_first_token) avgTimeToFirstToken += stats.time_to_first_token;
+                stepCount++;
+            }
+        });
+
+        if (stepCount > 0) {
+            avgTokensPerSecond /= stepCount;
+            avgTimeToFirstToken /= stepCount;
+        }
+
+        // Extract tool calls
+        const toolCalls = [];
+        conversation.forEach(msg => {
+            if (msg.role === 'assistant' && msg.content?.tool) {
+                toolCalls.push({
+                    tool: msg.content.tool,
+                    args: msg.content.tool_args,
+                    thought: msg.content.thought,
+                    goal: msg.content.goal
+                });
+            }
+        });
+
+        // Generate summary
+        const summary = {
+            status: agentData.status || 'unknown',
+            result: agentData.result || 'N/A',
+            steps_taken: agentData.steps_taken || 0,
+            error_count: agentData.error_count || 0,
+            conversation_length: conversation.length,
+            tool_calls_count: toolCalls.length,
+            has_performance_stats: performanceStats.length > 0
+        };
+
+        const displayName = filename?.replace('agent_output_', '').replace('.json', '') || reportId;
+        
+        return `
+            <div class="report-card agent-output" data-report-id="${reportId}">
+                <div class="report-header">
+                    <h3 title="${filename || 'N/A'}">${displayName}</h3>
+                    <div class="meta">Agent Output Analysis</div>
+                    <div class="report-actions">
+                        <div class="export-dropdown">
+                            <button class="export-btn" title="Export report">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                    <polyline points="7 10 12 15 17 10"/>
+                                    <line x1="12" y1="15" x2="12" y2="3"/>
+                                </svg>
+                            </button>
+                            <div class="export-menu">
+                                <button class="export-option" data-format="png" data-report-id="${reportId}">📷 Export as PNG</button>
+                                <button class="export-option" data-format="pdf" data-report-id="${reportId}">📄 Export as PDF</button>
+                            </div>
+                        </div>
+                        <button class="report-close" data-report-id="${reportId}">×</button>
+                    </div>
+                </div>
+                <div class="report-content">
+                    ${this.generateAgentSummarySection(summary)}
+                    ${this.generateConversationFlowSection(conversation)}
+                    ${this.generatePerformanceMetricsSection(performanceStats, totalInputTokens, totalOutputTokens, avgTokensPerSecond, avgTimeToFirstToken)}
+                    ${this.generateToolExecutionSection(toolCalls)}
+                    ${this.generateSystemPromptSection(systemPrompt, systemPromptTokens)}
                 </div>
             </div>
         `;
@@ -1059,7 +1240,7 @@ class EvaluationVisualizer {
             <div class="experiment-details">
                 <h4>Experiment Details</h4>
                 <div class="detail-grid">
-                    <div><strong>Model:</strong> ${metadata.model || 'N/A'}</div>
+                    <div><strong>Tested Model:</strong> ${metadata.tested_model || metadata.model || 'N/A'}</div>
                     <div><strong>Inference Type:</strong> ${isLocal ?
                         '<span style="color: #28a745;">🖥️ Local (Free)</span>' :
                         '<span style="color: #007bff;">☁️ Cloud (Paid)</span>'}</div>
@@ -1321,16 +1502,16 @@ class EvaluationVisualizer {
                         <div class="metric-label">Use Case</div>
                     </div>
                     <div class="metric-card">
-                        <div class="metric-value">${metadata.usage?.total_tokens || 'N/A'}</div>
-                        <div class="metric-label">Total Tokens</div>
+                        <div class="metric-value">${metadata.inference_usage?.total_tokens || 'N/A'}</div>
+                        <div class="metric-label">Generation Tokens</div>
                     </div>
                     <div class="metric-card">
                         <div class="metric-value">$${metadata.cost?.total_cost?.toFixed(4) || 'N/A'}</div>
                         <div class="metric-label">Generation Cost</div>
                     </div>
                     <div class="metric-card">
-                        <div class="metric-value">${metadata.model || 'N/A'}</div>
-                        <div class="metric-label">Model</div>
+                        <div class="metric-value">${metadata.tested_model || metadata.model || 'N/A'}</div>
+                        <div class="metric-label">Tested Model</div>
                     </div>
                 </div>
             `;
@@ -1409,7 +1590,8 @@ class EvaluationVisualizer {
                         <div class="detail-grid">
                             <div><strong>Generated:</strong> ${metadata.timestamp}</div>
                             <div><strong>Source File:</strong> ${metadata.source_file}</div>
-                            <div><strong>Model:</strong> ${metadata.model}</div>
+                            <div><strong>Tested Model:</strong> ${metadata.tested_model || metadata.model || 'N/A'}</div>
+                            <div><strong>Evaluator:</strong> ${metadata.evaluator_model || 'N/A'}</div>
                             <div><strong>Use Case:</strong> ${metadata.use_case}</div>
                             <div><strong>Input Tokens:</strong> ${metadata.usage?.input_tokens || 'N/A'}</div>
                             <div><strong>Output Tokens:</strong> ${metadata.usage?.output_tokens || 'N/A'}</div>
@@ -1581,7 +1763,13 @@ class EvaluationVisualizer {
         const evaluations = data.evaluations || [];
         const fullPath = filename || 'consolidated_evaluations_report.json';
 
-
+        // Calculate unique models count from metadata.evaluation_files
+        // Filter out files in subdirectories (those with / or \ in path)
+        const evaluationFiles = metadata.evaluation_files || [];
+        const uniqueModelsCount = evaluationFiles.filter(file => {
+            const path = file.file_path || '';
+            return !path.includes('/') && !path.includes('\\');
+        }).length;
 
         // Group evaluations by model to combine results from different test sets
         const modelGroups = {};
@@ -1660,8 +1848,11 @@ class EvaluationVisualizer {
             }
             group.totalCost += experimentCost;
 
-            group.totalTokens += evalData.usage?.total_tokens || 0;
-            
+            // Only accumulate inference tokens (actual model usage for generation)
+            // Evaluation tokens are tracked separately and should not be mixed
+            const tokensToAccumulate = evalData.inference_usage?.total_tokens || 0;
+            group.totalTokens += tokensToAccumulate;
+
             // Accumulate inference token usage
             if (evalData.inference_usage) {
                 group.totalInferenceInputTokens += evalData.inference_usage.input_tokens || 0;
@@ -1795,7 +1986,7 @@ class EvaluationVisualizer {
                 <div class="report-header">
                     <h3 title="${fullPath}">📊 Consolidated Evaluation Report</h3>
                     <div class="meta">
-                        ${consolidatedEvaluations.length} Unique Models | ${metadata.total_evaluations} Total Evaluations |
+                        ${uniqueModelsCount} Unique Models | ${metadata.total_evaluations} Total Evaluations |
                         ${metadata.timestamp || 'N/A'}
                     </div>
                     <div class="report-actions">
@@ -1847,16 +2038,29 @@ class EvaluationVisualizer {
                 fairCount += metrics.fair_count || 0;
                 poorCount += metrics.poor_count || 0;
 
-                // Extract and count unique models
-                const expName = evalData.experiment_name;
-                let modelName = expName.replace('.experiment', '');
-                uniqueModelNames.add(modelName);
+                // Use tested_model field, but fall back to experiment_name if unknown
+                let modelName = evalData.tested_model || 'unknown';
+                if (modelName === 'unknown') {
+                    // Fall back to experiment_name and clean it up
+                    modelName = evalData.experiment_name.replace('.experiment', '');
+                }
 
-                // Count cloud vs local models (for subcaption display)
-                if (expName.includes('Claude')) {
-                    cloudCount++;
-                } else {
-                    localCount++;
+                // Only count if this is a new unique model (avoid double counting)
+                if (!uniqueModelNames.has(modelName)) {
+                    uniqueModelNames.add(modelName);
+
+                    // Count cloud vs local models
+                    // Support both new format (tested_model_inference) and old format (inference from name)
+                    const isCloud = evalData.tested_model_inference === 'cloud' ||
+                                   evalData.tested_model_type === 'anthropic' ||
+                                   modelName.toLowerCase().includes('claude') ||
+                                   modelName.toLowerCase().includes('gpt-4') ||
+                                   modelName.toLowerCase().includes('gemini');
+                    if (isCloud) {
+                        cloudCount++;
+                    } else {
+                        localCount++;
+                    }
                 }
             }
 
@@ -1865,10 +2069,12 @@ class EvaluationVisualizer {
             if (expName.includes('.')) {
                 const meetingName = expName.split('.')[0];
                 // Clean up meeting type name - only count actual meetings, not metadata
-                if (meetingName.includes('_meeting_')) {
-                    // Extract base meeting type (e.g., "all_hands_meeting")
-                    const parts = meetingName.split('_meeting_');
-                    meetingTypes.add(parts[0] + '_meeting');
+                if (meetingName.includes('_meeting')) {
+                    // Extract base meeting type (e.g., "standup_meeting" from "standup_meeting.Model")
+                    const baseType = meetingName.replace(/_\d+$/, ''); // Remove numeric suffix if present
+                    if (baseType !== 'transcript_metadata') {
+                        meetingTypes.add(baseType);
+                    }
                 }
                 // Note: transcript_metadata is excluded as it's not a meeting type
             }
@@ -1901,7 +2107,7 @@ class EvaluationVisualizer {
                     </div>
                     <div class="summary-card">
                         <div class="summary-value">${(totalTokens / 1000).toFixed(1)}K</div>
-                        <div class="summary-label" data-tooltip="Total tokens processed">Tokens Used</div>
+                        <div class="summary-label" data-tooltip="Total tokens processed (input + output). Note: Input tokens represent content sent to the model; models may apply prompt caching which reduces processing time and costs for repeated content without affecting this count.">Tokens Used</div>
                         <div class="summary-subcaption">${(inputTokens/1000).toFixed(0)}K in, ${(outputTokens/1000).toFixed(0)}K out</div>
                     </div>
                 </div>
@@ -1910,6 +2116,11 @@ class EvaluationVisualizer {
     }
 
     generateComparisonTable(evaluations) {
+        // NOTE: This generates the "Model Performance Comparison" table which shows the Score.
+        // The Score here is the same as the Score shown in the "Model Performance Summary" table.
+        // For summarization: Score = quality_score = ((E×4 + G×3 + F×2 + P×1) / Total - 1) / 3 × 100
+        // For Q&A: Score = accuracy_percentage (pass rate)
+        // The Performance column shows the rating counts (E, G, F, P) used to calculate the Score.
 
         let tableRows = '';
 
@@ -1921,12 +2132,14 @@ class EvaluationVisualizer {
 
             const rating = evalData.overall_rating || {};
             const metrics = rating.metrics || {};
-            
+
             // Check if this is Q&A (has accuracy_percentage) or summarization (has quality_score)
             const isQA = metrics.accuracy_percentage !== undefined;
             const score = isQA ? metrics.accuracy_percentage : (metrics.quality_score || 0);
-            const cost = evalData.cost?.total_cost || 0;
-            const tokens = evalData.usage?.total_tokens || 0;
+            // Only use inference cost and tokens (actual model usage for generation)
+            // Do NOT mix with evaluation/analysis metrics
+            const cost = evalData.inference_cost?.total_cost || 0;
+            const tokens = evalData.inference_usage?.total_tokens || 0;
 
             // Extract model name from experiment name
             let fullModelName = evalData.experiment_name.replace('.experiment', '');
@@ -1999,11 +2212,11 @@ class EvaluationVisualizer {
                     <table class="comparison-table">
                         <thead>
                             <tr>
-                                <th class="rank-header" data-tooltip="Model ranking based on Grade">Rank</th>
+                                <th class="rank-header" data-tooltip="Model ranking based on Score">Rank</th>
                                 <th class="model-header" data-tooltip="AI model name and type (LOCAL runs on your machine, CLOUD runs remotely)">Model</th>
-                                <th class="score-header" data-tooltip="Score: accuracy % for Q&A, quality % for summarization">Score</th>
+                                <th class="score-header" data-tooltip="Quality score (0-100%): Calculated from performance rating counts using formula ((E×4 + G×3 + F×2 + P×1) / Total - 1) / 3 × 100. For Q&A tasks, shows accuracy percentage instead. See Model Performance Summary table below for detailed breakdown.">Score</th>
                                 <th class="rating-header" data-tooltip="Overall rating (Excellent/Good/Fair/Poor)">Rating</th>
-                                <th class="distribution-header" data-tooltip="Performance breakdown across evaluations">Performance</th>
+                                <th class="distribution-header" data-tooltip="Performance breakdown: Excellent, Good, Fair, Poor counts used to calculate Score above">Performance</th>
                                 <th class="cost-header" data-tooltip="Inference cost (FREE for local models)">Cost</th>
                                 <th class="tokens-header" data-tooltip="Number of tokens processed (1K = 1,000 tokens)">Tokens</th>
                             </tr>
@@ -2082,7 +2295,9 @@ class EvaluationVisualizer {
             const score = metrics.accuracy_percentage !== undefined ? metrics.accuracy_percentage : (metrics.quality_score || 0);
             scores.push(score);
             costs.push(experimentCost);
-            tokens.push((evalData.usage?.total_tokens || 0) / 1000); // in K
+            // Only use inference tokens for the leaderboard (actual model usage for generation)
+            // Do NOT fallback to evaluation tokens as they are completely different
+            tokens.push(totalToks / 1000); // in K
             latencies.push(avgLatency);
             inputTokens.push(inputToks);
             outputTokens.push(outputToks);
@@ -2180,9 +2395,9 @@ class EvaluationVisualizer {
                     <div class="chart-bar-container">
                         <div class="stacked-bar-wrapper" style="height: ${totalHeight}%; position: relative;">
                             <span class="bar-value-top">${formatTokens(totalTokens[i])}</span>
-                            <div class="stacked-bar input-tokens" 
+                            <div class="stacked-bar input-tokens"
                                  style="height: ${(inputHeight / totalHeight) * 100}%"
-                                 data-tooltip="Input Tokens: ${formatTokens(inputTokens[i])} (${inputPercentage}% of total)">
+                                 data-tooltip="Input Tokens: ${formatTokens(inputTokens[i])} (${inputPercentage}% of total). Note: Models may use prompt caching to reduce processing time and costs for repeated content.">
                             </div>
                             <div class="stacked-bar output-tokens" 
                                  style="height: ${(outputHeight / totalHeight) * 100}%"
@@ -2212,7 +2427,7 @@ class EvaluationVisualizer {
                 <div class="chart-container-full">
                     <h5>📈 Token Usage Comparison</h5>
                     <div class="token-legend">
-                        <span class="legend-item"><span class="legend-color input-color"></span> Input Tokens</span>
+                        <span class="legend-item"><span class="legend-color input-color"></span> <span data-tooltip="Input tokens processed. Note: Actual tokens processed may differ due to prompt caching, which can significantly reduce repeated content processing time and costs.">Input Tokens ℹ️</span></span>
                         <span class="legend-item"><span class="legend-color output-color"></span> Output Tokens</span>
                     </div>
                     <div class="bar-chart token-chart">
@@ -2252,7 +2467,7 @@ class EvaluationVisualizer {
             }
 
             // For consolidated reports, the actual evaluation data might be nested
-            let modelName = evalData.experiment_name || evalData.model || 'Unknown';
+            let modelName = evalData.tested_model || evalData.experiment_name || evalData.model || 'Unknown';
             modelName = modelName.replace('.experiment', '').replace('standup_meeting.', '');
 
             // Get shortened display name
@@ -2435,12 +2650,15 @@ These models struggle with ${aspect.tooltip.toLowerCase()}` : '';
             }
         });
 
-        // Create model-aspect matrix with clean table format
+        // Create model-aspect matrix with clean table format (Model Performance Summary table)
+        // NOTE: The Score column here is calculated the same way as in the Model Performance Comparison table above.
+        // Both tables use the same formula: Score = ((E×4 + G×3 + F×2 + P×1) / Total - 1) / 3 × 100
+        // The counts E, G, F, P shown in the Performance column of the Comparison table are used here.
         let matrixHtml = '';
         if (Object.keys(modelScores).length > 0) {
-            // Create table header with Grade column
+            // Create table header with Score column
             let headerRow = '<tr><th class="model-header">Model</th>';
-            headerRow += '<th class="grade-header">Grade</th>'; // Add Grade column
+            headerRow += '<th class="grade-header" data-tooltip="Quality score: ((E×4 + G×3 + F×2 + P×1) / Total - 1) / 3 × 100. Normalizes 1-4 scale to 0-100%. Excellent=100%, Good=67%, Fair=33%, Poor=0%">Score ℹ️</th>'; // Add Score column with tooltip
             aspects.forEach(aspect => {
                 headerRow += `<th class="aspect-header" data-tooltip="${aspect.tooltip}">${aspect.label.replace(' Quality', '').replace(' Structure', '').replace(' Information', '')}</th>`;
             });
@@ -2451,12 +2669,28 @@ These models struggle with ${aspect.tooltip.toLowerCase()}` : '';
             Object.entries(modelScores).forEach(([model, scores]) => {
                 tableRows += `<tr><td class="model-name">${model}</td>`;
 
-                // Add grade cell
-                const grade = modelGrades[model] || 0;
-                const gradeClass = grade >= 85 ? 'cell-excellent' :
-                                   grade >= 70 ? 'cell-good' :
-                                   grade >= 50 ? 'cell-fair' : 'cell-poor';
-                tableRows += `<td class="${gradeClass} grade-cell" title="Grade">${Math.round(grade)}%</td>`;
+                // Add score cell with detailed calculation
+                const score = modelGrades[model] || 0;
+                const scoreClass = score >= 85 ? 'cell-excellent' :
+                                   score >= 70 ? 'cell-good' :
+                                   score >= 50 ? 'cell-fair' : 'cell-poor';
+
+                // Find the evaluation data for this model to get rating counts
+                const evalForModel = evaluations.find(e => {
+                    const expName = e.experiment_name || '';
+                    return expName.includes(model.split(' ')[0]);
+                });
+                const metrics = evalForModel?.overall_rating?.metrics || {};
+                const exc = metrics.excellent_count || 0;
+                const good = metrics.good_count || 0;
+                const fair = metrics.fair_count || 0;
+                const poor = metrics.poor_count || 0;
+                const total = exc + good + fair + poor;
+
+                // Calculate raw score and show actual formula
+                const rawScore = total > 0 ? (exc * 4 + good * 3 + fair * 2 + poor * 1) / total : 0;
+                const tooltip = `Calculation: ((E:${exc}×4 + G:${good}×3 + F:${fair}×2 + P:${poor}×1) / ${total} - 1) / 3 × 100 = ((${rawScore.toFixed(2)} - 1) / 3) × 100 = ${Math.round(score)}%`;
+                tableRows += `<td class="${scoreClass} grade-cell" title="${tooltip}">${Math.round(score)}%</td>`;
 
                 // Add aspect rating cells
                 aspects.forEach(aspect => {
@@ -2467,6 +2701,71 @@ These models struggle with ${aspect.tooltip.toLowerCase()}` : '';
                 tableRows += '</tr>';
             });
 
+            // Build score calculation details as collapsible section
+            let scoreDetails = `
+                <div class="grade-calculation-details">
+                    <div class="grade-calc-header" onclick="this.parentElement.classList.toggle('expanded')">
+                        <h6>📐 Score Calculation Formula</h6>
+                        <span class="toggle-icon">▶</span>
+                    </div>
+                    <div class="grade-calc-content">
+                        <div class="formula-explanation">
+                            <code>Score = ((E×4 + G×3 + F×2 + P×1) / Total - 1) / 3 × 100</code>
+                            <div class="formula-legend">
+                                <span><strong>E</strong> = Excellent count</span>
+                                <span><strong>G</strong> = Good count</span>
+                                <span><strong>F</strong> = Fair count</span>
+                                <span><strong>P</strong> = Poor count</span>
+                                <span><strong>Total</strong> = E + G + F + P</span>
+                            </div>
+                            <div class="formula-note">
+                                <p><strong>Why this formula?</strong> Evaluations use a 1-4 rating scale (Poor=1, Fair=2, Good=3, Excellent=4). To convert to a 0-100% score, we calculate the average rating, subtract 1 (making it 0-3), divide by 3 (normalizing to 0-1), then multiply by 100.</p>
+                                <p><strong>Result:</strong> Excellent=100%, Good=67%, Fair=33%, Poor=0%</p>
+                                <p><strong>Note:</strong> This Score is the same as the "Score" column shown in the Model Performance Comparison table above, which is computed from the same performance rating counts (Excellent, Good, Fair, Poor).</p>
+                            </div>
+                        </div>
+            `;
+            
+            // Add calculation for each model
+            Object.entries(modelScores).forEach(([model, scores]) => {
+                const evalForModel = evaluations.find(e => {
+                    const expName = e.experiment_name || '';
+                    return expName.includes(model.split(' ')[0]);
+                });
+                const metrics = evalForModel?.overall_rating?.metrics || {};
+                const exc = metrics.excellent_count || 0;
+                const good = metrics.good_count || 0;
+                const fair = metrics.fair_count || 0;
+                const poor = metrics.poor_count || 0;
+                const total = exc + good + fair + poor;
+                const score = modelGrades[model] || 0;
+
+                if (total > 0) {
+                    const rawScore = (exc * 4 + good * 3 + fair * 2 + poor * 1) / total;
+                    const normalized = (rawScore - 1) / 3 * 100;
+                    scoreDetails += `
+                        <div class="grade-calc-item">
+                            <div class="model-calc-header"><strong>${model}</strong></div>
+                            <div class="calc-step">
+                                <span class="step-label">With actual data:</span>
+                                <code>((E:${exc}×4 + G:${good}×3 + F:${fair}×2 + P:${poor}×1) / ${total} - 1) / 3 × 100</code>
+                            </div>
+                            <div class="calc-step">
+                                <span class="step-label">Simplified:</span>
+                                <code>((${rawScore.toFixed(2)} - 1) / 3) × 100</code>
+                                = <code>${normalized.toFixed(2)}%</code>
+                                ≈ <strong>${Math.round(score)}%</strong>
+                            </div>
+                        </div>
+                    `;
+                }
+            });
+
+            scoreDetails += `
+                    </div>
+                </div>
+            `;
+
             matrixHtml = `
                 <div class="clean-matrix-container">
                     <h5>🎯 Model Performance Summary</h5>
@@ -2474,6 +2773,7 @@ These models struggle with ${aspect.tooltip.toLowerCase()}` : '';
                         <thead>${headerRow}</thead>
                         <tbody>${tableRows}</tbody>
                     </table>
+                    ${scoreDetails}
                 </div>
             `;
         }
@@ -2713,6 +3013,382 @@ These models struggle with ${aspect.tooltip.toLowerCase()}` : '';
             progress.remove();
             this.showError(`Failed to export PDF: ${error.message}`);
         }
+    }
+
+    // Agent Output Helper Methods
+    generateAgentSummarySection(summary) {
+        const statusClass = summary.status === 'success' ? 'success' : 'error';
+        const statusIcon = summary.status === 'success' ? '✅' : '❌';
+        
+        return `
+            <div class="section">
+                <h4>📊 Execution Summary</h4>
+                <div class="summary-status-banner ${statusClass}">
+                    <div class="status-icon">${statusIcon}</div>
+                    <div class="status-details">
+                        <div class="status-text">${summary.status.toUpperCase()}</div>
+                        <div class="status-result">${summary.result}</div>
+                    </div>
+                </div>
+                <div class="metrics-grid">
+                    <div class="metric">
+                        <span class="metric-label">Steps Taken</span>
+                        <span class="metric-value">${summary.steps_taken}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Total Messages</span>
+                        <span class="metric-value">${summary.conversation_length}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Tool Calls</span>
+                        <span class="metric-value">${summary.tool_calls_count}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Error Count</span>
+                        <span class="metric-value ${summary.error_count > 0 ? 'error' : 'success'}">${summary.error_count}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    generateConversationFlowSection(conversation) {
+        let flowHtml = '';
+        
+        conversation.forEach((msg, index) => {
+            let messageClass = '';
+            let roleLabel = '';
+            let content = '';
+            
+            if (msg.role === 'user') {
+                messageClass = 'user-message';
+                roleLabel = 'User';
+                content = `<div class="message-text">${this.escapeHtml(msg.content)}</div>`;
+            } else if (msg.role === 'assistant') {
+                messageClass = 'assistant-message';
+                roleLabel = 'Assistant';
+                if (typeof msg.content === 'object') {
+                    if (msg.content.thought && msg.content.goal) {
+                        content = `<div class="assistant-reasoning">`;
+                        content += `<div class="reasoning-item"><span class="reasoning-label">💭 Thought:</span> ${this.escapeHtml(msg.content.thought)}</div>`;
+                        content += `<div class="reasoning-item"><span class="reasoning-label">🎯 Goal:</span> ${this.escapeHtml(msg.content.goal)}</div>`;
+                        
+                        if (msg.content.tool) {
+                            content += `<div class="tool-invocation">`;
+                            content += `<div class="tool-name-inline">🔧 ${msg.content.tool}</div>`;
+                            if (msg.content.tool_args) {
+                                content += `<pre class="tool-args-inline">${JSON.stringify(msg.content.tool_args, null, 2)}</pre>`;
+                            }
+                            content += `</div>`;
+                        }
+                        if (msg.content.plan) {
+                            content += `<details class="plan-details">`;
+                            content += `<summary>📋 Execution Plan</summary>`;
+                            content += `<pre class="plan-content">${JSON.stringify(msg.content.plan, null, 2)}</pre>`;
+                            content += `</details>`;
+                        }
+                        if (msg.content.answer) {
+                            content += `<div class="final-answer">`;
+                            content += `<span class="answer-label">✅ Final Answer:</span>`;
+                            content += `<div class="answer-text">${this.escapeHtml(msg.content.answer)}</div>`;
+                            content += `</div>`;
+                        }
+                        content += `</div>`;
+                    } else {
+                        content = `<pre class="json-content">${JSON.stringify(msg.content, null, 2)}</pre>`;
+                    }
+                } else {
+                    content = `<div class="message-text">${this.escapeHtml(msg.content)}</div>`;
+                }
+            } else if (msg.role === 'system') {
+                messageClass = 'system-message';
+                roleLabel = 'System';
+                if (msg.content?.type === 'stats') {
+                    const stats = msg.content.performance_stats;
+                    content = `
+                        <div class="stats-badge">
+                            <div class="stats-header">📊 Performance Metrics (Step ${msg.content.step})</div>
+                            <div class="stats-grid">
+                                <div class="stat-item">
+                                    <span class="stat-label">Input</span>
+                                    <span class="stat-value">${stats.input_tokens.toLocaleString()}</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Output</span>
+                                    <span class="stat-value">${stats.output_tokens.toLocaleString()}</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">TTFT</span>
+                                    <span class="stat-value">${stats.time_to_first_token.toFixed(2)}s</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Speed</span>
+                                    <span class="stat-value">${stats.tokens_per_second.toFixed(0)} t/s</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                } else if (msg.content?.issues) {
+                    const issues = msg.content.issues || [];
+                    content = `
+                        <div class="tool-result">
+                            <div class="result-header">✅ Jira Search Results (${msg.content.total} found)</div>
+                            ${issues.length > 0 ? `
+                                <div class="issues-list">
+                                    ${issues.map(issue => `
+                                        <div class="issue-item">
+                                            <span class="issue-key">${issue.key}</span>
+                                            <span class="issue-summary">${this.escapeHtml(issue.summary)}</span>
+                                            <span class="issue-status ${issue.status.toLowerCase().replace(' ', '-')}">${issue.status}</span>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            ` : '<div class="no-results">No issues found</div>'}
+                        </div>
+                    `;
+                } else if (msg.content?.status === 'success') {
+                    content = `
+                        <div class="tool-result success">
+                            <div class="result-header">✅ Tool Execution Success</div>
+                            <pre class="result-data">${JSON.stringify(msg.content, null, 2)}</pre>
+                        </div>
+                    `;
+                } else {
+                    content = `<pre class="json-content">${JSON.stringify(msg.content, null, 2)}</pre>`;
+                }
+            }
+            
+            flowHtml += `
+                <div class="conversation-message ${messageClass}" data-index="${index}">
+                    <div class="message-header">
+                        <span class="message-role">${roleLabel}</span>
+                        <span class="message-number">#${index + 1}</span>
+                    </div>
+                    <div class="message-body">
+                        ${content}
+                    </div>
+                </div>
+            `;
+        });
+        
+        return `
+            <div class="section">
+                <h4>💬 Conversation Flow</h4>
+                <div class="conversation-flow">
+                    ${flowHtml}
+                </div>
+            </div>
+        `;
+    }
+
+    escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    generatePerformanceMetricsSection(performanceStats, totalInputTokens, totalOutputTokens, avgTokensPerSecond, avgTimeToFirstToken) {
+        if (performanceStats.length === 0) {
+            return `
+                <div class="section">
+                    <h4>⚡ Performance Metrics</h4>
+                    <p style="color: #6c757d; font-style: italic;">No performance statistics available</p>
+                </div>
+            `;
+        }
+
+        // Calculate min, max, and averages
+        const inputTokensList = performanceStats.map(s => s.input_tokens);
+        const outputTokensList = performanceStats.map(s => s.output_tokens);
+        const ttftList = performanceStats.map(s => s.time_to_first_token);
+        const speedList = performanceStats.map(s => s.tokens_per_second);
+        
+        const stats = {
+            input: {
+                min: Math.min(...inputTokensList).toLocaleString(),
+                max: Math.max(...inputTokensList).toLocaleString(),
+                avg: Math.round(totalInputTokens / performanceStats.length).toLocaleString()
+            },
+            output: {
+                min: Math.min(...outputTokensList).toLocaleString(),
+                max: Math.max(...outputTokensList).toLocaleString(),
+                avg: Math.round(totalOutputTokens / performanceStats.length).toLocaleString()
+            },
+            ttft: {
+                min: Math.min(...ttftList).toFixed(3),
+                max: Math.max(...ttftList).toFixed(3),
+                avg: avgTimeToFirstToken.toFixed(3)
+            },
+            speed: {
+                min: Math.min(...speedList).toFixed(1),
+                max: Math.max(...speedList).toFixed(1),
+                avg: avgTokensPerSecond.toFixed(1)
+            }
+        };
+
+        const totalTokens = totalInputTokens + totalOutputTokens;
+        const inputPercentage = totalTokens > 0 ? (totalInputTokens / totalTokens * 100).toFixed(1) : 0;
+        const outputPercentage = totalTokens > 0 ? (totalOutputTokens / totalTokens * 100).toFixed(1) : 0;
+
+        let stepsTableHtml = '';
+        performanceStats.forEach((stats, index) => {
+            stepsTableHtml += `
+                <tr>
+                    <td class="step-number">${index + 1}</td>
+                    <td class="tokens-in">${stats.input_tokens.toLocaleString()}</td>
+                    <td class="tokens-out">${stats.output_tokens.toLocaleString()}</td>
+                    <td class="ttft">${stats.time_to_first_token.toFixed(2)}s</td>
+                    <td class="speed">${stats.tokens_per_second.toFixed(0)} t/s</td>
+                </tr>
+            `;
+        });
+
+        return `
+            <div class="section">
+                <h4>⚡ Performance Metrics</h4>
+                <div class="performance-summary">
+                    <div class="token-overview">
+                        <h5>Token Summary</h5>
+                        <div class="metrics-grid">
+                            <div class="metric">
+                                <span class="metric-label">Total Tokens</span>
+                                <span class="metric-value">${totalTokens.toLocaleString()}</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">Total Input</span>
+                                <span class="metric-value">${totalInputTokens.toLocaleString()} (${inputPercentage}%)</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">Total Output</span>
+                                <span class="metric-value">${totalOutputTokens.toLocaleString()} (${outputPercentage}%)</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="detailed-stats">
+                        <h5>Detailed Statistics (Min / Avg / Max)</h5>
+                        <table class="stats-summary-table">
+                            <thead>
+                                <tr>
+                                    <th>Metric</th>
+                                    <th>Min</th>
+                                    <th>Average</th>
+                                    <th>Max</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr class="metric-tokens">
+                                    <td><strong>Input Tokens</strong></td>
+                                    <td class="stat-min">${stats.input.min}</td>
+                                    <td class="stat-avg">${stats.input.avg}</td>
+                                    <td class="stat-max">${stats.input.max}</td>
+                                </tr>
+                                <tr class="metric-tokens">
+                                    <td><strong>Output Tokens</strong></td>
+                                    <td class="stat-min">${stats.output.min}</td>
+                                    <td class="stat-avg">${stats.output.avg}</td>
+                                    <td class="stat-max">${stats.output.max}</td>
+                                </tr>
+                                <tr class="metric-ttft">
+                                    <td><strong>Time to First Token</strong></td>
+                                    <td class="stat-min">${stats.ttft.min}s</td>
+                                    <td class="stat-avg">${stats.ttft.avg}s</td>
+                                    <td class="stat-max">${stats.ttft.max}s</td>
+                                </tr>
+                                <tr class="metric-speed">
+                                    <td><strong>Tokens/Second</strong></td>
+                                    <td class="stat-min">${stats.speed.min} t/s</td>
+                                    <td class="stat-avg">${stats.speed.avg} t/s</td>
+                                    <td class="stat-max">${stats.speed.max} t/s</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                    <div class="steps-table-container">
+                        <h5>Step-by-Step Breakdown</h5>
+                        <table class="steps-table">
+                            <thead>
+                                <tr>
+                                    <th>Step</th>
+                                    <th>Input</th>
+                                    <th>Output</th>
+                                    <th>TTFT</th>
+                                    <th>Speed</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${stepsTableHtml}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    generateToolExecutionSection(toolCalls) {
+        if (toolCalls.length === 0) {
+            return `
+                <div class="section">
+                    <h4>🔧 Tool Executions</h4>
+                    <p style="color: #6c757d; font-style: italic;">No tool calls were made during this conversation.</p>
+                </div>
+            `;
+        }
+
+        let toolsHtml = '';
+        toolCalls.forEach((toolCall, index) => {
+            toolsHtml += `
+                <div class="tool-call">
+                    <div class="tool-header">
+                        <span class="tool-name">🔧 ${toolCall.tool}</span>
+                        <span class="tool-index">#${index + 1}</span>
+                    </div>
+                    <div class="tool-details">
+                        <div class="tool-thought"><strong>Thought:</strong> ${toolCall.thought}</div>
+                        <div class="tool-goal"><strong>Goal:</strong> ${toolCall.goal}</div>
+                        <div class="tool-args"><strong>Arguments:</strong> <code>${JSON.stringify(toolCall.args, null, 2)}</code></div>
+                    </div>
+                </div>
+            `;
+        });
+
+        return `
+            <div class="section">
+                <h4>🔧 Tool Executions (${toolCalls.length})</h4>
+                <div class="tool-executions">
+                    ${toolsHtml}
+                </div>
+            </div>
+        `;
+    }
+
+    generateSystemPromptSection(systemPrompt, systemPromptTokens) {
+        if (!systemPrompt) {
+            return '';
+        }
+
+        // Estimate token count if not provided (rough approximation: ~4 chars per token)
+        const estimatedTokens = Math.round(systemPrompt.length / 4);
+        const tokenCount = systemPromptTokens || estimatedTokens;
+        
+        // Note about token counting for local models
+        const tokenNote = systemPromptTokens ? '' : 
+            '<div class="token-note">Note: System prompt tokens are included in the total input but may not be reflected in per-step metrics for local models.</div>';
+
+        return `
+            <div class="section">
+                <h4>📋 System Prompt</h4>
+                <div class="system-prompt-info">
+                    <span class="prompt-tokens">Estimated Token Count: ~${tokenCount.toLocaleString()}</span>
+                    <span class="prompt-chars">(${systemPrompt.length.toLocaleString()} characters)</span>
+                </div>
+                ${tokenNote}
+                <pre class="system-prompt">${this.escapeHtml(systemPrompt)}</pre>
+            </div>
+        `;
     }
 }
 

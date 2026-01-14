@@ -1,24 +1,206 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 import json
-import time
 import threading
-from typing import Dict, Any, List
+import time
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional
 
 # Import Rich library for pretty printing and syntax highlighting
 try:
-    from rich.console import Console
-    from rich.syntax import Syntax
-    from rich.panel import Panel
     from rich import print as rprint
+    from rich.console import Console
     from rich.live import Live
+    from rich.panel import Panel
     from rich.spinner import Spinner
+    from rich.syntax import Syntax
     from rich.table import Table
 
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
     print(
-        "Rich library not found. Install with 'pip install rich' for syntax highlighting."
+        "Rich library not found. Install with 'uv pip install rich' for syntax highlighting."
     )
+
+# Display configuration constants
+MAX_DISPLAY_LINE_LENGTH = 120
+
+
+# ANSI Color Codes for fallback when Rich is not available
+ANSI_RESET = "\033[0m"
+ANSI_BOLD = "\033[1m"
+ANSI_DIM = "\033[90m"  # Dark Gray
+ANSI_RED = "\033[91m"
+ANSI_GREEN = "\033[92m"
+ANSI_YELLOW = "\033[93m"
+ANSI_BLUE = "\033[94m"
+ANSI_MAGENTA = "\033[95m"
+ANSI_CYAN = "\033[96m"
+
+
+class OutputHandler(ABC):
+    """
+    Abstract base class for handling agent output.
+
+    Defines the minimal interface that agents use to report their progress.
+    Each implementation handles the output differently:
+    - AgentConsole: Rich console output for CLI
+    - SilentConsole: Suppressed output for testing
+    - SSEOutputHandler: Server-Sent Events for API streaming
+
+    This interface focuses on WHAT agents need to report, not HOW
+    each handler chooses to display it.
+    """
+
+    # === Core Progress/State Methods (Required) ===
+
+    @abstractmethod
+    def print_processing_start(self, query: str, max_steps: int):
+        """Print processing start message."""
+        ...
+
+    @abstractmethod
+    def print_step_header(self, step_num: int, step_limit: int):
+        """Print step header."""
+        ...
+
+    @abstractmethod
+    def print_state_info(self, state_message: str):
+        """Print current execution state."""
+        ...
+
+    @abstractmethod
+    def print_thought(self, thought: str):
+        """Print agent's reasoning/thought."""
+        ...
+
+    @abstractmethod
+    def print_goal(self, goal: str):
+        """Print agent's current goal."""
+        ...
+
+    @abstractmethod
+    def print_plan(self, plan: List[Any], current_step: int = None):
+        """Print agent's plan with optional current step highlight."""
+        ...
+
+    # === Tool Execution Methods (Required) ===
+
+    @abstractmethod
+    def print_tool_usage(self, tool_name: str):
+        """Print tool being called."""
+        ...
+
+    @abstractmethod
+    def print_tool_complete(self):
+        """Print tool completion."""
+        ...
+
+    @abstractmethod
+    def pretty_print_json(self, data: Dict[str, Any], title: str = None):
+        """Print JSON data (tool args/results)."""
+        ...
+
+    # === Status Messages (Required) ===
+
+    @abstractmethod
+    def print_error(self, error_message: str):
+        """Print error message."""
+        ...
+
+    @abstractmethod
+    def print_warning(self, warning_message: str):
+        """Print warning message."""
+        ...
+
+    @abstractmethod
+    def print_info(self, message: str):
+        """Print informational message."""
+        ...
+
+    # === Progress Indicators (Required) ===
+
+    @abstractmethod
+    def start_progress(self, message: str):
+        """Start progress indicator."""
+        ...
+
+    @abstractmethod
+    def stop_progress(self):
+        """Stop progress indicator."""
+        ...
+
+    # === Completion Methods (Required) ===
+
+    @abstractmethod
+    def print_final_answer(self, answer: str):
+        """Print final answer/result."""
+        ...
+
+    @abstractmethod
+    def print_repeated_tool_warning(self):
+        """Print warning about repeated tool calls (loop detection)."""
+        ...
+
+    @abstractmethod
+    def print_completion(self, steps_taken: int, steps_limit: int):
+        """Print completion summary."""
+        ...
+
+    @abstractmethod
+    def print_step_paused(self, description: str):
+        """Print step paused message."""
+        ...
+
+    @abstractmethod
+    def print_command_executing(self, command: str):
+        """Print command executing message."""
+        ...
+
+    @abstractmethod
+    def print_agent_selected(self, agent_name: str, language: str, project_type: str):
+        """Print agent selected message."""
+        ...
+
+    # === Optional Methods (with default no-op implementations) ===
+
+    def print_prompt(
+        self, prompt: str, title: str = "Prompt"
+    ):  # pylint: disable=unused-argument
+        """Print prompt (for debugging). Optional - default no-op."""
+        ...
+
+    def print_response(
+        self, response: str, title: str = "Response"
+    ):  # pylint: disable=unused-argument
+        """Print response (for debugging). Optional - default no-op."""
+        ...
+
+    def print_streaming_text(
+        self, text_chunk: str, end_of_stream: bool = False
+    ):  # pylint: disable=unused-argument
+        """Print streaming text. Optional - default no-op."""
+        ...
+
+    def display_stats(self, stats: Dict[str, Any]):  # pylint: disable=unused-argument
+        """Display performance statistics. Optional - default no-op."""
+        ...
+
+    def print_header(self, text: str):  # pylint: disable=unused-argument
+        """Print header. Optional - default no-op."""
+        ...
+
+    def print_separator(self, length: int = 50):  # pylint: disable=unused-argument
+        """Print separator. Optional - default no-op."""
+        ...
+
+    def print_tool_info(
+        self, name: str, params_str: str, description: str
+    ):  # pylint: disable=unused-argument
+        """Print tool info. Optional - default no-op."""
+        ...
 
 
 class ProgressIndicator:
@@ -94,7 +276,10 @@ class ProgressIndicator:
         if RICH_AVAILABLE:
             if self.rich_spinner:
                 self.rich_spinner.text = self.message
-                self.live = Live(self.rich_spinner, refresh_per_second=10)
+                # Use transient=True to auto-clear when done
+                self.live = Live(
+                    self.rich_spinner, refresh_per_second=10, transient=True
+                )
                 self.live.start()
         else:
             self.thread = threading.Thread(target=self._animate)
@@ -116,10 +301,11 @@ class ProgressIndicator:
             print("\r" + " " * (len(self.message) + 5) + "\r", end="", flush=True)
 
 
-class AgentConsole:
+class AgentConsole(OutputHandler):
     """
     A class to handle all display-related functionality for the agent.
     Provides rich text formatting and progress indicators when available.
+    Implements OutputHandler for CLI-based output.
     """
 
     def __init__(self):
@@ -130,30 +316,124 @@ class AgentConsole:
         self.rprint = rprint
         self.Panel = Panel
         self.streaming_buffer = ""  # Buffer for accumulating streaming text
+        self.file_preview_live: Optional[Live] = None
+        self.file_preview_content = ""
+        self.file_preview_filename = ""
+        self.file_preview_max_lines = 15
+        self._paused_preview = False  # Track if preview was paused for progress
+        self._last_preview_update_time = 0  # Throttle preview updates
+        self._preview_update_interval = 0.25  # Minimum seconds between updates
+
+    def print(self, *args, **kwargs):
+        """
+        Print method that delegates to Rich Console or standard print.
+
+        This allows code to call console.print() directly on AgentConsole instances.
+
+        Args:
+            *args: Arguments to print
+            **kwargs: Keyword arguments (style, etc.) for Rich Console
+        """
+        if self.rich_available and self.console:
+            self.console.print(*args, **kwargs)
+        else:
+            # Fallback to standard print
+            print(*args, **kwargs)
+
+    # Implementation of OutputHandler abstract methods
 
     def pretty_print_json(self, data: Dict[str, Any], title: str = None) -> None:
         """
         Pretty print JSON data with syntax highlighting if Rich is available.
+        If data contains a "command" field, shows it prominently.
 
         Args:
             data: Dictionary data to print
             title: Optional title for the panel
         """
+
+        def _safe_default(obj: Any) -> Any:
+            """
+            JSON serializer fallback that handles common non-serializable types like numpy scalars/arrays.
+            """
+            try:
+                import numpy as np  # Local import to avoid hard dependency at module import time
+
+                if isinstance(obj, np.generic):
+                    return obj.item()
+                if isinstance(obj, np.ndarray):
+                    return obj.tolist()
+            except Exception:
+                pass
+
+            for caster in (float, int, str):
+                try:
+                    return caster(obj)
+                except Exception:
+                    continue
+            return "<non-serializable>"
+
         if self.rich_available:
-            # Convert to formatted JSON string
-            json_str = json.dumps(data, indent=2)
-            # Create a syntax object with JSON highlighting
-            syntax = Syntax(json_str, "json", theme="monokai", line_numbers=False)
-            # Create a panel with a title if provided
-            if title:
-                self.console.print(Panel(syntax, title=title, border_style="blue"))
+            # Check if this is a command execution result
+            if "command" in data and "stdout" in data:
+                # Show command execution in a special format
+                command = data.get("command", "")
+                stdout = data.get("stdout", "")
+                stderr = data.get("stderr", "")
+                return_code = data.get("return_code", 0)
+
+                # Build preview text
+                preview = f"$ {command}\n\n"
+                if stdout:
+                    preview += stdout[:500]  # First 500 chars
+                    if len(stdout) > 500:
+                        preview += "\n... (output truncated)"
+                if stderr:
+                    preview += f"\n\nSTDERR:\n{stderr[:200]}"
+                if return_code != 0:
+                    preview += f"\n\n[Return code: {return_code}]"
+
+                self.console.print(
+                    Panel(
+                        preview,
+                        title=title or "Command Output",
+                        border_style="blue",
+                        expand=False,
+                    )
+                )
             else:
-                self.console.print(syntax)
+                # Regular JSON output
+                # Convert to formatted JSON string with safe fallback for non-serializable types (e.g., numpy.float32)
+                print(data)
+                try:
+                    json_str = json.dumps(data, indent=2)
+                except TypeError:
+                    json_str = json.dumps(data, indent=2, default=_safe_default)
+
+                # Create a syntax object with JSON highlighting
+                syntax = Syntax(json_str, "json", theme="monokai", line_numbers=False)
+                # Create a panel with a title if provided
+                if title:
+                    self.console.print(Panel(syntax, title=title, border_style="blue"))
+                else:
+                    self.console.print(syntax)
         else:
             # Fallback to standard pretty printing without highlighting
             if title:
                 print(f"\n--- {title} ---")
-            print(json.dumps(data, indent=2))
+            # Check if this is a command execution
+            if "command" in data and "stdout" in data:
+                print(f"\n$ {data.get('command', '')}")
+                stdout = data.get("stdout", "")
+                if stdout:
+                    print(stdout[:500])
+                    if len(stdout) > 500:
+                        print("... (output truncated)")
+            else:
+                try:
+                    print(json.dumps(data, indent=2))
+                except TypeError:
+                    print(json.dumps(data, indent=2, default=_safe_default))
 
     def print_header(self, text: str) -> None:
         """
@@ -166,6 +446,39 @@ class AgentConsole:
             self.console.print(f"\n[bold blue]{text}[/bold blue]")
         else:
             print(f"\n{text}")
+
+    def print_step_paused(self, description: str) -> None:
+        """
+        Print step paused message.
+
+        Args:
+            description: Description of the step being paused after
+        """
+        if self.rich_available:
+            self.console.print(
+                f"\n[bold yellow]⏸️  Paused after step:[/bold yellow] {description}"
+            )
+            self.console.print("Press Enter to continue, or 'n'/'q' to stop...")
+        else:
+            print(f"\n⏸️  Paused after step: {description}")
+            print("Press Enter to continue, or 'n'/'q' to stop...")
+
+    def print_processing_start(self, query: str, max_steps: int) -> None:
+        """
+        Print the initial processing message.
+
+        Args:
+            query: The user query being processed
+            max_steps: Maximum number of steps allowed (kept for API compatibility)
+        """
+        if self.rich_available:
+            self.console.print(f"\n[bold blue]🤖 Processing:[/bold blue] '{query}'")
+            self.console.print("=" * 50)
+            self.console.print()
+        else:
+            print(f"\n🤖 Processing: '{query}'")
+            print("=" * 50)
+            print()
 
     def print_separator(self, length: int = 50) -> None:
         """
@@ -185,15 +498,16 @@ class AgentConsole:
 
         Args:
             step_num: Current step number
-            step_limit: Maximum number of steps
+            step_limit: Maximum number of steps (unused, kept for compatibility)
         """
+        _ = step_limit  # Mark as intentionally unused
         if self.rich_available:
             self.console.print(
-                f"\n[bold cyan]📝 Step {step_num}/{step_limit}:[/bold cyan] Thinking...",
+                f"\n[bold cyan]📝 Step {step_num}:[/bold cyan] Thinking...",
                 highlight=False,
             )
         else:
-            print(f"\n📝 Step {step_num}/{step_limit}: Thinking...")
+            print(f"\n📝 Step {step_num}: Thinking...")
 
     def print_thought(self, thought: str) -> None:
         """
@@ -299,17 +613,144 @@ class AgentConsole:
         else:
             print(f"{progress_str} {progress_bar}")
 
+    def print_checklist(self, items: List[Any], current_idx: int) -> None:
+        """Print the checklist with current item highlighted.
+
+        Args:
+            items: List of checklist items (must have .description attribute)
+            current_idx: Index of the item currently being executed (0-based)
+        """
+        if self.rich_available:
+            self.console.print("\n[bold magenta]📋 EXECUTION PLAN[/bold magenta]")
+            self.console.print("=" * 60, style="dim")
+
+            for i, item in enumerate(items):
+                desc = getattr(item, "description", str(item))
+
+                if i < current_idx:
+                    # Completed
+                    self.console.print(f"  [green]✓ {desc}[/green]")
+                elif i == current_idx:
+                    # Current
+                    self.console.print(f"  [bold blue]➜ {desc}[/bold blue]")
+                else:
+                    # Pending
+                    self.console.print(f"  [dim]○ {desc}[/dim]")
+
+            self.console.print("=" * 60, style="dim")
+            self.console.print("")
+        else:
+            print("\n" + "=" * 60)
+            print(f"{ANSI_BOLD}📋 EXECUTION PLAN{ANSI_RESET}")
+            print("=" * 60)
+
+            for i, item in enumerate(items):
+                desc = getattr(item, "description", str(item))
+                if i < current_idx:
+                    print(f"  {ANSI_GREEN}✓ {desc}{ANSI_RESET}")
+                elif i == current_idx:
+                    print(f"  {ANSI_BLUE}{ANSI_BOLD}➜ {desc}{ANSI_RESET}")
+                else:
+                    print(f"  {ANSI_DIM}○ {desc}{ANSI_RESET}")
+
+            print("=" * 60 + "\n")
+
+    def print_checklist_reasoning(self, reasoning: str) -> None:
+        """
+        Print checklist reasoning.
+
+        Args:
+            reasoning: The reasoning text to display
+        """
+        if self.rich_available:
+            self.console.print("\n[bold]📝 CHECKLIST REASONING[/bold]")
+            self.console.print("=" * 60, style="dim")
+            self.console.print(f"{reasoning}")
+            self.console.print("=" * 60, style="dim")
+            self.console.print("")
+        else:
+            print("\n" + "=" * 60)
+            print(f"{ANSI_BOLD}📝 CHECKLIST REASONING{ANSI_RESET}")
+            print("=" * 60)
+            print(f"{reasoning}")
+            print("=" * 60 + "\n")
+
+    def print_command_executing(self, command: str) -> None:
+        """
+        Print command executing message.
+
+        Args:
+            command: The command being executed
+        """
+        if self.rich_available:
+            self.console.print(f"\n[bold]Executing Command:[/bold] {command}")
+        else:
+            print(f"\nExecuting Command: {command}")
+
+    def print_agent_selected(
+        self, agent_name: str, language: str, project_type: str
+    ) -> None:
+        """
+        Print agent selected message.
+
+        Args:
+            agent_name: The name of the selected agent
+            language: The detected programming language
+            project_type: The detected project type
+        """
+        if self.rich_available:
+            self.console.print(
+                f"[bold]🤖 Agent Selected:[/bold] [blue]{agent_name}[/blue] (language={language}, project_type={project_type})\n"
+            )
+        else:
+            print(
+                f"{ANSI_BOLD}🤖 Agent Selected:{ANSI_RESET} {ANSI_BLUE}{agent_name}{ANSI_RESET} (language={language}, project_type={project_type})\n"
+            )
+
     def print_tool_usage(self, tool_name: str) -> None:
         """
-        Print tool usage information.
+        Print tool usage information with user-friendly descriptions.
 
         Args:
             tool_name: Name of the tool being used
         """
+        # Map tool names to user-friendly action descriptions
+        tool_descriptions = {
+            # RAG Tools
+            "list_indexed_documents": "📚 Checking which documents are currently indexed",
+            "query_documents": "🔍 Searching through indexed documents for relevant information",
+            "query_specific_file": "📄 Searching within a specific document",
+            "search_indexed_chunks": "🔎 Performing exact text search in indexed content",
+            "index_document": "📥 Adding document to the knowledge base",
+            "index_directory": "📁 Indexing all documents in a directory",
+            "dump_document": "📝 Exporting document content for analysis",
+            "summarize_document": "📋 Creating a summary of the document",
+            "rag_status": "ℹ️ Retrieving RAG system status",
+            # File System Tools
+            "search_file": "🔍 Searching for files on your system",
+            "search_directory": "📂 Looking for directories on your system",
+            "search_file_content": "📝 Searching for content within files",
+            "read_file": "📖 Reading file contents",
+            "write_file": "✏️ Writing content to a file",
+            "add_watch_directory": "👁️ Starting to monitor a directory for changes",
+            # Shell Tools
+            "run_shell_command": "💻 Executing shell command",
+            # Default for unknown tools
+            "default": "🔧 Executing operation",
+        }
+
+        # Get the description or use the tool name if not found
+        action_desc = tool_descriptions.get(tool_name, tool_descriptions["default"])
+
         if self.rich_available:
-            self.console.print(f"\n[bold blue]🔧 Using tool:[/bold blue] {tool_name}")
+            self.console.print(f"\n[bold blue]{action_desc}[/bold blue]")
+            if action_desc == tool_descriptions["default"]:
+                # If using default, also show the tool name
+                self.console.print(f"  [dim]Tool: {tool_name}[/dim]")
         else:
-            print(f"\n🔧 Using tool: {tool_name}")
+            print(f"\n{action_desc}")
+            if action_desc == tool_descriptions["default"]:
+                print(f"  Tool: {tool_name}")
 
     def print_tool_complete(self) -> None:
         """Print that tool execution is complete."""
@@ -344,9 +785,47 @@ class AgentConsole:
             message: The information message to display
         """
         if self.rich_available:
+            self.console.print()  # Add newline before
             self.console.print(Panel(message, title="ℹ️  Info", border_style="blue"))
         else:
             print(f"\nℹ️ INFO: {message}\n")
+
+    def print_success(self, message: str) -> None:
+        """
+        Print a success message.
+
+        Args:
+            message: The success message to display
+        """
+        if self.rich_available:
+            self.console.print()  # Add newline before
+            self.console.print(Panel(message, title="✅ Success", border_style="green"))
+        else:
+            print(f"\n✅ SUCCESS: {message}\n")
+
+    def print_diff(self, diff: str, filename: str) -> None:
+        """
+        Print a code diff with syntax highlighting.
+
+        Args:
+            diff: The diff content to display
+            filename: Name of the file being changed
+        """
+        if self.rich_available:
+            from rich.syntax import Syntax
+
+            self.console.print()  # Add newline before
+            diff_panel = Panel(
+                Syntax(diff, "diff", theme="monokai", line_numbers=True),
+                title=f"🔧 Changes to {filename}",
+                border_style="yellow",
+            )
+            self.console.print(diff_panel)
+        else:
+            print(f"\n🔧 DIFF for {filename}:")
+            print("=" * 50)
+            print(diff)
+            print("=" * 50 + "\n")
 
     def print_repeated_tool_warning(self) -> None:
         """Print a warning about repeated tool calls."""
@@ -365,17 +844,23 @@ class AgentConsole:
         else:
             print(f"\n⚠️ WARNING: {message}\n")
 
-    def print_final_answer(self, answer: str) -> None:
+    def print_final_answer(
+        self, answer: str, streaming: bool = True  # pylint: disable=unused-argument
+    ) -> None:
         """
         Print the final answer with appropriate styling.
 
         Args:
             answer: The final answer to display
+            streaming: Not used (kept for compatibility)
         """
         if self.rich_available:
-            self.console.print(f"\n[bold green]✅ Final answer:[/bold green] {answer}")
+            self.console.print()  # Add newline before
+            self.console.print(
+                Panel(answer, title="✅ Final Answer", border_style="green")
+            )
         else:
-            print(f"\n✅ Final answer: {answer}")
+            print(f"\n✅ FINAL ANSWER: {answer}\n")
 
     def print_completion(self, steps_taken: int, steps_limit: int) -> None:
         """
@@ -386,12 +871,18 @@ class AgentConsole:
             steps_limit: Maximum number of steps allowed
         """
         self.print_separator()
-        if self.rich_available:
-            self.console.print(
-                f"[bold blue]✨ Processing complete![/bold blue] Steps taken: {steps_taken}/{steps_limit}"
-            )
+
+        if steps_taken < steps_limit:
+            # Completed successfully before hitting limit - clean message
+            message = "✨ Processing complete!"
         else:
-            print(f"✨ Processing complete! Steps taken: {steps_taken}/{steps_limit}")
+            # Hit the limit - show ratio to indicate incomplete
+            message = f"⚠️ Processing stopped after {steps_taken}/{steps_limit} steps"
+
+        if self.rich_available:
+            self.console.print(f"[bold blue]{message}[/bold blue]")
+        else:
+            print(message)
 
     def print_prompt(self, prompt: str, title: str = "Prompt") -> None:
         """
@@ -404,73 +895,84 @@ class AgentConsole:
         if self.rich_available:
             from rich.syntax import Syntax
 
-            syntax = Syntax(prompt, "markdown", theme="monokai", line_numbers=False)
+            # Use plain text instead of markdown to avoid any parsing issues
+            # and ensure the full content is displayed
+            syntax = Syntax(prompt, "text", theme="monokai", line_numbers=False)
+
+            # Use expand=False to prevent Rich from trying to fit to terminal width
+            # This ensures the full prompt is shown even if it's very long
             self.console.print(
-                Panel(syntax, title=f"🔍 {title}", border_style="cyan", padding=(1, 2))
+                Panel(
+                    syntax,
+                    title=f"🔍 {title}",
+                    border_style="cyan",
+                    padding=(1, 2),
+                    expand=False,
+                )
             )
         else:
             print(f"\n🔍 {title}:\n{'-' * 80}\n{prompt}\n{'-' * 80}\n")
 
     def display_stats(self, stats: Dict[str, Any]) -> None:
         """
-        Display LLM performance statistics.
+        Display LLM performance statistics or query execution stats.
 
         Args:
             stats: Dictionary containing performance statistics
+                   Can include: duration, steps_taken, total_tokens (query stats)
+                   Or: time_to_first_token, tokens_per_second, etc. (LLM stats)
         """
         if not stats:
             return
 
+        # Check if we have query-level stats or LLM-level stats
+        has_query_stats = any(
+            key in stats for key in ["duration", "steps_taken", "total_tokens"]
+        )
+        has_llm_stats = any(
+            key in stats for key in ["time_to_first_token", "tokens_per_second"]
+        )
+
         # Skip if there's no meaningful stats
-        if not stats.get("time_to_first_token") and not stats.get("tokens_per_second"):
+        if not has_query_stats and not has_llm_stats:
             return
 
-        # Create a nice display of the stats
-        if self.rich_available:
-            # Create a table for the stats
-            table = Table(
-                title="🚀 LLM Performance Stats",
-                show_header=True,
-                header_style="bold cyan",
-            )
-            table.add_column("Metric", style="dim")
-            table.add_column("Value", justify="right")
+        # Create a table for the stats
+        title = "📊 Query Stats" if has_query_stats else "🚀 LLM Performance Stats"
+        table = Table(
+            title=title,
+            show_header=True,
+            header_style="bold cyan",
+        )
+        table.add_column("Metric", style="dim")
+        table.add_column("Value", justify="right")
 
-            # Add stats to the table
-            if (
-                "time_to_first_token" in stats
-                and stats["time_to_first_token"] is not None
-            ):
-                table.add_row(
-                    "Time to First Token", f"{stats['time_to_first_token']:.2f} sec"
-                )
+        # Add query-level stats (timing and steps)
+        if "duration" in stats and stats["duration"] is not None:
+            table.add_row("Duration", f"{stats['duration']:.2f}s")
 
-            if "tokens_per_second" in stats and stats["tokens_per_second"] is not None:
-                table.add_row("Tokens per Second", f"{stats['tokens_per_second']:.2f}")
+        if "steps_taken" in stats and stats["steps_taken"] is not None:
+            table.add_row("Steps", f"{stats['steps_taken']}")
 
-            if "input_tokens" in stats and stats["input_tokens"] is not None:
-                table.add_row("Input Tokens", f"{stats['input_tokens']}")
+        # Add LLM performance stats (timing)
+        if "time_to_first_token" in stats and stats["time_to_first_token"] is not None:
+            table.add_row("Time to First Token", f"{stats['time_to_first_token']:.2f}s")
 
-            if "output_tokens" in stats and stats["output_tokens"] is not None:
-                table.add_row("Output Tokens", f"{stats['output_tokens']}")
+        if "tokens_per_second" in stats and stats["tokens_per_second"] is not None:
+            table.add_row("Tokens/Second", f"{stats['tokens_per_second']:.1f}")
 
-            # Print the table in a panel
-            self.console.print(Panel(table, border_style="blue"))
-        else:
-            # Plain text fallback
-            print("\n--- LLM Performance Stats ---")
-            if (
-                "time_to_first_token" in stats
-                and stats["time_to_first_token"] is not None
-            ):
-                print(f"Time to First Token: {stats['time_to_first_token']:.2f} sec")
-            if "tokens_per_second" in stats and stats["tokens_per_second"] is not None:
-                print(f"Tokens per Second: {stats['tokens_per_second']:.2f}")
-            if "input_tokens" in stats and stats["input_tokens"] is not None:
-                print(f"Input Tokens: {stats['input_tokens']}")
-            if "output_tokens" in stats and stats["output_tokens"] is not None:
-                print(f"Output Tokens: {stats['output_tokens']}")
-            print("-----------------------------")
+        # Add token usage stats (always show in consistent format)
+        if "input_tokens" in stats and stats["input_tokens"] is not None:
+            table.add_row("Input Tokens", f"{stats['input_tokens']:,}")
+
+        if "output_tokens" in stats and stats["output_tokens"] is not None:
+            table.add_row("Output Tokens", f"{stats['output_tokens']:,}")
+
+        if "total_tokens" in stats and stats["total_tokens"] is not None:
+            table.add_row("Total Tokens", f"{stats['total_tokens']:,}")
+
+        # Print the table in a panel
+        self.console.print(Panel(table, border_style="blue"))
 
     def start_progress(self, message: str) -> None:
         """
@@ -479,11 +981,37 @@ class AgentConsole:
         Args:
             message: Message to display with the indicator
         """
+        # If file preview is active, pause it temporarily
+        self._paused_preview = False
+        if self.file_preview_live is not None:
+            try:
+                self.file_preview_live.stop()
+                self._paused_preview = True
+                self.file_preview_live = None
+                # Small delay to ensure clean transition
+                time.sleep(0.05)
+            except Exception:
+                pass
+
         self.progress.start(message)
 
     def stop_progress(self) -> None:
         """Stop the progress indicator."""
         self.progress.stop()
+
+        # Ensure clean line separation after progress stops
+        if self.rich_available:
+            # Longer delay to ensure the transient display is FULLY cleared
+            time.sleep(0.15)
+            # Explicitly move to a new line
+            print()  # Use print() instead of console.print() to avoid Live display conflicts
+
+        # NOTE: Do NOT create Live display here - let update_file_preview() handle it
+        # This prevents double panels from appearing when both stop_progress and update_file_preview execute
+
+        # Reset the paused flag
+        if hasattr(self, "_paused_preview"):
+            self._paused_preview = False
 
     def print_state_info(self, state_message: str):
         """
@@ -511,6 +1039,7 @@ class AgentConsole:
             warning_message: Warning message to display
         """
         if self.rich_available:
+            self.console.print()  # Add newline before
             self.console.print(
                 self.Panel(
                     f"⚠️ [bold yellow] {warning_message} [/bold yellow]",
@@ -591,3 +1120,722 @@ class AgentConsole:
         else:
             print(f"\n📌 {name}({params_str})")
             print(f"   {description}")
+
+    # === File Watcher Output Methods ===
+
+    def print_file_created(
+        self, filename: str, size: int = 0, extension: str = ""
+    ) -> None:
+        """
+        Print file created notification with styling.
+
+        Args:
+            filename: Name of the file
+            size: Size in bytes
+            extension: File extension
+        """
+        if self.rich_available:
+            self.console.print(
+                f"\n[bold green]📄 New file detected:[/bold green] [cyan]{filename}[/cyan]"
+            )
+            size_str = self._format_file_size(size)
+            self.console.print(f"   [dim]Size:[/dim] {size_str}")
+            self.console.print(f"   [dim]Type:[/dim] {extension or 'unknown'}")
+        else:
+            print(f"\n📄 New file detected: {filename}")
+            print(f"   Size: {size} bytes")
+            print(f"   Type: {extension or 'unknown'}")
+
+    def print_file_modified(self, filename: str) -> None:
+        """
+        Print file modified notification.
+
+        Args:
+            filename: Name of the file
+        """
+        if self.rich_available:
+            self.console.print(
+                f"\n[bold yellow]✏️  File modified:[/bold yellow] [cyan]{filename}[/cyan]"
+            )
+        else:
+            print(f"\n✏️  File modified: {filename}")
+
+    def print_file_deleted(self, filename: str) -> None:
+        """
+        Print file deleted notification.
+
+        Args:
+            filename: Name of the file
+        """
+        if self.rich_available:
+            self.console.print(
+                f"\n[bold red]🗑️  File deleted:[/bold red] [cyan]{filename}[/cyan]"
+            )
+        else:
+            print(f"\n🗑️  File deleted: {filename}")
+
+    def print_file_moved(self, src_filename: str, dest_filename: str) -> None:
+        """
+        Print file moved notification.
+
+        Args:
+            src_filename: Original filename
+            dest_filename: New filename
+        """
+        if self.rich_available:
+            self.console.print(
+                f"\n[bold magenta]📦 File moved:[/bold magenta] "
+                f"[cyan]{src_filename}[/cyan] → [cyan]{dest_filename}[/cyan]"
+            )
+        else:
+            print(f"\n📦 File moved: {src_filename} → {dest_filename}")
+
+    def _format_file_size(self, size_bytes: int) -> str:
+        """Format file size in human-readable format."""
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        elif size_bytes < 1024 * 1024 * 1024:
+            return f"{size_bytes / (1024 * 1024):.1f} MB"
+        else:
+            return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+
+    # === VLM/Model Progress Output Methods ===
+
+    def print_model_loading(self, model_name: str) -> None:
+        """
+        Print model loading progress.
+
+        Args:
+            model_name: Name of the model being loaded
+        """
+        if self.rich_available:
+            self.console.print(
+                f"[bold blue]🔄 Loading model:[/bold blue] [cyan]{model_name}[/cyan]..."
+            )
+        else:
+            print(f"🔄 Loading model: {model_name}...")
+
+    def print_model_ready(self, model_name: str, already_loaded: bool = False) -> None:
+        """
+        Print model ready notification.
+
+        Args:
+            model_name: Name of the model
+            already_loaded: If True, model was already loaded
+        """
+        status = "ready" if already_loaded else "loaded"
+        if self.rich_available:
+            self.console.print(
+                f"[bold green]✅ Model {status}:[/bold green] [cyan]{model_name}[/cyan]"
+            )
+        else:
+            print(f"✅ Model {status}: {model_name}")
+
+    def print_extraction_start(
+        self, image_num: int, page_num: int, mime_type: str
+    ) -> None:
+        """
+        Print VLM extraction starting notification.
+
+        Args:
+            image_num: Image number being processed
+            page_num: Page number (for PDFs)
+            mime_type: MIME type of the image
+        """
+        if self.rich_available:
+            self.console.print(
+                f"   [dim]🔍 VLM extracting from image {image_num} "
+                f"on page {page_num} ({mime_type})...[/dim]"
+            )
+        else:
+            print(
+                f"   🔍 VLM extracting from image {image_num} "
+                f"on page {page_num} ({mime_type})..."
+            )
+
+    def print_extraction_complete(
+        self, chars: int, image_num: int, elapsed_seconds: float, size_kb: float
+    ) -> None:
+        """
+        Print VLM extraction complete notification.
+
+        Args:
+            chars: Number of characters extracted
+            image_num: Image number processed
+            elapsed_seconds: Time taken for extraction
+            size_kb: Image size in KB
+        """
+        if self.rich_available:
+            self.console.print(
+                f"   [green]✅ Extracted {chars} chars from image {image_num} "
+                f"in {elapsed_seconds:.2f}s ({size_kb:.0f}KB image)[/green]"
+            )
+        else:
+            print(
+                f"   ✅ Extracted {chars} chars from image {image_num} "
+                f"in {elapsed_seconds:.2f}s ({size_kb:.0f}KB image)"
+            )
+
+    def print_ready_for_input(self) -> None:
+        """
+        Print a visual separator indicating ready for user input.
+
+        Used after file processing completes to show the user
+        that the system is ready for commands.
+        """
+        if self.rich_available:
+            self.console.print()
+            self.console.print("─" * 80, style="dim")
+            self.console.print("> ", end="", style="bold green")
+        else:
+            print()
+            print("─" * 80)
+            print("> ", end="")
+
+    # === Processing Pipeline Progress Methods ===
+
+    def print_processing_step(
+        self,
+        step_num: int,
+        total_steps: int,
+        step_name: str,
+        status: str = "running",
+    ) -> None:
+        """
+        Print a processing step indicator with progress bar.
+
+        Args:
+            step_num: Current step number (1-based)
+            total_steps: Total number of steps
+            step_name: Human-readable name of the current step
+            status: Step status - 'running', 'complete', 'error'
+        """
+        # Create a simple progress bar
+        progress_width = 20
+        completed = int((step_num - 1) / total_steps * progress_width)
+        current = 1 if step_num <= total_steps else 0
+        remaining = progress_width - completed - current
+
+        if status == "complete":
+            bar = "█" * progress_width
+        elif status == "error":
+            bar = "█" * completed + "✗" + "░" * remaining
+        else:
+            bar = "█" * completed + "▶" * current + "░" * remaining
+
+        # Status icon
+        icons = {
+            "running": "⏳",
+            "complete": "✅",
+            "error": "❌",
+        }
+        icon = icons.get(status, "⏳")
+
+        if self.rich_available:
+            # Style based on status
+            if status == "complete":
+                style = "green"
+            elif status == "error":
+                style = "red"
+            else:
+                style = "cyan"
+
+            self.console.print(
+                f"   [{style}]{icon} [{step_num}/{total_steps}][/{style}] "
+                f"[dim]{bar}[/dim] [bold]{step_name}[/bold]"
+            )
+        else:
+            print(f"   {icon} [{step_num}/{total_steps}] {bar} {step_name}")
+
+    def print_processing_pipeline_start(self, filename: str, total_steps: int) -> None:
+        """
+        Print the start of a processing pipeline.
+
+        Args:
+            filename: Name of the file being processed
+            total_steps: Total number of processing steps
+        """
+        if self.rich_available:
+            self.console.print()
+            self.console.print(
+                f"[bold cyan]⚙️  Processing Pipeline[/bold cyan] "
+                f"[dim]({total_steps} steps)[/dim]"
+            )
+            self.console.print(f"   [dim]File:[/dim] [cyan]{filename}[/cyan]")
+        else:
+            print(f"\n⚙️  Processing Pipeline ({total_steps} steps)")
+            print(f"   File: {filename}")
+
+    def print_processing_pipeline_complete(
+        self,
+        filename: str,  # pylint: disable=unused-argument
+        success: bool,
+        elapsed_seconds: float,
+        patient_name: str = None,
+        is_duplicate: bool = False,
+    ) -> None:
+        """
+        Print the completion of a processing pipeline.
+
+        Args:
+            filename: Name of the file processed (kept for API consistency)
+            success: Whether processing was successful
+            elapsed_seconds: Total processing time
+            patient_name: Optional patient name for success message
+            is_duplicate: Whether this was a duplicate file (skipped)
+        """
+        if self.rich_available:
+            if is_duplicate:
+                msg = f"[bold yellow]⚡ Duplicate skipped[/bold yellow] in {elapsed_seconds:.1f}s"
+                if patient_name:
+                    msg += f" → [cyan]{patient_name}[/cyan] (already processed)"
+                self.console.print(msg)
+            elif success:
+                msg = f"[bold green]✅ Pipeline complete[/bold green] in {elapsed_seconds:.1f}s"
+                if patient_name:
+                    msg += f" → [cyan]{patient_name}[/cyan]"
+                self.console.print(msg)
+            else:
+                self.console.print(
+                    f"[bold red]❌ Pipeline failed[/bold red] after {elapsed_seconds:.1f}s"
+                )
+        else:
+            if is_duplicate:
+                msg = f"⚡ Duplicate skipped in {elapsed_seconds:.1f}s"
+                if patient_name:
+                    msg += f" → {patient_name} (already processed)"
+                print(msg)
+            elif success:
+                msg = f"✅ Pipeline complete in {elapsed_seconds:.1f}s"
+                if patient_name:
+                    msg += f" → {patient_name}"
+                print(msg)
+            else:
+                print(f"❌ Pipeline failed after {elapsed_seconds:.1f}s")
+
+    # === File Preview Methods ===
+
+    def start_file_preview(
+        self, filename: str, max_lines: int = 15, title_prefix: str = "📄"
+    ) -> None:
+        """
+        Start a live streaming file preview window.
+
+        Args:
+            filename: Name of the file being generated
+            max_lines: Maximum number of lines to show (default: 15)
+            title_prefix: Emoji/prefix for the title (default: 📄)
+        """
+        # CRITICAL: Stop progress indicator if running to prevent overlapping Live displays
+        if self.progress.is_running:
+            self.stop_progress()
+
+        # Stop any existing preview first to prevent stacking
+        if self.file_preview_live is not None:
+            try:
+                self.file_preview_live.stop()
+            except Exception:
+                pass  # Ignore errors if already stopped
+            finally:
+                self.file_preview_live = None
+                # Small delay to ensure display cleanup
+                time.sleep(0.1)
+                # Ensure we're on a new line after stopping the previous preview
+                if self.rich_available:
+                    self.console.print()
+
+        # Reset state for new file
+        self.file_preview_filename = filename
+        self.file_preview_content = ""
+        self.file_preview_max_lines = max_lines
+
+        if self.rich_available:
+            # DON'T start the live preview here - wait for first content
+            pass
+        else:
+            # For non-rich mode, just print a header
+            print(f"\n{title_prefix} Generating {filename}...")
+            print("=" * 80)
+
+    def update_file_preview(self, content_chunk: str) -> None:
+        """
+        Update the live file preview with new content.
+
+        Args:
+            content_chunk: New content to append to the preview
+        """
+        self.file_preview_content += content_chunk
+
+        if self.rich_available:
+            # Only process if we have a filename set (preview has been started)
+            if not self.file_preview_filename:
+                return
+
+            # Check if enough time has passed for throttling
+            current_time = time.time()
+            time_since_last_update = current_time - self._last_preview_update_time
+
+            # Start the live preview on first content if not already started
+            if self.file_preview_live is None and self.file_preview_content:
+                preview = self._generate_file_preview_panel("📄")
+                self.file_preview_live = Live(
+                    preview,
+                    console=self.console,
+                    refresh_per_second=4,
+                    transient=False,  # Keep False to prevent double rendering
+                )
+                self.file_preview_live.start()
+                self._last_preview_update_time = current_time
+            elif (
+                self.file_preview_live
+                and time_since_last_update >= self._preview_update_interval
+            ):
+                try:
+                    # Update existing live display with new content
+                    preview = self._generate_file_preview_panel("📄")
+                    # Just update, don't force refresh
+                    self.file_preview_live.update(preview)
+                    self._last_preview_update_time = current_time
+                except Exception:
+                    # If update fails, continue accumulating content
+                    # (silently ignore preview update failures)
+                    pass
+        else:
+            # For non-rich mode, print new content directly
+            print(content_chunk, end="", flush=True)
+
+    def stop_file_preview(self) -> None:
+        """Stop the live file preview and show final summary."""
+        if self.rich_available:
+            # Only stop if it was started
+            if self.file_preview_live:
+                try:
+                    self.file_preview_live.stop()
+                except Exception:
+                    pass
+                finally:
+                    self.file_preview_live = None
+
+            # Show completion message only if we generated content
+            if self.file_preview_content:
+                total_lines = len(self.file_preview_content.splitlines())
+                self.console.print(
+                    f"[green]✅ Generated {self.file_preview_filename} ({total_lines} lines)[/green]\n"
+                )
+        else:
+            print("\n" + "=" * 80)
+            total_lines = len(self.file_preview_content.splitlines())
+            print(f"✅ Generated {self.file_preview_filename} ({total_lines} lines)\n")
+
+        # Reset state - IMPORTANT: Clear filename first to prevent updates
+        self.file_preview_filename = ""
+        self.file_preview_content = ""
+
+    def _generate_file_preview_panel(self, title_prefix: str) -> Panel:
+        """
+        Generate a Rich Panel with the current file preview content.
+
+        Args:
+            title_prefix: Emoji/prefix for the title
+
+        Returns:
+            Rich Panel with syntax-highlighted content
+        """
+        lines = self.file_preview_content.splitlines()
+        total_lines = len(lines)
+
+        # Truncate extremely long lines to prevent display issues
+        truncated_lines = []
+        for line in lines:
+            if len(line) > MAX_DISPLAY_LINE_LENGTH:
+                truncated_lines.append(line[:MAX_DISPLAY_LINE_LENGTH] + "...")
+            else:
+                truncated_lines.append(line)
+
+        # Show last N lines
+        if total_lines <= self.file_preview_max_lines:
+            preview_lines = truncated_lines
+            line_info = f"All {total_lines} lines"
+        else:
+            preview_lines = truncated_lines[-self.file_preview_max_lines :]
+            line_info = f"Last {self.file_preview_max_lines} of {total_lines} lines"
+
+        # Determine syntax highlighting
+        ext = (
+            self.file_preview_filename.split(".")[-1]
+            if "." in self.file_preview_filename
+            else "txt"
+        )
+        syntax_map = {
+            "py": "python",
+            "js": "javascript",
+            "ts": "typescript",
+            "jsx": "jsx",
+            "tsx": "tsx",
+            "json": "json",
+            "md": "markdown",
+            "yml": "yaml",
+            "yaml": "yaml",
+            "toml": "toml",
+            "ini": "ini",
+            "sh": "bash",
+            "bash": "bash",
+            "ps1": "powershell",
+            "sql": "sql",
+            "html": "html",
+            "css": "css",
+            "xml": "xml",
+            "c": "c",
+            "cpp": "cpp",
+            "java": "java",
+            "go": "go",
+            "rs": "rust",
+        }
+        syntax_lang = syntax_map.get(ext.lower(), "text")
+
+        # Create syntax-highlighted preview
+        preview_content = (
+            "\n".join(preview_lines) if preview_lines else "[dim]Generating...[/dim]"
+        )
+
+        if preview_lines:
+            # Calculate starting line number for the preview
+            if total_lines <= self.file_preview_max_lines:
+                start_line = 1
+            else:
+                start_line = total_lines - self.file_preview_max_lines + 1
+
+            syntax = Syntax(
+                preview_content,
+                syntax_lang,
+                theme="monokai",
+                line_numbers=True,
+                start_line=start_line,
+                word_wrap=False,  # Prevent line wrapping that causes display issues
+            )
+        else:
+            syntax = preview_content
+
+        return Panel(
+            syntax,
+            title=f"{title_prefix} {self.file_preview_filename} ({line_info})",
+            border_style="cyan",
+            padding=(1, 2),
+        )
+
+
+class SilentConsole(OutputHandler):
+    """
+    A silent console that suppresses all output for JSON-only mode.
+    Provides the same interface as AgentConsole but with no-op methods.
+    Implements OutputHandler for silent/suppressed output.
+    """
+
+    def __init__(self, silence_final_answer: bool = False):
+        """Initialize the silent console.
+
+        Args:
+            silence_final_answer: If True, suppress even the final answer (for JSON-only mode)
+        """
+        self.streaming_buffer = ""  # Maintain compatibility
+        self.silence_final_answer = silence_final_answer
+
+    # Implementation of OutputHandler abstract methods - all no-ops
+    def print_final_answer(
+        self, answer: str, streaming: bool = True  # pylint: disable=unused-argument
+    ) -> None:
+        """
+        Print the final answer.
+        Only suppressed if silence_final_answer is True.
+
+        Args:
+            answer: The final answer to display
+            streaming: Not used (kept for compatibility)
+        """
+        if self.silence_final_answer:
+            return  # Completely silent
+
+        # Print the final answer directly
+        print(f"\n🧠 gaia: {answer}")
+
+    def display_stats(self, stats: Dict[str, Any]) -> None:
+        """
+        Display stats even in silent mode (since explicitly requested).
+        Uses the same Rich table format as AgentConsole.
+
+        Args:
+            stats: Dictionary containing performance statistics
+        """
+        if not stats:
+            return
+
+        # Check if we have query-level stats or LLM-level stats
+        has_query_stats = any(
+            key in stats for key in ["duration", "steps_taken", "total_tokens"]
+        )
+        has_llm_stats = any(
+            key in stats for key in ["time_to_first_token", "tokens_per_second"]
+        )
+
+        # Skip if there's no meaningful stats
+        if not has_query_stats and not has_llm_stats:
+            return
+
+        # Use Rich table format (same as AgentConsole)
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+
+        console = Console()
+
+        title = "📊 Query Stats" if has_query_stats else "🚀 LLM Performance Stats"
+        table = Table(
+            title=title,
+            show_header=True,
+            header_style="bold cyan",
+        )
+        table.add_column("Metric", style="dim")
+        table.add_column("Value", justify="right")
+
+        # Add query-level stats (timing and steps)
+        if "duration" in stats and stats["duration"] is not None:
+            table.add_row("Duration", f"{stats['duration']:.2f}s")
+
+        if "steps_taken" in stats and stats["steps_taken"] is not None:
+            table.add_row("Steps", f"{stats['steps_taken']}")
+
+        # Add LLM performance stats (timing)
+        if "time_to_first_token" in stats and stats["time_to_first_token"] is not None:
+            table.add_row("Time to First Token", f"{stats['time_to_first_token']:.2f}s")
+
+        if "tokens_per_second" in stats and stats["tokens_per_second"] is not None:
+            table.add_row("Tokens/Second", f"{stats['tokens_per_second']:.1f}")
+
+        # Add token usage stats (always show in consistent format)
+        if "input_tokens" in stats and stats["input_tokens"] is not None:
+            table.add_row("Input Tokens", f"{stats['input_tokens']:,}")
+
+        if "output_tokens" in stats and stats["output_tokens"] is not None:
+            table.add_row("Output Tokens", f"{stats['output_tokens']:,}")
+
+        if "total_tokens" in stats and stats["total_tokens"] is not None:
+            table.add_row("Total Tokens", f"{stats['total_tokens']:,}")
+
+        # Print the table in a panel
+        console.print(Panel(table, border_style="blue"))
+
+    # All other abstract methods as no-ops
+    def print_processing_start(self, query: str, max_steps: int):
+        """No-op implementation."""
+
+    def print_step_header(self, step_num: int, step_limit: int):
+        """No-op implementation."""
+
+    def print_state_info(self, state_message: str):
+        """No-op implementation."""
+
+    def print_thought(self, thought: str):
+        """No-op implementation."""
+
+    def print_goal(self, goal: str):
+        """No-op implementation."""
+
+    def print_plan(self, plan: List[Any], current_step: int = None):
+        """No-op implementation."""
+
+    def print_step_paused(self, description: str):
+        """No-op implementation."""
+
+    def print_checklist(self, items: List[Any], current_idx: int):
+        """No-op implementation."""
+
+    def print_checklist_reasoning(self, reasoning: str):
+        """No-op implementation."""
+
+    def print_command_executing(self, command: str):
+        """No-op implementation."""
+
+    def print_agent_selected(self, agent_name: str, language: str, project_type: str):
+        """No-op implementation."""
+
+    def print_tool_usage(self, tool_name: str):
+        """No-op implementation."""
+
+    def print_tool_complete(self):
+        """No-op implementation."""
+
+    def pretty_print_json(self, data: Dict[str, Any], title: str = None):
+        """No-op implementation."""
+
+    def print_error(self, error_message: str):
+        """No-op implementation."""
+
+    def print_warning(self, warning_message: str):
+        """No-op implementation."""
+
+    def print_info(self, message: str):
+        """No-op implementation."""
+
+    def start_progress(self, message: str):
+        """No-op implementation."""
+
+    def stop_progress(self):
+        """No-op implementation."""
+
+    def print_repeated_tool_warning(self):
+        """No-op implementation."""
+
+    def print_completion(self, steps_taken: int, steps_limit: int):
+        """No-op implementation."""
+
+    def print_success(self, message: str):
+        """No-op implementation."""
+
+    def print_file_created(self, filename: str, size: int = 0, extension: str = ""):
+        """No-op implementation."""
+
+    def print_file_modified(self, filename: str, size: int = 0):
+        """No-op implementation."""
+
+    def print_file_deleted(self, filename: str):
+        """No-op implementation."""
+
+    def print_file_moved(self, src_filename: str, dest_filename: str):
+        """No-op implementation."""
+
+    def print_model_loading(self, model_name: str):
+        """No-op implementation."""
+
+    def print_model_ready(self, model_name: str, already_loaded: bool = False):
+        """No-op implementation."""
+
+    def print_extraction_start(self, image_num: int, page_num: int, mime_type: str):
+        """No-op implementation."""
+
+    def print_extraction_complete(
+        self, chars: int, image_num: int, elapsed_seconds: float, size_kb: float
+    ):
+        """No-op implementation."""
+
+    def print_ready_for_input(self):
+        """No-op implementation."""
+
+    def print_processing_step(
+        self, step_num: int, total_steps: int, step_name: str, status: str = "running"
+    ):
+        """No-op implementation."""
+
+    def print_processing_pipeline_start(self, filename: str, total_steps: int):
+        """No-op implementation."""
+
+    def print_processing_pipeline_complete(
+        self,
+        filename: str,
+        success: bool,
+        elapsed_seconds: float,
+        patient_name: str = None,
+        is_duplicate: bool = False,
+    ):
+        """No-op implementation."""

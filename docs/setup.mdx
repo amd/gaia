@@ -1,0 +1,105 @@
+---
+title: "Setup"
+description: "Install prerequisites for GAIA"
+---
+
+## System Requirements
+
+| Requirement | Supported |
+|-------------|-----------|
+| **NPU** | AMD Ryzen AI 300-series |
+| **GPU** | AMD Radeon RX 7000/9000-series, Radeon PRO W-series |
+| **CPU** | Any x86_64 processor (slower, but works without dedicated AI hardware) |
+| **OS** | Windows 11, Ubuntu 24.04+ |
+| **RAM** | 16GB minimum, 64GB recommended |
+| **Python** | 3.10 - 3.12 (uv installs automatically) |
+
+<Tip>
+  **Recommended Configuration:** The SDK has been primarily tested on a GMKtec NucBox EVO-X2 with AMD Ryzen AI MAX+ 395 w/ Radeon 8060S (or comparable) with 128GB RAM, using the Qwen3-Coder-30B-A3B-Instruct-GGUF LLM running on the iGPU.
+</Tip>
+
+<Note>
+  For detailed hardware specs, see the [Lemonade supported configurations](https://github.com/lemonade-sdk/lemonade?tab=readme-ov-file#supported-configurations).
+</Note>
+
+---
+
+## Install Prerequisites
+
+Follow the steps below to install Lemonade Server and uv, the two prerequisites for running GAIA.
+
+<Tabs>
+  <Tab title="Windows">
+    ### Step 1: Install Lemonade Server
+
+    Download and install from [lemonade-server.ai](https://lemonade-server.ai). GAIA starts it automatically when needed.
+
+    ### Step 2: Install uv
+
+    [uv](https://docs.astral.sh/uv/) is a fast Python package manager (10-100x faster than pip).
+
+    Open **PowerShell** and run:
+    ```powershell
+    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+    ```
+
+    <Tip>
+      If `uv` is not recognized after install, restart PowerShell or run:
+      ```powershell
+      $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
+      ```
+    </Tip>
+
+    Verify uv is installed:
+    ```powershell
+    uv --version
+    ```
+
+    <Success>
+      You're ready to install GAIA! Continue to the [Quickstart](/quickstart).
+    </Success>
+
+    <Tip>
+      **Having issues?** Check the [Troubleshooting](/reference/troubleshooting) guide, [create an issue](https://github.com/amd/gaia/issues) on GitHub, or contact us at gaia@amd.com.
+    </Tip>
+  </Tab>
+
+  <Tab title="Linux">
+    ### Step 1: Install Lemonade Server
+
+    Download and install from [lemonade-server.ai](https://lemonade-server.ai). GAIA starts it automatically when needed.
+
+    ### Step 2: Install uv
+
+    [uv](https://docs.astral.sh/uv/) is a fast Python package manager (10-100x faster than pip).
+
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+
+    Verify uv is installed (restart terminal if needed):
+    ```bash
+    uv --version
+    ```
+
+    <Success>
+      You're ready to install GAIA! Continue to the [Quickstart](/quickstart).
+    </Success>
+
+    <Tip>
+      **Having issues?** Check the [Troubleshooting](/reference/troubleshooting) guide, [create an issue](https://github.com/amd/gaia/issues) on GitHub, or contact us at gaia@amd.com.
+    </Tip>
+  </Tab>
+</Tabs>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

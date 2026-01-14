@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Q&A Status</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 800px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        .status-card {
+            background: #f7f7f7;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+
+        .status-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
+
+        .status-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.healthy {
+            background: #10b981;
+        }
+
+        .status-dot.error {
+            background: #ef4444;
+            animation: none;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .status-details {
+            background: white;
+            border-radius: 5px;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 14px;
+        }
+
+        .chat-section {
+            background: #f7f7f7;
+            border-radius: 10px;
+            padding: 20px;
+        }
+
+        .question-form {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .question-input {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #e5e5e5;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        .question-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .response-box {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            min-height: 100px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .loading {
+            color: #999;
+            font-style: italic;
+        }
+
+        .error {
+            color: #ef4444;
+            font-weight: 500;
+        }
+
+        .refresh-btn {
+            padding: 8px 16px;
+            background: white;
+            color: #667eea;
+            border: 2px solid #667eea;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .refresh-btn:hover {
+            background: #667eea;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 MCP Q&A Status</h1>
+
+        <div class="status-card">
+            <div class="status-header">
+                <div class="status-indicator">
+                    <span class="status-dot" id="statusDot"></span>
+                    <strong>MCP Server Status:</strong>
+                    <span id="statusText">Checking...</span>
+                </div>
+                <button class="refresh-btn" onclick="checkStatus()">↻ Refresh</button>
+            </div>
+            <div class="status-details" id="statusDetails">
+                Connecting to MCP server...
+            </div>
+        </div>
+
+        <div class="chat-section">
+            <h2 style="margin-bottom: 20px;">💬 Ask a Question</h2>
+            <form class="question-form" onsubmit="askQuestion(event)">
+                <input
+                    type="text"
+                    id="questionInput"
+                    class="question-input"
+                    placeholder="Type your question here..."
+                    required
+                >
+                <button type="submit" class="btn" id="askBtn">Ask</button>
+            </form>
+            <div class="response-box" id="responseBox">
+                Ask me anything! I'm ready to help.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Get MCP URL from environment or use default
+        const getMcpUrl = () => {
+            const url = window.ENV?.GAIA_MCP_URL || 'http://localhost:8765';
+            console.log('MCP URL:', url);
+            return url;
+        };
+
+        // Check MCP server status
+        async function checkStatus() {
+            const statusDot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
+            const statusDetails = document.getElementById('statusDetails');
+
+            statusDot.className = 'status-dot';
+            statusText.textContent = 'Checking...';
+            statusDetails.textContent = 'Connecting to MCP server...';
+
+            try {
+                const response = await fetch(`${getMcpUrl()}/health`);
+                const data = await response.json();
+
+                if (data.status === 'healthy') {
+                    statusDot.className = 'status-dot healthy';
+                    statusText.textContent = 'Connected';
+                    statusDetails.innerHTML = `
+                        <strong>✅ Server is healthy</strong><br>
+                        Agents: ${data.agents || 'N/A'}<br>
+                        Tools: ${data.tools || 'N/A'}
+                    `;
+                } else {
+                    statusDot.className = 'status-dot error';
+                    statusText.textContent = 'Unhealthy';
+                    statusDetails.innerHTML = '<span class="error">Server is not healthy</span>';
+                }
+            } catch (error) {
+                console.error('Status check failed:', error);
+                statusDot.className = 'status-dot error';
+                statusText.textContent = 'Disconnected';
+                statusDetails.innerHTML = `
+                    <span class="error">Cannot connect to MCP server</span><br>
+                    <small>URL: ${getMcpUrl()}</small><br>
+                    <small>Error: ${error.message}</small>
+                `;
+            }
+        }
+
+        // Ask a question
+        async function askQuestion(event) {
+            event.preventDefault();
+
+            const questionInput = document.getElementById('questionInput');
+            const responseBox = document.getElementById('responseBox');
+            const askBtn = document.getElementById('askBtn');
+
+            const question = questionInput.value.trim();
+            if (!question) return;
+
+            // Disable form while processing
+            askBtn.disabled = true;
+            responseBox.innerHTML = '<span class="loading">Thinking...</span>';
+
+            try {
+                const response = await fetch(`${getMcpUrl()}/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ query: question })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    responseBox.textContent = data.result || 'No response received';
+                } else {
+                    responseBox.innerHTML = `<span class="error">Error: ${data.error || 'Unknown error'}</span>`;
+                }
+            } catch (error) {
+                console.error('Question failed:', error);
+                responseBox.innerHTML = `<span class="error">Failed to send question: ${error.message}</span>`;
+            } finally {
+                askBtn.disabled = false;
+            }
+        }
+
+        // Check status on load
+        window.onload = () => {
+            checkStatus();
+            // Auto-refresh status every 30 seconds
+            setInterval(checkStatus, 30000);
+        };
+    </script>
+</body>
+</html>

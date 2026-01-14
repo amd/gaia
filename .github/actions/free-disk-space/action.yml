@@ -1,0 +1,68 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: 'Free Disk Space'
+description: 'Frees up disk space on GitHub Actions runners by removing unnecessary software'
+branding:
+  icon: 'hard-drive'
+  color: 'blue'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Display disk space before cleanup
+      shell: bash
+      run: |
+        echo "=== Disk Space Before Cleanup ==="
+        df -h
+        echo ""
+
+    - name: Free up disk space
+      shell: bash
+      run: |
+        echo "Removing unnecessary software to free up disk space..."
+
+        # Remove large packages that are rarely needed
+        sudo rm -rf /usr/share/dotnet || true
+        sudo rm -rf /opt/ghc || true
+        sudo rm -rf /usr/local/share/boost || true
+        sudo rm -rf "$AGENT_TOOLSDIRECTORY" || true
+
+        # Remove Android SDK
+        sudo rm -rf /usr/local/lib/android || true
+
+        # Remove .NET
+        sudo rm -rf /usr/share/dotnet || true
+
+        # Remove Haskell
+        sudo rm -rf /opt/ghc || true
+        sudo rm -rf /usr/local/.ghcup || true
+
+        # Clean apt cache
+        sudo apt-get clean || true
+
+        # Remove swap file to free up disk space
+        sudo swapoff -a || true
+        sudo rm -f /swapfile || true
+        sudo rm -f /mnt/swapfile || true
+
+        echo "✅ Cleanup complete"
+
+    - name: Clear package manager caches
+      shell: bash
+      run: |
+        echo "Clearing package manager caches..."
+        # Clear pip cache if pip is available
+        pip cache purge 2>/dev/null || true
+        # Clear uv cache if uv is available
+        uv cache clean 2>/dev/null || true
+        echo "✅ Package caches cleared"
+
+    - name: Display disk space after cleanup
+      shell: bash
+      run: |
+        echo ""
+        echo "=== Disk Space After Cleanup ==="
+        df -h
+        echo ""
+        echo "✅ Disk space freed successfully"
