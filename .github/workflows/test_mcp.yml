@@ -203,7 +203,7 @@ jobs:
 
       - name: Upload MCP Bridge Logs
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: mcp-bridge-logs-linux
           path: mcp_bridge.log
