@@ -88,6 +88,23 @@ updates:
         patterns:
           - "*"
 
+  # JavaScript - EMR Dashboard Electron wrapper
+  - package-ecosystem: "npm"
+    directory: "/src/gaia/agents/emr/dashboard/electron"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "javascript"
+      - "electron"
+      - "emr-dashboard"
+    open-pull-requests-limit: 1
+    groups:
+      emr-dashboard-dependencies:
+        patterns:
+          - "*"
+
   # GitHub Actions dependencies
   - package-ecosystem: "github-actions"
     directory: "/"

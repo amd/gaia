@@ -80,8 +80,8 @@ jobs:
       - name: Run app integration tests
         run: |
           cd tests/electron
-          # Run structure tests only (not functional - those are separate)
-          npm test -- test_jira_app.js test_example_app.js
+          # Run structure tests for all apps (not functional - those are separate)
+          npm test -- test_jira_app.js test_example_app.js test_emr_dashboard.js
 
       - name: Upload test results
         if: always()
@@ -138,9 +138,14 @@ jobs:
         app:
           - name: jira
             path: src/gaia/apps/jira/webui
+            has_package_script: true
           - name: example
             path: src/gaia/apps/example/webui
-    
+            has_package_script: true
+          - name: emr-dashboard
+            path: src/gaia/agents/emr/dashboard/electron
+            has_package_script: false
+
     steps:
       - uses: actions/checkout@v6
 
@@ -164,14 +169,14 @@ jobs:
           cd ${{ matrix.app.path }}
           # Allow command to fail but capture output
           npm audit --json > audit-results.json || true
-          
+
           # Check for high/critical vulnerabilities
           HIGH=$(cat audit-results.json | jq -r '.metadata.vulnerabilities.high // 0')
           CRITICAL=$(cat audit-results.json | jq -r '.metadata.vulnerabilities.critical // 0')
-          
+
           echo "High severity vulnerabilities: $HIGH"
           echo "Critical severity vulnerabilities: $CRITICAL"
-          
+
           if [ "$HIGH" -gt 0 ] || [ "$CRITICAL" -gt 0 ]; then
             echo "::warning::Found $HIGH high and $CRITICAL critical vulnerabilities in ${{ matrix.app.name }}"
             cat audit-results.json | jq '.vulnerabilities'
@@ -184,21 +189,31 @@ jobs:
           npm run --if-present lint || echo "No lint script"
 
       - name: Test app packaging
+        if: matrix.app.has_package_script
         run: |
           cd ${{ matrix.app.path }}
-          # Try to package the app - this validates dependencies work together
-          npm run package || echo "::warning::Package failed for ${{ matrix.app.name }} - may be platform-specific"
-        continue-on-error: true
+          # Package the app - this validates dependencies work together
+          # BLOCKING: Packaging failures indicate broken dependencies
+          npm run package
 
       - name: Verify build artifacts exist
+        if: matrix.app.has_package_script
         run: |
           cd ${{ matrix.app.path }}
           if [ -d "out" ]; then
-            echo "Build artifacts created successfully"
+            echo "✅ Build artifacts created successfully"
             ls -R out/ | head -20
           else
-            echo "::warning::No build artifacts found - packaging may have failed"
+            echo "❌ No build artifacts found - packaging failed"
+            exit 1
           fi
+
+      - name: Validate Electron can be required (EMR Dashboard)
+        if: matrix.app.name == 'emr-dashboard'
+        run: |
+          cd ${{ matrix.app.path }}
+          # Verify Electron module can be loaded
+          node -e "require('electron'); console.log('✅ Electron module loads successfully')"
 
   dependency-audit:
     name: Audit Dependencies
@@ -213,6 +228,8 @@ jobs:
             path: src/gaia/apps/jira/webui
           - name: example-app
             path: src/gaia/apps/example/webui
+          - name: emr-dashboard
+            path: src/gaia/agents/emr/dashboard/electron
 
     steps:
       - uses: actions/checkout@v6
@@ -240,27 +257,186 @@ jobs:
           path: ${{ matrix.package.path }}/audit-results.json
           retention-days: 30
 
+  # Headless E2E tests - actually launches Electron apps to catch runtime breakage
+  test-electron-runtime:
+    name: Test Electron Runtime (${{ matrix.app.name }})
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - name: jira
+            path: src/gaia/apps/jira/webui
+          - name: example
+            path: src/gaia/apps/example/webui
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ${{ matrix.app.path }}/package.json
+
+      - name: Install app dependencies
+        run: |
+          cd ${{ matrix.app.path }}
+          npm ci
+
+      - name: Install xvfb for headless display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Test Electron app launches (headless)
+        run: |
+          cd ${{ matrix.app.path }}
+          # Start xvfb for headless display
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1024x768x24 &
+          sleep 2
+
+          # Create a test script that launches the app and verifies it starts
+          cat > /tmp/test-launch.js << 'EOF'
+          const { spawn } = require('child_process');
+          const path = require('path');
+
+          console.log('Starting Electron app launch test...');
+
+          const electronPath = require.resolve('electron');
+          const appPath = process.cwd();
+
+          // Get the main entry point from package.json
+          const pkg = require(path.join(appPath, 'package.json'));
+          const mainFile = pkg.main || 'src/main.js';
+
+          console.log(`Launching: ${electronPath} ${mainFile}`);
+
+          const proc = spawn(electronPath, [mainFile], {
+            cwd: appPath,
+            env: {
+              ...process.env,
+              ELECTRON_DISABLE_SANDBOX: '1',
+              ELECTRON_NO_ATTACH_CONSOLE: '1',
+              GAIA_TEST_MODE: '1'
+            },
+            stdio: ['ignore', 'pipe', 'pipe']
+          });
+
+          let stdout = '';
+          let stderr = '';
+          let crashed = false;
+
+          proc.stdout.on('data', (data) => {
+            stdout += data.toString();
+            console.log('[stdout]', data.toString().trim());
+          });
+
+          proc.stderr.on('data', (data) => {
+            stderr += data.toString();
+            const msg = data.toString();
+            console.log('[stderr]', msg.trim());
+            // Check for crash indicators
+            if (msg.includes('crashed') || msg.includes('SIGSEGV') || msg.includes('SIGABRT')) {
+              crashed = true;
+            }
+          });
+
+          // Wait for app to initialize (5 seconds), then terminate
+          setTimeout(() => {
+            if (!crashed) {
+              console.log('✅ App launched successfully without crashing');
+              proc.kill('SIGTERM');
+              process.exit(0);
+            } else {
+              console.log('❌ App crashed during startup');
+              proc.kill('SIGTERM');
+              process.exit(1);
+            }
+          }, 5000);
+
+          proc.on('error', (err) => {
+            console.log('❌ Failed to start Electron:', err.message);
+            process.exit(1);
+          });
+
+          proc.on('exit', (code, signal) => {
+            if (code !== null && code !== 0 && !signal) {
+              console.log(`❌ Electron exited with code ${code}`);
+              process.exit(1);
+            }
+          });
+          EOF
+
+          node /tmp/test-launch.js
+        timeout-minutes: 3
+
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
     if: always()
-    needs: [test-electron-framework, test-apps-integration, test-apps-functional, test-apps-build, dependency-audit]
-    
+    needs: [test-electron-framework, test-apps-integration, test-apps-functional, test-apps-build, dependency-audit, test-electron-runtime]
+
     steps:
       - name: Check test results
         run: |
+          echo "=========================================="
+          echo "        ELECTRON TEST RESULTS            "
+          echo "=========================================="
+          echo ""
           echo "Test Electron Framework: ${{ needs.test-electron-framework.result }}"
           echo "Test Apps Integration: ${{ needs.test-apps-integration.result }}"
           echo "Test Apps Functionality: ${{ needs.test-apps-functional.result }}"
           echo "Test Apps Build: ${{ needs.test-apps-build.result }}"
+          echo "Test Electron Runtime: ${{ needs.test-electron-runtime.result }}"
           echo "Dependency Audit: ${{ needs.dependency-audit.result }}"
-          
-          if [[ "${{ needs.test-electron-framework.result }}" == "failure" ]] || \
-             [[ "${{ needs.test-apps-integration.result }}" == "failure" ]] || \
-             [[ "${{ needs.test-apps-functional.result }}" == "failure" ]] || \
-             [[ "${{ needs.test-apps-build.result }}" == "failure" ]]; then
-            echo "❌ Some tests failed"
+          echo ""
+
+          FAILED=false
+
+          if [[ "${{ needs.test-electron-framework.result }}" == "failure" ]]; then
+            echo "❌ FAILED: Electron Framework tests"
+            FAILED=true
+          fi
+
+          if [[ "${{ needs.test-apps-integration.result }}" == "failure" ]]; then
+            echo "❌ FAILED: Apps Integration tests"
+            FAILED=true
+          fi
+
+          if [[ "${{ needs.test-apps-functional.result }}" == "failure" ]]; then
+            echo "❌ FAILED: Apps Functional tests"
+            FAILED=true
+          fi
+
+          if [[ "${{ needs.test-apps-build.result }}" == "failure" ]]; then
+            echo "❌ FAILED: Apps Build tests - dependencies may be broken"
+            FAILED=true
+          fi
+
+          if [[ "${{ needs.test-electron-runtime.result }}" == "failure" ]]; then
+            echo "❌ FAILED: Electron Runtime tests - apps crash on startup"
+            FAILED=true
+          fi
+
+          echo ""
+          if [[ "$FAILED" == "true" ]]; then
+            echo "=========================================="
+            echo "  ❌ SOME ELECTRON TESTS FAILED          "
+            echo "=========================================="
+            echo ""
+            echo "If this is a Dependabot PR, the dependency update"
+            echo "may have introduced breaking changes."
             exit 1
           else
-            echo "✅ All tests passed"
+            echo "=========================================="
+            echo "  ✅ ALL ELECTRON TESTS PASSED           "
+            echo "=========================================="
           fi
