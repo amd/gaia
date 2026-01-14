@@ -104,7 +104,7 @@ jobs:
           Write-Host "Installer SHA256: $hash"
 
       - name: Upload Windows installer artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: gaia-windows-installer-${{ steps.extract_version.outputs.VERSION }}-${{ steps.get_commit.outputs.COMMIT_HASH }}
           path: installer\gaia-windows-setup.exe
