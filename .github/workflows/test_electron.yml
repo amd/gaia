@@ -80,8 +80,8 @@ jobs:
       - name: Run app integration tests
         run: |
           cd tests/electron
-          # Run structure tests for all apps (not functional - those are separate)
-          npm test -- test_jira_app.js test_example_app.js test_emr_dashboard.js
+          # Run structure tests for all apps and framework integration
+          npm test -- test_jira_app.js test_example_app.js test_emr_dashboard.js test_framework_integration.js
 
       - name: Upload test results
         if: always()
