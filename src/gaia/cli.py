@@ -23,6 +23,7 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.llm_client import LLMClient
 from gaia.logger import get_logger
+from gaia.perf_analysis import run_perf_visualization
 from gaia.version import version
 
 # Optional imports
@@ -35,14 +36,6 @@ except ImportError:
     BlenderAgent = None
     MCPClient = None
     BLENDER_AVAILABLE = False
-
-try:
-    from gaia.agents.code.agent import CodeAgent
-
-    CODE_AVAILABLE = True
-except ImportError:
-    CodeAgent = None
-    CODE_AVAILABLE = False
 
 # Load environment variables from .env file
 load_dotenv()
@@ -1052,54 +1045,6 @@ def main():
         help="Enable debug logging",
     )
 
-    # Add Code agent command
-    code_parser = subparsers.add_parser(
-        "code",
-        help="Python code assistant with analysis, generation, and linting",
-        parents=[parent_parser],
-    )
-    code_parser.add_argument(
-        "query",
-        nargs="?",
-        help="Code operation query (e.g., 'Generate a function to sort a list')",
-    )
-    code_parser.add_argument(
-        "--interactive",
-        "-i",
-        action="store_true",
-        help="Interactive mode for multiple queries",
-    )
-    code_parser.add_argument(
-        "--silent",
-        "-s",
-        action="store_true",
-        help="Silent mode - suppress console output, return JSON only",
-    )
-    code_parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug logging",
-    )
-    code_parser.add_argument(
-        "--show-prompts",
-        action="store_true",
-        help="Display prompts sent to LLM",
-    )
-    # Note: --use-claude, --use-chatgpt, --max-steps, --list-tools, --stream, --stats inherited from parent_parser
-    code_parser.add_argument(
-        "--step-through",
-        action="store_true",
-        help="Enable step-through debugging mode (pause at each agent step)",
-    )
-    code_parser.add_argument(
-        "--path",
-        "-p",
-        type=str,
-        default=None,
-        help="Project directory path. Creates directory if it doesn't exist. All operations will use this as working directory.",
-    )
-    code_parser.set_defaults(action="code")
-
     # Add Docker app command
     docker_parser = subparsers.add_parser(
         "docker",
@@ -1640,6 +1585,86 @@ Examples:
         help="Update consolidated report incrementally with new evaluations only",
     )
 
+    # Nested eval subcommands (e.g., fix_code testbench)
+    eval_subparsers = eval_parser.add_subparsers(
+        dest="eval_command",
+        help="Additional evaluation utilities",
+    )
+    fix_code_parser = eval_subparsers.add_parser(
+        "fix-code",
+        help="Run the fix_code testbench prompts via Gaia CLI",
+        parents=[parent_parser],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run fix_code testbench with local Lemonade model
+  gaia eval fix-code src/gaia/eval/fix_code_testbench/off_by_one_bug/off_by_one_bug.py \\
+      "Loop stops too early" \\
+      output/off_by_one_bug_fixed.py \\
+      --model Qwen3-Coder-30B-A3B-Instruct-GGUF
+
+  # Run fix_code testbench and ask for edit_file tool output
+  gaia eval fix-code src/app.ts "TS2322 type error" fixed.ts --use-edit-file
+
+  # Use Claude instead of the local model (requires ANTHROPIC_API_KEY)
+  gaia eval fix-code src/app.ts "TS7053 index error" fixed.ts --use-claude
+        """,
+    )
+    fix_code_parser.add_argument(
+        "file",
+        help="Path to the source file that should be repaired",
+    )
+    fix_code_parser.add_argument(
+        "error",
+        help="Error description that explains what needs to be fixed",
+    )
+    fix_code_parser.add_argument(
+        "output_file",
+        help="Path where the patched code should be written",
+    )
+    fix_code_parser.add_argument(
+        "--context",
+        help="Optional additional context appended to the prompt (e.g., logs)",
+    )
+    fix_code_parser.add_argument(
+        "--language",
+        help="Override detected language label (python, typescript, etc.)",
+    )
+    fix_code_parser.add_argument(
+        "--use-prompt-engineering",
+        action="store_true",
+        help="Inject additional prompt engineering guidance",
+    )
+    fix_code_parser.add_argument(
+        "--use-edit-file",
+        action="store_true",
+        help="Ask the model to emit an edit_file tool call instead of full code",
+    )
+    fix_code_parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.2,
+        help="Sampling temperature sent to the model (default: 0.2)",
+    )
+    fix_code_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="HTTP timeout for the completion request (default: 600)",
+    )
+    fix_code_parser.add_argument(
+        "--start-line",
+        type=int,
+        default=1,
+        help="First line in the file to include in the prompt (default: 1)",
+    )
+    fix_code_parser.add_argument(
+        "--end-line",
+        type=int,
+        default=None,
+        help="Last line in the file to include in the prompt (default: EOF)",
+    )
+
     # Add new subparser for generating summary reports from evaluation directories
     report_parser = subparsers.add_parser(
         "report",
@@ -1762,6 +1787,23 @@ Examples:
         "--agent-output-file",
         type=str,
         help="Single agent output JSON file to visualize",
+    )
+
+    perf_vis_parser = subparsers.add_parser(
+        "perf-vis",
+        help="Visualize llama.cpp performance metrics from log files",
+        parents=[parent_parser],
+    )
+    perf_vis_parser.add_argument(
+        "log_paths",
+        type=Path,
+        nargs="+",
+        help="One or more llama.cpp server log files to visualize",
+    )
+    perf_vis_parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Display plots interactively in addition to saving images",
     )
 
     # Add new subparser for generating synthetic test data
@@ -3365,6 +3407,50 @@ Let me know your answer!
 
     # Handle evaluation
     if args.action == "eval":
+        if getattr(args, "eval_command", None) == "fix-code":
+            try:
+                from gaia.eval.fix_code_testbench.fix_code_testbench import (
+                    DEFAULT_LOCAL_MODEL,
+                    FixCodeTestbench,
+                )
+            except ImportError as e:
+                log.error(f"Failed to import fix_code_testbench: {e}")
+                print("❌ Error: fix_code_testbench dependencies are missing.")
+                print("The evaluation CLI fix-code helper requires the eval extras.")
+                print("")
+                print("To install the dependencies, run:")
+                print('  uv pip install -e ".[eval]"')
+                return
+
+            if args.use_chatgpt:
+                print(
+                    "❌ The fix_code testbench does not support the ChatGPT backend yet."
+                )
+                print(
+                    "Please use the local Lemonade endpoint (default) or --use-claude."
+                )
+                return
+
+            model_name = args.model or DEFAULT_LOCAL_MODEL
+            bench = FixCodeTestbench(
+                model=model_name,
+                use_claude=args.use_claude,
+                use_prompt_engineering=args.use_prompt_engineering,
+                use_edit_file=args.use_edit_file,
+                temperature=args.temperature,
+                timeout=args.timeout,
+                context=args.context,
+                language_override=args.language,
+            )
+            bench.run(
+                source_path=Path(args.file),
+                error_description=args.error,
+                output_path=Path(args.output_file),
+                start_line=args.start_line,
+                end_line=args.end_line,
+            )
+            return
+
         log.info("Evaluating experiment results")
         try:
             from gaia.eval.eval import Evaluator
@@ -3992,11 +4078,6 @@ Let me know your answer!
         handle_blender_command(args)
         return
 
-    # Handle Code command
-    if args.action == "code":
-        handle_code_command(args)
-        return
-
     # Handle Jira command
     if args.action == "jira":
         handle_jira_command(args)
@@ -4010,6 +4091,10 @@ Let me know your answer!
     # Handle API server command
     if args.action == "api":
         handle_api_command(args)
+        return
+
+    if args.action == "perf-vis":
+        handle_perf_vis_command(args)
         return
 
     # Handle visualize command
@@ -4226,245 +4311,6 @@ def run_blender_interactive_mode(agent, print_result=True):
             console.print_error(f"Error processing Blender query: {e}")
 
 
-def handle_code_command(args):
-    """
-    Handle the Code agent command.
-
-    Args:
-        args: Parsed command line arguments for the code command
-    """
-    log = get_logger(__name__)
-
-    # Set logging level to DEBUG if --debug flag is used
-    if getattr(args, "debug", False):
-        from gaia.logger import log_manager
-
-        # Set root logger level first to ensure all handlers process DEBUG messages
-        root_logger = logging.getLogger()
-        root_logger.setLevel(logging.DEBUG)
-
-        # Update all existing loggers that start with "gaia"
-        for logger_name in list(log_manager.loggers.keys()):
-            if logger_name.startswith("gaia"):
-                log_manager.loggers[logger_name].setLevel(logging.DEBUG)
-
-        # Set default level for future loggers
-        log_manager.set_level("gaia", logging.DEBUG)
-
-        # Also ensure all handlers have DEBUG level
-        for handler in root_logger.handlers:
-            handler.setLevel(logging.DEBUG)
-
-    if not CODE_AVAILABLE:
-        log.error("Code agent is not available. Please check your installation.")
-        return
-
-    # Get base_url from args or environment
-    base_url = getattr(args, "base_url", None)
-    if base_url is None:
-        base_url = os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
-
-    # Initialize Lemonade with code agent profile (32768 context)
-    # Skip for remote servers (e.g., devtunnel URLs), external APIs, or --no-lemonade-check
-    is_local = "localhost" in base_url or "127.0.0.1" in base_url
-    skip_lemonade = getattr(args, "no_lemonade_check", False)
-    if is_local and not skip_lemonade:
-        success, _ = initialize_lemonade_for_agent(
-            agent="code",
-            skip_if_external=True,
-            use_claude=getattr(args, "use_claude", False),
-            use_chatgpt=getattr(args, "use_chatgpt", False),
-        )
-        if not success:
-            sys.exit(1)
-
-    try:
-        # Import RoutingAgent for intelligent language detection
-        from gaia.agents.routing.agent import RoutingAgent
-
-        # Handle --path argument
-        project_path = getattr(args, "path", None)
-        if project_path:
-            project_path = Path(project_path).expanduser().resolve()
-            # Create directory if it doesn't exist
-            project_path.mkdir(parents=True, exist_ok=True)
-            project_path = str(project_path)
-            log.debug(f"Using project path: {project_path}")
-
-        # Get the query to analyze
-        query = args.query if hasattr(args, "query") and args.query else None
-
-        # Use RoutingAgent to determine language and project type
-        if query:
-            # Prepare agent configuration from CLI args
-            agent_config = {
-                "silent_mode": getattr(args, "silent", False),
-                "debug": getattr(args, "debug", False),
-                "show_prompts": getattr(args, "show_prompts", False),
-                "max_steps": getattr(args, "max_steps", 100),
-                "use_claude": getattr(args, "use_claude", False),
-                "use_chatgpt": getattr(args, "use_chatgpt", False),
-                "streaming": getattr(args, "streaming", False),
-                "base_url": getattr(args, "base_url", None),
-                "skip_lemonade": getattr(args, "no_lemonade_check", False),
-            }
-
-            # Single query mode - use routing with configuration
-            router = RoutingAgent(**agent_config)
-            agent = router.process_query(query)
-        else:
-            # Interactive mode - start with default Python agent
-            # User can still benefit from routing per query
-            agent = CodeAgent(
-                silent_mode=getattr(args, "silent", False),
-                debug=getattr(args, "debug", False),
-                show_prompts=getattr(args, "show_prompts", False),
-                max_steps=getattr(args, "max_steps", 100),
-                use_claude=getattr(args, "use_claude", False),
-                use_chatgpt=getattr(args, "use_chatgpt", False),
-                streaming=getattr(args, "streaming", False),
-                base_url=getattr(args, "base_url", None),
-                skip_lemonade=getattr(args, "no_lemonade_check", False),
-            )
-
-        # Handle list tools option
-        if getattr(args, "list_tools", False):
-            agent.list_tools(verbose=True)
-            return
-
-        # Handle interactive mode
-        if getattr(args, "interactive", False):
-            log.info("🤖 Code Agent Interactive Mode")
-            log.info("Type 'exit' or 'quit' to end the session")
-            log.info("Type 'help' for available commands\n")
-
-            while True:
-                try:
-                    query = input("\ncode> ").strip()
-
-                    if query.lower() in ["exit", "quit"]:
-                        log.info("Goodbye!")
-                        break
-
-                    if query.lower() == "help":
-                        print("\nAvailable commands:")
-                        print("  Generate functions, classes, or tests")
-                        print("  Analyze Python files")
-                        print("  Validate Python syntax")
-                        print("  Lint and format code")
-                        print("  Edit files with diffs")
-                        print("  Search for code patterns")
-                        print("  Type 'exit' or 'quit' to end")
-                        continue
-
-                    if not query:
-                        continue
-
-                    # Process the query
-                    result = agent.process_query(
-                        query,
-                        workspace_root=project_path,
-                        max_steps=getattr(args, "max_steps", 100),
-                        trace=args.trace,
-                    )
-
-                    # Display result
-                    if not args.silent:
-                        if result.get("status") == "success":
-                            log.info(f"\n✅ {result.get('result', 'Task completed')}")
-                        else:
-                            log.error(f"\n❌ {result.get('result', 'Task failed')}")
-
-                except KeyboardInterrupt:
-                    print("\n\nInterrupted. Type 'exit' to quit.")
-                    continue
-                except Exception as e:
-                    log.error(f"Error processing query: {e}")
-                    if args.debug:
-                        import traceback
-
-                        traceback.print_exc()
-
-        # Single query mode
-        elif hasattr(args, "query") and args.query:
-            result = agent.process_query(
-                args.query,
-                workspace_root=project_path,
-                max_steps=args.max_steps,
-                trace=args.trace,
-                step_through=getattr(args, "step_through", False),
-            )
-
-            # Output result
-            if args.silent:
-                # In silent mode, output only JSON
-                import json
-
-                print(json.dumps(result, indent=2))
-            else:
-                # Display formatted result
-                agent.display_result("Code Operation Result", result)
-
-        else:
-            # Default to interactive mode when no query provided
-            log.info("Starting Code Agent interactive mode (type 'help' for commands)")
-
-            while True:
-                try:
-                    query = input("\ncode> ").strip()
-
-                    if query.lower() in ["exit", "quit"]:
-                        log.info("Goodbye!")
-                        break
-
-                    if query.lower() == "help":
-                        print("\nAvailable commands:")
-                        print("  Generate functions, classes, or tests")
-                        print("  Analyze Python files")
-                        print("  Validate Python syntax")
-                        print("  Lint and format code")
-                        print("  Edit files with diffs")
-                        print("  Search for code patterns")
-                        print("  Type 'exit' or 'quit' to end")
-                        continue
-
-                    if not query:
-                        continue
-
-                    # Process the query
-                    result = agent.process_query(
-                        query,
-                        workspace_root=project_path,
-                        max_steps=getattr(args, "max_steps", 100),
-                        trace=args.trace,
-                    )
-
-                    # Display result
-                    if not args.silent:
-                        if result.get("status") == "success":
-                            log.info(f"\n✅ {result.get('result', 'Task completed')}")
-                        else:
-                            log.error(f"\n❌ {result.get('result', 'Task failed')}")
-
-                except KeyboardInterrupt:
-                    print("\n\nInterrupted. Type 'exit' to quit.")
-                    continue
-                except Exception as e:
-                    log.error(f"Error processing query: {e}")
-                    if getattr(args, "debug", False):
-                        import traceback
-
-                        traceback.print_exc()
-            return
-
-    except Exception as e:
-        log.error(f"Error initializing Code agent: {e}")
-        if getattr(args, "debug", False):
-            import traceback
-
-            traceback.print_exc()
-
-
 def handle_jira_command(args):
     """
     Handle the Jira app command.
@@ -4671,6 +4517,20 @@ def handle_api_command(args):
         except Exception as e:
             print(f"❌ Error stopping server: {e}")
             sys.exit(1)
+
+
+def handle_perf_vis_command(args):
+    """Generate llama.cpp performance plots from one or more log files."""
+    try:
+        exit_code = run_perf_visualization(args.log_paths, show=args.show)
+    except Exception as exc:
+        log = get_logger(__name__)
+        log.error(f"Error running perf-vis: {exc}")
+        print(f"❌ Error running perf-vis: {exc}")
+        sys.exit(1)
+
+    if exit_code != 0:
+        sys.exit(exit_code)
 
 
 def handle_visualize_command(args):

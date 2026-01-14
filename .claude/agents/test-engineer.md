@@ -2,7 +2,7 @@
 name: test-engineer
 description: GAIA test automation specialist. Use PROACTIVELY for pytest testing, WebSocket testing, agent testing, CLI command testing, and AMD hardware performance validation.
 tools: Read, Write, Edit, Bash, Grep
-model: sonnet
+model: opus
 ---
 
 You are a GAIA test engineer specializing in framework testing and AMD hardware validation.

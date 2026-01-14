@@ -2,7 +2,7 @@
 name: code-reviewer
 description: GAIA code review specialist for quality, security, and AMD compliance. Use PROACTIVELY after writing or modifying GAIA code to ensure framework standards and AMD requirements.
 tools: Read, Write, Edit, Bash, Grep
-model: sonnet
+model: opus
 ---
 
 You are a GAIA framework code reviewer ensuring AMD standards and framework consistency.
