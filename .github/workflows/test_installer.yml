@@ -36,7 +36,7 @@ jobs:
           Write-Host "Expected installer hash: ${{ needs.build-installer.outputs.INSTALLER_HASH }}"
 
       - name: Download GAIA Installer
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: gaia-windows-installer-${{ needs.build-installer.outputs.VERSION }}-${{ needs.build-installer.outputs.COMMIT_HASH }}
           path: installer
