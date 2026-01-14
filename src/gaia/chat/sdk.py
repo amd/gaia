@@ -820,26 +820,31 @@ class ChatSDK:
             "- Key implementation details already completed\n"
             "- Outstanding issues, validation failures, or TODOs (quote error/warning text verbatim)\n"
             "- Any constraints or preferences the user emphasized\n\n"
-            "Write the summary in under 400 tokens, using concise paragraphs, and include the exact text of any warnings/errors so future fixes have full context."
-        )
-        full_prompt = (
-            f"{summary_prompt}\n\nConversation History:\n{history_text}\n\nSummary:"
+            "Write the summary in under 400 tokens, using concise paragraphs, and include the exact text of any warnings/errors so future fixes have full context.\n\n"
+            "You have full access to the prior conversation history above; summarize it directly without restating the entire transcript."
         )
 
+        # Use ChatSDK's send() so history formatting/ordering is handled consistently
+        # by the same path used for normal chat turns.
+        original_history = list(self.chat_history)
         try:
-            summary = self.llm_client.generate(
-                full_prompt,
-                model=self.config.model,
+            chat_response = self.send(
+                summary_prompt,
                 max_tokens=min(self.config.max_tokens, 2048),
                 timeout=1200,
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self.log.error("Failed to summarize conversation history: %s", exc)
+            # Restore history to avoid dropping context on failure
+            self.chat_history.clear()
+            self.chat_history.extend(original_history)
             return None
 
-        summary = summary.strip()
+        summary = chat_response.text.strip() if chat_response else ""
         if not summary:
             self.log.warning("Summarization returned empty content; keeping history.")
+            self.chat_history.clear()
+            self.chat_history.extend(original_history)
             return None
 
         self.chat_history.clear()
