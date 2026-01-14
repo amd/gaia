@@ -197,7 +197,7 @@ jobs:
 
       - name: Upload API Server Logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: api-server-logs
           path: |
