@@ -37,7 +37,8 @@ jobs:
         uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
-          install-package: '.[dev,eval,rag]'
+          # Note: 'blender' excluded as bpy requires Blender runtime
+          install-package: '.[dev,talk,rag,mcp,api]'
           extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
       - name: Install system dependencies
