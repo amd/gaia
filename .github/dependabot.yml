@@ -43,31 +43,35 @@ updates:
   # Note: Electron framework (src/gaia/electron) is scanned via the root workspace
   # configuration above, so no separate entry is needed.
 
-  # JavaScript - Example app (monitor only, no PRs)
+  # JavaScript - Example Electron app
   - package-ecosystem: "npm"
     directory: "/src/gaia/apps/example/webui"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
+      day: "monday"
     labels:
       - "dependencies"
       - "javascript"
+      - "electron"
       - "example-app"
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 1
     groups:
       example-app-dependencies:
         patterns:
           - "*"
 
-  # JavaScript - Jira app (monitor only, no PRs)
+  # JavaScript - Jira Electron app (JAX)
   - package-ecosystem: "npm"
     directory: "/src/gaia/apps/jira/webui"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
+      day: "monday"
     labels:
       - "dependencies"
       - "javascript"
+      - "electron"
       - "jira-app"
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 1
     groups:
       jira-app-dependencies:
         patterns:

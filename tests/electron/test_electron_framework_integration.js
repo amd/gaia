@@ -182,11 +182,12 @@ describe('Electron Framework Integration', () => {
     });
 
     it('should create a valid package.json with electron', () => {
-      // Get electron version from the example app (what Dependabot would update)
-      const examplePkg = JSON.parse(
-        fs.readFileSync(path.join(EXAMPLE_APP_PATH, 'package.json'), 'utf8')
+      // Get electron version from the framework (canonical source that Dependabot updates)
+      // The framework version is what all apps should match
+      const frameworkPkg = JSON.parse(
+        fs.readFileSync(path.join(FRAMEWORK_PATH, 'package.json'), 'utf8')
       );
-      const electronVersion = examplePkg.devDependencies.electron;
+      const electronVersion = frameworkPkg.devDependencies.electron;
 
       const pkg = {
         name: TEMP_APP_NAME,
