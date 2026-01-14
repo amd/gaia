@@ -1,0 +1,167 @@
+---
+title: GAIA Chat UI Plan
+description: Implementation plan for the privacy-first desktop chat application
+---
+
+# GAIA Chat UI - Implementation Plan
+
+<Info>
+**Status:** Active Development
+**Priority:** High
+[View full plan on GitHub](https://github.com/amd/gaia/blob/main/docs/plans/chat-ui.md) • [Vote with 👍](https://github.com/amd/gaia/issues/167)
+</Info>
+
+## Executive Summary
+
+Build **GAIA Chat** - a privacy-first desktop chat application for AI PCs that runs **100% locally** on AMD Ryzen AI hardware. Unlike cloud-based alternatives, your conversations and documents never leave your machine.
+
+### Core Value Proposition
+
+| Feature | Benefit |
+|---------|---------|
+| **Private** | Your data stays on YOUR device |
+| **Fast** | AMD Ryzen AI NPU acceleration |
+| **Smart** | RAG-powered document Q&A |
+| **Free** | No API costs, no subscriptions |
+
+> "ChatGPT for your private documents, running entirely on your AMD AI PC. No cloud, no subscription, no compromises."
+
+---
+
+## Key Features
+
+### Document Support
+
+The RAG SDK already supports **50+ formats**:
+
+<Tabs>
+  <Tab title="Documents">
+    - PDF (with VLM for images)
+    - TXT, LOG
+    - Markdown (.md, .markdown)
+    - CSV, JSON
+    - ReStructuredText (.rst)
+  </Tab>
+  <Tab title="Code">
+    - Python, Java, C++, Go, Rust, Ruby, PHP
+    - JavaScript, TypeScript, JSX, TSX
+    - Vue, Svelte, Astro
+    - HTML, CSS, SCSS
+    - SQL, YAML, XML, TOML
+  </Tab>
+</Tabs>
+
+### Session Management
+
+- **Global Document Library** - Index once, use everywhere
+- **Per-Session Attachments** - Choose which docs to use per conversation
+- **Shared CLI/UI State** - Start in terminal, continue in desktop app
+
+### Privacy-First Design
+
+- Visual "🔒 Local" indicator always visible
+- Network monitor showing no outbound connections
+- Data location display in settings
+- One-click export and secure deletion
+- No telemetry by default (opt-in only)
+
+---
+
+## Architecture
+
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontSize':'18px', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+graph TD
+    A["Electron Shell"] --> B["React Frontend"]
+    B --> C["FastAPI Backend"]
+    C --> D["GAIA Core"]
+    D --> E["Lemonade Server"]
+
+    B1["OnboardingWizard"]
+    B2["ChatView"]
+    B3["DocumentLibrary"]
+    B4["SessionList"]
+
+    C1["/api/chat/*"]
+    C2["/api/documents/*"]
+    C3["/api/sessions/*"]
+    C4["/api/system/*"]
+
+    D1["ChatSDK"]
+    D2["RAGSDK"]
+    D3["LemonadeClient"]
+
+    B -.-> B1 & B2 & B3 & B4
+    C -.-> C1 & C2 & C3 & C4
+    D -.-> D1 & D2 & D3
+
+    style A fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
+    style B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style C fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style D fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+    style E fill:#6c757d,stroke:#495057,stroke-width:2px,color:#fff
+
+    style B1 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:1px,color:#fff
+    style B2 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:1px,color:#fff
+    style B3 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:1px,color:#fff
+    style B4 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:1px,color:#fff
+
+    style C1 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:1px,color:#fff
+    style C2 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:1px,color:#fff
+    style C3 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:1px,color:#fff
+    style C4 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:1px,color:#fff
+
+    style D1 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:1px,color:#fff
+    style D2 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:1px,color:#fff
+    style D3 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:1px,color:#fff
+```
+
+---
+
+## Milestones
+
+<Steps>
+  <Step title="Foundation">
+    Project structure, database schema, basic FastAPI server, CLI `gaia chat init`
+  </Step>
+  <Step title="Core Chat">
+    Chat API endpoints, React UI, SSE streaming, message persistence
+  </Step>
+  <Step title="Documents">
+    Document upload, RAG integration, library UI, source citations
+  </Step>
+  <Step title="Onboarding">
+    System state detection, setup wizard, model download progress, error states
+  </Step>
+  <Step title="Polish">
+    Privacy indicators, settings panel, export, keyboard shortcuts
+  </Step>
+  <Step title="Distribution">
+    Electron packaging, installer integration, documentation
+  </Step>
+</Steps>
+
+---
+
+## Success Metrics
+
+| Metric | Target |
+|--------|--------|
+| Time to first chat (new user) | < 5 minutes |
+| Time to first chat (returning) | < 10 seconds |
+| Document indexing | < 5 seconds per MB |
+| Streaming latency | < 200ms first token |
+| Error recovery rate | > 90% |
+
+---
+
+## Related
+
+- [Roadmap](/roadmap) - High-level feature timeline
+- [Installer Plan](/plans/installer) - Distribution strategy
+- [Chat SDK Reference](/sdk/sdks/chat) - Underlying SDK documentation
+- [RAG SDK Reference](/sdk/sdks/rag) - Document Q&A SDK
+
+<Card title="Full Implementation Plan" icon="github" href="https://github.com/amd/gaia/blob/main/docs/plans/chat-ui.md">
+  View the complete technical specification on GitHub
+</Card>
