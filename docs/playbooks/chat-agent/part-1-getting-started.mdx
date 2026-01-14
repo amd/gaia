@@ -47,7 +47,6 @@ A chat agent that combines:
 
 ## The Architecture (What You're Building)
 
-<Frame>
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 graph TD
@@ -73,7 +72,6 @@ graph TD
 
     linkStyle 0,1,2,3,4,5,6 stroke:#ED1C24,stroke-width:2px
 ```
-</Frame>
 
 **Flow:**
 1. User query → ChatAgent (orchestrator)
@@ -174,7 +172,6 @@ Before we build step-by-step, let's understand what each piece does **under the 
 
 **Processing flow when you call `process_query()`:**
 
-<Frame>
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
@@ -199,7 +196,6 @@ flowchart TD
 
     linkStyle 0,1,2,3,4,5,6,7,8 stroke:#ED1C24,stroke-width:2px
 ```
-</Frame>
 
 **Trade-off:** You delegate control flow to the LLM. This is flexible but less deterministic than traditional programming.
 
@@ -285,7 +281,6 @@ flowchart TD
 
 **RAG pipeline:**
 
-<Frame>
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
@@ -313,7 +308,6 @@ flowchart TD
 
     linkStyle 0,1,2,3,4,5,6,7,8 stroke:#ED1C24,stroke-width:2px
 ```
-</Frame>
 
 **Why chunks?**
 - LLMs have context window limits (e.g., 4096 tokens)
