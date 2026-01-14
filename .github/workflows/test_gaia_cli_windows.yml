@@ -38,38 +38,18 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Download and Install Miniforge
-        run: |
-          Invoke-WebRequest -Uri "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Windows-x86_64.exe" -OutFile "miniforge3.exe"
-          Start-Process -FilePath "miniforge3.exe" -ArgumentList "/S", "/D=$env:GITHUB_WORKSPACE\miniforge3" -Wait
-
-      - name: Initialize Conda
-        run: |
-          Write-Host "Step 1: Get conda path"
-          $condaPath = "$env:GITHUB_WORKSPACE\miniforge3"
-          $env:Path = "$condaPath;$condaPath\Scripts;$env:Path"
-
-          Write-Host "Step 2: Initialize conda for both shells"
-          & "$condaPath\Scripts\conda.exe" init powershell
-          & "$condaPath\Scripts\conda.exe" init cmd.exe
-
-          Write-Host "Step 3: Create the environment at system level"
-          & "$condaPath\Scripts\conda.exe" create -n gaiaenv python=3.10 -y
+      - name: Setup Python Environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          install-package: '.[dev,talk]'
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
 
-      - name: Install GAIA dependencies
+      - name: Verify GAIA Installation
         run: |
-          Write-Host "Step 1: Activate conda environment"
-          & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
-          conda activate gaiaenv
-
-          Write-Host "Step 2: Install dependencies"
-          python -m pip install --upgrade pip
-          pip install -e .[dev,talk,rag]
-
-          Write-Host "Step 3: Verify installation"
+          Write-Host "Verifying GAIA installation..."
           $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
           if (-not $gaiaPath) {
             Write-Host "Error: gaia not installed correctly"
@@ -77,6 +57,7 @@ jobs:
             exit 1
           }
           Write-Host "Found gaia at: $($gaiaPath.Source)"
+          python --version
           python -m pip check
 
       - uses: FedericoCarboni/setup-ffmpeg@v3
@@ -89,11 +70,6 @@ jobs:
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           PYTHONUTF8: 1
         run: |
-          Write-Host "Activate and verify Conda environment"
-          $env:Path = "$env:GITHUB_WORKSPACE\miniforge3;$env:GITHUB_WORKSPACE\miniforge3\Scripts;$env:Path"
-          & "$env:GITHUB_WORKSPACE\miniforge3\shell\condabin\conda-hook.ps1"
-          conda activate gaiaenv
-
           Write-Host "Verify Python environment"
           python -c "import sys; print(sys.executable)"
 
@@ -154,13 +130,13 @@ jobs:
         env:
           PYTHONUTF8: 1
         run: |
-          REM Activate conda environment
-          call "%GITHUB_WORKSPACE%\miniforge3\Scripts\activate.bat" gaiaenv
+          REM Activate virtual environment
+          call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
 
           echo ================================================================
           echo                 GAIA UNIT TESTS - FULL ERROR LOGGING
           echo ================================================================
-          echo Environment: %CONDA_DEFAULT_ENV%
+          echo Virtual Environment: %VIRTUAL_ENV%
           echo Python Version:
           python --version
           echo Working Directory: %CD%
@@ -280,13 +256,13 @@ jobs:
         env:
           PYTHONUTF8: 1
         run: |
-          REM Activate conda environment
-          call "%GITHUB_WORKSPACE%\miniforge3\Scripts\activate.bat" gaiaenv
+          REM Activate virtual environment
+          call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
 
           echo ================================================================
           echo              GAIA SUMMARIZER CLI INTEGRATION TESTS
           echo ================================================================
-          echo Environment: %CONDA_DEFAULT_ENV%
+          echo Virtual Environment: %VIRTUAL_ENV%
           echo Python Version:
           python --version
           echo Working Directory: %CD%
