@@ -1,6 +1,7 @@
-name: Runner Heartbeat
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 
-# Change to trigger push
+name: Runner Heartbeat
 
 on:
   schedule:
