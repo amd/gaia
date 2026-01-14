@@ -33,6 +33,11 @@ jobs:
       - name: Free disk space
         uses: ./.github/actions/free-disk-space
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl jq portaudio19-dev
+
       - name: Setup Python environment
         uses: ./.github/actions/setup-venv
         with:
@@ -40,11 +45,6 @@ jobs:
           # Note: 'blender' excluded as bpy requires Blender runtime
           install-package: '.[dev,talk,rag,mcp,api]'
           extra-index-url: 'https://download.pytorch.org/whl/cpu'
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential curl jq
 
       - name: Install Lemonade SDK
         run: |
