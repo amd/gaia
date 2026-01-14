@@ -81,7 +81,7 @@ jobs:
         run: |
           cd tests/electron
           # Run structure tests for all apps and framework integration
-          npm test -- test_jira_app.js test_example_app.js test_emr_dashboard.js test_framework_integration.js
+          npm test -- test_electron_jira_app.js test_electron_example_app.js test_electron_emr_dashboard.js test_electron_framework_integration.js
 
       - name: Upload test results
         if: always()
@@ -117,7 +117,7 @@ jobs:
         run: |
           cd tests/electron
           # These tests actually install deps and try to build the apps
-          npm test -- test_functional.js --verbose
+          npm test -- test_electron_functional.js --verbose
         timeout-minutes: 15
 
       - name: Upload functional test results
