@@ -188,13 +188,18 @@ jobs:
           cd ${{ matrix.app.path }}
           npm run --if-present lint || echo "No lint script"
 
-      - name: Test app packaging
+      - name: Test app packaging (Linux)
         if: matrix.app.has_package_script
         run: |
           cd ${{ matrix.app.path }}
-          # Package the app - this validates dependencies work together
-          # BLOCKING: Packaging failures indicate broken dependencies
+          # Package the app for Linux - validates dependencies work together
+          # Note: This runs on ubuntu-latest, so only Linux packaging is tested.
+          # Windows/macOS packaging is tested separately in build-electron-apps.yml
+          # BLOCKING: Packaging failures indicate broken dependencies from Dependabot updates
           npm run package
+        env:
+          # Electron Forge will auto-detect Linux platform
+          DEBUG: electron-forge:*
 
       - name: Verify build artifacts exist
         if: matrix.app.has_package_script
@@ -205,6 +210,7 @@ jobs:
             ls -R out/ | head -20
           else
             echo "❌ No build artifacts found - packaging failed"
+            echo "This indicates a dependency compatibility issue from the update."
             exit 1
           fi
 
@@ -308,7 +314,23 @@ jobs:
           const { spawn } = require('child_process');
           const path = require('path');
 
+          /**
+           * Electron App Launch Test
+           *
+           * This script launches an Electron app in headless mode and verifies
+           * it starts without crashing. Used to catch breaking changes from
+           * Dependabot dependency updates.
+           *
+           * Timeout Configuration:
+           * - ELECTRON_LAUNCH_TIMEOUT_MS: Time to wait for app initialization (default: 5000ms)
+           * - 5 seconds is sufficient for most GAIA apps which have minimal startup logic
+           * - Apps with heavy initialization (database, network) may need longer timeouts
+           * - The timeout only needs to be long enough to detect startup crashes
+           */
+          const LAUNCH_TIMEOUT_MS = parseInt(process.env.ELECTRON_LAUNCH_TIMEOUT_MS || '5000', 10);
+
           console.log('Starting Electron app launch test...');
+          console.log(`Launch timeout: ${LAUNCH_TIMEOUT_MS}ms`);
 
           const electronPath = require.resolve('electron');
           const appPath = process.cwd();
@@ -349,7 +371,8 @@ jobs:
             }
           });
 
-          // Wait for app to initialize (5 seconds), then terminate
+          // Wait for app to initialize, then terminate
+          // This timeout is configurable via ELECTRON_LAUNCH_TIMEOUT_MS
           setTimeout(() => {
             if (!crashed) {
               console.log('✅ App launched successfully without crashing');
@@ -360,7 +383,7 @@ jobs:
               proc.kill('SIGTERM');
               process.exit(1);
             }
-          }, 5000);
+          }, LAUNCH_TIMEOUT_MS);
 
           proc.on('error', (err) => {
             console.log('❌ Failed to start Electron:', err.message);

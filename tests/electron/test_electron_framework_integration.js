@@ -17,10 +17,30 @@
  * - IPC/preload script patterns
  */
 
-const { execSync, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+
+// =============================================================================
+// Version Requirements (update these when minimum supported versions change)
+// =============================================================================
+
+/**
+ * Minimum Electron version required for GAIA apps.
+ * Electron 31+ is required for:
+ * - Enhanced security features (contextIsolation improvements)
+ * - V8 12.4+ JavaScript engine
+ * - Chrome 131+ web platform features
+ * - Node.js 20.14+ runtime
+ * See: https://www.electronjs.org/docs/latest/breaking-changes
+ */
+const MIN_ELECTRON_VERSION = 31;
+
+/**
+ * Minimum Electron Forge version for compatibility with Electron 31+.
+ * Forge 7+ includes updated packagers and makers for modern Electron.
+ */
+const MIN_FORGE_VERSION = 7;
 
 // Paths to framework and apps
 const FRAMEWORK_PATH = path.join(__dirname, '../../src/gaia/electron');
@@ -341,7 +361,7 @@ contextBridge.exposeInMainWorld('testAPI', {
       expect(jiraMajor).toBe(frameworkMajor);
     });
 
-    it('should use electron >= 31 for security features', () => {
+    it(`should use electron >= ${MIN_ELECTRON_VERSION} for security features`, () => {
       const frameworkPkg = JSON.parse(
         fs.readFileSync(path.join(FRAMEWORK_PATH, 'package.json'), 'utf8')
       );
@@ -349,11 +369,11 @@ contextBridge.exposeInMainWorld('testAPI', {
       const electronVersion = frameworkPkg.devDependencies.electron;
       const majorVersion = parseInt(electronVersion.replace(/[\^~]/, '').split('.')[0]);
 
-      // Electron 31+ required for latest security features
-      expect(majorVersion).toBeGreaterThanOrEqual(31);
+      // See MIN_ELECTRON_VERSION constant for version requirements documentation
+      expect(majorVersion).toBeGreaterThanOrEqual(MIN_ELECTRON_VERSION);
     });
 
-    it('should have compatible electron-forge version if present', () => {
+    it(`should have compatible electron-forge version (>=${MIN_FORGE_VERSION}) if present`, () => {
       // Check if apps using forge have compatible versions
       const jiraPkg = JSON.parse(
         fs.readFileSync(path.join(JIRA_APP_PATH, 'package.json'), 'utf8')
@@ -363,8 +383,8 @@ contextBridge.exposeInMainWorld('testAPI', {
         const forgeVersion = jiraPkg.devDependencies['@electron-forge/cli'];
         const forgeMajor = parseInt(forgeVersion.replace(/[\^~]/, '').split('.')[0]);
 
-        // Forge 7+ for Electron 31+ compatibility
-        expect(forgeMajor).toBeGreaterThanOrEqual(7);
+        // See MIN_FORGE_VERSION constant for version requirements documentation
+        expect(forgeMajor).toBeGreaterThanOrEqual(MIN_FORGE_VERSION);
       }
     });
   });
