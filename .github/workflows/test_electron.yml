@@ -332,7 +332,7 @@ jobs:
           console.log('Starting Electron app launch test...');
           console.log(`Launch timeout: ${LAUNCH_TIMEOUT_MS}ms`);
 
-          const electronPath = require.resolve('electron');
+          const electronPath = require('electron');
           const appPath = process.cwd();
 
           // Get the main entry point from package.json
