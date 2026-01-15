@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 """
@@ -27,7 +27,7 @@ sys.path.insert(
 )
 
 from gaia.agents.blender.agent import BlenderAgent
-from gaia.llm.llm_client import LLMClient
+from gaia.llm import create_client
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -314,7 +314,7 @@ class GAIAMCPBridge:
     def _execute_query(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Execute LLM query."""
         if not self.llm_client:
-            self.llm_client = LLMClient(base_url=self.base_url)
+            self.llm_client = create_client("lemonade", base_url=self.base_url)
 
         response = self.llm_client.generate(
             prompt=args.get("query", ""),
