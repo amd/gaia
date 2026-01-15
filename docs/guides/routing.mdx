@@ -28,34 +28,40 @@ The routing agent solves these problems by:
 - Separating routing concerns from agent logic
 - Using LLM-powered analysis to detect language/framework from natural language
 - Asking users for clarification when uncertain, rather than guessing
-- Providing a consistent routing experience across all agents (currently used for `gaia code`, with plans to expand)
+- Providing a consistent routing experience across all agents (currently used for `gaia-code`, with plans to expand)
 
 ## How It Works
 
-```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│ User Request    │────▶│  Routing Agent   │────▶│ Specialized     │
-│ "Create todo    │     │  - Analyzes query│     │ Agent           │
-│  backend app"   │     │  - Detects lang  │     │ (CodeAgent)     │
-└─────────────────┘     │  - Asks if needed│     │ Configured with │
-                        └──────────────────┘     │ language=TS     │
-                                │                │ project_type=BE │
-                                │                └─────────────────┘
-                        ┌───────▼────────┐
-                        │ If Uncertain:  │
-                        │ "What language/│
-                        │  framework?"   │
-                        └────────────────┘
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+flowchart LR
+    A[/"REQUEST"/] --> B(["ANALYZE"])
+    B --> C{"CONFIDENT?"}
+    C -->|Yes| D(["ROUTE"])
+    C -->|No| E[/"CLARIFY"/]
+    E --> B
+
+    style A fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
+    style B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style C fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    style D fill:#28a745,stroke:#1e7e34,stroke-width:2px,color:#fff
+    style E fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+
+    linkStyle 0,1,2 stroke:#ED1C24,stroke-width:2px
+    linkStyle 3,4 stroke:#F4484D,stroke-width:2px,stroke-dasharray:5
 ```
 
-The routing agent:
-1. Analyzes the user's request using an LLM
-2. Detects programming language (TypeScript, Python) and project type (frontend, backend, fullstack)
-3. Checks confidence level (must be ≥0.9 to proceed)
-4. If uncertain, asks a clarifying question
-5. Incorporates the user's response into the conversation history
-6. Re-analyzes with the enriched context
-7. Once confident, creates the specialized agent with the correct configuration
+| Step | Description | Example |
+|------|-------------|---------|
+| **REQUEST** | User submits a natural language request | `"Create a todo backend app"` |
+| **ANALYZE** | LLM detects language (TypeScript, Python) and project type (frontend, backend, fullstack) | Detects: backend project, needs framework clarification |
+| **CONFIDENT?** | Checks if confidence ≥ 0.9 to proceed | Confidence: 0.6 → too low, needs clarification |
+| **CLARIFY** | Asks user for missing information, then re-analyzes with enriched context | `"What framework? (Express, Django, FastAPI)"` |
+| **ROUTE** | Creates specialized agent with the detected configuration | `CodeAgent(language=TypeScript, project_type=backend)` |
+
+<Note>
+The **CLARIFY → ANALYZE** loop can repeat multiple times until the agent reaches high confidence. Each user response is incorporated into the conversation history before re-analysis.
+</Note>
 
 ## Quick Start
 
@@ -63,11 +69,11 @@ The routing agent is automatically used when you run certain GAIA commands:
 
 ```bash
 # Routing happens automatically
-gaia code "Create a REST API with Express and SQLite"
+gaia-code "Create a REST API with Express and SQLite"
 # → Detected: TypeScript backend → Creates TypeScript CodeAgent
 
 # If ambiguous, you'll be prompted
-gaia code "Create a todo backend app"
+gaia-code "Create a todo backend app"
 # → What language/framework would you like to use for your backend project?
 # → (e.g., 'Express', 'Django', 'React', 'FastAPI')
 # User: Express
@@ -115,7 +121,7 @@ The routing agent uses the following rules for language detection:
 ### High-Confidence Detection (No Questions)
 
 ```bash
-$ gaia code "Create an Express API with SQLite"
+$ gaia-code "Create an Express API with SQLite"
 [2025-11-18 10:08:03] | INFO | Analysis result: {
     'language': 'typescript',
     'project_type': 'backend',
@@ -127,7 +133,7 @@ $ gaia code "Create an Express API with SQLite"
 ### Conversational Disambiguation
 
 ```bash
-$ gaia code "Build me a todo backend app"
+$ gaia-code "Build me a todo backend app"
 
 What language/framework would you like to use for your backend project?
 (e.g., 'Express', 'Django', 'React', 'FastAPI')
@@ -145,7 +151,7 @@ What language/framework would you like to use for your backend project?
 ### Multiple Disambiguation Rounds
 
 ```bash
-$ gaia code "Create an app"
+$ gaia-code "Create an app"
 
 What kind of application would you like to build?
 (e.g., 'React web app', 'Python CLI tool', 'Express API', 'Django backend')
@@ -176,7 +182,7 @@ Add these to your `.env` file for persistent configuration.
 
 The routing agent is currently integrated with:
 
-- **`gaia code`**: Intelligently routes to Python or TypeScript CodeAgent based on framework detection
+- **`gaia-code`**: Intelligently routes to Python or TypeScript CodeAgent based on framework detection
 
 **Future Integration Plans:**
 - `gaia docker`: Route to appropriate containerization strategy
@@ -217,7 +223,7 @@ echo $AGENT_ROUTING_MODEL
 echo $LEMONADE_BASE_URL
 
 # Test with a clear request
-gaia code "Create an Express API with SQLite"
+gaia-code "Create an Express API with SQLite"
 ```
 
 ### Low Confidence / Always Asks Questions

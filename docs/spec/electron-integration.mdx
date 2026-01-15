@@ -82,61 +82,59 @@ The Electron Integration system provides a reusable framework for packaging GAIA
 
 ### Component Diagram
 
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+flowchart TD
+    A(["MAIN PROCESS"]) --> B(["APP CONTROLLER"])
+    B --> C(["WINDOW MGR"])
+    B --> D(["EXPRESS SERVER"])
+    D --> E(["BACKEND"])
+
+    style A fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style B fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style C fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    style D fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    style E fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+
+    linkStyle 0,1,2,3 stroke:#ED1C24,stroke-width:2px
 ```
-┌────────────────────────────────────────────────────┐
-│         Electron Main Process                      │
-│         (src/electron/src/main.js)                 │
-└───────────┬────────────────────────────────────────┘
-            │
-    ┌───────▼──────────┐
-    │  AppController   │
-    │  (app-controller.js)
-    └────┬────────┬────┘
-         │        │
-    ┌────▼─────┐  │
-    │  Window  │  │
-    │  Manager │  │
-    └──────────┘  │
-         ┌────────▼────────┐
-         │  Express Server │
-         │  (serves WebUI) │
-         └────┬────────────┘
-              │
-    ┌─────────▼──────────┐
-    │  Backend Services  │
-    │  - MCP Client      │
-    │  - IPC Handlers    │
-    └────────────────────┘
-```
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| **MAIN PROCESS** | `src/electron/src/main.js` | Electron entry point, app lifecycle |
+| **APP CONTROLLER** | `app-controller.js` | Manages app initialization and cleanup |
+| **WINDOW MGR** | `window-manager.js` | BrowserWindow creation and management |
+| **EXPRESS SERVER** | Express.js | Serves static WebUI files, handles CORS |
+| **BACKEND** | Services | MCP Client for tool invocation, IPC Handlers for renderer communication |
 
 ### Directory Structure
 
-```
-src/gaia/electron/
-├── package.json            # @gaia/electron package metadata
-├── src/
-│   ├── main.js            # Entry point
-│   ├── app-controller.js  # App lifecycle management
-│   ├── preload/
-│   │   └── preload.js    # Renderer context bridge
-│   └── services/
-│       ├── window-manager.js      # Window creation/management
-│       ├── base-ipc-handlers.js   # Core IPC handlers
-│       └── mcp-client.js          # MCP communication
-└── node_modules/          # Dependencies (express, cors, etc.)
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+flowchart TD
+    A(["src/gaia/"]) --> B(["electron/"])
+    A --> C(["apps/"])
+    B --> D(["src/"])
+    B --> E(["preload/"])
+    B --> F(["services/"])
 
-src/gaia/apps/
-├── jira/webui/
-│   ├── app.config.json    # Jira app configuration
-│   ├── index.html
-│   └── assets/
-├── chat/webui/
-│   ├── app.config.json    # Chat app configuration
-│   └── ...
-└── docker/webui/
-    ├── app.config.json    # Docker app configuration
-    └── ...
+    style A fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff,rx:10,ry:10
+    style B fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff,rx:10,ry:10
+    style C fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff,rx:10,ry:10
+    style D fill:#3d3d3d,stroke:#555,stroke-width:2px,color:#fff,rx:10,ry:10
+    style E fill:#3d3d3d,stroke:#555,stroke-width:2px,color:#fff,rx:10,ry:10
+    style F fill:#3d3d3d,stroke:#555,stroke-width:2px,color:#fff,rx:10,ry:10
+
+    linkStyle 0,1,2,3,4 stroke:#ED1C24,stroke-width:2px
 ```
+
+| Directory | Contents |
+|-----------|----------|
+| **electron/** | `package.json` (@gaia/electron metadata) |
+| **electron/src/** | `main.js` (entry point), `app-controller.js` (lifecycle) |
+| **electron/preload/** | `preload.js` (renderer context bridge) |
+| **electron/services/** | `window-manager.js`, `base-ipc-handlers.js`, `mcp-client.js` |
+| **apps/** | `jira/webui/`, `chat/webui/`, `docker/webui/` - each with `app.config.json` |
 
 ---
 
@@ -624,23 +622,6 @@ npm run build:win
 # Build for Linux
 npm run build:linux
 ```
-
----
-
-## Acceptance Criteria
-
-- [ ] Shared Electron framework works across all apps
-- [ ] Apps load configuration from `app.config.json`
-- [ ] Express server serves static files
-- [ ] Windows created with correct dimensions
-- [ ] IPC communication functional
-- [ ] MCP client can invoke tools
-- [ ] Dev mode opens dev tools
-- [ ] Production mode optimized
-- [ ] Multiple apps supported (jira, chat, docker)
-- [ ] Error handling graceful
-- [ ] Cleanup on app quit
-- [ ] Cross-platform compatibility
 
 ---
 

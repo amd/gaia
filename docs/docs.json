@@ -134,6 +134,7 @@
                   "sdk/applications",
                   "sdk/configuration",
                   "sdk/testing",
+                  "sdk/performance-analysis-plotter",
                   "sdk/security",
                   "sdk/best-practices"
                 ]
@@ -255,7 +256,13 @@
               "reference/api",
               "reference/api-spec",
               "reference/dev",
-              "reference/eval",
+              {
+                "group": "Evaluation Framework",
+                "pages": [
+                  "reference/eval",
+                  "reference/eval/fix-code-testbench"
+                ]
+              },
               "reference/dependency-management"
             ]
           },
@@ -285,6 +292,24 @@
               "deployment/installer",
               "deployment/ui",
               "deployment/testing-electron"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Roadmap",
+        "groups": [
+          {
+            "group": "What's Next",
+            "pages": [
+              "roadmap"
+            ]
+          },
+          {
+            "group": "Plans",
+            "pages": [
+              "plans/installer",
+              "plans/chat-ui"
             ]
           }
         ]
