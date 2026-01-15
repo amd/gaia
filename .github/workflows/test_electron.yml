@@ -309,8 +309,8 @@ jobs:
           Xvfb :99 -screen 0 1024x768x24 &
           sleep 2
 
-          # Create a test script that launches the app and verifies it starts
-          cat > /tmp/test-launch.js << 'EOF'
+          # Create a test script in app directory so it can find electron in node_modules
+          cat > test-launch.js << 'EOF'
           const { spawn } = require('child_process');
           const path = require('path');
 
@@ -398,7 +398,8 @@ jobs:
           });
           EOF
 
-          node /tmp/test-launch.js
+          node test-launch.js
+          rm test-launch.js
         timeout-minutes: 3
 
   test-summary:
