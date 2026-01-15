@@ -16,21 +16,12 @@ GAIA (Generative AI Is Awesome) is AMD's open-source framework for running gener
 
 ### Repository Structure
 
-This is the **gaia-pirate** repository (`amd/gaia`), the private repository where all GAIA development occurs. There are two related repositories:
-
-1. **gaia-pirate** (`amd/gaia`) - **This repository** - Private development repository and single source of truth
-2. **gaia-public** (`github.com/amd/gaia`) - Public open-source repository
+This is the GAIA repository (`amd/gaia`) on GitHub: https://github.com/amd/gaia
 
 **Development Workflow:**
-- All development work happens in this private repository (gaia-pirate)
-- **Claude will NEVER commit to the public repository** - releases are synced manually using `release.py`
-- The `release.py` script filters out internal/NDA content based on an exclude list
-- Files in the `./nda` directory are automatically excluded from public releases
-- External contributions (issues/PRs) come through the public repository
-- External contributions are manually reviewed and merged back into this private repository
-- Legal review happens during the manual release process before PRs are completed in the public repo
-
-See [`nda/docs/release.md`](nda/docs/release.md) for detailed release process documentation.
+- All development work happens in this repository
+- Files in the `./nda` directory contain internal content not synced to public releases
+- Use pull requests for all changes to main branch
 
 ### IMPORTANT: Never Commit Changes
 **NEVER commit changes to the repository unless explicitly requested by the user.** The user will decide when and what to commit. This prevents unwanted changes from being added to the repository history.
