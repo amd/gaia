@@ -3,7 +3,8 @@
 
 from typing import Any, Dict, Optional, Tuple
 
-from gaia.llm.llm_client import LLMClient
+from gaia.llm import create_client
+from gaia.llm.base_client import LLMClient
 from gaia.mcp.blender_mcp_client import MCPClient
 
 
@@ -39,7 +40,6 @@ Example: "Make a tall cylinder" → CYLINDER,0,0,0,1,1,3
         self,
         llm: Optional[LLMClient] = None,
         mcp: Optional[MCPClient] = None,
-        use_local: bool = True,
         base_url: Optional[str] = "http://localhost:8000/api/v1",
     ):
         """
@@ -48,15 +48,13 @@ Example: "Make a tall cylinder" → CYLINDER,0,0,0,1,1,3
         Args:
             llm: An optional pre-configured LLM client, otherwise a new one will be created
             mcp: An optional pre-configured MCP client, otherwise a new one will be created
-            use_local: Whether to use a local LLM (True) or a remote API (False)
-            base_url: Base URL for the local LLM API if using local LLM. If None and use_local=True,
-                      defaults to "http://localhost:8000/api/v1"
+            base_url: Base URL for the Lemonade LLM server
         """
         self.llm = (
             llm
             if llm
-            else LLMClient(
-                use_local=use_local, system_prompt=self.SYSTEM_PROMPT, base_url=base_url
+            else create_client(
+                "lemonade", base_url=base_url, system_prompt=self.SYSTEM_PROMPT
             )
         )
         self.mcp = mcp if mcp else MCPClient()

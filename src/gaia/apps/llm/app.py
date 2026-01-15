@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 """
@@ -11,7 +11,7 @@ import argparse
 import sys
 from typing import Iterator, Optional, Union
 
-from gaia.llm.llm_client import LLMClient
+from gaia.llm import create_client
 from gaia.logger import get_logger
 
 
@@ -28,7 +28,11 @@ class LlmApp:
             base_url: Base URL for local LLM server (defaults to LEMONADE_BASE_URL env var)
         """
         self.log = get_logger(__name__)
-        self.client = LLMClient(system_prompt=system_prompt, base_url=base_url)
+        self.client = create_client(
+            "lemonade",
+            base_url=base_url,
+            system_prompt=system_prompt,
+        )
         self.log.debug("LLM app initialized")
 
     def query(

@@ -25,6 +25,7 @@ setup(
     packages=[
         "gaia",
         "gaia.llm",
+        "gaia.llm.providers",
         "gaia.audio",
         "gaia.chat",
         "gaia.database",

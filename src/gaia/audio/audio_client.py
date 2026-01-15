@@ -6,7 +6,7 @@ import queue
 import threading
 import time
 
-from gaia.llm.llm_client import LLMClient
+from gaia.llm import create_client
 from gaia.logger import get_logger
 
 
@@ -40,10 +40,10 @@ class AudioClient:
         self.transcription_queue = queue.Queue()
         self.tts = None
 
-        # Initialize LLM client (base_url handled automatically)
-        self.llm_client = LLMClient(
+        # Initialize LLM client - factory auto-detects provider from flags
+        self.llm_client = create_client(
             use_claude=use_claude,
-            use_openai=use_chatgpt,  # LLMClient uses use_openai, not use_chatgpt
+            use_openai=use_chatgpt,
             system_prompt=system_prompt,
         )
 

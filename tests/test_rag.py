@@ -399,7 +399,7 @@ class TestChatIntegration:
         with (
             patch("gaia.llm.vlm_client.VLMClient") as mock_vlm_class,
             patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lemonade,
-            patch("gaia.chat.sdk.LLMClient") as mock_llm,
+            patch("gaia.chat.sdk.create_client") as mock_create_client,
             patch("gaia.rag.sdk.RAGSDK") as mock_rag_class,
         ):
 
@@ -416,9 +416,9 @@ class TestChatIntegration:
             }
             mock_lemonade.return_value = mock_lemonade_instance
 
-            # Mock LLM client
+            # Mock LLM client factory - create_client() returns mock instance
             mock_llm_instance = Mock()
-            mock_llm.return_value = mock_llm_instance
+            mock_create_client.return_value = mock_llm_instance
 
             # Mock RAG SDK
             mock_rag = Mock()
