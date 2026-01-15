@@ -6,18 +6,24 @@ SummarizerAgent: GAIA agent for advanced text/document summarization.
 """
 
 import json
-import os
 import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Generator, List, Optional
 
-import yaml
-
+from gaia.agents.base import Agent
 from gaia.chat.sdk import ChatConfig, ChatSDK
 from gaia.logger import get_logger
 from gaia.rag.sdk import RAGSDK
+
+from .prompts import (
+    DETECTION_PROMPT_TEMPLATE,
+    DOCUMENT_SUMMARY_TEMPLATE,
+    ITERATIVE_SUMMARY_TEMPLATE,
+    SUMMARY_STYLES,
+    SYSTEM_PROMPTS,
+)
 
 
 class Chunker:
@@ -105,7 +111,7 @@ class Chunker:
         return chunks
 
 
-class SummarizerAgent:
+class SummarizerAgent(Agent):
 
     DEFAULT_MODEL = "Qwen3-4B-Instruct-2507-GGUF"
 
@@ -113,11 +119,13 @@ class SummarizerAgent:
         self,
         model: Optional[str] = None,
         max_tokens: int = 1024,
+        max_ctx_size: int = 8192,
         styles: Optional[List[str]] = None,
         combined_prompt: bool = False,
         use_claude: bool = False,
         use_chatgpt: bool = False,
     ):
+        super().__init__()
         self.model = model or self.DEFAULT_MODEL
         self.max_tokens = max_tokens
         self.styles = styles or ["executive", "participants", "action_items"]
@@ -139,63 +147,45 @@ class SummarizerAgent:
         self.rag_sdk.llm_client = self.llm_client
         self.max_retries = 3
         self.retry_delay = 1.0
-        self.max_ctx_size = 8192
+        # Default 8192 balances context size with TTFT for responsive UI.
+        # Can be increased for larger documents if TTFT is not critical.
+        self.max_ctx_size = max_ctx_size
         self.overlap_tokens_ratio = 0.05
         self.chunk_tokens = int(self.max_ctx_size * 0.7)
         self.overlap_tokens = int(self.chunk_tokens * self.overlap_tokens_ratio)
-        self.summary_styles = {}
-        self.system_prompts = {}
-        self.iterative_summary_template = None
-        self.document_summary_template = None
-        self.detection_prompt_template = None
 
-        # Disk cache for extracted text (PDF/text)
+        # Load prompts from prompts.py
+        self.summary_styles = SUMMARY_STYLES
+        self.system_prompts = SYSTEM_PROMPTS
+        self.iterative_summary_template = ITERATIVE_SUMMARY_TEMPLATE
+        self.document_summary_template = DOCUMENT_SUMMARY_TEMPLATE
+        self.detection_prompt_template = DETECTION_PROMPT_TEMPLATE
+
+        # Disk cache for extracted text
+        self._text_cache_dir = Path(".gaia") / "text_cache"
         try:
-            self._text_cache_dir = Path(
-                os.environ.get("GAIA_CACHE_DIR", ".gaia")
-            ).joinpath("text_cache")
             self._text_cache_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            # Fallback to local folder if .gaia cannot be created
-            self._text_cache_dir = Path("text_cache")
-            try:
-                self._text_cache_dir.mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                raise RuntimeError("Failed to create text cache directory") from e
-
-        # Attempt to load external prompts.yml
-        try:
-            prompts_path_env = os.environ.get("GAIA_PROMPTS_PATH")
-            default_path = Path(__file__).with_name("prompts.yml")
-            prompts_path = Path(prompts_path_env) if prompts_path_env else default_path
-            if prompts_path.exists() and yaml is not None:
-                with prompts_path.open("r", encoding="utf-8") as f:
-                    data = yaml.safe_load(f) or {}
-                styles = data.get("styles") or {}
-                system_prompts = data.get("system_prompts") or {}
-                templates = data.get("templates") or {}
-
-                # Override defaults if provided
-                if isinstance(styles, dict):
-                    self.summary_styles = styles
-                if isinstance(system_prompts, dict):
-                    self.system_prompts = system_prompts
-                if isinstance(templates, dict):
-                    self.iterative_summary_template = templates.get("iterative_summary")
-                    self.document_summary_template = templates.get("document_summary")
-                    self.detection_prompt_template = templates.get("detection_prompt")
-                self.log.info(f"Loaded prompts from {prompts_path}")
-            elif prompts_path.exists() and yaml is None:
-                self.log.warning(
-                    "PyYAML not installed; using built-in prompts. Install with 'pip install PyYAML' to enable prompts.yml."
-                )
-            else:
-                raise FileNotFoundError(
-                    "prompts.yml not found; set GAIA_PROMPTS_PATH or add prompts.yml next to agent.py"
-                )
         except Exception as e:
-            # Hard fail to avoid implicit duplication; caller should fix prompts.yml
-            raise RuntimeError(f"Failed to load prompts.yml: {e}")
+            raise RuntimeError("Failed to create text cache directory") from e
+
+    def _get_system_prompt(self, content_type: Optional[str] = None) -> str:
+        """Return the system prompt for the agent.
+
+        Args:
+            content_type: Optional content type (email, transcript, pdf).
+                         If None, returns default transcript prompt.
+
+        Returns:
+            System prompt string for the specified content type.
+        """
+        if content_type is None:
+            content_type = "transcript"
+        return self.system_prompts.get(
+            content_type, self.system_prompts.get("transcript", "")
+        )
+
+    def _register_tools(self) -> None:
+        """Register tools for the agent. No tools needed for summarizer."""
 
     def _prepare_chat(self, input_type: str) -> None:
         """Clear prior chat context and set system prompt for the given input type."""
@@ -203,13 +193,13 @@ class SummarizerAgent:
             self.chat_sdk.clear_history()
         except Exception as e:
             self.log.warning(f"Failed to clear chat history: {e}")
-        system_prompt = (self.system_prompts or {}).get(input_type)
+        system_prompt = self._get_system_prompt(input_type)
         if not system_prompt:
-            raise KeyError(f"Missing system prompt for '{input_type}' in prompts.yml")
+            raise KeyError(f"Missing system prompt for '{input_type}' in prompts")
         self.chat_sdk.config.system_prompt = system_prompt
 
     def _validate_styles(self, styles: Any) -> None:
-        """Validate provided style or list of styles against prompts.yml definitions."""
+        """Validate provided style or list of styles against prompt definitions."""
         allowed = set((self.summary_styles or {}).keys())
         provided = styles if isinstance(styles, list) else [styles]
         invalid = [s for s in provided if s not in allowed]
@@ -259,24 +249,35 @@ class SummarizerAgent:
         combined_prompt: Optional[bool],
     ) -> Dict[str, Any]:
         """Summarize content choosing iterative vs direct path, returning structured output."""
-        if self._should_use_iterative(content) and input_type == "pdf":
-            self.log.info("Large content detected; using iterative summarization")
-            brief = self._iterative_summarize(content, "brief", content_type=input_type)
-            return self.summarize(
-                brief.get("text", ""),
-                input_file,
-                input_type=input_type,
-                styles=styles,
-                combined_prompt=combined_prompt,
-            )
-        else:
-            return self.summarize(
-                content,
-                input_file,
-                input_type=input_type,
-                styles=styles,
-                combined_prompt=combined_prompt,
-            )
+        should_iterate = self._should_use_iterative(content)
+
+        if should_iterate:
+            if input_type == "pdf":
+                self.log.info("Large content detected; using iterative summarization")
+                brief = self._iterative_summarize(
+                    content, "brief", content_type=input_type
+                )
+                return self.summarize(
+                    brief.get("text", ""),
+                    input_file,
+                    input_type=input_type,
+                    styles=styles,
+                    combined_prompt=combined_prompt,
+                )
+            else:
+                self.log.warning(
+                    f"Content is large enough for iterative summarization but input type is '{input_type}'. "
+                    f"Attempting direct summarization which may exceed token limits. "
+                    f"Consider splitting the content manually or converting to PDF."
+                )
+
+        return self.summarize(
+            content,
+            input_file,
+            input_type=input_type,
+            styles=styles,
+            combined_prompt=combined_prompt,
+        )
 
     def _stream_summary_content(self, content: str, input_type: str, style: str):
         """Stream summary for content, using iterative folding for large inputs."""
@@ -326,7 +327,7 @@ class SummarizerAgent:
         for i, chunk in enumerate(chunks):
             style_instruction = (self.summary_styles or {}).get(style)
             if not style_instruction:
-                raise KeyError(f"Missing style '{style}' in prompts.yml")
+                raise KeyError(f"Missing style '{style}' in prompts")
             if i == 0:
                 base_prompt = self.document_summary_template.format(
                     style_instruction=style_instruction, document_text=chunk
@@ -347,41 +348,8 @@ class SummarizerAgent:
                     )
                 yield {"text": "\n", "is_complete": False}
             except Exception as e:
-                self.log.warning(
-                    f"Error processing chunk {i+1}/{len(chunks)}: {e}. Attempting fallback with smaller chunk."
-                )
-                mid = max(1, len(chunk) // 2)
-                fallback_chunk = chunk[:mid]
-                if i == 0:
-                    fallback_prompt = self.document_summary_template.format(
-                        document_text=fallback_chunk
-                    )
-                else:
-                    fallback_prompt = self.iterative_summary_template.format(
-                        style_instruction=style_instruction,
-                        previous_summary=summary_so_far,
-                        new_chunk=fallback_chunk,
-                    )
-                try:
-                    style_instruction = (self.summary_styles or {}).get(style)
-                    if not style_instruction:
-                        raise KeyError(f"Missing style '{style}' in prompts.yml")
-                    prompt = f"{fallback_prompt}\n\nNow, please provide the summary in the following style: {style_instruction}"
-                    completed = yield from self._stream_chunk_and_accumulate(
-                        prompt, i, len(chunks), "LLM Prompt Fallback"
-                    )
-                    if completed:
-                        summary_so_far = (
-                            summary_so_far
-                            + ("\n" if summary_so_far else "")
-                            + completed
-                        )
-                    yield {"text": "\n", "is_complete": False}
-                except Exception as e:
-                    self.log.warning(
-                        f"Error in fallback processing for chunk {i+1}/{len(chunks)}: {e}. Stopping chunk processing."
-                    )
-                    break
+                self.log.error(f"Failed to process chunk {i+1}/{len(chunks)}: {e}")
+                raise
         try:
             perf_stats = self.llm_client.get_performance_stats()
         except Exception as e:
@@ -494,7 +462,7 @@ class SummarizerAgent:
     ) -> str:
         style_instruction = (self.summary_styles or {}).get(style)
         if not style_instruction:
-            raise KeyError(f"Missing style '{style}' in prompts.yml")
+            raise KeyError(f"Missing style '{style}' in prompts")
         if style == "participants" and content_type == "email":
             prompt = f"""Extract the sender and all recipients from this email.\n\nFormat your response as JSON:\n{{\n    \"sender\": \"sender email/name\",\n    \"recipients\": [\"recipient1\", \"recipient2\"],\n    \"cc\": [\"cc1\", \"cc2\"] (if any),\n    \"bcc\": [\"bcc1\"] (if any)\n}}\n\nEmail content:\n{content}"""
         elif style == "action_items":
@@ -510,7 +478,7 @@ class SummarizerAgent:
         for style in styles:
             style_instruction = (self.summary_styles or {}).get(style)
             if not style_instruction:
-                raise KeyError(f"Missing style '{style}' in prompts.yml")
+                raise KeyError(f"Missing style '{style}' in prompts")
             sections.append(f"- {style.upper()}: {style_instruction}")
         prompt = f"""Analyze this {content_type} and generate the following summaries:\n\n{chr(10).join(sections)}\n\nFormat your response with clear section headers for each style.\n\nContent:\n{content}"""
         return prompt
@@ -519,12 +487,10 @@ class SummarizerAgent:
         self, content: str, content_type: str, style: str
     ) -> Dict[str, Any]:
         start_time = time.time()
-        system_prompt = self.system_prompts.get(
-            content_type, self.system_prompts["transcript"]
-        )
+        system_prompt = self._get_system_prompt(content_type)
         style_instruction = (self.summary_styles or {}).get(style)
         if not style_instruction:
-            raise KeyError(f"Missing style '{style}' in prompts.yml")
+            raise KeyError(f"Missing style '{style}' in prompts")
         # Merge style guidance into the system prompt for consistent behavior
         self.chat_sdk.config.system_prompt = system_prompt
         prompt = self.generate_summary_prompt(content, content_type, style)
@@ -612,9 +578,7 @@ class SummarizerAgent:
         self, content: str, content_type: str, styles: List[str]
     ) -> Dict[str, Dict[str, Any]]:
         start_time = time.time()
-        system_prompt = self.system_prompts.get(
-            content_type, self.system_prompts["transcript"]
-        )
+        system_prompt = self._get_system_prompt(content_type)
         self.chat_sdk.config.system_prompt = system_prompt
         prompt = self.generate_combined_prompt(content, content_type, styles)
         response = self.chat_sdk.send(prompt)
@@ -754,7 +718,7 @@ class SummarizerAgent:
 
     def summarize_stream(
         self, content: str, input_type: str = "auto", style: str = "brief"
-    ):
+    ) -> Generator[Dict[str, Any], None, None]:
         """Stream a single-style summary, using iterative folding for large inputs."""
         self._validate_styles(style)
         yield from self._stream_summary_content(content, input_type, style)

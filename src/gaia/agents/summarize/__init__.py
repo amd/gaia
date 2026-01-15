@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 
 """
-GAIA Summarize Agent for GAIA.
+GAIA Summarizer Agent for GAIA.
 """
 
 from .agent import SummarizerAgent

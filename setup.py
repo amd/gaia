@@ -70,9 +70,6 @@ setup(
             "webapp/public/*.css",
             "webapp/public/*.js",
         ],
-        "gaia.agents.summarize": [
-            "prompts.yml",
-        ],
     },
     install_requires=[
         "openai",

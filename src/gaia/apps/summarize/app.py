@@ -100,3 +100,17 @@ class SummarizerApp:
             combined_prompt=combined_prompt,
             input_type=input_type,
         )
+
+    def summarize(
+        self,
+        content: str,
+        styles: Optional[List[str]] = None,
+        combined_prompt: Optional[bool] = None,
+        input_type: str = "auto",
+    ) -> Dict[str, Any]:
+        return self.agent.summarize(
+            content,
+            styles=styles,
+            combined_prompt=combined_prompt,
+            input_type=input_type,
+        )
