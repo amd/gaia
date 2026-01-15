@@ -125,7 +125,6 @@ class SummarizerAgent(Agent):
         use_claude: bool = False,
         use_chatgpt: bool = False,
     ):
-        super().__init__()
         self.model = model or self.DEFAULT_MODEL
         self.max_tokens = max_tokens
         self.styles = styles or ["executive", "participants", "action_items"]
@@ -160,6 +159,9 @@ class SummarizerAgent(Agent):
         self.iterative_summary_template = ITERATIVE_SUMMARY_TEMPLATE
         self.document_summary_template = DOCUMENT_SUMMARY_TEMPLATE
         self.detection_prompt_template = DETECTION_PROMPT_TEMPLATE
+
+        # Initialize parent class after setting required attributes
+        super().__init__()
 
         # Disk cache for extracted text
         self._text_cache_dir = Path(".gaia") / "text_cache"
