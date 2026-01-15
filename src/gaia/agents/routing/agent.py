@@ -7,7 +7,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.agent import Agent
-from gaia.llm.llm_client import LLMClient
+from gaia.llm import create_client
 from gaia.logger import get_logger
 
 from .system_prompt import ROUTING_ANALYSIS_PROMPT
@@ -58,13 +58,10 @@ class RoutingAgent:
             # Read from environment if not provided
             base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
 
-        llm_kwargs = {
-            "use_claude": use_claude,
-            "use_openai": use_chatgpt,
-            "base_url": base_url,
-        }
-
-        self.llm_client = LLMClient(**llm_kwargs)
+        # Initialize LLM client - factory auto-detects provider from flags
+        self.llm_client = create_client(
+            use_claude=use_claude, use_openai=use_chatgpt, base_url=base_url
+        )
         self.agent_kwargs = agent_kwargs  # Store for passing to created agents
 
         # Model to use for routing analysis (configurable via env var)
