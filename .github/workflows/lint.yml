@@ -41,6 +41,8 @@ jobs:
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
 
       - name: Check copyright headers
+        # Skip for outside contributors (PRs from forks) - they can't add AMD headers
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
           python util/header.py --check
 
