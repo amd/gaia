@@ -161,9 +161,12 @@ jobs:
 
       - name: Install workspace dependencies
         run: |
-          # Apps are part of npm workspaces, so install from root
-          # This ensures electron and other dependencies are properly hoisted
+          # Apps are part of npm workspaces, so install from root first
           npm ci
+          # Also install in app directory to ensure electron-forge can find electron
+          # (forge uses local package-lock.json to determine project root)
+          cd ${{ matrix.app.path }}
+          npm install
 
       - name: Check for high-severity vulnerabilities
         run: |
@@ -294,8 +297,11 @@ jobs:
 
       - name: Install workspace dependencies
         run: |
-          # Apps are part of npm workspaces, so install from root
+          # Apps are part of npm workspaces, so install from root first
           npm ci
+          # Also install in app directory to ensure electron can be resolved
+          cd ${{ matrix.app.path }}
+          npm install
 
       - name: Install xvfb for headless display
         run: |
