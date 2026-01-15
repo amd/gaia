@@ -157,11 +157,12 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: ${{ matrix.app.path }}/package.json
+          cache-dependency-path: package-lock.json
 
-      - name: Install app dependencies
+      - name: Install workspace dependencies
         run: |
-          cd ${{ matrix.app.path }}
+          # Apps are part of npm workspaces, so install from root
+          # This ensures electron and other dependencies are properly hoisted
           npm ci
 
       - name: Check for high-severity vulnerabilities
@@ -289,11 +290,11 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: ${{ matrix.app.path }}/package.json
+          cache-dependency-path: package-lock.json
 
-      - name: Install app dependencies
+      - name: Install workspace dependencies
         run: |
-          cd ${{ matrix.app.path }}
+          # Apps are part of npm workspaces, so install from root
           npm ci
 
       - name: Install xvfb for headless display
