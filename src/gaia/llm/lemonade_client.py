@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
 Lemonade Server Client for GAIA.
@@ -505,6 +505,7 @@ class LemonadeClient:
         model: Optional[str] = None,
         host: Optional[str] = None,
         port: Optional[int] = None,
+        base_url: Optional[str] = None,
         verbose: bool = True,
         keep_alive: bool = False,
     ):
@@ -515,18 +516,35 @@ class LemonadeClient:
             model: Name of the model to load (optional)
             host: Host address of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
             port: Port number of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
+            base_url: Base URL for the Lemonade server (defaults to LEMONADE_BASE_URL env var)
             verbose: If False, reduce logging verbosity during initialization
             keep_alive: If True, don't terminate server in __del__
         """
+        from urllib.parse import urlparse
+
         # Use provided host/port, or get from env var, or use defaults
         env_host, env_port, env_base_url = _get_lemonade_config()
-        self.host = host if host is not None else env_host
-        self.port = port if port is not None else env_port
-        # If host/port explicitly provided, construct URL; otherwise use env URL directly
+
+        # Determine base_url with priority: explicit params > base_url param > env
         if host is not None or port is not None:
+            # Explicit host/port provided - construct URL from them
+            self.host = host if host is not None else env_host
+            self.port = port if port is not None else env_port
             self.base_url = f"http://{self.host}:{self.port}/api/{LEMONADE_API_VERSION}"
+        elif base_url is not None:
+            # base_url parameter provided - normalize and use it
+            if not base_url.rstrip("/").endswith(f"/api/{LEMONADE_API_VERSION}"):
+                base_url = f"{base_url.rstrip('/')}/api/{LEMONADE_API_VERSION}"
+            self.base_url = base_url
+            # Parse for backwards compatibility with code accessing self.host/self.port
+            parsed = urlparse(base_url)
+            self.host = parsed.hostname or DEFAULT_HOST
+            self.port = parsed.port or DEFAULT_PORT
         else:
+            # Use environment config
             self.base_url = env_base_url
+            self.host = env_host
+            self.port = env_port
         self.model = model
         self.server_process = None
         self.log = get_logger(__name__)
@@ -1196,6 +1214,9 @@ class LemonadeClient:
             }]
         }
         """
+        # Proactively ensure model is loaded before making request
+        self._ensure_model_loaded(model, auto_download)
+
         # Create a client just for this request
         client = OpenAI(
             base_url=self.base_url,
@@ -1267,67 +1288,6 @@ class LemonadeClient:
         except (openai.APIError, openai.APIConnectionError, openai.RateLimitError) as e:
             error_type = e.__class__.__name__
             error_msg = str(e)
-
-            # Check if this is a model loading error and auto_download is enabled
-            if auto_download and self._is_model_error(e):
-                self.log.info(
-                    f"{_emoji('📥', '[AUTO-DOWNLOAD]')} Model '{model}' not loaded, "
-                    f"attempting auto-download and load..."
-                )
-                try:
-                    # Load model with auto-download (may take hours for large models)
-                    self.load_model(model, timeout=60, auto_download=True)
-
-                    # Retry streaming
-                    self.log.info(
-                        f"{_emoji('🔄', '[RETRY]')} Retrying streaming chat completion "
-                        f"with model: {model}"
-                    )
-                    stream = client.chat.completions.create(**request_params)
-
-                    tokens_generated = 0
-                    for chunk in stream:
-                        tokens_generated += 1
-                        yield {
-                            "id": chunk.id,
-                            "object": "chat.completion.chunk",
-                            "created": chunk.created,
-                            "model": chunk.model,
-                            "choices": [
-                                {
-                                    "index": choice.index,
-                                    "delta": {
-                                        "role": (
-                                            choice.delta.role
-                                            if hasattr(choice.delta, "role")
-                                            and choice.delta.role
-                                            else None
-                                        ),
-                                        "content": (
-                                            choice.delta.content
-                                            if hasattr(choice.delta, "content")
-                                            and choice.delta.content
-                                            else None
-                                        ),
-                                    },
-                                    "finish_reason": choice.finish_reason,
-                                }
-                                for choice in chunk.choices
-                            ],
-                        }
-
-                    self.log.debug(
-                        f"Completed streaming chat completion. Generated {tokens_generated} tokens."
-                    )
-                    return
-
-                except Exception as load_error:
-                    self.log.error(f"Auto-download/load failed: {load_error}")
-                    raise LemonadeClientError(
-                        f"Model '{model}' not loaded and auto-load failed: {load_error}"
-                    )
-
-            # Re-raise original error
             self.log.error(f"OpenAI {error_type}: {error_msg}")
             raise LemonadeClientError(f"OpenAI {error_type}: {error_msg}")
         except Exception as e:
@@ -1458,6 +1418,7 @@ class LemonadeClient:
         echo: bool = False,
         timeout: int = DEFAULT_REQUEST_TIMEOUT,
         logprobs: Optional[bool] = None,
+        auto_download: bool = True,
         **kwargs,
     ) -> Generator[Dict[str, Any], None, None]:
         """
@@ -1476,6 +1437,9 @@ class LemonadeClient:
             }]
         }
         """
+        # Proactively ensure model is loaded before making request
+        self._ensure_model_loaded(model, auto_download)
+
         client = OpenAI(
             base_url=self.base_url,
             api_key="lemonade",  # required, but unused
@@ -2079,6 +2043,43 @@ class LemonadeClient:
             )
         return False
 
+    def _ensure_model_loaded(self, model: str, auto_download: bool = True) -> None:
+        """Ensure a model is loaded on the server before making requests.
+
+        This method proactively checks if the model is loaded and loads it if not,
+        preventing 404 errors when making completions requests. Downloads are
+        automatic without user prompts when auto_download is enabled.
+
+        Args:
+            model: Model name to ensure is loaded
+            auto_download: If True, download the model if not present (without prompting)
+
+        Note:
+            This method is called at the start of streaming methods to ensure
+            the model is ready before making API requests. When a model is explicitly
+            requested via CLI flags, it downloads automatically without user confirmation.
+        """
+        if not auto_download:
+            return  # Skip if auto_download disabled
+
+        try:
+            # Check current server state
+            status = self.get_status()
+            loaded_models = [m.get("id", "") for m in status.loaded_models]
+
+            # If model already loaded, nothing to do
+            if model in loaded_models:
+                self.log.debug(f"Model '{model}' already loaded")
+                return
+
+            # Model not loaded - load it (will download if needed without prompting)
+            self.log.info(f"Model '{model}' not loaded, loading...")
+            self.load_model(model, auto_download=True, prompt=False)
+
+        except Exception as e:
+            # Log but don't fail - let the actual request fail with proper error
+            self.log.debug(f"Could not pre-check model status: {e}")
+
     def load_model(
         self,
         model_name: str,
@@ -2086,12 +2087,13 @@ class LemonadeClient:
         auto_download: bool = False,
         download_timeout: int = 7200,
         llamacpp_args: Optional[str] = None,
+        prompt: bool = True,
     ) -> Dict[str, Any]:
         """
         Load a model on the server.
 
         If auto_download is enabled and the model is not available:
-        1. Prompts user for confirmation (with size and ETA)
+        1. Prompts user for confirmation (with size and ETA) - unless prompt=False
         2. Validates disk space
         3. Downloads model with cancellation support
         4. Retries loading
@@ -2104,6 +2106,8 @@ class LemonadeClient:
                              Large models can be 100GB+ and take hours to download
             llamacpp_args: Optional llama.cpp arguments (e.g., "--ubatch-size 2048").
                           Used to configure model loading parameters like batch sizes.
+            prompt: If True, prompt user before downloading (default: True).
+                   Set to False to download automatically without user confirmation.
 
         Returns:
             Dict containing the status of the load operation
@@ -2181,10 +2185,21 @@ class LemonadeClient:
             size_gb = model_info["size_gb"]
             estimated_minutes = self._estimate_download_time(size_gb)
 
-            # Prompt user for confirmation
-            if not _prompt_user_for_download(model_name, size_gb, estimated_minutes):
-                raise ModelDownloadCancelledError(
-                    f"User declined download of {model_name}"
+            # Prompt user for confirmation (if prompt=True)
+            if prompt:
+                if not _prompt_user_for_download(
+                    model_name, size_gb, estimated_minutes
+                ):
+                    raise ModelDownloadCancelledError(
+                        f"User declined download of {model_name}"
+                    )
+            else:
+                # Log the download info without prompting
+                self.log.info(
+                    f"   {_emoji('📦', '[SIZE]')} Model size: {size_gb:.1f} GB"
+                )
+                self.log.info(
+                    f"   {_emoji('⏱️', '[ETA]')} Estimated time: ~{estimated_minutes} minutes"
                 )
 
             # Validate disk space
