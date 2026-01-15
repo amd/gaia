@@ -23,6 +23,7 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.llm_client import LLMClient
 from gaia.logger import get_logger
+from gaia.perf_analysis import run_perf_visualization
 from gaia.version import version
 
 # Optional imports
@@ -1584,6 +1585,86 @@ Examples:
         help="Update consolidated report incrementally with new evaluations only",
     )
 
+    # Nested eval subcommands (e.g., fix_code testbench)
+    eval_subparsers = eval_parser.add_subparsers(
+        dest="eval_command",
+        help="Additional evaluation utilities",
+    )
+    fix_code_parser = eval_subparsers.add_parser(
+        "fix-code",
+        help="Run the fix_code testbench prompts via Gaia CLI",
+        parents=[parent_parser],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run fix_code testbench with local Lemonade model
+  gaia eval fix-code src/gaia/eval/fix_code_testbench/off_by_one_bug/off_by_one_bug.py \\
+      "Loop stops too early" \\
+      output/off_by_one_bug_fixed.py \\
+      --model Qwen3-Coder-30B-A3B-Instruct-GGUF
+
+  # Run fix_code testbench and ask for edit_file tool output
+  gaia eval fix-code src/app.ts "TS2322 type error" fixed.ts --use-edit-file
+
+  # Use Claude instead of the local model (requires ANTHROPIC_API_KEY)
+  gaia eval fix-code src/app.ts "TS7053 index error" fixed.ts --use-claude
+        """,
+    )
+    fix_code_parser.add_argument(
+        "file",
+        help="Path to the source file that should be repaired",
+    )
+    fix_code_parser.add_argument(
+        "error",
+        help="Error description that explains what needs to be fixed",
+    )
+    fix_code_parser.add_argument(
+        "output_file",
+        help="Path where the patched code should be written",
+    )
+    fix_code_parser.add_argument(
+        "--context",
+        help="Optional additional context appended to the prompt (e.g., logs)",
+    )
+    fix_code_parser.add_argument(
+        "--language",
+        help="Override detected language label (python, typescript, etc.)",
+    )
+    fix_code_parser.add_argument(
+        "--use-prompt-engineering",
+        action="store_true",
+        help="Inject additional prompt engineering guidance",
+    )
+    fix_code_parser.add_argument(
+        "--use-edit-file",
+        action="store_true",
+        help="Ask the model to emit an edit_file tool call instead of full code",
+    )
+    fix_code_parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.2,
+        help="Sampling temperature sent to the model (default: 0.2)",
+    )
+    fix_code_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="HTTP timeout for the completion request (default: 600)",
+    )
+    fix_code_parser.add_argument(
+        "--start-line",
+        type=int,
+        default=1,
+        help="First line in the file to include in the prompt (default: 1)",
+    )
+    fix_code_parser.add_argument(
+        "--end-line",
+        type=int,
+        default=None,
+        help="Last line in the file to include in the prompt (default: EOF)",
+    )
+
     # Add new subparser for generating summary reports from evaluation directories
     report_parser = subparsers.add_parser(
         "report",
@@ -1706,6 +1787,23 @@ Examples:
         "--agent-output-file",
         type=str,
         help="Single agent output JSON file to visualize",
+    )
+
+    perf_vis_parser = subparsers.add_parser(
+        "perf-vis",
+        help="Visualize llama.cpp performance metrics from log files",
+        parents=[parent_parser],
+    )
+    perf_vis_parser.add_argument(
+        "log_paths",
+        type=Path,
+        nargs="+",
+        help="One or more llama.cpp server log files to visualize",
+    )
+    perf_vis_parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Display plots interactively in addition to saving images",
     )
 
     # Add new subparser for generating synthetic test data
@@ -3309,6 +3407,50 @@ Let me know your answer!
 
     # Handle evaluation
     if args.action == "eval":
+        if getattr(args, "eval_command", None) == "fix-code":
+            try:
+                from gaia.eval.fix_code_testbench.fix_code_testbench import (
+                    DEFAULT_LOCAL_MODEL,
+                    FixCodeTestbench,
+                )
+            except ImportError as e:
+                log.error(f"Failed to import fix_code_testbench: {e}")
+                print("❌ Error: fix_code_testbench dependencies are missing.")
+                print("The evaluation CLI fix-code helper requires the eval extras.")
+                print("")
+                print("To install the dependencies, run:")
+                print('  uv pip install -e ".[eval]"')
+                return
+
+            if args.use_chatgpt:
+                print(
+                    "❌ The fix_code testbench does not support the ChatGPT backend yet."
+                )
+                print(
+                    "Please use the local Lemonade endpoint (default) or --use-claude."
+                )
+                return
+
+            model_name = args.model or DEFAULT_LOCAL_MODEL
+            bench = FixCodeTestbench(
+                model=model_name,
+                use_claude=args.use_claude,
+                use_prompt_engineering=args.use_prompt_engineering,
+                use_edit_file=args.use_edit_file,
+                temperature=args.temperature,
+                timeout=args.timeout,
+                context=args.context,
+                language_override=args.language,
+            )
+            bench.run(
+                source_path=Path(args.file),
+                error_description=args.error,
+                output_path=Path(args.output_file),
+                start_line=args.start_line,
+                end_line=args.end_line,
+            )
+            return
+
         log.info("Evaluating experiment results")
         try:
             from gaia.eval.eval import Evaluator
@@ -3951,6 +4093,10 @@ Let me know your answer!
         handle_api_command(args)
         return
 
+    if args.action == "perf-vis":
+        handle_perf_vis_command(args)
+        return
+
     # Handle visualize command
     if args.action == "visualize":
         handle_visualize_command(args)
@@ -4371,6 +4517,20 @@ def handle_api_command(args):
         except Exception as e:
             print(f"❌ Error stopping server: {e}")
             sys.exit(1)
+
+
+def handle_perf_vis_command(args):
+    """Generate llama.cpp performance plots from one or more log files."""
+    try:
+        exit_code = run_perf_visualization(args.log_paths, show=args.show)
+    except Exception as exc:
+        log = get_logger(__name__)
+        log.error(f"Error running perf-vis: {exc}")
+        print(f"❌ Error running perf-vis: {exc}")
+        sys.exit(1)
+
+    if exit_code != 0:
+        sys.exit(exit_code)
 
 
 def handle_visualize_command(args):
