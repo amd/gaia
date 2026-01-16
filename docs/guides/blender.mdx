@@ -97,16 +97,16 @@ gaia blender [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--model` | string | "Llama-3.2-3B-Instruct-Hybrid" | Model ID to use for AI processing |
+| `--model` | string | "Llama-3.2-3B-Instruct-Hybrid" | Language model ID for AI processing (not a Blender 3D model) |
 | `--example` | int (1-6) | None | Run a specific example, if not specified run interactive mode |
 | `--steps` | int | 5 | Maximum number of steps per query |
 | `--output-dir` | string | "output" | Directory to save output files |
 | `--stream` | flag | False | Enable streaming mode for LLM responses |
-| `--stats` | flag | True | Display performance statistics |
+| `--stats` | flag | True | Enable statistics collection (stats saved to output files, not displayed) |
 | `--query` | string | None | Custom query to run instead of examples |
 | `--interactive` | flag | False | Enable interactive mode for continuous queries |
 | `--debug-prompts` | flag | False | Enable debug prompts for development |
-| `--print-result` | flag | False | Print results to console |
+| `--print-result` | flag | False | Enable result printing (output depends on query type) |
 | `--mcp-port` | int | 9876 | Port for the Blender MCP server |
 
 ## Usage Examples
@@ -183,6 +183,10 @@ The Blender agent includes several built-in examples to demonstrate capabilities
 **Purpose**: Green cube and red sphere arrangement
 **Command**: Create a green cube at (0, 0, 0) and a red sphere 3 units above it
 **Learning**: Multi-object scenes and spatial relationships
+
+<Note>
+**Positioning Note**: Relative positioning (e.g., "3 units above") may not always position objects as expected. For precise placement, use explicit 3D coordinates like `(0, 0, 3)` instead.
+</Note>
 
 ### Example 5: Object Modification
 **Purpose**: Create and then modify a blue cylinder
@@ -274,66 +278,76 @@ Exiting Blender interactive mode.
 
 ## Troubleshooting
 
-### Common Issues
+<AccordionGroup>
+  <Accordion title="Lemonade Server Not Running">
+    **Error**: Connection errors or "server not accessible" messages
 
-#### Lemonade Server Not Running
-**Error**: Connection errors or "server not accessible" messages
-**Solution**:
-```bash
-lemonade-server serve
-```
+    **Solution**:
+    ```bash
+    lemonade-server serve
+    ```
+  </Accordion>
 
-#### Blender MCP Server Issues
-**Error**: "Blender MCP server is not running or not accessible"
-**Solutions**:
-1. Verify Blender is open with the MCP add-on installed
-2. Check the MCP server is started in Blender's sidebar panel
-3. Confirm port 9876 is available (or use custom port with `--mcp-port`)
-4. Restart Blender if the server appears unresponsive
+  <Accordion title="Blender MCP Server Issues">
+    **Error**: "Blender MCP server is not running or not accessible"
 
-#### Installation Problems
-**Error**: MCP server add-on not found or won't install
-**Solutions**:
-1. Verify you're navigating to the correct file: `src/gaia/mcp/blender_mcp_server.py`
-2. Check Blender version compatibility (4.3+ recommended)
-3. Ensure GAIA is properly installed
-4. Try restarting Blender after installation
+    **Solutions**:
+    1. Verify Blender is open with the MCP add-on installed
+    2. Check the MCP server is started in Blender's sidebar panel
+    3. Confirm port 9876 is available (or use custom port with `--mcp-port`)
+    4. Restart Blender if the server appears unresponsive
+  </Accordion>
 
-#### Performance Issues
-**Error**: Slow response times or timeouts
-**Solutions**:
-1. Reduce `--steps` parameter for simpler operations
-2. Use smaller models for faster processing
-3. Ensure adequate system resources
-4. Check for memory constraints in both GAIA and Blender
+  <Accordion title="Installation Problems">
+    **Error**: MCP server add-on not found or won't install
 
-#### Port Conflicts
-**Error**: MCP server won't start due to port conflicts
-**Solutions**:
-1. Use `--mcp-port` to specify an alternative port
-2. Check for other applications using port 9876
-3. Kill conflicting processes: `gaia kill --port 9876`
+    **Solutions**:
+    1. Verify you're navigating to the correct file: `src/gaia/mcp/blender_mcp_server.py`
+    2. Check Blender version compatibility (4.3+ recommended)
+    3. Ensure GAIA is properly installed
+    4. Try restarting Blender after installation
+  </Accordion>
 
-### Debug Mode
+  <Accordion title="Performance Issues">
+    **Error**: Slow response times or timeouts
 
-Enable debug mode for detailed troubleshooting:
-```bash
-gaia blender --debug-prompts --interactive --logging-level DEBUG
-```
+    **Solutions**:
+    1. Reduce `--steps` parameter for simpler operations
+    2. Use smaller models for faster processing
+    3. Ensure adequate system resources
+    4. Check for memory constraints in both GAIA and Blender
+  </Accordion>
 
-This provides:
-- Detailed prompt information
-- Step-by-step execution logs
-- Error stack traces
-- Communication details between GAIA and Blender
+  <Accordion title="Port Conflicts">
+    **Error**: MCP server won't start due to port conflicts
 
-### Getting Help
+    **Solutions**:
+    1. Use `--mcp-port` to specify an alternative port
+    2. Check for other applications using port 9876
+    3. Kill conflicting processes: `gaia kill --port 9876`
+  </Accordion>
 
-For additional support:
-1. Check the workshop notebook: `workshop/blender.ipynb`
-2. Review the [Development Guide](/reference/dev#troubleshooting)
-3. Consult the [FAQ](/reference/faq) for common solutions
-4. Enable debug mode to gather detailed information
+  <Accordion title="Debug Mode">
+    Enable debug mode for detailed troubleshooting:
+    ```bash
+    gaia blender --debug-prompts --interactive --logging-level DEBUG
+    ```
+
+    This provides:
+    - Detailed prompt information
+    - Step-by-step execution logs
+    - Error stack traces
+    - Communication details between GAIA and Blender
+  </Accordion>
+
+  <Accordion title="Getting Help">
+    For additional support:
+    1. Check the workshop notebook: `workshop/blender.ipynb`
+    2. Review the [Development Guide](/reference/dev#troubleshooting)
+    3. Consult the [FAQ](/reference/faq) for common solutions
+    4. Enable debug mode to gather detailed information
+  </Accordion>
+</AccordionGroup>
 
 ## Advanced Usage
 
@@ -358,6 +372,10 @@ gaia blender --output-dir ./batch_scenes --query "Create scene 1: office setup"
 # Use streaming for real-time feedback
 gaia blender --stream --query "Build a complex architectural structure"
 ```
+
+<Note>
+**Output Directory Behavior**: The `--output-dir` creates the specified directory, but output files depend on the specific operations performed. Some queries may not generate output files even with this flag set.
+</Note>
 
 ### Integration with Other Tools
 The Blender agent can be integrated into larger workflows:
