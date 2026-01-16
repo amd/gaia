@@ -8,7 +8,7 @@ GAIA (Generative AI Is Awesome) is AMD's open-source framework for running gener
 
 **Key Documentation:**
 - External site: https://amd-gaia.ai
-- Development setup: [`docs/dev.md`](docs/dev.md) (local MDX format)
+- Development setup: [`docs/reference/dev.mdx`](docs/reference/dev.mdx)
 - SDK Reference: https://amd-gaia.ai/sdk
 - Guides: https://amd-gaia.ai/guides
 
@@ -16,21 +16,11 @@ GAIA (Generative AI Is Awesome) is AMD's open-source framework for running gener
 
 ### Repository Structure
 
-This is the **gaia-pirate** repository (`amd/gaia`), the private repository where all GAIA development occurs. There are two related repositories:
-
-1. **gaia-pirate** (`amd/gaia`) - **This repository** - Private development repository and single source of truth
-2. **gaia-public** (`github.com/amd/gaia`) - Public open-source repository
+This is the GAIA repository (`amd/gaia`) on GitHub: https://github.com/amd/gaia
 
 **Development Workflow:**
-- All development work happens in this private repository (gaia-pirate)
-- **Claude will NEVER commit to the public repository** - releases are synced manually using `release.py`
-- The `release.py` script filters out internal/NDA content based on an exclude list
-- Files in the `./nda` directory are automatically excluded from public releases
-- External contributions (issues/PRs) come through the public repository
-- External contributions are manually reviewed and merged back into this private repository
-- Legal review happens during the manual release process before PRs are completed in the public repo
-
-See [`nda/docs/release.md`](nda/docs/release.md) for detailed release process documentation.
+- All development work happens in this repository
+- Use pull requests for all changes to main branch
 
 ### IMPORTANT: Never Commit Changes
 **NEVER commit changes to the repository unless explicitly requested by the user.** The user will decide when and what to commit. This prevents unwanted changes from being added to the repository history.
@@ -40,6 +30,79 @@ See [`nda/docs/release.md`](nda/docs/release.md) for detailed release process do
 - Feature branches: Use descriptive names (e.g., `kalin/mcp`, `feature/new-agent`)
 - Always check current branch status before making changes
 - Use pull requests for merging changes to main
+
+## Development Standards
+
+### Documentation Requirements
+
+**Every new feature must be documented.** Before completing any feature work:
+
+1. **Update [`docs/docs.json`](docs/docs.json)** - Add new pages to the appropriate navigation section
+2. **Create documentation in `.mdx` format** - All docs use MDX (Markdown + JSX for Mintlify)
+3. **Follow the docs structure:**
+   - User-facing features → `docs/guides/`
+   - SDK/API features → `docs/sdk/`
+   - Technical specs → `docs/spec/`
+   - CLI commands → update `docs/reference/cli.mdx`
+
+```bash
+# Verify docs build locally before committing
+# Check that new .mdx files are referenced in docs/docs.json
+```
+
+### Code Reuse and Base Classes
+
+**Always extend existing base classes and reuse core functionality.** The `src/gaia/agents/base/` directory provides foundational components:
+
+| File | Purpose | When to Use |
+|------|---------|-------------|
+| `agent.py` | Base `Agent` class | Inherit for all new agents |
+| `mcp_agent.py` | `MCPAgent` mixin | Add MCP protocol support |
+| `api_agent.py` | `ApiAgent` mixin | Add OpenAI-compatible API exposure |
+| `tools.py` | `@tool` decorator, registry | Register all agent tools |
+| `console.py` | `AgentConsole` | Standardized CLI output |
+| `errors.py` | Error formatting | Consistent error handling |
+
+**Before creating new functionality:**
+1. Check if similar functionality exists in `src/gaia/agents/base/`
+2. Check existing mixins in agent subdirectories (e.g., `chat/tools/`, `code/tools/`)
+3. Extract shared logic into base classes or mixins when patterns repeat
+
+### Testing Requirements
+
+**Every new feature requires tests.** The testing structure:
+
+```
+tests/
+├── unit/           # Isolated component tests (mocked dependencies)
+├── mcp/            # MCP protocol integration tests
+├── integration/    # Cross-system tests (real services)
+└── [root]          # Feature tests (test_*.py)
+```
+
+**Required for new features:**
+
+| Feature Type | Required Tests |
+|--------------|----------------|
+| SDK core (agents/base/) | Unit tests + integration tests |
+| New tools (@tool decorated) | Unit tests with mocked LLM |
+| CLI commands | CLI integration tests |
+| API endpoints | API tests (see `test_api.py`) |
+| Agent implementations | Agent tests with mocked/real LLM |
+
+**Testing patterns** (see `tests/conftest.py` for shared fixtures):
+```python
+# Unit test with mocked LLM
+@pytest.fixture
+def mock_lemonade_client(mocker):
+    return mocker.patch("gaia.llm.lemonade_client.LemonadeClient")
+
+# Integration test (uses require_lemonade fixture from conftest.py)
+def test_real_inference(require_lemonade, api_client):
+    # Test skips automatically if Lemonade server not running
+    response = api_client.post("/v1/chat/completions", json={...})
+    ...
+```
 
 ## Testing Philosophy
 
@@ -56,7 +119,7 @@ python -m gaia.mcp.mcp_bridge
 
 ## Development Workflow
 
-**See [`docs/dev.md`](docs/dev.md)** for complete setup (using uv for fast installs), testing, and linting instructions.
+**See [`docs/reference/dev.mdx`](docs/reference/dev.mdx)** for complete setup (using uv for fast installs), testing, and linting instructions.
 
 **Feature documentation:** All documentation is in MDX format in `docs/` directory. See external site https://amd-gaia.ai for rendered version.
 
@@ -94,18 +157,36 @@ gaia-code                          # Code agent
 ```
 gaia/
 ├── src/gaia/           # Main source code
-│   ├── agents/         # Agent implementations (base, blender, code, jira)
-│   ├── apps/           # Standalone applications (jira, llm, summarize)
-│   ├── audio/          # Audio processing (ASR/TTS)
-│   ├── chat/           # Chat interface and SDK
+│   ├── agents/         # Agent implementations
+│   │   ├── base/       # Base Agent class, MCPAgent, ApiAgent, tools
+│   │   ├── chat/       # ChatAgent with RAG capabilities
+│   │   ├── code/       # CodeAgent with orchestration, validators
+│   │   ├── blender/    # BlenderAgent for 3D automation
+│   │   ├── jira/       # JiraAgent for issue management
+│   │   ├── docker/     # DockerAgent for containerization
+│   │   ├── emr/        # MedicalIntakeAgent for healthcare
+│   │   └── routing/    # RoutingAgent for intelligent agent selection
+│   ├── api/            # OpenAI-compatible REST API server
+│   ├── apps/           # Standalone applications (jira, llm, summarize, docker)
+│   ├── audio/          # Audio processing (Whisper ASR, Kokoro TTS)
+│   ├── chat/           # Chat SDK
+│   ├── database/       # DatabaseMixin and DatabaseAgent
+│   ├── electron/       # Electron app integration
 │   ├── eval/           # Evaluation framework
-│   ├── llm/            # LLM backend clients
-│   ├── mcp/            # Model Context Protocol
+│   ├── llm/            # LLM backend clients (Lemonade, Claude, OpenAI)
+│   ├── mcp/            # Model Context Protocol servers/clients
 │   ├── rag/            # Document retrieval (RAG)
-│   ├── talk/           # Voice interaction
+│   ├── shell/          # Shell integration
+│   ├── talk/           # Voice interaction SDK
+│   ├── testing/        # Test utilities and fixtures
+│   ├── utils/          # Utility modules (FileWatcher, parsing)
 │   └── cli.py          # Main CLI entry point
-├── tests/              # Test suite (unit/, mcp/, integration tests)
-├── docs/               # Documentation (see docs/README.md)
+├── tests/              # Test suite
+│   ├── unit/           # Unit tests
+│   ├── mcp/            # MCP integration tests
+│   ├── integration/    # Cross-system integration tests
+│   └── electron/       # Electron app tests (Jest)
+├── docs/               # Documentation (MDX format)
 ├── installer/          # NSIS installer scripts
 ├── workshop/           # Tutorial materials
 └── .github/workflows/  # CI/CD pipelines
@@ -113,26 +194,94 @@ gaia/
 
 ## Architecture
 
-**See [`docs/dev.md`](docs/dev.md)** for detailed architecture documentation.
+**See [`docs/reference/dev.mdx`](docs/reference/dev.mdx)** for detailed architecture documentation.
 
 ### Key Components
 - **Agent System** (`src/gaia/agents/`): Base Agent class with tool registry, state management, error recovery
-- **LLM Backend** (`src/gaia/llm/`): Lemonade Server integration for AMD-optimized inference
+  - `base/agent.py` - Core Agent class
+  - `base/mcp_agent.py` - MCP support mixin
+  - `base/api_agent.py` - OpenAI API compatibility mixin
+  - `base/tools.py` - Tool decorator and registry
+- **LLM Backend** (`src/gaia/llm/`): Multi-provider support with AMD optimization
+  - `lemonade_client.py` - Lemonade Server (AMD NPU/GPU)
+  - `providers/claude.py` - Claude API
+  - `providers/openai_provider.py` - OpenAI API
+  - `factory.py` - Client factory for provider selection
+- **API Server** (`src/gaia/api/`): OpenAI-compatible REST API for agent access
 - **MCP Integration** (`src/gaia/mcp/`): Model Context Protocol for external integrations
-- **RAG System** (`src/gaia/rag/`): Document Q&A with PDF support - see [`docs/chat.md`](docs/chat.md)
-- **Evaluation** (`src/gaia/eval/`): Batch experiments and ground truth - see [`docs/eval.md`](docs/eval.md)
+- **RAG System** (`src/gaia/rag/`): Document Q&A with PDF support - see [`docs/guides/chat.mdx`](docs/guides/chat.mdx)
+- **Evaluation** (`src/gaia/eval/`): Batch experiments and ground truth - see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)
+
+### Agent Implementations
+
+| Agent | Location | Description | Default Model |
+|-------|----------|-------------|---------------|
+| **ChatAgent** | `agents/chat/agent.py` | Document Q&A with RAG | Qwen3-Coder-30B |
+| **CodeAgent** | `agents/code/agent.py` | Code generation with orchestration | Qwen3-Coder-30B |
+| **JiraAgent** | `agents/jira/agent.py` | Jira issue management | Qwen3-Coder-30B |
+| **BlenderAgent** | `agents/blender/agent.py` | 3D scene automation | Qwen3-Coder-30B |
+| **DockerAgent** | `agents/docker/agent.py` | Container management | Qwen3-Coder-30B |
+| **MedicalIntakeAgent** | `agents/emr/agent.py` | Medical form processing | Qwen3-VL-4B (VLM) |
+| **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3-Coder-30B |
 
 ### Default Models
 - General tasks: `Qwen2.5-0.5B-Instruct-CPU`
-- Code/Jira: `Qwen3-Coder-30B-A3B-Instruct-GGUF`
+- Code/Agents: `Qwen3-Coder-30B-A3B-Instruct-GGUF`
+- Vision tasks: `Qwen3-VL-4B-Instruct-GGUF`
+
+## CLI Commands
+
+Primary commands available via `gaia`:
+- `gaia chat` - Interactive chat with RAG
+- `gaia talk` - Voice interaction
+- `gaia prompt` - Single prompt to LLM
+- `gaia llm` - Simple LLM queries
+- `gaia blender` - Blender 3D agent
+- `gaia jira` - Jira integration
+- `gaia docker` - Docker management
+- `gaia api` - OpenAI-compatible API server
+- `gaia mcp` - MCP bridge server (start, stop, status, test)
+- `gaia eval` - Evaluation framework
+- `gaia summarize` - Document summarization
+- `gaia cache` - Cache management (status, clear)
 
 ## Documentation Index
 
-**User:** [`docs/cli.md`](docs/cli.md), [`docs/chat.md`](docs/chat.md), [`docs/talk.md`](docs/talk.md), [`docs/code.md`](docs/code.md), [`docs/blender.md`](docs/blender.md), [`docs/jira.md`](docs/jira.md), [`docs/features.md`](docs/features.md), [`docs/faq.md`](docs/faq.md)
+All documentation uses `.mdx` format (Markdown + JSX for Mintlify).
 
-**Developer:** [`docs/dev.md`](docs/dev.md), [`docs/apps/dev.md`](docs/apps/dev.md), [`docs/mcp.md`](docs/mcp.md), [`docs/eval.md`](docs/eval.md), [`CONTRIBUTING.md`](CONTRIBUTING.md)
+**User Guides:**
+- [`docs/guides/chat.mdx`](docs/guides/chat.mdx) - Chat with RAG
+- [`docs/guides/talk.mdx`](docs/guides/talk.mdx) - Voice interaction
+- [`docs/guides/code.mdx`](docs/guides/code.mdx) - Code generation
+- [`docs/guides/blender.mdx`](docs/guides/blender.mdx) - 3D automation
+- [`docs/guides/jira.mdx`](docs/guides/jira.mdx) - Jira integration
+- [`docs/guides/docker.mdx`](docs/guides/docker.mdx) - Docker management
+- [`docs/guides/routing.mdx`](docs/guides/routing.mdx) - Agent routing
+- [`docs/guides/emr.mdx`](docs/guides/emr.mdx) - Medical intake
 
-**Platform:** [`docs/installer.md`](docs/installer.md), [`docs/ui.md`](docs/ui.md)
+**SDK Reference:**
+- [`docs/sdk/core/agent-system.mdx`](docs/sdk/core/agent-system.mdx) - Agent framework
+- [`docs/sdk/core/tools.mdx`](docs/sdk/core/tools.mdx) - Tool decorator
+- [`docs/sdk/core/console.mdx`](docs/sdk/core/console.mdx) - Console output
+- [`docs/sdk/sdks/chat.mdx`](docs/sdk/sdks/chat.mdx) - Chat SDK
+- [`docs/sdk/sdks/rag.mdx`](docs/sdk/sdks/rag.mdx) - RAG SDK
+- [`docs/sdk/sdks/llm.mdx`](docs/sdk/sdks/llm.mdx) - LLM clients
+- [`docs/sdk/sdks/vlm.mdx`](docs/sdk/sdks/vlm.mdx) - Vision LLM clients
+- [`docs/sdk/sdks/audio.mdx`](docs/sdk/sdks/audio.mdx) - Audio (ASR/TTS)
+- [`docs/sdk/infrastructure/mcp.mdx`](docs/sdk/infrastructure/mcp.mdx) - MCP protocol
+- [`docs/sdk/infrastructure/api-server.mdx`](docs/sdk/infrastructure/api-server.mdx) - API server
+
+**Reference:**
+- [`docs/reference/cli.mdx`](docs/reference/cli.mdx) - CLI reference
+- [`docs/reference/dev.mdx`](docs/reference/dev.mdx) - Development guide
+- [`docs/reference/faq.mdx`](docs/reference/faq.mdx) - FAQ
+- [`docs/reference/troubleshooting.mdx`](docs/reference/troubleshooting.mdx) - Troubleshooting
+
+**Deployment:**
+- [`docs/deployment/installer.mdx`](docs/deployment/installer.mdx) - NSIS installer
+- [`docs/deployment/ui.mdx`](docs/deployment/ui.mdx) - Electron UI
+
+**Specifications:** See `docs/spec/` for 40+ technical specifications.
 
 ## Issue Response Guidelines
 
@@ -148,7 +297,7 @@ When responding to GitHub issues and pull requests, follow these guidelines:
 
 The documentation is organized in [`docs/docs.json`](docs/docs.json) with the following structure:
 - **SDK**: `docs/sdk/` - Agent system, tools, core SDKs (chat, llm, rag, vlm, audio)
-- **User Guides** (`docs/guides/`): Feature-specific guides (chat, talk, code, blender, jira, docker, routing)
+- **User Guides** (`docs/guides/`): Feature-specific guides (chat, talk, code, blender, jira, docker, routing, emr)
 - **Playbooks** (`docs/playbooks/`): Step-by-step tutorials for building agents
 - **SDK Reference** (`docs/sdk/`): Core concepts, SDKs, infrastructure, mixins, agents
 - **Specifications** (`docs/spec/`): Technical specs for all components
@@ -164,45 +313,46 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 2. **Check for duplicates:** Search existing issues/PRs to avoid redundant responses
 
 3. **Reference specific files:** Use precise file references with line numbers when possible
-   - Agent implementations: `src/gaia/agents/` (base.py, chat_agent.py, code_agent.py, jira_agent.py, blender_agent.py)
+   - Agent implementations: `src/gaia/agents/` (base/, chat/, code/, blender/, jira/, docker/, emr/, routing/)
    - CLI commands: `src/gaia/cli.py`
    - MCP integration: `src/gaia/mcp/`
    - LLM backend: `src/gaia/llm/`
-   - Audio processing: `src/gaia/audio/` (ASR, TTS)
-   - RAG system: `src/gaia/rag/` (document Q&A, embeddings)
-   - Evaluation: `src/gaia/eval/` (batch experiments, ground truth)
-   - Applications: `src/gaia/apps/` (jira, llm, summarize)
+   - Audio processing: `src/gaia/audio/` (whisper_asr.py, kokoro_tts.py)
+   - RAG system: `src/gaia/rag/` (sdk.py, pdf_utils.py)
+   - Evaluation: `src/gaia/eval/` (eval.py, batch_experiment.py)
+   - Applications: `src/gaia/apps/` (jira/, llm/, summarize/, docker/)
    - Chat SDK: `src/gaia/chat/`
+   - API Server: `src/gaia/api/`
 
 4. **Link to relevant documentation:**
-   - **Getting Started:** [`docs/setup.md`](docs/setup.md), [`docs/quickstart.md`](docs/quickstart.md)
-   - **User Guides:** [`docs/guides/chat.md`](docs/guides/chat.md), [`docs/guides/talk.md`](docs/guides/talk.md), [`docs/guides/code.md`](docs/guides/code.md), [`docs/guides/blender.md`](docs/guides/blender.md), [`docs/guides/jira.md`](docs/guides/jira.md)
-   - **SDK Reference:** [`docs/sdk/core/agent-system.md`](docs/sdk/core/agent-system.md), [`docs/sdk/sdks/chat.md`](docs/sdk/sdks/chat.md), [`docs/sdk/sdks/rag.md`](docs/sdk/sdks/rag.md), [`docs/sdk/infrastructure/mcp.md`](docs/sdk/infrastructure/mcp.md)
-   - **CLI Reference:** [`docs/reference/cli.md`](docs/reference/cli.md), [`docs/reference/features.md`](docs/reference/features.md)
-   - **Development:** [`docs/reference/dev.md`](docs/reference/dev.md), [`docs/sdk/testing.md`](docs/sdk/testing.md), [`docs/sdk/best-practices.md`](docs/sdk/best-practices.md)
-   - **FAQ & Help:** [`docs/reference/faq.md`](docs/reference/faq.md), [`docs/glossary.md`](docs/glossary.md)
+   - **Getting Started:** [`docs/setup.mdx`](docs/setup.mdx), [`docs/quickstart.mdx`](docs/quickstart.mdx)
+   - **User Guides:** [`docs/guides/chat.mdx`](docs/guides/chat.mdx), [`docs/guides/talk.mdx`](docs/guides/talk.mdx), [`docs/guides/code.mdx`](docs/guides/code.mdx), [`docs/guides/blender.mdx`](docs/guides/blender.mdx), [`docs/guides/jira.mdx`](docs/guides/jira.mdx)
+   - **SDK Reference:** [`docs/sdk/core/agent-system.mdx`](docs/sdk/core/agent-system.mdx), [`docs/sdk/sdks/chat.mdx`](docs/sdk/sdks/chat.mdx), [`docs/sdk/sdks/rag.mdx`](docs/sdk/sdks/rag.mdx), [`docs/sdk/infrastructure/mcp.mdx`](docs/sdk/infrastructure/mcp.mdx)
+   - **CLI Reference:** [`docs/reference/cli.mdx`](docs/reference/cli.mdx), [`docs/reference/features.mdx`](docs/reference/features.mdx)
+   - **Development:** [`docs/reference/dev.mdx`](docs/reference/dev.mdx), [`docs/sdk/testing.mdx`](docs/sdk/testing.mdx), [`docs/sdk/best-practices.mdx`](docs/sdk/best-practices.mdx)
+   - **FAQ & Help:** [`docs/reference/faq.mdx`](docs/reference/faq.mdx), [`docs/glossary.mdx`](docs/glossary.mdx)
 
 5. **For bugs:**
    - Search `src/gaia/` for related code
    - Check `tests/` for related test cases that might reveal the issue or need updating
-   - Reference [`docs/sdk/troubleshooting.md`](docs/sdk/troubleshooting.md)
-   - Check security implications using [`docs/sdk/security.md`](docs/sdk/security.md)
+   - Reference [`docs/sdk/troubleshooting.mdx`](docs/sdk/troubleshooting.mdx)
+   - Check security implications using [`docs/sdk/security.mdx`](docs/sdk/security.mdx)
 
 6. **For feature requests:**
    - Check if similar functionality exists in `src/gaia/agents/` or `src/gaia/apps/`
-   - Reference [`docs/sdk/examples.md`](docs/sdk/examples.md) and [`docs/sdk/advanced-patterns.md`](docs/sdk/advanced-patterns.md)
-   - Suggest approaches following [`docs/sdk/best-practices.md`](docs/sdk/best-practices.md)
+   - Reference [`docs/sdk/examples.mdx`](docs/sdk/examples.mdx) and [`docs/sdk/advanced-patterns.mdx`](docs/sdk/advanced-patterns.mdx)
+   - Suggest approaches following [`docs/sdk/best-practices.mdx`](docs/sdk/best-practices.mdx)
 
 7. **Follow contribution guidelines:**
    - Reference [`CONTRIBUTING.md`](CONTRIBUTING.md) for code standards
-   - Point to [`docs/reference/dev.md`](docs/reference/dev.md) for development workflow
+   - Point to [`docs/reference/dev.mdx`](docs/reference/dev.mdx) for development workflow
 
 ### Response Quality Guidelines
 
 #### Tone & Style
 - **Professional but friendly:** Welcome contributors warmly while maintaining technical accuracy
 - **Concise:** Aim for 1-3 paragraphs for simple questions, expand for complex issues
-- **Specific:** Reference actual files with line numbers (e.g., `src/gaia/agents/base.py:123`)
+- **Specific:** Reference actual files with line numbers (e.g., `src/gaia/agents/base/agent.py:123`)
 - **Helpful:** Provide next steps, code examples, or links to documentation
 - **Honest:** If you don't know something, say so and suggest escalation to @kovtcharov-amd
 
@@ -256,11 +406,11 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 ```
 Thanks for reporting this! The error you're seeing in `gaia chat` appears to be related to RAG initialization.
 
-Looking at src/gaia/rag/embeddings.py:145, the initialization expects a model path. Could you confirm:
+Looking at src/gaia/rag/sdk.py:145, the initialization expects a model path. Could you confirm:
 1. Did you run `gaia chat init` first?
 2. What's the output of `gaia chat status`?
 
-See docs/guides/chat.md for the full setup process. This might also be related to #123.
+See docs/guides/chat.mdx for the full setup process. This might also be related to #123.
 ```
 
 **Bad Response (Too Generic):**
@@ -272,9 +422,9 @@ This looks like a configuration issue. Try checking your configuration and makin
 ```
 Interesting idea! GAIA doesn't currently have built-in Slack integration, but you could build this using:
 
-1. The Chat SDK (docs/sdk/sdks/chat.md) for message handling
-2. The MCP protocol (docs/sdk/infrastructure/mcp.md) for Slack connectivity
-3. Similar pattern to our Jira agent (src/gaia/agents/jira_agent.py)
+1. The Chat SDK (docs/sdk/sdks/chat.mdx) for message handling
+2. The MCP protocol (docs/sdk/infrastructure/mcp.mdx) for Slack connectivity
+3. Similar pattern to our Jira agent (src/gaia/agents/jira/agent.py)
 
 For AMD optimization: Consider using the local LLM backend (src/gaia/llm/) to keep conversations private and leverage Ryzen AI NPU acceleration.
 
@@ -295,27 +445,42 @@ Looking at your code, the issue is on line 45 where you're using subprocess.call
 - **Recognize contributions:** Thank people for bug reports, feature ideas, and PRs
 - **AMD's commitment:** Remind users that GAIA is AMD's open-source commitment to accessible AI
 
-## File Path Rules (Workaround for Claude Code v1.0.111 Bug)
-- When reading or editing a file, **ALWAYS use relative paths.**
-
-## File Path Rules
-- When reading or editing files, **ALWAYS use relative paths** starting with `./`
-- Example: `./src/components/Component.tsx` ✅
-- **DO NOT use absolute paths**
-- Example: `C:/Users/user/project/src/components/Component.tsx` ❌
-
 ## Claude Agents
-Specialized agents are available in `.claude/agents/` for specific tasks:
-- **Agent Development**: gaia-agent-builder (opus) - Creating new GAIA agents, tool registration, state management
-- **SDK Architecture**: sdk-architect (opus) - API design, pattern consistency, breaking changes
-- **Hardware Optimization**: hardware-optimizer (opus) - NPU/iGPU tuning, Ryzen AI performance
-- **Python**: python-developer (sonnet) - Python code, refactoring, design patterns
-- **TypeScript**: typescript-developer (sonnet) - TypeScript, Electron apps, type definitions
-- **Testing**: test-engineer (sonnet) - pytest, CLI testing, AMD hardware validation
-- **Frontend**: frontend-developer (sonnet) - Electron apps, web UIs
-- **Architecture Review**: architecture-reviewer (opus) - SOLID principles, dependency analysis
-- **Documentation**: api-documenter (sonnet) - OpenAPI specs, MCP schemas
-- **MCP Development**: mcp-developer (sonnet) - MCP server creation
-- And many more - see `.claude/agents/` directory
+
+Specialized agents are available in `.claude/agents/` for specific tasks (24 agents total):
+
+### Development Agents
+- **gaia-agent-builder** (opus) - Creating new GAIA agents, tool registration, state management
+- **sdk-architect** (opus) - SDK API design, pattern consistency, breaking changes
+- **python-developer** (sonnet) - Python code, refactoring, design patterns
+- **typescript-developer** (sonnet) - TypeScript, Electron apps, type definitions
+- **cli-developer** (opus) - CLI command development, argparse patterns
+- **mcp-developer** (sonnet) - MCP server implementation, WebSocket protocols
+
+### Quality & Testing Agents
+- **test-engineer** (sonnet) - pytest, CLI testing, AMD hardware validation
+- **eval-engineer** (sonnet) - Evaluation framework, benchmarking, ground truth
+- **code-reviewer** (opus) - Code quality, AMD compliance, security
+- **architecture-reviewer** (opus) - SOLID principles, dependency analysis
+
+### Specialist Agents
+- **rag-specialist** (opus) - RAG pipelines, document indexing, semantic search
+- **jira-specialist** (sonnet) - Jira integration, NLP-powered issue management
+- **blender-specialist** (sonnet) - Blender 3D automation, procedural modeling
+- **voice-engineer** (sonnet) - Whisper ASR, Kokoro TTS, speech pipelines
+- **lemonade-specialist** (opus) - Lemonade Server, AMD NPU/GPU optimization
+- **prompt-engineer** (opus) - LLM prompt optimization, chain-of-thought
+
+### Infrastructure Agents
+- **frontend-developer** (sonnet) - Electron apps, web UIs
+- **docker-specialist** (opus) - Docker containerization, Kubernetes
+- **github-actions-specialist** (opus) - CI/CD workflows, pipeline debugging
+- **github-issues-specialist** (opus) - GitHub Issues/PRs for AI agents
+- **nsis-installer** (sonnet) - Windows installer development
+- **release-manager** (sonnet) - Release management, version bumping
+
+### Documentation Agents
+- **api-documenter** (sonnet) - Mintlify MDX documentation, API specs
+- **ui-ux-designer** (opus) - User-centered design, accessibility
 
 When invoking a proactive agent from `.claude/agents/`, indicate which agent you are using in your response.
