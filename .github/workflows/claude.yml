@@ -27,6 +27,8 @@ on:
     types: [opened, ready_for_review]
   pull_request_review_comment:
     types: [created, edited]
+  release:
+    types: [created]
 
 permissions:
   contents: write  # Allows Claude to post suggested changes (requires write for GitHub API)
@@ -482,3 +484,390 @@ jobs:
             - Friendly and professional
             - Assume good intent
             - Welcome contributors
+
+  # Generate release notes when a new release is created
+  release-notes:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # For committing release notes
+      issues: write    # For creating failure notification issue
+    concurrency:
+      group: claude-release-notes-${{ github.event.release.tag_name }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: main       # Checkout main branch (not tag) so we can commit
+          fetch-depth: 0  # Full history for tag comparison
+          token: ${{ secrets.RELEASE_PAT }}  # PAT needed to push past branch protection
+
+      - name: Generate release context
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          echo "Generating release context for $CURRENT_TAG"
+
+          # Ensure docs/releases directory exists
+          mkdir -p docs/releases
+
+          # Find previous tag using git describe (more reliable)
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 "$CURRENT_TAG^" 2>/dev/null || echo "")
+          if [ -z "$PREVIOUS_TAG" ]; then
+            # No previous tag found, use first commit
+            PREVIOUS_TAG=$(git rev-list --max-parents=0 HEAD)
+            echo "No previous tag found, using initial commit: $PREVIOUS_TAG"
+          else
+            echo "Previous tag: $PREVIOUS_TAG"
+          fi
+          echo "PREVIOUS_TAG=$PREVIOUS_TAG" >> $GITHUB_ENV
+
+          # Generate diff statistics
+          echo "## Release: $CURRENT_TAG" > release-context.txt
+          echo "## Previous: $PREVIOUS_TAG" >> release-context.txt
+          echo "" >> release-context.txt
+
+          # Get commit count and contributor count
+          COMMIT_COUNT=$(git rev-list --count $PREVIOUS_TAG..$CURRENT_TAG)
+          CONTRIBUTOR_COUNT=$(git log $PREVIOUS_TAG..$CURRENT_TAG --format='%aN' | sort -u | wc -l)
+          echo "**$COMMIT_COUNT commits** from **$CONTRIBUTOR_COUNT contributors**" >> release-context.txt
+          echo "" >> release-context.txt
+
+          # Get contributors
+          echo "## Contributors" >> release-context.txt
+          git log $PREVIOUS_TAG..$CURRENT_TAG --format='%aN' | sort -u >> release-context.txt
+          echo "" >> release-context.txt
+
+          # Get commit log with PR references (limit to 100 for large releases)
+          echo "## Commit Log" >> release-context.txt
+          git log $PREVIOUS_TAG..$CURRENT_TAG --oneline --no-merges | head -100 >> release-context.txt
+          TOTAL_COMMITS=$(git log $PREVIOUS_TAG..$CURRENT_TAG --oneline --no-merges | wc -l)
+          if [ "$TOTAL_COMMITS" -gt 100 ]; then
+            echo "... and $((TOTAL_COMMITS - 100)) more commits" >> release-context.txt
+          fi
+          echo "" >> release-context.txt
+
+          # Get merged PRs using GitHub's compare API (more accurate)
+          echo "## Merged Pull Requests" >> release-context.txt
+          gh api "repos/$GITHUB_REPOSITORY/compare/$PREVIOUS_TAG...$CURRENT_TAG" \
+            --jq '.commits[].commit.message' 2>/dev/null | \
+            grep -oE '#[0-9]+' | sort -u | while read pr; do
+              pr_num="${pr#\#}"
+              pr_info=$(gh pr view "$pr_num" --json title,author --jq '"\(.title) (@\(.author.login))"' 2>/dev/null || echo "")
+              if [ -n "$pr_info" ]; then
+                echo "#$pr_num - $pr_info" >> release-context.txt
+              fi
+            done
+          echo "" >> release-context.txt
+
+          # Get file change summary (not full diff - too large)
+          echo "## Files Changed Summary" >> release-context.txt
+          git diff --stat $PREVIOUS_TAG..$CURRENT_TAG | tail -20 >> release-context.txt
+          echo "" >> release-context.txt
+
+          # Get changed directories for context
+          echo "## Changed Directories" >> release-context.txt
+          git diff --name-only $PREVIOUS_TAG..$CURRENT_TAG | xargs -I {} dirname {} | sort -u | head -30 >> release-context.txt
+          echo "" >> release-context.txt
+
+          # Split diff into component-based files for iterative processing
+          mkdir -p release-diffs
+
+          # Create diffs by top-level directory for manageable chunks
+          for dir in src tests docs .github installer examples; do
+            if git diff --name-only $PREVIOUS_TAG..$CURRENT_TAG | grep -q "^$dir/"; then
+              git diff $PREVIOUS_TAG..$CURRENT_TAG -- "$dir/" > "release-diffs/$dir.diff"
+              LINES=$(wc -l < "release-diffs/$dir.diff")
+              echo "  - release-diffs/$dir.diff: $LINES lines" >> release-context.txt
+            fi
+          done
+
+          # Capture any remaining changes not in known directories
+          git diff $PREVIOUS_TAG..$CURRENT_TAG -- ':!src/' ':!tests/' ':!docs/' ':!.github/' ':!installer/' ':!examples/' > release-diffs/other.diff 2>/dev/null || true
+          if [ -s "release-diffs/other.diff" ]; then
+            LINES=$(wc -l < "release-diffs/other.diff")
+            echo "  - release-diffs/other.diff: $LINES lines" >> release-context.txt
+          fi
+
+          echo "" >> release-context.txt
+          echo "## Diff Files Available" >> release-context.txt
+          echo "Diffs are split by directory in release-diffs/ folder." >> release-context.txt
+          echo "Read each diff file to understand changes in that component." >> release-context.txt
+          ls -la release-diffs/ >> release-context.txt 2>/dev/null || echo "No diff files generated" >> release-context.txt
+
+          echo "Context generated: $(wc -l < release-context.txt) lines"
+          echo "Diff files created in release-diffs/"
+          ls -la release-diffs/ 2>/dev/null || echo "No diff files"
+
+      - name: Generate release notes with Claude
+        id: generate-notes
+        uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          max_turns: 30
+          model: claude-opus-4-5-20251101
+          prompt: |
+            Generate comprehensive release notes for GAIA version ${{ github.event.release.tag_name }}.
+
+            ## FIRST ACTIONS
+            1. Read release-context.txt - Contains commit log, contributors, PRs, and list of diff files
+            2. Read src/gaia/version.py - Get the current version info
+            3. Read CLAUDE.md for project context
+
+            ## ITERATIVE DIFF ANALYSIS
+            Diffs are split by component in the `release-diffs/` folder:
+            - release-diffs/src.diff - Source code changes (most important!)
+            - release-diffs/tests.diff - Test changes
+            - release-diffs/docs.diff - Documentation changes
+            - release-diffs/.github.diff - CI/workflow changes
+            - release-diffs/installer.diff - Installer changes
+            - release-diffs/examples.diff - Example changes
+            - release-diffs/other.diff - Other changes
+
+            **Strategy for large diffs:**
+            1. Start with release-diffs/src.diff - this contains the main feature changes
+            2. For very large diffs (>1000 lines), read in chunks using offset/limit
+            3. Summarize key changes from each component before writing final notes
+            4. Focus on user-facing changes, not internal refactoring
+
+            ## OUTPUT: TWO FILES REQUIRED
+
+            You MUST write TWO files:
+
+            ### 1. `RELEASE_NOTES.md` - For GitHub Release
+            Plain markdown for the GitHub release page.
+
+            ### 2. `docs/releases/${{ github.event.release.tag_name }}.mdx` - For Documentation Site
+            MDX format with Mintlify frontmatter for the documentation website.
+
+            ## Release Notes Format (use for BOTH files)
+
+            For the MDX file, add this frontmatter at the top:
+            ```
+            ---
+            title: "${{ github.event.release.tag_name }}"
+            description: "[One-line summary of this release]"
+            ---
+            ```
+
+            Then use this content structure for both files:
+
+            # GAIA ${{ github.event.release.tag_name }} Release Notes
+
+            ## Overview
+
+            [2-3 sentence summary of the most important changes. Highlight major new features, significant improvements, or breaking changes.]
+
+            ## What's New
+
+            ### 🚀 [Major Feature Name]
+            [Description with code example if applicable]
+
+            [Continue for each major new feature...]
+
+            ## Improvements
+
+            ### [Category - e.g., Agent UX, Performance, etc.]
+            - **[Improvement name]**: [Brief description]
+
+            ## Bug Fixes
+
+            - **#[issue]**: [Description of fix]
+
+            ## Infrastructure
+
+            - [Change description]
+
+            ## Breaking Changes
+
+            [List any breaking changes, or "None. All changes are additive."]
+
+            ## Full Changelog
+
+            **[N] commits** from [N] contributors
+
+            Key PRs:
+            - #[number] - [PR title]
+
+            Full Changelog: [${{ env.PREVIOUS_TAG }}...${{ github.event.release.tag_name }}](https://github.com/amd/gaia/compare/${{ env.PREVIOUS_TAG }}...${{ github.event.release.tag_name }})
+
+            ## Guidelines
+
+            1. **Be specific** - Reference actual file changes, not generic descriptions
+            2. **Include code examples** - For new features, show how to use them
+            3. **Categorize properly**: 🚀 new features, 🎯 improvements, 🐛 bug fixes, 🔧 infrastructure, 📚 docs, 🔒 security
+            4. **Link PRs and issues** - Use #number format
+            5. **Credit contributors** - Mention contributors for significant changes
+            6. **Highlight AMD-specific features** - NPU optimizations, Ryzen AI features
+
+            ## What NOT to Include
+
+            - Minor typo fixes (unless significant)
+            - Internal refactoring without user impact
+            - Dependency updates (unless security-related)
+            - Copyright/license header changes
+
+            IMPORTANT: You MUST write BOTH files:
+            1. `RELEASE_NOTES.md` (for GitHub release)
+            2. `docs/releases/${{ github.event.release.tag_name }}.mdx` (for documentation site)
+
+      - name: Verify release notes generated
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          echo "Checking for generated release notes..."
+
+          if [ ! -f "RELEASE_NOTES.md" ]; then
+            echo "❌ RELEASE_NOTES.md was not generated"
+            exit 1
+          fi
+
+          if [ ! -f "docs/releases/$TAG_NAME.mdx" ]; then
+            echo "❌ docs/releases/$TAG_NAME.mdx was not generated"
+            exit 1
+          fi
+
+          echo "✅ Both release notes files generated successfully"
+
+      - name: Update docs.json with new release
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          # Add the new release to docs.json navigation
+          # Insert at the beginning of the releases array (newest first)
+          python3 << 'EOF'
+          import json
+          import os
+
+          tag = os.environ['TAG_NAME']
+          docs_json_path = 'docs/docs.json'
+
+          with open(docs_json_path, 'r') as f:
+              docs = json.load(f)
+
+          # Find or create the Releases tab
+          tabs = docs['navigation']['tabs']
+          releases_tab = None
+
+          for tab in tabs:
+              if tab.get('tab') == 'Releases':
+                  releases_tab = tab
+                  break
+
+          if releases_tab is None:
+              # Create new Releases tab
+              releases_tab = {
+                  "tab": "Releases",
+                  "groups": [
+                      {
+                          "group": "Release Notes",
+                          "pages": []
+                      }
+                  ]
+              }
+              tabs.append(releases_tab)
+
+          # Find the Release Notes group
+          releases_group = None
+          for group in releases_tab['groups']:
+              if group.get('group') == 'Release Notes':
+                  releases_group = group
+                  break
+
+          if releases_group is None:
+              releases_group = {"group": "Release Notes", "pages": []}
+              releases_tab['groups'].append(releases_group)
+
+          # Add new release at the beginning (newest first)
+          new_page = f"releases/{tag}"
+          if new_page not in releases_group['pages']:
+              releases_group['pages'].insert(0, new_page)
+
+          with open(docs_json_path, 'w') as f:
+              json.dump(docs, f, indent=2)
+
+          print(f"✅ Added {new_page} to docs.json")
+          EOF
+
+      - name: Bump version.py to next patch version
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          # Extract version from tag (strip 'v' prefix if present)
+          RELEASED_VERSION="${TAG_NAME#v}"
+          echo "Released version: $RELEASED_VERSION"
+
+          # Validate version format (must be X.Y.Z)
+          if [[ ! "$RELEASED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "⚠️ Version '$RELEASED_VERSION' doesn't match X.Y.Z pattern"
+            echo "Skipping auto-bump - please update version.py manually"
+            echo "NEXT_VERSION=$RELEASED_VERSION" >> $GITHUB_ENV
+            exit 0
+          fi
+
+          # Parse version components (MAJOR.MINOR.PATCH)
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$RELEASED_VERSION"
+
+          # Bump patch version
+          NEXT_PATCH=$((PATCH + 1))
+          NEXT_VERSION="$MAJOR.$MINOR.$NEXT_PATCH"
+          echo "Next development version: $NEXT_VERSION"
+
+          # Update __version__ in version.py
+          sed -i "s/__version__ = \".*\"/__version__ = \"$NEXT_VERSION\"/" src/gaia/version.py
+
+          # Verify the change
+          grep "__version__" src/gaia/version.py
+          echo "NEXT_VERSION=$NEXT_VERSION" >> $GITHUB_ENV
+          echo "✅ version.py bumped to $NEXT_VERSION"
+
+      - name: Commit release notes and version bump
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          NEXT_VERSION: ${{ env.NEXT_VERSION }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add docs/releases/$TAG_NAME.mdx docs/docs.json src/gaia/version.py
+
+          # Only commit if there are changes
+          if git diff --cached --quiet; then
+            echo "⚠️ No changes to commit"
+          else
+            git commit -m "release: $TAG_NAME notes + bump to $NEXT_VERSION for development"
+            git push origin HEAD:main
+            echo "✅ Release notes committed, version bumped to $NEXT_VERSION"
+          fi
+
+      - name: Update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          echo "Updating GitHub release with generated notes..."
+          gh release edit "$TAG_NAME" --notes-file RELEASE_NOTES.md
+          echo "✅ GitHub release updated successfully"
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          gh issue create \
+            --title "⚠️ Release notes generation failed for $TAG_NAME" \
+            --body "The automated release notes generation for **$TAG_NAME** failed.
+
+          **Action required:** Please manually write release notes for this release.
+
+          - Release: https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG_NAME
+          - Workflow run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+
+          cc @kovtcharov-amd" \
+            --assignee kovtcharov-amd \
+            --label "bug,release"
