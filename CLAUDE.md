@@ -106,7 +106,6 @@ gaia/
 │   └── cli.py          # Main CLI entry point
 ├── tests/              # Test suite (unit/, mcp/, integration tests)
 ├── docs/               # Documentation (see docs/README.md)
-├── installer/          # NSIS installer scripts
 ├── workshop/           # Tutorial materials
 └── .github/workflows/  # CI/CD pipelines
 ```
@@ -132,7 +131,7 @@ gaia/
 
 **Developer:** [`docs/dev.md`](docs/dev.md), [`docs/apps/dev.md`](docs/apps/dev.md), [`docs/mcp.md`](docs/mcp.md), [`docs/eval.md`](docs/eval.md), [`CONTRIBUTING.md`](CONTRIBUTING.md)
 
-**Platform:** [`docs/installer.md`](docs/installer.md), [`docs/ui.md`](docs/ui.md)
+**Platform:** [`docs/ui.md`](docs/ui.md)
 
 ## Issue Response Guidelines
 
@@ -154,7 +153,7 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 - **Specifications** (`docs/spec/`): Technical specs for all components
 - **Reference** (`docs/reference/`): CLI, API, features, FAQ, development
 - **Integrations**: `docs/integrations/` - MCP, n8n, VSCode
-- **Deployment** (`docs/deployment/`): Packaging, installers, UI
+- **Deployment** (`docs/deployment/`): Packaging, UI
 
 ### Response Protocol
 
