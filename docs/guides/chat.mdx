@@ -76,13 +76,13 @@ Configure your chat session with these options:
 ```python
 @dataclass
 class ChatConfig:
-    model: str = "Qwen3-Coder-30B-A3B-Instruct-GGUF"  # Default validated model
+    model: str = "Qwen3-Coder-30B-A3B-Instruct-GGUF"  # Recommended model for chat
     max_tokens: int = 512
     system_prompt: Optional[str] = None
     max_history_length: int = 4
     show_stats: bool = False
     use_local_llm: bool = True
-    assistant_name: str = "assistant"
+    assistant_name: str = "gaia"
 ```
 
 ### ChatResponse
@@ -315,7 +315,7 @@ RAG (Retrieval-Augmented Generation) enables chatting with PDF documents using s
 </Tabs>
 
 <Note>
-  **PDF Indexing Requirements:** Processing PDFs with images requires a Vision Language Model (VLM). GAIA uses `Qwen3-VL-4B-Instruct-GGUF` by default for extracting text from images in PDFs. The model will be automatically downloaded on first use if not already installed (requires [Lemonade Server](https://amd-gaia.ai/setup#install-lemonade-server)).
+  **PDF Indexing Requirements:** Processing PDFs with images requires a Vision Language Model (VLM). GAIA uses `Qwen3-VL-4B-Instruct-GGUF` by default for extracting text from images in PDFs. Ensure the VLM model is installed via [Lemonade Server](https://amd-gaia.ai/setup#install-lemonade-server) before indexing PDFs with images.
 </Note>
 
 ### Interactive RAG Commands
