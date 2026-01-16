@@ -76,7 +76,7 @@ Configure your chat session with these options:
 ```python
 @dataclass
 class ChatConfig:
-    model: str = "Qwen3-Coder-30B-A3B-Instruct-GGUF"  # Recommended model for chat
+    model: str = "Qwen3-Coder-30B-A3B-Instruct-GGUF"  # Default validated model
     max_tokens: int = 512
     system_prompt: Optional[str] = None
     max_history_length: int = 4
