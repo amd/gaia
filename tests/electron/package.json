@@ -41,8 +41,7 @@
   },
   "devDependencies": {
     "@jest/globals": "^29.7.0",
-    "jest": "^29.7.0",
-    "spectron": "^19.0.0"
+    "jest": "^29.7.0"
   },
   "author": "AMD AI Group",
   "license": "MIT"
