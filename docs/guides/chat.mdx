@@ -121,13 +121,38 @@ gaia chat --stats
 ```
 </CodeGroup>
 
-<Accordion title="Interactive Commands">
-  - `/clear` - Clear conversation history
-  - `/history` - Show conversation history
-  - `/stats` - Show performance statistics
-  - `/help` - Show help message
-  - `quit`, `exit`, `bye` - End conversation
-</Accordion>
+<AccordionGroup>
+  <Accordion title="Basic Commands">
+    - `/clear` - Clear conversation history
+    - `/history` - Show conversation history
+    - `/stats` - Show performance statistics
+    - `/help` - Show help message
+    - `quit`, `exit`, `bye` - End conversation
+  </Accordion>
+
+  <Accordion title="Session Management">
+    - `/resume [id]` - Resume a previous session (or list if no id provided)
+    - `/save` - Save current session
+    - `/sessions` - List all available sessions
+    - `/reset` - Clear conversation and start fresh
+  </Accordion>
+
+  <Accordion title="Document Management">
+    - `/index <path>` - Index a document or directory for RAG
+    - `/watch <dir>` - Watch a directory for changes and auto-index
+    - `/list` - List all indexed documents
+    - `/status` - Show system status (RAG, sessions, etc.)
+  </Accordion>
+
+  <Accordion title="Debug & Observability">
+    - `/chunks [file]` - View indexed chunks for a file
+    - `/chunk <id>` - View specific chunk by ID
+    - `/test <query>` - Test query retrieval with relevance scores
+    - `/dump <file|#>` - Export document and chunks to markdown
+    - `/clear-cache` - Clear RAG cache (force re-indexing)
+    - `/search-debug` - Enable search debugging output
+  </Accordion>
+</AccordionGroup>
 
 ### Single Query Mode
 
@@ -290,12 +315,23 @@ RAG (Retrieval-Augmented Generation) enables chatting with PDF documents using s
   </Tab>
 
   <Tab title="Voice Mode">
+    <Note>
+      **Prerequisites:** Voice mode requires the `talk` module:
+      ```bash
+      uv pip install -e ".[talk]"
+      ```
+    </Note>
+
     ```bash
     # Voice with documents
     gaia talk --index manual.pdf
     ```
   </Tab>
 </Tabs>
+
+<Note>
+  **PDF Indexing Requirements:** Processing PDFs with images requires a Vision Language Model (VLM). GAIA uses `Qwen3-VL-4B-Instruct-GGUF` by default for extracting text from images in PDFs. Ensure the VLM model is installed via [Lemonade Server](https://amd-gaia.ai/setup#install-lemonade-server) before indexing PDFs with images.
+</Note>
 
 ### RAG Configuration
 
@@ -391,10 +427,25 @@ print(f"Debug trace saved to: {result['output_file']}")
     ```
   </Accordion>
 
+  <Accordion title="Voice Mode: No Module Named 'pip'">
+    If `gaia talk` fails with "No module named 'pip'", install dependencies manually:
+
+    ```bash
+    # Install talk dependencies
+    uv pip install -e ".[talk]"
+
+    # If the error persists, install pip in your environment
+    python -m ensurepip --upgrade
+    ```
+
+    **Root Cause:** Some virtual environments don't include pip by default. The `gaia talk` command attempts to install missing dependencies automatically, but this requires pip to be available.
+  </Accordion>
+
   <Accordion title="PDF Issues">
-    - Ensure PDF has extractable text (not scanned images)
+    - Ensure PDF has extractable text (not scanned images, unless VLM is available)
     - Check file is not password-protected
     - Verify file is not corrupted
+    - If you see "tuple index out of range" errors, the PDF may have complex formatting or embedded images that require VLM processing
   </Accordion>
 
   <Accordion title="Performance Tuning">
