@@ -131,28 +131,16 @@ gaia chat --stats
   </Accordion>
 
   <Accordion title="Session Management">
-    - `/resume [id]` - Resume a previous session (or list if no id provided)
-    - `/save` - Save current session
-    - `/sessions` - List all available sessions
+    - `/resume [id]` - Resume a previous conversation (or list sessions if no id)
+    - `/save` - Save current conversation
+    - `/sessions` - List all saved sessions
     - `/reset` - Clear conversation and start fresh
   </Accordion>
-
-  <Accordion title="Document Management">
-    - `/index <path>` - Index a document or directory for RAG
-    - `/watch <dir>` - Watch a directory for changes and auto-index
-    - `/list` - List all indexed documents
-    - `/status` - Show system status (RAG, sessions, etc.)
-  </Accordion>
-
-  <Accordion title="Debug & Observability">
-    - `/chunks [file]` - View indexed chunks for a file
-    - `/chunk <id>` - View specific chunk by ID
-    - `/test <query>` - Test query retrieval with relevance scores
-    - `/dump <file|#>` - Export document and chunks to markdown
-    - `/clear-cache` - Clear RAG cache (force re-indexing)
-    - `/search-debug` - Enable search debugging output
-  </Accordion>
 </AccordionGroup>
+
+<Note>
+  **Document Q&A:** To work with documents, see the [Document Q&A (RAG)](#document-qa-rag) section below for RAG-specific commands.
+</Note>
 
 ### Single Query Mode
 
@@ -332,6 +320,37 @@ RAG (Retrieval-Augmented Generation) enables chatting with PDF documents using s
 <Note>
   **PDF Indexing Requirements:** Processing PDFs with images requires a Vision Language Model (VLM). GAIA uses `Qwen3-VL-4B-Instruct-GGUF` by default for extracting text from images in PDFs. Ensure the VLM model is installed via [Lemonade Server](https://amd-gaia.ai/setup#install-lemonade-server) before indexing PDFs with images.
 </Note>
+
+### Interactive RAG Commands
+
+When using `gaia chat` with documents (via `--index` flag or `/index` command), additional commands become available:
+
+<AccordionGroup>
+  <Accordion title="Session Management">
+    Sessions preserve both your conversation history and indexed documents:
+
+    - `/resume [id]` - Resume session with conversation and documents restored
+    - `/save` - Save session including indexed documents
+    - `/sessions` - List all saved sessions
+    - `/reset` - Clear conversation and remove all indexed documents
+  </Accordion>
+
+  <Accordion title="Document Management">
+    - `/index <path>` - Index a document or directory (enables RAG if needed)
+    - `/watch <dir>` - Watch directory for changes and auto-index new files
+    - `/list` - List all currently indexed documents
+    - `/status` - Show RAG system status (indexed files, chunks, memory usage)
+  </Accordion>
+
+  <Accordion title="Debug & Observability">
+    - `/chunks [file]` - View indexed chunks for a specific file
+    - `/chunk <id>` - View specific chunk by ID
+    - `/test <query>` - Test query retrieval with relevance scores
+    - `/dump <file|#>` - Export document and chunks to markdown
+    - `/clear-cache` - Clear RAG cache and force re-indexing
+    - `/search-debug` - Enable detailed search debugging output
+  </Accordion>
+</AccordionGroup>
 
 ### RAG Configuration
 
