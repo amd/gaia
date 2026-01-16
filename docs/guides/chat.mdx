@@ -437,8 +437,6 @@ print(f"Debug trace saved to: {result['output_file']}")
     # If the error persists, install pip in your environment
     python -m ensurepip --upgrade
     ```
-
-    **Root Cause:** Some virtual environments don't include pip by default. The `gaia talk` command attempts to install missing dependencies automatically, but this requires pip to be available.
   </Accordion>
 
   <Accordion title="PDF Issues">
