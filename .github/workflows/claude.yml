@@ -742,8 +742,8 @@ jobs:
 
           echo "✅ Both release notes files exist"
 
-          # Validate MDX structure
-          python util/validate_mdx.py "docs/releases/$TAG_NAME.mdx" --tag "$TAG_NAME"
+          # Validate MDX structure (release notes specific)
+          python util/validate_mdx.py "docs/releases/$TAG_NAME.mdx" --tag "$TAG_NAME" --release-notes
 
       - name: Update docs.json with new release
         env:

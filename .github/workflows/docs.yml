@@ -1,0 +1,47 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: Docs Validation
+
+on:
+  push:
+    paths:
+      - 'docs/**'
+      - 'util/validate_mdx.py'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'util/validate_mdx.py'
+      - '.github/workflows/docs.yml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Validate MDX frontmatter
+        run: |
+          echo "Validating MDX frontmatter..."
+          find docs -name "*.mdx" | xargs python util/validate_mdx.py
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Mintlify CLI
+        run: npm install -g mintlify
+
+      - name: Validate docs with Mintlify
+        working-directory: docs
+        run: |
+          echo "Validating documentation with Mintlify..."
+          mintlify build
+          echo "✅ Documentation validated successfully"
