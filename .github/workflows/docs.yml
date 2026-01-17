@@ -31,5 +31,5 @@ jobs:
         working-directory: docs
         run: |
           echo "Validating documentation with Mintlify..."
-          mintlify build
+          mintlify validate
           echo "✅ Documentation validated successfully"
