@@ -313,6 +313,17 @@
             ]
           }
         ]
+      },
+      {
+        "tab": "Releases",
+        "groups": [
+          {
+            "group": "Release Notes",
+            "pages": [
+              "releases/v0.15.0"
+            ]
+          }
+        ]
       }
     ],
     "global": {
