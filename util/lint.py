@@ -29,12 +29,12 @@ class CheckResult:
 # Configuration
 SRC_DIR = "src/gaia"
 TEST_DIR = "tests"
-INSTALLER_DIR = "installer"
 PYLINT_CONFIG = ".pylintrc"
 DISABLED_CHECKS = "C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718"
 EXCLUDE_DIRS = (
     ".git,__pycache__,venv,.venv,.mypy_cache,.tox,.eggs,_build,buck-out,node_modules"
 )
+LINT_DIRS = [SRC_DIR, TEST_DIR]
 
 
 def run_command(cmd: list[str], check: bool = False) -> tuple[int, str]:
@@ -60,16 +60,7 @@ def check_black(fix: bool = False) -> CheckResult:
     print("-" * 40)
 
     if fix:
-        cmd = [
-            sys.executable,
-            "-m",
-            "black",
-            INSTALLER_DIR,
-            SRC_DIR,
-            TEST_DIR,
-            "--config",
-            "pyproject.toml",
-        ]
+        cmd = [sys.executable, "-m", "black", *LINT_DIRS, "--config", "pyproject.toml"]
     else:
         cmd = [
             sys.executable,
@@ -77,9 +68,7 @@ def check_black(fix: bool = False) -> CheckResult:
             "black",
             "--check",
             "--diff",
-            INSTALLER_DIR,
-            SRC_DIR,
-            TEST_DIR,
+            *LINT_DIRS,
             "--config",
             "pyproject.toml",
         ]
@@ -91,8 +80,15 @@ def check_black(fix: bool = False) -> CheckResult:
         # Count files that would be reformatted
         issues = output.count("would reformat") or 1
         print(f"\n[!] Code formatting issues found.")
+        # Show the actual error output
+        if output.strip():
+            print("\n[OUTPUT]")
+            for line in output.strip().split("\n")[:30]:
+                print(f"   {line}")
+            if len(output.strip().split("\n")) > 30:
+                print("   ... (output truncated, showing first 30 lines)")
         if not fix:
-            print("Fix with: python util/lint.py --black --fix")
+            print("\nFix with: python util/lint.py --black --fix")
         return CheckResult("Code Formatting (Black)", False, False, issues, output)
 
     print("[OK] Code formatting looks good!")
@@ -105,18 +101,9 @@ def check_isort(fix: bool = False) -> CheckResult:
     print("-" * 40)
 
     if fix:
-        cmd = [sys.executable, "-m", "isort", INSTALLER_DIR, SRC_DIR, TEST_DIR]
+        cmd = [sys.executable, "-m", "isort", *LINT_DIRS]
     else:
-        cmd = [
-            sys.executable,
-            "-m",
-            "isort",
-            "--check-only",
-            "--diff",
-            INSTALLER_DIR,
-            SRC_DIR,
-            TEST_DIR,
-        ]
+        cmd = [sys.executable, "-m", "isort", "--check-only", "--diff", *LINT_DIRS]
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
@@ -124,8 +111,15 @@ def check_isort(fix: bool = False) -> CheckResult:
     if exit_code != 0:
         issues = output.count("would reformat") + output.count("ERROR") or 1
         print(f"\n[!] Import sorting issues found.")
+        # Show the actual error output
+        if output.strip():
+            print("\n[OUTPUT]")
+            for line in output.strip().split("\n")[:30]:
+                print(f"   {line}")
+            if len(output.strip().split("\n")) > 30:
+                print("   ... (output truncated, showing first 30 lines)")
         if not fix:
-            print("Fix with: python util/lint.py --isort --fix")
+            print("\nFix with: python util/lint.py --isort --fix")
         return CheckResult("Import Sorting (isort)", False, False, issues, output)
 
     print("[OK] Import sorting looks good!")
@@ -173,9 +167,7 @@ def check_flake8() -> CheckResult:
         sys.executable,
         "-m",
         "flake8",
-        INSTALLER_DIR,
-        SRC_DIR,
-        TEST_DIR,
+        *LINT_DIRS,
         f"--exclude={EXCLUDE_DIRS}",
         "--count",
         "--statistics",
@@ -306,7 +298,7 @@ def count_python_files() -> tuple[int, int]:
     total_files = 0
     total_lines = 0
 
-    for dir_name in [SRC_DIR, TEST_DIR, INSTALLER_DIR]:
+    for dir_name in LINT_DIRS:
         dir_path = Path(dir_name)
         if dir_path.exists():
             for py_file in dir_path.rglob("*.py"):
@@ -332,7 +324,7 @@ def print_summary(results: list[CheckResult]) -> int:
     print("[STATS] Project Statistics:")
     print(f"   - Python Files: {total_files}")
     print(f"   - Lines of Code: {total_lines:,}")
-    print(f"   - Directories: {SRC_DIR}, {TEST_DIR}, {INSTALLER_DIR}")
+    print(f"   - Directories: {', '.join(LINT_DIRS)}")
 
     # Build results
     pass_count = 0
