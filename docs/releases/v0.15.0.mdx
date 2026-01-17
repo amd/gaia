@@ -1,0 +1,174 @@
+---
+title: "v0.15.0"
+description: "SDK v1.0.0, Medical Intake Agent, Database Module, and comprehensive documentation improvements"
+---
+
+# GAIA v0.15.0 Release Notes
+
+## Overview
+
+This release transforms GAIA into a full **AI Agent Framework (SDK v1.0.0)**, introduces the **Medical Intake Agent with Dashboard**, adds the **Database Module** for SQLite-backed agents, and includes comprehensive documentation improvements with new playbooks.
+
+## What's New
+
+### SDK v1.0.0 - AI Agent Framework
+GAIA is now positioned as a **pure framework/SDK** for building AI PC agents:
+- 900+ line API reference with 20+ components
+- 60+ MDX documentation files organized into tabs
+- 55+ interface validation tests
+- Mintlify-powered documentation site at [amd-gaia.ai](https://amd-gaia.ai)
+
+```python
+from gaia import Agent, tool
+
+class MyAgent(Agent):
+    def _get_system_prompt(self) -> str:
+        return "You are a helpful assistant."
+
+    def _register_tools(self):
+        @tool
+        def greet(name: str) -> str:
+            """Greet someone by name."""
+            return f"Hello, {name}!"
+```
+
+### Medical Intake Agent with Dashboard
+Complete patient intake form processing system:
+- Automatic file watching for intake forms (.png, .jpg, .pdf)
+- VLM-powered data extraction (Qwen2.5-VL on NPU)
+- SQLite database with 17 patient fields
+- Real-time React dashboard with SSE updates
+- Natural language patient queries
+
+```bash
+gaia-emr watch          # Auto-process forms
+gaia-emr dashboard      # Launch web dashboard
+gaia-emr query "Find patient John Smith"
+```
+
+### Database Module
+New `gaia.database` module with two usage patterns:
+
+**DatabaseAgent** (prototyping):
+```python
+from gaia import DatabaseAgent
+
+class MyAgent(DatabaseAgent):
+    def __init__(self, **kwargs):
+        super().__init__(db_path="data/app.db", **kwargs)
+```
+
+**DatabaseMixin** (production):
+```python
+from gaia import Agent, DatabaseMixin, tool
+
+class MyAgent(Agent, DatabaseMixin):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.init_db("data/app.db")
+```
+
+### Testing Utilities Module
+New `gaia.testing` module for testing agents without real LLM/VLM services:
+- `MockLLMProvider`, `MockVLMClient`, `MockToolExecutor`
+- `temp_directory`, `temp_file`, `create_test_agent` fixtures
+- `assert_llm_called`, `assert_tool_called` assertions
+- 51 unit tests with full coverage
+
+```python
+from gaia.testing import MockLLMProvider, assert_llm_called
+
+def test_my_agent():
+    mock_llm = MockLLMProvider(responses=["I found the data"])
+    agent = MyAgent(skip_lemonade=True)
+    agent.chat = mock_llm
+    result = agent.process_query("Find data")
+    assert_llm_called(mock_llm)
+```
+
+### Hardware Advisor Agent
+New example agent with LemonadeClient APIs for dynamic model recommendations:
+```bash
+python examples/hardware_advisor_agent.py
+```
+
+### GAIA Code Playbook
+Complete 3-part playbook for the Code Agent:
+- Part 1: Introduction and fundamentals
+- Part 2: Application creation and development
+- Part 3: Validation and building workflows
+
+## Improvements
+
+### Agent UX Enhancements
+- **Rich Panel Final Answers**: Agent responses now appear with green-bordered panels and "Final Answer" title
+- **Better Completion Messages**: Removed confusing step counters, now shows clean "Processing complete!" message
+- **Enhanced Error Display**: Shows execution trace with Query → Plan Step → Tool → Error, plus code context with line pointers
+
+### Code Agent
+- Limited router to TypeScript only (other languages report helpful error)
+- Fixed default path issue where `create-next-app` would fail on non-empty directories
+- Added dynamic timer scaffolding and artifact-aware planning
+
+### Lemonade Server Integration
+- Centralized initialization in `LemonadeManager` singleton
+- Changed context size check from error to warning (agents continue running)
+- Fixed VLM image processing breaking embeddings endpoint
+
+### Documentation
+- New `setup.mdx` with step-by-step installation guide
+- New `glossary.mdx` with 50+ GAIA terms
+- Streamlined learning path: Quickstart → Hardware Advisor → Playbooks/Guides
+- Applied `<CodeGroup>` component across multiple docs for compact command examples
+- Standardized license headers across 90+ files
+- Added source code links throughout documentation
+
+### PyPI Package
+- Renamed from `gaia` to `amd-gaia` (import name remains `gaia`)
+- Enhanced PyTorch CPU-only build support
+
+## Bug Fixes
+
+- **#1092**: Agent receives empty response after tool execution - fixed duplicate message insertion
+- **#1088**: Confusing agent completion messages showing incomplete steps
+- **#1087**: Context size error now shows as warning instead of blocking
+- **#134**: Blender MCP 'Namespace' object has no attribute 'stats'
+- **#1075**: VLM image processing breaks embeddings endpoint
+- **#1083**: Agent tool calling fixed with JSON format instructions in base class
+- **#1095**: Windows npx command can't find TypeScript compiler
+- **#1137**: Code agent default path fails on non-empty directories
+- **#1079**: Authentication flow for documentation sub-pages
+- **#940**: Empty LLM response when last message has `role==tool`
+
+## Infrastructure
+
+### CI/CD
+- All workflows now skip tests on draft PRs (unless `ready_for_ci` label added)
+- New `test_unit.yml` workflow for fast unit/integration tests
+- Updated GitHub Actions: `actions/checkout` v5, `actions/setup-python` v6
+
+### Documentation Site
+- Access code protection via Express.js proxy server
+- Railway deployment with cookie-based authentication
+- Open redirect and XSS vulnerability fixes
+
+## Breaking Changes
+
+None. All changes are additive.
+
+## Full Changelog
+
+**40 commits** from 8 contributors
+
+Key PRs:
+- #1063 - Transform GAIA into AI Agent Framework (SDK v1.0.0)
+- #1101 - Medical Intake Agent with Dashboard
+- #1093 - Add Database Module with DatabaseMixin and DatabaseAgent
+- #1098 - Add Testing Utilities Module
+- #1131 - GAIA Code Playbook
+- #1113 - Hardware Advisor agent
+- #1112 - Fix agent empty response after tool execution
+- #1085 - Rename PyPI package to `amd-gaia`
+- #1067 - Centralize Lemonade Server Initialization
+
+Full Changelog: [v0.14.2...v0.15.0](https://github.com/amd/gaia/compare/v0.14.2...v0.15.0)

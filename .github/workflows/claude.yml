@@ -714,7 +714,17 @@ jobs:
             1. `RELEASE_NOTES.md` (for GitHub release)
             2. `docs/releases/${{ github.event.release.tag_name }}.mdx` (for documentation site)
 
-      - name: Verify release notes generated
+            ## MANDATORY: Review Your Changes
+            After writing the release notes files, you MUST:
+            1. Read back both files you wrote to verify they are correct
+            2. Check that the MDX frontmatter is valid (title, description)
+            3. Verify code examples are properly formatted
+            4. Ensure all PR/issue references use correct #number format
+            5. Confirm the changelog link uses the correct tag names
+
+            Do NOT skip this review step - always verify your output before completing.
+
+      - name: Verify and validate release notes
         env:
           TAG_NAME: ${{ github.event.release.tag_name }}
         run: |
@@ -730,7 +740,10 @@ jobs:
             exit 1
           fi
 
-          echo "✅ Both release notes files generated successfully"
+          echo "✅ Both release notes files exist"
+
+          # Validate MDX structure
+          python util/validate_mdx.py "docs/releases/$TAG_NAME.mdx" --tag "$TAG_NAME"
 
       - name: Update docs.json with new release
         env:
@@ -738,7 +751,7 @@ jobs:
         run: |
           # Add the new release to docs.json navigation
           # Insert at the beginning of the releases array (newest first)
-          python3 << 'EOF'
+          python << 'EOF'
           import json
           import os
 
