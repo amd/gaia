@@ -13,16 +13,13 @@ from pathlib import Path
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 
-def validate_mdx(
-    file_path: str, tag: str | None = None, release_notes: bool = False
-) -> list[str]:
+def validate_release_notes(file_path: str, tag: str | None = None) -> list[str]:
     """
-    Validate an MDX file.
+    Validate a release notes MDX file.
 
     Args:
         file_path: Path to the MDX file
         tag: Optional release tag to validate against (e.g., 'v0.16.0')
-        release_notes: If True, validate release notes specific requirements
 
     Returns:
         List of validation errors (empty if valid)
@@ -52,45 +49,39 @@ def validate_mdx(
             if "description:" not in frontmatter:
                 errors.append("Missing 'description' in frontmatter")
 
-            # Check title matches tag if provided (release notes only)
-            if tag and release_notes:
+            # Check title matches tag if provided
+            if tag:
                 title_match = re.search(
                     r'title:\s*["\']?([^"\'\n]+)["\']?', frontmatter
                 )
                 if title_match and tag not in title_match.group(1):
                     errors.append(f"Title should contain '{tag}'")
 
-    # Release notes specific checks
-    if release_notes:
-        required_sections = ["## Overview", "## What's New", "## Full Changelog"]
-        for section in required_sections:
-            if section not in content:
-                errors.append(f"Missing required section: {section}")
+    # Required sections
+    required_sections = ["## Overview", "## What's New", "## Full Changelog"]
+    for section in required_sections:
+        if section not in content:
+            errors.append(f"Missing required section: {section}")
 
-        if "github.com/amd/gaia/compare/" not in content:
-            errors.append("Missing changelog comparison link")
+    # Changelog link
+    if "github.com/amd/gaia/compare/" not in content:
+        errors.append("Missing changelog comparison link")
 
     return errors
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Validate MDX files")
-    parser.add_argument("file", nargs="+", help="Path(s) to MDX file(s) to validate")
+    parser = argparse.ArgumentParser(description="Validate release notes MDX files")
+    parser.add_argument("file", nargs="+", help="Path(s) to release notes MDX file(s)")
     parser.add_argument(
         "--tag", "-t", help="Release tag to validate against (e.g., v0.16.0)"
-    )
-    parser.add_argument(
-        "--release-notes",
-        "-r",
-        action="store_true",
-        help="Enable release notes specific validation",
     )
     args = parser.parse_args()
 
     all_errors = {}
     for file_path in args.file:
         print(f"Validating {file_path}...")
-        errors = validate_mdx(file_path, args.tag, args.release_notes)
+        errors = validate_release_notes(file_path, args.tag)
         if errors:
             all_errors[file_path] = errors
 

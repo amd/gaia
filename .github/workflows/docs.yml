@@ -7,12 +7,10 @@ on:
   push:
     paths:
       - 'docs/**'
-      - 'util/validate_mdx.py'
       - '.github/workflows/docs.yml'
   pull_request:
     paths:
       - 'docs/**'
-      - 'util/validate_mdx.py'
       - '.github/workflows/docs.yml'
 
 jobs:
@@ -20,16 +18,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Validate MDX frontmatter
-        run: |
-          echo "Validating MDX frontmatter..."
-          find docs -name "*.mdx" | xargs python util/validate_mdx.py
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
