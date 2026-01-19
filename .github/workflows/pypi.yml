@@ -11,10 +11,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+      - name: Clean previous builds
+        run: rm -rf dist/ build/ *.egg-info
       - name: Build release distributions
         run: |
           python -m pip install build
           python -m build
+      - name: Verify package with twine
+        run: |
+          python -m pip install twine
+          twine check dist/*
       - name: Store the distribution packages
         uses: actions/upload-artifact@v4
         with:
@@ -24,7 +30,7 @@ jobs:
   publish-to-pypi:
     name: >-
       Publish Python 🐍 distribution 📦 to PyPI
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') && github.event.repository.default_branch == 'main'
     needs:
     - build
     runs-on: ubuntu-latest
@@ -33,7 +39,30 @@ jobs:
       url: https://pypi.org/p/amd-gaia
     permissions:
       id-token: write
+      contents: read  # Needed for checkout
     steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    - name: Verify tag matches version.py
+      run: |
+        # Extract version from version.py
+        VERSION_PY=$(grep -oP '__version__\s*=\s*"\K[^"]+' src/gaia/version.py)
+
+        # Get tag name (strip 'v' prefix if present)
+        TAG_VERSION="${GITHUB_REF_NAME#v}"
+
+        echo "version.py version: $VERSION_PY"
+        echo "Git tag version:    $TAG_VERSION"
+
+        if [ "$VERSION_PY" != "$TAG_VERSION" ]; then
+          echo "❌ ERROR: Version mismatch!"
+          echo "   src/gaia/version.py has version '$VERSION_PY'"
+          echo "   Git tag is '$TAG_VERSION'"
+          echo "   Please update version.py to match the tag, or create the correct tag."
+          exit 1
+        fi
+
+        echo "✅ Versions match!"
     - name: Download all the dists
       uses: actions/download-artifact@v4
       with:

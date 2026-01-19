@@ -126,8 +126,7 @@ def print_integration_examples():
     print("INTEGRATION EXAMPLES")
     print("=" * 60)
 
-    print(
-        """
+    print("""
 Basic Integration:
 ```python
 from gaia.talk.sdk import TalkSDK, TalkConfig
@@ -174,8 +173,7 @@ from gaia.talk.sdk import quick_chat
 response = await quick_chat("Hello!")
 print(response)
 ```
-"""
-    )
+""")
 
 
 async def main():

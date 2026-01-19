@@ -380,8 +380,7 @@ async def main(cli_args=None):
                     if command.lower() in ["exit", "quit", "q"]:
                         break
                     elif command.lower() in ["help", "h", "?"]:
-                        print(
-                            """
+                        print("""
 Commands:
   search <query>       - Search for issues
   create <description> - Create a new issue
@@ -392,8 +391,7 @@ Examples:
   search critical bugs
   create Fix login timeout issue
   search my open issues
-                        """
-                        )
+                        """)
                     elif command:
                         result = await app.execute_command(command)
                         app._display_result(result)  # pylint: disable=protected-access

@@ -25,6 +25,16 @@ This is the GAIA repository (`amd/gaia`) on GitHub: https://github.com/amd/gaia
 ### IMPORTANT: Never Commit Changes
 **NEVER commit changes to the repository unless explicitly requested by the user.** The user will decide when and what to commit. This prevents unwanted changes from being added to the repository history.
 
+### IMPORTANT: Always Review Your Changes
+**After making any changes to files, you MUST review your work:**
+1. Read back files you wrote or edited to verify correctness
+2. Check for syntax errors, typos, and formatting issues
+3. Verify code examples compile/run correctly
+4. Ensure documentation links are valid
+5. Confirm changes align with the original request
+
+This self-review step is mandatory - never skip verification of your output.
+
 ### Branch Management
 - Main branch: `main`
 - Feature branches: Use descriptive names (e.g., `kalin/mcp`, `feature/new-agent`)
