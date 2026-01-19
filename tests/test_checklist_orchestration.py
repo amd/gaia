@@ -774,8 +774,7 @@ class TestProjectAnalyzer(unittest.TestCase):
         prisma_dir = Path(self.test_dir) / "prisma"
         prisma_dir.mkdir()
         schema = prisma_dir / "schema.prisma"
-        schema.write_text(
-            """
+        schema.write_text("""
 model User {
   id    Int    @id @default(autoincrement())
   name  String
@@ -786,8 +785,7 @@ model Todo {
   title     String
   completed Boolean
 }
-"""
-        )
+""")
 
         analyzer = ProjectAnalyzer()
         state = analyzer.analyze(self.test_dir)

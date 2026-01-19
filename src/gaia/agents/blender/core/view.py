@@ -13,13 +13,13 @@ class ViewManager:
         self.mcp = mcp
 
     def adjust_for_large_scale(
-        self, clip_end: float = 100000, orbit_selection: bool = True
+        self, clip_end: float = 100000, _orbit_selection: bool = True
     ) -> Dict:
         """Adjust viewport settings to properly view large-scale objects like Earth.
 
         Args:
             clip_end: The maximum view distance to set for the 3D viewport (default: 100000)
-            orbit_selection: Whether to enable orbit around selection (default: True, but may not work in all Blender versions)
+            _orbit_selection: Whether to enable orbit around selection (default: True, but may not work in all Blender versions)
         """
 
         def generate_code():
