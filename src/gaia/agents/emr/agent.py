@@ -325,7 +325,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
         """Get or create VLM client (lazy initialization)."""
         if self._vlm is None:
             try:
-                from gaia.llm.vlm_client import VLMClient
+                from gaia.llm import VLMClient
 
                 self.console.print_model_loading(self._vlm_model)
                 self._vlm = VLMClient(vlm_model=self._vlm_model)

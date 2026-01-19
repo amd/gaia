@@ -273,16 +273,21 @@ function Invoke-ImportTests {
         @{Import="from gaia.llm import LLMClient"; Desc="LLM client class"},
         @{Import="from gaia.llm import VLMClient"; Desc="Vision LLM client"},
         @{Import="from gaia.llm import create_client"; Desc="LLM factory"},
+        @{Import="from gaia.llm import NotSupportedError"; Desc="LLM exception"},
 
         # Chat SDK
         @{Module="gaia.chat.sdk"; Desc="Chat SDK module"},
         @{Import="from gaia.chat.sdk import ChatSDK"; Desc="Chat SDK class"},
         @{Import="from gaia.chat.sdk import ChatConfig"; Desc="Chat configuration"},
+        @{Import="from gaia.chat.sdk import ChatSession"; Desc="Chat session"},
+        @{Import="from gaia.chat.sdk import ChatResponse"; Desc="Chat response"},
         @{Import="from gaia.chat.sdk import quick_chat"; Desc="Quick chat function"},
 
         # RAG SDK
         @{Module="gaia.rag.sdk"; Desc="RAG SDK module"},
         @{Import="from gaia.rag.sdk import RAGSDK"; Desc="RAG SDK class"},
+        @{Import="from gaia.rag.sdk import RAGConfig"; Desc="RAG configuration"},
+        @{Import="from gaia.rag.sdk import quick_rag"; Desc="Quick RAG function"},
 
         # Base Agent System
         @{Module="gaia.agents.base.agent"; Desc="Base agent module"},
@@ -295,13 +300,17 @@ function Invoke-ImportTests {
         @{Import="from gaia.agents.code import CodeAgent"; Desc="Code agent"},
         @{Import="from gaia.agents.jira import JiraAgent"; Desc="Jira agent"},
         @{Import="from gaia.agents.docker import DockerAgent"; Desc="Docker agent"},
+        @{Import="from gaia.agents.blender import BlenderAgent"; Desc="Blender agent"},
+        @{Import="from gaia.agents.emr import MedicalIntakeAgent"; Desc="Medical intake agent"},
+        @{Import="from gaia.agents.routing import RoutingAgent"; Desc="Routing agent"},
 
         # Database
         @{Import="from gaia.database import DatabaseAgent"; Desc="Database agent"},
         @{Import="from gaia.database import DatabaseMixin"; Desc="Database mixin"},
 
         # Utilities
-        @{Import="from gaia.utils import FileWatcher"; Desc="File watcher"}
+        @{Import="from gaia.utils import FileWatcher"; Desc="File watcher"},
+        @{Import="from gaia.utils import FileWatcherMixin"; Desc="File watcher mixin"}
     )
 
     $failed = $false
