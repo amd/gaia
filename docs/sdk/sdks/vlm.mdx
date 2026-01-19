@@ -7,7 +7,7 @@ title: "Vision-Language Models"
 </Info>
 
 <Note>
-**Import:** `from gaia.llm.vlm_client import VLMClient`
+**Import:** `from gaia.llm import VLMClient`
 </Note>
 ---
 
@@ -24,7 +24,7 @@ title: "Vision-Language Models"
 ## Basic VLM Usage
 
 ```python
-from gaia.llm.vlm_client import VLMClient
+from gaia.llm import VLMClient
 from pathlib import Path
 
 # Initialize VLM
@@ -49,7 +49,7 @@ if vlm.check_availability():
 ## Structured Extraction
 
 ```python
-from gaia.llm.vlm_client import VLMClient
+from gaia.llm import VLMClient
 from pathlib import Path
 import json
 
@@ -93,7 +93,7 @@ except json.JSONDecodeError:
 ```python
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import tool
-from gaia.llm.vlm_client import VLMClient
+from gaia.llm import VLMClient
 from pathlib import Path
 
 class FormProcessingAgent(Agent):

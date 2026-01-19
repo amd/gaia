@@ -238,20 +238,63 @@ function Invoke-ImportTests {
     Write-Host "----------------------------------------"
 
     $imports = @(
+        # Core CLI
         @{Module="gaia.cli"; Desc="CLI module"},
-        @{Module="gaia.chat.sdk"; Desc="Chat SDK"},
-        @{Module="gaia.llm"; Desc="LLM client"},
-        @{Module="gaia.agents.base.agent"; Desc="Base agent"}
+
+        # LLM Clients (test module and key exports)
+        @{Module="gaia.llm"; Desc="LLM package"},
+        @{Import="from gaia.llm import LLMClient"; Desc="LLM client class"},
+        @{Import="from gaia.llm import VLMClient"; Desc="Vision LLM client"},
+        @{Import="from gaia.llm import create_client"; Desc="LLM factory"},
+
+        # Chat SDK
+        @{Module="gaia.chat.sdk"; Desc="Chat SDK module"},
+        @{Import="from gaia.chat.sdk import ChatSDK"; Desc="Chat SDK class"},
+        @{Import="from gaia.chat.sdk import ChatConfig"; Desc="Chat configuration"},
+        @{Import="from gaia.chat.sdk import quick_chat"; Desc="Quick chat function"},
+
+        # RAG SDK
+        @{Module="gaia.rag.sdk"; Desc="RAG SDK module"},
+        @{Import="from gaia.rag.sdk import RAGSDK"; Desc="RAG SDK class"},
+
+        # Base Agent System
+        @{Module="gaia.agents.base.agent"; Desc="Base agent module"},
+        @{Import="from gaia.agents.base.agent import Agent"; Desc="Base Agent class"},
+        @{Import="from gaia.agents.base import MCPAgent"; Desc="MCP agent mixin"},
+        @{Import="from gaia.agents.base import tool"; Desc="Tool decorator"},
+
+        # Specialized Agents
+        @{Import="from gaia.agents.chat import ChatAgent"; Desc="Chat agent"},
+        @{Import="from gaia.agents.code import CodeAgent"; Desc="Code agent"},
+        @{Import="from gaia.agents.jira import JiraAgent"; Desc="Jira agent"},
+        @{Import="from gaia.agents.docker import DockerAgent"; Desc="Docker agent"},
+
+        # Database
+        @{Import="from gaia.database import DatabaseAgent"; Desc="Database agent"},
+        @{Import="from gaia.database import DatabaseMixin"; Desc="Database mixin"},
+
+        # Utilities
+        @{Import="from gaia.utils import FileWatcher"; Desc="File watcher"}
     )
 
     $failed = $false
     $script:ImportsIssues = 0
     foreach ($import in $imports) {
-        $cmd = "$PYTHON_PATH -c `"import $($import.Module); print('OK: $($import.Desc) imports')`""
-        Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-        & $PYTHON_PATH -c "import $($import.Module); print('OK: $($import.Desc) imports')" 2>&1 | Out-String -Width 4096
+        # Handle both "Module" (import x) and "Import" (from x import y) syntax
+        if ($import.Module) {
+            $cmd = "import $($import.Module); print('OK: $($import.Desc) imports')"
+            $displayCmd = "python -c `"import $($import.Module); print('OK: $($import.Desc) imports')`""
+            $failedImport = $import.Module
+        } elseif ($import.Import) {
+            $cmd = "$($import.Import); print('OK: $($import.Desc) imports')"
+            $displayCmd = "python -c `"$($import.Import); print('OK: $($import.Desc) imports')`""
+            $failedImport = $import.Import
+        }
+
+        Write-Host "[CMD] $displayCmd" -ForegroundColor DarkGray
+        & $PYTHON_PATH -c $cmd 2>&1 | Out-String -Width 4096
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "[!] Failed to import $($import.Module)" -ForegroundColor Red
+            Write-Host "[!] Failed: $failedImport" -ForegroundColor Red
             $failed = $true
             $script:ImportsIssues++
         }

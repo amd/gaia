@@ -7,7 +7,7 @@ title: "LLM Integration"
 </Info>
 
 <Note>
-**Import:** `from gaia.llm.llm_client import LLMClient`
+**Import:** `from gaia.llm import LLMClient`
 </Note>
 ---
 
@@ -20,7 +20,7 @@ title: "LLM Integration"
 ## LLM Client
 
 ```python
-from gaia.llm.llm_client import LLMClient
+from gaia.llm import LLMClient
 
 # Local LLM (Lemonade server)
 llm = LLMClient(
@@ -65,7 +65,7 @@ for model in models:
 ## Cloud Providers
 
 ```python
-from gaia.llm.llm_client import LLMClient
+from gaia.llm import LLMClient
 
 # Claude API
 llm_claude = LLMClient(
