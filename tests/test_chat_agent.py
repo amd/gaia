@@ -579,19 +579,16 @@ class TestChatAgentCodeSupport:
         src_dir.mkdir()
 
         # Python file
-        (src_dir / "auth.py").write_text(
-            '''
+        (src_dir / "auth.py").write_text('''
 class UserAuth:
     """Authentication handler."""
     def authenticate(self, username, password):
         # TODO: Add rate limiting
         return self.check_credentials(username, password)
-'''
-        )
+''')
 
         # JavaScript file
-        (src_dir / "api.js").write_text(
-            """
+        (src_dir / "api.js").write_text("""
 // API client
 class APIClient {
     constructor(baseUrl) {
@@ -603,18 +600,15 @@ class APIClient {
         return fetch(`${this.baseUrl}/users/${userId}`);
     }
 }
-"""
-        )
+""")
 
         # Config file
-        (src_dir / "config.yaml").write_text(
-            """
+        (src_dir / "config.yaml").write_text("""
 database:
   host: localhost
   port: 5432
   name: myapp
-"""
-        )
+""")
 
         return str(src_dir)
 
@@ -625,8 +619,7 @@ database:
         web_dir.mkdir()
 
         # HTML file
-        (web_dir / "index.html").write_text(
-            """
+        (web_dir / "index.html").write_text("""
 <!DOCTYPE html>
 <html>
 <head>
@@ -639,12 +632,10 @@ database:
     </div>
 </body>
 </html>
-"""
-        )
+""")
 
         # CSS file
-        (web_dir / "styles.css").write_text(
-            """
+        (web_dir / "styles.css").write_text("""
 .container {
     max-width: 1200px;
     margin: 0 auto;
@@ -654,12 +645,10 @@ database:
     background-color: #0056b3;
     transform: scale(1.05);
 }
-"""
-        )
+""")
 
         # Vue component
-        (web_dir / "UserCard.vue").write_text(
-            """
+        (web_dir / "UserCard.vue").write_text("""
 <template>
   <div class="user-card">
     <h2>{{ user.name }}</h2>
@@ -675,12 +664,10 @@ export default {
   }
 }
 </script>
-"""
-        )
+""")
 
         # React component (JSX)
-        (web_dir / "Button.jsx").write_text(
-            """
+        (web_dir / "Button.jsx").write_text("""
 import React from 'react';
 
 export function Button({ onClick, children }) {
@@ -690,12 +677,10 @@ export function Button({ onClick, children }) {
     </button>
   );
 }
-"""
-        )
+""")
 
         # SCSS file
-        (web_dir / "variables.scss").write_text(
-            """
+        (web_dir / "variables.scss").write_text("""
 $primary-color: #007bff;
 $secondary-color: #6c757d;
 
@@ -705,8 +690,7 @@ $secondary-color: #6c757d;
     background-color: darken($primary-color, 10%);
   }
 }
-"""
-        )
+""")
 
         return str(web_dir)
 

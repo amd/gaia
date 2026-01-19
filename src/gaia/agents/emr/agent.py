@@ -155,8 +155,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
         """
         try:
             # Get aggregate stats from patients table
-            result = self.query(
-                """
+            result = self.query("""
                 SELECT
                     COUNT(*) as total_patients,
                     COALESCE(SUM(processing_time_seconds), 0) as total_processing_time,
@@ -164,8 +163,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
                     SUM(CASE WHEN is_new_patient = 1 THEN 1 ELSE 0 END) as new_patients,
                     SUM(CASE WHEN is_new_patient = 0 THEN 1 ELSE 0 END) as returning_patients
                 FROM patients
-                """
-            )
+                """)
 
             if result and result[0]:
                 stats = result[0]

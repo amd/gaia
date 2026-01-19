@@ -17,15 +17,13 @@ class SimpleDBAgent(DatabaseAgent):
 
         # Create test schema
         if not self.table_exists("items"):
-            self.execute(
-                """
+            self.execute("""
                 CREATE TABLE items (
                     id INTEGER PRIMARY KEY,
                     name TEXT NOT NULL,
                     quantity INTEGER DEFAULT 0
                 )
-            """
-            )
+            """)
 
     def _get_system_prompt(self) -> str:
         return "You manage items."
