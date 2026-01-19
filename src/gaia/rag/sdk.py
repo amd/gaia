@@ -432,7 +432,7 @@ class RAGSDK:
             vlm = None
             vlm_available = False
             try:
-                from gaia.llm.vlm_client import VLMClient
+                from gaia.llm import VLMClient
                 from gaia.rag.pdf_utils import (
                     count_images_in_page,
                     extract_images_from_page_pymupdf,

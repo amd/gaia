@@ -200,12 +200,10 @@ def test_transaction_nested_operations():
     """All operations within transaction are atomic."""
     db = DB()
     db.init_db()
-    db.execute(
-        """
+    db.execute("""
         CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
         CREATE TABLE profiles (id INTEGER PRIMARY KEY, user_id INTEGER, bio TEXT);
-    """
-    )
+    """)
 
     try:
         with db.transaction():
@@ -239,13 +237,11 @@ def test_execute_multiple_statements():
     """execute() handles multiple SQL statements."""
     db = DB()
     db.init_db()
-    db.execute(
-        """
+    db.execute("""
         CREATE TABLE t1 (id INTEGER);
         CREATE TABLE t2 (id INTEGER);
         CREATE TABLE t3 (id INTEGER);
-    """
-    )
+    """)
 
     assert db.table_exists("t1")
     assert db.table_exists("t2")
@@ -257,12 +253,10 @@ def test_foreign_keys_enabled():
     """Foreign key constraints are enforced."""
     db = DB()
     db.init_db()
-    db.execute(
-        """
+    db.execute("""
         CREATE TABLE parent (id INTEGER PRIMARY KEY);
         CREATE TABLE child (id INTEGER, parent_id INTEGER REFERENCES parent(id));
-    """
-    )
+    """)
 
     # This should fail - no parent with id=999
     with pytest.raises(Exception):  # sqlite3.IntegrityError

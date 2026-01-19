@@ -13,7 +13,6 @@ Inheritance patterns:
     - Future: FooAgent(MCPAgent, ApiAgent, Agent) - Multiple inheritance
 """
 
-
 from typing import Any, Dict
 
 from .agent import Agent
