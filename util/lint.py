@@ -293,34 +293,79 @@ def check_bandit() -> CheckResult:
 
 
 def check_imports() -> CheckResult:
-    """Test critical imports."""
-    print("\n[7/7] Testing critical imports...")
+    """Test comprehensive SDK imports."""
+    print("\n[7/7] Testing comprehensive SDK imports...")
     print("-" * 40)
 
-    imports = [
-        ("gaia.cli", "CLI module"),
-        ("gaia.chat.sdk", "Chat SDK"),
-        ("gaia.llm", "LLM client"),
-        ("gaia.agents.base.agent", "Base agent"),
+    # Comprehensive import tests matching lint.ps1
+    tests = [
+        # Core CLI
+        ("import", "gaia.cli", "CLI module"),
+        # LLM Clients
+        ("import", "gaia.llm", "LLM package"),
+        ("from", "gaia.llm", "LLMClient", "LLM client class"),
+        ("from", "gaia.llm", "VLMClient", "Vision LLM client"),
+        ("from", "gaia.llm", "create_client", "LLM factory"),
+        ("from", "gaia.llm", "NotSupportedError", "LLM exception"),
+        # Chat SDK
+        ("import", "gaia.chat.sdk", "Chat SDK module"),
+        ("from", "gaia.chat.sdk", "ChatSDK", "Chat SDK class"),
+        ("from", "gaia.chat.sdk", "ChatConfig", "Chat configuration"),
+        ("from", "gaia.chat.sdk", "ChatSession", "Chat session"),
+        ("from", "gaia.chat.sdk", "ChatResponse", "Chat response"),
+        ("from", "gaia.chat.sdk", "quick_chat", "Quick chat function"),
+        # RAG SDK
+        ("import", "gaia.rag.sdk", "RAG SDK module"),
+        ("from", "gaia.rag.sdk", "RAGSDK", "RAG SDK class"),
+        ("from", "gaia.rag.sdk", "RAGConfig", "RAG configuration"),
+        ("from", "gaia.rag.sdk", "quick_rag", "Quick RAG function"),
+        # Base Agent System
+        ("import", "gaia.agents.base.agent", "Base agent module"),
+        ("from", "gaia.agents.base.agent", "Agent", "Base Agent class"),
+        ("from", "gaia.agents.base", "MCPAgent", "MCP agent mixin"),
+        ("from", "gaia.agents.base", "tool", "Tool decorator"),
+        # Specialized Agents
+        ("from", "gaia.agents.chat", "ChatAgent", "Chat agent"),
+        ("from", "gaia.agents.code", "CodeAgent", "Code agent"),
+        ("from", "gaia.agents.jira", "JiraAgent", "Jira agent"),
+        ("from", "gaia.agents.docker", "DockerAgent", "Docker agent"),
+        ("from", "gaia.agents.blender", "BlenderAgent", "Blender agent"),
+        ("from", "gaia.agents.emr", "MedicalIntakeAgent", "Medical intake agent"),
+        ("from", "gaia.agents.routing", "RoutingAgent", "Routing agent"),
+        # Database
+        ("from", "gaia.database", "DatabaseAgent", "Database agent"),
+        ("from", "gaia.database", "DatabaseMixin", "Database mixin"),
+        # Utilities
+        ("from", "gaia.utils", "FileWatcher", "File watcher"),
+        ("from", "gaia.utils", "FileWatcherMixin", "File watcher mixin"),
     ]
 
     failed = False
     issues = 0
 
-    for module, desc in imports:
-        cmd = [sys.executable, "-c", f"import {module}; print('OK: {desc} imports')"]
+    for test in tests:
+        if test[0] == "import":
+            # Simple module import
+            module, desc = test[1], test[2]
+            test_code = f"import {module}; print('OK: {desc} imports')"
+        else:
+            # from X import Y
+            module, name, desc = test[1], test[2], test[3]
+            test_code = f"from {module} import {name}; print('OK: {desc} imports')"
+
+        cmd = [sys.executable, "-c", test_code]
         print(f"[CMD] {' '.join(cmd)}")
         exit_code, output = run_command(cmd)
         print(output.strip())
         if exit_code != 0:
-            print(f"[!] Failed to import {module}")
+            print(f"[!] Failed: {test_code}")
             failed = True
             issues += 1
 
     if failed:
         return CheckResult("Import Validation", False, False, issues, "")
 
-    print("[OK] All imports working!")
+    print(f"[OK] All {len(tests)} imports working!")
     return CheckResult("Import Validation", True, False, 0, "")
 
 
