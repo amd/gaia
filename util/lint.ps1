@@ -266,51 +266,51 @@ function Invoke-ImportTests {
 
     $imports = @(
         # Core CLI
-        @{Module="gaia.cli"; Desc="CLI module"},
+        @{Module="gaia.cli"; Desc="CLI module"; Optional=$false},
 
         # LLM Clients (test module and key exports)
-        @{Module="gaia.llm"; Desc="LLM package"},
-        @{Import="from gaia.llm import LLMClient"; Desc="LLM client class"},
-        @{Import="from gaia.llm import VLMClient"; Desc="Vision LLM client"},
-        @{Import="from gaia.llm import create_client"; Desc="LLM factory"},
-        @{Import="from gaia.llm import NotSupportedError"; Desc="LLM exception"},
+        @{Module="gaia.llm"; Desc="LLM package"; Optional=$false},
+        @{Import="from gaia.llm import LLMClient"; Desc="LLM client class"; Optional=$false},
+        @{Import="from gaia.llm import VLMClient"; Desc="Vision LLM client"; Optional=$false},
+        @{Import="from gaia.llm import create_client"; Desc="LLM factory"; Optional=$false},
+        @{Import="from gaia.llm import NotSupportedError"; Desc="LLM exception"; Optional=$false},
 
         # Chat SDK
-        @{Module="gaia.chat.sdk"; Desc="Chat SDK module"},
-        @{Import="from gaia.chat.sdk import ChatSDK"; Desc="Chat SDK class"},
-        @{Import="from gaia.chat.sdk import ChatConfig"; Desc="Chat configuration"},
-        @{Import="from gaia.chat.sdk import ChatSession"; Desc="Chat session"},
-        @{Import="from gaia.chat.sdk import ChatResponse"; Desc="Chat response"},
-        @{Import="from gaia.chat.sdk import quick_chat"; Desc="Quick chat function"},
+        @{Module="gaia.chat.sdk"; Desc="Chat SDK module"; Optional=$false},
+        @{Import="from gaia.chat.sdk import ChatSDK"; Desc="Chat SDK class"; Optional=$false},
+        @{Import="from gaia.chat.sdk import ChatConfig"; Desc="Chat configuration"; Optional=$false},
+        @{Import="from gaia.chat.sdk import ChatSession"; Desc="Chat session"; Optional=$false},
+        @{Import="from gaia.chat.sdk import ChatResponse"; Desc="Chat response"; Optional=$false},
+        @{Import="from gaia.chat.sdk import quick_chat"; Desc="Quick chat function"; Optional=$false},
 
         # RAG SDK
-        @{Module="gaia.rag.sdk"; Desc="RAG SDK module"},
-        @{Import="from gaia.rag.sdk import RAGSDK"; Desc="RAG SDK class"},
-        @{Import="from gaia.rag.sdk import RAGConfig"; Desc="RAG configuration"},
-        @{Import="from gaia.rag.sdk import quick_rag"; Desc="Quick RAG function"},
+        @{Module="gaia.rag.sdk"; Desc="RAG SDK module"; Optional=$false},
+        @{Import="from gaia.rag.sdk import RAGSDK"; Desc="RAG SDK class"; Optional=$false},
+        @{Import="from gaia.rag.sdk import RAGConfig"; Desc="RAG configuration"; Optional=$false},
+        @{Import="from gaia.rag.sdk import quick_rag"; Desc="Quick RAG function"; Optional=$false},
 
         # Base Agent System
-        @{Module="gaia.agents.base.agent"; Desc="Base agent module"},
-        @{Import="from gaia.agents.base.agent import Agent"; Desc="Base Agent class"},
-        @{Import="from gaia.agents.base import MCPAgent"; Desc="MCP agent mixin"},
-        @{Import="from gaia.agents.base import tool"; Desc="Tool decorator"},
+        @{Module="gaia.agents.base.agent"; Desc="Base agent module"; Optional=$false},
+        @{Import="from gaia.agents.base.agent import Agent"; Desc="Base Agent class"; Optional=$false},
+        @{Import="from gaia.agents.base import MCPAgent"; Desc="MCP agent mixin"; Optional=$false},
+        @{Import="from gaia.agents.base import tool"; Desc="Tool decorator"; Optional=$false},
 
         # Specialized Agents
-        @{Import="from gaia.agents.chat import ChatAgent"; Desc="Chat agent"},
-        @{Import="from gaia.agents.code import CodeAgent"; Desc="Code agent"},
-        @{Import="from gaia.agents.jira import JiraAgent"; Desc="Jira agent"},
-        @{Import="from gaia.agents.docker import DockerAgent"; Desc="Docker agent"},
-        @{Import="from gaia.agents.blender import BlenderAgent"; Desc="Blender agent"},
-        @{Import="from gaia.agents.emr import MedicalIntakeAgent"; Desc="Medical intake agent"},
-        @{Import="from gaia.agents.routing import RoutingAgent"; Desc="Routing agent"},
+        @{Import="from gaia.agents.chat import ChatAgent"; Desc="Chat agent"; Optional=$false},
+        @{Import="from gaia.agents.code import CodeAgent"; Desc="Code agent"; Optional=$false},
+        @{Import="from gaia.agents.jira import JiraAgent"; Desc="Jira agent"; Optional=$false},
+        @{Import="from gaia.agents.docker import DockerAgent"; Desc="Docker agent"; Optional=$false},
+        @{Import="from gaia.agents.blender import BlenderAgent"; Desc="Blender agent"; Optional=$false},
+        @{Import="from gaia.agents.emr import MedicalIntakeAgent"; Desc="Medical intake agent"; Optional=$false},
+        @{Import="from gaia.agents.routing import RoutingAgent"; Desc="Routing agent"; Optional=$false},
 
         # Database
-        @{Import="from gaia.database import DatabaseAgent"; Desc="Database agent"},
-        @{Import="from gaia.database import DatabaseMixin"; Desc="Database mixin"},
+        @{Import="from gaia.database import DatabaseAgent"; Desc="Database agent"; Optional=$false},
+        @{Import="from gaia.database import DatabaseMixin"; Desc="Database mixin"; Optional=$false},
 
         # Utilities
-        @{Import="from gaia.utils import FileWatcher"; Desc="File watcher"},
-        @{Import="from gaia.utils import FileWatcherMixin"; Desc="File watcher mixin"}
+        @{Import="from gaia.utils import FileWatcher"; Desc="File watcher"; Optional=$false},
+        @{Import="from gaia.utils import FileWatcherMixin"; Desc="File watcher mixin"; Optional=$false}
     )
 
     $failed = $false
@@ -318,21 +318,33 @@ function Invoke-ImportTests {
     foreach ($import in $imports) {
         # Handle both "Module" (import x) and "Import" (from x import y) syntax
         if ($import.Module) {
-            $cmd = "import $($import.Module); print('OK: $($import.Desc) imports')"
-            $displayCmd = "python -c `"import $($import.Module); print('OK: $($import.Desc) imports')`""
-            $failedImport = $import.Module
+            $importStr = "import $($import.Module)"
+            $cmd = "$importStr; print('OK')"
         } elseif ($import.Import) {
-            $cmd = "$($import.Import); print('OK: $($import.Desc) imports')"
-            $displayCmd = "python -c `"$($import.Import); print('OK: $($import.Desc) imports')`""
-            $failedImport = $import.Import
+            $importStr = $import.Import
+            $cmd = "$importStr; print('OK')"
         }
 
-        Write-Host "[CMD] $displayCmd" -ForegroundColor DarkGray
-        & $PYTHON_PATH -c $cmd 2>&1 | Out-String -Width 4096
+        $desc = $import.Desc.PadRight(35)
+        $result = & $PYTHON_PATH -c $cmd 2>&1 | Out-String
+
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "[!] Failed: $failedImport" -ForegroundColor Red
-            $failed = $true
-            $script:ImportsIssues++
+            # Extract error message
+            $errorLine = $result -split "`n" | Where-Object { $_ -match "Error:|ImportError:|ModuleNotFoundError:" } | Select-Object -First 1
+
+            if ($import.Optional) {
+                $errorMsg = if ($errorLine) { " ($($errorLine.Trim()))" } else { " (optional dependency)" }
+                Write-Host "[SKIP] $desc - $importStr$errorMsg" -ForegroundColor Yellow
+            } else {
+                Write-Host "[FAIL] $desc - $importStr" -ForegroundColor Red
+                if ($errorLine) {
+                    Write-Host "       Error: $($errorLine.Trim())" -ForegroundColor DarkRed
+                }
+                $failed = $true
+                $script:ImportsIssues++
+            }
+        } else {
+            Write-Host "[OK]   $desc - $importStr" -ForegroundColor Green
         }
     }
 

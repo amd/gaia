@@ -300,44 +300,44 @@ def check_imports() -> CheckResult:
     # Comprehensive import tests matching lint.ps1
     tests = [
         # Core CLI
-        ("import", "gaia.cli", "CLI module"),
+        ("import", "gaia.cli", "CLI module", False),
         # LLM Clients
-        ("import", "gaia.llm", "LLM package"),
-        ("from", "gaia.llm", "LLMClient", "LLM client class"),
-        ("from", "gaia.llm", "VLMClient", "Vision LLM client"),
-        ("from", "gaia.llm", "create_client", "LLM factory"),
-        ("from", "gaia.llm", "NotSupportedError", "LLM exception"),
+        ("import", "gaia.llm", "LLM package", False),
+        ("from", "gaia.llm", "LLMClient", "LLM client class", False),
+        ("from", "gaia.llm", "VLMClient", "Vision LLM client", False),
+        ("from", "gaia.llm", "create_client", "LLM factory", False),
+        ("from", "gaia.llm", "NotSupportedError", "LLM exception", False),
         # Chat SDK
-        ("import", "gaia.chat.sdk", "Chat SDK module"),
-        ("from", "gaia.chat.sdk", "ChatSDK", "Chat SDK class"),
-        ("from", "gaia.chat.sdk", "ChatConfig", "Chat configuration"),
-        ("from", "gaia.chat.sdk", "ChatSession", "Chat session"),
-        ("from", "gaia.chat.sdk", "ChatResponse", "Chat response"),
-        ("from", "gaia.chat.sdk", "quick_chat", "Quick chat function"),
+        ("import", "gaia.chat.sdk", "Chat SDK module", False),
+        ("from", "gaia.chat.sdk", "ChatSDK", "Chat SDK class", False),
+        ("from", "gaia.chat.sdk", "ChatConfig", "Chat configuration", False),
+        ("from", "gaia.chat.sdk", "ChatSession", "Chat session", False),
+        ("from", "gaia.chat.sdk", "ChatResponse", "Chat response", False),
+        ("from", "gaia.chat.sdk", "quick_chat", "Quick chat function", False),
         # RAG SDK
-        ("import", "gaia.rag.sdk", "RAG SDK module"),
-        ("from", "gaia.rag.sdk", "RAGSDK", "RAG SDK class"),
-        ("from", "gaia.rag.sdk", "RAGConfig", "RAG configuration"),
-        ("from", "gaia.rag.sdk", "quick_rag", "Quick RAG function"),
+        ("import", "gaia.rag.sdk", "RAG SDK module", False),
+        ("from", "gaia.rag.sdk", "RAGSDK", "RAG SDK class", False),
+        ("from", "gaia.rag.sdk", "RAGConfig", "RAG configuration", False),
+        ("from", "gaia.rag.sdk", "quick_rag", "Quick RAG function", False),
         # Base Agent System
-        ("import", "gaia.agents.base.agent", "Base agent module"),
-        ("from", "gaia.agents.base.agent", "Agent", "Base Agent class"),
-        ("from", "gaia.agents.base", "MCPAgent", "MCP agent mixin"),
-        ("from", "gaia.agents.base", "tool", "Tool decorator"),
+        ("import", "gaia.agents.base.agent", "Base agent module", False),
+        ("from", "gaia.agents.base.agent", "Agent", "Base Agent class", False),
+        ("from", "gaia.agents.base", "MCPAgent", "MCP agent mixin", False),
+        ("from", "gaia.agents.base", "tool", "Tool decorator", False),
         # Specialized Agents
-        ("from", "gaia.agents.chat", "ChatAgent", "Chat agent"),
-        ("from", "gaia.agents.code", "CodeAgent", "Code agent"),
-        ("from", "gaia.agents.jira", "JiraAgent", "Jira agent"),
-        ("from", "gaia.agents.docker", "DockerAgent", "Docker agent"),
-        ("from", "gaia.agents.blender", "BlenderAgent", "Blender agent"),
-        ("from", "gaia.agents.emr", "MedicalIntakeAgent", "Medical intake agent"),
-        ("from", "gaia.agents.routing", "RoutingAgent", "Routing agent"),
+        ("from", "gaia.agents.chat", "ChatAgent", "Chat agent", False),
+        ("from", "gaia.agents.code", "CodeAgent", "Code agent", False),
+        ("from", "gaia.agents.jira", "JiraAgent", "Jira agent", False),
+        ("from", "gaia.agents.docker", "DockerAgent", "Docker agent", False),
+        ("from", "gaia.agents.blender", "BlenderAgent", "Blender agent", False),
+        ("from", "gaia.agents.emr", "MedicalIntakeAgent", "Medical intake agent", False),
+        ("from", "gaia.agents.routing", "RoutingAgent", "Routing agent", False),
         # Database
-        ("from", "gaia.database", "DatabaseAgent", "Database agent"),
-        ("from", "gaia.database", "DatabaseMixin", "Database mixin"),
+        ("from", "gaia.database", "DatabaseAgent", "Database agent", False),
+        ("from", "gaia.database", "DatabaseMixin", "Database mixin", False),
         # Utilities
-        ("from", "gaia.utils", "FileWatcher", "File watcher"),
-        ("from", "gaia.utils", "FileWatcherMixin", "File watcher mixin"),
+        ("from", "gaia.utils", "FileWatcher", "File watcher", False),
+        ("from", "gaia.utils", "FileWatcherMixin", "File watcher mixin", False),
     ]
 
     failed = False
@@ -346,26 +346,40 @@ def check_imports() -> CheckResult:
     for test in tests:
         if test[0] == "import":
             # Simple module import
-            module, desc = test[1], test[2]
-            test_code = f"import {module}; print('OK: {desc} imports')"
+            module, desc, optional = test[1], test[2], test[3]
+            import_str = f"import {module}"
         else:
             # from X import Y
-            module, name, desc = test[1], test[2], test[3]
-            test_code = f"from {module} import {name}; print('OK: {desc} imports')"
+            module, name, desc, optional = test[1], test[2], test[3], test[4]
+            import_str = f"from {module} import {name}"
 
+        test_code = f"{import_str}; print('OK')"
         cmd = [sys.executable, "-c", test_code]
-        print(f"[CMD] {' '.join(cmd)}")
         exit_code, output = run_command(cmd)
-        print(output.strip())
+
         if exit_code != 0:
-            print(f"[!] Failed: {test_code}")
-            failed = True
-            issues += 1
+            # Extract error message from output
+            error_line = ""
+            for line in output.strip().split('\n'):
+                if "Error:" in line or "ImportError:" in line or "ModuleNotFoundError:" in line:
+                    error_line = line.strip()
+                    break
+
+            if optional:
+                print(f"[SKIP] {desc:35} - {import_str} ({error_line if error_line else 'optional dependency'})")
+            else:
+                print(f"[FAIL] {desc:35} - {import_str}")
+                if error_line:
+                    print(f"       Error: {error_line}")
+                failed = True
+                issues += 1
+        else:
+            print(f"[OK]   {desc:35} - {import_str}")
 
     if failed:
         return CheckResult("Import Validation", False, False, issues, "")
 
-    print(f"[OK] All {len(tests)} imports working!")
+    print(f"\n[OK] All required imports working!")
     return CheckResult("Import Validation", True, False, 0, "")
 
 
