@@ -73,8 +73,35 @@ function Invoke-Black {
         if ($script:BlackIssues -eq 0) { $script:BlackIssues = 1 }
 
         Write-Host "`n[!] Code formatting issues found." -ForegroundColor Red
+
+        # Show which files would be reformatted
+        Write-Host "`n[FILES] Files that would be reformatted:" -ForegroundColor Yellow
+        $blackOutput | Select-String "would reformat" | ForEach-Object {
+            Write-Host "   $_" -ForegroundColor DarkYellow
+        }
+
+        # Show the diff output (first 100 lines to avoid overwhelming terminal)
+        if ($blackOutput.Length -gt 0) {
+            Write-Host "`n[DIFF] Formatting differences:" -ForegroundColor Yellow
+            $diffLines = ($blackOutput -split "`n") | Select-Object -First 100
+            $diffLines | ForEach-Object {
+                if ($_ -match "^---" -or $_ -match "^\+\+\+") {
+                    Write-Host $_ -ForegroundColor Cyan
+                } elseif ($_ -match "^-") {
+                    Write-Host $_ -ForegroundColor Red
+                } elseif ($_ -match "^\+") {
+                    Write-Host $_ -ForegroundColor Green
+                } else {
+                    Write-Host $_ -ForegroundColor DarkGray
+                }
+            }
+            if (($blackOutput -split "`n").Count -gt 100) {
+                Write-Host "... (output truncated, showing first 100 lines)" -ForegroundColor DarkGray
+            }
+        }
+
         if (-not $Fix) {
-            Write-Host "Fix with: powershell util\lint.ps1 -RunBlack -Fix" -ForegroundColor Yellow
+            Write-Host "`nFix with: powershell util\lint.ps1 -RunBlack -Fix" -ForegroundColor Yellow
         }
         $script:ErrorCount++
         $script:BlackPassed = $false

@@ -91,6 +91,29 @@ def check_black(fix: bool = False) -> CheckResult:
         # Count files that would be reformatted
         issues = output.count("would reformat") or 1
         print(f"\n[!] Code formatting issues found.")
+
+        # Show which files would be reformatted
+        print("\n[FILES] Files that would be reformatted:")
+        for line in output.split('\n'):
+            if "would reformat" in line:
+                print(f"   {line}")
+
+        # Show the diff output (first 100 lines)
+        if output:
+            print("\n[DIFF] Formatting differences:")
+            lines = output.split('\n')[:100]
+            for line in lines:
+                if line.startswith('---') or line.startswith('+++'):
+                    print(f"\033[96m{line}\033[0m")  # Cyan
+                elif line.startswith('-'):
+                    print(f"\033[91m{line}\033[0m")  # Red
+                elif line.startswith('+'):
+                    print(f"\033[92m{line}\033[0m")  # Green
+                else:
+                    print(f"\033[90m{line}\033[0m")  # Dark gray
+            if len(output.split('\n')) > 100:
+                print("... (output truncated, showing first 100 lines)")
+
         if not fix:
             print("Fix with: python util/lint.py --black --fix")
         return CheckResult("Code Formatting (Black)", False, False, issues, output)
