@@ -72,15 +72,33 @@ function Invoke-Black {
         if ($script:BlackIssues -eq 0) { $script:BlackIssues = 1 }
 
         Write-Host "`n[!] Code formatting issues found." -ForegroundColor Red
-        # Show the actual error output
-        if ($blackOutput.Trim()) {
-            Write-Host "`n[OUTPUT]" -ForegroundColor White
-            $lines = ($blackOutput -split "`n") | Select-Object -First 30
-            $lines | ForEach-Object { Write-Host "   $_" -ForegroundColor Yellow }
-            if (($blackOutput -split "`n").Count -gt 30) {
-                Write-Host "   ... (output truncated, showing first 30 lines)" -ForegroundColor DarkGray
+
+        # Show which files would be reformatted
+        Write-Host "`n[FILES] Files that would be reformatted:" -ForegroundColor Yellow
+        $blackOutput | Select-String "would reformat" | ForEach-Object {
+            Write-Host "   $_" -ForegroundColor DarkYellow
+        }
+
+        # Show the diff output (first 100 lines to avoid overwhelming terminal)
+        if ($blackOutput.Length -gt 0) {
+            Write-Host "`n[DIFF] Formatting differences:" -ForegroundColor Yellow
+            $diffLines = ($blackOutput -split "`n") | Select-Object -First 100
+            $diffLines | ForEach-Object {
+                if ($_ -match "^---" -or $_ -match "^\+\+\+") {
+                    Write-Host $_ -ForegroundColor Cyan
+                } elseif ($_ -match "^-") {
+                    Write-Host $_ -ForegroundColor Red
+                } elseif ($_ -match "^\+") {
+                    Write-Host $_ -ForegroundColor Green
+                } else {
+                    Write-Host $_ -ForegroundColor DarkGray
+                }
+            }
+            if (($blackOutput -split "`n").Count -gt 100) {
+                Write-Host "... (output truncated, showing first 100 lines)" -ForegroundColor DarkGray
             }
         }
+
         if (-not $Fix) {
             Write-Host "`nFix with: powershell util\lint.ps1 -RunBlack -Fix" -ForegroundColor Yellow
         }
@@ -255,22 +273,86 @@ function Invoke-ImportTests {
     Write-Host "----------------------------------------"
 
     $imports = @(
-        @{Module="gaia.cli"; Desc="CLI module"},
-        @{Module="gaia.chat.sdk"; Desc="Chat SDK"},
-        @{Module="gaia.llm.llm_client"; Desc="LLM client"},
-        @{Module="gaia.agents.base.agent"; Desc="Base agent"}
+        # Core CLI
+        @{Module="gaia.cli"; Desc="CLI module"; Optional=$false},
+
+        # LLM Clients (test module and key exports)
+        @{Module="gaia.llm"; Desc="LLM package"; Optional=$false},
+        @{Import="from gaia.llm import LLMClient"; Desc="LLM client class"; Optional=$false},
+        @{Import="from gaia.llm import VLMClient"; Desc="Vision LLM client"; Optional=$false},
+        @{Import="from gaia.llm import create_client"; Desc="LLM factory"; Optional=$false},
+        @{Import="from gaia.llm import NotSupportedError"; Desc="LLM exception"; Optional=$false},
+
+        # Chat SDK
+        @{Module="gaia.chat.sdk"; Desc="Chat SDK module"; Optional=$false},
+        @{Import="from gaia.chat.sdk import ChatSDK"; Desc="Chat SDK class"; Optional=$false},
+        @{Import="from gaia.chat.sdk import ChatConfig"; Desc="Chat configuration"; Optional=$false},
+        @{Import="from gaia.chat.sdk import ChatSession"; Desc="Chat session"; Optional=$false},
+        @{Import="from gaia.chat.sdk import ChatResponse"; Desc="Chat response"; Optional=$false},
+        @{Import="from gaia.chat.sdk import quick_chat"; Desc="Quick chat function"; Optional=$false},
+
+        # RAG SDK
+        @{Module="gaia.rag.sdk"; Desc="RAG SDK module"; Optional=$false},
+        @{Import="from gaia.rag.sdk import RAGSDK"; Desc="RAG SDK class"; Optional=$false},
+        @{Import="from gaia.rag.sdk import RAGConfig"; Desc="RAG configuration"; Optional=$false},
+        @{Import="from gaia.rag.sdk import quick_rag"; Desc="Quick RAG function"; Optional=$false},
+
+        # Base Agent System
+        @{Module="gaia.agents.base.agent"; Desc="Base agent module"; Optional=$false},
+        @{Import="from gaia.agents.base.agent import Agent"; Desc="Base Agent class"; Optional=$false},
+        @{Import="from gaia.agents.base import MCPAgent"; Desc="MCP agent mixin"; Optional=$false},
+        @{Import="from gaia.agents.base import tool"; Desc="Tool decorator"; Optional=$false},
+
+        # Specialized Agents
+        @{Import="from gaia.agents.chat import ChatAgent"; Desc="Chat agent"; Optional=$false},
+        @{Import="from gaia.agents.code import CodeAgent"; Desc="Code agent"; Optional=$false},
+        @{Import="from gaia.agents.jira import JiraAgent"; Desc="Jira agent"; Optional=$false},
+        @{Import="from gaia.agents.docker import DockerAgent"; Desc="Docker agent"; Optional=$false},
+        @{Import="from gaia.agents.blender import BlenderAgent"; Desc="Blender agent"; Optional=$false},
+        @{Import="from gaia.agents.emr import MedicalIntakeAgent"; Desc="Medical intake agent"; Optional=$false},
+        @{Import="from gaia.agents.routing import RoutingAgent"; Desc="Routing agent"; Optional=$false},
+
+        # Database
+        @{Import="from gaia.database import DatabaseAgent"; Desc="Database agent"; Optional=$false},
+        @{Import="from gaia.database import DatabaseMixin"; Desc="Database mixin"; Optional=$false},
+
+        # Utilities
+        @{Import="from gaia.utils import FileWatcher"; Desc="File watcher"; Optional=$false},
+        @{Import="from gaia.utils import FileWatcherMixin"; Desc="File watcher mixin"; Optional=$false}
     )
 
     $failed = $false
     $script:ImportsIssues = 0
     foreach ($import in $imports) {
-        $cmd = "$PYTHON_PATH -c `"import $($import.Module); print('OK: $($import.Desc) imports')`""
-        Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-        & $PYTHON_PATH -c "import $($import.Module); print('OK: $($import.Desc) imports')" 2>&1 | Out-String -Width 4096
+        # Handle both "Module" (import x) and "Import" (from x import y) syntax
+        if ($import.Module) {
+            $importStr = "import $($import.Module)"
+            $cmd = "$importStr; print('OK')"
+        } elseif ($import.Import) {
+            $importStr = $import.Import
+            $cmd = "$importStr; print('OK')"
+        }
+
+        $desc = $import.Desc.PadRight(35)
+        $result = & $PYTHON_PATH -c $cmd 2>&1 | Out-String
+
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "[!] Failed to import $($import.Module)" -ForegroundColor Red
-            $failed = $true
-            $script:ImportsIssues++
+            # Extract error message
+            $errorLine = $result -split "`n" | Where-Object { $_ -match "Error:|ImportError:|ModuleNotFoundError:" } | Select-Object -First 1
+
+            if ($import.Optional) {
+                $errorMsg = if ($errorLine) { " ($($errorLine.Trim()))" } else { " (optional dependency)" }
+                Write-Host "[SKIP] $desc - $importStr$errorMsg" -ForegroundColor Yellow
+            } else {
+                Write-Host "[FAIL] $desc - $importStr" -ForegroundColor Red
+                if ($errorLine) {
+                    Write-Host "       Error: $($errorLine.Trim())" -ForegroundColor DarkRed
+                }
+                $failed = $true
+                $script:ImportsIssues++
+            }
+        } else {
+            Write-Host "[OK]   $desc - $importStr" -ForegroundColor Green
         }
     }
 

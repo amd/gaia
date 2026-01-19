@@ -1,0 +1,174 @@
+---
+title: "v0.15.1"
+description: "Summarization Agent, LLM Client Factory, Claude AI automation, and developer tooling improvements"
+---
+
+# GAIA v0.15.1 Release Notes
+
+## Overview
+
+This release introduces the **Summarization Agent** with MCP integration, refactors the **LLM Client Architecture** to a provider-based pattern, adds **Claude AI Assistant automation** for GitHub issues and PRs, and significantly improves **developer tooling** with automated release notes, simplified CLI, and new evaluation benchmarks.
+
+## What's New
+
+### Summarization Agent
+New agent for document summarization with MCP bridge integration:
+- **MCP Bridge Integration**: Data sent as `multipart/form-data` leveraging OCR capabilities
+- **Streaming Responses**: Summarization results streamed in real time
+- **Iterative Summarization**: Produced iteratively to minimize time-to-first-token (TTFT)
+- **PDF Text Caching**: Extracted text cached for improved performance
+- **KV Cache Optimization**: Reduced TTFT by leveraging KV cache properly
+
+```bash
+gaia summarize document.pdf
+```
+
+### LLM Client Factory
+Complete refactor of LLM client architecture for better maintainability:
+- **Provider Pattern**: New `LemonadeProvider`, `OpenAIProvider`, `ClaudeProvider` implementations
+- **Factory Function**: Easy instantiation with `create_client("lemonade")`
+- **Base Interface**: Abstract `LLMClient` class for consistent behavior
+- **Auto-Loading**: Models automatically load before requests in `LemonadeClient`
+- **Default Temperature**: 0.1 for deterministic responses
+
+```python
+from gaia.llm import LLMClient, create_client
+
+# New pattern
+client = create_client("lemonade")  # or "openai", "claude"
+response = client.chat("Hello!")
+```
+
+### Claude AI Assistant Workflow
+Automated Claude assistance for GitHub issues and pull requests:
+- **PR Review**: Automatic reviews on PR open/ready with security and AMD compliance checks
+- **Issue Handling**: Intelligent triage and response to new issues
+- **@claude Mentions**: Responds to mentions in PR comments and issues
+- **Documentation-Aware**: References docs/docs.json for intelligent responses
+- **Cost-Optimized**: Concurrency control and selective triggering
+
+### Automated Release Notes Generation
+Claude-powered release notes when GitHub releases are created:
+- **Dual Output**: `RELEASE_NOTES.md` (GitHub) + `docs/releases/vX.Y.Z.mdx` (website)
+- **Iterative Diff Analysis**: Splits diffs by component for large releases
+- **Auto Version Bump**: Automatically bumps to next patch version after release
+- **MDX Validation**: Validates frontmatter, required sections, and changelog links
+- **Self-Review**: Claude verifies its generated output before committing
+
+### GAIA Code CLI Simplification
+Streamlined CLI by removing unnecessary subcommands:
+- **Direct Invocation**: `gaia-code "Build me an app"` works directly
+- **Auto-Initialization**: Models load automatically on first use
+- **176 Lines Removed**: Cleaner, simpler codebase
+- **Working Help**: `gaia-code --help` now shows ALL arguments
+
+```bash
+# These all work directly now:
+gaia-code "Build me a todo app"
+gaia-code "Build me an app" --path ~/projects/myapp
+gaia-code --interactive
+```
+
+<Warning>
+**Breaking Change**: The `run` subcommand has been removed. Use `gaia-code "prompt"` directly instead of `gaia-code run "prompt"`.
+</Warning>
+
+### Fix-Code Microbenchmark
+New evaluation framework for automated code fixes:
+- **CLI Helper**: `gaia eval fix-code` command
+- **Prompt Engineering**: Experiment with prompt designs for code fixes
+- **Multi-Model Support**: Test with local models or Claude
+- **Sample Fixtures**: Python and TypeScript bug examples included
+- **Diff Output**: Shows patched output with diffs
+
+```bash
+gaia eval fix-code --model claude examples/sum.py
+```
+
+### Performance Analysis Plotter
+New CLI tool for analyzing LLM server performance:
+- **Log Analysis**: Ingests llama.cpp server logs
+- **Token Charts**: Generates prompt/input/output token count charts
+- **Performance Metrics**: TTFT and TPS plots
+- **Prefill vs Decode**: Pie charts showing time distribution
+
+```bash
+gaia perf-analysis --show server.log
+```
+
+### Public Roadmap
+New documentation section with transparent development plans:
+- **Roadmap Page**: Timeline and upcoming priorities at [amd-gaia.ai](https://amd-gaia.ai)
+- **Technical Plans**: Detailed specs for Chat UI and Installer
+- **Q1 2026 Timeline**: Visual Mermaid diagram showing planned features
+- **Community Engagement**: Email contact (gaia@amd.com) for use cases
+
+## Improvements
+
+### Claude Framework Refresh
+- **Pruned Agents**: 28 → 24 agents (removed redundant ones)
+- **Renamed Agents**: Clearer naming (ai-engineer → gaia-agent-builder, etc.)
+- **New Agent**: `sdk-architect` for SDK API design guidance
+- **Pre-commit Hook**: Auto-fixes code before commits
+
+### Documentation
+- **Mermaid Diagrams**: Converted 56+ ASCII diagrams to Mermaid in specs
+- **Routing Agent**: Updated diagram to Mermaid format
+- **CLAUDE.md**: Comprehensive issue response guidelines
+- **Glossary**: Updated with Claude Code integration guidance
+
+### Infrastructure
+
+#### CI/CD Improvements
+- **Electron CI Tests**: Validation for Dependabot PRs (#183)
+- **PyPI Wheel Uploads**: Automated wheel publishing support (#93)
+- **uv Standardization**: All workflows use uv for consistency (#179)
+- **Self-Hosted Runner Monitoring**: New workflows to track CI runners (#178)
+- **GitHub Actions Updates**: Bumped to latest versions across 15 files
+
+#### Build & Dependencies
+- Bumped `electron` from 28.3.3 to 35.7.5
+- Bumped `esbuild` and `vite` in EMR dashboard frontend
+- Bumped `qs` from 6.14.0 to 6.14.1 in docs
+- Bumped GitHub Actions group with 4 updates
+
+### Workflow Improvements
+- **Fork Support**: Claude workflow now works correctly with forks
+- **Header Check Removal**: Simplified workflows by removing header checks
+- **Outside Contributors**: Skip copyright header check for external contributors
+- **Docs Validation**: New workflow validates MDX syntax with Mintlify CLI
+
+## Bug Fixes
+
+- **#152**: Summarization KV cache bypass causing high TTFT - now leverages cache properly
+- **#142**: Security updates for esbuild and vite dependencies
+- **#143**: Security update for qs dependency
+- **#144**: Electron security update (28.3.3 → 35.7.5)
+
+## Breaking Changes
+
+| Change | Migration |
+|--------|-----------|
+| `gaia-code run` removed | Use `gaia-code "prompt"` directly |
+| LLMClient import path | Use `from gaia.llm import LLMClient, create_client` |
+
+## Full Changelog
+
+**40 commits** from 8 contributors
+
+Key PRs:
+- #170 - Summarization Agent with MCP bridge integration
+- #150 - LLM Client Factory refactor with provider pattern
+- #154 - Claude AI Assistant GitHub Actions Workflow
+- #197 - Automated release notes generation with Claude
+- #147 - GAIA Code CLI simplification
+- #159 - Fix-Code Microbenchmark for evaluation
+- #158 - Performance Analysis Plotter for LLM logs
+- #166 - Public Roadmap and Technical Plans
+- #149 - Claude framework refresh (24 agents)
+- #152 - KV cache optimization for summarization
+- #93 - PyPI wheel upload support
+- #183 - Electron CI tests for Dependabot
+- #179 - Standardize workflows to uv
+
+Full Changelog: [v0.15.0...v0.15.1](https://github.com/amd/gaia/compare/v0.15.0...v0.15.1)

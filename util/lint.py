@@ -80,13 +80,29 @@ def check_black(fix: bool = False) -> CheckResult:
         # Count files that would be reformatted
         issues = output.count("would reformat") or 1
         print(f"\n[!] Code formatting issues found.")
-        # Show the actual error output
-        if output.strip():
-            print("\n[OUTPUT]")
-            for line in output.strip().split("\n")[:30]:
+
+        # Show which files would be reformatted
+        print("\n[FILES] Files that would be reformatted:")
+        for line in output.split('\n'):
+            if "would reformat" in line:
                 print(f"   {line}")
-            if len(output.strip().split("\n")) > 30:
-                print("   ... (output truncated, showing first 30 lines)")
+
+        # Show the diff output (first 100 lines)
+        if output:
+            print("\n[DIFF] Formatting differences:")
+            lines = output.split('\n')[:100]
+            for line in lines:
+                if line.startswith('---') or line.startswith('+++'):
+                    print(f"\033[96m{line}\033[0m")  # Cyan
+                elif line.startswith('-'):
+                    print(f"\033[91m{line}\033[0m")  # Red
+                elif line.startswith('+'):
+                    print(f"\033[92m{line}\033[0m")  # Green
+                else:
+                    print(f"\033[90m{line}\033[0m")  # Dark gray
+            if len(output.split('\n')) > 100:
+                print("... (output truncated, showing first 100 lines)")
+
         if not fix:
             print("\nFix with: python util/lint.py --black --fix")
         return CheckResult("Code Formatting (Black)", False, False, issues, output)
@@ -262,34 +278,93 @@ def check_bandit() -> CheckResult:
 
 
 def check_imports() -> CheckResult:
-    """Test critical imports."""
-    print("\n[7/7] Testing critical imports...")
+    """Test comprehensive SDK imports."""
+    print("\n[7/7] Testing comprehensive SDK imports...")
     print("-" * 40)
 
-    imports = [
-        ("gaia.cli", "CLI module"),
-        ("gaia.chat.sdk", "Chat SDK"),
-        ("gaia.llm", "LLM client"),
-        ("gaia.agents.base.agent", "Base agent"),
+    # Comprehensive import tests matching lint.ps1
+    tests = [
+        # Core CLI
+        ("import", "gaia.cli", "CLI module", False),
+        # LLM Clients
+        ("import", "gaia.llm", "LLM package", False),
+        ("from", "gaia.llm", "LLMClient", "LLM client class", False),
+        ("from", "gaia.llm", "VLMClient", "Vision LLM client", False),
+        ("from", "gaia.llm", "create_client", "LLM factory", False),
+        ("from", "gaia.llm", "NotSupportedError", "LLM exception", False),
+        # Chat SDK
+        ("import", "gaia.chat.sdk", "Chat SDK module", False),
+        ("from", "gaia.chat.sdk", "ChatSDK", "Chat SDK class", False),
+        ("from", "gaia.chat.sdk", "ChatConfig", "Chat configuration", False),
+        ("from", "gaia.chat.sdk", "ChatSession", "Chat session", False),
+        ("from", "gaia.chat.sdk", "ChatResponse", "Chat response", False),
+        ("from", "gaia.chat.sdk", "quick_chat", "Quick chat function", False),
+        # RAG SDK
+        ("import", "gaia.rag.sdk", "RAG SDK module", False),
+        ("from", "gaia.rag.sdk", "RAGSDK", "RAG SDK class", False),
+        ("from", "gaia.rag.sdk", "RAGConfig", "RAG configuration", False),
+        ("from", "gaia.rag.sdk", "quick_rag", "Quick RAG function", False),
+        # Base Agent System
+        ("import", "gaia.agents.base.agent", "Base agent module", False),
+        ("from", "gaia.agents.base.agent", "Agent", "Base Agent class", False),
+        ("from", "gaia.agents.base", "MCPAgent", "MCP agent mixin", False),
+        ("from", "gaia.agents.base", "tool", "Tool decorator", False),
+        # Specialized Agents
+        ("from", "gaia.agents.chat", "ChatAgent", "Chat agent", False),
+        ("from", "gaia.agents.code", "CodeAgent", "Code agent", False),
+        ("from", "gaia.agents.jira", "JiraAgent", "Jira agent", False),
+        ("from", "gaia.agents.docker", "DockerAgent", "Docker agent", False),
+        ("from", "gaia.agents.blender", "BlenderAgent", "Blender agent", False),
+        ("from", "gaia.agents.emr", "MedicalIntakeAgent", "Medical intake agent", False),
+        ("from", "gaia.agents.routing", "RoutingAgent", "Routing agent", False),
+        # Database
+        ("from", "gaia.database", "DatabaseAgent", "Database agent", False),
+        ("from", "gaia.database", "DatabaseMixin", "Database mixin", False),
+        # Utilities
+        ("from", "gaia.utils", "FileWatcher", "File watcher", False),
+        ("from", "gaia.utils", "FileWatcherMixin", "File watcher mixin", False),
     ]
 
     failed = False
     issues = 0
 
-    for module, desc in imports:
-        cmd = [sys.executable, "-c", f"import {module}; print('OK: {desc} imports')"]
-        print(f"[CMD] {' '.join(cmd)}")
+    for test in tests:
+        if test[0] == "import":
+            # Simple module import
+            module, desc, optional = test[1], test[2], test[3]
+            import_str = f"import {module}"
+        else:
+            # from X import Y
+            module, name, desc, optional = test[1], test[2], test[3], test[4]
+            import_str = f"from {module} import {name}"
+
+        test_code = f"{import_str}; print('OK')"
+        cmd = [sys.executable, "-c", test_code]
         exit_code, output = run_command(cmd)
-        print(output.strip())
+
         if exit_code != 0:
-            print(f"[!] Failed to import {module}")
-            failed = True
-            issues += 1
+            # Extract error message from output
+            error_line = ""
+            for line in output.strip().split('\n'):
+                if "Error:" in line or "ImportError:" in line or "ModuleNotFoundError:" in line:
+                    error_line = line.strip()
+                    break
+
+            if optional:
+                print(f"[SKIP] {desc:35} - {import_str} ({error_line if error_line else 'optional dependency'})")
+            else:
+                print(f"[FAIL] {desc:35} - {import_str}")
+                if error_line:
+                    print(f"       Error: {error_line}")
+                failed = True
+                issues += 1
+        else:
+            print(f"[OK]   {desc:35} - {import_str}")
 
     if failed:
         return CheckResult("Import Validation", False, False, issues, "")
 
-    print("[OK] All imports working!")
+    print(f"\n[OK] All required imports working!")
     return CheckResult("Import Validation", True, False, 0, "")
 
 
