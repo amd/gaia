@@ -30,17 +30,21 @@ Timelines are estimates and may shift based on community feedback and technical 
 graph LR
     Q1["Q1 2026<br/>Lightweight Installer<br/><small>One-command install</small>"]
     Q1B["Q1 2026<br/>Chat Desktop UI<br/><small>Privacy-first RAG</small>"]
-    Q2["Q2 2026<br/>TBD<br/><small>Community-driven</small>"]
+    Q2["Q2 2026<br/>MCP Docs Server<br/><small>AI assistant context</small>"]
+    Q3["Q3 2026<br/>TBD<br/><small>Community-driven</small>"]
 
     Q1 -.-> Q1B
     Q1B --> Q2
+    Q2 --> Q3
 
     style Q1 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style Q1B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style Q2 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    style Q2 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style Q3 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
 
     linkStyle 0 stroke:#ED1C24,stroke-width:2px,stroke-dasharray: 5 5
     linkStyle 1 stroke:#ED1C24,stroke-width:2px
+    linkStyle 2 stroke:#ED1C24,stroke-width:2px
 ```
 
 ### Q1 2026: Lightweight Installer
@@ -78,6 +82,26 @@ Key capabilities:
 
 → [View detailed plan](/plans/chat-ui) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/167)
 
+### Q2 2026: MCP Docs Server
+
+**AI assistant context for GAIA development**
+
+An MCP server that gives AI coding assistants (Claude Code, Cursor, GitHub Copilot) intelligent access to GAIA SDK documentation:
+
+```bash
+gaia mcp docs start
+```
+
+Key capabilities:
+- Semantic search across all GAIA documentation
+- Working code examples on demand
+- Version-aware API information
+- Works with Claude Code, VSCode, Cursor, and any MCP-compatible client
+
+Make AI assistants expert GAIA developers out of the box.
+
+→ [View detailed plan](/plans/mcp-docs) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/201)
+
 ---
 
 ## Recently Shipped
@@ -107,6 +131,7 @@ Based on usage data from [amd-gaia.ai](https://amd-gaia.ai):
 |--------|--------|
 | `/quickstart` is #1 page | → Lightweight installer |
 | Chat agent playbook #2 | → Desktop chat UI |
+| AI coding assistants popular | → MCP Docs Server |
 | 60%+ Linux traffic | → Cross-platform focus |
 | Phoronix coverage | → Privacy-first messaging |
 
@@ -128,4 +153,4 @@ Based on usage data from [amd-gaia.ai](https://amd-gaia.ai):
 
 ---
 
-*Updated: January 2026*
+*Updated: January 18, 2026*
