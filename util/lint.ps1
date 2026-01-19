@@ -240,7 +240,7 @@ function Invoke-ImportTests {
     $imports = @(
         @{Module="gaia.cli"; Desc="CLI module"},
         @{Module="gaia.chat.sdk"; Desc="Chat SDK"},
-        @{Module="gaia.llm.llm_client"; Desc="LLM client"},
+        @{Module="gaia.llm"; Desc="LLM client"},
         @{Module="gaia.agents.base.agent"; Desc="Base agent"}
     )
 
