@@ -43,10 +43,7 @@ jobs:
         with:
           python-version: '3.12'
           # Note: 'blender' excluded as bpy requires Blender runtime
-          install-package: '.[dev,talk,rag,mcp,api]'
-
-      - name: Install Lemonade Server
-        uses: ./.github/actions/install-lemonade
+          install-package: '.[dev,talk,rag,mcp,api,lemonade]'
 
       - name: Verify GAIA Installation
         run: |

@@ -32,15 +32,12 @@ jobs:
         uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
-          install-package: '.[dev,api]'
+          install-package: '.[dev,api,lemonade]'
 
       - name: Install additional test dependencies
         shell: powershell
         run: |
           uv pip install pytest pytest-timeout requests --python .venv\Scripts\python.exe
-
-      - name: Install Lemonade Server
-        uses: ./.github/actions/install-lemonade
 
       - name: Start Lemonade Server and Run Tests
         shell: powershell

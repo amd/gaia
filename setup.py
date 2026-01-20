@@ -12,6 +12,13 @@ with open("src/gaia/version.py", encoding="utf-8") as fp:
         raise ValueError("Unable to find version string in version.py")
     gaia_version = version_match.group(1)
 
+    lemonade_version_match = re.search(
+        r'LEMONADE_VERSION\s*=\s*["\']([^"\']+)["\']', version_content
+    )
+    if not lemonade_version_match:
+        raise ValueError("Unable to find LEMONADE_VERSION string in version.py")
+    lemonade_version = lemonade_version_match.group(1)
+
 tkml_version = "5.0.4"
 
 setup(
@@ -87,6 +94,9 @@ setup(
             "fastapi>=0.115.0",
             "uvicorn>=0.32.0",
             "python-multipart>=0.0.9",
+        ],
+        "lemonade": [
+            f"lemonade-sdk>={lemonade_version}",
         ],
         "audio": [
             "torch>=2.0.0,<2.4",

@@ -26,15 +26,11 @@ description: "Install prerequisites for GAIA"
 
 ## Install Prerequisites
 
-Follow the steps below to install Lemonade Server and uv, the two prerequisites for running GAIA.
+Follow the steps below to install uv, the prerequisite for running GAIA. You can install Lemonade Server either via pip (as a GAIA extra) or as a standalone application.
 
 <Tabs>
   <Tab title="Windows">
-    ### Step 1: Install Lemonade Server
-
-    Download and install from [lemonade-server.ai](https://lemonade-server.ai). GAIA starts it automatically when needed.
-
-    ### Step 2: Install uv
+    ### Step 1: Install uv
 
     [uv](https://docs.astral.sh/uv/) is a fast Python package manager (10-100x faster than pip).
 
@@ -65,11 +61,7 @@ Follow the steps below to install Lemonade Server and uv, the two prerequisites 
   </Tab>
 
   <Tab title="Linux">
-    ### Step 1: Install Lemonade Server
-
-    Download and install from [lemonade-server.ai](https://lemonade-server.ai). GAIA starts it automatically when needed.
-
-    ### Step 2: Install uv
+    ### Step 1: Install uv
 
     [uv](https://docs.astral.sh/uv/) is a fast Python package manager (10-100x faster than pip).
 
@@ -91,6 +83,30 @@ Follow the steps below to install Lemonade Server and uv, the two prerequisites 
     </Tip>
   </Tab>
 </Tabs>
+
+---
+
+## Lemonade Server
+
+GAIA uses [Lemonade Server](https://lemonade-server.ai) for running Large Language Models locally on AMD hardware. You have two installation options:
+
+### Option 1: Install via pip (Recommended)
+
+Install Lemonade Server as part of GAIA using the `lemonade` extra:
+
+```bash
+uv pip install "amd-gaia[lemonade]"
+```
+
+This installs the [lemonade-sdk](https://pypi.org/project/lemonade-sdk/) package which includes the `lemonade-server` command.
+
+### Option 2: Standalone Installation
+
+Download and install the standalone Lemonade Server from [lemonade-server.ai](https://lemonade-server.ai).
+
+<Note>
+  Both options provide the same `lemonade-server` command. Choose Option 1 if you want everything managed through pip, or Option 2 if you prefer a standalone installation or already have Lemonade Server installed.
+</Note>
 
 ---
 

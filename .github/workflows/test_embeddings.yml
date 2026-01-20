@@ -29,11 +29,8 @@ jobs:
       uses: ./.github/actions/setup-venv
       with:
         python-version: '3.12'
-        install-package: '.[dev,rag]'
+        install-package: '.[dev,rag,lemonade]'
         extra-index-url: 'https://download.pytorch.org/whl/cpu'
-
-    - name: Install Lemonade Server
-      uses: ./.github/actions/install-lemonade
 
     - name: Start Lemonade Server and Run Tests
       shell: powershell

@@ -39,10 +39,7 @@ jobs:
         uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
-          install-package: '.[dev]'
-
-      - name: Install Lemonade Server
-        uses: ./.github/actions/install-lemonade
+          install-package: '.[dev,lemonade]'
 
       - name: Verify GAIA Installation
         run: |
