@@ -222,8 +222,6 @@
           {
             "group": "Packaging",
             "pages": [
-              "spec/web-ui-packaging",
-              "spec/nsis-installer",
               "spec/electron-integration"
             ]
           },
@@ -289,7 +287,6 @@
           {
             "group": "Packaging & Distribution",
             "pages": [
-              "deployment/installer",
               "deployment/ui",
               "deployment/testing-electron"
             ]
@@ -310,6 +307,7 @@
             "pages": [
               "plans/installer",
               "plans/chat-ui",
+              "plans/mcp-client",
               "plans/mcp-docs"
             ]
           }

@@ -26,7 +26,6 @@ $PYTHON_PATH = "python"
 $PYLINT_PATH = "pylint"
 $SRC_DIR = "src\gaia"
 $TEST_DIR = "tests"
-$INSTALLER_DIR = "installer"
 $PYLINT_CONFIG = ".pylintrc"
 $DISABLED_CHECKS = "C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718"
 $EXCLUDE_DIRS = ".git,__pycache__,venv,.venv,.mypy_cache,.tox,.eggs,_build,buck-out,node_modules"
@@ -58,13 +57,13 @@ function Invoke-Black {
     Write-Host "----------------------------------------"
 
     if ($Fix) {
-        $cmd = "$PYTHON_PATH -m black $INSTALLER_DIR $SRC_DIR $TEST_DIR --config pyproject.toml"
+        $cmd = "$PYTHON_PATH -m black $SRC_DIR $TEST_DIR --config pyproject.toml"
         Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-        $blackOutput = & $PYTHON_PATH -m black $INSTALLER_DIR $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1 | Out-String -Width 4096
+        $blackOutput = & $PYTHON_PATH -m black $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1 | Out-String -Width 4096
     } else {
-        $cmd = "$PYTHON_PATH -m black --check --diff $INSTALLER_DIR $SRC_DIR $TEST_DIR --config pyproject.toml"
+        $cmd = "$PYTHON_PATH -m black --check --diff $SRC_DIR $TEST_DIR --config pyproject.toml"
         Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-        $blackOutput = & $PYTHON_PATH -m black --check --diff $INSTALLER_DIR $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1 | Out-String -Width 4096
+        $blackOutput = & $PYTHON_PATH -m black --check --diff $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1 | Out-String -Width 4096
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -118,13 +117,13 @@ function Invoke-Isort {
     Write-Host "----------------------------------------"
 
     if ($Fix) {
-        $cmd = "$PYTHON_PATH -m isort $INSTALLER_DIR $SRC_DIR $TEST_DIR"
+        $cmd = "$PYTHON_PATH -m isort $SRC_DIR $TEST_DIR"
         Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-        $isortOutput = & $PYTHON_PATH -m isort $INSTALLER_DIR $SRC_DIR $TEST_DIR 2>&1 | Out-String -Width 4096
+        $isortOutput = & $PYTHON_PATH -m isort $SRC_DIR $TEST_DIR 2>&1 | Out-String -Width 4096
     } else {
-        $cmd = "$PYTHON_PATH -m isort --check-only --diff $INSTALLER_DIR $SRC_DIR $TEST_DIR"
+        $cmd = "$PYTHON_PATH -m isort --check-only --diff $SRC_DIR $TEST_DIR"
         Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-        $isortOutput = & $PYTHON_PATH -m isort --check-only --diff $INSTALLER_DIR $SRC_DIR $TEST_DIR 2>&1 | Out-String -Width 4096
+        $isortOutput = & $PYTHON_PATH -m isort --check-only --diff $SRC_DIR $TEST_DIR 2>&1 | Out-String -Width 4096
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -133,8 +132,17 @@ function Invoke-Isort {
         if ($script:IsortIssues -eq 0) { $script:IsortIssues = 1 }
 
         Write-Host "`n[!] Import sorting issues found." -ForegroundColor Red
+        # Show the actual error output
+        if ($isortOutput.Trim()) {
+            Write-Host "`n[OUTPUT]" -ForegroundColor White
+            $lines = ($isortOutput -split "`n") | Select-Object -First 30
+            $lines | ForEach-Object { Write-Host "   $_" -ForegroundColor Yellow }
+            if (($isortOutput -split "`n").Count -gt 30) {
+                Write-Host "   ... (output truncated, showing first 30 lines)" -ForegroundColor DarkGray
+            }
+        }
         if (-not $Fix) {
-            Write-Host "Fix with: powershell util\lint.ps1 -RunIsort -Fix" -ForegroundColor Yellow
+            Write-Host "`nFix with: powershell util\lint.ps1 -RunIsort -Fix" -ForegroundColor Yellow
         }
         $script:ErrorCount++
         $script:IsortPassed = $false
@@ -175,9 +183,9 @@ function Invoke-Flake8 {
     Write-Host "`n[4/7] Running Flake8..." -ForegroundColor Cyan
     Write-Host "----------------------------------------"
 
-    $cmd = "$PYTHON_PATH -m flake8 $INSTALLER_DIR $SRC_DIR $TEST_DIR --exclude=$EXCLUDE_DIRS --count --statistics --max-line-length=88 --extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722"
+    $cmd = "$PYTHON_PATH -m flake8 $SRC_DIR $TEST_DIR --exclude=$EXCLUDE_DIRS --count --statistics --max-line-length=88 --extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722"
     Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-    $flake8Output = & $PYTHON_PATH -m flake8 $INSTALLER_DIR $SRC_DIR $TEST_DIR --exclude=$EXCLUDE_DIRS --count --statistics --max-line-length=88 --extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722 2>&1 | Out-String -Width 4096
+    $flake8Output = & $PYTHON_PATH -m flake8 $SRC_DIR $TEST_DIR --exclude=$EXCLUDE_DIRS --count --statistics --max-line-length=88 --extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722 2>&1 | Out-String -Width 4096
 
     if ($LASTEXITCODE -ne 0) {
         # Count actual violation lines (format: filepath:line:col: error_code message)
@@ -399,7 +407,7 @@ if ($RunBandit -or $All) {
 
 # Collect file statistics
 Write-Host "`nCollecting statistics..." -ForegroundColor DarkGray
-$pyFiles = @(Get-ChildItem -Path $SRC_DIR,$TEST_DIR,$INSTALLER_DIR -Recurse -Filter "*.py" -File)
+$pyFiles = @(Get-ChildItem -Path $SRC_DIR,$TEST_DIR -Recurse -Filter "*.py" -File)
 $totalPyFiles = $pyFiles.Count
 $totalLines = 0
 foreach ($file in $pyFiles) {
@@ -417,7 +425,7 @@ Write-Host ""
 Write-Host "[STATS] Project Statistics:" -ForegroundColor White
 Write-Host "   - Python Files: $totalPyFiles" -ForegroundColor Gray
 Write-Host "   - Lines of Code: $($totalLines.ToString('N0'))" -ForegroundColor Gray
-Write-Host "   - Directories: src/gaia, tests, installer" -ForegroundColor Gray
+Write-Host "   - Directories: src/gaia, tests" -ForegroundColor Gray
 
 # Build results table
 $results = @()
