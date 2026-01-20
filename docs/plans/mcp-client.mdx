@@ -8,7 +8,7 @@ description: Implementation plan for enabling GAIA agents to consume external MC
 <Info>
 **Status:** Planning
 **Priority:** High
-[View full plan on GitHub](https://github.com/amd/gaia/blob/main/docs/plans/mcp-client.md) • [Vote with 👍](https://github.com/amd/gaia/issues/203)
+[Vote with 👍](https://github.com/amd/gaia/issues/203)
 </Info>
 
 ## Executive Summary
@@ -30,7 +30,7 @@ Create an **MCP Client Mixin** that enables GAIA agents to connect to and use to
 ### MCP Server Requirements
 
 MCP servers must support the [MCP Protocol](https://modelcontextprotocol.io/):
-- stdio transport (subprocess communication)
+- One of: stdio, HTTP, or WebSocket transport
 - `initialize` handshake
 - `tools/list` capability
 - `tools/call` for tool execution
@@ -184,6 +184,34 @@ class FullStackAgent(MCPClientMixin, Agent):
         return f"Completed workflow: {task}"
 ```
 
+### Additional Use Cases
+
+The MCP ecosystem supports many integration patterns:
+
+| Use Case | MCP Server | Example |
+|----------|------------|---------|
+| **Filesystem** | Filesystem MCP | Read/write files, watch directories |
+| **Database** | SQLite/PostgreSQL MCP | Query data, manage schemas |
+| **GitHub** | GitHub MCP | Create issues, manage PRs, search repos |
+| **Web Search** | Brave/Google MCP | Search the web, fetch results |
+| **Slack/Discord** | Chat platform MCPs | Send messages, read channels |
+| **Calendar** | Google Calendar MCP | Create events, check availability |
+
+```python
+# Example: GitHub automation agent
+class GitHubAgent(MCPClientMixin, Agent):
+    def __init__(self):
+        super().__init__()
+        self.connect_mcp_server("github", url="http://localhost:8080", transport="http")
+
+    @tool
+    def create_issue(self, repo: str, title: str, body: str) -> str:
+        result = self.mcp_call("github", "create-issue", {
+            "repo": repo, "title": title, "body": body
+        })
+        return f"Created issue #{result['number']}"
+```
+
 ---
 
 ## MCP Client Mixin API
@@ -199,7 +227,9 @@ class MCPClientMixin:
     def connect_mcp_server(
         self,
         name: str,
-        command: str,
+        command: Optional[str] = None,
+        url: Optional[str] = None,
+        transport: str = "stdio",
         env: Optional[Dict[str, str]] = None,
         working_dir: Optional[str] = None,
         auto_register: bool = False,
@@ -210,7 +240,9 @@ class MCPClientMixin:
 
         Args:
             name: Unique identifier for this connection
-            command: Command to start the MCP server (e.g., "uvx windows-mcp")
+            command: Command to start the MCP server (for stdio transport)
+            url: URL of the MCP server (for http/websocket transport)
+            transport: Transport type - "stdio", "http", or "websocket"
             env: Environment variables for the server process
             working_dir: Working directory for the server
             auto_register: If True, register MCP tools as agent tools
@@ -221,9 +253,17 @@ class MCPClientMixin:
             MCPTimeoutError: If connection times out
 
         Example:
-            self.connect_mcp_server("windows", "uvx windows-mcp")
-            self.connect_mcp_server("db", "uvx sqlite-mcp", env={"DB_PATH": "/data/app.db"})
-            self.connect_mcp_server("win", "uvx windows-mcp", auto_register=True, tool_prefix="win_")
+            # stdio transport (local subprocess)
+            self.connect_mcp_server("windows", command="uvx windows-mcp")
+
+            # HTTP transport (remote server)
+            self.connect_mcp_server("api", url="http://localhost:8080", transport="http")
+
+            # WebSocket transport (persistent connection)
+            self.connect_mcp_server("realtime", url="ws://localhost:9000", transport="websocket")
+
+            # With auto-registration
+            self.connect_mcp_server("win", command="uvx windows-mcp", auto_register=True, tool_prefix="win_")
         """
 
     def disconnect_mcp_server(self, name: str) -> None:
@@ -351,8 +391,11 @@ graph TD
 | Component | Purpose | Implementation |
 |-----------|---------|----------------|
 | **MCPClientMixin** | Base mixin class | Inherit to add MCP client capabilities |
-| **MCP Client Manager** | Connection lifecycle | Start/stop servers, manage processes |
-| **Transport Layer** | Communication | stdio transport (subprocess pipes) |
+| **MCPClient** | Protocol handler | MCP message serialization/deserialization |
+| **MCPClientManager** | Connection orchestrator | Manage multiple server connections |
+| **StdioTransport** | Local subprocess | Pipe-based communication |
+| **HTTPTransport** | Remote HTTP servers | Request/response pattern |
+| **WebSocketTransport** | Persistent connections | Bidirectional streaming |
 | **Tool Registry Bridge** | Tool integration | Auto-register MCP tools as agent tools |
 
 ---
@@ -437,14 +480,21 @@ gaia cua --mcp windows --task "Open Calculator and compute 2+2"
 ### MCP Server Management
 
 ```bash
-# List available MCP servers
+# Add an MCP server to config
+gaia mcp add windows --command "uvx windows-mcp"
+gaia mcp add github --url "http://localhost:8080" --transport http
+
+# List configured MCP servers
 gaia mcp list
 
 # Test MCP server connection
-gaia mcp test windows-mcp
+gaia mcp test windows
 
 # Show tools from an MCP server
-gaia mcp tools windows-mcp
+gaia mcp tools windows
+
+# Remove an MCP server from config
+gaia mcp remove windows
 ```
 
 ---
@@ -494,7 +544,10 @@ sequenceDiagram
 
 <Steps>
   <Step title="Foundation">
-    MCPClientMixin base class, connection management, stdio transport
+    MCPClientMixin base class, MCPClient protocol handler, MCPClientManager
+  </Step>
+  <Step title="Transports">
+    StdioTransport (subprocess), HTTPTransport, WebSocketTransport
   </Step>
   <Step title="Protocol">
     MCP protocol implementation (initialize, tools/list, tools/call)
@@ -502,14 +555,11 @@ sequenceDiagram
   <Step title="Tool Bridge">
     Auto-registration of MCP tools as agent tools, tool prefix support
   </Step>
-  <Step title="Windows Integration">
-    Windows MCP integration, example CUA agent
-  </Step>
   <Step title="CLI">
-    `gaia cua` command, MCP server management commands
+    `gaia mcp add/list/test/tools/remove`, `gaia cua` commands
   </Step>
-  <Step title="Documentation">
-    SDK documentation, CUA guide, example agents
+  <Step title="Integration">
+    Windows MCP integration, example CUA agent, documentation
   </Step>
 </Steps>
 
@@ -523,15 +573,24 @@ sequenceDiagram
 # In your agent
 class MyAgent(MCPClientMixin, Agent):
     MCP_SERVERS = {
+        # stdio transport (default)
         "windows": {
             "command": "uvx windows-mcp",
+            "transport": "stdio",
             "auto_register": True,
             "tool_prefix": "win_"
         },
-        "browser": {
-            "command": "npx @anthropic/puppeteer-mcp",
+        # HTTP transport
+        "github": {
+            "url": "http://localhost:8080",
+            "transport": "http",
             "auto_register": True,
-            "tool_prefix": "browser_"
+            "tool_prefix": "gh_"
+        },
+        # WebSocket transport
+        "realtime": {
+            "url": "ws://localhost:9000",
+            "transport": "websocket"
         }
     }
 ```
@@ -542,11 +601,24 @@ class MyAgent(MCPClientMixin, Agent):
 # ~/.gaia/config.yaml
 mcp:
   servers:
+    # stdio transport (local subprocess)
     windows:
       command: uvx windows-mcp
+      transport: stdio
       enabled: true
-    browser:
-      command: npx @anthropic/puppeteer-mcp
+      auto_register: true
+      tool_prefix: win_
+
+    # HTTP transport (remote server)
+    github:
+      url: http://localhost:8080
+      transport: http
+      enabled: true
+
+    # WebSocket transport (persistent connection)
+    realtime:
+      url: ws://localhost:9000
+      transport: websocket
       enabled: false
 ```
 
@@ -556,11 +628,13 @@ mcp:
 
 | Metric | Target |
 |--------|--------|
-| MCP server connection time | < 2 seconds |
+| MCP server connection time (stdio) | < 2 seconds |
+| MCP server connection time (HTTP/WS) | < 500ms |
 | Tool call latency overhead | < 50ms |
+| Supported transports | stdio, HTTP, WebSocket |
 | Supported MCP protocol version | 2024-11-05 |
 | Windows MCP tool coverage | 100% (all 11 tools) |
-| Example CUA agents | 3+ (forms, browser, workflow) |
+| Example agents | 3+ (CUA, GitHub, multi-MCP) |
 
 ---
 
@@ -620,6 +694,6 @@ class FullyConnectedAgent(MCPClientMixin, MCPAgent, Agent):
 - [MCPAgent Specification](/spec/mcp-agent) - Server-side MCP implementation
 - [Windows MCP](https://github.com/CursorTouch/Windows-MCP) - Desktop automation server
 
-<Card title="Full Implementation Plan" icon="github" href="https://github.com/amd/gaia/blob/main/docs/plans/mcp-client.md">
-  View the complete technical specification on GitHub
+<Card title="Vote on GitHub" icon="github" href="https://github.com/amd/gaia/issues/203">
+  React with 👍 to help prioritize this feature
 </Card>
