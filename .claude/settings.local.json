@@ -23,8 +23,6 @@
       "Bash(gh run list:*)",
       "Bash(gh run view:*)",
       "Bash(git add:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
       "Bash(git commit:*)",
       "Bash(git log:*)",
       "Bash(git ls-tree:*)",
