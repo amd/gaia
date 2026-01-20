@@ -315,7 +315,16 @@ RAG (Retrieval-Augmented Generation) enables chatting with PDF documents using s
 </Tabs>
 
 <Note>
-  **PDF Indexing Requirements:** Processing PDFs with images requires a Vision Language Model (VLM). GAIA uses `Qwen3-VL-4B-Instruct-GGUF` by default for extracting text from images in PDFs. Ensure the VLM model is installed via [Lemonade Server](https://amd-gaia.ai/setup#install-lemonade-server) before indexing PDFs with images.
+  **PDF Indexing Requirements:** Processing PDFs with images requires a Vision Language Model (VLM). GAIA uses `Qwen2.5-VL-7B-Instruct-GGUF` by default for extracting text from images in PDFs.
+
+  To download all models needed for chat (including VLM):
+  ```bash
+  gaia download --agent chat
+  ```
+
+  To see what models each agent requires: `gaia download --list`
+
+  See the [CLI Reference](/reference/cli#download-command) for more download options.
 </Note>
 
 ### Interactive RAG Commands
@@ -329,7 +338,7 @@ When using `gaia chat` with documents (via `--index` flag or `/index` command), 
     - `/resume [id]` - Resume session with conversation and documents restored
     - `/save` - Save session including indexed documents
     - `/sessions` - List all saved sessions
-    - `/reset` - Clear conversation and remove all indexed documents
+    - `/reset` - Clear conversation and start a new session (indexed documents are preserved)
   </Accordion>
 
   <Accordion title="Document Management">

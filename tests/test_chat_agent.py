@@ -126,6 +126,92 @@ class TestChatAgent:
             if test_dir.exists() and not any(test_dir.iterdir()):
                 test_dir.rmdir()
 
+    def test_indexed_files_tracked_after_index(self, agent):
+        """Test that indexed files are tracked in agent.indexed_files after indexing."""
+        test_dir = Path(__file__).parent / "test_data"
+        test_dir.mkdir(exist_ok=True)
+        test_file = test_dir / "test_tracking.txt"
+
+        try:
+            test_file.write_text("Content for tracking test.")
+
+            # Verify initial state
+            assert len(agent.rag.indexed_files) == 0
+
+            # Index the document
+            result = agent.rag.index_document(str(test_file))
+            assert result.get("success")
+
+            # Verify file is tracked
+            assert str(test_file) in agent.rag.indexed_files
+            assert len(agent.rag.indexed_files) == 1
+        finally:
+            if test_file.exists():
+                test_file.unlink()
+            if test_dir.exists() and not any(test_dir.iterdir()):
+                test_dir.rmdir()
+
+    def test_multiple_documents_indexed(self, agent):
+        """Test indexing multiple documents updates system prompt correctly."""
+        test_dir = Path(__file__).parent / "test_data"
+        test_dir.mkdir(exist_ok=True)
+        test_file1 = test_dir / "doc1.txt"
+        test_file2 = test_dir / "doc2.txt"
+
+        try:
+            test_file1.write_text("First document about Python programming.")
+            test_file2.write_text("Second document about machine learning.")
+
+            # Index both documents
+            result1 = agent.rag.index_document(str(test_file1))
+            result2 = agent.rag.index_document(str(test_file2))
+            assert result1.get("success")
+            assert result2.get("success")
+
+            # Update system prompt
+            agent._update_system_prompt()
+
+            # Verify both documents in system prompt
+            assert "doc1.txt" in agent.system_prompt
+            assert "doc2.txt" in agent.system_prompt
+            assert len(agent.rag.indexed_files) == 2
+        finally:
+            for f in [test_file1, test_file2]:
+                if f.exists():
+                    f.unlink()
+            if test_dir.exists() and not any(test_dir.iterdir()):
+                test_dir.rmdir()
+
+    def test_rag_chunks_created_after_index(self, agent):
+        """Test that RAG chunks are created after indexing a document."""
+        test_dir = Path(__file__).parent / "test_data"
+        test_dir.mkdir(exist_ok=True)
+        test_file = test_dir / "test_chunks.txt"
+
+        try:
+            # Create content that will generate chunks
+            test_file.write_text(
+                "This is a test document with enough content to create chunks. "
+                "It contains information about artificial intelligence and machine learning. "
+                "The document discusses various topics including neural networks and deep learning."
+            )
+
+            # Verify initial state
+            assert len(agent.rag.chunks) == 0
+
+            # Index the document
+            result = agent.rag.index_document(str(test_file))
+            assert result.get("success")
+
+            # Verify chunks were created
+            assert len(agent.rag.chunks) > 0
+            assert result.get("num_chunks", 0) > 0
+        finally:
+            if test_file.exists():
+                test_file.unlink()
+            if test_dir.exists() and not any(test_dir.iterdir()):
+                test_dir.rmdir()
+
 
 class TestChatAgentEval:
     """Evaluation tests for Chat Agent quality metrics."""
