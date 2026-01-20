@@ -311,42 +311,17 @@ Each playbook follows this format:
 
 ## Prerequisites
 
-All playbooks assume you have:
+All playbooks assume you have completed the [Setup](/setup) guide, which installs:
 
-<Tabs>
-  <Tab title="Python Environment">
-    - Python 3.10 or higher
-    - Virtual environment (venv or conda)
-    - pip or uv for package management
-  </Tab>
+- **uv** - Fast Python package manager
+- **GAIA** - The agent framework
+- **Lemonade Server** - AMD-optimized LLM inference
 
-  <Tab title="GAIA Installed">
-    ```bash
-    uv pip install amd-gaia
-    ```
-  </Tab>
-
-  <Tab title="Lemonade Server">
-    ```bash
-    # Install Lemonade Server (AMD-optimized for Ryzen AI)
-    uv pip install lemonade-server
-
-    # Start with NPU/iGPU acceleration
-    lemonade-server serve
-    ```
-
-    <Tip>
-    Lemonade Server provides AMD-optimized inference for AI PCs, utilizing NPU and iGPU acceleration.
-    </Tip>
-  </Tab>
-
-  <Tab title="Basic Python Knowledge">
-    - Classes and inheritance
-    - Decorators (@tool)
-    - Type hints
-    - Async/await (for voice playbooks)
-  </Tab>
-</Tabs>
+You should also have basic Python knowledge:
+- Classes and inheritance
+- Decorators (`@tool`)
+- Type hints
+- Async/await (for voice playbooks)
 
 ---
 

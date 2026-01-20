@@ -1,6 +1,6 @@
 ---
 title: "Setup"
-description: "Install prerequisites for GAIA"
+description: "Install GAIA and its dependencies"
 ---
 
 ## System Requirements
@@ -24,12 +24,14 @@ description: "Install prerequisites for GAIA"
 
 ---
 
-## Install Prerequisites
+## Install GAIA
 
-Follow the steps below to install uv, the prerequisite for running GAIA. You can install Lemonade Server either via pip (as a GAIA extra) or as a standalone application.
+Choose your platform and installation type, then follow the steps below.
 
 <Tabs>
-  <Tab title="Windows">
+  <Tab title="Windows (PyPI)">
+    Installs [amd-gaia](https://pypi.org/project/amd-gaia/) from PyPI.
+
     ### Step 1: Install uv
 
     [uv](https://docs.astral.sh/uv/) is a fast Python package manager (10-100x faster than pip).
@@ -51,16 +53,69 @@ Follow the steps below to install uv, the prerequisite for running GAIA. You can
     uv --version
     ```
 
-    <Success>
-      You're ready to install GAIA! Continue to the [Quickstart](/quickstart).
-    </Success>
+    ### Step 2: Create Project Directory
+
+    ```powershell
+    mkdir my-gaia-project
+    ```
+    ```powershell
+    cd my-gaia-project
+    ```
+
+    ### Step 3: Create Virtual Environment
+
+    ```powershell
+    uv venv .venv --python 3.12
+    ```
+
+    <Note>uv will automatically download Python 3.12 if not already installed.</Note>
+
+    ### Step 4: Activate the Environment
+
+    ```powershell
+    .\.venv\Scripts\Activate.ps1
+    ```
+
+    <Warning>
+      If you see a script execution error, run this once:
+      ```powershell
+      Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+      ```
+      Then retry the activation command.
+    </Warning>
+
+    You should see `(.venv)` in your terminal prompt when activated.
+
+    ### Step 5: Install GAIA
+
+    ```powershell
+    uv pip install "amd-gaia[lemonade]"
+    ```
+
+    This installs GAIA and [Lemonade Server](https://lemonade-server.ai), which provides AMD-optimized LLM inference.
 
     <Tip>
-      **Having issues?** Check the [Troubleshooting](/reference/troubleshooting) guide, [create an issue](https://github.com/amd/gaia/issues) on GitHub, or contact us at gaia@amd.com.
+      **Additional extras:** `uv pip install "amd-gaia[lemonade,talk,rag]"` for voice and document Q&A features.
     </Tip>
+
+    <Note>
+      **Already have Lemonade Server installed?** You can skip the `lemonade` extra: `uv pip install amd-gaia`
+    </Note>
+
+    ### Step 6: Verify Installation
+
+    ```powershell
+    gaia -v
+    ```
+
+    <Success>
+      You're ready to build your first agent! Continue to the [Quickstart](/quickstart).
+    </Success>
   </Tab>
 
-  <Tab title="Linux">
+  <Tab title="Linux (PyPI)">
+    Installs [amd-gaia](https://pypi.org/project/amd-gaia/) from PyPI.
+
     ### Step 1: Install uv
 
     [uv](https://docs.astral.sh/uv/) is a fast Python package manager (10-100x faster than pip).
@@ -74,39 +129,226 @@ Follow the steps below to install uv, the prerequisite for running GAIA. You can
     uv --version
     ```
 
-    <Success>
-      You're ready to install GAIA! Continue to the [Quickstart](/quickstart).
-    </Success>
+    ### Step 2: Create Project Directory
+
+    ```bash
+    mkdir my-gaia-project
+    ```
+    ```bash
+    cd my-gaia-project
+    ```
+
+    ### Step 3: Create Virtual Environment
+
+    ```bash
+    uv venv .venv --python 3.12
+    ```
+
+    <Note>uv will automatically download Python 3.12 if not already installed.</Note>
+
+    ### Step 4: Activate the Environment
+
+    ```bash
+    source .venv/bin/activate
+    ```
+
+    You should see `(.venv)` in your terminal prompt when activated.
+
+    ### Step 5: Install GAIA
+
+    ```bash
+    uv pip install "amd-gaia[lemonade]"
+    ```
+
+    This installs GAIA and [Lemonade Server](https://lemonade-server.ai), which provides AMD-optimized LLM inference.
 
     <Tip>
-      **Having issues?** Check the [Troubleshooting](/reference/troubleshooting) guide, [create an issue](https://github.com/amd/gaia/issues) on GitHub, or contact us at gaia@amd.com.
+      **Additional extras:** `uv pip install "amd-gaia[lemonade,talk,rag]"` for voice and document Q&A features.
     </Tip>
+
+    <Note>
+      **Already have Lemonade Server installed?** You can skip the `lemonade` extra: `uv pip install amd-gaia`
+    </Note>
+
+    ### Step 6: Verify Installation
+
+    ```bash
+    gaia -v
+    ```
+
+    <Success>
+      You're ready to build your first agent! Continue to the [Quickstart](/quickstart).
+    </Success>
+  </Tab>
+
+  <Tab title="Windows (Clone)">
+    For contributors. Clones [amd/gaia](https://github.com/amd/gaia) from GitHub.
+
+    <Note>
+      **Requires:** [Git for Windows](https://git-scm.com/download/win) must be installed.
+    </Note>
+
+    ### Step 1: Install uv
+
+    [uv](https://docs.astral.sh/uv/) is a fast Python package manager (10-100x faster than pip).
+
+    Open **PowerShell** and run:
+    ```powershell
+    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+    ```
+
+    <Tip>
+      If `uv` is not recognized after install, restart PowerShell or run:
+      ```powershell
+      $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
+      ```
+    </Tip>
+
+    Verify uv is installed:
+    ```powershell
+    uv --version
+    ```
+
+    ### Step 2: Clone the Repository
+
+    ```powershell
+    git clone https://github.com/amd/gaia.git
+    ```
+    ```powershell
+    cd gaia
+    ```
+
+    ### Step 3: Create Virtual Environment
+
+    ```powershell
+    uv venv .venv --python 3.12
+    ```
+
+    <Note>uv will automatically download Python 3.12 if not already installed.</Note>
+
+    ### Step 4: Activate the Environment
+
+    ```powershell
+    .\.venv\Scripts\Activate.ps1
+    ```
+
+    <Warning>
+      If you see a script execution error, run this once:
+      ```powershell
+      Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+      ```
+      Then retry the activation command.
+    </Warning>
+
+    You should see `(.venv)` in your terminal prompt when activated.
+
+    ### Step 5: Install in Editable Mode
+
+    ```powershell
+    uv pip install -e ".[dev,lemonade]"
+    ```
+
+    <Tip>
+      **With all extras:** `uv pip install -e ".[dev,lemonade,talk,rag]"` for voice and document Q&A features.
+    </Tip>
+
+    <Note>
+      **Already have Lemonade Server installed?** You can skip the `lemonade` extra: `uv pip install -e ".[dev]"`
+    </Note>
+
+    ### Step 6: Verify Installation
+
+    ```powershell
+    gaia -v
+    ```
+
+    <Note>
+      Changes to GAIA source code will take effect immediately without reinstalling.
+    </Note>
+
+    <Success>
+      You're ready to build your first agent! Continue to the [Quickstart](/quickstart).
+    </Success>
+  </Tab>
+
+  <Tab title="Linux (Clone)">
+    For contributors. Clones [amd/gaia](https://github.com/amd/gaia) from GitHub.
+
+    <Note>
+      **Requires:** Git must be installed (`sudo apt install git`).
+    </Note>
+
+    ### Step 1: Install uv
+
+    [uv](https://docs.astral.sh/uv/) is a fast Python package manager (10-100x faster than pip).
+
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+
+    Verify uv is installed (restart terminal if needed):
+    ```bash
+    uv --version
+    ```
+
+    ### Step 2: Clone the Repository
+
+    ```bash
+    git clone https://github.com/amd/gaia.git
+    ```
+    ```bash
+    cd gaia
+    ```
+
+    ### Step 3: Create Virtual Environment
+
+    ```bash
+    uv venv .venv --python 3.12
+    ```
+
+    <Note>uv will automatically download Python 3.12 if not already installed.</Note>
+
+    ### Step 4: Activate the Environment
+
+    ```bash
+    source .venv/bin/activate
+    ```
+
+    You should see `(.venv)` in your terminal prompt when activated.
+
+    ### Step 5: Install in Editable Mode
+
+    ```bash
+    uv pip install -e ".[dev,lemonade]"
+    ```
+
+    <Tip>
+      **With all extras:** `uv pip install -e ".[dev,lemonade,talk,rag]"` for voice and document Q&A features.
+    </Tip>
+
+    <Note>
+      **Already have Lemonade Server installed?** You can skip the `lemonade` extra: `uv pip install -e ".[dev]"`
+    </Note>
+
+    ### Step 6: Verify Installation
+
+    ```bash
+    gaia -v
+    ```
+
+    <Note>
+      Changes to GAIA source code will take effect immediately without reinstalling.
+    </Note>
+
+    <Success>
+      You're ready to build your first agent! Continue to the [Quickstart](/quickstart).
+    </Success>
   </Tab>
 </Tabs>
 
----
-
-## Lemonade Server
-
-GAIA uses [Lemonade Server](https://lemonade-server.ai) for running Large Language Models locally on AMD hardware. You have two installation options:
-
-### Option 1: Install via pip (Recommended)
-
-Install Lemonade Server as part of GAIA using the `lemonade` extra:
-
-```bash
-uv pip install "amd-gaia[lemonade]"
-```
-
-This installs the [lemonade-sdk](https://pypi.org/project/lemonade-sdk/) package which includes the `lemonade-server` command.
-
-### Option 2: Standalone Installation
-
-Download and install the standalone Lemonade Server from [lemonade-server.ai](https://lemonade-server.ai).
-
-<Note>
-  Both options provide the same `lemonade-server` command. Choose Option 1 if you want everything managed through pip, or Option 2 if you prefer a standalone installation or already have Lemonade Server installed.
-</Note>
+<Tip>
+  **Having issues?** Check the [Troubleshooting](/reference/troubleshooting) guide, [create an issue](https://github.com/amd/gaia/issues) on GitHub, or contact us at gaia@amd.com.
+</Tip>
 
 ---
 
