@@ -23,6 +23,8 @@
       "Bash(gh run list:*)",
       "Bash(gh run view:*)",
       "Bash(git add:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
       "Bash(git commit:*)",
       "Bash(git log:*)",
       "Bash(git ls-tree:*)",
@@ -41,6 +43,7 @@
       "Bash(python util/lint.py:*)",
       "Bash(test:*)",
       "Bash(tree:*)",
+      "Bash(uv run python -m pytest:*)",
       "Bash(while read file)",
       "mcp__context7__get-library-docs",
       "mcp__context7__resolve-library-id",
@@ -72,9 +75,7 @@
       "WebFetch",
       "WebFetch(domain:code.claude.com)",
       "WebFetch(domain:lemonade-server.ai)",
-      "WebSearch",
-      "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "WebSearch"
     ],
     "deny": []
   },

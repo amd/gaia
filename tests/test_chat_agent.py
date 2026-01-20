@@ -89,6 +89,43 @@ class TestChatAgent:
         # Check if at least one expected key is present
         assert any(key in " ".join(keys) for key in expected_keys)
 
+    def test_system_prompt_updated_after_index(self, agent):
+        """Test that the system prompt includes indexed documents after indexing.
+
+        This test simulates what the /index command handler should do:
+        1. Index the document via agent.rag.index_document()
+        2. Update the system prompt via agent._update_system_prompt()
+
+        After these steps, the system prompt should list the indexed document.
+        """
+        # Use a test file in the project directory (within allowed paths)
+        test_dir = Path(__file__).parent / "test_data"
+        test_dir.mkdir(exist_ok=True)
+        test_file = test_dir / "test_document_for_prompt.txt"
+
+        try:
+            test_file.write_text("This is test content about machine learning and AI.")
+
+            # Verify initial state: no documents indexed
+            assert "No documents are currently indexed" in agent.system_prompt
+
+            # Step 1: Index the document (what /index command does)
+            result = agent.rag.index_document(str(test_file))
+            assert result.get("success")
+
+            # Step 2: Update the system prompt (what /index command should do after indexing)
+            agent._update_system_prompt()
+
+            # After both steps, system prompt should be updated to list the document
+            assert "test_document_for_prompt.txt" in agent.system_prompt
+            assert "No documents are currently indexed" not in agent.system_prompt
+        finally:
+            # Cleanup
+            if test_file.exists():
+                test_file.unlink()
+            if test_dir.exists() and not any(test_dir.iterdir()):
+                test_dir.rmdir()
+
 
 class TestChatAgentEval:
     """Evaluation tests for Chat Agent quality metrics."""
