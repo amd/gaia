@@ -22,11 +22,8 @@ from gaia.llm.lemonade_client import (
     create_lemonade_client,
 )
 
-# Test constants
-TEST_MODEL = "Llama-3.2-3B-Instruct-Hybrid"
-# TEST_MODEL = "Gemma-3-4b-it-FLM"
-# TEST_MODEL = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
-# TEST_MODEL = "Qwen2.5-0.5B-Instruct-CPU"
+# Test constants - override via GAIA_TEST_MODEL env var for different platforms
+TEST_MODEL = os.environ.get("GAIA_TEST_MODEL", "Llama-3.2-3B-Instruct-Hybrid")
 
 HOST = "localhost"
 PORT = 8000
