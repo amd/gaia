@@ -86,6 +86,8 @@ jobs:
         try {
             Write-Host "Starting Lemonade server..."
             $serverJob = Start-Job -ScriptBlock {
+                Set-Location $using:PWD
+                & .\.venv\Scripts\Activate.ps1
                 # Workaround for Issue #612: Disable Vulkan cooperative matrix optimization
                 $env:GGML_VK_DISABLE_COOPMAT = "1"
                 & lemonade-server serve --host localhost --port 8000 --ctx-size 8192 --no-tray 2>&1
