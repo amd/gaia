@@ -306,7 +306,8 @@
             "group": "Plans",
             "pages": [
               "plans/installer",
-              "plans/chat-ui"
+              "plans/chat-ui",
+              "plans/mcp-docs"
             ]
           }
         ]
