@@ -398,23 +398,6 @@ The agent can optionally use web search (Perplexity) when `PERPLEXITY_API_KEY` i
   </Accordion>
 </AccordionGroup>
 
-## VS Code Debugging (Developers)
-
-Use the existing launch configurations to step through the agent when it generates Next.js projects.
-
-<Accordion title="Available Debug Configurations">
-  1. **Code Agent Debug - Next.js App** - Full project generation workflow
-  2. **Code Agent Debug - REST API** - Focus on API route generation
-  3. **Code Agent Debug - Interactive** - Step through with `--step-through`
-  4. **Code Agent Debug - With Breakpoint** ⭐ - Stops before execution for setting breakpoints
-</Accordion>
-
-**Useful breakpoint locations:**
-- `src/gaia/agents/code/agent.py` - Agent initialization and orchestration
-- `src/gaia/agents/code/tools/typescript_tools.py` - TypeScript/Next.js tooling
-- `src/gaia/agents/code/tools/checklist_orchestration.py` - Full-stack checklist workflow
-- `src/gaia/agents/base/agent.py` - Base agent loop
-
 ## Best Practices
 
 <CardGroup cols={2}>
