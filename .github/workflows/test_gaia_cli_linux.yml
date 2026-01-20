@@ -195,6 +195,20 @@ jobs:
             echo "Note: Error details displayed above"
           fi
 
+          echo ""
+          echo "=== Testing Lemonade Client Integration ==="
+          echo "Testing LemonadeClient API with running server"
+
+          # Run the lemonade client integration tests (skip hybrid NPU test - no NPU on Linux)
+          GAIA_TEST_MODEL="Qwen3-0.6B-GGUF" python -m pytest tests/test_lemonade_client.py -vs --tb=short -k "Integration and not hybrid" || LEMONADE_TEST_EXIT=$?
+
+          if [ "${LEMONADE_TEST_EXIT:-0}" -eq 0 ]; then
+            echo "✅ Lemonade client integration tests passed successfully!"
+          else
+            echo "❌ Lemonade client integration tests failed with exit code: ${LEMONADE_TEST_EXIT}"
+            echo "Note: Error details displayed above"
+          fi
+
           # Clean up: Stop the Lemonade server
           echo "Stopping Lemonade server..."
           kill $LEMONADE_PID 2>/dev/null || true
@@ -294,6 +308,7 @@ jobs:
           echo "   ✅ Evaluation commands (eval, groundtruth, report, etc.)"
           echo "   ✅ Summarizer CLI integration (gaia summarize command)"
           echo "   ✅ RAG (Retrieval-Augmented Generation) functionality"
+          echo "   ✅ Lemonade client integration (API tests)"
           echo "   ✅ Cross-platform compatibility"
           echo "   ✅ Process management and cleanup"
           echo ""

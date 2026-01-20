@@ -42,17 +42,14 @@ All workflows are located in `.github/workflows/` and follow AMD copyright heade
 
 | Workflow | File | Purpose |
 |----------|------|---------|
-| Build Installer | `build_installer.yml` | NSIS Windows installer |
 | Publish Installer | `publish_installer.yml` | Release distribution |
 | Build Electron | `build-electron-apps.yml` | Desktop apps |
-| Test Installer | `test_installer.yml` | Installer validation |
 | Test Electron | `test_electron.yml` | Electron app tests |
 
 ### Special Workflows
 
 | Workflow | File | Purpose |
 |----------|------|---------|
-| Local Hybrid | `local_hybrid_tests.yml` | Local + cloud model testing |
 | Agent MCP Server | `test_agent_mcp_server.yml` | Agent MCP integration |
 
 ## Workflow Patterns

@@ -1,34 +1,25 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-name: Publish GAIA Installer
+name: Publish GAIA Release
 
 on:
   push:
-    branches: ["main"]
     tags:
       - v*
-  pull_request:
-    branches: ["main"]
-    types: [opened, synchronize, reopened, ready_for_review]
-  merge_group:
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build-installer:
-    uses: ./.github/workflows/build_installer.yml
-
   build-electron-apps:
     uses: ./.github/workflows/build-electron-apps.yml
-    if: startsWith(github.ref, 'refs/tags/v')
 
-  publish-installer:
-    runs-on: windows-latest
-    needs: [build-installer, build-electron-apps]
-    if: always() && needs.build-installer.result == 'success' && (needs.build-electron-apps.result == 'success' || needs.build-electron-apps.result == 'skipped')
+  publish-release:
+    runs-on: ubuntu-latest
+    needs: [build-electron-apps]
+    if: always() && (needs.build-electron-apps.result == 'success' || needs.build-electron-apps.result == 'skipped')
     steps:
       - uses: actions/checkout@v6
         with:
@@ -38,25 +29,18 @@ jobs:
         id: release_notes
         run: |
           # Get the previous tag
-          $previousTag = $(git describe --tags --abbrev=0 HEAD^) 2>$null
-          if ($?) {
+          previous_tag=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$previous_tag" ]; then
             # If previous tag exists, generate changelog from previous tag to current
-            $changelog = git log --pretty=format:"* %s (%h)" $previousTag..HEAD
-          } else {
+            changelog=$(git log --pretty=format:"* %s (%h)" "$previous_tag"..HEAD)
+          else
             # If no previous tag, get all commits
-            $changelog = git log --pretty=format:"* %s (%h)"
-          }
-          # Escape multiline output for GitHub Actions
-          $changelog = $changelog -replace '%', '%25' -replace "`n", '%0A' -replace "`r", '%0D'
-          echo "CHANGELOG<<EOF" >> $env:GITHUB_OUTPUT
-          echo "$changelog" >> $env:GITHUB_OUTPUT
-          echo "EOF" >> $env:GITHUB_OUTPUT
-
-      - name: Download GAIA Installer
-        uses: actions/download-artifact@v7
-        with:
-          name: gaia-windows-installer-${{ needs.build-installer.outputs.VERSION }}-${{ needs.build-installer.outputs.COMMIT_HASH }}
-          path: release-assets
+            changelog=$(git log --pretty=format:"* %s (%h)")
+          fi
+          # Save to output
+          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
+          echo "$changelog" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Download Electron App Artifacts (Windows)
         if: needs.build-electron-apps.outputs.has_apps == 'true'
@@ -78,7 +62,6 @@ jobs:
 
       - name: Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/v')
         with:
           files: release-assets/*
           body: |
@@ -86,4 +69,12 @@ jobs:
             ${{ steps.release_notes.outputs.CHANGELOG }}
 
             ## Installation
-            Download and run the GAIA installer (gaia-windows-setup.exe)
+            Install GAIA using pip:
+            ```bash
+            pip install amd-gaia
+            ```
+
+            Or using uv:
+            ```bash
+            uv pip install amd-gaia
+            ```
