@@ -267,7 +267,10 @@ No documents are currently indexed.
 """
 
         # Add indexed documents section
-        prompt = base_prompt + indexed_docs_section + """
+        prompt = (
+            base_prompt
+            + indexed_docs_section
+            + """
 **WHEN TO USE TOOLS VS DIRECT ANSWERS:**
 
 Use Format 1 (answer) for:
@@ -373,6 +376,7 @@ When user asks to "index my data folder" or similar:
 2. Show user the matches and ask which one (if multiple)
 3. Use index_directory on the chosen path
 4. Report indexing results"""
+        )
 
         return prompt
 
