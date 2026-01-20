@@ -1278,8 +1278,7 @@ def generate_field_display(fields: dict, max_fields: int = 3) -> str:
     # Generate checkbox + title combo for boolean fields (e.g., completed todo)
     if boolean_field and title_field:
         # Render checkbox with title that has strikethrough when boolean is true
-        display_fields.append(
-            f"""<div className="flex items-center gap-4">
+        display_fields.append(f"""<div className="flex items-center gap-4">
                     <div className="relative">
                       <input
                         type="checkbox"
@@ -1296,8 +1295,7 @@ def generate_field_display(fields: dict, max_fields: int = 3) -> str:
                     <h3 className={{`font-semibold text-lg ${{item.{boolean_field} ? "line-through text-slate-500" : "text-slate-100"}}`}}>
                       {{item.{title_field}}}
                     </h3>
-                  </div>"""
-        )
+                  </div>""")
     elif title_field:
         # Just render title without checkbox
         display_fields.append(

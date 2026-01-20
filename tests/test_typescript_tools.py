@@ -149,8 +149,7 @@ class TestTypeScriptTools:
         # Create INVALID TypeScript file (missing type)
         src_dir = temp_project_dir / "src"
         src_dir.mkdir()
-        (src_dir / "App.tsx").write_text(
-            """
+        (src_dir / "App.tsx").write_text("""
 import React from 'react';
 
 const App = ({ name }) => {  // Missing type annotation
@@ -158,8 +157,7 @@ const App = ({ name }) => {  // Missing type annotation
 };
 
 export default App;
-"""
-        )
+""")
 
         package_json = {
             "name": "test-app",

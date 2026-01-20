@@ -26,15 +26,13 @@ class ItemAgent(Agent, DatabaseMixin):
 
         # Create schema if needed
         if not self.table_exists("items"):
-            self.execute(
-                """
+            self.execute("""
                 CREATE TABLE items (
                     id INTEGER PRIMARY KEY,
                     name TEXT NOT NULL,
                     quantity INTEGER DEFAULT 0
                 )
-            """
-            )
+            """)
 
     def _get_system_prompt(self) -> str:
         return "You are an item management agent."
@@ -277,15 +275,13 @@ def test_agent_reinitialize_database():
 
     # Schema needs to be recreated
     if not agent.table_exists("items"):
-        agent.execute(
-            """
+        agent.execute("""
             CREATE TABLE items (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 quantity INTEGER DEFAULT 0
             )
-        """
-        )
+        """)
 
     # Old data is gone
     assert len(agent.query("SELECT * FROM items")) == 0
@@ -327,16 +323,14 @@ def test_agent_foreign_key_enforcement():
     agent = ItemAgent()
 
     # Add related tables
-    agent.execute(
-        """
+    agent.execute("""
         CREATE TABLE categories (id INTEGER PRIMARY KEY, name TEXT);
         CREATE TABLE products (
             id INTEGER PRIMARY KEY,
             category_id INTEGER REFERENCES categories(id),
             name TEXT
         );
-    """
-    )
+    """)
 
     # This should fail - no category with id=999
     with pytest.raises(Exception):
