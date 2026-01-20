@@ -30,10 +30,10 @@
 
 /* Add subtle bottom border to navbar for visual separation */
 #navbar {
-  border-bottom: 1px solid #ccc;
+  border-bottom: 1px solid rgb(var(--gray-500) / 0.3);
 }
 
 /* Dark mode: Use darker border for better contrast */
 .dark #navbar {
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid rgb(var(--gray-500) / 0.4);
 }
