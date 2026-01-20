@@ -643,9 +643,9 @@ When user asks to "index my data folder" or similar:
                 logger.error(f"Failed to index {doc}: {e}")
 
         # Update system prompt after indexing to include the new documents
-        self._update_system_prompt()
+        self.update_system_prompt()
 
-    def _update_system_prompt(self) -> None:
+    def update_system_prompt(self) -> None:
         """Update the system prompt with current indexed documents."""
         # Regenerate the system prompt with updated document list
         self.system_prompt = self._get_system_prompt()
