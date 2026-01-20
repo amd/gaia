@@ -26,18 +26,6 @@ Build **GAIA Chat** - a privacy-first desktop chat application for AI PCs that r
 └────────────────────────────────────────────────────────────────┘
 ```
 
-### Analytics Justification
-
-| Signal | Data | Implication |
-|--------|------|-------------|
-| `/quickstart` #1 | 38 views | Users want fast onboarding |
-| `/playbooks/chat-agent/part-1` #2 | 17 views | Strong chat/RAG interest |
-| Colombia = 60% traffic | 97 views | One power user deep-diving |
-| Phoronix coverage | 4 referrals | Linux/privacy-conscious audience |
-| GitHub referrals | 16 views | Developers discovering via repo |
-
-**User profile:** Privacy-conscious developers/enthusiasts who want local AI without cloud dependencies.
-
 ---
 
 ## User Personas
@@ -853,7 +841,7 @@ src/__tests__/
 2. **Conversation export** - Markdown only, or also HTML/PDF?
 3. **Model switching** - Allow mid-conversation or only new sessions?
 4. **Analytics opt-in** - What exactly to track?
-5. **Multi-language UI** - Worth prioritizing given Colombia traffic?
+5. **Multi-language UI** - Worth prioritizing based on community demand?
 
 ---
 

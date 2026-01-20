@@ -197,7 +197,6 @@ gaia/
 │   ├── integration/    # Cross-system integration tests
 │   └── electron/       # Electron app tests (Jest)
 ├── docs/               # Documentation (MDX format)
-├── installer/          # NSIS installer scripts
 ├── workshop/           # Tutorial materials
 └── .github/workflows/  # CI/CD pipelines
 ```
@@ -288,7 +287,6 @@ All documentation uses `.mdx` format (Markdown + JSX for Mintlify).
 - [`docs/reference/troubleshooting.mdx`](docs/reference/troubleshooting.mdx) - Troubleshooting
 
 **Deployment:**
-- [`docs/deployment/installer.mdx`](docs/deployment/installer.mdx) - NSIS installer
 - [`docs/deployment/ui.mdx`](docs/deployment/ui.mdx) - Electron UI
 
 **Specifications:** See `docs/spec/` for 40+ technical specifications.
@@ -313,7 +311,7 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 - **Specifications** (`docs/spec/`): Technical specs for all components
 - **Reference** (`docs/reference/`): CLI, API, features, FAQ, development
 - **Integrations**: `docs/integrations/` - MCP, n8n, VSCode
-- **Deployment** (`docs/deployment/`): Packaging, installers, UI
+- **Deployment** (`docs/deployment/`): Packaging, UI
 
 ### Response Protocol
 

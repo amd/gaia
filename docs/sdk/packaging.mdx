@@ -4,7 +4,7 @@
 
 ![Status](https://img.shields.io/badge/status-in_development-yellow)
 
-**Detailed Spec:** [spec/web-ui-packaging](/spec/web-ui-packaging)
+**Detailed Spec:** [spec/electron-integration](/spec/electron-integration)
 
 **Purpose:** Package GAIA agents as standalone applications for distribution.
 
@@ -45,32 +45,7 @@ class MyAgent(Agent):
 
 ---
 
-## 14.2 NSIS Windows Installer
-
-```bash
-# Create Windows installer for your agent
-gaia package \
-    --agent my_package.MyAgent \
-    --installer nsis \
-    --output ./installer \
-    --name "MyAgent" \
-    --version "1.0.0"
-
-# Generates:
-# ./installer/
-#   ├── MyAgent-1.0.0-setup.exe  # Windows installer
-#   └── uninstall.exe             # Uninstaller
-
-# Installer features:
-# - Start menu shortcuts
-# - Desktop icon
-# - Auto-update check
-# - Clean uninstall
-```
-
----
-
-## 14.3 Electron Desktop App
+## 14.2 Electron Desktop App
 
 ```bash
 # Package as cross-platform desktop app
@@ -94,7 +69,7 @@ gaia package \
 
 ---
 
-## 14.4 Deployment Patterns
+## 14.3 Deployment Patterns
 
 ```python
 # pyproject.toml - Package your agent
@@ -122,7 +97,7 @@ my-agent = "my_package.cli:main"
 - [Core Agent System](./core/agent-system) - Learn about the base Agent class
 - [API Server](./infrastructure/api-server) - Expose agents via API
 - [Best Practices](./best-practices) - Development guidelines
-- [Installer Documentation](/deployment/installer) - Windows installer details
+- [Lightweight Installer Plan](/plans/installer) - Future installation system
 
 ---
 
