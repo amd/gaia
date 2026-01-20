@@ -7,6 +7,7 @@ Docker Agent for GAIA.
 This agent provides an intelligent interface for containerizing applications,
 generating Dockerfiles, and managing Docker containers through natural language commands.
 """
+
 import json
 import logging
 import subprocess

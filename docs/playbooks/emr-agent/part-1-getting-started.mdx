@@ -159,7 +159,7 @@ Three components power this agent:
 |-----------|--------|---------|
 | `FileWatcherMixin` | `from gaia.utils import FileWatcherMixin` | Auto-detect new files in a directory |
 | `DatabaseMixin` | `from gaia.database import DatabaseMixin` | SQLite storage with `query()`, `insert()`, `update()` |
-| `VLMClient` | `from gaia.llm.vlm_client import VLMClient` | Extract structured data from images |
+| `VLMClient` | `from gaia.llm import VLMClient` | Extract structured data from images |
 
 ```python
 # FileWatcherMixin - monitors directory, calls callback on new files
@@ -273,7 +273,7 @@ Add VLM to extract patient data from images.
     from gaia.agents.base import Agent
     from gaia.agents.base.tools import tool
     from gaia.database import DatabaseMixin
-    from gaia.llm.vlm_client import VLMClient
+    from gaia.llm import VLMClient
 
     EXTRACTION_PROMPT = """Extract patient data from this intake form.
     Return ONLY valid JSON: {"first_name": "", "last_name": "", "date_of_birth": "YYYY-MM-DD", "phone": ""}"""
@@ -369,7 +369,7 @@ Make the agent fully automatic—process forms as soon as they arrive.
     from gaia.agents.base.tools import tool
     from gaia.database import DatabaseMixin
     from gaia.utils import FileWatcherMixin
-    from gaia.llm.vlm_client import VLMClient
+    from gaia.llm import VLMClient
     from pathlib import Path
     import json
 
@@ -563,7 +563,7 @@ def __init__(self, watch_dir: str, **kwargs):
 def _get_vlm(self):
     """Lazy initialization - only create when needed."""
     if self._vlm is None:
-        from gaia.llm.vlm_client import VLMClient
+        from gaia.llm import VLMClient
         self._vlm = VLMClient()
     return self._vlm
 ```
