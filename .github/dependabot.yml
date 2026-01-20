@@ -18,7 +18,7 @@ updates:
     labels:
       - "dependencies"
       - "python"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     # Group all Python dependency updates together to reduce PR noise
     groups:
       python-dependencies:
@@ -34,7 +34,7 @@ updates:
     labels:
       - "dependencies"
       - "javascript"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     ignore:
       # Ignore node_modules from app builds - they have their own configs below
       - dependency-name: "*"
@@ -54,7 +54,7 @@ updates:
       - "javascript"
       - "electron"
       - "example-app"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     groups:
       example-app-dependencies:
         patterns:
@@ -71,7 +71,7 @@ updates:
       - "javascript"
       - "electron"
       - "jira-app"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     groups:
       jira-app-dependencies:
         patterns:
@@ -103,7 +103,7 @@ updates:
       - "javascript"
       - "electron"
       - "emr-dashboard"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     groups:
       emr-dashboard-dependencies:
         patterns:
@@ -118,7 +118,7 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     groups:
       github-actions:
         patterns:

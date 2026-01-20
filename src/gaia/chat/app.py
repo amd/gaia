@@ -212,8 +212,7 @@ def print_integration_examples():
     print("INTEGRATION EXAMPLES")
     print("=" * 60)
 
-    print(
-        """
+    print("""
 Basic Integration:
 ```python
 from gaia.chat.sdk import ChatSDK, ChatConfig
@@ -297,8 +296,7 @@ responses = quick_chat_with_memory([
     "What's my name?"
 ], assistant_name="Gaia")
 ```
-"""
-    )
+""")
 
 
 async def main():

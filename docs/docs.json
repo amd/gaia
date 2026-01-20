@@ -309,7 +309,20 @@
             "group": "Plans",
             "pages": [
               "plans/installer",
-              "plans/chat-ui"
+              "plans/chat-ui",
+              "plans/mcp-docs"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Releases",
+        "groups": [
+          {
+            "group": "Release Notes",
+            "pages": [
+              "releases/v0.15.1",
+              "releases/v0.15.0"
             ]
           }
         ]

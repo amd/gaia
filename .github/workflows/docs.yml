@@ -1,0 +1,35 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: Docs Validation
+
+on:
+  push:
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Mintlify CLI
+        run: npm install -g mintlify
+
+      - name: Validate docs with Mintlify
+        working-directory: docs
+        run: |
+          echo "Validating documentation with Mintlify..."
+          mintlify validate
+          echo "✅ Documentation validated successfully"
