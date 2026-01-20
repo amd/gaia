@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import numpy as np
 import pytest
 
 from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
@@ -109,9 +110,30 @@ class TestChatAgent:
             # Verify initial state: no documents indexed
             assert "No documents are currently indexed" in agent.system_prompt
 
-            # Step 1: Index the document (what /index command does)
-            result = agent.rag.index_document(str(test_file))
-            assert result.get("success")
+            # Mock the LemonadeClient to avoid needing server
+            mock_lemonade = Mock()
+            mock_lemonade.embeddings.return_value = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+            }
+
+            # Create a custom _load_embedder that sets our mock
+            def mock_load_embedder():
+                agent.rag.llm_client = mock_lemonade
+                agent.rag.embedder = mock_lemonade
+                agent.rag.use_lemonade_embeddings = True
+
+            with (
+                patch("gaia.rag.sdk.faiss") as mock_faiss,
+                patch.object(agent.rag, "_load_embedder", mock_load_embedder),
+            ):
+                # Setup mock FAISS index
+                mock_index = Mock()
+                mock_index.ntotal = 1
+                mock_faiss.IndexFlatL2.return_value = mock_index
+
+                # Step 1: Index the document (what /index command does)
+                result = agent.rag.index_document(str(test_file))
+                assert result.get("success"), f"Indexing failed: {result.get('error')}"
 
             # Step 2: Update the system prompt (what /index command should do after indexing)
             agent.update_system_prompt()
@@ -138,9 +160,30 @@ class TestChatAgent:
             # Verify initial state
             assert len(agent.rag.indexed_files) == 0
 
-            # Index the document
-            result = agent.rag.index_document(str(test_file))
-            assert result.get("success")
+            # Mock the LemonadeClient to avoid needing server
+            mock_lemonade = Mock()
+            mock_lemonade.embeddings.return_value = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+            }
+
+            # Create a custom _load_embedder that sets our mock
+            def mock_load_embedder():
+                agent.rag.llm_client = mock_lemonade
+                agent.rag.embedder = mock_lemonade
+                agent.rag.use_lemonade_embeddings = True
+
+            with (
+                patch("gaia.rag.sdk.faiss") as mock_faiss,
+                patch.object(agent.rag, "_load_embedder", mock_load_embedder),
+            ):
+                # Setup mock FAISS index
+                mock_index = Mock()
+                mock_index.ntotal = 1
+                mock_faiss.IndexFlatL2.return_value = mock_index
+
+                # Index the document
+                result = agent.rag.index_document(str(test_file))
+                assert result.get("success"), f"Indexing failed: {result.get('error')}"
 
             # Verify file is tracked
             assert str(test_file) in agent.rag.indexed_files
@@ -162,11 +205,36 @@ class TestChatAgent:
             test_file1.write_text("First document about Python programming.")
             test_file2.write_text("Second document about machine learning.")
 
-            # Index both documents
-            result1 = agent.rag.index_document(str(test_file1))
-            result2 = agent.rag.index_document(str(test_file2))
-            assert result1.get("success")
-            assert result2.get("success")
+            # Mock the LemonadeClient to avoid needing server
+            mock_lemonade = Mock()
+            mock_lemonade.embeddings.return_value = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+            }
+
+            # Create a custom _load_embedder that sets our mock
+            def mock_load_embedder():
+                agent.rag.llm_client = mock_lemonade
+                agent.rag.embedder = mock_lemonade
+                agent.rag.use_lemonade_embeddings = True
+
+            with (
+                patch("gaia.rag.sdk.faiss") as mock_faiss,
+                patch.object(agent.rag, "_load_embedder", mock_load_embedder),
+            ):
+                # Setup mock FAISS index
+                mock_index = Mock()
+                mock_index.ntotal = 2
+                mock_faiss.IndexFlatL2.return_value = mock_index
+
+                # Index both documents
+                result1 = agent.rag.index_document(str(test_file1))
+                result2 = agent.rag.index_document(str(test_file2))
+                assert result1.get(
+                    "success"
+                ), f"Indexing failed: {result1.get('error')}"
+                assert result2.get(
+                    "success"
+                ), f"Indexing failed: {result2.get('error')}"
 
             # Update system prompt
             agent.update_system_prompt()
@@ -199,9 +267,30 @@ class TestChatAgent:
             # Verify initial state
             assert len(agent.rag.chunks) == 0
 
-            # Index the document
-            result = agent.rag.index_document(str(test_file))
-            assert result.get("success")
+            # Mock the LemonadeClient to avoid needing server
+            mock_lemonade = Mock()
+            mock_lemonade.embeddings.return_value = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+            }
+
+            # Create a custom _load_embedder that sets our mock
+            def mock_load_embedder():
+                agent.rag.llm_client = mock_lemonade
+                agent.rag.embedder = mock_lemonade
+                agent.rag.use_lemonade_embeddings = True
+
+            with (
+                patch("gaia.rag.sdk.faiss") as mock_faiss,
+                patch.object(agent.rag, "_load_embedder", mock_load_embedder),
+            ):
+                # Setup mock FAISS index
+                mock_index = Mock()
+                mock_index.ntotal = 1
+                mock_faiss.IndexFlatL2.return_value = mock_index
+
+                # Index the document
+                result = agent.rag.index_document(str(test_file))
+                assert result.get("success"), f"Indexing failed: {result.get('error')}"
 
             # Verify chunks were created
             assert len(agent.rag.chunks) > 0
@@ -702,16 +791,19 @@ class TestChatAgentCodeSupport:
         src_dir.mkdir()
 
         # Python file
-        (src_dir / "auth.py").write_text('''
+        (src_dir / "auth.py").write_text(
+            '''
 class UserAuth:
     """Authentication handler."""
     def authenticate(self, username, password):
         # TODO: Add rate limiting
         return self.check_credentials(username, password)
-''')
+'''
+        )
 
         # JavaScript file
-        (src_dir / "api.js").write_text("""
+        (src_dir / "api.js").write_text(
+            """
 // API client
 class APIClient {
     constructor(baseUrl) {
@@ -723,15 +815,18 @@ class APIClient {
         return fetch(`${this.baseUrl}/users/${userId}`);
     }
 }
-""")
+"""
+        )
 
         # Config file
-        (src_dir / "config.yaml").write_text("""
+        (src_dir / "config.yaml").write_text(
+            """
 database:
   host: localhost
   port: 5432
   name: myapp
-""")
+"""
+        )
 
         return str(src_dir)
 
@@ -742,7 +837,8 @@ database:
         web_dir.mkdir()
 
         # HTML file
-        (web_dir / "index.html").write_text("""
+        (web_dir / "index.html").write_text(
+            """
 <!DOCTYPE html>
 <html>
 <head>
@@ -755,10 +851,12 @@ database:
     </div>
 </body>
 </html>
-""")
+"""
+        )
 
         # CSS file
-        (web_dir / "styles.css").write_text("""
+        (web_dir / "styles.css").write_text(
+            """
 .container {
     max-width: 1200px;
     margin: 0 auto;
@@ -768,10 +866,12 @@ database:
     background-color: #0056b3;
     transform: scale(1.05);
 }
-""")
+"""
+        )
 
         # Vue component
-        (web_dir / "UserCard.vue").write_text("""
+        (web_dir / "UserCard.vue").write_text(
+            """
 <template>
   <div class="user-card">
     <h2>{{ user.name }}</h2>
@@ -787,10 +887,12 @@ export default {
   }
 }
 </script>
-""")
+"""
+        )
 
         # React component (JSX)
-        (web_dir / "Button.jsx").write_text("""
+        (web_dir / "Button.jsx").write_text(
+            """
 import React from 'react';
 
 export function Button({ onClick, children }) {
@@ -800,10 +902,12 @@ export function Button({ onClick, children }) {
     </button>
   );
 }
-""")
+"""
+        )
 
         # SCSS file
-        (web_dir / "variables.scss").write_text("""
+        (web_dir / "variables.scss").write_text(
+            """
 $primary-color: #007bff;
 $secondary-color: #6c757d;
 
@@ -813,7 +917,8 @@ $secondary-color: #6c757d;
     background-color: darken($primary-color, 10%);
   }
 }
-""")
+"""
+        )
 
         return str(web_dir)
 
