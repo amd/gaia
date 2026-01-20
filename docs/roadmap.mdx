@@ -30,21 +30,25 @@ Timelines are estimates and may shift based on community feedback and technical 
 graph LR
     Q1["Q1 2026<br/>Lightweight Installer<br/><small>One-command install</small>"]
     Q1B["Q1 2026<br/>Chat Desktop UI<br/><small>Privacy-first RAG</small>"]
+    Q1C["Q1 2026<br/>MCP Client Mixin<br/><small>Computer Use Agents</small>"]
     Q2["Q2 2026<br/>MCP Docs Server<br/><small>AI assistant context</small>"]
     Q3["Q3 2026<br/>TBD<br/><small>Community-driven</small>"]
 
     Q1 -.-> Q1B
-    Q1B --> Q2
+    Q1B --> Q1C
+    Q1C --> Q2
     Q2 --> Q3
 
     style Q1 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style Q1B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style Q1C fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style Q2 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style Q3 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
 
     linkStyle 0 stroke:#ED1C24,stroke-width:2px,stroke-dasharray: 5 5
     linkStyle 1 stroke:#ED1C24,stroke-width:2px
     linkStyle 2 stroke:#ED1C24,stroke-width:2px
+    linkStyle 3 stroke:#ED1C24,stroke-width:2px
 ```
 
 ### Q1 2026: Lightweight Installer
@@ -81,6 +85,29 @@ Key capabilities:
 - Lighter and faster than RAUX
 
 → [View detailed plan](/plans/chat-ui) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/167)
+
+### Q1 2026: MCP Client Mixin
+
+**Computer Use Agents for GAIA**
+
+An MCP Client Mixin that enables GAIA agents to connect to external MCP servers, transforming them into Computer Use Agents (CUA):
+
+```python
+from gaia.agents.base import Agent, MCPClientMixin
+
+class DesktopAgent(MCPClientMixin, Agent):
+    def __init__(self):
+        super().__init__()
+        self.connect_mcp_server("windows", "uvx windows-mcp")
+```
+
+Key capabilities:
+- Connect to any MCP server (Windows, browser, database, etc.)
+- Desktop automation via Windows MCP
+- Auto-registration of MCP tools as agent tools
+- Multi-server orchestration
+
+→ [View detailed plan](/plans/mcp-client) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/203)
 
 ### Q2 2026: MCP Docs Server
 
@@ -154,4 +181,4 @@ The more votes an issue gets, the higher priority it becomes. Your input directl
 
 ---
 
-*Updated: January 18, 2026*
+*Updated: January 19, 2026*
