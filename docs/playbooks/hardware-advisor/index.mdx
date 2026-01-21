@@ -288,9 +288,9 @@ Now let's build this agent incrementally using **a single file** that grows with
 
 ---
 
-### Step 1: Agent Skeleton (Not Runnable Yet)
+### Step 1: Agent Skeleton
 
-Start by creating the file with a minimal agent structure—just the class and a basic system prompt.
+Start by creating the file with a minimal agent structure—just the class and a basic system prompt. This creates the foundation, but the agent has no tools yet and cannot answer queries.
 
 #### Implementation
 
@@ -353,9 +353,9 @@ Agent created successfully!
 
 ---
 
-### Step 2: GPU & Hardware Detection (Runnable)
+### Step 2: GPU & Hardware Detection
 
-Add the `_get_gpu_info()` helper method and the full `get_hardware_info()` tool with GPU object, NPU object, and OS field.
+Add the `_get_gpu_info()` helper method and the full `get_hardware_info()` tool with GPU object, NPU object, and OS field. This makes the agent interactive—you can now query it about system specs!
 
 #### Implementation
 
@@ -580,9 +580,9 @@ Agent: Your system has excellent specs for running LLMs locally!
 
 ---
 
-### Step 3: Model Catalog (Runnable)
+### Step 3: Model Catalog
 
-Add the `list_available_models()` tool with `labels` field and `message` in the response.
+Add the `list_available_models()` tool with `labels` field and `message` in the response. Now the agent can tell you what models are available in the Lemonade catalog.
 
 #### Implementation
 
@@ -688,9 +688,9 @@ Small models:
 
 ---
 
-### Step 4: Smart Recommendations (Runnable)
+### Step 4: Smart Recommendations
 
-Add the complete `recommend_models()` tool with `estimated_runtime_gb`, `fits_in_ram`, `fits_in_gpu`, and `constraints` object.
+Add the complete `recommend_models()` tool with `estimated_runtime_gb`, `fits_in_ram`, `fits_in_gpu`, and `constraints` object. The agent can now calculate which models fit in your system's memory!
 #### Implementation
 
 **Add this tool** inside the `_register_tools()` method (after the `list_available_models` function):
@@ -788,10 +788,10 @@ You: What size LLM can I run?
   "recommendations": [...],
   "total_fitting_models": 12,
   "constraints": {
-"available_ram_gb": 32.0,
-"available_gpu_mb": 24576,
-"max_model_size_gb": 22.4,
-"safety_margin_percent": 30
+    "available_ram_gb": 32.0,
+    "available_gpu_mb": 24576,
+    "max_model_size_gb": 22.4,
+    "safety_margin_percent": 30
   }
 }
 
@@ -827,9 +827,9 @@ Top recommendations:
 
 ---
 
-### Step 5: Interactive CLI (Runnable)
+### Step 5: Production CLI
 
-Replace the simple `__main__` block with a full interactive CLI function.
+Replace the simple `__main__` block with a full interactive CLI function. This adds a professional banner, better error handling, and graceful exit options.
 #### Implementation
 
 **Replace the entire `if __name__ == "__main__":` block** at the end of the file with:
@@ -942,40 +942,39 @@ Goodbye!
 
 ### Step 6: Final Verification
 
-Your `hardware_advisor.py` should now match `examples/hardware_advisor_agent.py` exactly (except for the copyright header).
+Verify that your `hardware_advisor.py` has all the components working together correctly.
+
 #### Verify Structure
 
 **Your file should have:**
-1. ✓ Public imports: `from gaia import Agent, tool`
-2. ✓ `__init__` with `max_steps = 50`
-3. ✓ Full 8-line system prompt
-4. ✓ `_get_gpu_info()` helper (70 lines)
-5. ✓ `_register_tools()` with `client = self.client` and `agent = self`
-6. ✓ Full `get_hardware_info()` with GPU object, NPU object, OS field
-7. ✓ Full `list_available_models()` with `labels` and `message`
-8. ✓ Full `recommend_models()` with `estimated_runtime_gb`, `fits_in_ram`, `fits_in_gpu`, `constraints`
-9. ✓ Full `main()` function with interactive CLI
+1. ✓ Imports: `from typing import Any, Dict` and `from gaia import Agent, tool`
+2. ✓ LemonadeClient import: `from gaia.llm.lemonade_client import LemonadeClient`
+3. ✓ `HardwareAdvisorAgent` class with minimal `__init__` and one-line system prompt
+4. ✓ `_get_gpu_info()` helper method (Windows and Linux GPU detection)
+5. ✓ `_register_tools()` method with `client = self.client` and `agent = self`
+6. ✓ `get_hardware_info()` tool with GPU object, NPU object, and OS field
+7. ✓ `list_available_models()` tool with `labels` and `message` fields
+8. ✓ `recommend_models()` tool with `estimated_runtime_gb`, `fits_in_ram`, `fits_in_gpu`, `constraints`
+9. ✓ `main()` function with interactive CLI (banner, loop, quit handling)
 10. ✓ `if __name__ == "__main__": main()`
-#### Compare Files
+#### Test Your Implementation
 
-**Run diff to verify:**
+**Run your agent:**
 ```bash
-diff hardware_advisor.py examples/hardware_advisor_agent.py
-```
-
-**Expected output:** Only copyright header difference (lines 1-18)
-#### Test Both
-
-**Run both and compare:**
-```bash
-# Test your implementation
 python hardware_advisor.py
-
-# Test the example
-python examples/hardware_advisor_agent.py
 ```
 
-Both should produce identical interactive sessions.
+**Try these queries:**
+- "What size LLM can I run?"
+- "Show me my system specs"
+- "What models are available?"
+- "Can I run a 30B model?"
+
+**Expected behavior:**
+- Agent starts with interactive banner
+- Hardware detection returns system specs
+- Model catalog lists available models
+- Recommendations calculate safe model sizes based on your RAM
 #### Complete!
 
 <Check>
@@ -990,7 +989,7 @@ Both should produce identical interactive sessions.
 </Check>
 
 <Info>
-**Congratulations!** You've built a production-ready hardware advisor agent that matches the official example. Your implementation includes GPU detection, smart memory calculations, and an interactive CLI—all running locally on AMD hardware.
+**Congratulations!** You've built a fully functional hardware advisor agent! Your implementation includes OS-native GPU detection, smart memory-based recommendations, and an interactive CLI—all running locally on AMD hardware with Ryzen AI acceleration.
 </Info>
 
 ---
