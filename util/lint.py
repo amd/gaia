@@ -54,24 +54,22 @@ def run_command(cmd: list[str], check: bool = False) -> tuple[int, str]:
         return 1, f"Command not found: {cmd[0]}"
 
 
+def uvx(tool: str, *args: str) -> list[str]:
+    """Build a uvx command for a tool (auto-downloads if not installed)."""
+    return ["uvx", tool, *args]
+
+
 def check_black(fix: bool = False) -> CheckResult:
     """Check code formatting with Black."""
     print("\n[1/7] Checking code formatting with Black...")
     print("-" * 40)
 
     if fix:
-        cmd = [sys.executable, "-m", "black", *LINT_DIRS, "--config", "pyproject.toml"]
+        cmd = uvx("black", *LINT_DIRS, "--config", "pyproject.toml")
     else:
-        cmd = [
-            sys.executable,
-            "-m",
-            "black",
-            "--check",
-            "--diff",
-            *LINT_DIRS,
-            "--config",
-            "pyproject.toml",
-        ]
+        cmd = uvx(
+            "black", "--check", "--diff", *LINT_DIRS, "--config", "pyproject.toml"
+        )
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
@@ -83,24 +81,24 @@ def check_black(fix: bool = False) -> CheckResult:
 
         # Show which files would be reformatted
         print("\n[FILES] Files that would be reformatted:")
-        for line in output.split('\n'):
+        for line in output.split("\n"):
             if "would reformat" in line:
                 print(f"   {line}")
 
         # Show the diff output (first 100 lines)
         if output:
             print("\n[DIFF] Formatting differences:")
-            lines = output.split('\n')[:100]
+            lines = output.split("\n")[:100]
             for line in lines:
-                if line.startswith('---') or line.startswith('+++'):
+                if line.startswith("---") or line.startswith("+++"):
                     print(f"\033[96m{line}\033[0m")  # Cyan
-                elif line.startswith('-'):
+                elif line.startswith("-"):
                     print(f"\033[91m{line}\033[0m")  # Red
-                elif line.startswith('+'):
+                elif line.startswith("+"):
                     print(f"\033[92m{line}\033[0m")  # Green
                 else:
                     print(f"\033[90m{line}\033[0m")  # Dark gray
-            if len(output.split('\n')) > 100:
+            if len(output.split("\n")) > 100:
                 print("... (output truncated, showing first 100 lines)")
 
         if not fix:
@@ -117,9 +115,9 @@ def check_isort(fix: bool = False) -> CheckResult:
     print("-" * 40)
 
     if fix:
-        cmd = [sys.executable, "-m", "isort", *LINT_DIRS]
+        cmd = uvx("isort", *LINT_DIRS)
     else:
-        cmd = [sys.executable, "-m", "isort", "--check-only", "--diff", *LINT_DIRS]
+        cmd = uvx("isort", "--check-only", "--diff", *LINT_DIRS)
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
@@ -147,16 +145,9 @@ def check_pylint() -> CheckResult:
     print("\n[3/7] Running Pylint (errors only)...")
     print("-" * 40)
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "pylint",
-        SRC_DIR,
-        "--rcfile",
-        PYLINT_CONFIG,
-        "--disable",
-        DISABLED_CHECKS,
-    ]
+    cmd = uvx(
+        "pylint", SRC_DIR, "--rcfile", PYLINT_CONFIG, "--disable", DISABLED_CHECKS
+    )
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
@@ -179,9 +170,7 @@ def check_flake8() -> CheckResult:
     print("\n[4/7] Running Flake8...")
     print("-" * 40)
 
-    cmd = [
-        sys.executable,
-        "-m",
+    cmd = uvx(
         "flake8",
         *LINT_DIRS,
         f"--exclude={EXCLUDE_DIRS}",
@@ -189,7 +178,7 @@ def check_flake8() -> CheckResult:
         "--statistics",
         "--max-line-length=88",
         "--extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722",
-    ]
+    )
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
@@ -214,13 +203,7 @@ def check_mypy() -> CheckResult:
     print("\n[5/7] Running MyPy type checking (warning only)...")
     print("-" * 40)
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "mypy",
-        SRC_DIR,
-        "--ignore-missing-imports",
-    ]
+    cmd = uvx("mypy", SRC_DIR, "--ignore-missing-imports")
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
@@ -247,16 +230,7 @@ def check_bandit() -> CheckResult:
     print("\n[6/7] Running security check with Bandit (warning only)...")
     print("-" * 40)
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "bandit",
-        "-r",
-        SRC_DIR,
-        "-ll",
-        "--exclude",
-        EXCLUDE_DIRS,
-    ]
+    cmd = uvx("bandit", "-r", SRC_DIR, "-ll", "--exclude", EXCLUDE_DIRS)
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
@@ -315,7 +289,13 @@ def check_imports() -> CheckResult:
         ("from", "gaia.agents.jira", "JiraAgent", "Jira agent", False),
         ("from", "gaia.agents.docker", "DockerAgent", "Docker agent", False),
         ("from", "gaia.agents.blender", "BlenderAgent", "Blender agent", False),
-        ("from", "gaia.agents.emr", "MedicalIntakeAgent", "Medical intake agent", False),
+        (
+            "from",
+            "gaia.agents.emr",
+            "MedicalIntakeAgent",
+            "Medical intake agent",
+            False,
+        ),
         ("from", "gaia.agents.routing", "RoutingAgent", "Routing agent", False),
         # Database
         ("from", "gaia.database", "DatabaseAgent", "Database agent", False),
@@ -345,13 +325,19 @@ def check_imports() -> CheckResult:
         if exit_code != 0:
             # Extract error message from output
             error_line = ""
-            for line in output.strip().split('\n'):
-                if "Error:" in line or "ImportError:" in line or "ModuleNotFoundError:" in line:
+            for line in output.strip().split("\n"):
+                if (
+                    "Error:" in line
+                    or "ImportError:" in line
+                    or "ModuleNotFoundError:" in line
+                ):
                     error_line = line.strip()
                     break
 
             if optional:
-                print(f"[SKIP] {desc:35} - {import_str} ({error_line if error_line else 'optional dependency'})")
+                print(
+                    f"[SKIP] {desc:35} - {import_str} ({error_line if error_line else 'optional dependency'})"
+                )
             else:
                 print(f"[FAIL] {desc:35} - {import_str}")
                 if error_line:
