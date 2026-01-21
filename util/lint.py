@@ -319,7 +319,7 @@ def check_imports() -> CheckResult:
             import_str = f"from {module} import {name}"
 
         test_code = f"{import_str}; print('OK')"
-        cmd = ["uv", "run", "python", "-c", test_code]
+        cmd = [sys.executable, "-c", test_code]
         exit_code, output = run_command(cmd)
 
         if exit_code != 0:
