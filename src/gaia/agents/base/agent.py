@@ -2122,16 +2122,3 @@ You must respond ONLY in valid JSON. No text before { or after }.
             List of error messages
         """
         return self.error_history
-
-    def get_atomic_tools(self) -> List[str]:
-        """
-        Get list of atomic tools that can execute without multi-step planning.
-
-        Atomic tools are marked with @tool(atomic=True) decorator.
-
-        Returns:
-            List of atomic tool names
-        """
-        return [
-            name for name, info in _TOOL_REGISTRY.items() if info.get("atomic", False)
-        ]
