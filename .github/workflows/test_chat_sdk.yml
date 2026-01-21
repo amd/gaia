@@ -105,6 +105,11 @@ jobs:
           echo ----------------------------------------------------------------
 
           if %integration_exit% neq 0 (
+              echo.
+              echo === LEMONADE SERVER LOGS ===
+              if exist "lemonade-server.log" (
+                  type lemonade-server.log
+              )
               exit /b 1
           )
 

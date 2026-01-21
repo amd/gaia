@@ -43,7 +43,7 @@ echo === Waiting for Server ===
 set MAX_WAIT=60
 set WAITED=0
 :WAIT_LOOP
-timeout /t 2 /nobreak >nul
+ping 127.0.0.1 -n 3 >nul
 set /a WAITED+=2
 
 REM Try health check
@@ -69,7 +69,7 @@ echo.
 
 REM Wait for files
 echo Waiting 5 seconds for model files...
-timeout /t 5 /nobreak >nul
+ping 127.0.0.1 -n 6 >nul
 
 REM Load model
 echo === Loading Model: %MODEL_NAME% ===
@@ -82,7 +82,7 @@ echo.
 
 REM Wait for initialization
 echo Waiting 10 seconds for initialization...
-timeout /t 10 /nobreak >nul
+ping 127.0.0.1 -n 11 >nul
 
 echo ==========================================
 echo OK LEMONADE SERVER READY
