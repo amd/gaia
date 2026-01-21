@@ -62,8 +62,8 @@ jobs:
           chcp 65001 | Out-Null
 
           try {
-              # Store Lemonade job ID for cleanup
-              $env:LEMONADE_JOB_ID = "${{ steps.start-lemonade.outputs.server-job-id }}"
+              # Store Lemonade process ID for cleanup
+              $env:LEMONADE_PROCESS_ID = "${{ steps.start-lemonade.outputs.server-process-id }}"
 
               # Start API server using gaia CLI (runs on default port 8080)
               Write-Host "`n=== Starting GAIA API Server ==="
@@ -120,11 +120,14 @@ jobs:
                   Remove-Job -Id $env:API_JOB_ID -ErrorAction SilentlyContinue
                   Write-Host "[OK] API server stopped"
               }
-              if ($env:LEMONADE_JOB_ID) {
+              if ($env:LEMONADE_PROCESS_ID) {
                   Write-Host "Stopping Lemonade server..."
-                  Stop-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                  Remove-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                  Write-Host "[OK] Lemonade server stopped"
+                  try {
+                      Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
+                      Write-Host "[OK] Lemonade server stopped"
+                  } catch {
+                      Write-Host "[WARN] Could not stop Lemonade server: $_"
+                  }
               }
           }
 

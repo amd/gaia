@@ -56,8 +56,8 @@ jobs:
         chcp 65001 | Out-Null
 
         try {
-            # Store Lemonade job ID for cleanup
-            $env:LEMONADE_JOB_ID = "${{ steps.start-lemonade.outputs.server-job-id }}"
+            # Store Lemonade process ID for cleanup
+            $env:LEMONADE_PROCESS_ID = "${{ steps.start-lemonade.outputs.server-process-id }}"
 
             # Verify model is available
             try {
@@ -75,11 +75,6 @@ jobs:
                 Write-Host "[OK] Server responding: $($health | ConvertTo-Json -Compress)"
             } catch {
                 Write-Host "[ERROR] Server health check failed: $($_.Exception.Message)"
-                # Show server job output for debugging
-                if ($env:LEMONADE_JOB_ID) {
-                    $jobOutput = Receive-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                    Write-Host "Server output: $jobOutput"
-                }
                 throw "Server not responding after model load"
             }
 
@@ -124,11 +119,14 @@ jobs:
             }
         } finally {
             # Always cleanup server
-            if ($env:LEMONADE_JOB_ID) {
+            if ($env:LEMONADE_PROCESS_ID) {
                 Write-Host "`n=== Stopping Lemonade Server ==="
-                Stop-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                Remove-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                Write-Host "[OK] Server stopped"
+                try {
+                    Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
+                    Write-Host "[OK] Server stopped"
+                } catch {
+                    Write-Host "[WARN] Could not stop Lemonade server: $_"
+                }
             }
         }
 
