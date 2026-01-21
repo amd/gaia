@@ -45,7 +45,7 @@ param(
     [int]$Port = 8000,
 
     [Parameter(Mandatory=$false)]
-    [int]$CtxSize = 8192,
+    [int]$CtxSize = 32768,
 
     [Parameter(Mandatory=$false)]
     [int]$InitWaitTime = 10,

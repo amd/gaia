@@ -52,7 +52,7 @@ jobs:
 
           try {
               # Start Lemonade server and load model (all in same session)
-              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-Instruct-2507-GGUF" -CtxSize 8192
+              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-Instruct-2507-GGUF" -CtxSize 32768
 
               # Start API server using gaia CLI (runs on default port 8080)
               Write-Host "`n=== Starting GAIA API Server ==="

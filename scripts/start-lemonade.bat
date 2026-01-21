@@ -13,7 +13,7 @@ set CTX_SIZE=%3
 
 if "%MODEL_NAME%"=="" set MODEL_NAME=Qwen3-0.6B-GGUF
 if "%PORT%"=="" set PORT=8000
-if "%CTX_SIZE%"=="" set CTX_SIZE=8192
+if "%CTX_SIZE%"=="" set CTX_SIZE=32768
 
 echo === Lemonade Server Setup ===
 echo Model: %MODEL_NAME%
