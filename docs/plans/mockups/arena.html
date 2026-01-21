@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arena - GAIA Agents Hub</title>
+    <style>
+        :root {
+            --amd-red: #ED1C24;
+            --amd-red-light: #F4484D;
+            --amd-red-dark: #C8171E;
+            --bg-dark: #0d0d0d;
+            --bg-card: #1a1a1a;
+            --bg-card-hover: #242424;
+            --text-primary: #ffffff;
+            --text-secondary: #a0a0a0;
+            --text-muted: #666666;
+            --border-color: #333333;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --gold: #fbbf24;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-primary);
+            line-height: 1.6;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        .header {
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border-color);
+            padding: 0.75rem 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .back-btn {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.9rem;
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+
+        .back-btn:hover {
+            background: var(--bg-card-hover);
+            color: var(--text-primary);
+        }
+
+        .agent-info {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .agent-icon {
+            width: 36px;
+            height: 36px;
+            background: linear-gradient(135deg, var(--amd-red) 0%, var(--amd-red-dark) 100%);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+        }
+
+        .agent-title h1 {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .agent-title p {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 0.75rem;
+            background: rgba(34, 197, 94, 0.15);
+            border: 1px solid var(--success);
+            border-radius: 20px;
+            font-size: 0.8rem;
+            color: var(--success);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            border: none;
+        }
+
+        .btn-primary {
+            background: var(--amd-red);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--amd-red-light);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-card-hover);
+        }
+
+        /* Main Content */
+        .main {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 320px;
+            background: var(--bg-card);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+
+        .sidebar-header {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .sidebar-header h2 {
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .sidebar-tabs {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .sidebar-tab {
+            padding: 0.4rem 0.75rem;
+            background: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .sidebar-tab.active {
+            background: var(--amd-red);
+            border-color: var(--amd-red);
+            color: white;
+        }
+
+        .agents-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0.5rem;
+        }
+
+        .agent-list-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-bottom: 0.25rem;
+        }
+
+        .agent-list-item:hover {
+            background: var(--bg-card-hover);
+        }
+
+        .agent-list-item.active {
+            background: rgba(237, 28, 36, 0.15);
+            border: 1px solid var(--amd-red);
+        }
+
+        .agent-list-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--bg-card-hover);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+        }
+
+        .agent-list-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .agent-list-info h4 {
+            font-size: 0.9rem;
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .agent-list-info p {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        .agent-list-badge {
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .badge-official {
+            background: var(--amd-red);
+            color: white;
+        }
+
+        .badge-competing {
+            background: var(--gold);
+            color: #000;
+        }
+
+        /* Chat Area */
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .message {
+            max-width: 75%;
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        .message.bot {
+            align-self: flex-start;
+        }
+
+        .message.user {
+            align-self: flex-end;
+            flex-direction: row-reverse;
+        }
+
+        .message-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.9rem;
+            flex-shrink: 0;
+        }
+
+        .message.bot .message-avatar {
+            background: linear-gradient(135deg, var(--amd-red) 0%, var(--amd-red-dark) 100%);
+        }
+
+        .message.user .message-avatar {
+            background: var(--bg-card-hover);
+        }
+
+        .message-content {
+            padding: 0.875rem 1rem;
+            border-radius: 12px;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+
+        .message.bot .message-content {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-bottom-left-radius: 4px;
+        }
+
+        .message.user .message-content {
+            background: var(--amd-red);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message-time {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }
+
+        .message.user .message-time {
+            text-align: right;
+        }
+
+        .typing-indicator {
+            display: flex;
+            gap: 4px;
+            padding: 0.875rem 1rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            width: fit-content;
+        }
+
+        .typing-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--text-muted);
+            border-radius: 50%;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-4px); }
+        }
+
+        /* Chat Input */
+        .chat-input-area {
+            padding: 1rem 1.5rem;
+            background: var(--bg-card);
+            border-top: 1px solid var(--border-color);
+        }
+
+        .chat-input-container {
+            display: flex;
+            gap: 0.75rem;
+            align-items: flex-end;
+        }
+
+        .chat-input-wrapper {
+            flex: 1;
+            background: var(--bg-dark);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 0.75rem 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .chat-input-wrapper:focus-within {
+            border-color: var(--amd-red);
+        }
+
+        .chat-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-primary);
+            font-size: 0.9rem;
+            outline: none;
+            resize: none;
+            max-height: 120px;
+        }
+
+        .chat-input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .input-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .input-action-btn {
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+
+        .input-action-btn:hover {
+            background: var(--bg-card-hover);
+            color: var(--text-primary);
+        }
+
+        .send-btn {
+            width: 44px;
+            height: 44px;
+            background: var(--amd-red);
+            border: none;
+            border-radius: 12px;
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .send-btn:hover {
+            background: var(--amd-red-light);
+        }
+
+        /* Info Panel */
+        .info-panel {
+            width: 300px;
+            background: var(--bg-card);
+            border-left: 1px solid var(--border-color);
+            padding: 1.5rem;
+            overflow-y: auto;
+            flex-shrink: 0;
+        }
+
+        .info-section {
+            margin-bottom: 1.5rem;
+        }
+
+        .info-section h3 {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.75rem;
+        }
+
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 0.85rem;
+        }
+
+        .info-item:last-child {
+            border-bottom: none;
+        }
+
+        .info-label {
+            color: var(--text-secondary);
+        }
+
+        .info-value {
+            font-weight: 500;
+        }
+
+        .info-value.success {
+            color: var(--success);
+        }
+
+        .rating-display {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .rating-stars {
+            color: var(--gold);
+        }
+
+        .vote-section {
+            background: var(--bg-dark);
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: center;
+        }
+
+        .vote-section p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.75rem;
+        }
+
+        .vote-stars {
+            display: flex;
+            justify-content: center;
+            gap: 0.5rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .vote-star {
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: var(--border-color);
+            transition: all 0.2s;
+        }
+
+        .vote-star:hover,
+        .vote-star.active {
+            color: var(--gold);
+            transform: scale(1.1);
+        }
+
+        .description-text {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+
+        .tags-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .tag {
+            padding: 0.25rem 0.5rem;
+            background: var(--bg-dark);
+            border-radius: 4px;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        /* Code Block in Messages */
+        .code-block {
+            background: var(--bg-dark);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-top: 0.75rem;
+            font-family: 'Fira Code', 'Consolas', monospace;
+            font-size: 0.8rem;
+            overflow-x: auto;
+        }
+
+        .code-block-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .code-block-lang {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        .code-block-copy {
+            font-size: 0.7rem;
+            color: var(--amd-red);
+            cursor: pointer;
+        }
+
+        /* Suggested Prompts */
+        .suggested-prompts {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .suggested-prompt {
+            padding: 0.5rem 0.75rem;
+            background: var(--bg-dark);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .suggested-prompt:hover {
+            border-color: var(--amd-red);
+            color: var(--amd-red);
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <a href="agents-hub-mockup.html" class="back-btn">
+                ← Back to Hub
+            </a>
+            <div class="agent-info">
+                <div class="agent-icon">💬</div>
+                <div class="agent-title">
+                    <h1>ChatAgent</h1>
+                    <p>by @amd • v1.5.0</p>
+                </div>
+            </div>
+        </div>
+        <div class="header-right">
+            <div class="status-badge">
+                <span class="status-dot"></span>
+                <span>Live on Strix Halo</span>
+            </div>
+            <button class="btn btn-secondary">View Source</button>
+            <button class="btn btn-primary">Install Locally</button>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main">
+        <!-- Sidebar - Agent List -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>Try Other Agents</h2>
+                <div class="sidebar-tabs">
+                    <button class="sidebar-tab active">All</button>
+                    <button class="sidebar-tab">Competing</button>
+                    <button class="sidebar-tab">Official</button>
+                </div>
+            </div>
+            <div class="agents-list">
+                <div class="agent-list-item active">
+                    <div class="agent-list-icon">💬</div>
+                    <div class="agent-list-info">
+                        <h4>ChatAgent</h4>
+                        <p>Document Q&A with RAG</p>
+                    </div>
+                    <span class="agent-list-badge badge-official">AMD</span>
+                </div>
+                <div class="agent-list-item">
+                    <div class="agent-list-icon">🔍</div>
+                    <div class="agent-list-info">
+                        <h4>CodeSensei</h4>
+                        <p>Code review agent</p>
+                    </div>
+                    <span class="agent-list-badge badge-competing">1st</span>
+                </div>
+                <div class="agent-list-item">
+                    <div class="agent-list-icon">📝</div>
+                    <div class="agent-list-info">
+                        <h4>TaxBot</h4>
+                        <p>Tax preparation assistant</p>
+                    </div>
+                </div>
+                <div class="agent-list-item">
+                    <div class="agent-list-icon">🎨</div>
+                    <div class="agent-list-info">
+                        <h4>BlenderAgent</h4>
+                        <p>3D scene automation</p>
+                    </div>
+                    <span class="agent-list-badge badge-official">AMD</span>
+                </div>
+                <div class="agent-list-item">
+                    <div class="agent-list-icon">🤖</div>
+                    <div class="agent-list-info">
+                        <h4>ReviewBot</h4>
+                        <p>Code review helper</p>
+                    </div>
+                    <span class="agent-list-badge badge-competing">2nd</span>
+                </div>
+                <div class="agent-list-item">
+                    <div class="agent-list-icon">🎫</div>
+                    <div class="agent-list-info">
+                        <h4>JiraAgent</h4>
+                        <p>Issue management</p>
+                    </div>
+                    <span class="agent-list-badge badge-official">AMD</span>
+                </div>
+                <div class="agent-list-item">
+                    <div class="agent-list-icon">🎤</div>
+                    <div class="agent-list-info">
+                        <h4>TalkAgent</h4>
+                        <p>Voice interaction</p>
+                    </div>
+                    <span class="agent-list-badge badge-official">AMD</span>
+                </div>
+                <div class="agent-list-item">
+                    <div class="agent-list-icon">🐳</div>
+                    <div class="agent-list-info">
+                        <h4>DockerAgent</h4>
+                        <p>Container management</p>
+                    </div>
+                    <span class="agent-list-badge badge-official">AMD</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Chat Area -->
+        <div class="chat-area">
+            <div class="chat-messages">
+                <!-- Bot Welcome Message -->
+                <div class="message bot">
+                    <div class="message-avatar">💬</div>
+                    <div>
+                        <div class="message-content">
+                            <strong>Welcome to ChatAgent!</strong><br><br>
+                            I'm an AI assistant specialized in document Q&A with RAG (Retrieval-Augmented Generation) capabilities. I can help you:
+                            <br><br>
+                            • Answer questions about uploaded documents<br>
+                            • Summarize PDFs, code files, and text<br>
+                            • Extract specific information<br>
+                            • Explain complex concepts
+                            <br><br>
+                            Try uploading a document or ask me anything!
+                        </div>
+                        <div class="message-time">Just now</div>
+                    </div>
+                </div>
+
+                <!-- User Message -->
+                <div class="message user">
+                    <div class="message-avatar">U</div>
+                    <div>
+                        <div class="message-content">
+                            Can you explain how RAG works and why it's useful for document Q&A?
+                        </div>
+                        <div class="message-time">1 min ago</div>
+                    </div>
+                </div>
+
+                <!-- Bot Response -->
+                <div class="message bot">
+                    <div class="message-avatar">💬</div>
+                    <div>
+                        <div class="message-content">
+                            Great question! <strong>RAG (Retrieval-Augmented Generation)</strong> combines the power of large language models with external knowledge retrieval.
+                            <br><br>
+                            <strong>How it works:</strong>
+                            <br><br>
+                            1. <strong>Indexing:</strong> Documents are split into chunks and converted to embeddings (numerical vectors)<br>
+                            2. <strong>Retrieval:</strong> When you ask a question, we find the most relevant chunks using semantic search<br>
+                            3. <strong>Generation:</strong> The LLM uses those chunks as context to generate an accurate, grounded answer
+                            <br><br>
+                            <strong>Why it's useful:</strong>
+                            <br><br>
+                            • <strong>Accuracy:</strong> Answers are grounded in your actual documents<br>
+                            • <strong>Currency:</strong> No need to retrain the model for new information<br>
+                            • <strong>Privacy:</strong> Your documents stay local, processed on your AMD hardware<br>
+                            • <strong>Citations:</strong> I can show you exactly where information came from
+                        </div>
+                        <div class="message-time">Just now</div>
+                    </div>
+                </div>
+
+                <!-- User Message with Code -->
+                <div class="message user">
+                    <div class="message-avatar">U</div>
+                    <div>
+                        <div class="message-content">
+                            Show me a simple Python example of using the GAIA Chat SDK
+                        </div>
+                        <div class="message-time">Just now</div>
+                    </div>
+                </div>
+
+                <!-- Bot Response with Code -->
+                <div class="message bot">
+                    <div class="message-avatar">💬</div>
+                    <div>
+                        <div class="message-content">
+                            Here's a simple example of using the GAIA Chat SDK for document Q&A:
+                            <div class="code-block">
+                                <div class="code-block-header">
+                                    <span class="code-block-lang">python</span>
+                                    <span class="code-block-copy">Copy</span>
+                                </div>
+<pre style="margin: 0; color: var(--text-secondary);">from gaia.chat import ChatSDK
+from gaia.rag import RAGSDK
+
+# Initialize RAG with your documents
+rag = RAGSDK()
+rag.add_documents("./my_docs/")
+
+# Create chat with RAG context
+chat = ChatSDK(rag=rag)
+
+# Ask questions about your documents
+response = chat.query(
+    "What are the key findings?"
+)
+print(response.answer)
+print(response.sources)  # Shows citations</pre>
+                            </div>
+                            <br>
+                            This will:
+                            <br>• Index all documents in the folder<br>
+                            • Use semantic search to find relevant context<br>
+                            • Generate an answer with source citations
+                        </div>
+                        <div class="message-time">Just now</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Input -->
+            <div class="chat-input-area">
+                <div class="suggested-prompts">
+                    <span class="suggested-prompt">Summarize my document</span>
+                    <span class="suggested-prompt">Extract key points</span>
+                    <span class="suggested-prompt">Compare two sections</span>
+                    <span class="suggested-prompt">Find specific information</span>
+                </div>
+                <div class="chat-input-container">
+                    <div class="chat-input-wrapper">
+                        <textarea class="chat-input" placeholder="Ask ChatAgent anything..." rows="1"></textarea>
+                        <div class="input-actions">
+                            <button class="input-action-btn" title="Upload file">📎</button>
+                            <button class="input-action-btn" title="Voice input">🎤</button>
+                        </div>
+                    </div>
+                    <button class="send-btn">➤</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Info Panel -->
+        <aside class="info-panel">
+            <div class="info-section">
+                <h3>Agent Info</h3>
+                <div class="info-item">
+                    <span class="info-label">Status</span>
+                    <span class="info-value success">● Online</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Hardware</span>
+                    <span class="info-value">Strix Halo</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Model</span>
+                    <span class="info-value">Qwen3-Coder-30B</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Latency</span>
+                    <span class="info-value">~1.2s</span>
+                </div>
+            </div>
+
+            <div class="info-section">
+                <h3>Rating</h3>
+                <div class="rating-display">
+                    <span class="rating-stars">★★★★★</span>
+                    <span>4.8 (421 votes)</span>
+                </div>
+            </div>
+
+            <div class="info-section vote-section">
+                <p>Rate this agent</p>
+                <div class="vote-stars">
+                    <span class="vote-star active">★</span>
+                    <span class="vote-star active">★</span>
+                    <span class="vote-star active">★</span>
+                    <span class="vote-star active">★</span>
+                    <span class="vote-star">★</span>
+                </div>
+                <button class="btn btn-primary" style="width: 100%;">Submit Vote</button>
+            </div>
+
+            <div class="info-section">
+                <h3>Description</h3>
+                <p class="description-text">
+                    ChatAgent is AMD's official document Q&A agent with RAG capabilities. Upload PDFs, code files, and documents for intelligent conversation. All processing happens locally on AMD hardware.
+                </p>
+            </div>
+
+            <div class="info-section">
+                <h3>Tags</h3>
+                <div class="tags-list">
+                    <span class="tag">documents</span>
+                    <span class="tag">RAG</span>
+                    <span class="tag">Q&A</span>
+                    <span class="tag">PDF</span>
+                    <span class="tag">summarization</span>
+                </div>
+            </div>
+
+            <div class="info-section">
+                <h3>Stats</h3>
+                <div class="info-item">
+                    <span class="info-label">Downloads</span>
+                    <span class="info-value">3,421</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Version</span>
+                    <span class="info-value">1.5.0</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Updated</span>
+                    <span class="info-value">2 days ago</span>
+                </div>
+            </div>
+
+            <div class="info-section">
+                <h3>Quick Install</h3>
+                <div class="code-block" style="margin-top: 0;">
+                    <code style="color: var(--text-secondary);">gaia agent install chatagent</code>
+                </div>
+            </div>
+        </aside>
+    </main>
+</body>
+</html>

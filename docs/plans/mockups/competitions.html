@@ -1,0 +1,1042 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Competitions - GAIA Agents Hub</title>
+    <style>
+        :root {
+            --amd-red: #ED1C24;
+            --amd-red-light: #F4484D;
+            --amd-red-dark: #C8171E;
+            --bg-dark: #0d0d0d;
+            --bg-card: #1a1a1a;
+            --bg-card-hover: #242424;
+            --text-primary: #ffffff;
+            --text-secondary: #a0a0a0;
+            --text-muted: #666666;
+            --border-color: #333333;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --gold: #fbbf24;
+            --silver: #9ca3af;
+            --bronze: #d97706;
+            --purple: #8b5cf6;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(180deg, #1a1a1a 0%, var(--bg-dark) 100%);
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            text-decoration: none;
+            color: var(--text-primary);
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--amd-red);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.2rem;
+        }
+
+        .logo-text {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .logo-text span {
+            color: var(--amd-red);
+        }
+
+        .nav {
+            display: flex;
+            gap: 2rem;
+            align-items: center;
+        }
+
+        .nav a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.95rem;
+            transition: color 0.2s;
+        }
+
+        .nav a:hover, .nav a.active {
+            color: var(--text-primary);
+        }
+
+        .nav a.active {
+            color: var(--amd-red);
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            border: none;
+        }
+
+        .btn-primary {
+            background: var(--amd-red);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--amd-red-light);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-card);
+        }
+
+        .btn-large {
+            padding: 0.75rem 1.5rem;
+            font-size: 1rem;
+        }
+
+        /* Main */
+        .main {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        /* Page Header */
+        .page-header {
+            margin-bottom: 2rem;
+        }
+
+        .page-header h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .page-header p {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 2rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.5rem;
+        }
+
+        .tab {
+            padding: 0.75rem 1.25rem;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            cursor: pointer;
+            border-radius: 8px 8px 0 0;
+            transition: all 0.2s;
+        }
+
+        .tab:hover {
+            color: var(--text-primary);
+            background: var(--bg-card);
+        }
+
+        .tab.active {
+            color: var(--amd-red);
+            background: var(--bg-card);
+            border-bottom: 2px solid var(--amd-red);
+        }
+
+        /* Active Competition Card */
+        .active-competition {
+            background: linear-gradient(135deg, var(--bg-card) 0%, #2d1a1a 100%);
+            border: 2px solid var(--amd-red);
+            border-radius: 16px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .active-competition::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 300px;
+            height: 300px;
+            background: radial-gradient(circle, rgba(237, 28, 36, 0.1) 0%, transparent 70%);
+            pointer-events: none;
+        }
+
+        .competition-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: var(--amd-red);
+            color: white;
+            padding: 0.4rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .competition-badge .pulse {
+            width: 8px;
+            height: 8px;
+            background: white;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .active-competition h2 {
+            font-size: 2rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .competition-description {
+            color: var(--text-secondary);
+            font-size: 1.05rem;
+            margin-bottom: 1.5rem;
+            max-width: 700px;
+        }
+
+        .competition-meta {
+            display: flex;
+            gap: 3rem;
+            margin-bottom: 2rem;
+        }
+
+        .meta-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .meta-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .meta-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+
+        .meta-value.countdown {
+            color: var(--amd-red-light);
+        }
+
+        .competition-actions {
+            display: flex;
+            gap: 1rem;
+        }
+
+        /* Prize Grid */
+        .prize-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1.5rem;
+            margin: 2rem 0;
+        }
+
+        .prize-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            text-align: center;
+            position: relative;
+        }
+
+        .prize-card.gold {
+            border-color: var(--gold);
+            background: linear-gradient(180deg, rgba(251, 191, 36, 0.1) 0%, var(--bg-card) 100%);
+        }
+
+        .prize-card.silver {
+            border-color: var(--silver);
+        }
+
+        .prize-card.bronze {
+            border-color: var(--bronze);
+        }
+
+        .prize-medal {
+            font-size: 3rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .prize-place {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+        }
+
+        .prize-value {
+            font-size: 1.1rem;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+
+        /* Leaderboard */
+        .leaderboard {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 2rem;
+        }
+
+        .leaderboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.25rem 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .leaderboard-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .leaderboard-meta {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .leaderboard-table {
+            width: 100%;
+        }
+
+        .leaderboard-row {
+            display: grid;
+            grid-template-columns: 60px 1fr 200px 120px 100px 100px;
+            align-items: center;
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            transition: background 0.2s;
+        }
+
+        .leaderboard-row:hover {
+            background: var(--bg-card-hover);
+        }
+
+        .leaderboard-row:last-child {
+            border-bottom: none;
+        }
+
+        .leaderboard-row.header {
+            background: var(--bg-dark);
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+        }
+
+        .rank {
+            font-size: 1.25rem;
+            font-weight: 700;
+            text-align: center;
+        }
+
+        .rank.gold { color: var(--gold); }
+        .rank.silver { color: var(--silver); }
+        .rank.bronze { color: var(--bronze); }
+
+        .agent-cell {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .agent-cell-icon {
+            width: 44px;
+            height: 44px;
+            background: var(--bg-card-hover);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+        }
+
+        .agent-cell-info h4 {
+            font-size: 0.95rem;
+            margin-bottom: 0.15rem;
+        }
+
+        .agent-cell-info p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .votes-cell {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .vote-bar {
+            flex: 1;
+            height: 8px;
+            background: var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .vote-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--amd-red) 0%, var(--amd-red-light) 100%);
+            border-radius: 4px;
+        }
+
+        .vote-count {
+            font-size: 0.9rem;
+            font-weight: 500;
+            min-width: 50px;
+            text-align: right;
+        }
+
+        .rating-cell {
+            color: var(--gold);
+            font-size: 0.9rem;
+        }
+
+        /* Past Competitions */
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 3rem 0 1.5rem;
+        }
+
+        .section-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .past-competitions-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .past-competition-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            transition: all 0.2s;
+        }
+
+        .past-competition-card:hover {
+            border-color: var(--amd-red);
+            transform: translateY(-2px);
+        }
+
+        .past-competition-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1rem;
+        }
+
+        .past-badge {
+            padding: 0.25rem 0.5rem;
+            background: var(--text-muted);
+            color: var(--bg-dark);
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+
+        .past-competition-card h3 {
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .past-competition-card .date {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            margin-bottom: 1rem;
+        }
+
+        .winner-preview {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem;
+            background: var(--bg-dark);
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+
+        .winner-medal {
+            font-size: 1.5rem;
+        }
+
+        .winner-info h4 {
+            font-size: 0.9rem;
+        }
+
+        .winner-info p {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .past-stats {
+            display: flex;
+            gap: 1.5rem;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        /* Upcoming Competition */
+        .upcoming-competition {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 2rem;
+            align-items: center;
+        }
+
+        .upcoming-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: var(--purple);
+            color: white;
+            padding: 0.4rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .upcoming-competition h3 {
+            font-size: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .upcoming-description {
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+        }
+
+        .upcoming-date {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        .notify-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .notify-btn span {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        /* Rules Section */
+        .rules-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-top: 3rem;
+        }
+
+        .rules-section h2 {
+            font-size: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .rules-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+        }
+
+        .rule-category h3 {
+            font-size: 1rem;
+            margin-bottom: 1rem;
+            color: var(--amd-red);
+        }
+
+        .rule-category ul {
+            list-style: none;
+        }
+
+        .rule-category li {
+            padding: 0.5rem 0;
+            padding-left: 1.5rem;
+            position: relative;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .rule-category li::before {
+            content: '✓';
+            position: absolute;
+            left: 0;
+            color: var(--success);
+        }
+
+        /* Developer Credits Banner */
+        .credits-banner {
+            background: linear-gradient(90deg, var(--amd-red) 0%, var(--purple) 100%);
+            border-radius: 12px;
+            padding: 1.5rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 2rem;
+        }
+
+        .credits-banner h3 {
+            font-size: 1.1rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .credits-banner p {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <a href="agents-hub-mockup.html" class="logo">
+                <div class="logo-icon">G</div>
+                <div class="logo-text">GAIA <span>Agents Hub</span></div>
+            </a>
+
+            <nav class="nav">
+                <a href="agents-hub-mockup.html">Discover</a>
+                <a href="#" class="active">Competitions</a>
+                <a href="arena.html">Arena</a>
+                <a href="#">Leaderboard</a>
+                <a href="#">Docs</a>
+            </nav>
+
+            <div class="header-actions">
+                <a href="#" class="btn btn-secondary">Sign In</a>
+                <a href="#" class="btn btn-primary">Join AMD Dev Program</a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main -->
+    <main class="main">
+        <!-- Page Header -->
+        <div class="page-header">
+            <h1>Competitions</h1>
+            <p>Build the best AI PC agents, win prizes, and get recognized by the community.</p>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab active">Active</button>
+            <button class="tab">Upcoming</button>
+            <button class="tab">Past</button>
+            <button class="tab">My Submissions</button>
+        </div>
+
+        <!-- Active Competition -->
+        <div class="active-competition">
+            <div class="competition-badge">
+                <span class="pulse"></span>
+                LIVE NOW
+            </div>
+            <h2>🏆 Best Code Review Agent</h2>
+            <p class="competition-description">
+                Build an AI agent that reviews code for bugs, security vulnerabilities, style issues, and best practices.
+                The best agent will be featured on the Agents Hub homepage and the developer wins an AMD Ryzen AI PC.
+            </p>
+
+            <div class="competition-meta">
+                <div class="meta-item">
+                    <span class="meta-label">Time Remaining</span>
+                    <span class="meta-value countdown">12d 4h 32m</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">Entries</span>
+                    <span class="meta-value">23</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">Votes Cast</span>
+                    <span class="meta-value">142</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">Prize Pool</span>
+                    <span class="meta-value">$2,750+</span>
+                </div>
+            </div>
+
+            <div class="competition-actions">
+                <a href="#" class="btn btn-primary btn-large">Submit Your Agent</a>
+                <a href="#" class="btn btn-secondary btn-large">View All Entries</a>
+                <a href="#" class="btn btn-secondary btn-large">Read Rules</a>
+            </div>
+        </div>
+
+        <!-- Prize Grid -->
+        <div class="prize-grid">
+            <div class="prize-card gold">
+                <div class="prize-medal">🥇</div>
+                <div class="prize-place">1st Place</div>
+                <div class="prize-value">
+                    AMD Ryzen AI PC<br>
+                    + $1,000 Cash<br>
+                    + Featured on Hub
+                </div>
+            </div>
+            <div class="prize-card silver">
+                <div class="prize-medal">🥈</div>
+                <div class="prize-place">2nd Place</div>
+                <div class="prize-value">
+                    AMD Radeon RX 9070 XT<br>
+                    + $500 Cash
+                </div>
+            </div>
+            <div class="prize-card bronze">
+                <div class="prize-medal">🥉</div>
+                <div class="prize-place">3rd Place</div>
+                <div class="prize-value">
+                    $250 Cash<br>
+                    + Featured on AMD Developer
+                </div>
+            </div>
+        </div>
+
+        <!-- Leaderboard -->
+        <div class="leaderboard">
+            <div class="leaderboard-header">
+                <h2 class="leaderboard-title">Current Standings</h2>
+                <span class="leaderboard-meta">142 votes cast • Updated live</span>
+            </div>
+            <div class="leaderboard-table">
+                <div class="leaderboard-row header">
+                    <span>Rank</span>
+                    <span>Agent</span>
+                    <span>Votes</span>
+                    <span>Rating</span>
+                    <span>Version</span>
+                    <span>Action</span>
+                </div>
+                <div class="leaderboard-row">
+                    <span class="rank gold">1</span>
+                    <div class="agent-cell">
+                        <div class="agent-cell-icon">🔍</div>
+                        <div class="agent-cell-info">
+                            <h4>CodeSensei</h4>
+                            <p>by @alice</p>
+                        </div>
+                    </div>
+                    <div class="votes-cell">
+                        <div class="vote-bar"><div class="vote-bar-fill" style="width: 100%"></div></div>
+                        <span class="vote-count">47</span>
+                    </div>
+                    <span class="rating-cell">★ 4.7</span>
+                    <span>v1.0.0</span>
+                    <a href="arena.html" class="btn btn-secondary">Try</a>
+                </div>
+                <div class="leaderboard-row">
+                    <span class="rank silver">2</span>
+                    <div class="agent-cell">
+                        <div class="agent-cell-icon">🤖</div>
+                        <div class="agent-cell-info">
+                            <h4>ReviewBot</h4>
+                            <p>by @bob</p>
+                        </div>
+                    </div>
+                    <div class="votes-cell">
+                        <div class="vote-bar"><div class="vote-bar-fill" style="width: 87%"></div></div>
+                        <span class="vote-count">41</span>
+                    </div>
+                    <span class="rating-cell">★ 4.5</span>
+                    <span>v2.1.0</span>
+                    <a href="arena.html" class="btn btn-secondary">Try</a>
+                </div>
+                <div class="leaderboard-row">
+                    <span class="rank bronze">3</span>
+                    <div class="agent-cell">
+                        <div class="agent-cell-icon">✨</div>
+                        <div class="agent-cell-info">
+                            <h4>LintMaster</h4>
+                            <p>by @charlie</p>
+                        </div>
+                    </div>
+                    <div class="votes-cell">
+                        <div class="vote-bar"><div class="vote-bar-fill" style="width: 60%"></div></div>
+                        <span class="vote-count">28</span>
+                    </div>
+                    <span class="rating-cell">★ 4.3</span>
+                    <span>v1.2.0</span>
+                    <a href="arena.html" class="btn btn-secondary">Try</a>
+                </div>
+                <div class="leaderboard-row">
+                    <span class="rank">4</span>
+                    <div class="agent-cell">
+                        <div class="agent-cell-icon">🐛</div>
+                        <div class="agent-cell-info">
+                            <h4>BugHunter</h4>
+                            <p>by @diana</p>
+                        </div>
+                    </div>
+                    <div class="votes-cell">
+                        <div class="vote-bar"><div class="vote-bar-fill" style="width: 38%"></div></div>
+                        <span class="vote-count">18</span>
+                    </div>
+                    <span class="rating-cell">★ 4.1</span>
+                    <span>v1.0.0</span>
+                    <a href="arena.html" class="btn btn-secondary">Try</a>
+                </div>
+                <div class="leaderboard-row">
+                    <span class="rank">5</span>
+                    <div class="agent-cell">
+                        <div class="agent-cell-icon">🛡️</div>
+                        <div class="agent-cell-info">
+                            <h4>CodeGuard</h4>
+                            <p>by @eve</p>
+                        </div>
+                    </div>
+                    <div class="votes-cell">
+                        <div class="vote-bar"><div class="vote-bar-fill" style="width: 17%"></div></div>
+                        <span class="vote-count">8</span>
+                    </div>
+                    <span class="rating-cell">★ 3.9</span>
+                    <span>v0.9.0</span>
+                    <a href="arena.html" class="btn btn-secondary">Try</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Developer Credits Banner -->
+        <div class="credits-banner">
+            <div>
+                <h3>Free Strix Halo Cloud Access for Competitors</h3>
+                <p>Sign up for the competition and get free access to AMD Strix Halo Developer Cloud to build and test your agent.</p>
+            </div>
+            <a href="#" class="btn btn-secondary" style="background: white; color: var(--bg-dark);">Get Dev Credits</a>
+        </div>
+
+        <!-- Upcoming Competition -->
+        <div class="section-header">
+            <h2 class="section-title">Coming Soon</h2>
+        </div>
+
+        <div class="upcoming-competition">
+            <div>
+                <div class="upcoming-badge">📅 UPCOMING</div>
+                <h3>Best Document Q&A Agent</h3>
+                <p class="upcoming-description">
+                    Build an agent that excels at answering questions about uploaded documents.
+                    Focus on accuracy, source citations, and handling complex multi-document queries.
+                </p>
+                <div class="upcoming-date">
+                    📅 Starts: February 15, 2026 • Duration: 1 month
+                </div>
+            </div>
+            <div class="notify-btn">
+                <a href="#" class="btn btn-primary btn-large">🔔 Get Notified</a>
+                <span>142 developers interested</span>
+            </div>
+        </div>
+
+        <!-- Past Competitions -->
+        <div class="section-header">
+            <h2 class="section-title">Past Competitions</h2>
+            <a href="#" style="color: var(--amd-red); text-decoration: none;">View all →</a>
+        </div>
+
+        <div class="past-competitions-grid">
+            <div class="past-competition-card">
+                <div class="past-competition-header">
+                    <div>
+                        <h3>Best Tax Preparation Agent</h3>
+                        <div class="date">January 2026</div>
+                    </div>
+                    <span class="past-badge">COMPLETED</span>
+                </div>
+                <div class="winner-preview">
+                    <span class="winner-medal">🥇</span>
+                    <div class="winner-info">
+                        <h4>TaxBot by @janedoe</h4>
+                        <p>52 votes • ★ 4.9</p>
+                    </div>
+                </div>
+                <div class="past-stats">
+                    <span>18 entries</span>
+                    <span>234 votes</span>
+                    <span>$2,500 prizes</span>
+                </div>
+            </div>
+
+            <div class="past-competition-card">
+                <div class="past-competition-header">
+                    <div>
+                        <h3>Best General Assistant</h3>
+                        <div class="date">December 2025</div>
+                    </div>
+                    <span class="past-badge">COMPLETED</span>
+                </div>
+                <div class="winner-preview">
+                    <span class="winner-medal">🥇</span>
+                    <div class="winner-info">
+                        <h4>OmniHelper by @techpro</h4>
+                        <p>67 votes • ★ 4.7</p>
+                    </div>
+                </div>
+                <div class="past-stats">
+                    <span>24 entries</span>
+                    <span>312 votes</span>
+                    <span>$2,500 prizes</span>
+                </div>
+            </div>
+
+            <div class="past-competition-card">
+                <div class="past-competition-header">
+                    <div>
+                        <h3>Best Data Analysis Agent</h3>
+                        <div class="date">November 2025</div>
+                    </div>
+                    <span class="past-badge">COMPLETED</span>
+                </div>
+                <div class="winner-preview">
+                    <span class="winner-medal">🥇</span>
+                    <div class="winner-info">
+                        <h4>DataWiz by @analyst99</h4>
+                        <p>45 votes • ★ 4.6</p>
+                    </div>
+                </div>
+                <div class="past-stats">
+                    <span>15 entries</span>
+                    <span>189 votes</span>
+                    <span>$2,000 prizes</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Rules Section -->
+        <div class="rules-section">
+            <h2>Competition Rules</h2>
+            <div class="rules-grid">
+                <div class="rule-category">
+                    <h3>Eligibility</h3>
+                    <ul>
+                        <li>Must be a member of AMD AI Developer Program</li>
+                        <li>Agent must be built with GAIA SDK</li>
+                        <li>One entry per developer per competition</li>
+                        <li>Version locked at submission deadline</li>
+                    </ul>
+                </div>
+                <div class="rule-category">
+                    <h3>Submission Requirements</h3>
+                    <ul>
+                        <li>Valid agent.yaml configuration</li>
+                        <li>Passes all automated gates</li>
+                        <li>Open source code (MIT or Apache 2.0)</li>
+                        <li>Documentation and usage examples</li>
+                    </ul>
+                </div>
+                <div class="rule-category">
+                    <h3>Voting</h3>
+                    <ul>
+                        <li>Only AMD Dev Program members can vote</li>
+                        <li>One vote per member per competition</li>
+                        <li>Must try agent in Arena before voting</li>
+                        <li>Votes are final and cannot be changed</li>
+                    </ul>
+                </div>
+                <div class="rule-category">
+                    <h3>Prizes</h3>
+                    <ul>
+                        <li>Winners announced within 48 hours</li>
+                        <li>Prize fulfillment within 30 days</li>
+                        <li>Top 3 featured on Hub homepage</li>
+                        <li>All entries added to Hall of Fame</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </main>
+</body>
+</html>
