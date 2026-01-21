@@ -82,8 +82,8 @@ jobs:
 
           # Start the server in the background as a process (not PowerShell job)
           Write-Host "Starting lemonade-server in background..."
-          # Start the server as a background process
-          $serverProcess = Start-Process -FilePath "lemonade-server" -ArgumentList "serve", "--no-tray" -PassThru -WindowStyle Hidden
+          # Start the server as a background process (use full path to venv executable)
+          $serverProcess = Start-Process -FilePath ".\.venv\Scripts\lemonade-server.exe" -ArgumentList "serve", "--no-tray" -PassThru -WindowStyle Hidden
           Write-Host "Started lemonade-server process with ID: $($serverProcess.Id)"
 
           # Wait for server to start up
@@ -121,7 +121,7 @@ jobs:
 
           # Pull the model now that server is running
           Write-Host "Pulling Llama-3.2-3B-Instruct-Hybrid model..."
-          lemonade-server pull Llama-3.2-3B-Instruct-Hybrid
+          .\.venv\Scripts\lemonade-server.exe pull Llama-3.2-3B-Instruct-Hybrid
 
       - name: Run Unit Tests (Direct CMD - Full Error Visibility)
         shell: cmd
