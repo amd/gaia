@@ -73,7 +73,6 @@ jobs:
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         with:
           model-name: 'Qwen3-0.6B-GGUF'
-          use-cli-pull: 'true'
 
       - name: Run Unit Tests (Direct CMD - Full Error Visibility)
         shell: cmd

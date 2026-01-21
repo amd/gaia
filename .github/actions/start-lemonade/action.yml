@@ -47,13 +47,11 @@ runs:
       run: |
         Write-Host "=== Starting Lemonade Server ==="
 
-        # Set environment variable for Vulkan workaround
+        # Start server - EXACT same approach as smoke test (which passed)
         $env:GGML_VK_DISABLE_COOPMAT = "1"
-
-        # Start server as direct background process (same as smoke test that works)
         $lemonadeExe = ".\.venv\Scripts\lemonade-server-dev.exe"
         $serverProcess = Start-Process -FilePath $lemonadeExe `
-            -ArgumentList "serve", "--port", "${{ inputs.port }}", "--ctx-size", "${{ inputs.ctx-size }}", "--host", "localhost", "--no-tray" `
+            -ArgumentList "serve", "--port", "${{ inputs.port }}", "--ctx-size", "${{ inputs.ctx-size }}", "--no-tray" `
             -PassThru -WindowStyle Hidden `
             -RedirectStandardOutput "lemonade-server-stdout.log" `
             -RedirectStandardError "lemonade-server-stderr.log"
@@ -154,6 +152,16 @@ runs:
         # Wait for model files to sync
         Write-Host "Waiting 5 seconds for model files to sync..."
         Start-Sleep -Seconds 5
+
+        # Verify server is still running before loading
+        Write-Host "Verifying server is still responsive..."
+        try {
+            $health = Invoke-RestMethod -Uri "http://localhost:${{ inputs.port }}/api/v1/health" -TimeoutSec 5
+            Write-Host "[OK] Server is responsive: $($health | ConvertTo-Json -Compress)"
+        } catch {
+            Write-Host "[ERROR] Server is not responding: $($_.Exception.Message)"
+            throw "Server died after pull"
+        }
 
         # Load the primary model into Lemonade (required for inference)
         Write-Host "`n=== Loading Model ==="
