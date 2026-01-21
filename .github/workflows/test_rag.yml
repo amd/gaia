@@ -77,13 +77,13 @@ jobs:
         uv pip install reportlab --python .venv\Scripts\python.exe
 
     - name: Start Lemonade Server and Load Models
-      id: start-lemonade
-      uses: ./.github/actions/start-lemonade
-      with:
-        model-name: 'nomic-embed-text-v2-moe-GGUF'
-        additional-models: 'Qwen3-0.6B-GGUF,Qwen2.5-VL-7B-Instruct-GGUF'
-        ctx-size: '8192'
-        init-wait-time: '30'
+      shell: powershell
+      run: |
+        .\scripts\start-lemonade.ps1 `
+          -ModelName "nomic-embed-text-v2-moe-GGUF" `
+          -AdditionalModels "Qwen3-0.6B-GGUF,Qwen2.5-VL-7B-Instruct-GGUF" `
+          -CtxSize 8192 `
+          -InitWaitTime 30
 
     - name: Run RAG Integration Tests
       shell: powershell
@@ -97,9 +97,6 @@ jobs:
         chcp 65001 | Out-Null
 
         try {
-            # Store Lemonade process ID for cleanup
-            $env:LEMONADE_PROCESS_ID = "${{ steps.start-lemonade.outputs.server-process-id }}"
-
             # Verify models
             try {
                 $models = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/models" -Method GET

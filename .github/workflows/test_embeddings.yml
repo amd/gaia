@@ -37,11 +37,9 @@ jobs:
         extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
     - name: Start Lemonade Server and Load Model
-      id: start-lemonade
-      uses: ./.github/actions/start-lemonade
-      with:
-        model-name: 'nomic-embed-text-v2-moe-GGUF'
-        init-wait-time: '30'
+      shell: powershell
+      run: |
+        .\scripts\start-lemonade.ps1 -ModelName "nomic-embed-text-v2-moe-GGUF" -InitWaitTime 30
 
     - name: Verify Embedding Model and Run Tests
       shell: powershell
@@ -55,9 +53,6 @@ jobs:
         chcp 65001 | Out-Null
 
         try {
-            # Store Lemonade process ID for cleanup
-            $env:LEMONADE_PROCESS_ID = "${{ steps.start-lemonade.outputs.server-process-id }}"
-
             # Verify model is available
             try {
                 $models = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/models" -Method GET

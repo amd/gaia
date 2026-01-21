@@ -59,13 +59,13 @@ jobs:
           python -m pip check
 
       - name: Start Lemonade Server and Load Model
-        uses: ./.github/actions/start-lemonade
+        shell: powershell
         timeout-minutes: 15
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
-        with:
-          model-name: 'Qwen3-0.6B-GGUF'
+        run: |
+          .\scripts\start-lemonade.ps1 -ModelName "Qwen3-0.6B-GGUF"
 
 
 
@@ -108,6 +108,15 @@ jobs:
           if %integration_exit% neq 0 (
               exit /b 1
           )
+
+      - name: Cleanup Lemonade Server
+        if: always()
+        shell: powershell
+        run: |
+          if ($env:LEMONADE_PROCESS_ID) {
+              Write-Host "Stopping server process $env:LEMONADE_PROCESS_ID..."
+              Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Debug Chat SDK Logs on Failure
         if: failure()

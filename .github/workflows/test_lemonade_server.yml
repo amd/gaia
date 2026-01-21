@@ -35,142 +35,43 @@ jobs:
           python-version: '3.12'
           install-package: '.[lemonade]'
 
-      - name: Test Lemonade Server Basic Functionality
+      - name: Start Lemonade Server and Load Model
         shell: powershell
         timeout-minutes: 10
         run: |
-          Write-Host "=========================================="
-          Write-Host "   LEMONADE SERVER SMOKE TEST"
-          Write-Host "=========================================="
-          Write-Host ""
+          .\scripts\start-lemonade.ps1 -ModelName "Qwen3-0.6B-GGUF" -Port 8000 -CtxSize 4096 -InitWaitTime 10
 
+      - name: Test Lemonade Server Completion
+        shell: powershell
+        run: |
+          Write-Host "=== Testing Completion ==="
           try {
-              # Check if lemonade-server-dev is installed
-              Write-Host "=== Checking Installation ==="
-              $lemonadeExe = ".\.venv\Scripts\lemonade-server-dev.exe"
-              if (-not (Test-Path $lemonadeExe)) {
-                  Write-Host "[ERROR] lemonade-server-dev.exe not found at: $lemonadeExe"
-                  Write-Host "Listing .venv\Scripts contents:"
-                  Get-ChildItem ".\.venv\Scripts" | Where-Object { $_.Name -like "*lemon*" }
-                  exit 1
-              }
-              Write-Host "[OK] Found lemonade-server-dev at: $lemonadeExe"
-              Write-Host ""
-
-              # Start server
-              Write-Host "=== Starting Server ==="
-              $env:GGML_VK_DISABLE_COOPMAT = "1"
-              $serverProcess = Start-Process -FilePath $lemonadeExe `
-                  -ArgumentList "serve", "--port", "8000", "--ctx-size", "4096", "--no-tray" `
-                  -PassThru -WindowStyle Hidden `
-                  -RedirectStandardOutput "lemonade-server-stdout.log" `
-                  -RedirectStandardError "lemonade-server-stderr.log"
-              Write-Host "[OK] Started server process ID: $($serverProcess.Id)"
-              Write-Host "     Logs: lemonade-server-stdout.log, lemonade-server-stderr.log"
-              Write-Host ""
-
-              # Wait for server
-              Write-Host "=== Waiting for Server ==="
-              $maxWait = 30
-              $waited = 0
-              $ready = $false
-              while ($waited -lt $maxWait -and -not $ready) {
-                  Start-Sleep -Seconds 2
-                  $waited += 2
-                  try {
-                      $health = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -TimeoutSec 5
-                      Write-Host "[OK] Server is ready (waited $waited seconds)"
-                      Write-Host "     Health: $($health | ConvertTo-Json -Compress)"
-                      $ready = $true
-                  } catch {
-                      Write-Host "Waiting... ($waited/$maxWait seconds)"
-                  }
-              }
-
-              if (-not $ready) {
-                  Write-Host "[ERROR] Server failed to start"
-                  Write-Host ""
-                  Write-Host "=== Server STDOUT ==="
-                  if (Test-Path "lemonade-server-stdout.log") { Get-Content "lemonade-server-stdout.log" }
-                  Write-Host ""
-                  Write-Host "=== Server STDERR ==="
-                  if (Test-Path "lemonade-server-stderr.log") { Get-Content "lemonade-server-stderr.log" }
-                  throw "Server failed to start"
-              }
-              Write-Host ""
-
-              # Pull model
-              Write-Host "=== Pulling Model: Qwen3-0.6B-GGUF ==="
-              $pullOutput = & $lemonadeExe pull Qwen3-0.6B-GGUF 2>&1
-              Write-Host "Pull exit code: $LASTEXITCODE"
-              Write-Host "Pull output:"
-              $pullOutput | ForEach-Object { Write-Host "  $_" }
-              Write-Host ""
-
-              # Wait for files to sync
-              Write-Host "Waiting 5 seconds for model files..."
-              Start-Sleep -Seconds 5
-
-              # Load model
-              Write-Host "=== Loading Model ==="
-              try {
-                  $loadBody = @{ model_name = "Qwen3-0.6B-GGUF" } | ConvertTo-Json
-                  Write-Host "Request body: $loadBody"
-                  $loadResponse = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/load" `
-                      -Method POST -ContentType "application/json" -Body $loadBody -TimeoutSec 120
-                  Write-Host "[OK] Model loaded"
-                  Write-Host "     Response: $($loadResponse | ConvertTo-Json -Compress)"
-              } catch {
-                  Write-Host "[ERROR] Load failed: $($_.Exception.Message)"
-                  if ($_.ErrorDetails) {
-                      Write-Host "Error details: $($_.ErrorDetails.Message)"
-                  }
-                  Write-Host ""
-                  Write-Host "=== Server Logs (last 100 lines) ==="
-                  if (Test-Path "lemonade-server-stdout.log") {
-                      Get-Content "lemonade-server-stdout.log" -Tail 100
-                  }
-                  if (Test-Path "lemonade-server-stderr.log") {
-                      Get-Content "lemonade-server-stderr.log" -Tail 100
-                  }
-                  throw "Model load failed"
-              }
-              Write-Host ""
-
-              # Wait for initialization
-              Write-Host "Waiting 10 seconds for model initialization..."
-              Start-Sleep -Seconds 10
-
-              # Test completion
-              Write-Host "=== Testing Completion ==="
-              try {
-                  $testBody = @{
-                      model = "Qwen3-0.6B-GGUF"
-                      prompt = "Say exactly: Hello World"
-                      max_tokens = 10
-                  } | ConvertTo-Json
-                  $completion = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/completions" `
-                      -Method POST -ContentType "application/json" -Body $testBody -TimeoutSec 30
-                  Write-Host "[OK] Completion successful"
-                  Write-Host "     Response: $($completion.choices[0].text)"
-              } catch {
-                  Write-Host "[ERROR] Completion failed: $($_.Exception.Message)"
-                  if ($_.ErrorDetails) {
-                      Write-Host "Error details: $($_.ErrorDetails.Message)"
-                  }
-                  throw "Completion test failed"
-              }
+              $testBody = @{
+                  model = "Qwen3-0.6B-GGUF"
+                  prompt = "Say exactly: Hello World"
+                  max_tokens = 10
+              } | ConvertTo-Json
+              $completion = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/completions" `
+                  -Method POST -ContentType "application/json" -Body $testBody -TimeoutSec 30
+              Write-Host "[OK] Completion successful"
+              Write-Host "     Response: $($completion.choices[0].text)"
               Write-Host ""
               Write-Host "[SUCCESS] All lemonade server tests passed!"
-
-          } finally {
-              # Cleanup
-              Write-Host ""
-              Write-Host "=== Cleanup ==="
-              if ($serverProcess -and -not $serverProcess.HasExited) {
-                  Write-Host "Stopping server process $($serverProcess.Id)..."
-                  Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
+          } catch {
+              Write-Host "[ERROR] Completion failed: $($_.Exception.Message)"
+              if ($_.ErrorDetails) {
+                  Write-Host "Error details: $($_.ErrorDetails.Message)"
               }
+              throw "Completion test failed"
+          }
+
+      - name: Cleanup Lemonade Server
+        if: always()
+        shell: powershell
+        run: |
+          if ($env:LEMONADE_PROCESS_ID) {
+              Write-Host "Stopping server process $env:LEMONADE_PROCESS_ID..."
+              Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
           }
 
       - name: Upload Server Logs

@@ -44,11 +44,9 @@ jobs:
           uv pip install pytest pytest-timeout requests --python .venv\Scripts\python.exe
 
       - name: Start Lemonade Server and Load Model
-        id: start-lemonade
-        uses: ./.github/actions/start-lemonade
-        with:
-          model-name: 'Qwen3-0.6B-GGUF'
-          ctx-size: '8192'
+        shell: powershell
+        run: |
+          .\scripts\start-lemonade.ps1 -ModelName "Qwen3-0.6B-GGUF" -CtxSize 8192
 
       - name: Start GAIA API Server and Run Tests
         shell: powershell
@@ -62,9 +60,6 @@ jobs:
           chcp 65001 | Out-Null
 
           try {
-              # Store Lemonade process ID for cleanup
-              $env:LEMONADE_PROCESS_ID = "${{ steps.start-lemonade.outputs.server-process-id }}"
-
               # Start API server using gaia CLI (runs on default port 8080)
               Write-Host "`n=== Starting GAIA API Server ==="
               $apiJob = Start-Job -ScriptBlock {
