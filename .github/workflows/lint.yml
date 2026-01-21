@@ -40,11 +40,10 @@ jobs:
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
 
-      - name: Install dependencies
+      - name: Install project dependencies
         run: |
-          # Install linting tools
-          uv pip install --system black pylint isort flake8 mypy bandit
-          # Install project dependencies for pylint and import checks
+          # Install project dependencies for import checks
+          # Linting tools are auto-downloaded by uvx
           uv pip install --system -e .
 
       - name: Run lint checks
