@@ -409,7 +409,8 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    if: always()
+    # Run always except when workflow is cancelled (e.g., by cancel-in-progress)
+    if: ${{ always() && !cancelled() }}
     needs: [test-electron-framework, test-apps-integration, test-apps-functional, test-apps-build, dependency-audit, test-electron-runtime]
 
     steps:

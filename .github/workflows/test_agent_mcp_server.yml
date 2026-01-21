@@ -110,7 +110,8 @@ jobs:
     name: Test Summary
     needs: test-mcp-agent
     runs-on: ubuntu-latest
-    if: always()
+    # Run always except when workflow is cancelled (e.g., by cancel-in-progress)
+    if: ${{ always() && !cancelled() }}
     permissions: {}
 
     steps:

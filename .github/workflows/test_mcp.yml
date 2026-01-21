@@ -226,7 +226,8 @@ jobs:
     name: MCP Test Summary
     runs-on: ubuntu-latest
     needs: [test-mcp-windows, test-mcp-linux]
-    if: always()
+    # Run always except when workflow is cancelled (e.g., by cancel-in-progress)
+    if: ${{ always() && !cancelled() }}
     steps:
       - name: Check test results
         run: |
