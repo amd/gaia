@@ -1409,19 +1409,18 @@ class TestLemonadeClientIntegration(unittest.TestCase):
         print("\n=== Hybrid NPU Validation Test ===")
 
         try:
-            # Step 1: Verify hybrid recipe is in use
+            # Step 1: Check if hybrid recipe is in use
             print("Step 1: Checking hybrid recipe configuration...")
             health = self.client.health_check()
             print(f"Health response: {health}")
 
-            # Verify we're using the hybrid checkpoint and recipe
+            # Check if we're using a hybrid checkpoint
             checkpoint = health.get("checkpoint_loaded", "")
+            if checkpoint and "hybrid" not in checkpoint.lower():
+                print(f"⏭️  Skipping: Not a hybrid model (checkpoint: {checkpoint})")
+                self.skipTest("Test requires hybrid NPU model, but non-hybrid model is loaded")
+
             if checkpoint:
-                self.assertIn(
-                    "hybrid",
-                    checkpoint.lower(),
-                    f"Expected hybrid checkpoint, got: {checkpoint}",
-                )
                 print(f"✅ Hybrid checkpoint loaded: {checkpoint}")
 
             # Step 2: Run deterministic chat completion (correct API for instruct models)
