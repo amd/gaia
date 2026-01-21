@@ -132,6 +132,19 @@ jobs:
             exit 0
           fi
 
+          # Check if all integration tests were skipped/cancelled (workflow cancelled early)
+          if [[ "${{ needs.unit-tests.result }}" == "skipped" &&
+                "${{ needs.test-lemonade-server.result }}" == "skipped" &&
+                "${{ needs.test-windows.result }}" == "skipped" &&
+                "${{ needs.test-linux.result }}" == "skipped" &&
+                "${{ needs.test-mcp.result }}" == "skipped" &&
+                "${{ needs.test-code-agent.result }}" == "skipped" &&
+                "${{ needs.test-chat-agent.result }}" == "skipped" &&
+                "${{ needs.test-security.result }}" == "skipped" ]]; then
+            echo "⏭️ Workflow cancelled or lint failed - no integration tests ran"
+            exit 0
+          fi
+
           # Helper function to check if result is acceptable (success or skipped)
           check_result() {
             [[ "$1" == "success" || "$1" == "skipped" ]]
