@@ -4,9 +4,8 @@
 """
 Tests for Hardware Advisor Agent.
 
-Purpose: Verify that the Hardware Advisor Agent correctly uses SIMPLE_TOOLS
-to allow direct execution of hardware information queries without requiring
-multi-step plans.
+Purpose: Verify that the Hardware Advisor Agent correctly provides hardware
+information and model recommendations.
 """
 
 from unittest.mock import MagicMock, patch
@@ -59,24 +58,6 @@ class TestHardwareAdvisorAgent:
         assert agent is not None
         assert agent.client is not None
         assert agent.max_steps == 50
-
-    def test_simple_tools_defined(self, agent):
-        """Test that SIMPLE_TOOLS is properly defined."""
-        expected_tools = [
-            "get_hardware_info",
-            "list_available_models",
-            "recommend_models",
-        ]
-        assert agent.SIMPLE_TOOLS == expected_tools
-
-    def test_simple_tools_are_registered(self, agent):
-        """Test that tools in SIMPLE_TOOLS are actually registered."""
-        from gaia.agents.base.tools import _TOOL_REGISTRY
-
-        for tool_name in agent.SIMPLE_TOOLS:
-            assert (
-                tool_name in _TOOL_REGISTRY
-            ), f"Tool {tool_name} in SIMPLE_TOOLS but not registered"
 
     def test_get_hardware_info_tool_exists(self, agent):
         """Test that get_hardware_info tool is registered and callable."""
@@ -137,72 +118,6 @@ class TestHardwareAdvisorAgent:
         assert result["success"] is True
         assert "recommendations" in result
         assert "constraints" in result
-
-
-class TestHardwareAdvisorAgentSimpleToolsBehavior:
-    """Test that Hardware Advisor Agent correctly uses SIMPLE_TOOLS."""
-
-    @pytest.fixture
-    def mock_lemonade_client(self):
-        """Mock Lemonade client."""
-        with patch(
-            "examples.hardware_advisor_agent.LemonadeClient"
-        ) as mock_client_class:
-            mock_client = MagicMock()
-            mock_client.get_system_info.return_value = {
-                "OS Version": "Windows 11",
-                "Processor": "AMD Ryzen 7",
-                "Physical Memory": "16.0 GB",
-                "devices": {"npu": {"available": False}},
-            }
-            mock_client.list_models.return_value = {"data": []}
-            mock_client.get_model_info.return_value = {"size_gb": 0}
-            mock_client_class.return_value = mock_client
-            yield mock_client
-
-    @pytest.fixture
-    def agent(self, mock_lemonade_client):
-        """Create agent instance."""
-        return HardwareAdvisorAgent()
-
-    def test_simple_tool_does_not_require_plan(self, agent):
-        """Test that simple tools can execute without creating a plan."""
-        # Set agent to planning state
-        agent.execution_state = agent.STATE_PLANNING
-        agent.current_plan = None
-
-        # Simulate parsed response with a simple tool
-        parsed = {"tool": "get_hardware_info", "args": {}}
-
-        # Validate - should not require plan
-        agent._validate_plan_required(parsed, step=1)
-
-        # Should NOT have needs_plan flag
-        assert "needs_plan" not in parsed
-
-    def test_all_simple_tools_execute_without_plan(self, agent):
-        """Test that all tools in SIMPLE_TOOLS can execute without plan."""
-        agent.execution_state = agent.STATE_PLANNING
-        agent.current_plan = None
-
-        for tool_name in agent.SIMPLE_TOOLS:
-            parsed = {"tool": tool_name, "args": {}}
-            agent._validate_plan_required(parsed, step=1)
-            assert (
-                "needs_plan" not in parsed
-            ), f"Tool {tool_name} should not require plan"
-
-    def test_non_existent_tool_requires_plan(self, agent):
-        """Test that tools not in SIMPLE_TOOLS would require a plan."""
-        agent.execution_state = agent.STATE_PLANNING
-        agent.current_plan = None
-
-        # Tool that doesn't exist in SIMPLE_TOOLS
-        parsed = {"tool": "some_complex_operation", "args": {}}
-        agent._validate_plan_required(parsed, step=1)
-
-        # Should require plan
-        assert parsed.get("needs_plan") is True
 
 
 class TestHardwareAdvisorAgentToolImplementation:
