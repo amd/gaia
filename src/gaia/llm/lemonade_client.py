@@ -79,8 +79,9 @@ def _get_lemonade_config() -> tuple:
 # Model Configuration Defaults
 # =========================================================================
 # Default model for text generation - lightweight CPU model for testing
-DEFAULT_MODEL_NAME = "Qwen2.5-0.5B-Instruct-CPU"
-# DEFAULT_MODEL_NAME = "Llama-3.2-3B-Instruct-Hybrid"
+DEFAULT_MODEL_NAME = "Qwen3-0.6B-GGUF"
+# DEFAULT_MODEL_NAME = "Qwen2.5-0.5B-Instruct-CPU"  # Requires onnxruntime-genai
+# DEFAULT_MODEL_NAME = "Llama-3.2-3B-Instruct-Hybrid"  # Requires onnxruntime-genai
 
 # =========================================================================
 # Request Configuration Defaults

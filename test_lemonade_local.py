@@ -270,7 +270,7 @@ def main():
     lemonade_exe = venv_scripts / ("lemonade-server-dev.exe" if os.name == "nt" else "lemonade-server-dev")
 
     server_process = None
-    test_api_pull = input("\n🔍 Test API pull (may crash server)? [y/N]: ").strip().lower() == 'y'
+    test_api_pull = input("\nTest API pull (may crash server)? [y/N]: ").strip().lower() == 'y'
 
     try:
         # 1. Check installation
