@@ -1418,7 +1418,9 @@ class TestLemonadeClientIntegration(unittest.TestCase):
             checkpoint = health.get("checkpoint_loaded", "")
             if checkpoint and "hybrid" not in checkpoint.lower():
                 print(f"⏭️  Skipping: Not a hybrid model (checkpoint: {checkpoint})")
-                self.skipTest("Test requires hybrid NPU model, but non-hybrid model is loaded")
+                self.skipTest(
+                    "Test requires hybrid NPU model, but non-hybrid model is loaded"
+                )
 
             if checkpoint:
                 print(f"✅ Hybrid checkpoint loaded: {checkpoint}")
