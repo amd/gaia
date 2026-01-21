@@ -43,6 +43,26 @@ jobs:
               # Start server and load model (all in one session)
               .\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-Instruct-2507-GGUF" -Port 8000 -CtxSize 32768 -InitWaitTime 10
 
+              # Verify health endpoint returns context_size
+              Write-Host "=== Verifying Health Endpoint ==="
+              $health = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 10
+              Write-Host "Health response: $($health | ConvertTo-Json -Compress)"
+
+              if (-not $health.PSObject.Properties['context_size']) {
+                  Write-Host "[ERROR] context_size not found in health response"
+                  Write-Host "Available fields: $($health.PSObject.Properties.Name -join ', ')"
+                  throw "Health endpoint missing context_size field"
+              }
+
+              $contextSize = $health.context_size
+              Write-Host "[OK] context_size: $contextSize"
+
+              if ($contextSize -lt 32768) {
+                  Write-Host "[ERROR] context_size $contextSize is less than expected 32768"
+                  throw "Insufficient context size"
+              }
+              Write-Host ""
+
               # Test completion (in same session while server is still alive)
               Write-Host "=== Testing Completion ==="
               $testBody = @{
