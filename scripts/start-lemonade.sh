@@ -5,7 +5,7 @@
 set -e
 
 # Parse arguments
-MODEL_NAME=""
+MODEL_NAME="Qwen3-4B-Instruct-2507-GGUF"
 ADDITIONAL_MODELS=""
 PORT=8000
 CTX_SIZE=32768
@@ -44,11 +44,6 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
-
-if [ -z "$MODEL_NAME" ]; then
-    echo "Error: --model-name is required"
-    exit 1
-fi
 
 echo "=========================================="
 echo "   LEMONADE SERVER SETUP"
