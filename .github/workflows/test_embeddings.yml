@@ -41,7 +41,6 @@ jobs:
       uses: ./.github/actions/start-lemonade
       with:
         model-name: 'nomic-embed-text-v2-moe-GGUF'
-        clear-cache: 'true'
         init-wait-time: '30'
 
     - name: Verify Embedding Model and Run Tests

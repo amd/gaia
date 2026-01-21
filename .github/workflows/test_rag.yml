@@ -83,7 +83,6 @@ jobs:
         model-name: 'nomic-embed-text-v2-moe-GGUF'
         additional-models: 'Qwen3-0.6B-GGUF,Qwen2.5-VL-7B-Instruct-GGUF'
         ctx-size: '8192'
-        clear-cache: 'true'
         init-wait-time: '30'
 
     - name: Run RAG Integration Tests

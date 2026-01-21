@@ -31,7 +31,7 @@ inputs:
   use-cli-pull:
     description: 'Use CLI pull command instead of API (true/false)'
     required: false
-    default: 'false'
+    default: 'true'
 
 outputs:
   server-process-id:
@@ -131,20 +131,18 @@ runs:
             }
         }
 
-        # Pull additional models if specified
+        # Pull additional models if specified (also use CLI to avoid server crashes)
         if ("${{ inputs.additional-models }}" -ne "") {
             Write-Host "`n=== Pulling Additional Models ==="
             $additionalModels = "${{ inputs.additional-models }}".Split(",")
             foreach ($model in $additionalModels) {
                 $model = $model.Trim()
                 Write-Host "Pulling $model..."
-                try {
-                    $body = @{ model_name = $model } | ConvertTo-Json
-                    $response = Invoke-RestMethod -Uri "http://localhost:${{ inputs.port }}/api/v1/pull" `
-                        -Method POST -ContentType "application/json" -Body $body -TimeoutSec 600
-                    Write-Host "   [OK] $model pull initiated"
-                } catch {
-                    Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
+                $pullOutput = & .\.venv\Scripts\lemonade-server-dev.exe pull $model 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "   [WARN] Pull failed with exit code: $LASTEXITCODE"
+                } else {
+                    Write-Host "   [OK] $model pulled"
                 }
             }
         }
