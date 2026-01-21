@@ -103,7 +103,7 @@ Get a working agent running to understand the basic flow.
 
   <Step title="Run the Hardware Advisor">
     ```bash
-    python examples/hardware_advisor_agent.py
+    uv run examples/hardware_advisor_agent.py
     ```
 
     **Try asking:**
@@ -326,7 +326,7 @@ if __name__ == "__main__":
 #### Running It
 
 ```bash
-python hardware_advisor.py
+uv run hardware_advisor.py
 ```
 
 **Expected output:**
@@ -528,7 +528,7 @@ if __name__ == "__main__":
 #### Running It
 
 ```bash
-python hardware_advisor.py
+uv run hardware_advisor.py
 ```
 
 **Try asking:** "Show me my system specs"
@@ -642,7 +642,7 @@ def list_available_models() -> Dict[str, Any]:
 #### Running It
 
 ```bash
-python hardware_advisor.py
+uv run hardware_advisor.py
 ```
 
 **Try asking:** "What models are available?"
@@ -768,7 +768,7 @@ def recommend_models(ram_gb: float, gpu_memory_mb: int = 0) -> Dict[str, Any]:
 #### Running It
 
 ```bash
-python hardware_advisor.py
+uv run hardware_advisor.py
 ```
 
 **Try asking:** "What size LLM can I run?"
@@ -892,7 +892,7 @@ if __name__ == "__main__":
 #### Running It
 
 ```bash
-python hardware_advisor.py
+uv run hardware_advisor.py
 ```
 
 **You'll now get a full interactive session!**
@@ -961,7 +961,7 @@ Verify that your `hardware_advisor.py` has all the components working together c
 
 **Run your agent:**
 ```bash
-python hardware_advisor.py
+uv run hardware_advisor.py
 ```
 
 **Try these queries:**
@@ -1124,7 +1124,7 @@ examples/hardware_advisor_agent.py
 Run the agent and try these queries:
 
 ```bash
-python examples/hardware_advisor_agent.py
+uv run examples/hardware_advisor_agent.py
 ```
 
 **Example questions:**
