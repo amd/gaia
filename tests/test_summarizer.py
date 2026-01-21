@@ -315,8 +315,10 @@ class TestSummarizer:
                 cmd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=120,
-                env=env,  # 2 minute timeout
+                env=env,
             )
 
             print(f"📤 Return code: {result.returncode}")
@@ -448,8 +450,10 @@ class TestSummarizer:
                 cmd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=120,
-                env=env,  # 2 minute timeout
+                env=env,
             )
 
             print(f"📤 Return code: {result.returncode}")
@@ -577,6 +581,8 @@ class TestSummarizer:
                 cmd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=180,  # 3 minute timeout for multiple styles
                 env=env,
             )
