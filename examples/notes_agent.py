@@ -28,16 +28,14 @@ class NotesAgent(Agent, DatabaseMixin):
 
         # Create schema on first run
         if not self.table_exists("notes"):
-            self.execute(
-                """
+            self.execute("""
                 CREATE TABLE notes (
                     id INTEGER PRIMARY KEY,
                     title TEXT NOT NULL,
                     content TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
-            """
-            )
+            """)
 
     def _get_system_prompt(self) -> str:
         return """You are a notes assistant. Help users manage their personal notes.
