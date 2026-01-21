@@ -22,8 +22,6 @@ $env:PYTHONUTF8 = "1"
 chcp 65001 | Out-Null  # Set console code page to UTF-8
 
 # Configuration
-$PYTHON_PATH = "python"
-$PYLINT_PATH = "pylint"
 $SRC_DIR = "src\gaia"
 $TEST_DIR = "tests"
 $PYLINT_CONFIG = ".pylintrc"
@@ -57,13 +55,13 @@ function Invoke-Black {
     Write-Host "----------------------------------------"
 
     if ($Fix) {
-        $cmd = "$PYTHON_PATH -m black $SRC_DIR $TEST_DIR --config pyproject.toml"
+        $cmd = "uvx black $SRC_DIR $TEST_DIR --config pyproject.toml"
         Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-        $blackOutput = & $PYTHON_PATH -m black $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1 | Out-String -Width 4096
+        $blackOutput = & uvx black $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1 | Out-String -Width 4096
     } else {
-        $cmd = "$PYTHON_PATH -m black --check --diff $SRC_DIR $TEST_DIR --config pyproject.toml"
+        $cmd = "uvx black --check --diff $SRC_DIR $TEST_DIR --config pyproject.toml"
         Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-        $blackOutput = & $PYTHON_PATH -m black --check --diff $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1 | Out-String -Width 4096
+        $blackOutput = & uvx black --check --diff $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1 | Out-String -Width 4096
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -117,13 +115,13 @@ function Invoke-Isort {
     Write-Host "----------------------------------------"
 
     if ($Fix) {
-        $cmd = "$PYTHON_PATH -m isort $SRC_DIR $TEST_DIR"
+        $cmd = "uvx isort $SRC_DIR $TEST_DIR"
         Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-        $isortOutput = & $PYTHON_PATH -m isort $SRC_DIR $TEST_DIR 2>&1 | Out-String -Width 4096
+        $isortOutput = & uvx isort $SRC_DIR $TEST_DIR 2>&1 | Out-String -Width 4096
     } else {
-        $cmd = "$PYTHON_PATH -m isort --check-only --diff $SRC_DIR $TEST_DIR"
+        $cmd = "uvx isort --check-only --diff $SRC_DIR $TEST_DIR"
         Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-        $isortOutput = & $PYTHON_PATH -m isort --check-only --diff $SRC_DIR $TEST_DIR 2>&1 | Out-String -Width 4096
+        $isortOutput = & uvx isort --check-only --diff $SRC_DIR $TEST_DIR 2>&1 | Out-String -Width 4096
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -158,9 +156,9 @@ function Invoke-Pylint {
     Write-Host "`n[3/7] Running Pylint (errors only)..." -ForegroundColor Cyan
     Write-Host "----------------------------------------"
 
-    $cmd = "$PYTHON_PATH -m $PYLINT_PATH $SRC_DIR --rcfile $PYLINT_CONFIG --disable $DISABLED_CHECKS"
+    $cmd = "uvx pylint $SRC_DIR --rcfile $PYLINT_CONFIG --disable $DISABLED_CHECKS"
     Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-    $pylintOutput = & $PYTHON_PATH -m $PYLINT_PATH $SRC_DIR --rcfile $PYLINT_CONFIG --disable $DISABLED_CHECKS 2>&1 | Out-String -Width 4096
+    $pylintOutput = & uvx pylint $SRC_DIR --rcfile $PYLINT_CONFIG --disable $DISABLED_CHECKS 2>&1 | Out-String -Width 4096
 
     if ($LASTEXITCODE -ne 0) {
         # Count error lines (lines starting with file path and containing error indicators)
@@ -183,9 +181,9 @@ function Invoke-Flake8 {
     Write-Host "`n[4/7] Running Flake8..." -ForegroundColor Cyan
     Write-Host "----------------------------------------"
 
-    $cmd = "$PYTHON_PATH -m flake8 $SRC_DIR $TEST_DIR --exclude=$EXCLUDE_DIRS --count --statistics --max-line-length=88 --extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722"
+    $cmd = "uvx flake8 $SRC_DIR $TEST_DIR --exclude=$EXCLUDE_DIRS --count --statistics --max-line-length=88 --extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722"
     Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-    $flake8Output = & $PYTHON_PATH -m flake8 $SRC_DIR $TEST_DIR --exclude=$EXCLUDE_DIRS --count --statistics --max-line-length=88 --extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722 2>&1 | Out-String -Width 4096
+    $flake8Output = & uvx flake8 $SRC_DIR $TEST_DIR --exclude=$EXCLUDE_DIRS --count --statistics --max-line-length=88 --extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722 2>&1 | Out-String -Width 4096
 
     if ($LASTEXITCODE -ne 0) {
         # Count actual violation lines (format: filepath:line:col: error_code message)
@@ -211,9 +209,9 @@ function Invoke-MyPy {
     Write-Host "`n[5/7] Running MyPy type checking (warning only)..." -ForegroundColor Cyan
     Write-Host "----------------------------------------"
 
-    $cmd = "$PYTHON_PATH -m mypy $SRC_DIR --ignore-missing-imports"
+    $cmd = "uvx mypy $SRC_DIR --ignore-missing-imports"
     Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-    $mypyOutput = & $PYTHON_PATH -m mypy $SRC_DIR --ignore-missing-imports 2>&1 | Out-String -Width 4096
+    $mypyOutput = & uvx mypy $SRC_DIR --ignore-missing-imports 2>&1 | Out-String -Width 4096
 
     if ($LASTEXITCODE -ne 0) {
         # Count error lines (format: filepath:line: error: message)
@@ -241,9 +239,9 @@ function Invoke-Bandit {
     Write-Host "`n[6/7] Running security check with Bandit (warning only)..." -ForegroundColor Cyan
     Write-Host "----------------------------------------"
 
-    $cmd = "$PYTHON_PATH -m bandit -r $SRC_DIR -ll --exclude $EXCLUDE_DIRS"
+    $cmd = "uvx bandit -r $SRC_DIR -ll --exclude $EXCLUDE_DIRS"
     Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-    $banditOutput = & $PYTHON_PATH -m bandit -r $SRC_DIR -ll --exclude $EXCLUDE_DIRS 2>&1 | Out-String -Width 4096
+    $banditOutput = & uvx bandit -r $SRC_DIR -ll --exclude $EXCLUDE_DIRS 2>&1 | Out-String -Width 4096
 
     if ($LASTEXITCODE -ne 0) {
         # Count issue lines (look for >> Issue: patterns)
@@ -334,7 +332,7 @@ function Invoke-ImportTests {
         }
 
         $desc = $import.Desc.PadRight(35)
-        $result = & $PYTHON_PATH -c $cmd 2>&1 | Out-String
+        $result = & uv run python -c $cmd 2>&1 | Out-String
 
         if ($LASTEXITCODE -ne 0) {
             # Extract error message
