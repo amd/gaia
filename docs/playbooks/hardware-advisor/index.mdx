@@ -280,278 +280,722 @@ Max safe model size: 32 × 0.7 = 22.4 GB
 
 ## Building It: The Step-by-Step Journey
 
-Now let's build this agent incrementally using **a single file** that grows with each step.
+Now let's build this agent incrementally using **a single file** that grows with each step. We'll build **exactly** what's in `examples/hardware_advisor_agent.py` by adding functionality progressively.
 
 <Note>
-**Building Strategy:** You'll create ONE file called `hardware_advisor.py` and progressively add tools to it. Each step builds on the previous one.
+**Building Strategy:** You'll create ONE file called `hardware_advisor.py` and progressively add features to it. Each step builds on the previous one, and by Step 6 you'll have code that matches the example exactly.
 </Note>
 
 ---
 
-### Step 1: Create the Basic Agent Skeleton
+### Step 1: Agent Skeleton (Not Runnable Yet)
 
-Start by creating the file with the basic agent structure (no tools yet).
+Start by creating the file with a minimal agent structure—just the class and a basic system prompt.
 
-<Tabs>
-  <Tab title="Implementation">
-    ```python title="hardware_advisor.py"
-    from typing import Dict, Any
-    from gaia.agents.base.agent import Agent
-    from gaia.agents.base.tools import tool
-    from gaia.llm.lemonade_client import LemonadeClient
+#### Implementation
+
+```python title="hardware_advisor.py"
+from gaia import Agent
+from gaia.llm.lemonade_client import LemonadeClient
 
 
-    class HardwareAdvisorAgent(Agent):
-        """Agent that advises on LLM capabilities based on your hardware."""
+class HardwareAdvisorAgent(Agent):
+    """Agent that advises on LLM capabilities based on your hardware."""
 
-        def __init__(self, **kwargs):
-            self.client = LemonadeClient(keep_alive=True)
-            super().__init__(**kwargs)
+    def __init__(self, **kwargs):
+        self.client = LemonadeClient(keep_alive=True)
+        super().__init__(**kwargs)
 
-        def _get_system_prompt(self) -> str:
-            return """You are a hardware advisor for running local LLMs on AMD systems.
-    Use the available tools to check system hardware and recommend models.
-    Always check real hardware first - never guess specifications."""
+    def _get_system_prompt(self) -> str:
+        return "You are a hardware advisor for running local LLMs on AMD systems."
 
-        def _register_tools(self):
-            # No tools yet - we'll add them in the next steps
-            pass
+    def _register_tools(self):
+        # Tools will be added in the next steps
+        pass
 
 
-    if __name__ == "__main__":
-        agent = HardwareAdvisorAgent()
-        result = agent.process_query("What size LLM can I run?")
-    ```
-  </Tab>
-
-  <Tab title="What You Have">
-    <Check>
-    - ✓ Agent class structure
-    - ✓ LemonadeClient connection
-    - ✓ System prompt definition
-    - ✗ No tools yet (agent cannot check hardware)
-    - ✗ Cannot run yet - tools needed
-    </Check>
-  </Tab>
-</Tabs>
+if __name__ == "__main__":
+    agent = HardwareAdvisorAgent()
+    print("Agent created successfully!")
+```
 
 <Warning>
-**Don't run this yet!** This is just the skeleton. The agent has no tools, so it can only give generic advice. Continue to Step 2 to add hardware detection.
+**Formatting Note:** When pasting code, ensure proper Python indentation (4 spaces for class/function bodies). Use an IDE with Python support to avoid alignment issues.
+</Warning>
+
+#### Running It
+
+```bash
+python hardware_advisor.py
+```
+
+**Expected output:**
+```
+Agent created successfully!
+```
+
+#### Progress Check
+
+<Check>
+- ✓ Basic agent structure
+- ✓ LemonadeClient connection
+- ✓ Minimal system prompt
+- ✗ GPU detection helper (`_get_gpu_info()`)
+- ✗ Hardware detection tool (`get_hardware_info()`)
+- ✗ Model catalog tool (`list_available_models()`)
+- ✗ Smart recommendations tool (`recommend_models()`)
+- ✗ Interactive CLI
+</Check>
+
+<Warning>
+**Don't try to query this agent yet!** It has no tools, so it cannot check hardware or recommend models. Continue to Step 2 to add GPU detection and hardware tools.
 </Warning>
 
 ---
 
-### Step 2: Add Hardware Detection Tool
+### Step 2: GPU & Hardware Detection (Runnable)
 
-Now add the `get_hardware_info` tool to detect system specifications.
+Add the `_get_gpu_info()` helper method and the full `get_hardware_info()` tool with GPU object, NPU object, and OS field.
 
-<Tabs>
-  <Tab title="Implementation">
-    **Replace the `_register_tools()` method** in `hardware_advisor.py` with:
+#### Implementation
 
-    ```python
-    def _register_tools(self):
-        client = self.client
+**First, update the imports** at the top of the file:
 
-        @tool
-        def get_hardware_info() -> Dict[str, Any]:
-            """Get system RAM, GPU, and NPU information."""
-            try:
-                info = client.get_system_info()
-                ram_str = info.get("Physical Memory", "0 GB")
-                ram_gb = float(ram_str.split()[0]) if ram_str else 0
+```python
+from typing import Any, Dict
 
-                devices = info.get("devices", {})
-                npu_info = devices.get("npu", {})
+from gaia import Agent, tool
+from gaia.llm.lemonade_client import LemonadeClient
+```
 
-                return {
-                    "success": True,
-                    "ram_gb": ram_gb,
-                    "processor": info.get("Processor", "Unknown"),
-                    "npu_available": npu_info.get("available", False)
-                }
-            except Exception as e:
-                return {"success": False, "error": str(e)}
-    ```
-  </Tab>
+**Add the `_get_gpu_info()` helper** after the `_get_system_prompt()` method:
 
-  <Tab title="Run">
-    ```bash
-    python hardware_advisor.py
-    ```
+```python
+def _get_gpu_info(self) -> Dict[str, Any]:
+    """Detect GPU using OS-native commands."""
+    import platform
+    import subprocess
 
-    **Then ask:** "How much RAM do I have?"
-  </Tab>
+    system = platform.system()
 
-  <Tab title="Output Example">
-    ```
-    You: How much RAM do I have?
-
-    [Tool: get_hardware_info]
-    {"success": true, "ram_gb": 32.0, "processor": "AMD Ryzen 9", "npu_available": true}
-
-    Agent: You have 32 GB of RAM and an AMD Ryzen 9 processor.
-    Your system also has an NPU available for accelerated inference!
-    ```
-  </Tab>
-
-  <Tab title="What You Have">
-    <Check>
-    - ✓ Agent with reasoning loop
-    - ✓ get_hardware_info tool
-    - ✓ Can detect RAM, CPU, NPU
-    - ✗ No model catalog access yet
-    </Check>
-  </Tab>
-</Tabs>
-
----
-
-### Step 3: Add Model Catalog Tool
-
-Add the `list_available_models` tool to query the model catalog.
-
-<Tabs>
-  <Tab title="Implementation">
-    **Add this tool** inside the `_register_tools()` method (after the `get_hardware_info` function):
-
-    ```python
-        @tool
-        def list_available_models() -> Dict[str, Any]:
-            """List all models with their sizes and download status."""
-            try:
-                response = client.list_models(show_all=True)
-                models_data = response.get("data", [])
-
-                enriched_models = []
-                for model in models_data:
-                    model_id = model.get("id", "")
-                    model_info = client.get_model_info(model_id)
-                    enriched_models.append({
-                        "id": model_id,
-                        "name": model.get("name", model_id),
-                        "size_gb": model_info.get("size_gb", 0),
-                        "downloaded": model.get("downloaded", False)
-                    })
-
-                enriched_models.sort(key=lambda m: m["size_gb"], reverse=True)
-                return {"success": True, "models": enriched_models, "count": len(enriched_models)}
-            except Exception as e:
-                return {"success": False, "error": str(e)}
-    ```
-  </Tab>
-
-  <Tab title="Run">
-    ```bash
-    python hardware_advisor.py
-    ```
-
-    **Then ask:** "What models are available?"
-  </Tab>
-
-  <Tab title="Output Example">
-    ```
-    You: What models are available?
-
-    [Tool: list_available_models]
-    {"success": true, "models": [...], "count": 15}
-
-    Agent: I found 15 models in the catalog:
-    - Qwen3-Coder-30B (18.5 GB) - Not downloaded
-    - Llama-3.1-8B (4.7 GB) - Downloaded ✓
-    - Qwen2.5-0.5B (0.3 GB) - Downloaded ✓
-    ...
-    ```
-  </Tab>
-
-  <Tab title="What You Have">
-    <Check>
-    - ✓ Hardware detection (get_hardware_info)
-    - ✓ Model catalog access (list_available_models)
-    - ✗ Cannot recommend models yet
-    </Check>
-  </Tab>
-</Tabs>
-
----
-
-### Step 4: Add Smart Recommendations Tool
-
-Add the final `recommend_models` tool to complete the agent.
-
-<Tabs>
-  <Tab title="Implementation">
-    **Add this tool** inside the `_register_tools()` method (after the `list_available_models` function):
-
-    ```python
-        @tool
-        def recommend_models(ram_gb: float, gpu_memory_mb: int = 0) -> Dict[str, Any]:
-            """Recommend models based on available memory."""
-            try:
-                models_result = list_available_models()
-                if not models_result.get("success"):
-                    return models_result
-
-                all_models = models_result.get("models", [])
-                max_model_size_gb = ram_gb * 0.7  # 70% rule
-
-                fitting_models = [
-                    model for model in all_models
-                    if model["size_gb"] <= max_model_size_gb and model["size_gb"] > 0
+    try:
+        if system == "Windows":
+            # Use PowerShell Get-WmiObject (wmic is deprecated on Windows 11)
+            ps_command = (
+                "Get-WmiObject Win32_VideoController | "
+                "Select-Object Name,AdapterRAM | "
+                "ConvertTo-Csv -NoTypeInformation"
+            )
+            result = subprocess.run(
+                ["powershell", "-Command", ps_command],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                lines = [
+                    l.strip()
+                    for l in result.stdout.strip().split("\n")
+                    if l.strip()
                 ]
+                # CSV format: "Name","AdapterRAM"
+                for line in lines[1:]:  # Skip header
+                    # Remove quotes and split
+                    line = line.replace('"', "")
+                    parts = line.split(",")
+                    if len(parts) >= 2:
+                        try:
+                            name = parts[0].strip()
+                            adapter_ram = (
+                                int(parts[1]) if parts[1].strip().isdigit() else 0
+                            )
+                            if name and len(name) > 0:
+                                return {
+                                    "name": name,
+                                    "memory_mb": (
+                                        adapter_ram // (1024 * 1024)
+                                        if adapter_ram > 0
+                                        else 0
+                                    ),
+                                }
+                        except (ValueError, IndexError):
+                            continue
 
-                return {
-                    "success": True,
-                    "recommendations": fitting_models,
-                    "max_model_size_gb": round(max_model_size_gb, 2)
+        elif system == "Linux":
+            # Use lspci to find VGA devices
+            result = subprocess.run(
+                ["lspci"], capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                for line in result.stdout.split("\n"):
+                    if "VGA compatible controller" in line:
+                        # Extract GPU name after the colon
+                        parts = line.split(":", 2)
+                        if len(parts) >= 3:
+                            return {
+                                "name": parts[2].strip(),
+                                "memory_mb": 0,  # Memory not available via lspci
+                            }
+
+    except Exception as e:
+        # Debug output
+        print(f"GPU detection error: {e}")
+
+    return {"name": "Not detected", "memory_mb": 0}
+```
+
+**Replace the `_register_tools()` method** with:
+
+```python
+def _register_tools(self):
+    client = self.client
+    agent = self
+
+    @tool
+    def get_hardware_info() -> Dict[str, Any]:
+        """Get detailed system hardware information including RAM, GPU, and NPU."""
+        try:
+            # Use Lemonade Server's system info API for basic info
+            info = client.get_system_info()
+
+            # Parse RAM (format: "32.0 GB")
+            ram_str = info.get("Physical Memory", "0 GB")
+            ram_gb = float(ram_str.split()[0]) if ram_str else 0
+
+            # Detect GPU
+            gpu_info = agent._get_gpu_info()
+            gpu_name = gpu_info.get("name", "Not detected")
+            gpu_available = gpu_name != "Not detected"
+            gpu_memory_mb = gpu_info.get("memory_mb", 0)
+            gpu_memory_gb = (
+                round(gpu_memory_mb / 1024, 2) if gpu_memory_mb > 0 else 0
+            )
+
+            # Get NPU information from Lemonade
+            devices = info.get("devices", {})
+            npu_info = devices.get("npu", {})
+            npu_available = npu_info.get("available", False)
+            npu_name = (
+                npu_info.get("name", "Not detected")
+                if npu_available
+                else "Not detected"
+            )
+
+            return {
+                "success": True,
+                "os": info.get("OS Version", "Unknown"),
+                "processor": info.get("Processor", "Unknown"),
+                "ram_gb": ram_gb,
+                "gpu": {
+                    "name": gpu_name,
+                    "memory_mb": gpu_memory_mb,
+                    "memory_gb": gpu_memory_gb,
+                    "available": gpu_available,
+                },
+                "npu": {"name": npu_name, "available": npu_available},
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "message": "Failed to get hardware information from Lemonade Server",
+            }
+```
+
+**Update the `__main__` block** to enable interactive testing:
+
+```python
+if __name__ == "__main__":
+    agent = HardwareAdvisorAgent()
+    print("Hardware Advisor Agent (Ctrl+C to exit)")
+    print("Try: 'Show me my system specs'\n")
+
+    while True:
+        try:
+            query = input("You: ").strip()
+            if query:
+                agent.process_query(query)
+                print()
+        except KeyboardInterrupt:
+            print("\nGoodbye!")
+            break
+```
+
+<Warning>
+**Formatting Note:** When pasting code, ensure proper Python indentation. Method bodies should be indented 4 spaces from the class level, and nested blocks should maintain consistent 4-space indentation.
+</Warning>
+
+#### Running It
+
+```bash
+python hardware_advisor.py
+```
+
+**Try asking:** "Show me my system specs"
+
+**Example output:**
+```
+Hardware Advisor Agent (Ctrl+C to exit)
+Try: 'Show me my system specs'
+
+You: Show me my system specs
+
+[Tool: get_hardware_info]
+{
+  "success": true,
+  "os": "Windows 11 Pro",
+  "processor": "AMD Ryzen 9 7950X",
+  "ram_gb": 32.0,
+  "gpu": {
+    "name": "AMD Radeon RX 7900 XTX",
+    "memory_mb": 24576,
+    "memory_gb": 24.0,
+    "available": true
+  },
+  "npu": {
+    "name": "Ryzen AI NPU",
+    "available": true
+  }
+}
+
+Agent: Your system has excellent specs for running LLMs locally!
+- 32 GB RAM
+- AMD Radeon RX 7900 XTX with 24 GB VRAM
+- Ryzen AI NPU for accelerated inference
+```
+
+#### Progress Check
+
+<Check>
+- ✓ Basic agent structure
+- ✓ LemonadeClient connection
+- ✓ Minimal system prompt
+- ✓ GPU detection helper (`_get_gpu_info()`)
+- ✓ Hardware detection tool (`get_hardware_info()`)
+- ✗ Model catalog tool (`list_available_models()`)
+- ✗ Smart recommendations tool (`recommend_models()`)
+- ✓ Interactive CLI
+</Check>
+
+
+---
+
+### Step 3: Model Catalog (Runnable)
+
+Add the `list_available_models()` tool with `labels` field and `message` in the response.
+
+#### Implementation
+
+**Add this tool** inside the `_register_tools()` method (after the `get_hardware_info` function):
+
+```python
+@tool
+def list_available_models() -> Dict[str, Any]:
+    """List all models available in the catalog with their sizes and download status."""
+    try:
+        # Fetch model catalog from Lemonade Server
+        response = client.list_models(show_all=True)
+        models_data = response.get("data", [])
+
+        # Enrich each model with size information
+        enriched_models = []
+        for model in models_data:
+            model_id = model.get("id", "")
+
+            # Get size estimate for this model
+            model_info = client.get_model_info(model_id)
+            size_gb = model_info.get("size_gb", 0)
+
+            enriched_models.append(
+                {
+                    "id": model_id,
+                    "name": model.get("name", model_id),
+                    "size_gb": size_gb,
+                    "downloaded": model.get("downloaded", False),
+                    "labels": model.get("labels", []),
                 }
-            except Exception as e:
-                return {"success": False, "error": str(e)}
-    ```
-  </Tab>
+            )
 
-  <Tab title="Run">
-    ```bash
-    python hardware_advisor.py
-    ```
+        # Sort by size (largest first)
+        enriched_models.sort(key=lambda m: m["size_gb"], reverse=True)
 
-    **Then ask:** "What size LLM can I run?"
-  </Tab>
+        return {
+            "success": True,
+            "models": enriched_models,
+            "count": len(enriched_models),
+            "message": f"Found {len(enriched_models)} models in catalog",
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Failed to fetch models from Lemonade Server",
+        }
+```
 
-  <Tab title="Output Example">
-    ```
-    You: What size LLM can I run?
+**The `__main__` block stays the same** (already interactive from Step 2)
 
-    [Tool: get_hardware_info]
-    {"ram_gb": 32.0, "npu_available": true}
+<Warning>
+**Formatting Note:** When pasting the tool code inside `_register_tools()`, maintain proper indentation. The `@tool` decorator and function definition should be indented 4 spaces, with the function body indented 8 spaces.
+</Warning>
 
-    [Tool: recommend_models]
-    {"max_model_size_gb": 22.4, "recommendations": [...]}
+#### Running It
 
-    Agent: With your 32 GB RAM, you can safely run models up to 22.4 GB!
+```bash
+python hardware_advisor.py
+```
 
-    Top recommendations:
-    1. Qwen3-Coder-30B (18.5 GB) - Best for coding tasks
-    2. Llama-3.1-8B (4.7 GB) - Great general purpose
-    3. Qwen2.5-0.5B (0.3 GB) - Fast, runs on NPU
+**Try asking:** "What models are available?"
 
-    Your NPU is available for accelerated inference on smaller models.
-    ```
-  </Tab>
+**Example output:**
+```
+Hardware Advisor Agent (Ctrl+C to exit)
+Try: 'Show me my system specs'
 
-  <Tab title="What You Have">
-    <Check>
-    - ✓ Hardware detection (get_hardware_info)
-    - ✓ Model catalog access (list_available_models)
-    - ✓ Smart recommendations (recommend_models)
-    - ✓ **Complete Hardware Advisor Agent!**
-    </Check>
-  </Tab>
-</Tabs>
+You: What models are available?
+
+[Tool: list_available_models]
+{
+  "success": true,
+  "models": [...],
+  "count": 15,
+  "message": "Found 15 models in catalog"
+}
+
+Agent: I found 15 models in the catalog:
+
+Large models:
+- Qwen3-Coder-30B (18.5 GB) [hot, coding] - Not downloaded
+- Llama-3.1-8B (4.7 GB) [general] - Downloaded ✓
+
+Small models:
+- Qwen2.5-0.5B (0.3 GB) [hot, cpu, small] - Downloaded ✓
+```
+
+#### Progress Check
+
+<Check>
+- ✓ Basic agent structure
+- ✓ LemonadeClient connection
+- ✓ Minimal system prompt
+- ✓ GPU detection helper (`_get_gpu_info()`)
+- ✓ Hardware detection tool (`get_hardware_info()`)
+- ✓ Model catalog tool (`list_available_models()`)
+- ✗ Smart recommendations tool (`recommend_models()`)
+- ✓ Interactive CLI
+</Check>
+
+
+---
+
+### Step 4: Smart Recommendations (Runnable)
+
+Add the complete `recommend_models()` tool with `estimated_runtime_gb`, `fits_in_ram`, `fits_in_gpu`, and `constraints` object.
+#### Implementation
+
+**Add this tool** inside the `_register_tools()` method (after the `list_available_models` function):
+
+```python
+@tool
+def recommend_models(ram_gb: float, gpu_memory_mb: int = 0) -> Dict[str, Any]:
+    """Recommend models based on available system memory.
+
+    Args:
+        ram_gb: Available system RAM in GB
+        gpu_memory_mb: Available GPU memory in MB (0 if no GPU)
+
+    Returns:
+        Dictionary with model recommendations that fit in available memory
+    """
+    try:
+        # Get all available models
+        models_result = list_available_models()
+        if not models_result.get("success"):
+            return models_result  # Propagate error
+
+        all_models = models_result.get("models", [])
+
+        # Calculate maximum safe model size
+        # Rule: Model size should be < 70% of available RAM (30% overhead for inference)
+        max_model_size_gb = ram_gb * 0.7
+
+        # Filter models that fit in memory
+        fitting_models = [
+            model
+            for model in all_models
+            if model["size_gb"] <= max_model_size_gb and model["size_gb"] > 0
+        ]
+
+        # Add recommendation metadata
+        for model in fitting_models:
+            # Estimate actual runtime memory needed (model size + ~30% overhead)
+            model["estimated_runtime_gb"] = round(model["size_gb"] * 1.3, 2)
+            model["fits_in_ram"] = model["estimated_runtime_gb"] <= ram_gb
+
+            # Check GPU fit if GPU available
+            if gpu_memory_mb > 0:
+                gpu_memory_gb = gpu_memory_mb / 1024
+                model["fits_in_gpu"] = model["size_gb"] <= (gpu_memory_gb * 0.9)
+
+        # Sort by size (largest = most capable)
+        fitting_models.sort(key=lambda m: m["size_gb"], reverse=True)
+
+        return {
+            "success": True,
+            "recommendations": fitting_models,
+            "total_fitting_models": len(fitting_models),
+            "constraints": {
+                "available_ram_gb": ram_gb,
+                "available_gpu_mb": gpu_memory_mb,
+                "max_model_size_gb": round(max_model_size_gb, 2),
+                "safety_margin_percent": 30,
+            },
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Failed to generate model recommendations",
+        }
+```
+
+**The `__main__` block stays the same** (already interactive from Step 2)
+
+<Warning>
+**Formatting Note:** When pasting the tool code inside `_register_tools()`, maintain proper indentation. The `@tool` decorator and function definition should be indented 4 spaces, with the function body indented 8 spaces.
+</Warning>
+
+#### Running It
+
+```bash
+python hardware_advisor.py
+```
+
+**Try asking:** "What size LLM can I run?"
+
+**Example output:**
+```
+Hardware Advisor Agent (Ctrl+C to exit)
+Try: 'Show me my system specs'
+
+You: What size LLM can I run?
+
+[Tool: get_hardware_info]
+{"ram_gb": 32.0, "gpu": {"memory_mb": 24576, "available": true}}
+
+[Tool: recommend_models]
+{
+  "recommendations": [...],
+  "total_fitting_models": 12,
+  "constraints": {
+"available_ram_gb": 32.0,
+"available_gpu_mb": 24576,
+"max_model_size_gb": 22.4,
+"safety_margin_percent": 30
+  }
+}
+
+Agent: With 32 GB RAM and 24 GB GPU, you can safely run models up to 22.4 GB!
+
+Top recommendations:
+1. Qwen3-Coder-30B (18.5 GB)
+   - Estimated runtime: 24.1 GB
+   - Fits in RAM: ✓
+   - Fits in GPU: ✓ (21.6 GB available)
+
+2. Llama-3.1-8B (4.7 GB)
+   - Estimated runtime: 6.1 GB
+   - Fits in RAM: ✓
+   - Fits in GPU: ✓
+```
+#### Progress Check
+
+<Check>
+- ✓ Basic agent structure
+- ✓ LemonadeClient connection
+- ✓ Minimal system prompt
+- ✓ GPU detection helper (`_get_gpu_info()`)
+- ✓ Hardware detection tool (`get_hardware_info()`)
+- ✓ Model catalog tool (`list_available_models()`)
+- ✓ Smart recommendations tool (`recommend_models()`)
+- ✓ Interactive CLI
+</Check>
+
+---
+
+
+
+---
+
+### Step 5: Interactive CLI (Runnable)
+
+Replace the simple `__main__` block with a full interactive CLI function.
+#### Implementation
+
+**Replace the entire `if __name__ == "__main__":` block** at the end of the file with:
+
+```python
+def main():
+    """Run the Hardware Advisor Agent interactively."""
+    print("=" * 60)
+    print("Hardware Advisor Agent")
+    print("=" * 60)
+    print("\nHi! I can help you figure out what size LLM your system can run.")
+    print("\nTry asking:")
+    print("  - 'What size LLM can I run?'")
+    print("  - 'Show me my system specs'")
+    print("  - 'What models are available?'")
+    print("  - 'Can I run a 30B model?'")
+    print("\nType 'quit', 'exit', or 'q' to stop.\n")
+
+    # Create agent (uses local Lemonade server by default)
+    try:
+        agent = HardwareAdvisorAgent()
+        print("Agent ready!\n")
+    except Exception as e:
+        print(f"Error initializing agent: {e}")
+        print("\nMake sure Lemonade server is running.")
+        print("GAIA will start it automatically on first use.")
+        return
+
+    # Interactive loop
+    while True:
+        try:
+            user_input = input("You: ").strip()
+
+            if not user_input:
+                continue
+
+            if user_input.lower() in ("quit", "exit", "q"):
+                print("Goodbye!")
+                break
+
+            # Process the query (agent prints the output)
+            agent.process_query(user_input)
+            print()  # Add spacing
+
+        except KeyboardInterrupt:
+            print("\nGoodbye!")
+            break
+        except Exception as e:
+            print(f"\nError: {e}\n")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+<Warning>
+**Formatting Note:** When pasting the `main()` function, ensure the function body is indented 4 spaces, and nested blocks (try/except/while) maintain consistent 4-space indentation increments.
+</Warning>
+
+#### Running It
+
+```bash
+python hardware_advisor.py
+```
+
+**You'll now get a full interactive session!**
+
+**Expected output:**
+```
+============================================================
+Hardware Advisor Agent
+============================================================
+
+Hi! I can help you figure out what size LLM your system can run.
+
+Try asking:
+  - 'What size LLM can I run?'
+  - 'Show me my system specs'
+  - 'What models are available?'
+  - 'Can I run a 30B model?'
+
+Type 'quit', 'exit', or 'q' to stop.
+
+Agent ready!
+
+You: What size LLM can I run?
+[Agent processes and responds...]
+
+You: quit
+Goodbye!
+```
+#### Progress Check
+
+<Check>
+- ✓ Basic agent structure
+- ✓ LemonadeClient connection
+- ✓ Minimal system prompt
+- ✓ GPU detection helper (`_get_gpu_info()`)
+- ✓ Hardware detection tool (`get_hardware_info()`)
+- ✓ Model catalog tool (`list_available_models()`)
+- ✓ Smart recommendations tool (`recommend_models()`)
+- ✓ Interactive CLI
+</Check>
+
+---
+
+
+
+---
+
+### Step 6: Final Verification
+
+Your `hardware_advisor.py` should now match `examples/hardware_advisor_agent.py` exactly (except for the copyright header).
+#### Verify Structure
+
+**Your file should have:**
+1. ✓ Public imports: `from gaia import Agent, tool`
+2. ✓ `__init__` with `max_steps = 50`
+3. ✓ Full 8-line system prompt
+4. ✓ `_get_gpu_info()` helper (70 lines)
+5. ✓ `_register_tools()` with `client = self.client` and `agent = self`
+6. ✓ Full `get_hardware_info()` with GPU object, NPU object, OS field
+7. ✓ Full `list_available_models()` with `labels` and `message`
+8. ✓ Full `recommend_models()` with `estimated_runtime_gb`, `fits_in_ram`, `fits_in_gpu`, `constraints`
+9. ✓ Full `main()` function with interactive CLI
+10. ✓ `if __name__ == "__main__": main()`
+#### Compare Files
+
+**Run diff to verify:**
+```bash
+diff hardware_advisor.py examples/hardware_advisor_agent.py
+```
+
+**Expected output:** Only copyright header difference (lines 1-18)
+#### Test Both
+
+**Run both and compare:**
+```bash
+# Test your implementation
+python hardware_advisor.py
+
+# Test the example
+python examples/hardware_advisor_agent.py
+```
+
+Both should produce identical interactive sessions.
+#### Complete!
+
+<Check>
+- ✓ Basic agent structure
+- ✓ LemonadeClient connection
+- ✓ Minimal system prompt
+- ✓ GPU detection helper (`_get_gpu_info()`)
+- ✓ Hardware detection tool (`get_hardware_info()`)
+- ✓ Model catalog tool (`list_available_models()`)
+- ✓ Smart recommendations tool (`recommend_models()`)
+- ✓ Interactive CLI
+</Check>
 
 <Info>
-**Next:** Your agent is now functionally complete! For the production-ready version with GPU detection and an interactive CLI, see [`examples/hardware_advisor_agent.py`](https://github.com/amd/gaia/blob/main/examples/hardware_advisor_agent.py).
+**Congratulations!** You've built a production-ready hardware advisor agent that matches the official example. Your implementation includes GPU detection, smart memory calculations, and an interactive CLI—all running locally on AMD hardware.
 </Info>
+
+---
+
+
 
 ---
 
