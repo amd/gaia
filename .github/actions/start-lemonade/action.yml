@@ -47,13 +47,18 @@ runs:
       run: |
         Write-Host "=== Starting Lemonade Server ==="
 
-        # Set environment variable for Vulkan workaround
-        $env:GGML_VK_DISABLE_COOPMAT = "1"
+        # Create a wrapper script to set environment and launch server
+        # (Start-Process in PS 5.1 doesn't support -EnvironmentVariables)
+        $wrapperScript = @"
+`$env:GGML_VK_DISABLE_COOPMAT = "1"
+& '.\.venv\Scripts\lemonade-server-dev.exe' serve --ctx-size ${{ inputs.ctx-size }} --host localhost --port ${{ inputs.port }} --no-tray
+"@
+        $wrapperScript | Out-File -FilePath ".\start-lemonade-wrapper.ps1" -Encoding UTF8
 
         # Start server as background Windows process (survives PowerShell session)
-        $serverProcess = Start-Process -FilePath ".\.venv\Scripts\lemonade-server-dev.exe" `
-            -ArgumentList "serve", "--ctx-size", "${{ inputs.ctx-size }}", "--host", "localhost", "--port", "${{ inputs.port }}", "--no-tray" `
-            -PassThru -WindowStyle Hidden -EnvironmentVariables @{GGML_VK_DISABLE_COOPMAT="1"}
+        $serverProcess = Start-Process -FilePath "powershell.exe" `
+            -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ".\start-lemonade-wrapper.ps1" `
+            -PassThru -WindowStyle Hidden
         Write-Host "Started Lemonade server process with ID: $($serverProcess.Id)"
         "process-id=$($serverProcess.Id)" >> $env:GITHUB_OUTPUT
 

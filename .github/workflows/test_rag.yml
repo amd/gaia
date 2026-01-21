@@ -117,11 +117,6 @@ jobs:
                 Write-Host "[OK] Server responding: $($health | ConvertTo-Json -Compress)"
             } catch {
                 Write-Host "[ERROR] Server health check failed: $($_.Exception.Message)"
-                # Show server job output for debugging
-                if ($env:LEMONADE_JOB_ID) {
-                    $jobOutput = Receive-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                    Write-Host "Server output: $jobOutput"
-                }
                 throw "Server not responding after model load"
             }
 
