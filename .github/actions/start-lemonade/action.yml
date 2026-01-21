@@ -47,15 +47,16 @@ runs:
       run: |
         Write-Host "=== Starting Lemonade Server ==="
 
-        # Create a wrapper script to set environment and launch server
+        # Create a wrapper script to set environment and launch server with logging
         # (Start-Process in PS 5.1 doesn't support -EnvironmentVariables)
         '$env:GGML_VK_DISABLE_COOPMAT = "1"' | Out-File -FilePath ".\start-lemonade-wrapper.ps1" -Encoding UTF8
-        "& '.\.venv\Scripts\lemonade-server-dev.exe' serve --ctx-size ${{ inputs.ctx-size }} --host localhost --port ${{ inputs.port }} --no-tray" | Out-File -FilePath ".\start-lemonade-wrapper.ps1" -Encoding UTF8 -Append
+        "& '.\.venv\Scripts\lemonade-server-dev.exe' serve --ctx-size ${{ inputs.ctx-size }} --host localhost --port ${{ inputs.port }} --no-tray 2>&1 | Tee-Object -FilePath lemonade-server.log" | Out-File -FilePath ".\start-lemonade-wrapper.ps1" -Encoding UTF8 -Append
 
         # Start server as background Windows process (survives PowerShell session)
         $serverProcess = Start-Process -FilePath "powershell.exe" `
             -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ".\start-lemonade-wrapper.ps1" `
             -PassThru -WindowStyle Hidden
+        Write-Host "[INFO] Server logs will be written to: lemonade-server.log"
         Write-Host "Started Lemonade server process with ID: $($serverProcess.Id)"
         "process-id=$($serverProcess.Id)" >> $env:GITHUB_OUTPUT
 
@@ -112,7 +113,13 @@ runs:
         Write-Host "`n=== Pulling Primary Model: ${{ inputs.model-name }} ==="
         if ("${{ inputs.use-cli-pull }}" -eq "true") {
             Write-Host "Using CLI pull command..."
-            .\.venv\Scripts\lemonade-server-dev.exe pull ${{ inputs.model-name }}
+            $pullOutput = & .\.venv\Scripts\lemonade-server-dev.exe pull ${{ inputs.model-name }} 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "[ERROR] Pull command failed with exit code: $LASTEXITCODE"
+                Write-Host "Output: $pullOutput"
+                throw "Failed to pull model via CLI"
+            }
+            Write-Host "Pull output: $pullOutput"
         } else {
             Write-Host "Using API pull..."
             try {
@@ -159,6 +166,12 @@ runs:
             Write-Host "[ERROR] Model load failed: $($_.Exception.Message)"
             if ($_.ErrorDetails) {
                 Write-Host "Error details: $($_.ErrorDetails.Message)"
+            }
+            Write-Host "`n=== Server Logs (last 50 lines) ==="
+            if (Test-Path "lemonade-server.log") {
+                Get-Content "lemonade-server.log" -Tail 50 | ForEach-Object { Write-Host $_ }
+            } else {
+                Write-Host "(no server log file found)"
             }
             throw "Failed to load model"
         }
