@@ -280,123 +280,107 @@ Max safe model size: 32 × 0.7 = 22.4 GB
 
 ## Building It: The Step-by-Step Journey
 
-Now let's build this agent incrementally, understanding each piece as we go.
+Now let's build this agent incrementally using **a single file** that grows with each step.
 
-### Step 1: The Simplest Possible Agent
-
-Start with a minimal agent that just has a system prompt.
-
-<Tabs>
-  <Tab title="Implementation">
-    ```python title="step1_basic.py"
-    from gaia.agents.base.agent import Agent
-
-    class SimpleAdvisorAgent(Agent):
-        """Minimal hardware advisor with no tools."""
-
-        def _get_system_prompt(self) -> str:
-            return """You are a hardware advisor for running local LLMs.
-
-    When users ask about LLM capabilities, explain that you need
-    to check their actual hardware to give accurate recommendations.
-
-    Be helpful and explain concepts in plain language."""
-
-        def _register_tools(self):
-            # No tools yet
-            pass
-
-    # Use it
-    agent = SimpleAdvisorAgent()
-    result = agent.process_query("What size LLM can I run?")
-    print(result)
-    ```
-  </Tab>
-
-  <Tab title="Run">
-    ```bash
-    python step1_basic.py
-    ```
-
-    **Expected output:**
-    ```
-    Agent: To give you accurate recommendations, I would need to check
-    your actual hardware specifications. Generally, the size of LLM
-    you can run depends on your RAM, GPU memory, and whether you have
-    an NPU available...
-    ```
-  </Tab>
-
-  <Tab title="What You Have">
-    - ✓ Agent with reasoning loop
-    - ✓ System prompt definition
-    - ✗ No tools (can only give general advice)
-    - ✗ Cannot detect actual hardware
-  </Tab>
-</Tabs>
-
-<Warning>
-This basic agent cannot check real hardware. It can only provide generic advice based on LLM training data.
-</Warning>
+<Note>
+**Building Strategy:** You'll create ONE file called `hardware_advisor.py` and progressively add tools to it. Each step builds on the previous one.
+</Note>
 
 ---
 
-### Step 2: Add Hardware Detection
+### Step 1: Create the Basic Agent Skeleton
 
-Add the first tool to detect system specs via LemonadeClient.
+Start by creating the file with the basic agent structure (no tools yet).
 
 <Tabs>
   <Tab title="Implementation">
-    ```python title="step2_hardware.py"
+    ```python title="hardware_advisor.py"
     from typing import Dict, Any
     from gaia.agents.base.agent import Agent
     from gaia.agents.base.tools import tool
     from gaia.llm.lemonade_client import LemonadeClient
 
-    class HardwareDetectorAgent(Agent):
-        """Agent that can check system hardware."""
+
+    class HardwareAdvisorAgent(Agent):
+        """Agent that advises on LLM capabilities based on your hardware."""
 
         def __init__(self, **kwargs):
             self.client = LemonadeClient(keep_alive=True)
             super().__init__(**kwargs)
 
         def _get_system_prompt(self) -> str:
-            return """You are a hardware advisor for running local LLMs.
-
-    Use get_hardware_info to check the user's actual system specs.
-    Always check real hardware - never guess specifications."""
+            return """You are a hardware advisor for running local LLMs on AMD systems.
+    Use the available tools to check system hardware and recommend models.
+    Always check real hardware first - never guess specifications."""
 
         def _register_tools(self):
-            client = self.client
+            # No tools yet - we'll add them in the next steps
+            pass
 
-            @tool
-            def get_hardware_info() -> Dict[str, Any]:
-                """Get system RAM, GPU, and NPU information."""
-                try:
-                    info = client.get_system_info()
 
-                    # Parse RAM
-                    ram_str = info.get("Physical Memory", "0 GB")
-                    ram_gb = float(ram_str.split()[0]) if ram_str else 0
-
-                    # Get NPU info
-                    devices = info.get("devices", {})
-                    npu_info = devices.get("npu", {})
-                    npu_available = npu_info.get("available", False)
-
-                    return {
-                        "success": True,
-                        "ram_gb": ram_gb,
-                        "processor": info.get("Processor", "Unknown"),
-                        "npu_available": npu_available
-                    }
-                except Exception as e:
-                    return {"success": False, "error": str(e)}
-
-    # Test it
-    agent = HardwareDetectorAgent()
-    result = agent.process_query("How much RAM do I have?")
+    if __name__ == "__main__":
+        agent = HardwareAdvisorAgent()
+        result = agent.process_query("What size LLM can I run?")
     ```
+  </Tab>
+
+  <Tab title="What You Have">
+    <Check>
+    - ✓ Agent class structure
+    - ✓ LemonadeClient connection
+    - ✓ System prompt definition
+    - ✗ No tools yet (agent cannot check hardware)
+    - ✗ Cannot run yet - tools needed
+    </Check>
+  </Tab>
+</Tabs>
+
+<Warning>
+**Don't run this yet!** This is just the skeleton. The agent has no tools, so it can only give generic advice. Continue to Step 2 to add hardware detection.
+</Warning>
+
+---
+
+### Step 2: Add Hardware Detection Tool
+
+Now add the `get_hardware_info` tool to detect system specifications.
+
+<Tabs>
+  <Tab title="Implementation">
+    **Replace the `_register_tools()` method** in `hardware_advisor.py` with:
+
+    ```python
+    def _register_tools(self):
+        client = self.client
+
+        @tool
+        def get_hardware_info() -> Dict[str, Any]:
+            """Get system RAM, GPU, and NPU information."""
+            try:
+                info = client.get_system_info()
+                ram_str = info.get("Physical Memory", "0 GB")
+                ram_gb = float(ram_str.split()[0]) if ram_str else 0
+
+                devices = info.get("devices", {})
+                npu_info = devices.get("npu", {})
+
+                return {
+                    "success": True,
+                    "ram_gb": ram_gb,
+                    "processor": info.get("Processor", "Unknown"),
+                    "npu_available": npu_info.get("available", False)
+                }
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+    ```
+  </Tab>
+
+  <Tab title="Run">
+    ```bash
+    python hardware_advisor.py
+    ```
+
+    **Then ask:** "How much RAM do I have?"
   </Tab>
 
   <Tab title="Output Example">
@@ -410,59 +394,59 @@ Add the first tool to detect system specs via LemonadeClient.
     Your system also has an NPU available for accelerated inference!
     ```
   </Tab>
-</Tabs>
 
-<Check>
-**What you have:** Real hardware detection via Lemonade Server. The agent can now tell users their actual specs.
-</Check>
+  <Tab title="What You Have">
+    <Check>
+    - ✓ Agent with reasoning loop
+    - ✓ get_hardware_info tool
+    - ✓ Can detect RAM, CPU, NPU
+    - ✗ No model catalog access yet
+    </Check>
+  </Tab>
+</Tabs>
 
 ---
 
-### Step 3: Add Model Catalog
+### Step 3: Add Model Catalog Tool
 
-Add a tool to list available models with their sizes.
+Add the `list_available_models` tool to query the model catalog.
 
 <Tabs>
   <Tab title="Implementation">
-    ```python title="step3_models.py"
-    # Add to existing agent...
+    **Add this tool** inside the `_register_tools()` method (after the `get_hardware_info` function):
 
-    @tool
-    def list_available_models() -> Dict[str, Any]:
-        """List all models with their sizes and download status."""
-        try:
-            response = client.list_models(show_all=True)
-            models_data = response.get("data", [])
+    ```python
+        @tool
+        def list_available_models() -> Dict[str, Any]:
+            """List all models with their sizes and download status."""
+            try:
+                response = client.list_models(show_all=True)
+                models_data = response.get("data", [])
 
-            enriched_models = []
-            for model in models_data:
-                model_id = model.get("id", "")
-                model_info = client.get_model_info(model_id)
-                size_gb = model_info.get("size_gb", 0)
+                enriched_models = []
+                for model in models_data:
+                    model_id = model.get("id", "")
+                    model_info = client.get_model_info(model_id)
+                    enriched_models.append({
+                        "id": model_id,
+                        "name": model.get("name", model_id),
+                        "size_gb": model_info.get("size_gb", 0),
+                        "downloaded": model.get("downloaded", False)
+                    })
 
-                enriched_models.append({
-                    "id": model_id,
-                    "name": model.get("name", model_id),
-                    "size_gb": size_gb,
-                    "downloaded": model.get("downloaded", False)
-                })
-
-            # Sort by size (largest first)
-            enriched_models.sort(key=lambda m: m["size_gb"], reverse=True)
-
-            return {
-                "success": True,
-                "models": enriched_models,
-                "count": len(enriched_models)
-            }
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    # Test it
-    agent = HardwareDetectorAgent()
-    result = agent.process_query("What models are available?")
-    print(result)
+                enriched_models.sort(key=lambda m: m["size_gb"], reverse=True)
+                return {"success": True, "models": enriched_models, "count": len(enriched_models)}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
     ```
+  </Tab>
+
+  <Tab title="Run">
+    ```bash
+    python hardware_advisor.py
+    ```
+
+    **Then ask:** "What models are available?"
   </Tab>
 
   <Tab title="Output Example">
@@ -479,67 +463,59 @@ Add a tool to list available models with their sizes.
     ...
     ```
   </Tab>
-</Tabs>
 
-<Check>
-**What you have:** Model catalog queries with size estimates. The agent can show what's available.
-</Check>
+  <Tab title="What You Have">
+    <Check>
+    - ✓ Hardware detection (get_hardware_info)
+    - ✓ Model catalog access (list_available_models)
+    - ✗ Cannot recommend models yet
+    </Check>
+  </Tab>
+</Tabs>
 
 ---
 
-### Step 4: Add Smart Recommendations
+### Step 4: Add Smart Recommendations Tool
 
-Add the final tool that combines hardware info with model sizes to give recommendations.
+Add the final `recommend_models` tool to complete the agent.
 
 <Tabs>
   <Tab title="Implementation">
-    ```python title="step4_recommend.py"
-    # Add to existing agent...
+    **Add this tool** inside the `_register_tools()` method (after the `list_available_models` function):
 
-    @tool
-    def recommend_models(ram_gb: float, gpu_memory_mb: int = 0) -> Dict[str, Any]:
-        """Recommend models based on available memory.
+    ```python
+        @tool
+        def recommend_models(ram_gb: float, gpu_memory_mb: int = 0) -> Dict[str, Any]:
+            """Recommend models based on available memory."""
+            try:
+                models_result = list_available_models()
+                if not models_result.get("success"):
+                    return models_result
 
-        Args:
-            ram_gb: Available system RAM in GB
-            gpu_memory_mb: Available GPU memory in MB (0 if no GPU)
-        """
-        try:
-            # Get all models
-            models_result = list_available_models()
-            if not models_result.get("success"):
-                return models_result
+                all_models = models_result.get("models", [])
+                max_model_size_gb = ram_gb * 0.7  # 70% rule
 
-            all_models = models_result.get("models", [])
+                fitting_models = [
+                    model for model in all_models
+                    if model["size_gb"] <= max_model_size_gb and model["size_gb"] > 0
+                ]
 
-            # Apply 70% rule
-            max_model_size_gb = ram_gb * 0.7
-
-            # Filter models that fit
-            fitting_models = [
-                model for model in all_models
-                if model["size_gb"] <= max_model_size_gb and model["size_gb"] > 0
-            ]
-
-            # Add runtime estimates
-            for model in fitting_models:
-                model["estimated_runtime_gb"] = round(model["size_gb"] * 1.3, 2)
-                model["fits_in_ram"] = model["estimated_runtime_gb"] <= ram_gb
-
-            return {
-                "success": True,
-                "recommendations": fitting_models,
-                "max_model_size_gb": round(max_model_size_gb, 2),
-                "total_fitting": len(fitting_models)
-            }
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    # Test it
-    agent = HardwareDetectorAgent()
-    result = agent.process_query("What size LLM can I run?")
-    print(result)
+                return {
+                    "success": True,
+                    "recommendations": fitting_models,
+                    "max_model_size_gb": round(max_model_size_gb, 2)
+                }
+            except Exception as e:
+                return {"success": False, "error": str(e)}
     ```
+  </Tab>
+
+  <Tab title="Run">
+    ```bash
+    python hardware_advisor.py
+    ```
+
+    **Then ask:** "What size LLM can I run?"
   </Tab>
 
   <Tab title="Output Example">
@@ -550,7 +526,7 @@ Add the final tool that combines hardware info with model sizes to give recommen
     {"ram_gb": 32.0, "npu_available": true}
 
     [Tool: recommend_models]
-    {"max_model_size_gb": 22.4, "recommendations": [...], "total_fitting": 12}
+    {"max_model_size_gb": 22.4, "recommendations": [...]}
 
     Agent: With your 32 GB RAM, you can safely run models up to 22.4 GB!
 
@@ -562,11 +538,20 @@ Add the final tool that combines hardware info with model sizes to give recommen
     Your NPU is available for accelerated inference on smaller models.
     ```
   </Tab>
+
+  <Tab title="What You Have">
+    <Check>
+    - ✓ Hardware detection (get_hardware_info)
+    - ✓ Model catalog access (list_available_models)
+    - ✓ Smart recommendations (recommend_models)
+    - ✓ **Complete Hardware Advisor Agent!**
+    </Check>
+  </Tab>
 </Tabs>
 
-<Check>
-**What you have:** Complete hardware advisor! The agent detects hardware, queries models, and provides personalized recommendations.
-</Check>
+<Info>
+**Next:** Your agent is now functionally complete! For the production-ready version with GPU detection and an interactive CLI, see [`examples/hardware_advisor_agent.py`](https://github.com/amd/gaia/blob/main/examples/hardware_advisor_agent.py).
+</Info>
 
 ---
 
