@@ -49,11 +49,8 @@ runs:
 
         # Create a wrapper script to set environment and launch server
         # (Start-Process in PS 5.1 doesn't support -EnvironmentVariables)
-        $wrapperScript = @"
-`$env:GGML_VK_DISABLE_COOPMAT = "1"
-& '.\.venv\Scripts\lemonade-server-dev.exe' serve --ctx-size ${{ inputs.ctx-size }} --host localhost --port ${{ inputs.port }} --no-tray
-"@
-        $wrapperScript | Out-File -FilePath ".\start-lemonade-wrapper.ps1" -Encoding UTF8
+        '$env:GGML_VK_DISABLE_COOPMAT = "1"' | Out-File -FilePath ".\start-lemonade-wrapper.ps1" -Encoding UTF8
+        "& '.\.venv\Scripts\lemonade-server-dev.exe' serve --ctx-size ${{ inputs.ctx-size }} --host localhost --port ${{ inputs.port }} --no-tray" | Out-File -FilePath ".\start-lemonade-wrapper.ps1" -Encoding UTF8 -Append
 
         # Start server as background Windows process (survives PowerShell session)
         $serverProcess = Start-Process -FilePath "powershell.exe" `
