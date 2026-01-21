@@ -179,4 +179,29 @@ runs:
         # Wait for model initialization
         Write-Host "Waiting ${{ inputs.init-wait-time }} seconds for model initialization..."
         Start-Sleep -Seconds ${{ inputs.init-wait-time }}
+
+        # Verify model works with a test completion
+        Write-Host "`n=== Testing Model ==="
+        try {
+            $testBody = @{
+                model = "${{ inputs.model-name }}"
+                prompt = "Say: OK"
+                max_tokens = 5
+            } | ConvertTo-Json
+            $testResponse = Invoke-RestMethod -Uri "http://localhost:${{ inputs.port }}/api/v1/completions" `
+                -Method POST -ContentType "application/json" -Body $testBody -TimeoutSec 30
+            Write-Host "[OK] Model is responding to completions"
+            Write-Host "     Test response: $($testResponse.choices[0].text)"
+        } catch {
+            Write-Host "[ERROR] Model loaded but completions failing: $($_.Exception.Message)"
+            if ($_.ErrorDetails) {
+                Write-Host "Error details: $($_.ErrorDetails.Message)"
+            }
+            Write-Host "`n=== Server Logs (last 100 lines) ==="
+            if (Test-Path "lemonade-server.log") {
+                Get-Content "lemonade-server.log" -Tail 100 | ForEach-Object { Write-Host $_ }
+            }
+            throw "Model loaded but completions failing"
+        }
+
         Write-Host "[OK] Lemonade server ready with model: ${{ inputs.model-name }}"
