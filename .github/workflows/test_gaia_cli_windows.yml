@@ -72,7 +72,7 @@ jobs:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         with:
-          model-name: 'Llama-3.2-3B-Instruct-Hybrid'
+          model-name: 'Qwen3-0.6B-GGUF'
           use-cli-pull: 'true'
 
       - name: Run Unit Tests (Direct CMD - Full Error Visibility)
@@ -274,7 +274,7 @@ jobs:
         shell: cmd
         env:
           PYTHONUTF8: 1
-          GAIA_TEST_MODEL: Llama-3.2-3B-Instruct-Hybrid
+          GAIA_TEST_MODEL: Qwen3-0.6B-GGUF
         run: |
           REM Activate virtual environment
           call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"

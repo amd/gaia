@@ -65,7 +65,7 @@ jobs:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         with:
-          model-name: 'Llama-3.2-3B-Instruct-Hybrid'
+          model-name: 'Qwen3-0.6B-GGUF'
           use-cli-pull: 'true'
 
 
