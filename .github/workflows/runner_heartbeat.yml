@@ -12,6 +12,10 @@ on:
 permissions:
   actions: write  # Required to upload artifacts
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   heartbeat:
     strategy:
