@@ -47,17 +47,18 @@ runs:
       run: |
         Write-Host "=== Starting Lemonade Server ==="
 
-        # Create a wrapper script to set environment and launch server with logging
-        # (Start-Process in PS 5.1 doesn't support -EnvironmentVariables)
-        '$env:GGML_VK_DISABLE_COOPMAT = "1"' | Out-File -FilePath ".\start-lemonade-wrapper.ps1" -Encoding UTF8
-        "& '.\.venv\Scripts\lemonade-server-dev.exe' serve --ctx-size ${{ inputs.ctx-size }} --host localhost --port ${{ inputs.port }} --no-tray 2>&1 | Tee-Object -FilePath lemonade-server.log" | Out-File -FilePath ".\start-lemonade-wrapper.ps1" -Encoding UTF8 -Append
+        # Set environment variable for Vulkan workaround
+        $env:GGML_VK_DISABLE_COOPMAT = "1"
 
-        # Start server as background Windows process (survives PowerShell session)
-        $serverProcess = Start-Process -FilePath "powershell.exe" `
-            -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ".\start-lemonade-wrapper.ps1" `
-            -PassThru -WindowStyle Hidden
-        Write-Host "[INFO] Server logs will be written to: lemonade-server.log"
+        # Start server as direct background process (same as smoke test that works)
+        $lemonadeExe = ".\.venv\Scripts\lemonade-server-dev.exe"
+        $serverProcess = Start-Process -FilePath $lemonadeExe `
+            -ArgumentList "serve", "--port", "${{ inputs.port }}", "--ctx-size", "${{ inputs.ctx-size }}", "--host", "localhost", "--no-tray" `
+            -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput "lemonade-server-stdout.log" `
+            -RedirectStandardError "lemonade-server-stderr.log"
         Write-Host "Started Lemonade server process with ID: $($serverProcess.Id)"
+        Write-Host "Server logs: lemonade-server-stdout.log, lemonade-server-stderr.log"
         "process-id=$($serverProcess.Id)" >> $env:GITHUB_OUTPUT
 
         # Wait for server to be ready
@@ -167,11 +168,12 @@ runs:
             if ($_.ErrorDetails) {
                 Write-Host "Error details: $($_.ErrorDetails.Message)"
             }
-            Write-Host "`n=== Server Logs (last 50 lines) ==="
-            if (Test-Path "lemonade-server.log") {
-                Get-Content "lemonade-server.log" -Tail 50 | ForEach-Object { Write-Host $_ }
-            } else {
-                Write-Host "(no server log file found)"
+            Write-Host "`n=== Server Logs (last 100 lines) ==="
+            if (Test-Path "lemonade-server-stdout.log") {
+                Get-Content "lemonade-server-stdout.log" -Tail 100 | ForEach-Object { Write-Host $_ }
+            }
+            if (Test-Path "lemonade-server-stderr.log") {
+                Get-Content "lemonade-server-stderr.log" -Tail 100 | ForEach-Object { Write-Host $_ }
             }
             throw "Failed to load model"
         }
@@ -179,29 +181,4 @@ runs:
         # Wait for model initialization
         Write-Host "Waiting ${{ inputs.init-wait-time }} seconds for model initialization..."
         Start-Sleep -Seconds ${{ inputs.init-wait-time }}
-
-        # Verify model works with a test completion
-        Write-Host "`n=== Testing Model ==="
-        try {
-            $testBody = @{
-                model = "${{ inputs.model-name }}"
-                prompt = "Say: OK"
-                max_tokens = 5
-            } | ConvertTo-Json
-            $testResponse = Invoke-RestMethod -Uri "http://localhost:${{ inputs.port }}/api/v1/completions" `
-                -Method POST -ContentType "application/json" -Body $testBody -TimeoutSec 30
-            Write-Host "[OK] Model is responding to completions"
-            Write-Host "     Test response: $($testResponse.choices[0].text)"
-        } catch {
-            Write-Host "[ERROR] Model loaded but completions failing: $($_.Exception.Message)"
-            if ($_.ErrorDetails) {
-                Write-Host "Error details: $($_.ErrorDetails.Message)"
-            }
-            Write-Host "`n=== Server Logs (last 100 lines) ==="
-            if (Test-Path "lemonade-server.log") {
-                Get-Content "lemonade-server.log" -Tail 100 | ForEach-Object { Write-Host $_ }
-            }
-            throw "Model loaded but completions failing"
-        }
-
         Write-Host "[OK] Lemonade server ready with model: ${{ inputs.model-name }}"

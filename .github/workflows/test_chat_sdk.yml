@@ -72,6 +72,8 @@ jobs:
 
       - name: Run Chat SDK Integration Tests with Lemonade
         shell: cmd
+        env:
+          LEMONADE_MODEL: Qwen3-0.6B-GGUF
         run: |
           REM Activate virtual environment
           call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
