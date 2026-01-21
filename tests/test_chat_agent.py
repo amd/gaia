@@ -809,5 +809,74 @@ $secondary-color: #6c757d;
         # Should find button in CSS, JSX, etc.
 
 
+class TestChatAgentSimpleTools:
+    """Test SIMPLE_TOOLS functionality in Chat Agent."""
+
+    @pytest.fixture
+    def agent(self):
+        """Create Chat Agent instance."""
+        agent = ChatAgent(ChatAgentConfig(silent_mode=True, debug=False, max_steps=5))
+        yield agent
+        agent.stop_watching()
+
+    def test_simple_tools_defined(self, agent):
+        """Test that SIMPLE_TOOLS is properly defined."""
+        # ChatAgent should have SIMPLE_TOOLS defined
+        assert hasattr(agent, "SIMPLE_TOOLS")
+        assert isinstance(agent.SIMPLE_TOOLS, list)
+        assert len(agent.SIMPLE_TOOLS) > 0
+
+    def test_simple_tools_include_rag_tools(self, agent):
+        """Test that SIMPLE_TOOLS includes RAG-related tools."""
+        expected_tools = [
+            "list_indexed_documents",
+            "rag_status",
+            "query_documents",
+            "query_specific_file",
+            "search_indexed_chunks",
+        ]
+
+        for tool_name in expected_tools:
+            assert (
+                tool_name in agent.SIMPLE_TOOLS
+            ), f"Expected tool {tool_name} not in SIMPLE_TOOLS"
+
+    def test_simple_tools_are_registered(self, agent):
+        """Test that all tools in SIMPLE_TOOLS are actually registered."""
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        for tool_name in agent.SIMPLE_TOOLS:
+            assert (
+                tool_name in _TOOL_REGISTRY
+            ), f"Tool {tool_name} in SIMPLE_TOOLS but not registered"
+
+    def test_simple_tool_executes_without_plan_requirement(self, agent):
+        """Test that simple tools can execute without requiring a plan."""
+        # Set agent to planning state
+        agent.execution_state = agent.STATE_PLANNING
+        agent.current_plan = None
+
+        # Simulate parsed response with a simple tool
+        parsed = {"tool": "list_indexed_documents", "args": {}}
+
+        # Validate - should not require plan
+        agent._validate_plan_required(parsed, step=1)
+
+        # Should NOT have needs_plan flag
+        assert "needs_plan" not in parsed
+
+    def test_all_simple_tools_execute_without_plan(self, agent):
+        """Test that all tools in SIMPLE_TOOLS can execute without plan."""
+        agent.execution_state = agent.STATE_PLANNING
+        agent.current_plan = None
+
+        for tool_name in agent.SIMPLE_TOOLS:
+            parsed = {"tool": tool_name, "args": {}}
+            agent._validate_plan_required(parsed, step=1)
+            assert (
+                "needs_plan" not in parsed
+            ), f"Tool {tool_name} should not require plan"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

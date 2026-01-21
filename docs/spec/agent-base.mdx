@@ -87,8 +87,76 @@ class Agent(ABC):
     STATE_COMPLETION = "COMPLETION"
 
     # Simple tools that can execute without planning
+    # Subclasses can override this to mark specific tools as "simple"
+    # (no multi-step plan required for execution)
     SIMPLE_TOOLS: List[str] = []
 ```
+
+### Class Attributes
+
+#### SIMPLE_TOOLS
+
+**Type:** `List[str]`
+**Default:** `[]` (empty list)
+**Override in subclasses:** Yes
+
+**Purpose:** Defines which tools can execute directly without requiring a multi-step plan.
+
+**Behavior:**
+- Tools listed in `SIMPLE_TOOLS` bypass plan requirement validation
+- Reduces overhead for quick information retrieval operations
+- Agent executes these tools immediately in step 1 without warning
+- Other tools trigger plan requirement or show warning if no plan exists
+
+**When to use:**
+- ✅ Quick information retrieval (`get_status`, `list_files`)
+- ✅ Simple lookups with immediate results (`query_database`)
+- ✅ Stateless operations (`calculate_hash`)
+- ❌ Multi-step operations (`analyze_and_optimize`)
+- ❌ Operations with side effects (`delete_all`)
+
+**Implementation:**
+
+The base `Agent` class validates tool execution in `_validate_plan_required()` (line 2136):
+
+```python
+def _validate_plan_required(self, parsed: Dict[str, Any], step: int) -> None:
+    """Check if tool requires a plan."""
+    # Skip if already executing a plan
+    if self.current_plan is not None:
+        return
+
+    # Allow simple tools without plan
+    if "tool" in parsed and step == 1:
+        tool_name = parsed.get("tool", "")
+        if tool_name in self.SIMPLE_TOOLS:
+            return  # Direct execution allowed
+
+    # Warn if no plan for complex operation
+    if "plan" not in parsed and "answer" not in parsed:
+        parsed["needs_plan"] = True
+```
+
+**Example usage:**
+
+```python
+class HardwareAdvisorAgent(Agent):
+    """Agent with quick hardware info tools."""
+
+    SIMPLE_TOOLS = [
+        "get_hardware_info",
+        "list_available_models",
+        "recommend_models"
+    ]
+
+    def _register_tools(self):
+        @tool
+        def get_hardware_info() -> dict:
+            """Get system specs - executes directly."""
+            return {"ram_gb": 32, "gpu": "AMD Radeon"}
+```
+
+**Reference:** See [Simple Tools Guide](/sdk/core/agent-system#simple-tools-direct-execution) for conceptual documentation.
 
 ### Constructor
 

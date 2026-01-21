@@ -26,6 +26,8 @@ from gaia.llm.lemonade_client import LemonadeClient
 class HardwareAdvisorAgent(Agent):
     """Agent that advises on LLM capabilities based on your hardware."""
 
+    SIMPLE_TOOLS = ["get_hardware_info", "list_available_models", "recommend_models"]
+
     def __init__(self, **kwargs):
         self.client = LemonadeClient(keep_alive=True)
         super().__init__(**kwargs)
