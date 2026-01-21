@@ -58,82 +58,15 @@ jobs:
           python --version
           python -m pip check
 
-      - name: Start Lemonade Server for Integration Tests
+      - name: Start Lemonade Server and Load Model
+        uses: ./.github/actions/start-lemonade
         timeout-minutes: 15
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
-        run: |
-          Write-Host "Verify Python environment"
-          python -c "import sys; print(sys.executable)"
-
-          Write-Host "Find gaia executable location"
-          $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
-          if (-not $gaiaPath) {
-            Write-Host "Error: Cannot find gaia executable in PATH"
-            Write-Host "Current PATH: $env:Path"
-            exit 1
-          }
-          Write-Host "Found gaia at: $($gaiaPath.Source)"
-
-          # Debug: Check if lemonade-server executable exists
-          Write-Host "`n=== Debug: Checking lemonade-server installation ==="
-          $lemonadeExe = ".\.venv\Scripts\lemonade-server-dev.exe"
-          if (Test-Path $lemonadeExe) {
-              Write-Host "[OK] Found lemonade-server at: $lemonadeExe"
-          } else {
-              Write-Host "[ERROR] lemonade-server-dev.exe NOT FOUND at: $lemonadeExe"
-              Write-Host "Checking for lemonade-related files in venv\Scripts:"
-              Get-ChildItem ".\.venv\Scripts" | Where-Object { $_.Name -like "*lemon*" } | ForEach-Object { Write-Host "  - $($_.Name)" }
-              Write-Host "`nChecking if lemonade-sdk is installed:"
-              .\.venv\Scripts\pip.exe show lemonade-sdk
-              Write-Host "`nAll executables in Scripts folder:"
-              Get-ChildItem ".\.venv\Scripts\*.exe" | ForEach-Object { Write-Host "  - $($_.Name)" }
-              exit 1
-          }
-
-          # Start the server in the background as a process (not PowerShell job)
-          Write-Host "`nStarting lemonade-server in background..."
-          # Start the server as a background process (use full path to venv executable)
-          $serverProcess = Start-Process -FilePath ".\.venv\Scripts\lemonade-server-dev.exe" -ArgumentList "serve", "--no-tray" -PassThru -WindowStyle Hidden
-          Write-Host "Started lemonade-server process with ID: $($serverProcess.Id)"
-
-          # Wait for server to start up
-          Write-Host "Waiting for server to start up..."
-          $maxWaitTime = 30  # seconds
-          $waitTime = 0
-          $serverReady = $false
-
-          while ($waitTime -lt $maxWaitTime -and -not $serverReady) {
-              Start-Sleep -Seconds 2
-              $waitTime += 2
-
-              try {
-                  $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 5
-                  Write-Host "Server is ready and responding to health checks"
-                  $serverReady = $true
-              } catch {
-                  Write-Host "Server not ready yet (waited $waitTime seconds)..."
-              }
-          }
-
-          if (-not $serverReady) {
-              Write-Host "Server failed to start within $maxWaitTime seconds"
-              try {
-                  if (-not $serverProcess.HasExited) {
-                      $serverProcess.Kill()
-                  }
-              } catch {
-                  Write-Host "Error stopping server process: $_"
-              }
-              throw "Failed to start lemonade-server for tests"
-          }
-
-          Write-Host "Lemonade server started successfully"
-
-          # Pull the model now that server is running
-          Write-Host "Pulling Llama-3.2-3B-Instruct-Hybrid model..."
-          .\.venv\Scripts\lemonade-server-dev.exe pull Llama-3.2-3B-Instruct-Hybrid
+        with:
+          model-name: 'Llama-3.2-3B-Instruct-Hybrid'
+          use-cli-pull: 'true'
 
 
 

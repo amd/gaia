@@ -36,7 +36,15 @@ jobs:
         install-package: '.[dev,rag,lemonade]'
         extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
-    - name: Start Lemonade Server and Run Tests
+    - name: Start Lemonade Server and Load Model
+      id: start-lemonade
+      uses: ./.github/actions/start-lemonade
+      with:
+        model-name: 'nomic-embed-text-v2-moe-GGUF'
+        clear-cache: 'true'
+        init-wait-time: '30'
+
+    - name: Verify Embedding Model and Run Tests
       shell: powershell
       run: |
         # Set console to UTF-8 for Unicode support
@@ -48,126 +56,8 @@ jobs:
         chcp 65001 | Out-Null
 
         try {
-            # Debug: Check if lemonade-server executable exists
-            Write-Host "=== Debug: Checking lemonade-server installation ==="
-            $lemonadeExe = ".\.venv\Scripts\lemonade-server-dev.exe"
-            if (Test-Path $lemonadeExe) {
-                Write-Host "[OK] Found lemonade-server at: $lemonadeExe"
-                Write-Host "File size: $((Get-Item $lemonadeExe).Length) bytes"
-            } else {
-                Write-Host "[ERROR] lemonade-server-dev.exe NOT FOUND at: $lemonadeExe"
-                Write-Host "Contents of .venv\Scripts:"
-                Get-ChildItem ".\.venv\Scripts" | Where-Object { $_.Name -like "*lemon*" } | ForEach-Object { Write-Host "  - $($_.Name)" }
-                throw "lemonade-server-dev.exe not found in venv"
-            }
-
-            Write-Host "`nStarting Lemonade server..."
-            $serverJob = Start-Job -ScriptBlock {
-                Set-Location $using:PWD
-                # Workaround for Issue #612: Disable Vulkan cooperative matrix optimization
-                $env:GGML_VK_DISABLE_COOPMAT = "1"
-                # Use full path to lemonade-server in venv (activation doesn't work reliably in Start-Job)
-                & .\.venv\Scripts\lemonade-server-dev.exe serve --host localhost --port 8000 --no-tray 2>&1
-            }
-            Write-Host "Started Lemonade server job with ID: $($serverJob.Id)"
-            $env:LEMONADE_JOB_ID = $serverJob.Id
-
-            # Wait for server to be ready
-            Write-Host "Waiting for Lemonade server to start..."
-            $maxWaitTime = 60
-            $waitTime = 0
-            $serverReady = $false
-
-            while ($waitTime -lt $maxWaitTime -and -not $serverReady) {
-                Start-Sleep -Seconds 2
-                $waitTime += 2
-
-                # Check job state and capture any output
-                $jobState = (Get-Job -Id $serverJob.Id).State
-                $jobOutput = Receive-Job -Id $serverJob.Id -Keep -ErrorAction SilentlyContinue
-                if ($jobOutput) {
-                    Write-Host "--- Server output ---"
-                    $jobOutput | ForEach-Object { Write-Host $_ }
-                    Write-Host "--- End server output ---"
-                }
-
-                # Check if job failed
-                if ($jobState -eq "Failed") {
-                    Write-Host "[ERROR] Server job failed!"
-                    $jobError = (Get-Job -Id $serverJob.Id).ChildJobs[0].JobStateInfo.Reason
-                    Write-Host "Job error: $jobError"
-                    throw "Server job failed to start"
-                }
-
-                try {
-                    $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 5
-                    Write-Host "[OK] Lemonade server is ready"
-                    Write-Host "Health response: $($response | ConvertTo-Json -Compress)"
-                    $serverReady = $true
-                } catch {
-                    Write-Host "Waiting... ($waitTime/$maxWaitTime seconds) [Job state: $jobState]"
-                }
-            }
-
-            if (-not $serverReady) {
-                Write-Host "[ERROR] Server health check failed after $maxWaitTime seconds"
-                Write-Host "=== Final server output ==="
-                $finalOutput = Receive-Job -Id $serverJob.Id -ErrorAction SilentlyContinue
-                if ($finalOutput) {
-                    $finalOutput | ForEach-Object { Write-Host $_ }
-                } else {
-                    Write-Host "(no output captured)"
-                }
-                Write-Host "=== End server output ==="
-                throw "Server failed to start"
-            }
-
-            # Clear any cached/corrupted model files to force fresh download
-            # See: https://github.com/ggml-org/llama.cpp/issues/13534
-            Write-Host "`n=== Clearing Model Cache ==="
-            $lemonadeCache = "$env:LOCALAPPDATA\lemonade-server"
-            if (Test-Path "$lemonadeCache\models") {
-                Write-Host "Removing cached models from: $lemonadeCache\models"
-                Get-ChildItem "$lemonadeCache\models" -Directory | ForEach-Object {
-                    Write-Host "   Removing: $($_.Name)"
-                    Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-                }
-            }
-
-            # Pull embedding model (actual model used in tests)
-            Write-Host "`n=== Pulling Embedding Model ==="
-            Write-Host "Pulling nomic-embed-text-v2-moe-GGUF..."
-            try {
-                $body = @{ model_name = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
-                $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/pull" `
-                    -Method POST -ContentType "application/json" -Body $body -TimeoutSec 600
-                Write-Host "   [OK] Model pull initiated"
-            } catch {
-                Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
-            }
-
-            # Load embedding model into memory (required in Lemonade v9.x)
-            Write-Host "`n=== Loading Embedding Model ==="
-            try {
-                $loadRequest = @{
-                    model_name = "nomic-embed-text-v2-moe-GGUF"
-                } | ConvertTo-Json
-
-                Write-Host "Loading model: nomic-embed-text-v2-moe-GGUF"
-                $loadResponse = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/load" `
-                    -Method POST -Body $loadRequest -ContentType "application/json" -TimeoutSec 60
-                Write-Host "[OK] Model loaded successfully: $($loadResponse | ConvertTo-Json -Compress)"
-            } catch {
-                Write-Host "[ERROR] Model load failed: $($_.Exception.Message)"
-                if ($_.ErrorDetails) {
-                    Write-Host "Error details: $($_.ErrorDetails.Message)"
-                }
-                throw "Failed to load embedding model"
-            }
-
-            # Wait for llamacpp backend to fully initialize (increased from 10s)
-            Write-Host "Waiting 30 seconds for llamacpp backend initialization..."
-            Start-Sleep -Seconds 30
+            # Store Lemonade job ID for cleanup
+            $env:LEMONADE_JOB_ID = "${{ steps.start-lemonade.outputs.server-job-id }}"
 
             # Verify model is available
             try {

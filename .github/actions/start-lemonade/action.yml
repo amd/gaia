@@ -1,0 +1,158 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: Start Lemonade Server
+description: Start Lemonade Server, pull and load a model for testing
+
+inputs:
+  model-name:
+    description: 'Model name to pull and load'
+    required: true
+  additional-models:
+    description: 'Comma-separated list of additional models to pull (but not load)'
+    required: false
+    default: ''
+  port:
+    description: 'Server port'
+    required: false
+    default: '8000'
+  ctx-size:
+    description: 'Context size'
+    required: false
+    default: '8192'
+  init-wait-time:
+    description: 'Seconds to wait after loading model for initialization'
+    required: false
+    default: '10'
+  clear-cache:
+    description: 'Clear model cache before pulling (true/false)'
+    required: false
+    default: 'false'
+  use-cli-pull:
+    description: 'Use CLI pull command instead of API (true/false)'
+    required: false
+    default: 'false'
+
+outputs:
+  server-job-id:
+    description: 'PowerShell job ID for the server process'
+    value: ${{ steps.start-server.outputs.job-id }}
+
+runs:
+  using: composite
+  steps:
+    - name: Start Lemonade Server
+      id: start-server
+      shell: powershell
+      run: |
+        Write-Host "=== Starting Lemonade Server ==="
+
+        # Start server as background job
+        $serverJob = Start-Job -ScriptBlock {
+            Set-Location $using:PWD
+            $env:GGML_VK_DISABLE_COOPMAT = "1"
+            & .\.venv\Scripts\lemonade-server-dev.exe serve --ctx-size ${{ inputs.ctx-size }} --host localhost --port ${{ inputs.port }} --no-tray 2>&1
+        }
+        Write-Host "Started Lemonade server job with ID: $($serverJob.Id)"
+        "job-id=$($serverJob.Id)" >> $env:GITHUB_OUTPUT
+
+        # Wait for server to be ready
+        Write-Host "Waiting for Lemonade server to start..."
+        $maxWaitTime = 60
+        $waitTime = 0
+        $serverReady = $false
+
+        while ($waitTime -lt $maxWaitTime -and -not $serverReady) {
+            Start-Sleep -Seconds 2
+            $waitTime += 2
+
+            try {
+                $response = Invoke-RestMethod -Uri "http://localhost:${{ inputs.port }}/api/v1/health" -Method GET -TimeoutSec 5
+                Write-Host "[OK] Lemonade server is ready"
+                $serverReady = $true
+            } catch {
+                Write-Host "Waiting... ($waitTime/$maxWaitTime seconds)"
+            }
+        }
+
+        if (-not $serverReady) {
+            Write-Host "[ERROR] Server health check failed after $maxWaitTime seconds"
+            throw "Server failed to start"
+        }
+
+    - name: Clear Model Cache (Optional)
+      if: ${{ inputs.clear-cache == 'true' }}
+      shell: powershell
+      run: |
+        Write-Host "`n=== Clearing Model Cache ==="
+        $lemonadeCache = "$env:LOCALAPPDATA\lemonade-server"
+        if (Test-Path "$lemonadeCache\models") {
+            Write-Host "Removing cached models from: $lemonadeCache\models"
+            Get-ChildItem "$lemonadeCache\models" -Directory | ForEach-Object {
+                Write-Host "   Removing: $($_.Name)"
+                Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+    - name: Pull and Load Models
+      shell: powershell
+      run: |
+        # Pull primary model
+        Write-Host "`n=== Pulling Primary Model: ${{ inputs.model-name }} ==="
+        if ("${{ inputs.use-cli-pull }}" -eq "true") {
+            Write-Host "Using CLI pull command..."
+            .\.venv\Scripts\lemonade-server-dev.exe pull ${{ inputs.model-name }}
+        } else {
+            Write-Host "Using API pull..."
+            try {
+                $body = @{ model_name = "${{ inputs.model-name }}" } | ConvertTo-Json
+                $response = Invoke-RestMethod -Uri "http://localhost:${{ inputs.port }}/api/v1/pull" `
+                    -Method POST -ContentType "application/json" -Body $body -TimeoutSec 600
+                Write-Host "[OK] Model pull initiated"
+            } catch {
+                Write-Host "[WARN] Pull may have failed: $($_.Exception.Message)"
+            }
+        }
+
+        # Pull additional models if specified
+        if ("${{ inputs.additional-models }}" -ne "") {
+            Write-Host "`n=== Pulling Additional Models ==="
+            $additionalModels = "${{ inputs.additional-models }}".Split(",")
+            foreach ($model in $additionalModels) {
+                $model = $model.Trim()
+                Write-Host "Pulling $model..."
+                try {
+                    $body = @{ model_name = $model } | ConvertTo-Json
+                    $response = Invoke-RestMethod -Uri "http://localhost:${{ inputs.port }}/api/v1/pull" `
+                        -Method POST -ContentType "application/json" -Body $body -TimeoutSec 600
+                    Write-Host "   [OK] $model pull initiated"
+                } catch {
+                    Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
+                }
+            }
+        }
+
+        # Wait for model files to sync
+        Write-Host "Waiting 5 seconds for model files to sync..."
+        Start-Sleep -Seconds 5
+
+        # Load the primary model into Lemonade (required for inference)
+        Write-Host "`n=== Loading Model ==="
+        try {
+            $loadRequest = @{ model_name = "${{ inputs.model-name }}" } | ConvertTo-Json
+            Write-Host "Loading model: ${{ inputs.model-name }}"
+            $loadResponse = Invoke-RestMethod -Uri "http://localhost:${{ inputs.port }}/api/v1/load" `
+                -Method POST -Body $loadRequest -ContentType "application/json" -TimeoutSec 120
+            Write-Host "[OK] Model loaded successfully"
+        } catch {
+            Write-Host "[ERROR] Model load failed: $($_.Exception.Message)"
+            if ($_.ErrorDetails) {
+                Write-Host "Error details: $($_.ErrorDetails.Message)"
+            }
+            throw "Failed to load model"
+        }
+
+        # Wait for model initialization
+        Write-Host "Waiting ${{ inputs.init-wait-time }} seconds for model initialization..."
+        Start-Sleep -Seconds ${{ inputs.init-wait-time }}
+        Write-Host "[OK] Lemonade server ready with model: ${{ inputs.model-name }}"
