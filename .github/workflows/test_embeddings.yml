@@ -44,7 +44,20 @@ jobs:
         chcp 65001 | Out-Null
 
         try {
-            Write-Host "Starting Lemonade server..."
+            # Debug: Check if lemonade-server executable exists
+            Write-Host "=== Debug: Checking lemonade-server installation ==="
+            $lemonadeExe = ".\.venv\Scripts\lemonade-server.exe"
+            if (Test-Path $lemonadeExe) {
+                Write-Host "[OK] Found lemonade-server at: $lemonadeExe"
+                Write-Host "File size: $((Get-Item $lemonadeExe).Length) bytes"
+            } else {
+                Write-Host "[ERROR] lemonade-server.exe NOT FOUND at: $lemonadeExe"
+                Write-Host "Contents of .venv\Scripts:"
+                Get-ChildItem ".\.venv\Scripts" | Where-Object { $_.Name -like "*lemon*" } | ForEach-Object { Write-Host "  - $($_.Name)" }
+                throw "lemonade-server.exe not found in venv"
+            }
+
+            Write-Host "`nStarting Lemonade server..."
             $serverJob = Start-Job -ScriptBlock {
                 Set-Location $using:PWD
                 # Workaround for Issue #612: Disable Vulkan cooperative matrix optimization
@@ -65,18 +78,43 @@ jobs:
                 Start-Sleep -Seconds 2
                 $waitTime += 2
 
+                # Check job state and capture any output
+                $jobState = (Get-Job -Id $serverJob.Id).State
+                $jobOutput = Receive-Job -Id $serverJob.Id -Keep -ErrorAction SilentlyContinue
+                if ($jobOutput) {
+                    Write-Host "--- Server output ---"
+                    $jobOutput | ForEach-Object { Write-Host $_ }
+                    Write-Host "--- End server output ---"
+                }
+
+                # Check if job failed
+                if ($jobState -eq "Failed") {
+                    Write-Host "[ERROR] Server job failed!"
+                    $jobError = (Get-Job -Id $serverJob.Id).ChildJobs[0].JobStateInfo.Reason
+                    Write-Host "Job error: $jobError"
+                    throw "Server job failed to start"
+                }
+
                 try {
                     $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 5
                     Write-Host "[OK] Lemonade server is ready"
                     Write-Host "Health response: $($response | ConvertTo-Json -Compress)"
                     $serverReady = $true
                 } catch {
-                    Write-Host "Waiting... ($waitTime/$maxWaitTime seconds)"
+                    Write-Host "Waiting... ($waitTime/$maxWaitTime seconds) [Job state: $jobState]"
                 }
             }
 
             if (-not $serverReady) {
                 Write-Host "[ERROR] Server health check failed after $maxWaitTime seconds"
+                Write-Host "=== Final server output ==="
+                $finalOutput = Receive-Job -Id $serverJob.Id -ErrorAction SilentlyContinue
+                if ($finalOutput) {
+                    $finalOutput | ForEach-Object { Write-Host $_ }
+                } else {
+                    Write-Host "(no output captured)"
+                }
+                Write-Host "=== End server output ==="
                 throw "Server failed to start"
             }
 
