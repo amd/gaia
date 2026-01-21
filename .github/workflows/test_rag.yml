@@ -79,19 +79,15 @@ jobs:
     - name: Start Lemonade Server and Run RAG Tests
       shell: powershell
       run: |
-        # Set console to UTF-8 for Unicode support
-        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-        [Console]::InputEncoding = [System.Text.Encoding]::UTF8
-        $OutputEncoding = [System.Text.Encoding]::UTF8
-        $env:PYTHONIOENCODING = "utf-8"
-        $env:PYTHONUTF8 = "1"
+        # UTF-8 setup
         chcp 65001 | Out-Null
+        $env:PYTHONIOENCODING = "utf-8"
 
         try {
             # Start Lemonade server and load models (all in same session)
             .\scripts\start-lemonade.ps1 `
               -ModelName "nomic-embed-text-v2-moe-GGUF" `
-              -AdditionalModels "Qwen3-0.6B-GGUF,Qwen2.5-VL-7B-Instruct-GGUF" `
+              -AdditionalModels "Qwen3-4B-Instruct-2507-GGUF,Qwen2.5-VL-7B-Instruct-GGUF" `
               -CtxSize 8192 `
               -InitWaitTime 30
 
@@ -164,6 +160,16 @@ jobs:
                 }
             }
         }
+
+    - name: Debug Logs on Failure
+      if: failure()
+      shell: powershell
+      run: |
+        Write-Host "=== Debug Info ==="
+        Write-Host ""
+        Write-Host "--- Lemonade Server Logs ---"
+        if (Test-Path "lemonade-server-stdout.log") { Get-Content "lemonade-server-stdout.log" -Tail 100 }
+        if (Test-Path "lemonade-server-stderr.log") { Get-Content "lemonade-server-stderr.log" -Tail 50 }
 
     - name: Upload test results
       if: always()

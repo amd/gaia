@@ -65,299 +65,86 @@ jobs:
       - uses: FedericoCarboni/setup-ffmpeg@v3
         id: setup-ffmpeg
 
-      - name: Start Lemonade Server and Run Tests
-        shell: cmd
-        timeout-minutes: 20
+      - name: Start Lemonade Server and Run All Integration Tests
+        shell: powershell
+        timeout-minutes: 30
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           PYTHONUTF8: 1
+          GAIA_TEST_MODEL: Qwen3-4B-Instruct-2507-GGUF
         run: |
-          REM Start lemonade server
-          call scripts\start-lemonade.bat Qwen3-0.6B-GGUF 8000 8192
-          if %ERRORLEVEL% neq 0 (
-            echo [ERROR] Failed to start lemonade server
-            exit /b 1
-          )
+          # UTF-8 setup
+          chcp 65001 | Out-Null
+          $env:PYTHONIOENCODING = "utf-8"
 
-          REM Now run tests while server is running
-          REM Activate virtual environment
-          call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
+          # Start Lemonade server
+          .\scripts\start-lemonade.ps1 `
+            -ModelName "Qwen3-4B-Instruct-2507-GGUF" `
+            -CtxSize 8192 `
+            -InitWaitTime 10
 
-          echo ================================================================
-          echo                 GAIA UNIT TESTS - FULL ERROR LOGGING
-          echo ================================================================
-          echo Virtual Environment: %VIRTUAL_ENV%
-          echo Python Version:
-          python --version
-          echo Working Directory: %CD%
-          echo.
+          # Track test results
+          $testResults = @{
+            "test_llm" = 0
+            "test_asr" = 0
+            "test_tts" = 0
+            "test_summarizer" = 0
+            "test_lemonade" = 0
+          }
 
-          REM Initialize test tracking
-          set test_llm_exit=0
-          set test_asr_exit=0
-          set test_tts_exit=0
+          Write-Host "`n=== Running Unit Tests ==="
 
-          REM ================================================================
-          REM TEST_LLM.PY
-          REM ================================================================
-          echo ****************************************************************
-          echo                          TEST_LLM.PY
-          echo ****************************************************************
-          echo Starting test_llm.py at %TIME%...
-          echo.
+          Write-Host "--- test_llm.py ---"
+          python tests/unit/test_llm.py
+          $testResults["test_llm"] = $LASTEXITCODE
 
-          python tests\unit\test_llm.py
-          set test_llm_exit=%ERRORLEVEL%
+          Write-Host "--- test_asr.py ---"
+          python tests/unit/test_asr.py
+          $testResults["test_asr"] = $LASTEXITCODE
 
-          echo.
-          echo ----------------------------------------------------------------
-          echo test_llm.py completed at %TIME% with exit code: %test_llm_exit%
-          if %test_llm_exit% equ 0 (
-              echo [SUCCESS] test_llm.py passed
-          ) else (
-              echo [FAILURE] test_llm.py failed with exit code %test_llm_exit%
-              echo Full error output displayed above - no truncation
-          )
-          echo ----------------------------------------------------------------
-          echo.
+          Write-Host "--- test_tts.py ---"
+          python tests/unit/test_tts.py
+          $testResults["test_tts"] = $LASTEXITCODE
 
-          REM ================================================================
-          REM TEST_ASR.PY
-          REM ================================================================
-          echo ****************************************************************
-          echo                          TEST_ASR.PY
-          echo ****************************************************************
-          echo Starting test_asr.py at %TIME%...
-          echo.
+          Write-Host "`n=== Running Summarizer CLI Tests ==="
+          pytest tests/test_summarizer.py -vs --tb=short
+          $testResults["test_summarizer"] = $LASTEXITCODE
 
-          python tests\unit\test_asr.py
-          set test_asr_exit=%ERRORLEVEL%
+          Write-Host "`n=== Running Lemonade Client Integration Tests ==="
+          pytest tests/test_lemonade_client.py -vs --tb=short -k "Integration"
+          $testResults["test_lemonade"] = $LASTEXITCODE
 
-          echo.
-          echo ----------------------------------------------------------------
-          echo test_asr.py completed at %TIME% with exit code: %test_asr_exit%
-          if %test_asr_exit% equ 0 (
-              echo [SUCCESS] test_asr.py passed
-          ) else (
-              echo [FAILURE] test_asr.py failed with exit code %test_asr_exit%
-              echo Full error output displayed above - no truncation
-          )
-          echo ----------------------------------------------------------------
-          echo.
+          Write-Host "`n=== Test Summary ==="
+          $testResults.GetEnumerator() | ForEach-Object {
+            Write-Host "$($_.Key): $($_.Value)"
+          }
 
-          REM ================================================================
-          REM TEST_TTS.PY
-          REM ================================================================
-          echo ****************************************************************
-          echo                          TEST_TTS.PY
-          echo ****************************************************************
-          echo Starting test_tts.py at %TIME%...
-          echo.
+          $totalFailures = ($testResults.Values | Measure-Object -Sum).Sum
+          if ($totalFailures -eq 0) {
+            Write-Host "[OK] All tests passed"
+            exit 0
+          } else {
+            Write-Host "[FAIL] Some tests failed"
+            exit 1
+          }
 
-          python tests\unit\test_tts.py
-          set test_tts_exit=%ERRORLEVEL%
-
-          echo.
-          echo ----------------------------------------------------------------
-          echo test_tts.py completed at %TIME% with exit code: %test_tts_exit%
-          if %test_tts_exit% equ 0 (
-              echo [SUCCESS] test_tts.py passed
-          ) else (
-              echo [FAILURE] test_tts.py failed with exit code %test_tts_exit%
-              echo Full error output displayed above - no truncation
-          )
-          echo ----------------------------------------------------------------
-          echo.
-
-          REM ================================================================
-          REM FINAL SUMMARY
-          REM ================================================================
-          echo ================================================================
-          echo                      FINAL TEST SUMMARY
-          echo ================================================================
-          echo test_llm.py:  exit code %test_llm_exit%
-          echo test_asr.py:  exit code %test_asr_exit%
-          echo test_tts.py:  exit code %test_tts_exit%
-          echo ================================================================
-
-          REM Calculate total failures
-          set /a total_failures=%test_llm_exit%+%test_asr_exit%+%test_tts_exit%
-
-          if %total_failures% equ 0 (
-              echo [OVERALL SUCCESS] All tests passed successfully
-              echo ================================================================
-              exit /b 0
-          ) else (
-              echo [OVERALL FAILURE] One or more tests failed
-              echo ================================================================
-              echo FAILED TESTS:
-              if %test_llm_exit% neq 0 echo   - test_llm.py ^(exit code %test_llm_exit%^)
-              if %test_asr_exit% neq 0 echo   - test_asr.py ^(exit code %test_asr_exit%^)
-              if %test_tts_exit% neq 0 echo   - test_tts.py ^(exit code %test_tts_exit%^)
-              echo ================================================================
-              echo IMPORTANT: All error messages are displayed in full above
-              echo No PowerShell wrapping or truncation - raw Python output preserved
-              echo ================================================================
-              exit /b 1
-          )
-
-      - name: Run Summarizer Integration Tests (CMD - CLI Testing)
-        shell: cmd
-        env:
-          PYTHONUTF8: 1
-        run: |
-          REM Activate virtual environment
-          call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
-
-          echo ================================================================
-          echo              GAIA SUMMARIZER CLI INTEGRATION TESTS
-          echo ================================================================
-          echo Virtual Environment: %VIRTUAL_ENV%
-          echo Python Version:
-          python --version
-          echo Working Directory: %CD%
-          echo.
-
-          REM Initialize test tracking
-          set summarizer_exit=0
-
-          REM ================================================================
-          REM TEST_SUMMARIZER.PY - CLI INTEGRATION TESTS
-          REM ================================================================
-          echo ****************************************************************
-          echo                    SUMMARIZER CLI INTEGRATION TESTS
-          echo ****************************************************************
-          echo Starting test_summarizer.py at %TIME%...
-          echo Testing complete CLI workflow: gaia summarize command
-          echo.
-
-          python -m pytest tests\test_summarizer.py -vs --tb=short
-          set summarizer_exit=%ERRORLEVEL%
-
-          echo.
-          echo ----------------------------------------------------------------
-          echo test_summarizer.py completed at %TIME% with exit code: %summarizer_exit%
-          if %summarizer_exit% equ 0 (
-              echo [SUCCESS] Summarizer CLI integration tests passed
-          ) else (
-              echo [FAILURE] Summarizer CLI integration tests failed with exit code %summarizer_exit%
-              echo Full error output displayed above - no truncation
-          )
-          echo ----------------------------------------------------------------
-          echo.
-
-          REM ================================================================
-          REM SUMMARIZER TEST SUMMARY
-          REM ================================================================
-          echo ================================================================
-          echo                   SUMMARIZER TEST SUMMARY
-          echo ================================================================
-          echo test_summarizer.py:  exit code %summarizer_exit%
-          echo ================================================================
-
-          if %summarizer_exit% neq 0 (
-              echo [FAILURE] Summarizer CLI integration tests failed
-              echo ================================================================
-              echo FAILED TEST:
-              echo   - test_summarizer.py ^(exit code %summarizer_exit%^)
-              echo ================================================================
-              echo IMPORTANT: All error messages are displayed in full above
-              echo No PowerShell wrapping or truncation - raw Python output preserved
-              echo ================================================================
-              exit /b 1
-          ) else (
-              echo [SUCCESS] Summarizer CLI integration tests passed successfully
-              echo ================================================================
-          )
-
-      - name: Run Lemonade Client Integration Tests (CMD)
-        shell: cmd
-        env:
-          PYTHONUTF8: 1
-          GAIA_TEST_MODEL: Qwen3-0.6B-GGUF
-        run: |
-          REM Activate virtual environment
-          call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
-
-          echo ================================================================
-          echo              LEMONADE CLIENT INTEGRATION TESTS
-          echo ================================================================
-          echo Virtual Environment: %VIRTUAL_ENV%
-          echo Python Version:
-          python --version
-          echo Test Model: %GAIA_TEST_MODEL%
-          echo Working Directory: %CD%
-          echo.
-
-          REM Initialize test tracking
-          set lemonade_exit=0
-
-          REM ================================================================
-          REM TEST_LEMONADE_CLIENT.PY - INTEGRATION TESTS ONLY
-          REM ================================================================
-          echo ****************************************************************
-          echo                 LEMONADE CLIENT INTEGRATION TESTS
-          echo ****************************************************************
-          echo Starting test_lemonade_client.py integration tests at %TIME%...
-          echo.
-
-          REM Run only integration tests (skip mock tests which don't need server)
-          python -m pytest tests\test_lemonade_client.py -vs --tb=short -k "Integration"
-          set lemonade_exit=%ERRORLEVEL%
-
-          echo.
-          echo ----------------------------------------------------------------
-          echo test_lemonade_client.py completed at %TIME% with exit code: %lemonade_exit%
-          if %lemonade_exit% equ 0 (
-              echo [SUCCESS] Lemonade client integration tests passed
-          ) else (
-              echo [FAILURE] Lemonade client integration tests failed with exit code %lemonade_exit%
-              echo Full error output displayed above - no truncation
-          )
-          echo ----------------------------------------------------------------
-          echo.
-
-          REM ================================================================
-          REM LEMONADE CLIENT TEST SUMMARY
-          REM ================================================================
-          echo ================================================================
-          echo                LEMONADE CLIENT TEST SUMMARY
-          echo ================================================================
-          echo test_lemonade_client.py:  exit code %lemonade_exit%
-          echo ================================================================
-
-          if %lemonade_exit% neq 0 (
-              echo [FAILURE] Lemonade client integration tests failed
-              echo ================================================================
-              echo FAILED TEST:
-              echo   - test_lemonade_client.py ^(exit code %lemonade_exit%^)
-              echo ================================================================
-              echo IMPORTANT: All error messages are displayed in full above
-              echo No PowerShell wrapping or truncation - raw Python output preserved
-              echo ================================================================
-              exit /b 1
-          ) else (
-              echo [SUCCESS] Lemonade client integration tests passed successfully
-              echo ================================================================
-          )
-
-      - name: Debug GAIA Logs on Failure
+      - name: Debug Logs on Failure
         if: failure()
-        shell: cmd
+        shell: powershell
         run: |
-          echo === Debugging GAIA failure ===
-
-          echo === Check for GAIA log files ===
-          if exist "gaia.cli.log" (
-            echo Found gaia.cli.log:
-            type gaia.cli.log
-          ) else (
-            echo No gaia.cli.log found
-          )
-
-          echo === Check running processes ===
-          tasklist | findstr /i "python gaia lemonade-server"
-
-          echo === Check ports in use ===
-          netstat -an | findstr ":8000 :8001"
+          Write-Host "=== Debug Info ==="
+          Write-Host ""
+          Write-Host "--- Lemonade Server Logs ---"
+          if (Test-Path "lemonade-server-stdout.log") { Get-Content "lemonade-server-stdout.log" -Tail 100 }
+          if (Test-Path "lemonade-server-stderr.log") { Get-Content "lemonade-server-stderr.log" -Tail 50 }
+          if (Test-Path "lemonade-server.log") { Get-Content "lemonade-server.log" -Tail 100 }
+          Write-Host ""
+          Write-Host "--- GAIA Logs ---"
+          if (Test-Path "gaia.cli.log") { Get-Content "gaia.cli.log" -Tail 100 }
+          Write-Host ""
+          Write-Host "--- Processes ---"
+          Get-Process | Where-Object { $_.Name -match "python|gaia|lemonade" } | Format-Table
+          Write-Host ""
+          Write-Host "--- Ports ---"
+          netstat -an | Select-String ":8000|:8001"

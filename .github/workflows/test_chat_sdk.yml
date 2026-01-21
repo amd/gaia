@@ -45,109 +45,42 @@ jobs:
           python-version: '3.12'
           install-package: '.[dev,lemonade]'
 
-      - name: Verify GAIA Installation
-        run: |
-          Write-Host "Verifying GAIA installation..."
-          $gaiaPath = Get-Command gaia -ErrorAction SilentlyContinue
-          if (-not $gaiaPath) {
-            Write-Host "Error: gaia not installed correctly"
-            Write-Host "Current PATH: $env:Path"
-            exit 1
-          }
-          Write-Host "Found gaia at: $($gaiaPath.Source)"
-          python --version
-          python -m pip check
-
       - name: Start Lemonade Server and Run Chat SDK Tests
         shell: cmd
         timeout-minutes: 15
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
-          LEMONADE_MODEL: Qwen3-0.6B-GGUF
+          PYTHONIOENCODING: utf-8
         run: |
-          REM Start lemonade server
-          call scripts\start-lemonade.bat Qwen3-0.6B-GGUF 8000 8192
-          if %ERRORLEVEL% neq 0 (
-            echo [ERROR] Failed to start lemonade server
-            exit /b 1
-          )
+          call scripts\start-lemonade.bat Qwen3-4B-Instruct-2507-GGUF 8000 8192
+          if %ERRORLEVEL% neq 0 exit /b 1
 
-          REM Activate virtual environment
           call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
-
-          echo ================================================================
-          echo           CHAT SDK INTEGRATION TESTS WITH LEMONADE SERVER
-          echo ================================================================
-          echo Testing real LLM integration with running Lemonade server
-          echo.
-
-          echo ****************************************************************
-          echo                 COMPREHENSIVE INTEGRATION TEST SUITE
-          echo ****************************************************************
-          echo Starting comprehensive integration tests at %TIME%...
-          echo.
-
-          REM Run the comprehensive integration test suite
-          set PYTHONIOENCODING=utf-8
+          echo === Chat SDK Integration Tests ===
           python tests\test_chat_sdk.py
-          set integration_exit=%ERRORLEVEL%
-
-          echo.
-          echo ----------------------------------------------------------------
-          echo Integration tests completed at %TIME% with exit code: %integration_exit%
-          if %integration_exit% equ 0 (
-              echo [SUCCESS] Chat SDK integration tests passed
-          ) else (
-              echo [FAILURE] Chat SDK integration tests failed with exit code %integration_exit%
-              echo Full error output displayed above - no truncation
-          )
-          echo ----------------------------------------------------------------
-
-          if %integration_exit% neq 0 (
+          if %ERRORLEVEL% neq 0 (
               echo.
-              echo === LEMONADE SERVER LOGS ===
-              if exist "lemonade-server.log" (
-                  type lemonade-server.log
-              )
+              echo --- Lemonade Server Logs ---
+              if exist "lemonade-server.log" type lemonade-server.log
               exit /b 1
           )
+          echo [OK] Chat SDK tests passed
 
-      - name: Cleanup Lemonade Server
-        if: always()
-        shell: powershell
-        run: |
-          if ($env:LEMONADE_PROCESS_ID) {
-              Write-Host "Stopping server process $env:LEMONADE_PROCESS_ID..."
-              Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
-          }
-
-      - name: Debug Chat SDK Logs on Failure
+      - name: Debug Logs on Failure
         if: failure()
         shell: cmd
         run: |
-          echo === Debugging Chat SDK test failure ===
-
-          echo === Check for GAIA log files ===
-          if exist "gaia.cli.log" (
-            echo Found gaia.cli.log:
-            type gaia.cli.log
-          ) else (
-            echo No gaia.cli.log found
-          )
-
-          echo === Check running processes ===
-          tasklist | findstr /i "python gaia lemonade-server"
-
-          echo === Check ports in use ===
+          echo === Debug Info ===
+          echo.
+          echo --- Lemonade Server Logs ---
+          if exist "lemonade-server.log" type lemonade-server.log
+          echo.
+          echo --- GAIA Logs ---
+          if exist "gaia.cli.log" type gaia.cli.log
+          echo.
+          echo --- Processes ---
+          tasklist | findstr /i "python gaia lemonade"
+          echo.
+          echo --- Ports ---
           netstat -an | findstr ":8000 :8001"
-
-          echo === Show recent Python errors ===
-          if exist "*.log" (
-            echo Recent log files:
-            dir *.log
-          )
-
-          echo === Environment information ===
-          echo VIRTUAL_ENV: %VIRTUAL_ENV%
-          echo PATH: %PATH%

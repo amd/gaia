@@ -41,12 +41,12 @@ jobs:
         run: |
           try {
               # Start server and load model (all in one session)
-              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-0.6B-GGUF" -Port 8000 -CtxSize 4096 -InitWaitTime 10
+              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-Instruct-2507-GGUF" -Port 8000 -CtxSize 4096 -InitWaitTime 10
 
               # Test completion (in same session while server is still alive)
               Write-Host "=== Testing Completion ==="
               $testBody = @{
-                  model = "Qwen3-0.6B-GGUF"
+                  model = "Qwen3-4B-Instruct-2507-GGUF"
                   prompt = "Say exactly: Hello World"
                   max_tokens = 10
               } | ConvertTo-Json

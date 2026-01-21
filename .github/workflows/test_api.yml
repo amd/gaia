@@ -46,24 +46,20 @@ jobs:
       - name: Start Lemonade, GAIA API Server, and Run Tests
         shell: powershell
         run: |
-          # Set console to UTF-8 for Unicode support
-          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-          [Console]::InputEncoding = [System.Text.Encoding]::UTF8
-          $OutputEncoding = [System.Text.Encoding]::UTF8
-          $env:PYTHONIOENCODING = "utf-8"
-          $env:PYTHONUTF8 = "1"
+          # UTF-8 setup
           chcp 65001 | Out-Null
+          $env:PYTHONIOENCODING = "utf-8"
 
           try {
               # Start Lemonade server and load model (all in same session)
-              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-0.6B-GGUF" -CtxSize 8192
+              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-Instruct-2507-GGUF" -CtxSize 8192
 
               # Start API server using gaia CLI (runs on default port 8080)
               Write-Host "`n=== Starting GAIA API Server ==="
               $apiJob = Start-Job -ScriptBlock {
                   Set-Location $using:PWD
                   & .\.venv\Scripts\Activate.ps1
-                  $env:AGENT_ROUTING_MODEL = "Qwen3-0.6B-GGUF"
+                  $env:AGENT_ROUTING_MODEL = "Qwen3-4B-Instruct-2507-GGUF"
                   & gaia api start 2>&1
               }
               Write-Host "Started API server job with ID: $($apiJob.Id)"
