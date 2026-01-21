@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: MIT
 """Test to verify context_size is returned in health endpoint."""
 
-import requests
-import pytest
 import os
+
+import pytest
+import requests
 
 
 def test_health_endpoint_returns_context_size():
@@ -28,15 +29,13 @@ def test_health_endpoint_returns_context_size():
         context_size = health_data["context_size"]
         print(f"Context size: {context_size}")
 
-        assert context_size > 0, (
-            f"context_size should be > 0, got {context_size}"
-        )
+        assert context_size > 0, f"context_size should be > 0, got {context_size}"
 
         # If we started with 32768, verify it
         expected_ctx = int(os.environ.get("EXPECTED_CTX_SIZE", "32768"))
-        assert context_size >= expected_ctx, (
-            f"context_size {context_size} is less than expected {expected_ctx}"
-        )
+        assert (
+            context_size >= expected_ctx
+        ), f"context_size {context_size} is less than expected {expected_ctx}"
 
     except requests.exceptions.ConnectionError:
         pytest.skip("Lemonade server not running")

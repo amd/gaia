@@ -10,7 +10,7 @@
     Everything runs in a single PowerShell session to avoid process lifecycle issues.
 
 .PARAMETER ModelName
-    Primary model to pull and load (required)
+    Primary model to pull and load (default: Qwen3-4B-Instruct-2507-GGUF)
 
 .PARAMETER AdditionalModels
     Comma-separated list of additional models to pull (but not load)
@@ -35,8 +35,8 @@
 #>
 
 param(
-    [Parameter(Mandatory=$true)]
-    [string]$ModelName,
+    [Parameter(Mandatory=$false)]
+    [string]$ModelName = "Qwen3-4B-Instruct-2507-GGUF",
 
     [Parameter(Mandatory=$false)]
     [string]$AdditionalModels = "",

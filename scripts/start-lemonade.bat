@@ -11,7 +11,7 @@ set MODEL_NAME=%1
 set PORT=%2
 set CTX_SIZE=%3
 
-if "%MODEL_NAME%"=="" set MODEL_NAME=Qwen3-0.6B-GGUF
+if "%MODEL_NAME%"=="" set MODEL_NAME=Qwen3-4B-Instruct-2507-GGUF
 if "%PORT%"=="" set PORT=8000
 if "%CTX_SIZE%"=="" set CTX_SIZE=32768
 
