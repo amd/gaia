@@ -133,7 +133,7 @@ class TestSimpleToolsExecution:
 
     def test_simple_tool_can_be_called_directly(self):
         """Verify simple tools can be called through the registry."""
-        agent = QuickInfoAgent()
+        _agent = QuickInfoAgent()  # Instantiation registers tools
 
         from gaia.agents.base.tools import _TOOL_REGISTRY
 
@@ -146,7 +146,7 @@ class TestSimpleToolsExecution:
 
     def test_simple_tool_execution_without_llm(self):
         """Verify simple tools work without LLM interaction."""
-        agent = QuickInfoAgent()
+        _agent = QuickInfoAgent()  # Instantiation registers tools
 
         from gaia.agents.base.tools import _TOOL_REGISTRY
 
