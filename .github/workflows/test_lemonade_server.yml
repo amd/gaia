@@ -35,17 +35,16 @@ jobs:
           python-version: '3.12'
           install-package: '.[lemonade]'
 
-      - name: Start Lemonade Server and Load Model
+      - name: Start Lemonade Server, Load Model, and Test
         shell: powershell
         timeout-minutes: 10
         run: |
-          .\scripts\start-lemonade.ps1 -ModelName "Qwen3-0.6B-GGUF" -Port 8000 -CtxSize 4096 -InitWaitTime 10
-
-      - name: Test Lemonade Server Completion
-        shell: powershell
-        run: |
-          Write-Host "=== Testing Completion ==="
           try {
+              # Start server and load model (all in one session)
+              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-0.6B-GGUF" -Port 8000 -CtxSize 4096 -InitWaitTime 10
+
+              # Test completion (in same session while server is still alive)
+              Write-Host "=== Testing Completion ==="
               $testBody = @{
                   model = "Qwen3-0.6B-GGUF"
                   prompt = "Say exactly: Hello World"
@@ -57,21 +56,19 @@ jobs:
               Write-Host "     Response: $($completion.choices[0].text)"
               Write-Host ""
               Write-Host "[SUCCESS] All lemonade server tests passed!"
+
           } catch {
-              Write-Host "[ERROR] Completion failed: $($_.Exception.Message)"
+              Write-Host "[ERROR] Test failed: $($_.Exception.Message)"
               if ($_.ErrorDetails) {
                   Write-Host "Error details: $($_.ErrorDetails.Message)"
               }
-              throw "Completion test failed"
-          }
-
-      - name: Cleanup Lemonade Server
-        if: always()
-        shell: powershell
-        run: |
-          if ($env:LEMONADE_PROCESS_ID) {
-              Write-Host "Stopping server process $env:LEMONADE_PROCESS_ID..."
-              Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
+              throw "Lemonade server smoke test failed"
+          } finally {
+              # Cleanup
+              if ($env:LEMONADE_PROCESS_ID) {
+                  Write-Host "Stopping server process $env:LEMONADE_PROCESS_ID..."
+                  Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
+              }
           }
 
       - name: Upload Server Logs

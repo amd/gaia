@@ -65,20 +65,22 @@ jobs:
       - uses: FedericoCarboni/setup-ffmpeg@v3
         id: setup-ffmpeg
 
-      - name: Start Lemonade Server and Load Model
-        shell: powershell
+      - name: Start Lemonade Server and Run Tests
+        shell: cmd
         timeout-minutes: 20
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
-        run: |
-          .\scripts\start-lemonade.ps1 -ModelName "Qwen3-0.6B-GGUF"
-
-      - name: Run Unit Tests (Direct CMD - Full Error Visibility)
-        shell: cmd
-        env:
           PYTHONUTF8: 1
         run: |
+          REM Start lemonade server
+          call scripts\start-lemonade.bat Qwen3-0.6B-GGUF 8000 8192
+          if %ERRORLEVEL% neq 0 (
+            echo [ERROR] Failed to start lemonade server
+            exit /b 1
+          )
+
+          REM Now run tests while server is running
           REM Activate virtual environment
           call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
 

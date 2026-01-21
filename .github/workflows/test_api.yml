@@ -43,12 +43,7 @@ jobs:
         run: |
           uv pip install pytest pytest-timeout requests --python .venv\Scripts\python.exe
 
-      - name: Start Lemonade Server and Load Model
-        shell: powershell
-        run: |
-          .\scripts\start-lemonade.ps1 -ModelName "Qwen3-0.6B-GGUF" -CtxSize 8192
-
-      - name: Start GAIA API Server and Run Tests
+      - name: Start Lemonade, GAIA API Server, and Run Tests
         shell: powershell
         run: |
           # Set console to UTF-8 for Unicode support
@@ -60,6 +55,9 @@ jobs:
           chcp 65001 | Out-Null
 
           try {
+              # Start Lemonade server and load model (all in same session)
+              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-0.6B-GGUF" -CtxSize 8192
+
               # Start API server using gaia CLI (runs on default port 8080)
               Write-Host "`n=== Starting GAIA API Server ==="
               $apiJob = Start-Job -ScriptBlock {

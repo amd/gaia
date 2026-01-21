@@ -76,16 +76,7 @@ jobs:
       run: |
         uv pip install reportlab --python .venv\Scripts\python.exe
 
-    - name: Start Lemonade Server and Load Models
-      shell: powershell
-      run: |
-        .\scripts\start-lemonade.ps1 `
-          -ModelName "nomic-embed-text-v2-moe-GGUF" `
-          -AdditionalModels "Qwen3-0.6B-GGUF,Qwen2.5-VL-7B-Instruct-GGUF" `
-          -CtxSize 8192 `
-          -InitWaitTime 30
-
-    - name: Run RAG Integration Tests
+    - name: Start Lemonade Server and Run RAG Tests
       shell: powershell
       run: |
         # Set console to UTF-8 for Unicode support
@@ -97,6 +88,13 @@ jobs:
         chcp 65001 | Out-Null
 
         try {
+            # Start Lemonade server and load models (all in same session)
+            .\scripts\start-lemonade.ps1 `
+              -ModelName "nomic-embed-text-v2-moe-GGUF" `
+              -AdditionalModels "Qwen3-0.6B-GGUF,Qwen2.5-VL-7B-Instruct-GGUF" `
+              -CtxSize 8192 `
+              -InitWaitTime 30
+
             # Verify models
             try {
                 $models = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/models" -Method GET

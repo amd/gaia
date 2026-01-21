@@ -36,12 +36,7 @@ jobs:
         install-package: '.[dev,rag,lemonade]'
         extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
-    - name: Start Lemonade Server and Load Model
-      shell: powershell
-      run: |
-        .\scripts\start-lemonade.ps1 -ModelName "nomic-embed-text-v2-moe-GGUF" -InitWaitTime 30
-
-    - name: Verify Embedding Model and Run Tests
+    - name: Start Lemonade Server and Run Embedding Tests
       shell: powershell
       run: |
         # Set console to UTF-8 for Unicode support
@@ -53,6 +48,9 @@ jobs:
         chcp 65001 | Out-Null
 
         try {
+            # Start Lemonade server and load model (all in same session)
+            .\scripts\start-lemonade.ps1 -ModelName "nomic-embed-text-v2-moe-GGUF" -InitWaitTime 30
+
             # Verify model is available
             try {
                 $models = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/models" -Method GET

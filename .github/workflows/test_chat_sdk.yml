@@ -58,22 +58,21 @@ jobs:
           python --version
           python -m pip check
 
-      - name: Start Lemonade Server and Load Model
-        shell: powershell
+      - name: Start Lemonade Server and Run Chat SDK Tests
+        shell: cmd
         timeout-minutes: 15
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
-        run: |
-          .\scripts\start-lemonade.ps1 -ModelName "Qwen3-0.6B-GGUF"
-
-
-
-      - name: Run Chat SDK Integration Tests with Lemonade
-        shell: cmd
-        env:
           LEMONADE_MODEL: Qwen3-0.6B-GGUF
         run: |
+          REM Start lemonade server
+          call scripts\start-lemonade.bat Qwen3-0.6B-GGUF 8000 8192
+          if %ERRORLEVEL% neq 0 (
+            echo [ERROR] Failed to start lemonade server
+            exit /b 1
+          )
+
           REM Activate virtual environment
           call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
 
