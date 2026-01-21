@@ -60,16 +60,20 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-REM Wait for files to sync
-ping 127.0.0.1 -n 6 >nul
-
-REM Verify server still responsive
+REM Wait for server to stabilize after pull (retry health check)
+set RETRY=0
+set MAX_RETRY=10
+:HEALTH_RETRY
+ping 127.0.0.1 -n 3 >nul
 curl -s "http://localhost:%PORT%/api/v1/health" >nul 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Server died after pull
-    type lemonade-server.log
-    exit /b 1
-)
+if %ERRORLEVEL%==0 goto HEALTH_OK
+set /a RETRY+=1
+echo Waiting for server after pull... (%RETRY%/%MAX_RETRY%)
+if %RETRY% LSS %MAX_RETRY% goto HEALTH_RETRY
+echo [ERROR] Server not responding after pull
+type lemonade-server.log
+exit /b 1
+:HEALTH_OK
 
 REM Load model
 echo.

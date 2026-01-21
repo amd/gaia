@@ -165,17 +165,25 @@ try {
         Write-Host ""
     }
 
-    # Wait for files
-    Write-Host "Waiting 5 seconds for model files to sync..."
-    Start-Sleep -Seconds 5
+    # Wait for server to stabilize after pull (retry health check)
+    Write-Host "Waiting for server to stabilize after pull..."
+    $maxRetry = 10
+    $retry = 0
+    $healthy = $false
+    while ($retry -lt $maxRetry -and -not $healthy) {
+        Start-Sleep -Seconds 2
+        $retry++
+        try {
+            $health = Invoke-RestMethod -Uri "http://localhost:${Port}/api/v1/health" -TimeoutSec 5
+            Write-Host "[OK] Server responsive after pull"
+            $healthy = $true
+        } catch {
+            Write-Host "Waiting for server after pull... ($retry/$maxRetry)"
+        }
+    }
 
-    # Verify server still responsive
-    Write-Host "Verifying server is still responsive..."
-    try {
-        $health = Invoke-RestMethod -Uri "http://localhost:${Port}/api/v1/health" -TimeoutSec 5
-        Write-Host "[OK] Server responsive: $($health | ConvertTo-Json -Compress)"
-    } catch {
-        Write-Host "[ERROR] Server not responding: $($_.Exception.Message)"
+    if (-not $healthy) {
+        Write-Host "[ERROR] Server not responding after pull"
         throw "Server died after pull"
     }
     Write-Host ""

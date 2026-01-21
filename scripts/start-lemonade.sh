@@ -135,17 +135,28 @@ if [ -n "$ADDITIONAL_MODELS" ]; then
     echo ""
 fi
 
-# Wait for files
-echo "Waiting 5 seconds for model files to sync..."
-sleep 5
+# Wait for server to stabilize after pull (retry health check)
+echo "Waiting for server to stabilize after pull..."
+MAX_RETRY=10
+RETRY=0
+HEALTHY=false
 
-# Verify server still responsive
-echo "Verifying server is still responsive..."
-if ! curl -s "http://localhost:${PORT}/api/v1/health" > /dev/null 2>&1; then
+while [ $RETRY -lt $MAX_RETRY ] && [ "$HEALTHY" = false ]; do
+    sleep 2
+    RETRY=$((RETRY + 1))
+
+    if curl -s "http://localhost:${PORT}/api/v1/health" > /dev/null 2>&1; then
+        echo "[OK] Server responsive after pull"
+        HEALTHY=true
+    else
+        echo "Waiting for server after pull... (${RETRY}/${MAX_RETRY})"
+    fi
+done
+
+if [ "$HEALTHY" = false ]; then
     echo "[ERROR] Server not responding after pull"
     exit 1
 fi
-echo "[OK] Server still responsive"
 echo ""
 
 # Load model
