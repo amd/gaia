@@ -121,13 +121,23 @@ gaia chat --stats
 ```
 </CodeGroup>
 
-<Accordion title="Interactive Commands">
-  - `/clear` - Clear conversation history
-  - `/history` - Show conversation history
-  - `/stats` - Show performance statistics
-  - `/help` - Show help message
-  - `quit`, `exit`, `bye` - End conversation
-</Accordion>
+<AccordionGroup>
+  <Accordion title="Session Management">
+    - `/resume [id]` - Resume a previous conversation (or list sessions if no id)
+    - `/save` - Save current conversation
+    - `/sessions` - List all saved sessions
+    - `/reset` - Clear conversation and start fresh
+  </Accordion>
+
+  <Accordion title="Other Commands">
+    - `/help` or `/?` - Show help message
+    - `/quit` - Exit the chat session
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  **Document Q&A:** To work with documents, see the [Document Q&A (RAG)](#document-qa-rag) section below for RAG-specific commands.
+</Note>
 
 ### Single Query Mode
 
@@ -290,12 +300,63 @@ RAG (Retrieval-Augmented Generation) enables chatting with PDF documents using s
   </Tab>
 
   <Tab title="Voice Mode">
+    <Note>
+      **Prerequisites:** Voice mode requires the `talk` module:
+      ```bash
+      uv pip install -e ".[talk]"
+      ```
+    </Note>
+
     ```bash
     # Voice with documents
     gaia talk --index manual.pdf
     ```
   </Tab>
 </Tabs>
+
+<Note>
+  **PDF Indexing Requirements:** Processing PDFs with images requires a Vision Language Model (VLM). GAIA uses `Qwen2.5-VL-7B-Instruct-GGUF` by default for extracting text from images in PDFs.
+
+  To download all models needed for chat (including VLM):
+  ```bash
+  gaia download --agent chat
+  ```
+
+  To see what models each agent requires: `gaia download --list`
+
+  See the [CLI Reference](/reference/cli#download-command) for more download options.
+</Note>
+
+### Interactive RAG Commands
+
+When using `gaia chat` with documents (via `--index` flag or `/index` command), additional commands become available:
+
+<AccordionGroup>
+  <Accordion title="Session Management">
+    Sessions preserve both your conversation history and indexed documents:
+
+    - `/resume [id]` - Resume session with conversation and documents restored
+    - `/save` - Save session including indexed documents
+    - `/sessions` - List all saved sessions
+    - `/reset` - Clear conversation and start a new session (indexed documents are preserved)
+  </Accordion>
+
+  <Accordion title="Document Management">
+    - `/index <path>` - Index a document or directory (enables RAG if needed)
+    - `/watch <dir>` - Watch directory for changes and auto-index new files
+    - `/list` - List all currently indexed documents
+    - `/status` - Show RAG system status (indexed files, chunks, memory usage)
+  </Accordion>
+
+  <Accordion title="Debug & Observability">
+    - `/chunks <file>` - View indexed chunks for a specific file
+    - `/chunk <id>` - View specific chunk by ID
+    - `/test <query>` - Test query retrieval with relevance scores
+    - `/dump <file|#>` - Export document and chunks to markdown
+    - `/clear-cache` - Clear RAG cache and force re-indexing
+    - `/search-debug` - Enable detailed search debugging output
+  </Accordion>
+</AccordionGroup>
 
 ### RAG Configuration
 
@@ -388,6 +449,18 @@ print(f"Debug trace saved to: {result['output_file']}")
   <Accordion title="Missing Dependencies">
     ```bash
     uv pip install -e ".[rag]"
+    ```
+  </Accordion>
+
+  <Accordion title="Voice Mode: No Module Named 'pip'">
+    If `gaia talk` fails with "No module named 'pip'", install dependencies manually:
+
+    ```bash
+    # Install talk dependencies
+    uv pip install -e ".[talk]"
+
+    # If the error persists, install pip in your environment
+    python -m ensurepip --upgrade
     ```
   </Accordion>
 
