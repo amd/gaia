@@ -230,6 +230,51 @@ class InitCommand:
             self._print("")
             return False
 
+    def _refresh_path_environment(self):
+        """
+        Refresh PATH environment variable from Windows registry.
+
+        This allows the current Python process to find executables
+        that were just installed by MSI, without requiring a terminal restart.
+        """
+        if sys.platform != "win32":
+            return
+
+        try:
+            import winreg
+
+            # Read user PATH from registry
+            user_path = ""
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as key:
+                    user_path, _ = winreg.QueryValueEx(key, "Path")
+            except (FileNotFoundError, OSError):
+                pass
+
+            # Read system PATH from registry
+            system_path = ""
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+                ) as key:
+                    system_path, _ = winreg.QueryValueEx(key, "Path")
+            except (FileNotFoundError, OSError):
+                pass
+
+            # Update os.environ['PATH'] with fresh values
+            if user_path or system_path:
+                new_path = (
+                    f"{user_path};{system_path}"
+                    if user_path and system_path
+                    else (user_path or system_path)
+                )
+                os.environ["PATH"] = new_path
+                log.debug("Refreshed PATH from Windows registry")
+
+        except Exception as e:
+            log.debug(f"Failed to refresh PATH: {e}")
+
     def _download_progress(self, downloaded: int, total: int):
         """Callback for download progress."""
         if total > 0:
@@ -324,6 +369,9 @@ class InitCommand:
 
         if info.installed and info.version:
             self._print_success(f"Lemonade Server found: v{info.version}")
+            # Show the path where it was found
+            if info.path:
+                self.console.print(f"   [dim]Path: {info.path}[/dim]")
 
             # Check version match
             if not self._check_version_compatibility(info):
@@ -508,17 +556,20 @@ class InitCommand:
             if result.success:
                 self._print_success(f"Installed Lemonade v{result.version}")
 
+                # Refresh PATH from Windows registry so current session can find lemonade-server
+                self.console.print("   [dim]Refreshing PATH environment...[/dim]")
+                self._refresh_path_environment()
+
                 # Verify installation by checking version
-                if RICH_AVAILABLE and self.console:
-                    self.console.print("   [dim]Verifying installation...[/dim]")
-                else:
-                    self._print("   Verifying installation...")
+                self.console.print("   [dim]Verifying installation...[/dim]")
                 verify_info = self.installer.check_installation()
 
                 if verify_info.installed and verify_info.version:
                     self._print_success(
                         f"Verified: lemonade-server v{verify_info.version}"
                     )
+                    if verify_info.path:
+                        self.console.print(f"   [dim]Path: {verify_info.path}[/dim]")
 
                 return True
             else:
@@ -683,11 +734,13 @@ class InitCommand:
             try:
                 # Use subprocess.Popen to start in background
                 # Redirect output to DEVNULL for clean background operation
+                # Pass full environment to ensure PowerShell is in PATH (needed for ZIP extraction)
                 process = subprocess.Popen(
                     [lemonade_path, "serve"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     start_new_session=True,  # Detach from parent process
+                    env=os.environ.copy(),  # Inherit full environment including PATH
                 )
                 log.debug(f"Started lemonade-server with PID {process.pid}")
             except Exception as e:
@@ -832,7 +885,12 @@ class InitCommand:
 
     def _verify_model(self, client, model_id: str) -> tuple:
         """
-        Verify a model works by running a quick inference test.
+        Verify a model is available (downloaded) on the server.
+
+        Note: We only check if the model exists in the server's model list.
+        Running inference to verify would require loading each model, which is
+        slow and can cause server issues. If a model is corrupted, the error
+        will surface when the user tries to use it.
 
         Args:
             client: LemonadeClient instance
@@ -840,44 +898,13 @@ class InitCommand:
 
         Returns:
             Tuple of (success: bool, error_type: str or None)
-            error_type is "corrupted" for actual file issues, "server_error" for transient issues
         """
         try:
-            # Embedding models use different API - check if it's an embedding model
-            model_lower = model_id.lower()
-            is_embedding = "embed" in model_lower or "nomic" in model_lower
-
-            if is_embedding:
-                # Test embedding model
-                response = client.embeddings(
-                    model=model_id,
-                    input="test",
-                    timeout=60,  # Longer timeout for model loading
-                )
-                # Check if we got embeddings
-                if response and response.get("data"):
-                    return (True, None)
-            else:
-                # Test chat model with minimal tokens
-                response = client.chat_completions(
-                    model=model_id,
-                    messages=[{"role": "user", "content": "Hi"}],
-                    max_tokens=1,
-                    timeout=60,  # Longer timeout for model loading
-                    auto_download=False,  # Don't auto-download, we're testing
-                )
-                # Check if we got a valid response
-                if response and response.get("choices"):
-                    return (True, None)
-            return (False, "no_response")
+            # Check if model is in the available models list
+            if client.check_model_available(model_id):
+                return (True, None)
+            return (False, "not_found")
         except Exception as e:
-            error_str = str(e).lower()
-            # Check for actual corruption indicators
-            if any(
-                x in error_str for x in ["corrupt", "invalid", "truncated", "checksum"]
-            ):
-                return (False, "corrupted")
-            # Server errors are not corruption - model files are likely fine
             log.debug(f"Model verification failed for {model_id}: {e}")
             return (False, "server_error")
 
@@ -950,49 +977,20 @@ class InitCommand:
                 models_to_download = list(model_ids)
                 models_available = []
             else:
-                # Check which need downloading (with verification)
+                # Check which models need downloading
                 models_to_download = []
                 models_available = []
-                models_corrupted = []
-                models_missing = []
 
                 for model_id in model_ids:
                     if client.check_model_available(model_id):
-                        # Verify the model actually works
+                        models_available.append(model_id)
                         if RICH_AVAILABLE and self.console:
                             self.console.print(
-                                f"   [dim]Verifying[/dim] [cyan]{model_id}[/cyan]...",
-                                end="",
+                                f"   [green]✓[/green] [cyan]{model_id}[/cyan] [dim]downloaded[/dim]"
                             )
                         else:
-                            print(f"   Verifying {model_id}...", end="", flush=True)
-
-                        success, error_type = self._verify_model(client, model_id)
-                        if success:
-                            models_available.append(model_id)
-                            if RICH_AVAILABLE and self.console:
-                                self.console.print(" [green]✓[/green]")
-                            else:
-                                print(" ✓")
-                        elif error_type == "corrupted":
-                            # Actual file corruption - needs re-download
-                            models_corrupted.append(model_id)
-                            models_to_download.append(model_id)
-                            if RICH_AVAILABLE and self.console:
-                                self.console.print(" [red]✗ corrupted[/red]")
-                            else:
-                                print(" ✗ corrupted")
-                        else:
-                            # Server error - model is likely fine, skip verification
-                            models_available.append(model_id)
-                            if RICH_AVAILABLE and self.console:
-                                self.console.print(
-                                    " [yellow]⚠ server error (assuming OK)[/yellow]"
-                                )
-                            else:
-                                print(" ⚠ server error (assuming OK)")
+                            print(f"   ✓ {model_id} - downloaded")
                     else:
-                        models_missing.append(model_id)
                         models_to_download.append(model_id)
                         if RICH_AVAILABLE and self.console:
                             self.console.print(
@@ -1001,18 +999,22 @@ class InitCommand:
                         else:
                             print(f"   📥 {model_id} - not downloaded")
 
-                if models_corrupted:
-                    self._print("")
-                    self._print_warning(
-                        f"Found {len(models_corrupted)} corrupted model(s) - will re-download"
-                    )
-
             if not models_to_download:
                 self._print_success("All models already downloaded")
                 return True
 
             # Skip redundant prompt if force_models already confirmed
             if not self.force_models:
+                # Calculate estimated size for models being downloaded
+                total_size_gb = sum(
+                    client._estimate_model_size(m) for m in models_to_download
+                )
+                if total_size_gb >= 1.0:
+                    size_str = f"~{total_size_gb:.1f} GB"
+                else:
+                    size_str = f"~{total_size_gb * 1024:.0f} MB"
+
+                self._print("")  # Newline before download summary
                 if RICH_AVAILABLE and self.console:
                     self.console.print(
                         f"   [bold]Need to download:[/bold] {len(models_to_download)} model(s)"
@@ -1021,16 +1023,14 @@ class InitCommand:
                         self.console.print(
                             f"   [yellow]📥[/yellow] [cyan]{model_id}[/cyan]"
                         )
-                    self.console.print(
-                        f"   [dim]Estimated size:[/dim] {profile_config['approx_size']}"
-                    )
+                    self.console.print(f"   [dim]Estimated size:[/dim] {size_str}")
                 else:
                     self._print(
                         f"   Need to download: {len(models_to_download)} model(s)"
                     )
                     for model_id in models_to_download:
                         self._print(f"   📥 {model_id}")
-                    self._print(f"   Estimated size: {profile_config['approx_size']}")
+                    self._print(f"   Estimated size: {size_str}")
                 self._print("")
 
                 if not self._prompt_yes_no("Continue with download?", default=True):
@@ -1107,9 +1107,63 @@ class InitCommand:
             self._print_error(f"Error downloading models: {e}")
             return False
 
+    def _test_model_inference(self, client, model_id: str) -> tuple:
+        """
+        Test a model with a small inference request.
+
+        Args:
+            client: LemonadeClient instance
+            model_id: Model ID to test
+
+        Returns:
+            Tuple of (success: bool, error_message: str or None)
+        """
+        try:
+            # Load the model first
+            client.load_model(model_id, auto_download=False, prompt=False)
+
+            # Check if this is an embedding model
+            is_embedding_model = "embed" in model_id.lower()
+
+            if is_embedding_model:
+                # Test embedding model with a simple text
+                response = client.embeddings(
+                    input_texts=["test"],
+                    model=model_id,
+                )
+                # Check if we got valid embeddings
+                if response and response.get("data"):
+                    embedding = response["data"][0].get("embedding", [])
+                    if embedding and len(embedding) > 0:
+                        return (True, None)
+                    return (False, "Empty embedding")
+                return (False, "Invalid response format")
+            else:
+                # Test LLM with a minimal chat request
+                response = client.chat_completions(
+                    model=model_id,
+                    messages=[{"role": "user", "content": "Say 'ok'"}],
+                    max_tokens=10,
+                    temperature=0,
+                )
+                # Check if we got a valid response
+                if response and response.get("choices"):
+                    content = response["choices"][0].get("message", {}).get("content", "")
+                    if content:
+                        return (True, None)
+                    return (False, "Empty response")
+                return (False, "Invalid response format")
+
+        except Exception as e:
+            error_msg = str(e)
+            # Truncate long error messages
+            if len(error_msg) > 100:
+                error_msg = error_msg[:100] + "..."
+            return (False, error_msg)
+
     def _verify_setup(self) -> bool:
         """
-        Verify the setup is working.
+        Verify the setup is working by testing each model with a small request.
 
         Returns:
             True if verification passes, False on failure
@@ -1131,21 +1185,89 @@ class InitCommand:
                 self._print_error("Server not responding")
                 return False
 
-            # Check models
+            # Get models to verify
             profile_config = INIT_PROFILES[self.profile]
             if profile_config["models"]:
                 model_ids = profile_config["models"]
             else:
                 model_ids = client.get_required_models(profile_config["agent"])
 
-            if model_ids and not self.skip_models:
-                available = sum(1 for m in model_ids if client.check_model_available(m))
-                self._print_success(f"Models ready: {available}/{len(model_ids)}")
+            if not model_ids or self.skip_models:
+                return True
 
-                if available < len(model_ids):
-                    self._print_warning("Some models are not downloaded")
+            # Prompt to run model verification (can be slow)
+            self.console.print()
+            self.console.print(
+                "   [dim]Model verification loads each model and runs a small inference test.[/dim]"
+            )
+            self.console.print(
+                "   [dim]This may take a few minutes but ensures models work correctly.[/dim]"
+            )
+            self.console.print()
 
-            return True
+            if not self._prompt_yes_no("Run model verification?", default=True):
+                self._print_success("Skipping model verification")
+                return True
+
+            # Test each model with a small inference request
+            self.console.print()
+            self.console.print("   [bold]Testing models with inference:[/bold]")
+            self.console.print(
+                "   [yellow]⚠️  Press Ctrl+C to skip.[/yellow]"
+            )
+
+            models_passed = 0
+            models_failed = []
+            interrupted = False
+
+            try:
+                for model_id in model_ids:
+                    # Check if model is available first
+                    if not client.check_model_available(model_id):
+                        self.console.print(
+                            f"   [yellow]⏭️[/yellow]  [cyan]{model_id}[/cyan] [dim]- not downloaded[/dim]"
+                        )
+                        continue
+
+                    # Show testing status
+                    self.console.print(
+                        f"   [dim]🔄[/dim] [cyan]{model_id}[/cyan] [dim]- testing...[/dim]",
+                        end="",
+                    )
+
+                    # Test the model
+                    success, error = self._test_model_inference(client, model_id)
+
+                    # Clear the line and show result
+                    print("\r" + " " * 80 + "\r", end="")
+                    if success:
+                        self.console.print(
+                            f"   [green]✓[/green]  [cyan]{model_id}[/cyan] [dim]- OK[/dim]"
+                        )
+                        models_passed += 1
+                    else:
+                        self.console.print(
+                            f"   [red]❌[/red] [cyan]{model_id}[/cyan] [dim]- {error}[/dim]"
+                        )
+                        models_failed.append((model_id, error))
+
+            except KeyboardInterrupt:
+                print("\r" + " " * 80 + "\r", end="")
+                self.console.print()
+                self._print_warning("Verification interrupted")
+                interrupted = True
+
+            # Summary
+            total = len(model_ids)
+            self.console.print()
+            if interrupted:
+                self._print_success(f"Verified {models_passed} model(s) before interruption")
+            elif models_failed:
+                self._print_warning(f"Models verified: {models_passed}/{total} passed")
+            else:
+                self._print_success(f"All {models_passed} model(s) verified")
+
+            return True  # Don't fail init due to model issues
 
         except Exception as e:
             self._print_error(f"Verification failed: {e}")

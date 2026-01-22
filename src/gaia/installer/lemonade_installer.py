@@ -100,8 +100,9 @@ class LemonadeInstaller:
         """Print a status message to console or log."""
         if self.console and RICH_AVAILABLE:
             self.console.print(f"   [{style}]{message}[/{style}]")
-        else:
-            log.info(message)
+        elif not self.console:
+            # Only log if no console provided (to avoid duplicate output)
+            log.debug(message)
 
     def refresh_path_from_registry(self) -> None:
         """Refresh PATH from Windows registry after MSI install."""

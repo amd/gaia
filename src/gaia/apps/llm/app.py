@@ -82,6 +82,10 @@ def main(
         stream: Whether to stream the response
         base_url: Base URL for local LLM server (defaults to LEMONADE_BASE_URL env var)
     """
+    from rich.console import Console
+
+    console = Console()
+
     if not query:
         raise ValueError("Query is required")
 
@@ -91,14 +95,21 @@ def main(
     )
 
     if stream:
-        # Handle streaming response
+        # Handle streaming response with Rich formatting
+        console.print()
+        console.print("[bold cyan]🤖 gaia:[/bold cyan] ", end="")
         full_response = ""
         for chunk in response:
-            print(chunk, end="", flush=True)
-            full_response += chunk
+            if chunk:  # Skip None chunks
+                print(chunk, end="", flush=True)
+                full_response += chunk
         print()  # Add newline
+        console.print()
         return full_response
     else:
+        console.print()
+        console.print(f"[bold cyan]🤖 gaia:[/bold cyan] {response}")
+        console.print()
         return response
 
 

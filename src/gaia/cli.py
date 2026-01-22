@@ -4262,32 +4262,42 @@ Let me know your answer!
     # Handle uninstall command
     if args.action == "uninstall":
         if args.lemonade:
+            from rich.console import Console
+
             from gaia.installer.lemonade_installer import LemonadeInstaller
 
-            installer = LemonadeInstaller()
+            console = Console()
+            installer = LemonadeInstaller(console=console)
 
             # Check if installed
             info = installer.check_installation()
             if not info.installed:
-                print("✅ Lemonade Server is not installed")
+                console.print("[green]✅ Lemonade Server is not installed[/green]")
                 sys.exit(0)
 
             # Confirm uninstallation
             if not args.yes:
-                response = input(f"Uninstall Lemonade Server v{info.version}? [y/N]: ")
+                console.print(
+                    f"[bold]Uninstall Lemonade Server v{info.version}?[/bold] [dim][y/N][/dim]: ",
+                    end="",
+                )
+                response = input()
                 if response.lower() != "y":
-                    print("Uninstall cancelled")
+                    console.print("[dim]Uninstall cancelled[/dim]")
                     sys.exit(0)
 
             # Uninstall
-            print("Uninstalling Lemonade Server...")
+            console.print()
+            console.print("[bold blue]Uninstalling Lemonade Server...[/bold blue]")
             result = installer.uninstall(silent=True)
 
             if result.success:
-                print("✅ Lemonade Server uninstalled successfully")
+                console.print()
+                console.print("[green]✅ Lemonade Server uninstalled successfully[/green]")
                 sys.exit(0)
             else:
-                print(f"❌ Uninstall failed: {result.error}")
+                console.print()
+                console.print(f"[red]❌ Uninstall failed: {result.error}[/red]")
                 sys.exit(1)
         else:
             print("Specify what to uninstall: --lemonade")
