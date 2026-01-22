@@ -6,22 +6,47 @@
     <title>@janedoe - Developer Profile - GAIA Agents Hub</title>
     <style>
         :root {
-            --amd-red: #ED1C24;
-            --amd-red-light: #F4484D;
-            --amd-red-dark: #C8171E;
-            --bg-dark: #0d0d0d;
-            --bg-card: #1a1a1a;
-            --bg-card-hover: #242424;
-            --text-primary: #ffffff;
-            --text-secondary: #a0a0a0;
-            --text-muted: #666666;
-            --border-color: #333333;
-            --success: #22c55e;
-            --warning: #f59e0b;
-            --gold: #fbbf24;
-            --silver: #9ca3af;
-            --bronze: #d97706;
-            --purple: #8b5cf6;
+            /* Softer color palette */
+            --amd-red: #E63946;
+            --amd-red-light: #FF6B6B;
+            --amd-red-dark: #C1121F;
+            --amd-red-subtle: rgba(230, 57, 70, 0.1);
+
+            /* Softer backgrounds - not pure black */
+            --bg-page: #121418;
+            --bg-elevated: #1a1d24;
+            --bg-card: #22262f;
+            --bg-card-hover: #2a2f3a;
+            --bg-input: #2a2f3a;
+
+            /* Text with better hierarchy */
+            --text-primary: #f0f2f5;
+            --text-secondary: #9ca3b0;
+            --text-muted: #6b7280;
+            --text-accent: var(--amd-red-light);
+
+            /* Borders and shadows */
+            --border-subtle: rgba(255, 255, 255, 0.06);
+            --border-default: rgba(255, 255, 255, 0.1);
+            --border-hover: rgba(255, 255, 255, 0.15);
+            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+            --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.3);
+            --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4);
+            --shadow-glow: 0 0 20px rgba(230, 57, 70, 0.15);
+
+            /* Status colors - softer */
+            --success: #4ade80;
+            --warning: #fbbf24;
+            --gold: #fcd34d;
+            --silver: #cbd5e1;
+            --bronze: #f59e0b;
+            --purple: #a78bfa;
+
+            /* Spacing */
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 24px;
         }
 
         * {
@@ -31,19 +56,21 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background-color: var(--bg-dark);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--bg-page);
             color: var(--text-primary);
             line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
         }
 
         /* Header */
         .header {
-            background: linear-gradient(180deg, #1a1a1a 0%, var(--bg-dark) 100%);
-            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-elevated);
+            border-bottom: 1px solid var(--border-subtle);
             position: sticky;
             top: 0;
             z-index: 100;
+            backdrop-filter: blur(12px);
         }
 
         .header-content {
@@ -64,56 +91,62 @@
         }
 
         .logo-icon {
-            width: 40px;
-            height: 40px;
-            background: var(--amd-red);
-            border-radius: 8px;
+            width: 42px;
+            height: 42px;
+            background: linear-gradient(135deg, var(--amd-red) 0%, var(--amd-red-dark) 100%);
+            border-radius: var(--radius-md);
             display: flex;
             align-items: center;
             justify-content: center;
-            font-weight: bold;
-            font-size: 1.2rem;
+            font-weight: 700;
+            font-size: 1.1rem;
+            box-shadow: var(--shadow-sm);
         }
 
         .logo-text {
-            font-size: 1.25rem;
+            font-size: 1.2rem;
             font-weight: 600;
+            letter-spacing: -0.02em;
         }
 
         .logo-text span {
-            color: var(--amd-red);
+            color: var(--amd-red-light);
         }
 
         .nav {
             display: flex;
-            gap: 2rem;
+            gap: 0.5rem;
             align-items: center;
         }
 
         .nav a {
             color: var(--text-secondary);
             text-decoration: none;
-            font-size: 0.95rem;
-            transition: color 0.2s;
+            font-size: 0.9rem;
+            font-weight: 500;
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius-sm);
+            transition: all 0.2s ease;
         }
 
         .nav a:hover {
             color: var(--text-primary);
+            background: var(--bg-card);
         }
 
         .header-actions {
             display: flex;
-            gap: 1rem;
+            gap: 0.75rem;
             align-items: center;
         }
 
         .btn {
-            padding: 0.5rem 1rem;
-            border-radius: 8px;
+            padding: 0.6rem 1.25rem;
+            border-radius: var(--radius-lg);
             font-size: 0.9rem;
             font-weight: 500;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.2s ease;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
@@ -122,28 +155,32 @@
         }
 
         .btn-primary {
-            background: var(--amd-red);
+            background: linear-gradient(135deg, var(--amd-red) 0%, var(--amd-red-dark) 100%);
             color: white;
+            box-shadow: var(--shadow-sm);
         }
 
         .btn-primary:hover {
-            background: var(--amd-red-light);
+            background: linear-gradient(135deg, var(--amd-red-light) 0%, var(--amd-red) 100%);
+            box-shadow: var(--shadow-glow);
+            transform: translateY(-1px);
         }
 
         .btn-secondary {
-            background: transparent;
+            background: var(--bg-card);
             color: var(--text-primary);
-            border: 1px solid var(--border-color);
+            border: 1px solid var(--border-default);
         }
 
         .btn-secondary:hover {
-            background: var(--bg-card);
+            background: var(--bg-card-hover);
+            border-color: var(--border-hover);
         }
 
         /* Profile Header */
         .profile-header {
-            background: linear-gradient(135deg, var(--bg-card) 0%, #2d1a1a 50%, var(--bg-card) 100%);
-            border-bottom: 1px solid var(--border-color);
+            background: linear-gradient(180deg, var(--bg-elevated) 0%, var(--bg-page) 100%);
+            border-bottom: 1px solid var(--border-subtle);
             padding: 3rem 2rem;
         }
 
@@ -163,10 +200,11 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 4rem;
+            font-size: 3.5rem;
+            font-weight: 600;
             flex-shrink: 0;
-            border: 4px solid var(--bg-dark);
-            box-shadow: 0 8px 32px rgba(237, 28, 36, 0.3);
+            border: 4px solid var(--bg-page);
+            box-shadow: var(--shadow-lg), var(--shadow-glow);
         }
 
         .profile-info {
@@ -183,16 +221,17 @@
         .profile-name {
             font-size: 2rem;
             font-weight: 700;
+            letter-spacing: -0.02em;
         }
 
         .profile-tier-badge {
             display: inline-flex;
             align-items: center;
             gap: 0.5rem;
-            background: linear-gradient(135deg, var(--gold) 0%, #f59e0b 100%);
+            background: linear-gradient(135deg, var(--gold) 0%, var(--bronze) 100%);
             color: #000;
-            padding: 0.4rem 0.8rem;
-            border-radius: 20px;
+            padding: 0.4rem 0.85rem;
+            border-radius: var(--radius-xl);
             font-size: 0.85rem;
             font-weight: 600;
         }
@@ -200,13 +239,14 @@
         .profile-handle {
             color: var(--text-secondary);
             font-size: 1.1rem;
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.75rem;
         }
 
         .profile-bio {
             color: var(--text-secondary);
             margin-bottom: 1rem;
             max-width: 600px;
+            line-height: 1.7;
         }
 
         .profile-meta {
@@ -234,9 +274,9 @@
             align-items: center;
             gap: 0.5rem;
             padding: 0.4rem 0.75rem;
-            background: var(--bg-dark);
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-sm);
             font-size: 0.8rem;
             color: var(--text-muted);
         }
@@ -252,12 +292,13 @@
 
         .stats-bar-content {
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
             padding: 1.5rem 2rem;
             display: grid;
             grid-template-columns: repeat(5, 1fr);
             gap: 2rem;
+            box-shadow: var(--shadow-md);
         }
 
         .stat-item {
@@ -268,6 +309,7 @@
             font-size: 2rem;
             font-weight: 700;
             margin-bottom: 0.25rem;
+            letter-spacing: -0.02em;
         }
 
         .stat-value.gold {
@@ -283,7 +325,7 @@
         .main {
             max-width: 1400px;
             margin: 0 auto;
-            padding: 2rem;
+            padding: 2.5rem 2rem;
             display: grid;
             grid-template-columns: 1fr 350px;
             gap: 2rem;
@@ -300,13 +342,14 @@
         .section-title {
             font-size: 1.25rem;
             font-weight: 600;
+            letter-spacing: -0.01em;
         }
 
         /* Badges Section */
         .badges-section {
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
             padding: 1.5rem;
             margin-bottom: 2rem;
         }
@@ -322,14 +365,16 @@
             align-items: center;
             gap: 0.5rem;
             padding: 0.6rem 1rem;
-            background: var(--bg-card-hover);
-            border-radius: 8px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
             font-size: 0.9rem;
-            transition: all 0.2s;
+            transition: all 0.2s ease;
         }
 
         .badge-item:hover {
-            background: var(--bg-dark);
+            background: var(--bg-card-hover);
+            border-color: var(--border-default);
             transform: translateY(-2px);
         }
 
@@ -338,7 +383,7 @@
         }
 
         .badge-item.legendary {
-            background: linear-gradient(135deg, rgba(251, 191, 36, 0.2) 0%, rgba(245, 158, 11, 0.1) 100%);
+            background: linear-gradient(135deg, rgba(252, 211, 77, 0.15) 0%, rgba(245, 158, 11, 0.08) 100%);
             border: 1px solid var(--gold);
         }
 
@@ -352,15 +397,16 @@
 
         .agent-card {
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
             padding: 1.25rem;
-            transition: all 0.2s;
+            transition: all 0.3s ease;
         }
 
         .agent-card:hover {
             border-color: var(--amd-red);
-            transform: translateY(-2px);
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-lg), var(--shadow-glow);
         }
 
         .agent-card-header {
@@ -373,12 +419,13 @@
         .agent-icon {
             width: 44px;
             height: 44px;
-            background: linear-gradient(135deg, var(--amd-red) 0%, var(--amd-red-dark) 100%);
-            border-radius: 10px;
+            background: linear-gradient(135deg, var(--bg-card-hover) 0%, var(--bg-elevated) 100%);
+            border-radius: var(--radius-md);
             display: flex;
             align-items: center;
             justify-content: center;
             font-size: 1.3rem;
+            border: 1px solid var(--border-default);
         }
 
         .agent-badges {
@@ -387,20 +434,23 @@
         }
 
         .agent-badge {
-            padding: 0.2rem 0.4rem;
-            border-radius: 4px;
-            font-size: 0.65rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: var(--radius-sm);
+            font-size: 0.7rem;
             font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
         }
 
         .badge-winner {
-            background: var(--gold);
+            background: linear-gradient(135deg, var(--gold) 0%, var(--bronze) 100%);
             color: #000;
         }
 
         .badge-featured {
-            background: var(--purple);
-            color: white;
+            background: rgba(167, 139, 250, 0.2);
+            color: var(--purple);
+            border: 1px solid var(--purple);
         }
 
         .agent-card h3 {
@@ -422,6 +472,7 @@
             -webkit-line-clamp: 2;
             -webkit-box-orient: vertical;
             overflow: hidden;
+            line-height: 1.5;
         }
 
         .agent-stats {
@@ -438,15 +489,15 @@
         /* Competition History */
         .competition-history {
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
             overflow: hidden;
             margin-bottom: 2rem;
         }
 
         .history-header {
             padding: 1rem 1.25rem;
-            border-bottom: 1px solid var(--border-color);
+            border-bottom: 1px solid var(--border-subtle);
             font-weight: 600;
         }
 
@@ -455,8 +506,8 @@
             justify-content: space-between;
             align-items: center;
             padding: 1rem 1.25rem;
-            border-bottom: 1px solid var(--border-color);
-            transition: background 0.2s;
+            border-bottom: 1px solid var(--border-subtle);
+            transition: background 0.2s ease;
         }
 
         .history-item:hover {
@@ -484,14 +535,14 @@
         }
 
         .place-badge {
-            padding: 0.25rem 0.5rem;
-            border-radius: 4px;
+            padding: 0.3rem 0.6rem;
+            border-radius: var(--radius-sm);
             font-size: 0.8rem;
             font-weight: 600;
         }
 
         .place-1 {
-            background: var(--gold);
+            background: linear-gradient(135deg, var(--gold) 0%, var(--bronze) 100%);
             color: #000;
         }
 
@@ -506,21 +557,22 @@
         }
 
         .place-other {
-            background: var(--bg-card-hover);
+            background: var(--bg-elevated);
             color: var(--text-secondary);
+            border: 1px solid var(--border-default);
         }
 
         /* Activity Feed */
         .activity-section {
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
             overflow: hidden;
         }
 
         .activity-header {
             padding: 1rem 1.25rem;
-            border-bottom: 1px solid var(--border-color);
+            border-bottom: 1px solid var(--border-subtle);
             font-weight: 600;
         }
 
@@ -528,7 +580,12 @@
             display: flex;
             gap: 0.75rem;
             padding: 0.875rem 1.25rem;
-            border-bottom: 1px solid var(--border-color);
+            border-bottom: 1px solid var(--border-subtle);
+            transition: background 0.2s ease;
+        }
+
+        .activity-item:hover {
+            background: var(--bg-card-hover);
         }
 
         .activity-item:last-child {
@@ -536,14 +593,15 @@
         }
 
         .activity-icon {
-            width: 32px;
-            height: 32px;
-            background: var(--bg-card-hover);
-            border-radius: 8px;
+            width: 36px;
+            height: 36px;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-md);
             display: flex;
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
+            font-size: 1rem;
         }
 
         .activity-content {
@@ -556,7 +614,8 @@
         }
 
         .activity-content span {
-            color: var(--amd-red);
+            color: var(--amd-red-light);
+            font-weight: 500;
         }
 
         .activity-time {
@@ -573,8 +632,8 @@
 
         .sidebar-card {
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
             padding: 1.25rem;
         }
 
@@ -609,7 +668,7 @@
 
         .tier-bar {
             height: 8px;
-            background: var(--bg-dark);
+            background: var(--bg-elevated);
             border-radius: 4px;
             overflow: hidden;
             margin-bottom: 0.5rem;
@@ -641,11 +700,11 @@
             color: var(--text-secondary);
             text-decoration: none;
             font-size: 0.9rem;
-            transition: color 0.2s;
+            transition: color 0.2s ease;
         }
 
         .link-item:hover {
-            color: var(--amd-red);
+            color: var(--amd-red-light);
         }
 
         /* Similar Developers */
@@ -665,6 +724,7 @@
             align-items: center;
             justify-content: center;
             font-size: 0.9rem;
+            font-weight: 600;
         }
 
         .similar-info h4 {
@@ -679,8 +739,8 @@
         /* Contribution Graph */
         .contribution-section {
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
             padding: 1.5rem;
             margin-bottom: 2rem;
         }
@@ -701,13 +761,13 @@
         .contribution-day {
             width: 12px;
             height: 12px;
-            background: var(--bg-dark);
+            background: var(--bg-elevated);
             border-radius: 2px;
         }
 
-        .contribution-day.l1 { background: rgba(237, 28, 36, 0.25); }
-        .contribution-day.l2 { background: rgba(237, 28, 36, 0.5); }
-        .contribution-day.l3 { background: rgba(237, 28, 36, 0.75); }
+        .contribution-day.l1 { background: rgba(230, 57, 70, 0.25); }
+        .contribution-day.l2 { background: rgba(230, 57, 70, 0.5); }
+        .contribution-day.l3 { background: rgba(230, 57, 70, 0.75); }
         .contribution-day.l4 { background: var(--amd-red); }
 
         .contribution-legend {
@@ -724,19 +784,80 @@
             display: flex;
             gap: 3px;
         }
+
+        /* AMD Dev Program Card */
+        .amd-dev-card {
+            background: linear-gradient(135deg, var(--amd-red-subtle) 0%, var(--bg-card) 100%);
+            border-color: var(--amd-red);
+        }
+
+        .amd-dev-card p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+        }
+
+        .amd-benefits {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .amd-benefits span::before {
+            content: '';
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            margin-right: 0.5rem;
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .main {
+                grid-template-columns: 1fr;
+            }
+            .stats-bar-content {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+
+        @media (max-width: 768px) {
+            .nav {
+                display: none;
+            }
+            .profile-header-content {
+                flex-direction: column;
+                align-items: center;
+                text-align: center;
+            }
+            .profile-actions {
+                align-items: center;
+            }
+            .profile-meta {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+            .stats-bar-content {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
     </style>
 </head>
 <body>
     <!-- Header -->
     <header class="header">
         <div class="header-content">
-            <a href="agents-hub-mockup.html" class="logo">
+            <a href="agents-hub.html" class="logo">
                 <div class="logo-icon">G</div>
                 <div class="logo-text">GAIA <span>Agents Hub</span></div>
             </a>
 
             <nav class="nav">
-                <a href="agents-hub-mockup.html">Discover</a>
+                <a href="agents-hub.html">Discover</a>
                 <a href="competitions.html">Competitions</a>
                 <a href="arena.html">Arena</a>
                 <a href="#">Leaderboard</a>
@@ -757,7 +878,7 @@
             <div class="profile-info">
                 <div class="profile-name-row">
                     <h1 class="profile-name">Jane Doe</h1>
-                    <span class="profile-tier-badge">🏆 Champion</span>
+                    <span class="profile-tier-badge">Champion</span>
                 </div>
                 <p class="profile-handle">@janedoe</p>
                 <p class="profile-bio">
@@ -766,14 +887,14 @@
                     Building the future of AI PC applications.
                 </p>
                 <div class="profile-meta">
-                    <span class="profile-meta-item">📍 San Francisco, CA</span>
-                    <span class="profile-meta-item">📅 Member since January 2026</span>
-                    <span class="profile-meta-item">🔗 github.com/janedoe</span>
+                    <span class="profile-meta-item">San Francisco, CA</span>
+                    <span class="profile-meta-item">Member since January 2026</span>
+                    <span class="profile-meta-item">github.com/janedoe</span>
                 </div>
             </div>
             <div class="profile-actions">
                 <div class="visibility-badge">
-                    🌐 Public Profile
+                    Public Profile
                 </div>
                 <a href="#" class="btn btn-secondary">Edit Profile</a>
                 <a href="#" class="btn btn-secondary">Share</a>
@@ -818,35 +939,35 @@
                 </div>
                 <div class="badges-grid">
                     <div class="badge-item legendary">
-                        <span class="badge-icon">🏆</span>
+                        <span class="badge-icon">W</span>
                         <span>Competition Winner</span>
                     </div>
                     <div class="badge-item">
-                        <span class="badge-icon">⭐</span>
+                        <span class="badge-icon">S</span>
                         <span>Community Favorite</span>
                     </div>
                     <div class="badge-item">
-                        <span class="badge-icon">🔧</span>
+                        <span class="badge-icon">C</span>
                         <span>Contributor</span>
                     </div>
                     <div class="badge-item">
-                        <span class="badge-icon">📦</span>
+                        <span class="badge-icon">D</span>
                         <span>100+ Downloads</span>
                     </div>
                     <div class="badge-item">
-                        <span class="badge-icon">🥉</span>
+                        <span class="badge-icon">3</span>
                         <span>Top 3 Finisher</span>
                     </div>
                     <div class="badge-item">
-                        <span class="badge-icon">🚀</span>
+                        <span class="badge-icon">E</span>
                         <span>Early Adopter</span>
                     </div>
                     <div class="badge-item">
-                        <span class="badge-icon">💬</span>
+                        <span class="badge-icon">V</span>
                         <span>Helpful Voter</span>
                     </div>
                     <div class="badge-item">
-                        <span class="badge-icon">📝</span>
+                        <span class="badge-icon">1</span>
                         <span>First Agent</span>
                     </div>
                 </div>
@@ -893,9 +1014,9 @@
                 <div class="agents-grid">
                     <div class="agent-card">
                         <div class="agent-card-header">
-                            <div class="agent-icon">📝</div>
+                            <div class="agent-icon">T</div>
                             <div class="agent-badges">
-                                <span class="agent-badge badge-winner">🥇 Winner</span>
+                                <span class="agent-badge badge-winner">1st Winner</span>
                                 <span class="agent-badge badge-featured">Featured</span>
                             </div>
                         </div>
@@ -903,47 +1024,47 @@
                         <div class="version">v2.1.0</div>
                         <p class="description">AI assistant for tax preparation and filing. Helps find deductions, explains tax concepts, and processes W-2 forms.</p>
                         <div class="agent-stats">
-                            <span class="rating">★ 4.9 (312)</span>
-                            <span>↓ 1,247</span>
+                            <span class="rating">4.9 (312)</span>
+                            <span>1,247 downloads</span>
                         </div>
                     </div>
                     <div class="agent-card">
                         <div class="agent-card-header">
-                            <div class="agent-icon">📋</div>
+                            <div class="agent-icon">F</div>
                             <div class="agent-badges"></div>
                         </div>
                         <h3>FormFiller</h3>
                         <div class="version">v1.3.0</div>
                         <p class="description">Automatically fills out forms from uploaded documents. Supports PDF forms, government documents, and more.</p>
                         <div class="agent-stats">
-                            <span class="rating">★ 4.5 (67)</span>
-                            <span>↓ 234</span>
+                            <span class="rating">4.5 (67)</span>
+                            <span>234 downloads</span>
                         </div>
                     </div>
                     <div class="agent-card">
                         <div class="agent-card-header">
-                            <div class="agent-icon">🧾</div>
+                            <div class="agent-icon">R</div>
                             <div class="agent-badges"></div>
                         </div>
                         <h3>ReceiptScan</h3>
                         <div class="version">v1.0.0</div>
                         <p class="description">Extracts and categorizes expenses from receipt images. Perfect for expense tracking and budgeting.</p>
                         <div class="agent-stats">
-                            <span class="rating">★ 4.2 (24)</span>
-                            <span>↓ 89</span>
+                            <span class="rating">4.2 (24)</span>
+                            <span>89 downloads</span>
                         </div>
                     </div>
                     <div class="agent-card">
                         <div class="agent-card-header">
-                            <div class="agent-icon">💼</div>
+                            <div class="agent-icon">I</div>
                             <div class="agent-badges"></div>
                         </div>
                         <h3>InvoicePro</h3>
                         <div class="version">v0.9.0</div>
                         <p class="description">Generate professional invoices from natural language descriptions. Supports multiple currencies and templates.</p>
                         <div class="agent-stats">
-                            <span class="rating">★ 4.0 (12)</span>
-                            <span>↓ 45</span>
+                            <span class="rating">4.0 (12)</span>
+                            <span>45 downloads</span>
                         </div>
                     </div>
                 </div>
@@ -955,27 +1076,27 @@
                 <div class="history-item">
                     <div class="history-info">
                         <h4>Best Tax Preparation Agent</h4>
-                        <p>March 2026 • TaxBot v2.0.0</p>
+                        <p>March 2026 - TaxBot v2.0.0</p>
                     </div>
                     <div class="history-result">
-                        <span class="place-badge place-1">🥇 1st Place</span>
+                        <span class="place-badge place-1">1st Place</span>
                         <span style="color: var(--text-muted); font-size: 0.85rem;">52 votes</span>
                     </div>
                 </div>
                 <div class="history-item">
                     <div class="history-info">
                         <h4>Document Processing Challenge</h4>
-                        <p>February 2026 • FormFiller v1.2.0</p>
+                        <p>February 2026 - FormFiller v1.2.0</p>
                     </div>
                     <div class="history-result">
-                        <span class="place-badge place-3">🥉 3rd Place</span>
+                        <span class="place-badge place-3">3rd Place</span>
                         <span style="color: var(--text-muted); font-size: 0.85rem;">28 votes</span>
                     </div>
                 </div>
                 <div class="history-item">
                     <div class="history-info">
                         <h4>Best General Assistant</h4>
-                        <p>January 2026 • TaxBot v1.5.0</p>
+                        <p>January 2026 - TaxBot v1.5.0</p>
                     </div>
                     <div class="history-result">
                         <span class="place-badge place-other">8th Place</span>
@@ -988,35 +1109,35 @@
             <section class="activity-section">
                 <div class="activity-header">Recent Activity</div>
                 <div class="activity-item">
-                    <div class="activity-icon">📦</div>
+                    <div class="activity-icon">P</div>
                     <div class="activity-content">
                         <p>Published <span>TaxBot v2.1.0</span> with improved deduction detection</p>
                         <div class="activity-time">2 days ago</div>
                     </div>
                 </div>
                 <div class="activity-item">
-                    <div class="activity-icon">🏆</div>
+                    <div class="activity-icon">W</div>
                     <div class="activity-content">
                         <p>Won <span>1st Place</span> in Best Tax Preparation Agent</p>
                         <div class="activity-time">1 week ago</div>
                     </div>
                 </div>
                 <div class="activity-item">
-                    <div class="activity-icon">⭐</div>
+                    <div class="activity-icon">V</div>
                     <div class="activity-content">
                         <p>Voted for <span>CodeSensei</span> in Best Code Review Agent</p>
                         <div class="activity-time">2 weeks ago</div>
                     </div>
                 </div>
                 <div class="activity-item">
-                    <div class="activity-icon">📦</div>
+                    <div class="activity-icon">P</div>
                     <div class="activity-content">
                         <p>Published <span>InvoicePro v0.9.0</span> - initial release</p>
                         <div class="activity-time">3 weeks ago</div>
                     </div>
                 </div>
                 <div class="activity-item">
-                    <div class="activity-icon">🥉</div>
+                    <div class="activity-icon">B</div>
                     <div class="activity-content">
                         <p>Earned <span>Top 3 Finisher</span> badge</p>
                         <div class="activity-time">1 month ago</div>
@@ -1032,8 +1153,8 @@
                 <h3>Tier Progress</h3>
                 <div class="tier-progress">
                     <div class="tier-current">
-                        <span class="tier-name">🏆 Champion</span>
-                        <span class="tier-next">Next: ⭐ Legend</span>
+                        <span class="tier-name">Champion</span>
+                        <span class="tier-next">Next: Legend</span>
                     </div>
                     <div class="tier-bar">
                         <div class="tier-bar-fill" style="width: 33%"></div>
@@ -1047,19 +1168,19 @@
                 <h3>Links</h3>
                 <div class="links-list">
                     <a href="#" class="link-item">
-                        <span>🌐</span>
+                        <span>Web</span>
                         <span>janedoe.dev</span>
                     </a>
                     <a href="#" class="link-item">
-                        <span>📦</span>
+                        <span>Code</span>
                         <span>github.com/janedoe</span>
                     </a>
                     <a href="#" class="link-item">
-                        <span>🐦</span>
+                        <span>Social</span>
                         <span>@janedoe</span>
                     </a>
                     <a href="#" class="link-item">
-                        <span>💼</span>
+                        <span>Work</span>
                         <span>linkedin.com/in/janedoe</span>
                     </a>
                 </div>
@@ -1072,36 +1193,36 @@
                     <div class="similar-avatar">A</div>
                     <div class="similar-info">
                         <h4>@alice</h4>
-                        <p>4 agents • Champion</p>
+                        <p>4 agents - Champion</p>
                     </div>
                 </div>
                 <div class="similar-dev">
                     <div class="similar-avatar">B</div>
                     <div class="similar-info">
                         <h4>@bob</h4>
-                        <p>3 agents • Builder</p>
+                        <p>3 agents - Builder</p>
                     </div>
                 </div>
                 <div class="similar-dev">
                     <div class="similar-avatar">T</div>
                     <div class="similar-info">
                         <h4>@techpro</h4>
-                        <p>5 agents • Legend</p>
+                        <p>5 agents - Legend</p>
                     </div>
                 </div>
             </div>
 
             <!-- AMD Dev Program -->
-            <div class="sidebar-card" style="background: linear-gradient(135deg, rgba(237, 28, 36, 0.1) 0%, var(--bg-card) 100%); border-color: var(--amd-red);">
+            <div class="sidebar-card amd-dev-card">
                 <h3>AMD Developer Program</h3>
-                <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
+                <p>
                     Jane is a verified member of the AMD AI Developer Program with access to exclusive benefits.
                 </p>
-                <div style="display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.85rem; color: var(--text-muted);">
-                    <span>✓ Voting rights</span>
-                    <span>✓ Competition entry</span>
-                    <span>✓ Dev Cloud credits</span>
-                    <span>✓ Discord access</span>
+                <div class="amd-benefits">
+                    <span>Voting rights</span>
+                    <span>Competition entry</span>
+                    <span>Dev Cloud credits</span>
+                    <span>Discord access</span>
                 </div>
             </div>
         </aside>

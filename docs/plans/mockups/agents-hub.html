@@ -3,24 +3,49 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GAIA AI PC Agents Hub - Mockup</title>
+    <title>GAIA AI PC Agents Hub</title>
     <style>
         :root {
-            --amd-red: #ED1C24;
-            --amd-red-light: #F4484D;
-            --amd-red-dark: #C8171E;
-            --bg-dark: #0d0d0d;
-            --bg-card: #1a1a1a;
-            --bg-card-hover: #242424;
-            --text-primary: #ffffff;
-            --text-secondary: #a0a0a0;
-            --text-muted: #666666;
-            --border-color: #333333;
-            --success: #22c55e;
-            --warning: #f59e0b;
-            --gold: #fbbf24;
-            --silver: #9ca3af;
-            --bronze: #d97706;
+            /* Softer color palette */
+            --amd-red: #E63946;
+            --amd-red-light: #FF6B6B;
+            --amd-red-dark: #C1121F;
+            --amd-red-subtle: rgba(230, 57, 70, 0.1);
+
+            /* Softer backgrounds - not pure black */
+            --bg-page: #121418;
+            --bg-elevated: #1a1d24;
+            --bg-card: #22262f;
+            --bg-card-hover: #2a2f3a;
+            --bg-input: #2a2f3a;
+
+            /* Text with better hierarchy */
+            --text-primary: #f0f2f5;
+            --text-secondary: #9ca3b0;
+            --text-muted: #6b7280;
+            --text-accent: var(--amd-red-light);
+
+            /* Borders and shadows */
+            --border-subtle: rgba(255, 255, 255, 0.06);
+            --border-default: rgba(255, 255, 255, 0.1);
+            --border-hover: rgba(255, 255, 255, 0.15);
+            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+            --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.3);
+            --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4);
+            --shadow-glow: 0 0 20px rgba(230, 57, 70, 0.15);
+
+            /* Status colors - softer */
+            --success: #4ade80;
+            --warning: #fbbf24;
+            --gold: #fcd34d;
+            --silver: #cbd5e1;
+            --bronze: #f59e0b;
+
+            /* Spacing */
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 24px;
         }
 
         * {
@@ -30,19 +55,21 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background-color: var(--bg-dark);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--bg-page);
             color: var(--text-primary);
             line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
         }
 
         /* Header */
         .header {
-            background: linear-gradient(180deg, #1a1a1a 0%, var(--bg-dark) 100%);
-            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-elevated);
+            border-bottom: 1px solid var(--border-subtle);
             position: sticky;
             top: 0;
             z-index: 100;
+            backdrop-filter: blur(12px);
         }
 
         .header-content {
@@ -63,61 +90,78 @@
         }
 
         .logo-icon {
-            width: 40px;
-            height: 40px;
-            background: var(--amd-red);
-            border-radius: 8px;
+            width: 42px;
+            height: 42px;
+            background: linear-gradient(135deg, var(--amd-red) 0%, var(--amd-red-dark) 100%);
+            border-radius: var(--radius-md);
             display: flex;
             align-items: center;
             justify-content: center;
-            font-weight: bold;
-            font-size: 1.2rem;
+            font-weight: 700;
+            font-size: 1.1rem;
+            box-shadow: var(--shadow-sm);
         }
 
         .logo-text {
-            font-size: 1.25rem;
+            font-size: 1.2rem;
             font-weight: 600;
+            letter-spacing: -0.02em;
         }
 
         .logo-text span {
-            color: var(--amd-red);
+            color: var(--amd-red-light);
         }
 
         .nav {
             display: flex;
-            gap: 2rem;
+            gap: 0.5rem;
             align-items: center;
         }
 
         .nav a {
             color: var(--text-secondary);
             text-decoration: none;
-            font-size: 0.95rem;
-            transition: color 0.2s;
+            font-size: 0.9rem;
+            font-weight: 500;
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius-sm);
+            transition: all 0.2s ease;
         }
 
-        .nav a:hover, .nav a.active {
+        .nav a:hover {
             color: var(--text-primary);
+            background: var(--bg-card);
         }
 
         .nav a.active {
-            color: var(--amd-red);
+            color: var(--amd-red-light);
+            background: var(--amd-red-subtle);
         }
 
         .header-actions {
             display: flex;
-            gap: 1rem;
+            gap: 0.75rem;
             align-items: center;
         }
 
         .search-box {
             display: flex;
             align-items: center;
-            background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 0.5rem 1rem;
-            gap: 0.5rem;
+            background: var(--bg-input);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 0.6rem 1rem;
+            gap: 0.6rem;
+            transition: all 0.2s ease;
+        }
+
+        .search-box:focus-within {
+            border-color: var(--amd-red);
+            box-shadow: 0 0 0 3px var(--amd-red-subtle);
+        }
+
+        .search-box svg {
+            color: var(--text-muted);
         }
 
         .search-box input {
@@ -125,7 +169,8 @@
             border: none;
             color: var(--text-primary);
             outline: none;
-            width: 200px;
+            width: 180px;
+            font-size: 0.9rem;
         }
 
         .search-box input::placeholder {
@@ -133,51 +178,54 @@
         }
 
         .btn {
-            padding: 0.5rem 1rem;
-            border-radius: 8px;
+            padding: 0.6rem 1.25rem;
+            border-radius: var(--radius-lg);
             font-size: 0.9rem;
             font-weight: 500;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.2s ease;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
             gap: 0.5rem;
-        }
-
-        .btn-primary {
-            background: var(--amd-red);
-            color: white;
             border: none;
         }
 
+        .btn-primary {
+            background: linear-gradient(135deg, var(--amd-red) 0%, var(--amd-red-dark) 100%);
+            color: white;
+            box-shadow: var(--shadow-sm);
+        }
+
         .btn-primary:hover {
-            background: var(--amd-red-light);
+            background: linear-gradient(135deg, var(--amd-red-light) 0%, var(--amd-red) 100%);
+            box-shadow: var(--shadow-glow);
+            transform: translateY(-1px);
         }
 
         .btn-secondary {
-            background: transparent;
+            background: var(--bg-card);
             color: var(--text-primary);
-            border: 1px solid var(--border-color);
+            border: 1px solid var(--border-default);
         }
 
         .btn-secondary:hover {
-            background: var(--bg-card);
-            border-color: var(--text-secondary);
+            background: var(--bg-card-hover);
+            border-color: var(--border-hover);
         }
 
-        /* Hero Section - Current Competition */
+        /* Hero Section */
         .hero {
-            background: linear-gradient(135deg, var(--bg-card) 0%, #2d1a1a 100%);
-            border-bottom: 1px solid var(--border-color);
-            padding: 3rem 2rem;
+            background: linear-gradient(180deg, var(--bg-elevated) 0%, var(--bg-page) 100%);
+            padding: 3.5rem 2rem;
+            border-bottom: 1px solid var(--border-subtle);
         }
 
         .hero-content {
             max-width: 1400px;
             margin: 0 auto;
             display: grid;
-            grid-template-columns: 1fr 400px;
+            grid-template-columns: 1fr 380px;
             gap: 3rem;
             align-items: center;
         }
@@ -186,48 +234,73 @@
             display: inline-flex;
             align-items: center;
             gap: 0.5rem;
-            background: rgba(237, 28, 36, 0.2);
+            background: var(--amd-red-subtle);
             color: var(--amd-red-light);
-            padding: 0.4rem 0.8rem;
-            border-radius: 20px;
-            font-size: 0.85rem;
-            font-weight: 500;
-            margin-bottom: 1rem;
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius-xl);
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 1.25rem;
+        }
+
+        .hero-badge::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--amd-red-light);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
         }
 
         .hero h1 {
-            font-size: 2.5rem;
+            font-size: 2.75rem;
             font-weight: 700;
             margin-bottom: 1rem;
-            line-height: 1.2;
+            line-height: 1.15;
+            letter-spacing: -0.03em;
+            background: linear-gradient(135deg, var(--text-primary) 0%, var(--text-secondary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
         }
 
         .hero-description {
             color: var(--text-secondary);
             font-size: 1.1rem;
-            margin-bottom: 1.5rem;
-            max-width: 600px;
+            margin-bottom: 2rem;
+            max-width: 580px;
+            line-height: 1.7;
         }
 
         .hero-meta {
             display: flex;
-            gap: 2rem;
+            gap: 2.5rem;
             margin-bottom: 2rem;
         }
 
         .hero-meta-item {
             display: flex;
             flex-direction: column;
+            gap: 0.25rem;
         }
 
         .hero-meta-label {
             color: var(--text-muted);
-            font-size: 0.85rem;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
         }
 
         .hero-meta-value {
-            font-size: 1.25rem;
-            font-weight: 600;
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
         }
 
         .hero-meta-value.countdown {
@@ -242,36 +315,44 @@
         /* Prize Card */
         .prize-card {
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 1.5rem;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 1.75rem;
+            box-shadow: var(--shadow-md);
         }
 
         .prize-card h3 {
-            font-size: 1rem;
-            color: var(--text-secondary);
-            margin-bottom: 1rem;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 1.25rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
         }
 
         .prize-item {
             display: flex;
             align-items: center;
             gap: 1rem;
-            padding: 0.75rem 0;
-            border-bottom: 1px solid var(--border-color);
+            padding: 1rem;
+            margin: 0.5rem 0;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-md);
+            transition: all 0.2s ease;
         }
 
-        .prize-item:last-child {
-            border-bottom: none;
+        .prize-item:hover {
+            background: var(--bg-card-hover);
+            transform: translateX(4px);
         }
 
         .prize-medal {
-            font-size: 1.5rem;
+            font-size: 1.75rem;
         }
 
         .prize-details h4 {
             font-size: 0.95rem;
-            margin-bottom: 0.25rem;
+            font-weight: 600;
+            margin-bottom: 0.2rem;
         }
 
         .prize-details p {
@@ -283,7 +364,7 @@
         .main {
             max-width: 1400px;
             margin: 0 auto;
-            padding: 2rem;
+            padding: 2.5rem 2rem;
         }
 
         /* Section Headers */
@@ -291,101 +372,114 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 1.5rem;
+            margin-bottom: 1.75rem;
         }
 
         .section-title {
             font-size: 1.5rem;
             font-weight: 600;
+            letter-spacing: -0.02em;
         }
 
         .section-link {
-            color: var(--amd-red);
+            color: var(--amd-red-light);
             text-decoration: none;
             font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s ease;
         }
 
         .section-link:hover {
-            text-decoration: underline;
+            color: var(--amd-red);
         }
 
         /* Categories */
         .categories {
             display: flex;
-            gap: 0.75rem;
+            gap: 0.6rem;
             flex-wrap: wrap;
-            margin-bottom: 2rem;
+            margin-bottom: 2.5rem;
         }
 
         .category-tag {
-            padding: 0.5rem 1rem;
+            padding: 0.6rem 1.25rem;
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 20px;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-xl);
             color: var(--text-secondary);
             font-size: 0.9rem;
+            font-weight: 500;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.2s ease;
         }
 
-        .category-tag:hover, .category-tag.active {
-            background: var(--amd-red);
+        .category-tag:hover {
+            background: var(--bg-card-hover);
+            color: var(--text-primary);
+            border-color: var(--border-hover);
+        }
+
+        .category-tag.active {
+            background: var(--amd-red-subtle);
             border-color: var(--amd-red);
-            color: white;
+            color: var(--amd-red-light);
         }
 
         /* Agent Cards Grid */
         .agents-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
             gap: 1.5rem;
-            margin-bottom: 3rem;
+            margin-bottom: 3.5rem;
         }
 
         .agent-card {
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
             padding: 1.5rem;
-            transition: all 0.2s;
+            transition: all 0.3s ease;
             cursor: pointer;
         }
 
         .agent-card:hover {
             background: var(--bg-card-hover);
             border-color: var(--amd-red);
-            transform: translateY(-2px);
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-lg), var(--shadow-glow);
         }
 
         .agent-card-header {
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
-            margin-bottom: 1rem;
+            margin-bottom: 1.25rem;
         }
 
         .agent-icon {
-            width: 48px;
-            height: 48px;
-            background: linear-gradient(135deg, var(--amd-red) 0%, var(--amd-red-dark) 100%);
-            border-radius: 12px;
+            width: 52px;
+            height: 52px;
+            background: linear-gradient(135deg, var(--bg-card-hover) 0%, var(--bg-elevated) 100%);
+            border-radius: var(--radius-md);
             display: flex;
             align-items: center;
             justify-content: center;
             font-size: 1.5rem;
+            border: 1px solid var(--border-default);
         }
 
         .agent-badges {
             display: flex;
-            gap: 0.5rem;
+            gap: 0.4rem;
         }
 
         .badge {
-            padding: 0.25rem 0.5rem;
-            border-radius: 4px;
+            padding: 0.3rem 0.6rem;
+            border-radius: var(--radius-sm);
             font-size: 0.7rem;
             font-weight: 600;
             text-transform: uppercase;
+            letter-spacing: 0.03em;
         }
 
         .badge-winner {
@@ -394,27 +488,32 @@
         }
 
         .badge-official {
-            background: var(--amd-red);
-            color: white;
+            background: var(--amd-red-subtle);
+            color: var(--amd-red-light);
+            border: 1px solid var(--amd-red);
         }
 
         .badge-new {
-            background: var(--success);
-            color: white;
+            background: rgba(74, 222, 128, 0.15);
+            color: var(--success);
+            border: 1px solid var(--success);
         }
 
         .badge-featured {
-            background: #8b5cf6;
-            color: white;
+            background: rgba(139, 92, 246, 0.15);
+            color: #a78bfa;
+            border: 1px solid #8b5cf6;
         }
 
         .agent-card h3 {
-            font-size: 1.1rem;
-            margin-bottom: 0.25rem;
+            font-size: 1.15rem;
+            font-weight: 600;
+            margin-bottom: 0.3rem;
+            letter-spacing: -0.01em;
         }
 
         .agent-author {
-            color: var(--text-secondary);
+            color: var(--text-muted);
             font-size: 0.9rem;
             margin-bottom: 0.75rem;
         }
@@ -427,21 +526,22 @@
             -webkit-line-clamp: 2;
             -webkit-box-orient: vertical;
             overflow: hidden;
+            line-height: 1.5;
         }
 
         .agent-stats {
             display: flex;
-            gap: 1rem;
-            margin-bottom: 1rem;
+            gap: 1.25rem;
+            margin-bottom: 1.25rem;
             padding-top: 1rem;
-            border-top: 1px solid var(--border-color);
+            border-top: 1px solid var(--border-subtle);
         }
 
         .agent-stat {
             display: flex;
             align-items: center;
-            gap: 0.35rem;
-            color: var(--text-secondary);
+            gap: 0.4rem;
+            color: var(--text-muted);
             font-size: 0.85rem;
         }
 
@@ -453,13 +553,13 @@
             display: flex;
             gap: 0.5rem;
             flex-wrap: wrap;
-            margin-bottom: 1rem;
+            margin-bottom: 1.25rem;
         }
 
         .agent-tag {
-            padding: 0.2rem 0.5rem;
-            background: rgba(255,255,255,0.05);
-            border-radius: 4px;
+            padding: 0.3rem 0.65rem;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-sm);
             font-size: 0.75rem;
             color: var(--text-muted);
         }
@@ -472,24 +572,26 @@
         .agent-actions .btn {
             flex: 1;
             justify-content: center;
+            padding: 0.65rem 1rem;
         }
 
         /* Leaderboard Section */
         .leaderboard {
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 1.5rem;
-            margin-bottom: 3rem;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 1.75rem;
+            margin-bottom: 3.5rem;
+            box-shadow: var(--shadow-sm);
         }
 
         .leaderboard-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 1rem;
+            margin-bottom: 1.5rem;
             padding-bottom: 1rem;
-            border-bottom: 1px solid var(--border-color);
+            border-bottom: 1px solid var(--border-subtle);
         }
 
         .leaderboard-title {
@@ -498,21 +600,24 @@
         }
 
         .leaderboard-meta {
-            color: var(--text-secondary);
+            color: var(--text-muted);
             font-size: 0.9rem;
         }
 
         .leaderboard-item {
             display: grid;
-            grid-template-columns: 50px 1fr 150px 100px 80px;
+            grid-template-columns: 50px 1fr 160px 80px 70px;
             align-items: center;
-            padding: 1rem 0;
-            border-bottom: 1px solid var(--border-color);
+            padding: 1rem;
+            margin: 0.5rem 0;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-md);
             gap: 1rem;
+            transition: all 0.2s ease;
         }
 
-        .leaderboard-item:last-child {
-            border-bottom: none;
+        .leaderboard-item:hover {
+            background: var(--bg-card-hover);
         }
 
         .leaderboard-rank {
@@ -532,47 +637,49 @@
         }
 
         .leaderboard-agent-icon {
-            width: 40px;
-            height: 40px;
-            background: var(--bg-card-hover);
-            border-radius: 8px;
+            width: 44px;
+            height: 44px;
+            background: var(--bg-card);
+            border-radius: var(--radius-md);
             display: flex;
             align-items: center;
             justify-content: center;
+            font-size: 1.25rem;
         }
 
         .leaderboard-agent-info h4 {
             font-size: 0.95rem;
-            margin-bottom: 0.2rem;
+            font-weight: 600;
+            margin-bottom: 0.15rem;
         }
 
         .leaderboard-agent-info p {
-            color: var(--text-secondary);
+            color: var(--text-muted);
             font-size: 0.85rem;
         }
 
         .leaderboard-votes {
             display: flex;
             align-items: center;
-            gap: 0.5rem;
+            gap: 0.75rem;
         }
 
         .vote-bar {
             flex: 1;
-            height: 8px;
-            background: var(--border-color);
-            border-radius: 4px;
+            height: 6px;
+            background: var(--bg-card);
+            border-radius: 3px;
             overflow: hidden;
         }
 
         .vote-bar-fill {
             height: 100%;
-            background: var(--amd-red);
-            border-radius: 4px;
+            background: linear-gradient(90deg, var(--amd-red) 0%, var(--amd-red-light) 100%);
+            border-radius: 3px;
         }
 
         .vote-count {
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             color: var(--text-secondary);
             min-width: 60px;
             text-align: right;
@@ -583,52 +690,82 @@
             font-size: 0.9rem;
         }
 
+        /* Credits Callout */
+        .credits-callout {
+            background: linear-gradient(135deg, var(--amd-red-subtle) 0%, rgba(139, 92, 246, 0.08) 100%);
+            border: 1px solid var(--amd-red);
+            border-radius: var(--radius-lg);
+            padding: 1.75rem 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 3rem;
+            box-shadow: var(--shadow-glow);
+        }
+
+        .credits-content h3 {
+            font-size: 1.15rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .credits-content p {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
         /* Arena Preview */
         .arena-preview {
-            background: linear-gradient(135deg, #1a1a2e 0%, var(--bg-card) 100%);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 2rem;
-            margin-bottom: 3rem;
+            background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-elevated) 100%);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 2.5rem;
+            margin-bottom: 3.5rem;
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 2rem;
+            gap: 3rem;
             align-items: center;
         }
 
         .arena-info h2 {
             font-size: 1.75rem;
+            font-weight: 600;
             margin-bottom: 1rem;
+            letter-spacing: -0.02em;
         }
 
         .arena-info p {
             color: var(--text-secondary);
-            margin-bottom: 1.5rem;
+            margin-bottom: 1.75rem;
+            line-height: 1.7;
         }
 
         .arena-features {
             display: flex;
             flex-direction: column;
-            gap: 0.75rem;
-            margin-bottom: 1.5rem;
+            gap: 0.85rem;
+            margin-bottom: 2rem;
         }
 
         .arena-feature {
             display: flex;
             align-items: center;
-            gap: 0.75rem;
+            gap: 0.85rem;
             color: var(--text-secondary);
+            font-size: 0.95rem;
         }
 
         .arena-feature-icon {
             color: var(--success);
+            font-size: 1.1rem;
         }
 
         .arena-mockup {
-            background: var(--bg-dark);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 1rem;
+            background: var(--bg-page);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-md);
+            padding: 1.25rem;
+            box-shadow: var(--shadow-md);
         }
 
         .arena-mockup-header {
@@ -636,8 +773,8 @@
             justify-content: space-between;
             align-items: center;
             margin-bottom: 1rem;
-            padding-bottom: 0.5rem;
-            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid var(--border-subtle);
         }
 
         .arena-mockup-title {
@@ -646,65 +783,71 @@
         }
 
         .arena-mockup-badge {
-            background: var(--success);
-            color: white;
-            padding: 0.2rem 0.5rem;
-            border-radius: 4px;
+            background: rgba(74, 222, 128, 0.15);
+            color: var(--success);
+            padding: 0.25rem 0.6rem;
+            border-radius: var(--radius-sm);
             font-size: 0.7rem;
+            font-weight: 600;
         }
 
         .arena-chat {
             display: flex;
             flex-direction: column;
-            gap: 0.75rem;
+            gap: 0.85rem;
         }
 
         .arena-message {
-            padding: 0.75rem 1rem;
-            border-radius: 8px;
+            padding: 0.85rem 1.1rem;
+            border-radius: var(--radius-md);
             font-size: 0.85rem;
-            max-width: 85%;
+            max-width: 88%;
+            line-height: 1.5;
         }
 
         .arena-message.bot {
             background: var(--bg-card);
             align-self: flex-start;
+            border: 1px solid var(--border-subtle);
         }
 
         .arena-message.user {
-            background: var(--amd-red);
+            background: linear-gradient(135deg, var(--amd-red) 0%, var(--amd-red-dark) 100%);
             align-self: flex-end;
         }
 
-        /* Recent Activity */
+        /* Activity Section */
         .activity {
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 1.5rem;
-            margin-bottom: 3rem;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 1.75rem;
+            margin-bottom: 3.5rem;
         }
 
         .activity-item {
             display: flex;
             align-items: center;
             gap: 1rem;
-            padding: 0.75rem 0;
-            border-bottom: 1px solid var(--border-color);
+            padding: 1rem;
+            margin: 0.4rem 0;
+            border-radius: var(--radius-md);
+            transition: all 0.2s ease;
         }
 
-        .activity-item:last-child {
-            border-bottom: none;
+        .activity-item:hover {
+            background: var(--bg-elevated);
         }
 
         .activity-icon {
-            width: 36px;
-            height: 36px;
-            background: var(--bg-card-hover);
-            border-radius: 8px;
+            width: 40px;
+            height: 40px;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-md);
             display: flex;
             align-items: center;
             justify-content: center;
+            font-size: 1.1rem;
         }
 
         .activity-content {
@@ -716,7 +859,8 @@
         }
 
         .activity-content span {
-            color: var(--amd-red);
+            color: var(--amd-red-light);
+            font-weight: 500;
         }
 
         .activity-time {
@@ -724,32 +868,34 @@
             font-size: 0.8rem;
         }
 
-        /* Developer Profile Preview */
+        /* Profile Preview */
         .profile-preview {
             display: grid;
-            grid-template-columns: 300px 1fr;
+            grid-template-columns: 280px 1fr;
             gap: 2rem;
-            margin-bottom: 3rem;
+            margin-bottom: 3.5rem;
         }
 
         .profile-card {
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 1.5rem;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 2rem 1.5rem;
             text-align: center;
         }
 
         .profile-avatar {
-            width: 80px;
-            height: 80px;
+            width: 88px;
+            height: 88px;
             background: linear-gradient(135deg, var(--amd-red) 0%, #8b5cf6 100%);
             border-radius: 50%;
-            margin: 0 auto 1rem;
+            margin: 0 auto 1.25rem;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 2rem;
+            font-size: 2.25rem;
+            font-weight: 600;
+            box-shadow: var(--shadow-md);
         }
 
         .profile-name {
@@ -759,7 +905,7 @@
         }
 
         .profile-handle {
-            color: var(--text-secondary);
+            color: var(--text-muted);
             margin-bottom: 1rem;
         }
 
@@ -769,19 +915,19 @@
             gap: 0.5rem;
             background: linear-gradient(135deg, var(--gold) 0%, #f59e0b 100%);
             color: #000;
-            padding: 0.35rem 0.75rem;
-            border-radius: 20px;
+            padding: 0.4rem 0.85rem;
+            border-radius: var(--radius-xl);
             font-size: 0.8rem;
             font-weight: 600;
-            margin-bottom: 1rem;
+            margin-bottom: 1.25rem;
         }
 
         .profile-stats {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
             gap: 1rem;
-            padding-top: 1rem;
-            border-top: 1px solid var(--border-color);
+            padding-top: 1.25rem;
+            border-top: 1px solid var(--border-subtle);
         }
 
         .profile-stat {
@@ -800,34 +946,59 @@
 
         .profile-badges-section {
             background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 1.5rem;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 1.75rem;
+        }
+
+        .profile-badges-section h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
         }
 
         .profile-badges-grid {
             display: flex;
             flex-wrap: wrap;
-            gap: 0.75rem;
-            margin-top: 1rem;
+            gap: 0.6rem;
+            margin-bottom: 2rem;
         }
 
         .profile-badge {
             display: flex;
             align-items: center;
             gap: 0.5rem;
-            padding: 0.5rem 0.75rem;
-            background: var(--bg-card-hover);
-            border-radius: 8px;
+            padding: 0.5rem 0.85rem;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-md);
             font-size: 0.85rem;
+            border: 1px solid var(--border-subtle);
+            transition: all 0.2s ease;
+        }
+
+        .profile-badge:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--border-default);
+        }
+
+        .competition-history-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid var(--border-subtle);
+            font-size: 0.9rem;
+        }
+
+        .competition-history-item:last-child {
+            border-bottom: none;
         }
 
         /* Footer */
         .footer {
-            background: var(--bg-card);
-            border-top: 1px solid var(--border-color);
-            padding: 3rem 2rem;
-            margin-top: 3rem;
+            background: var(--bg-elevated);
+            border-top: 1px solid var(--border-subtle);
+            padding: 3.5rem 2rem;
+            margin-top: 2rem;
         }
 
         .footer-content {
@@ -842,13 +1013,16 @@
             color: var(--text-secondary);
             margin-top: 1rem;
             font-size: 0.9rem;
+            line-height: 1.6;
         }
 
         .footer-section h4 {
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             font-weight: 600;
             margin-bottom: 1rem;
             color: var(--text-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
         }
 
         .footer-section ul {
@@ -856,24 +1030,25 @@
         }
 
         .footer-section li {
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.6rem;
         }
 
         .footer-section a {
             color: var(--text-secondary);
             text-decoration: none;
             font-size: 0.9rem;
+            transition: color 0.2s ease;
         }
 
         .footer-section a:hover {
-            color: var(--amd-red);
+            color: var(--amd-red-light);
         }
 
         .footer-bottom {
             max-width: 1400px;
-            margin: 2rem auto 0;
+            margin: 2.5rem auto 0;
             padding-top: 2rem;
-            border-top: 1px solid var(--border-color);
+            border-top: 1px solid var(--border-subtle);
             display: flex;
             justify-content: space-between;
             color: var(--text-muted);
@@ -883,36 +1058,16 @@
         /* Notification Banner */
         .notification-banner {
             background: linear-gradient(90deg, var(--amd-red) 0%, #8b5cf6 100%);
-            padding: 0.75rem 2rem;
+            padding: 0.85rem 2rem;
             text-align: center;
             font-size: 0.9rem;
         }
 
         .notification-banner a {
             color: white;
-            font-weight: 500;
-        }
-
-        /* Developer Credits Callout */
-        .credits-callout {
-            background: linear-gradient(135deg, rgba(237, 28, 36, 0.1) 0%, rgba(139, 92, 246, 0.1) 100%);
-            border: 1px solid var(--amd-red);
-            border-radius: 12px;
-            padding: 1.5rem 2rem;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 3rem;
-        }
-
-        .credits-content h3 {
-            font-size: 1.1rem;
-            margin-bottom: 0.5rem;
-        }
-
-        .credits-content p {
-            color: var(--text-secondary);
-            font-size: 0.9rem;
+            font-weight: 600;
+            text-decoration: underline;
+            text-underline-offset: 2px;
         }
 
         /* Responsive */
@@ -920,15 +1075,12 @@
             .hero-content {
                 grid-template-columns: 1fr;
             }
-
             .arena-preview {
                 grid-template-columns: 1fr;
             }
-
             .profile-preview {
                 grid-template-columns: 1fr;
             }
-
             .footer-content {
                 grid-template-columns: repeat(2, 1fr);
             }
@@ -938,19 +1090,15 @@
             .nav {
                 display: none;
             }
-
             .agents-grid {
                 grid-template-columns: 1fr;
             }
-
             .leaderboard-item {
                 grid-template-columns: 40px 1fr 80px;
             }
-
             .leaderboard-votes, .leaderboard-rating {
                 display: none;
             }
-
             .footer-content {
                 grid-template-columns: 1fr;
             }
@@ -960,7 +1108,7 @@
 <body>
     <!-- Notification Banner -->
     <div class="notification-banner">
-        New Competition Live: <a href="#">Best Code Review Agent</a> - 12 days remaining. Enter now for a chance to win an AMD Ryzen AI PC!
+        New Competition Live: <a href="#">Best Code Review Agent</a> — 12 days remaining. Enter now for a chance to win an AMD Ryzen AI PC!
     </div>
 
     <!-- Header -->
@@ -988,7 +1136,7 @@
                     <input type="text" placeholder="Search agents...">
                 </div>
                 <a href="#" class="btn btn-secondary">Sign In</a>
-                <a href="#" class="btn btn-primary">Join AMD Dev Program</a>
+                <a href="#" class="btn btn-primary">Join Program</a>
             </div>
         </div>
     </header>
@@ -998,13 +1146,12 @@
         <div class="hero-content">
             <div class="hero-main">
                 <div class="hero-badge">
-                    <span>LIVE COMPETITION</span>
+                    <span>Live Competition</span>
                 </div>
                 <h1>Best Code Review Agent</h1>
                 <p class="hero-description">
                     Build an AI agent that reviews code for bugs, security issues, style violations,
-                    and best practices. The winning agent will be featured on the Agents Hub homepage
-                    and the developer wins an AMD Ryzen AI PC.
+                    and best practices. Winners receive prizes and get featured on the Agents Hub homepage.
                 </p>
 
                 <div class="hero-meta">
@@ -1029,7 +1176,7 @@
             </div>
 
             <div class="prize-card">
-                <h3>PRIZES</h3>
+                <h3>Prizes</h3>
                 <div class="prize-item">
                     <span class="prize-medal">🥇</span>
                     <div class="prize-details">
@@ -1076,7 +1223,6 @@
             <span class="category-tag">Data</span>
             <span class="category-tag">Automation</span>
             <span class="category-tag">Voice</span>
-            <span class="category-tag">Healthcare</span>
         </div>
 
         <!-- Featured Agents -->
@@ -1087,7 +1233,7 @@
             </div>
 
             <div class="agents-grid">
-                <!-- Agent Card 1 - Competition Winner -->
+                <!-- Agent Card 1 -->
                 <div class="agent-card">
                     <div class="agent-card-header">
                         <div class="agent-icon">📝</div>
@@ -1115,7 +1261,7 @@
                     </div>
                 </div>
 
-                <!-- Agent Card 2 - AMD Official -->
+                <!-- Agent Card 2 -->
                 <div class="agent-card">
                     <div class="agent-card-header">
                         <div class="agent-icon">💬</div>
@@ -1169,7 +1315,7 @@
                     </div>
                 </div>
 
-                <!-- Agent Card 4 - New -->
+                <!-- Agent Card 4 -->
                 <div class="agent-card">
                     <div class="agent-card-header">
                         <div class="agent-icon">🔍</div>
@@ -1233,7 +1379,7 @@
                     </div>
                     <h3>TalkAgent</h3>
                     <p class="agent-author">by @amd</p>
-                    <p class="agent-description">Voice-first interaction with speech-to-speech capabilities. Talk naturally with AI using Whisper ASR and Kokoro TTS.</p>
+                    <p class="agent-description">Voice-first interaction with speech-to-speech capabilities. Talk naturally using Whisper ASR and Kokoro TTS.</p>
                     <div class="agent-tags">
                         <span class="agent-tag">voice</span>
                         <span class="agent-tag">ASR</span>
@@ -1252,11 +1398,11 @@
             </div>
         </section>
 
-        <!-- Current Competition Leaderboard -->
+        <!-- Leaderboard -->
         <section class="leaderboard">
             <div class="leaderboard-header">
-                <h2 class="leaderboard-title">🏆 Competition Leaderboard: Best Code Review Agent</h2>
-                <span class="leaderboard-meta">142 votes cast • 12 days remaining</span>
+                <h2 class="leaderboard-title">🏆 Competition: Best Code Review Agent</h2>
+                <span class="leaderboard-meta">142 votes • 12 days remaining</span>
             </div>
 
             <div class="leaderboard-item">
@@ -1273,7 +1419,7 @@
                     <span class="vote-count">47 votes</span>
                 </div>
                 <span class="leaderboard-rating">★ 4.7</span>
-                <a href="#" class="btn btn-secondary" style="padding: 0.35rem 0.75rem;">Try</a>
+                <a href="#" class="btn btn-secondary" style="padding: 0.4rem 0.85rem; font-size: 0.85rem;">Try</a>
             </div>
 
             <div class="leaderboard-item">
@@ -1290,7 +1436,7 @@
                     <span class="vote-count">41 votes</span>
                 </div>
                 <span class="leaderboard-rating">★ 4.5</span>
-                <a href="#" class="btn btn-secondary" style="padding: 0.35rem 0.75rem;">Try</a>
+                <a href="#" class="btn btn-secondary" style="padding: 0.4rem 0.85rem; font-size: 0.85rem;">Try</a>
             </div>
 
             <div class="leaderboard-item">
@@ -1307,7 +1453,7 @@
                     <span class="vote-count">28 votes</span>
                 </div>
                 <span class="leaderboard-rating">★ 4.3</span>
-                <a href="#" class="btn btn-secondary" style="padding: 0.35rem 0.75rem;">Try</a>
+                <a href="#" class="btn btn-secondary" style="padding: 0.4rem 0.85rem; font-size: 0.85rem;">Try</a>
             </div>
 
             <div class="leaderboard-item">
@@ -1324,7 +1470,7 @@
                     <span class="vote-count">18 votes</span>
                 </div>
                 <span class="leaderboard-rating">★ 4.1</span>
-                <a href="#" class="btn btn-secondary" style="padding: 0.35rem 0.75rem;">Try</a>
+                <a href="#" class="btn btn-secondary" style="padding: 0.4rem 0.85rem; font-size: 0.85rem;">Try</a>
             </div>
 
             <div class="leaderboard-item">
@@ -1341,7 +1487,7 @@
                     <span class="vote-count">8 votes</span>
                 </div>
                 <span class="leaderboard-rating">★ 3.9</span>
-                <a href="#" class="btn btn-secondary" style="padding: 0.35rem 0.75rem;">Try</a>
+                <a href="#" class="btn btn-secondary" style="padding: 0.4rem 0.85rem; font-size: 0.85rem;">Try</a>
             </div>
         </section>
 
@@ -1379,14 +1525,14 @@
                     <span class="arena-mockup-badge">LIVE</span>
                 </div>
                 <div class="arena-chat">
-                    <div class="arena-message bot">Hi! I'm ChatAgent. Upload a document or ask me anything. I can help with document Q&A, summarization, and more.</div>
+                    <div class="arena-message bot">Hi! I'm ChatAgent. Upload a document or ask me anything. I can help with Q&A, summarization, and more.</div>
                     <div class="arena-message user">Can you summarize the key points from this quarterly report?</div>
-                    <div class="arena-message bot">Of course! Based on the Q4 2025 report you uploaded, here are the key points: 1) Revenue increased 23% YoY... 2) New product launches exceeded targets...</div>
+                    <div class="arena-message bot">Based on the Q4 2025 report, here are the key points: 1) Revenue increased 23% YoY... 2) New product launches exceeded targets...</div>
                 </div>
             </div>
         </section>
 
-        <!-- Developer Profile Preview -->
+        <!-- Profile Preview -->
         <section>
             <div class="section-header">
                 <h2 class="section-title">Top Contributors</h2>
@@ -1432,26 +1578,24 @@
                         <div class="profile-badge">📝 First Agent</div>
                     </div>
 
-                    <h3 style="margin-top: 1.5rem;">Competition History</h3>
-                    <div style="margin-top: 1rem;">
-                        <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">
-                            <span>Mar 2026 "Best Tax Agent"</span>
-                            <span style="color: var(--gold);">🥇 1st Place</span>
-                        </div>
-                        <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">
-                            <span>Feb 2026 "Document Processing"</span>
-                            <span style="color: var(--bronze);">🥉 3rd Place</span>
-                        </div>
-                        <div style="display: flex; justify-content: space-between; padding: 0.5rem 0;">
-                            <span>Jan 2026 "General Assistant"</span>
-                            <span style="color: var(--text-muted);">8th Place</span>
-                        </div>
+                    <h3>Competition History</h3>
+                    <div class="competition-history-item">
+                        <span>Mar 2026 "Best Tax Agent"</span>
+                        <span style="color: var(--gold);">🥇 1st Place</span>
+                    </div>
+                    <div class="competition-history-item">
+                        <span>Feb 2026 "Document Processing"</span>
+                        <span style="color: var(--bronze);">🥉 3rd Place</span>
+                    </div>
+                    <div class="competition-history-item">
+                        <span>Jan 2026 "General Assistant"</span>
+                        <span style="color: var(--text-muted);">8th Place</span>
                     </div>
                 </div>
             </div>
         </section>
 
-        <!-- Recent Activity -->
+        <!-- Activity -->
         <section class="activity">
             <div class="section-header">
                 <h2 class="section-title">Recent Activity</h2>
