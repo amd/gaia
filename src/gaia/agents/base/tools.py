@@ -17,7 +17,10 @@ _TOOL_REGISTRY = {}
 
 
 def tool(
-    func: Callable = None, **kwargs  # pylint: disable=unused-argument
+    func: Callable = None,
+    *,
+    atomic: bool = False,
+    **kwargs,  # pylint: disable=unused-argument
 ) -> Callable:
     """
     Decorator to register a function as a tool.
@@ -28,6 +31,7 @@ def tool(
 
     Args:
         func: Function to register as a tool (when used as @tool)
+        atomic: If True, marks this tool as atomic (can execute without multi-step planning)
         **kwargs: Optional arguments (ignored, for backward compatibility)
 
     Returns:
@@ -63,12 +67,13 @@ def tool(
 
             params[name] = param_info
 
-        # Register the tool
+        # Register the tool with atomic metadata
         _TOOL_REGISTRY[tool_name] = {
             "name": tool_name,
             "description": f.__doc__ or "",
             "parameters": params,
             "function": f,
+            "atomic": atomic,
         }
 
         # Return the function unchanged

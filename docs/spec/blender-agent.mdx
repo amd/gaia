@@ -63,8 +63,6 @@ BlenderAgent enables natural language 3D scene creation in Blender. It translate
 class BlenderAgent(Agent):
     """Blender-specific agent for 3D scene creation."""
 
-    SIMPLE_TOOLS = ["clear_scene", "get_scene_info"]
-
     def __init__(
         self,
         mcp: Optional[MCPClient] = None,
