@@ -2111,6 +2111,41 @@ Examples:
         "--all", action="store_true", help="Clear all caches"
     )
 
+    # Init command (one-stop GAIA setup)
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Initialize GAIA: install Lemonade and download models",
+        parents=[parent_parser],
+    )
+    init_parser.add_argument(
+        "--profile",
+        "-p",
+        default="chat",
+        choices=["minimal", "chat", "code", "rag", "all"],
+        help="Profile to initialize: minimal, chat, code, rag, all (default: chat)",
+    )
+    init_parser.add_argument(
+        "--skip-models",
+        action="store_true",
+        help="Skip model downloads (only install Lemonade)",
+    )
+    init_parser.add_argument(
+        "--force-reinstall",
+        action="store_true",
+        help="Force reinstall even if compatible version exists",
+    )
+    init_parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip confirmation prompts (non-interactive)",
+    )
+    init_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose output",
+    )
+
     args = parser.parse_args()
 
     # Check if action is specified
@@ -4087,6 +4122,19 @@ Let me know your answer!
     if args.action == "visualize":
         handle_visualize_command(args)
         return
+
+    # Handle init command
+    if args.action == "init":
+        from gaia.installer.init_command import run_init
+
+        exit_code = run_init(
+            profile=args.profile,
+            skip_models=args.skip_models,
+            force_reinstall=args.force_reinstall,
+            yes=args.yes,
+            verbose=getattr(args, "verbose", False),
+        )
+        sys.exit(exit_code)
 
     # Log error for unknown action
     log.error(f"Unknown action specified: {args.action}")
