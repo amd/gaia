@@ -956,7 +956,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         # Chat agent requires qwen3-coder-30b, nomic-embed, qwen2.5-vl-7b
         self.assertIn("Qwen3-Coder-30B-A3B-Instruct-GGUF", model_ids)
         self.assertIn("nomic-embed-text-v2-moe-GGUF", model_ids)
-        self.assertIn("Qwen2.5-VL-7B-Instruct-GGUF", model_ids)
+        self.assertIn("Qwen3-VL-4B-Instruct-GGUF", model_ids)
 
     def test_get_required_models_for_code(self):
         """Test get_required_models returns correct models for code agent."""
@@ -981,7 +981,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         # Should have all unique models
         self.assertIn("Qwen3-Coder-30B-A3B-Instruct-GGUF", model_ids)
         self.assertIn("nomic-embed-text-v2-moe-GGUF", model_ids)
-        self.assertIn("Qwen2.5-VL-7B-Instruct-GGUF", model_ids)
+        self.assertIn("Qwen3-VL-4B-Instruct-GGUF", model_ids)
         self.assertIn("Qwen2.5-0.5B-Instruct-CPU", model_ids)
         # Should be exactly 4 unique models
         self.assertEqual(len(model_ids), 4)

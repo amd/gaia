@@ -34,7 +34,7 @@ VLMClient provides Vision-Language Model capabilities for extracting text from i
 ### Functional Requirements
 
 1. **Model Management**
-   - Load VLM model (Qwen2.5-VL-7B-Instruct-GGUF)
+   - Load VLM model (Qwen3-VL-4B-Instruct-GGUF)
    - Automatic model download via Lemonade
    - Model availability checking
    - State tracking (loaded/unloaded)
@@ -104,7 +104,7 @@ class VLMClient:
     VLM client for extracting text from images using Lemonade server.
 
     Handles:
-    - Model loading (Qwen2.5-VL-7B-Instruct-GGUF)
+    - Model loading (Qwen3-VL-4B-Instruct-GGUF)
     - Image-to-markdown conversion
     - State tracking for VLM processing
 
@@ -121,7 +121,7 @@ class VLMClient:
 
     def __init__(
         self,
-        vlm_model: str = "Qwen2.5-VL-7B-Instruct-GGUF",
+        vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF",
         base_url: Optional[str] = None,
         auto_load: bool = True,
     ):
@@ -157,10 +157,10 @@ class VLMClient:
             >>> vlm = VLMClient()
             >>> if not vlm.check_availability():
             ...     print("Model not available")
-            ❌ VLM model not found: Qwen2.5-VL-7B-Instruct-GGUF
+            ❌ VLM model not found: Qwen3-VL-4B-Instruct-GGUF
             📥 To download this model:
                1. Open Lemonade Model Manager (http://localhost:8000)
-               2. Search for: Qwen2.5-VL-7B-Instruct-GGUF
+               2. Search for: Qwen3-VL-4B-Instruct-GGUF
                3. Click 'Download' to install the model
         """
         pass
@@ -451,7 +451,7 @@ def test_initialize_vlm_client():
     """Test VLM client initialization."""
     with patch('gaia.llm.vlm_client.LemonadeClient'):
         vlm = VLMClient()
-        assert vlm.vlm_model == "Qwen2.5-VL-7B-Instruct-GGUF"
+        assert vlm.vlm_model == "Qwen3-VL-4B-Instruct-GGUF"
         assert vlm.auto_load is True
         assert vlm.vlm_loaded is False
 
@@ -476,7 +476,7 @@ def test_check_availability_success():
         vlm = VLMClient()
         vlm.client.list_models = Mock(return_value={
             "data": [
-                {"id": "Qwen2.5-VL-7B-Instruct-GGUF"},
+                {"id": "Qwen3-VL-4B-Instruct-GGUF"},
                 {"id": "Other-Model"}
             ]
         })

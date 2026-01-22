@@ -167,10 +167,10 @@ MODELS = {
         min_ctx_size=2048,
     ),
     # VLM Models
-    "qwen2.5-vl-7b": ModelRequirement(
+    "qwen3-vl-4b": ModelRequirement(
         model_type=ModelType.VLM,
-        model_id="Qwen2.5-VL-7B-Instruct-GGUF",
-        display_name="Qwen2.5 VL 7B",
+        model_id="Qwen3-VL-4B-Instruct-GGUF",
+        display_name="Qwen3 VL 4B",
         min_ctx_size=8192,
     ),
 }
@@ -180,7 +180,7 @@ AGENT_PROFILES = {
     "chat": AgentProfile(
         name="chat",
         display_name="Chat Agent",
-        models=["qwen3-coder-30b", "nomic-embed", "qwen2.5-vl-7b"],
+        models=["qwen3-coder-30b", "nomic-embed", "qwen3-vl-4b"],
         min_ctx_size=32768,
         description="Interactive chat with RAG and vision support",
     ),
@@ -201,7 +201,7 @@ AGENT_PROFILES = {
     "rag": AgentProfile(
         name="rag",
         display_name="RAG System",
-        models=["qwen3-coder-30b", "nomic-embed", "qwen2.5-vl-7b"],
+        models=["qwen3-coder-30b", "nomic-embed", "qwen3-vl-4b"],
         min_ctx_size=32768,
         description="Document Q&A with retrieval and vision",
     ),
@@ -229,7 +229,7 @@ AGENT_PROFILES = {
     "vlm": AgentProfile(
         name="vlm",
         display_name="Vision Agent",
-        models=["qwen2.5-vl-7b"],
+        models=["qwen3-vl-4b"],
         min_ctx_size=8192,
         description="Image understanding and analysis",
     ),
@@ -243,7 +243,7 @@ AGENT_PROFILES = {
     "mcp": AgentProfile(
         name="mcp",
         display_name="MCP Bridge",
-        models=["qwen3-coder-30b", "nomic-embed", "qwen2.5-vl-7b"],
+        models=["qwen3-coder-30b", "nomic-embed", "qwen3-vl-4b"],
         min_ctx_size=32768,
         description="Model Context Protocol bridge server with vision",
     ),

@@ -31,7 +31,7 @@
     .\scripts\start-lemonade.ps1 -ModelName "Qwen3-0.6B-GGUF"
 
 .EXAMPLE
-    .\scripts\start-lemonade.ps1 -ModelName "nomic-embed-text-v2-moe-GGUF" -AdditionalModels "Qwen3-0.6B-GGUF,Qwen2.5-VL-7B-Instruct-GGUF" -InitWaitTime 30 -ClearCache
+    .\scripts\start-lemonade.ps1 -ModelName "nomic-embed-text-v2-moe-GGUF" -AdditionalModels "Qwen3-0.6B-GGUF,Qwen3-VL-4B-Instruct-GGUF" -InitWaitTime 30 -ClearCache
 #>
 
 param(

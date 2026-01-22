@@ -22,7 +22,7 @@ AI-powered patient intake form processing using AMD Ryzen AI.
 
 2. Start Lemonade Server with VLM model:
    ```bash
-   lemonade server --model Qwen2.5-VL-7B-Instruct-GGUF
+   lemonade server --model Qwen3-VL-4B-Instruct-GGUF
    ```
 
 ### CLI Usage
