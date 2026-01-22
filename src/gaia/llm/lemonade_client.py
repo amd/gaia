@@ -2074,7 +2074,30 @@ class LemonadeClient:
 
             # Model not loaded - load it (will download if needed without prompting)
             self.log.info(f"Model '{model}' not loaded, loading...")
+
+            try:
+                from rich.console import Console
+
+                console = Console()
+                console.print(
+                    f"[bold blue]🔄 Loading model:[/bold blue] [cyan]{model}[/cyan]..."
+                )
+            except ImportError:
+                console = None
+                print(f"🔄 Loading model: {model}...")
+
             self.load_model(model, auto_download=True, prompt=False)
+
+            # Print model ready message
+            try:
+                if console:
+                    console.print(
+                        f"[bold green]✅ Model loaded:[/bold green] [cyan]{model}[/cyan]"
+                    )
+                else:
+                    print(f"✅ Model loaded: {model}")
+            except Exception:
+                pass  # Ignore print errors
 
         except Exception as e:
             # Log but don't fail - let the actual request fail with proper error
