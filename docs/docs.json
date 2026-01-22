@@ -308,6 +308,7 @@
               "plans/installer",
               "plans/chat-ui",
               "plans/mcp-client",
+              "plans/cua",
               "plans/mcp-docs"
             ]
           }
