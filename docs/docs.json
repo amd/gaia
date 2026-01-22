@@ -53,7 +53,7 @@
               {
                 "group": "Hardware Advisor Agent",
                 "pages": [
-                  "playbooks/hardware-advisor/part-1-getting-started"
+                  "playbooks/hardware-advisor/index"
                 ]
               },
               {
