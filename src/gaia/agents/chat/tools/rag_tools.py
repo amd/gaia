@@ -1073,12 +1073,20 @@ class RAGToolsMixin:
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
 
-                # Validate path with user confirmation
-                if not self.session_manager.validate_path(file_path, operation="index"):
-                    return {"status": "error", "error": f"Access denied: {file_path}"}
+                # Resolve to real path for consistent validation
+                real_file_path = os.path.realpath(file_path)
+
+                # Validate path with ChatAgent's internal logic (which uses allowed_paths)
+                if hasattr(self, "_is_path_allowed"):
+                    if not self._is_path_allowed(real_file_path):
+                        return {
+                            "status": "error",
+                            "error": f"Access denied: {real_file_path} is not in allowed paths",
+                        }
 
                 # Index the document (now returns dict with stats)
-                result = self.rag.index_document(file_path)
+                # Use real_file_path to ensure consistency in RAG index
+                result = self.rag.index_document(real_file_path)
 
                 if result.get("success"):
                     self.indexed_files.add(file_path)

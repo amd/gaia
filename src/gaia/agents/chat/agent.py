@@ -92,6 +92,9 @@ class ChatAgent(
         # Initialize path validator
         self.path_validator = PathValidator(config.allowed_paths)
 
+        # Store config for access in other methods
+        self.config = config
+
         # Now use config for all initialization
         # Store RAG configuration from config
         self.rag_documents = config.rag_documents
@@ -131,6 +134,7 @@ class ChatAgent(
                 use_local_llm=not (config.use_claude or config.use_chatgpt),
                 use_llm_chunking=config.use_llm_chunking,  # Enable semantic chunking
                 base_url=config.base_url,  # Pass base_url to RAG for VLM client
+                allowed_paths=config.allowed_paths,  # Pass allowed paths to RAG SDK
             )
             self.rag = RAGSDK(rag_config)
         except ImportError as e:
@@ -250,10 +254,7 @@ No documents are currently indexed.
 """
 
         # Add indexed documents section
-        prompt = (
-            base_prompt
-            + indexed_docs_section
-            + """
+        prompt = base_prompt + indexed_docs_section + """
 **WHEN TO USE TOOLS VS DIRECT ANSWERS:**
 
 Use Format 1 (answer) for:
@@ -359,7 +360,6 @@ When user asks to "index my data folder" or similar:
 2. Show user the matches and ask which one (if multiple)
 3. Use index_directory on the chosen path
 4. Report indexing results"""
-        )
 
         return prompt
 
@@ -456,7 +456,7 @@ When user asks to "index my data folder" or similar:
     def _is_path_allowed(self, path: str) -> bool:
         """
         Check if a path is within allowed directories.
-        Uses real path resolution to prevent TOCTOU attacks.
+        Uses PathValidator for the actual check.
 
         Args:
             path: Path to validate
@@ -464,24 +464,7 @@ When user asks to "index my data folder" or similar:
         Returns:
             True if path is allowed, False otherwise
         """
-        try:
-            # Resolve path using os.path.realpath to follow symlinks
-            # This prevents TOCTOU attacks by resolving at check time
-            real_path = Path(os.path.realpath(path)).resolve()
-
-            # Check if real path is within any allowed directory
-            for allowed_path in self.allowed_paths:
-                try:
-                    # is_relative_to requires Python 3.9+, use alternative for compatibility
-                    real_path.relative_to(allowed_path)
-                    return True
-                except ValueError:
-                    continue
-
-            return False
-        except Exception as e:
-            logger.error(f"Error validating path {path}: {e}")
-            return False
+        return self.path_validator.is_path_allowed(path, prompt_user=False)
 
     def _validate_and_open_file(self, file_path: str, mode: str = "r"):
         """
@@ -715,18 +698,26 @@ When user asks to "index my data folder" or similar:
             )
             return
 
+        # Resolve to real path for consistent validation
+        real_file_path = os.path.realpath(file_path)
+
+        # Security check
+        if not self._is_path_allowed(real_file_path):
+            logger.warning(f"Re-indexing skipped: Path not allowed {real_file_path}")
+            return
+
         try:
-            logger.info(f"Reindexing: {file_path}")
+            logger.info(f"Reindexing: {real_file_path}")
             # Use the new reindex_document method which removes old chunks first
-            result = self.rag.reindex_document(file_path)
+            result = self.rag.reindex_document(real_file_path)
             if result.get("success"):
                 self.indexed_files.add(file_path)
-                logger.info(f"Successfully reindexed {file_path}")
+                logger.info(f"Successfully reindexed {real_file_path}")
             else:
                 error = result.get("error", "Unknown error")
-                logger.error(f"Failed to reindex {file_path}: {error}")
+                logger.error(f"Failed to reindex {real_file_path}: {error}")
         except Exception as e:
-            logger.error(f"Failed to reindex {file_path}: {e}")
+            logger.error(f"Failed to reindex {real_file_path}: {e}")
 
     def stop_watching(self) -> None:
         """Stop all file system observers."""

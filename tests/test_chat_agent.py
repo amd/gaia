@@ -8,7 +8,6 @@ import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-import numpy as np
 import pytest
 
 from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
@@ -32,9 +31,20 @@ class TestChatAgent:
         return str(pdf_path)
 
     @pytest.fixture
-    def agent(self):
+    def agent(self, temp_dir):
         """Create Chat Agent instance."""
-        agent = ChatAgent(ChatAgentConfig(silent_mode=True, debug=False, max_steps=5))
+        # Use absolute paths for configuration
+        # On macOS, temp_dir might be in /var/... but resolved to /private/var/...
+        # We MUST use the resolved path for ChatAgent configuration because it uses
+        # realpath() internally for validation.
+        resolved_temp_dir = str(Path(temp_dir).resolve())
+        config = ChatAgentConfig(
+            silent_mode=True,
+            debug=False,
+            max_steps=5,
+            allowed_paths=[resolved_temp_dir, str(Path.cwd().resolve())],
+        )
+        agent = ChatAgent(config)
         yield agent
         # Cleanup
         agent.stop_watching()
@@ -306,12 +316,23 @@ class TestChatAgentEval:
     """Evaluation tests for Chat Agent quality metrics."""
 
     @pytest.fixture
+    def temp_dir(self):
+        """Create temporary directory for test files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield tmpdir
+
+    @pytest.fixture
     def agent_with_docs(self, temp_dir):
         """Create agent with test documents."""
         # This would be expanded with actual test documents
+        resolved_temp_dir = str(Path(temp_dir).resolve())
         agent = ChatAgent(
             ChatAgentConfig(
-                silent_mode=True, debug=False, rag_documents=[], max_steps=10
+                silent_mode=True,
+                debug=False,
+                rag_documents=[],
+                max_steps=10,
+                allowed_paths=[resolved_temp_dir, str(Path.cwd().resolve())],
             )
         )
         yield agent
@@ -375,9 +396,17 @@ class TestChatAgentTools:
     """Test chat agent tools from mixins."""
 
     @pytest.fixture
-    def agent(self):
+    def agent(self, temp_dir):
         """Create Chat Agent instance."""
-        agent = ChatAgent(ChatAgentConfig(silent_mode=True, debug=False, max_steps=5))
+        # Use resolved paths for configuration
+        resolved_temp_dir = str(Path(temp_dir).resolve())
+        config = ChatAgentConfig(
+            silent_mode=True,
+            debug=False,
+            max_steps=5,
+            allowed_paths=[resolved_temp_dir, str(Path.cwd().resolve())],
+        )
+        agent = ChatAgent(config)
         yield agent
         agent.stop_watching()
 
@@ -459,27 +488,39 @@ class DataManager {
 
     def test_index_text_file(self, agent, sample_txt_file):
         """Test indexing a text file."""
-        success = agent.rag.index_document(sample_txt_file)
-        assert success
-        assert sample_txt_file in agent.rag.indexed_files
+        # Use str(Path().resolve()) for the input path to ensure it passes ChatAgent validation
+        # which uses os.path.realpath().resolve()
+        res_sample_path = str(Path(sample_txt_file).resolve())
+        result = agent.rag.index_document(res_sample_path)
+        assert result["success"], f"Indexing failed: {result.get('error')}"
+
+        # RAG stores paths as absolute() (not resolved)
+        abs_path = str(Path(res_sample_path).absolute())
+        assert abs_path in agent.rag.indexed_files
 
     def test_index_markdown_file(self, agent, sample_md_file):
         """Test indexing a markdown file."""
-        success = agent.rag.index_document(sample_md_file)
-        assert success
-        assert sample_md_file in agent.rag.indexed_files
+        res_sample_path = str(Path(sample_md_file).resolve())
+        result = agent.rag.index_document(res_sample_path)
+        assert result["success"], f"Indexing failed: {result.get('error')}"
+        abs_path = str(Path(res_sample_path).absolute())
+        assert abs_path in agent.rag.indexed_files
 
     def test_index_csv_file(self, agent, sample_csv_file):
         """Test indexing a CSV file."""
-        success = agent.rag.index_document(sample_csv_file)
-        assert success
-        assert sample_csv_file in agent.rag.indexed_files
+        res_sample_path = str(Path(sample_csv_file).resolve())
+        result = agent.rag.index_document(res_sample_path)
+        assert result["success"], f"Indexing failed: {result.get('error')}"
+        abs_path = str(Path(res_sample_path).absolute())
+        assert abs_path in agent.rag.indexed_files
 
     def test_index_json_file(self, agent, sample_json_file):
         """Test indexing a JSON file."""
-        success = agent.rag.index_document(sample_json_file)
-        assert success
-        assert sample_json_file in agent.rag.indexed_files
+        res_sample_path = str(Path(sample_json_file).resolve())
+        result = agent.rag.index_document(res_sample_path)
+        assert result["success"], f"Indexing failed: {result.get('error')}"
+        abs_path = str(Path(res_sample_path).absolute())
+        assert abs_path in agent.rag.indexed_files
 
     def test_query_after_indexing(self, agent, sample_txt_file):
         """Test querying after indexing a document."""
@@ -490,15 +531,19 @@ class DataManager {
 
     def test_index_python_file(self, agent, sample_python_file):
         """Test indexing a Python code file."""
-        success = agent.rag.index_document(sample_python_file)
-        assert success
-        assert sample_python_file in agent.rag.indexed_files
+        res_sample_path = str(Path(sample_python_file).resolve())
+        result = agent.rag.index_document(res_sample_path)
+        assert result["success"], f"Indexing failed: {result.get('error')}"
+        abs_path = str(Path(res_sample_path).absolute())
+        assert abs_path in agent.rag.indexed_files
 
     def test_index_javascript_file(self, agent, sample_js_file):
         """Test indexing a JavaScript file."""
-        success = agent.rag.index_document(sample_js_file)
-        assert success
-        assert sample_js_file in agent.rag.indexed_files
+        res_sample_path = str(Path(sample_js_file).resolve())
+        result = agent.rag.index_document(res_sample_path)
+        assert result["success"], f"Indexing failed: {result.get('error')}"
+        abs_path = str(Path(res_sample_path).absolute())
+        assert abs_path in agent.rag.indexed_files
 
     def test_query_code_file(self, agent, sample_python_file):
         """Test querying code after indexing."""
@@ -559,16 +604,26 @@ class DataManager {
             cmd = f'ls "{temp_dir}"'
 
         # We can't easily test this without mocking, but we can test the path validation
-        assert agent._is_path_allowed(temp_dir)
+        # Use str(Path().absolute()) to match agent configuration
+        abs_temp_dir = str(Path(temp_dir).absolute())
+        assert agent._is_path_allowed(abs_temp_dir)
 
 
 class TestChatAgentSummarization:
     """Test document summarization functionality."""
 
     @pytest.fixture
-    def agent(self):
+    def agent(self, temp_dir):
         """Create Chat Agent instance."""
-        agent = ChatAgent(ChatAgentConfig(silent_mode=True, debug=False, max_steps=5))
+        # Use resolved paths for configuration
+        resolved_temp_dir = str(Path(temp_dir).resolve())
+        config = ChatAgentConfig(
+            silent_mode=True,
+            debug=False,
+            max_steps=5,
+            allowed_paths=[resolved_temp_dir, str(Path.cwd().resolve())],
+        )
+        agent = ChatAgent(config)
         yield agent
         agent.stop_watching()
 
@@ -609,9 +664,23 @@ class TestChatAgentSessions:
     """Test session management functionality."""
 
     @pytest.fixture
-    def agent(self):
+    def temp_dir(self):
+        """Create temporary directory for test files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield tmpdir
+
+    @pytest.fixture
+    def agent(self, temp_dir):
         """Create Chat Agent instance."""
-        agent = ChatAgent(ChatAgentConfig(silent_mode=True, debug=False, max_steps=5))
+        # Use resolved paths for configuration
+        resolved_temp_dir = str(Path(temp_dir).resolve())
+        config = ChatAgentConfig(
+            silent_mode=True,
+            debug=False,
+            max_steps=5,
+            allowed_paths=[resolved_temp_dir, str(Path.cwd().resolve())],
+        )
+        agent = ChatAgent(config)
         yield agent
         agent.stop_watching()
 
@@ -748,10 +817,13 @@ class TestChatAgentPathValidation:
     def agent(self):
         """Create Chat Agent instance with restricted paths."""
         with tempfile.TemporaryDirectory() as tmpdir:
+            resolved_tmpdir = str(Path(tmpdir).resolve())
             agent = ChatAgent(
-                ChatAgentConfig(silent_mode=True, debug=False, allowed_paths=[tmpdir])
+                ChatAgentConfig(
+                    silent_mode=True, debug=False, allowed_paths=[resolved_tmpdir]
+                )
             )
-            yield agent, tmpdir
+            yield agent, resolved_tmpdir
             agent.stop_watching()
 
     def test_allowed_path(self, agent):
@@ -771,9 +843,17 @@ class TestChatAgentCodeSupport:
     """Test code file indexing and retrieval capabilities."""
 
     @pytest.fixture
-    def agent(self):
+    def agent(self, temp_dir):
         """Create Chat Agent instance."""
-        agent = ChatAgent(ChatAgentConfig(silent_mode=True, debug=False, max_steps=5))
+        # Use resolved paths for configuration
+        resolved_temp_dir = str(Path(temp_dir).resolve())
+        config = ChatAgentConfig(
+            silent_mode=True,
+            debug=False,
+            max_steps=5,
+            allowed_paths=[resolved_temp_dir, str(Path.cwd().resolve())],
+        )
+        agent = ChatAgent(config)
         yield agent
         agent.stop_watching()
 
@@ -791,19 +871,16 @@ class TestChatAgentCodeSupport:
         src_dir.mkdir()
 
         # Python file
-        (src_dir / "auth.py").write_text(
-            '''
+        (src_dir / "auth.py").write_text('''
 class UserAuth:
     """Authentication handler."""
     def authenticate(self, username, password):
         # TODO: Add rate limiting
         return self.check_credentials(username, password)
-'''
-        )
+''')
 
         # JavaScript file
-        (src_dir / "api.js").write_text(
-            """
+        (src_dir / "api.js").write_text("""
 // API client
 class APIClient {
     constructor(baseUrl) {
@@ -815,18 +892,15 @@ class APIClient {
         return fetch(`${this.baseUrl}/users/${userId}`);
     }
 }
-"""
-        )
+""")
 
         # Config file
-        (src_dir / "config.yaml").write_text(
-            """
+        (src_dir / "config.yaml").write_text("""
 database:
   host: localhost
   port: 5432
   name: myapp
-"""
-        )
+""")
 
         return str(src_dir)
 
@@ -837,8 +911,7 @@ database:
         web_dir.mkdir()
 
         # HTML file
-        (web_dir / "index.html").write_text(
-            """
+        (web_dir / "index.html").write_text("""
 <!DOCTYPE html>
 <html>
 <head>
@@ -851,12 +924,10 @@ database:
     </div>
 </body>
 </html>
-"""
-        )
+""")
 
         # CSS file
-        (web_dir / "styles.css").write_text(
-            """
+        (web_dir / "styles.css").write_text("""
 .container {
     max-width: 1200px;
     margin: 0 auto;
@@ -866,12 +937,10 @@ database:
     background-color: #0056b3;
     transform: scale(1.05);
 }
-"""
-        )
+""")
 
         # Vue component
-        (web_dir / "UserCard.vue").write_text(
-            """
+        (web_dir / "UserCard.vue").write_text("""
 <template>
   <div class="user-card">
     <h2>{{ user.name }}</h2>
@@ -887,12 +956,10 @@ export default {
   }
 }
 </script>
-"""
-        )
+""")
 
         # React component (JSX)
-        (web_dir / "Button.jsx").write_text(
-            """
+        (web_dir / "Button.jsx").write_text("""
 import React from 'react';
 
 export function Button({ onClick, children }) {
@@ -902,12 +969,10 @@ export function Button({ onClick, children }) {
     </button>
   );
 }
-"""
-        )
+""")
 
         # SCSS file
-        (web_dir / "variables.scss").write_text(
-            """
+        (web_dir / "variables.scss").write_text("""
 $primary-color: #007bff;
 $secondary-color: #6c757d;
 
@@ -917,8 +982,7 @@ $secondary-color: #6c757d;
     background-color: darken($primary-color, 10%);
   }
 }
-"""
-        )
+""")
 
         return str(web_dir)
 
@@ -929,8 +993,11 @@ $secondary-color: #6c757d;
         # Index all files
         for file in src_dir.glob("*"):
             if file.is_file():
-                success = agent.rag.index_document(str(file))
-                assert success
+                res_sample_path = str(file.resolve())
+                result = agent.rag.index_document(res_sample_path)
+                assert result[
+                    "success"
+                ], f"Indexing failed for {file}: {result.get('error')}"
 
         # Should have indexed 3 files
         assert len(agent.rag.indexed_files) == 3
@@ -976,8 +1043,11 @@ $secondary-color: #6c757d;
         # Index all files
         for file in web_dir.glob("*"):
             if file.is_file():
-                success = agent.rag.index_document(str(file))
-                assert success
+                res_sample_path = str(file.resolve())
+                result = agent.rag.index_document(res_sample_path)
+                assert result[
+                    "success"
+                ], f"Indexing failed for {file}: {result.get('error')}"
 
         # Should have indexed HTML, CSS, Vue, JSX, SCSS files
         assert len(agent.rag.indexed_files) == 5
