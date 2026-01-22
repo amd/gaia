@@ -30,7 +30,7 @@ INIT_PROFILES = {
         "description": "Fast setup with lightweight model",
         "agent": "minimal",
         "models": ["Qwen3-4B-Instruct-2507-GGUF"],  # Override default minimal model
-        "approx_size": "~4 GB",
+        "approx_size": "~2.5 GB",
     },
     "chat": {
         "description": "Interactive chat with RAG and vision support",
@@ -48,13 +48,13 @@ INIT_PROFILES = {
         "description": "Document Q&A with retrieval",
         "agent": "rag",
         "models": None,
-        "approx_size": "~30 GB",
+        "approx_size": "~25 GB",
     },
     "all": {
         "description": "All models for all agents",
         "agent": "all",
         "models": None,
-        "approx_size": "~35 GB",
+        "approx_size": "~26 GB",
     },
 }
 
@@ -112,9 +112,13 @@ class InitCommand:
             valid = ", ".join(INIT_PROFILES.keys())
             raise ValueError(f"Invalid profile '{profile}'. Valid profiles: {valid}")
 
+        # Use minimal installer for minimal profile
+        use_minimal = self.profile == "minimal"
+
         self.installer = LemonadeInstaller(
             target_version=LEMONADE_VERSION,
             progress_callback=self._download_progress if verbose else None,
+            minimal=use_minimal,
         )
 
     def _print(self, message: str, end: str = "\n"):
@@ -391,11 +395,13 @@ class InitCommand:
             if result.success:
                 self._print_success(f"Installed Lemonade v{result.version}")
 
-                # Update PATH hint for Windows
-                if self.installer.system == "windows":
-                    self._print("")
-                    self._print(
-                        "   Note: You may need to restart your terminal for PATH changes."
+                # Verify installation by checking version
+                self._print("   Verifying installation...")
+                verify_info = self.installer.check_installation()
+
+                if verify_info.installed and verify_info.version:
+                    self._print_success(
+                        f"Verified: lemonade-server v{verify_info.version}"
                     )
 
                 return True
@@ -414,6 +420,22 @@ class InitCommand:
             self._print_error(f"Failed to install: {e}")
             return False
 
+    def _find_lemonade_server(self) -> Optional[str]:
+        """
+        Find the lemonade-server executable.
+
+        Uses the installer's PATH refresh to pick up recent MSI changes.
+
+        Returns:
+            Path to lemonade-server executable, or None if not found
+        """
+        import shutil
+
+        # Use installer's PATH refresh (reads from Windows registry)
+        self.installer._refresh_path_from_registry()
+
+        return shutil.which("lemonade-server")
+
     def _ensure_server_running(self) -> bool:
         """
         Ensure Lemonade server is running.
@@ -421,6 +443,8 @@ class InitCommand:
         Returns:
             True if server is running, False on failure
         """
+        import subprocess
+
         try:
             # Import here to avoid circular imports
             from gaia.llm.lemonade_client import LemonadeClient
@@ -439,23 +463,47 @@ class InitCommand:
             # Try to start the server
             self._print("   Server not running, attempting to start...")
 
-            # Use LemonadeManager to ensure the server is ready
-            from gaia.llm.lemonade_manager import LemonadeManager
+            # Find lemonade-server executable
+            lemonade_path = self._find_lemonade_server()
+            if not lemonade_path:
+                self._print_error("lemonade-server not found")
+                self._print("   Try opening a new terminal to refresh PATH")
+                return False
 
-            if LemonadeManager.ensure_ready(quiet=not self.verbose):
-                # Wait a moment for server to be ready
-                time.sleep(2)
+            # Start lemonade-server serve in background
+            try:
+                # Use subprocess.Popen to start in background
+                # Redirect output to DEVNULL for clean background operation
+                process = subprocess.Popen(
+                    [lemonade_path, "serve"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,  # Detach from parent process
+                )
+                log.debug(f"Started lemonade-server with PID {process.pid}")
+            except Exception as e:
+                self._print_error(f"Failed to start lemonade-server: {e}")
+                return False
 
-                # Verify it started
+            # Wait for server to be ready (poll health endpoint)
+            self._print("   Waiting for server to be ready...")
+            max_wait = 30  # seconds
+            wait_interval = 1
+            elapsed = 0
+
+            while elapsed < max_wait:
+                time.sleep(wait_interval)
+                elapsed += wait_interval
+
                 try:
                     health = client.health_check()
                     if health:
                         self._print_success("Server started successfully")
                         return True
                 except Exception:
-                    pass
+                    pass  # Keep waiting
 
-            self._print_error("Failed to start server")
+            self._print_error("Server failed to start within timeout")
             self._print("   Try starting manually with: lemonade-server serve")
             return False
 
@@ -568,6 +616,8 @@ class InitCommand:
                 return True
 
             self._print(f"   Need to download: {len(models_to_download)} model(s)")
+            for model_id in models_to_download:
+                self._print(f"   📥 {model_id}")
             self._print(f"   Estimated size: {profile_config['approx_size']}")
             self._print("")
 

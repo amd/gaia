@@ -127,6 +127,68 @@ gaia init --force-reinstall
 **Version Mismatch Warning:** If your installed Lemonade version doesn't match the expected version, `gaia init` will warn you and suggest reinstalling. Use `--force-reinstall` to automatically update.
 </Tip>
 
+### Install Command
+
+Install individual GAIA components.
+
+```bash
+gaia install [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `--lemonade` | flag | Install Lemonade Server |
+| `--yes, -y` | flag | Skip confirmation prompts |
+
+**Examples:**
+
+<CodeGroup>
+```bash Install Lemonade
+gaia install --lemonade
+```
+
+```bash Non-Interactive
+gaia install --lemonade --yes
+```
+</CodeGroup>
+
+<Note>
+If a different version of Lemonade is already installed, you'll be prompted to uninstall first.
+</Note>
+
+### Uninstall Command
+
+Uninstall GAIA components.
+
+```bash
+gaia uninstall [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `--lemonade` | flag | Uninstall Lemonade Server |
+| `--yes, -y` | flag | Skip confirmation prompts |
+
+**Examples:**
+
+<CodeGroup>
+```bash Uninstall Lemonade
+gaia uninstall --lemonade
+```
+
+```bash Non-Interactive
+gaia uninstall --lemonade --yes
+```
+</CodeGroup>
+
+<Tip>
+The uninstall command automatically downloads the correct MSI version matching your installed Lemonade to ensure clean removal.
+</Tip>
+
 ---
 
 ## Core Commands
@@ -884,15 +946,27 @@ gaia youtube \
 Terminate processes running on specific ports.
 
 ```bash
-gaia kill --port PORT_NUMBER
+gaia kill [OPTIONS]
 ```
 
-**Example:**
+**Options:**
 
-Kill process on port 8000:
-```bash
+| Option | Type | Description |
+|--------|------|-------------|
+| `--port` | integer | Port number to kill process on |
+| `--lemonade` | flag | Kill Lemonade server (port 8000) |
+
+**Examples:**
+
+<CodeGroup>
+```bash Kill Lemonade Server
+gaia kill --lemonade
+```
+
+```bash Kill by Port
 gaia kill --port 8000
 ```
+</CodeGroup>
 
 This command will:
 - Find the process ID (PID) bound to the specified port

@@ -87,7 +87,7 @@ class TestLemonadeInstaller(unittest.TestCase):
         mock_system.return_value = "Windows"
         installer = LemonadeInstaller(target_version="9.1.4")
         url = installer.get_download_url()
-        self.assertIn("lemonade-9.1.4.msi", url)
+        self.assertIn("v9.1.4/lemonade.msi", url)
         self.assertIn("github.com", url)
 
     @patch("platform.system")
@@ -96,7 +96,7 @@ class TestLemonadeInstaller(unittest.TestCase):
         mock_system.return_value = "Linux"
         installer = LemonadeInstaller(target_version="9.1.4")
         url = installer.get_download_url()
-        self.assertIn("lemonade_9.1.4_amd64.deb", url)
+        self.assertIn("v9.1.4/lemonade_9.1.4_amd64.deb", url)
         self.assertIn("github.com", url)
 
     @patch("platform.system")
@@ -107,6 +107,31 @@ class TestLemonadeInstaller(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             installer.get_download_url()
         self.assertIn("not supported", str(ctx.exception))
+
+    @patch("platform.system")
+    def test_get_download_url_windows_minimal(self, mock_system):
+        """Test download URL generation for Windows minimal installer."""
+        mock_system.return_value = "Windows"
+        installer = LemonadeInstaller(target_version="9.1.4", minimal=True)
+        url = installer.get_download_url()
+        self.assertIn("v9.1.4/lemonade-server-minimal.msi", url)
+        self.assertIn("github.com", url)
+
+    @patch("platform.system")
+    def test_get_installer_filename_windows_minimal(self, mock_system):
+        """Test installer filename for Windows minimal installer."""
+        mock_system.return_value = "Windows"
+        installer = LemonadeInstaller(target_version="9.1.4", minimal=True)
+        filename = installer.get_installer_filename()
+        self.assertEqual(filename, "lemonade-server-minimal.msi")
+
+    @patch("platform.system")
+    def test_get_installer_filename_windows_full(self, mock_system):
+        """Test installer filename for Windows full installer."""
+        mock_system.return_value = "Windows"
+        installer = LemonadeInstaller(target_version="9.1.4", minimal=False)
+        filename = installer.get_installer_filename()
+        self.assertEqual(filename, "lemonade.msi")
 
     def test_needs_install_not_installed(self):
         """Test needs_install when not installed."""

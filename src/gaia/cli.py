@@ -1330,7 +1330,12 @@ Available agents: chat, code, talk, rag, blender, jira, docker, vlm, minimal, mc
         "kill", help="Kill process running on specific port", parents=[parent_parser]
     )
     kill_parser.add_argument(
-        "--port", type=int, required=True, help="Port number to kill process on"
+        "--port", type=int, default=None, help="Port number to kill process on"
+    )
+    kill_parser.add_argument(
+        "--lemonade",
+        action="store_true",
+        help="Kill Lemonade server (port 8000)",
     )
 
     # Add LLM app command
@@ -2125,6 +2130,11 @@ Examples:
         help="Profile to initialize: minimal, chat, code, rag, all (default: chat)",
     )
     init_parser.add_argument(
+        "--minimal",
+        action="store_true",
+        help="Use minimal profile (~2.5 GB) - shortcut for --profile minimal",
+    )
+    init_parser.add_argument(
         "--skip-models",
         action="store_true",
         help="Skip model downloads (only install Lemonade)",
@@ -2144,6 +2154,42 @@ Examples:
         "--verbose",
         action="store_true",
         help="Enable verbose output",
+    )
+
+    # Install command (install specific components)
+    install_parser = subparsers.add_parser(
+        "install",
+        help="Install GAIA components",
+        parents=[parent_parser],
+    )
+    install_parser.add_argument(
+        "--lemonade",
+        action="store_true",
+        help="Install Lemonade Server",
+    )
+    install_parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip confirmation prompts",
+    )
+
+    # Uninstall command (uninstall specific components)
+    uninstall_parser = subparsers.add_parser(
+        "uninstall",
+        help="Uninstall GAIA components",
+        parents=[parent_parser],
+    )
+    uninstall_parser.add_argument(
+        "--lemonade",
+        action="store_true",
+        help="Uninstall Lemonade Server",
+    )
+    uninstall_parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip confirmation prompts",
     )
 
     args = parser.parse_args()
@@ -2828,8 +2874,18 @@ Let me know your answer!
 
     # Handle kill command
     if args.action == "kill":
-        log.info(f"Attempting to kill process on port {args.port}")
-        result = kill_process_by_port(args.port)
+        # Determine which port to kill
+        if args.lemonade:
+            port = 8000
+            log.info("Attempting to kill Lemonade server on port 8000")
+        elif args.port:
+            port = args.port
+            log.info(f"Attempting to kill process on port {port}")
+        else:
+            print("❌ Specify --lemonade or --port <number>")
+            return
+
+        result = kill_process_by_port(port)
         if result["success"]:
             print(f"✅ {result['message']}")
         else:
@@ -4127,14 +4183,109 @@ Let me know your answer!
     if args.action == "init":
         from gaia.installer.init_command import run_init
 
+        # --minimal flag overrides --profile
+        profile = "minimal" if args.minimal else args.profile
+
         exit_code = run_init(
-            profile=args.profile,
+            profile=profile,
             skip_models=args.skip_models,
             force_reinstall=args.force_reinstall,
             yes=args.yes,
             verbose=getattr(args, "verbose", False),
         )
         sys.exit(exit_code)
+
+    # Handle install command
+    if args.action == "install":
+        if args.lemonade:
+            from gaia.installer.lemonade_installer import LemonadeInstaller
+            from gaia.version import LEMONADE_VERSION
+
+            installer = LemonadeInstaller()
+
+            # Check if already installed
+            info = installer.check_installation()
+            if info.installed and info.version:
+                installed_ver = info.version.lstrip("v")
+                target_ver = LEMONADE_VERSION.lstrip("v")
+
+                if installed_ver == target_ver:
+                    print(f"✅ Lemonade Server v{info.version} is already installed")
+                    sys.exit(0)
+                else:
+                    print(f"Lemonade Server v{info.version} is installed")
+                    print(f"GAIA requires v{LEMONADE_VERSION}")
+                    print("")
+                    print("To update, run:")
+                    print("  gaia uninstall --lemonade")
+                    print("  gaia install --lemonade")
+                    sys.exit(1)
+
+            # Confirm installation
+            if not args.yes:
+                response = input(f"Install Lemonade v{LEMONADE_VERSION}? [Y/n]: ")
+                if response.lower() == "n":
+                    print("Installation cancelled")
+                    sys.exit(0)
+
+            # Download and install
+            print("Downloading Lemonade Server...")
+            try:
+                installer_path = installer.download_installer()
+                print("Installing...")
+                result = installer.install(installer_path, silent=True)
+
+                if result.success:
+                    # Verify installation
+                    verify_info = installer.check_installation()
+                    if verify_info.installed:
+                        print(f"✅ Installed Lemonade Server v{verify_info.version}")
+                    else:
+                        print(f"✅ Installed Lemonade Server v{result.version}")
+                    sys.exit(0)
+                else:
+                    print(f"❌ Installation failed: {result.error}")
+                    sys.exit(1)
+            except Exception as e:
+                print(f"❌ Installation failed: {e}")
+                sys.exit(1)
+        else:
+            print("Specify what to install: --lemonade")
+            sys.exit(1)
+
+    # Handle uninstall command
+    if args.action == "uninstall":
+        if args.lemonade:
+            from gaia.installer.lemonade_installer import LemonadeInstaller
+
+            installer = LemonadeInstaller()
+
+            # Check if installed
+            info = installer.check_installation()
+            if not info.installed:
+                print("✅ Lemonade Server is not installed")
+                sys.exit(0)
+
+            # Confirm uninstallation
+            if not args.yes:
+                response = input(f"Uninstall Lemonade Server v{info.version}? [y/N]: ")
+                if response.lower() != "y":
+                    print("Uninstall cancelled")
+                    sys.exit(0)
+
+            # Uninstall
+            print("Uninstalling Lemonade Server...")
+            result = installer.uninstall(silent=True)
+
+            if result.success:
+                print("✅ Lemonade Server uninstalled successfully")
+                sys.exit(0)
+            else:
+                print(f"❌ Uninstall failed: {result.error}")
+                sys.exit(1)
+        else:
+            print("Specify what to uninstall: --lemonade")
+            sys.exit(1)
 
     # Log error for unknown action
     log.error(f"Unknown action specified: {args.action}")

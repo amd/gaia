@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -68,6 +69,7 @@ class LemonadeInstaller:
         self,
         target_version: str = LEMONADE_VERSION,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        minimal: bool = False,
     ):
         """
         Initialize the installer.
@@ -75,10 +77,47 @@ class LemonadeInstaller:
         Args:
             target_version: Target Lemonade version to install
             progress_callback: Optional callback for download progress (bytes_downloaded, total_bytes)
+            minimal: Use minimal installer (smaller download, fewer features)
         """
         self.target_version = target_version.lstrip("v")
         self.progress_callback = progress_callback
+        self.minimal = minimal
         self.system = platform.system().lower()
+
+    def _refresh_path_from_registry(self) -> None:
+        """Refresh PATH from Windows registry after MSI install."""
+        if self.system != "windows":
+            return
+        try:
+            import winreg
+
+            user_path = ""
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as key:
+                    user_path, _ = winreg.QueryValueEx(key, "Path")
+            except (FileNotFoundError, OSError):
+                pass
+
+            system_path = ""
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+                ) as key:
+                    system_path, _ = winreg.QueryValueEx(key, "Path")
+            except (FileNotFoundError, OSError):
+                pass
+
+            if user_path or system_path:
+                new_path = (
+                    f"{user_path};{system_path}"
+                    if user_path and system_path
+                    else (user_path or system_path)
+                )
+                os.environ["PATH"] = new_path
+                log.debug("Refreshed PATH from registry")
+        except Exception as e:
+            log.debug(f"Failed to refresh PATH: {e}")
 
     def check_installation(self) -> LemonadeInfo:
         """
@@ -88,6 +127,9 @@ class LemonadeInstaller:
             LemonadeInfo with installation status
         """
         try:
+            # Refresh PATH from registry (in case MSI just updated it)
+            self._refresh_path_from_registry()
+
             # Try to find lemonade-server executable
             lemonade_path = shutil.which("lemonade-server")
 
@@ -183,10 +225,14 @@ class LemonadeInstaller:
         version = self.target_version
 
         if self.system == "windows":
-            # Windows MSI
-            return f"{GITHUB_RELEASE_BASE}/v{version}/lemonade-{version}.msi"
+            if self.minimal:
+                # Minimal installer for lightweight setup
+                return f"{GITHUB_RELEASE_BASE}/v{version}/lemonade-server-minimal.msi"
+            else:
+                # Full installer
+                return f"{GITHUB_RELEASE_BASE}/v{version}/lemonade.msi"
         elif self.system == "linux":
-            # Linux DEB (assuming amd64)
+            # Linux DEB - filename includes version (no minimal variant yet)
             return f"{GITHUB_RELEASE_BASE}/v{version}/lemonade_{version}_amd64.deb"
         else:
             raise RuntimeError(
@@ -196,12 +242,13 @@ class LemonadeInstaller:
 
     def get_installer_filename(self) -> str:
         """Get the installer filename for the current platform."""
-        version = self.target_version
-
         if self.system == "windows":
-            return f"lemonade-{version}.msi"
+            if self.minimal:
+                return "lemonade-server-minimal.msi"
+            else:
+                return "lemonade.msi"
         elif self.system == "linux":
-            return f"lemonade_{version}_amd64.deb"
+            return f"lemonade_{self.target_version}_amd64.deb"
         else:
             raise RuntimeError(f"Platform '{self.system}' is not supported.")
 
@@ -229,6 +276,17 @@ class LemonadeInstaller:
         log.info(f"Downloading Lemonade from {url}")
 
         try:
+            # Remove existing file if it exists (may be locked from previous attempt)
+            if dest_path.exists():
+                try:
+                    dest_path.unlink()
+                    log.debug(f"Removed existing installer at {dest_path}")
+                except PermissionError:
+                    # File is locked, use a unique filename instead
+                    unique_name = f"lemonade_{uuid.uuid4().hex[:8]}.msi"
+                    dest_path = Path(tempfile.gettempdir()) / unique_name
+                    log.debug(f"Using unique filename: {dest_path}")
+
             # Create request with User-Agent header
             request = urllib.request.Request(
                 url, headers={"User-Agent": "GAIA-Installer/1.0"}
@@ -331,7 +389,7 @@ class LemonadeInstaller:
             elif result.returncode == 1603:
                 return InstallResult(
                     success=False,
-                    error="Installation failed. Try running as Administrator.",
+                    error="Installation failed. Check Windows Event Log for details.",
                 )
             else:
                 return InstallResult(
@@ -417,3 +475,122 @@ class LemonadeInstaller:
             "darwin": "macOS",
         }
         return names.get(self.system, self.system.capitalize())
+
+    def uninstall(self, silent: bool = True) -> InstallResult:
+        """
+        Uninstall Lemonade Server.
+
+        Args:
+            silent: Whether to run silent uninstallation (no UI)
+
+        Returns:
+            InstallResult with success status
+        """
+        log.info("Uninstalling Lemonade Server")
+
+        try:
+            if self.system == "windows":
+                return self._uninstall_windows(silent)
+            elif self.system == "linux":
+                return self._uninstall_linux()
+            else:
+                return InstallResult(
+                    success=False, error=f"Platform '{self.system}' is not supported"
+                )
+        except Exception as e:
+            return InstallResult(success=False, error=str(e))
+
+    def _uninstall_windows(self, silent: bool) -> InstallResult:
+        """Uninstall on Windows using msiexec."""
+        try:
+            # Get currently installed version - we need matching MSI to uninstall
+            info = self.check_installation()
+            if not info.installed or not info.version:
+                return InstallResult(
+                    success=False, error="Lemonade Server is not installed"
+                )
+
+            installed_version = info.version.lstrip("v")
+
+            # Create installer for the installed version (not target version)
+            uninstall_installer = LemonadeInstaller(target_version=installed_version)
+
+            # Download the MSI matching the installed version
+            log.info(f"Downloading MSI v{installed_version} for uninstall...")
+            msi_path = uninstall_installer.download_installer()
+
+            cmd = ["msiexec", "/x", str(msi_path)]
+
+            if silent:
+                cmd.extend(["/qn", "/norestart"])
+
+            log.debug(f"Running: {' '.join(cmd)}")
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+            )
+
+            if result.returncode == 0:
+                return InstallResult(
+                    success=True,
+                    message="Lemonade Server uninstalled successfully",
+                )
+            elif result.returncode == 1605:
+                return InstallResult(
+                    success=False, error="Lemonade Server is not installed"
+                )
+            else:
+                return InstallResult(
+                    success=False,
+                    error=f"msiexec failed with code {result.returncode}: {result.stderr}",
+                )
+
+        except subprocess.TimeoutExpired:
+            return InstallResult(success=False, error="Uninstall timed out")
+        except FileNotFoundError:
+            return InstallResult(success=False, error="msiexec not found")
+        except Exception as e:
+            return InstallResult(success=False, error=str(e))
+
+    def _uninstall_linux(self) -> InstallResult:
+        """Uninstall on Linux using dpkg."""
+        try:
+            # Check if we have root access
+            is_root = False
+            if hasattr(os, "geteuid"):
+                is_root = os.geteuid() == 0
+
+            if not is_root:
+                cmd = ["sudo", "dpkg", "-r", "lemonade"]
+            else:
+                cmd = ["dpkg", "-r", "lemonade"]
+
+            log.debug(f"Running: {' '.join(cmd)}")
+
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=300, check=False
+            )
+
+            if result.returncode == 0:
+                return InstallResult(
+                    success=True,
+                    message="Lemonade Server uninstalled successfully",
+                )
+            else:
+                return InstallResult(
+                    success=False,
+                    error=f"dpkg failed: {result.stderr}",
+                )
+
+        except subprocess.TimeoutExpired:
+            return InstallResult(success=False, error="Uninstall timed out")
+        except FileNotFoundError as e:
+            return InstallResult(
+                success=False, error=f"Required command not found: {e}"
+            )
+        except Exception as e:
+            return InstallResult(success=False, error=str(e))
