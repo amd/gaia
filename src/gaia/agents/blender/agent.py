@@ -24,9 +24,6 @@ class BlenderAgent(Agent):
     Inherits core functionality from the base Agent class.
     """
 
-    # Define Blender-specific tools that can execute directly without requiring a plan
-    SIMPLE_TOOLS = ["clear_scene", "get_scene_info"]
-
     def __init__(
         self,
         mcp: Optional[MCPClient] = None,
@@ -169,7 +166,7 @@ Examples of colored requests:
     def _register_tools(self):
         """Register all Blender-related tools for the agent."""
 
-        @tool
+        @tool(atomic=True)
         def clear_scene() -> Dict[str, Any]:
             """
             Remove all objects from the current Blender scene.
@@ -382,7 +379,7 @@ Examples of colored requests:
                 self.error_history.append(str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(atomic=True)
         def get_scene_info() -> Dict[str, Any]:
             """
             Get information about the current scene.

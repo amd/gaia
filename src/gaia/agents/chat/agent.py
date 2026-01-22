@@ -78,23 +78,6 @@ class ChatAgent(
     - MCP server integration
     """
 
-    # Define simple tools that can execute without requiring a multi-step plan
-    SIMPLE_TOOLS = [
-        "list_indexed_documents",
-        "rag_status",
-        "query_documents",
-        "query_specific_file",
-        "search_indexed_chunks",  # RAG: Search indexed document chunks
-        "dump_document",  # RAG: Export cached extracted text
-        "search_file_content",  # Shared: Grep-like disk search
-        "search_file",  # Shared: Find files by name
-        "search_directory",  # Shared: Find directories by name
-        "read_file",  # Shared: Read any file
-        "write_file",  # Shared: Write any file
-        "index_directory",  # RAG: Index directory
-        "run_shell_command",  # Shell: Execute commands
-    ]
-
     def __init__(self, config: Optional[ChatAgentConfig] = None):
         """
         Initialize Chat Agent.

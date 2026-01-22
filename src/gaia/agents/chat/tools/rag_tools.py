@@ -73,6 +73,7 @@ class RAGToolsMixin:
         from gaia.agents.base.tools import tool
 
         @tool(
+            atomic=True,
             name="query_documents",
             description="Query indexed documents using RAG to find relevant information. Returns document chunks that the agent should use to answer the user's question.",
             parameters={
@@ -474,6 +475,7 @@ class RAGToolsMixin:
                 }
 
         @tool(
+            atomic=True,
             name="query_specific_file",
             description="Query a SPECIFIC file by name for targeted, fast retrieval. Use when user mentions a specific file or needs information from one document.",
             parameters={
@@ -865,6 +867,7 @@ class RAGToolsMixin:
                 }
 
         @tool(
+            atomic=True,
             name="search_indexed_chunks",
             description="Search for exact text patterns within RAG-indexed document chunks. Use for finding specific phrases in indexed documents.",
             parameters={
@@ -1123,6 +1126,7 @@ class RAGToolsMixin:
                 }
 
         @tool(
+            atomic=True,
             name="list_indexed_documents",
             description="List all currently indexed documents",
             parameters={},
@@ -1147,6 +1151,7 @@ class RAGToolsMixin:
                 }
 
         @tool(
+            atomic=True,
             name="rag_status",
             description="Get the status of the RAG system",
             parameters={},
@@ -1511,6 +1516,7 @@ Use the {summary_type} style. Ensure page references from section summaries are 
         # This provides shared file search functionality across all agents
 
         @tool(
+            atomic=True,
             name="dump_document",
             description="Export the cached extracted text from an indexed document to a markdown file. Useful for reviewing extracted content or debugging.",
             parameters={
@@ -1620,6 +1626,7 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                 }
 
         @tool(
+            atomic=True,
             name="index_directory",
             description="Index all supported files in a directory. Supports PDF, TXT, CSV, JSON, and code files.",
             parameters={

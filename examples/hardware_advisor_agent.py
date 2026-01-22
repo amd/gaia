@@ -121,7 +121,7 @@ Always use tools to get real data - never guess specifications."""
         client = self.client
         agent = self
 
-        @tool
+        @tool(atomic=True)
         def get_hardware_info() -> Dict[str, Any]:
             """Get detailed system hardware information including RAM, GPU, and NPU."""
             try:
@@ -171,7 +171,7 @@ Always use tools to get real data - never guess specifications."""
                     "message": "Failed to get hardware information from Lemonade Server",
                 }
 
-        @tool
+        @tool(atomic=True)
         def list_available_models() -> Dict[str, Any]:
             """List all models available in the catalog with their sizes and download status."""
             try:
@@ -214,7 +214,7 @@ Always use tools to get real data - never guess specifications."""
                     "message": "Failed to fetch models from Lemonade Server",
                 }
 
-        @tool
+        @tool(atomic=True)
         def recommend_models(ram_gb: float, gpu_memory_mb: int = 0) -> Dict[str, Any]:
             """Recommend models based on available system memory.
 
