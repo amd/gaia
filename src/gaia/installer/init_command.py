@@ -825,24 +825,26 @@ class InitCommand:
                 if bytes_total == 0 and bytes_downloaded == 0:
                     return
 
-                # Calculate speed
+                # Calculate speed (only when we'll display it)
                 now = time.time()
                 elapsed = now - state["last_update"]
                 speed_str = ""
-                if elapsed > 0.5:  # Update speed every 0.5 seconds
-                    bytes_delta = bytes_downloaded - state["last_bytes"]
-                    speed = bytes_delta / elapsed / 1024 / 1024  # MB/s
-                    speed_str = f" @ {speed:.1f} MB/s"
-                    state["last_update"] = now
-                    state["last_bytes"] = bytes_downloaded
 
                 # Only update display every 2% or at start/end
-                if (
+                should_update = (
                     percent >= state["last_percent"] + 2
                     or percent == 0
                     or percent == 100
-                    or speed_str
-                ):
+                )
+
+                if should_update:
+                    # Calculate speed for this update
+                    if elapsed > 0.5:  # Only show speed if enough time passed
+                        bytes_delta = bytes_downloaded - state["last_bytes"]
+                        speed = bytes_delta / elapsed / 1024 / 1024  # MB/s
+                        speed_str = f" @ {speed:.1f} MB/s"
+                        state["last_update"] = now
+                        state["last_bytes"] = bytes_downloaded
                     # Format sizes
                     if bytes_total > 1024 * 1024 * 1024:  # > 1 GB
                         dl_str = f"{bytes_downloaded / 1024 / 1024 / 1024:.2f} GB"
