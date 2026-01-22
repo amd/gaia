@@ -2145,6 +2145,11 @@ Examples:
         help="Force reinstall even if compatible version exists",
     )
     init_parser.add_argument(
+        "--force-models",
+        action="store_true",
+        help="Force re-download models (deletes then re-downloads each model)",
+    )
+    init_parser.add_argument(
         "--yes",
         "-y",
         action="store_true",
@@ -4190,6 +4195,7 @@ Let me know your answer!
             profile=profile,
             skip_models=args.skip_models,
             force_reinstall=args.force_reinstall,
+            force_models=args.force_models,
             yes=args.yes,
             verbose=getattr(args, "verbose", False),
         )

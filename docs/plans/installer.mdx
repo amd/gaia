@@ -61,14 +61,27 @@ curl -fsSL https://amd-gaia.ai/install.sh | sh
 Post-install setup - installs Lemonade Server and downloads models.
 
 ```bash
-gaia init [--profile PROFILE] [--skip-models] [--yes]
+gaia init [--profile PROFILE] [--skip-models] [--force-reinstall] [--force-models] [--yes]
 ```
+
+| Option | Description |
+|--------|-------------|
+| `--profile` | Profile to initialize (minimal, chat, code, rag, all) |
+| `--skip-models` | Skip model downloads |
+| `--force-reinstall` | Force reinstall Lemonade even if compatible |
+| `--force-models` | Force re-download all models (delete + download) |
+| `--yes` | Skip confirmation prompts |
 
 | Profile | Models | Size |
 |---------|--------|------|
 | `minimal` | Qwen3-4B | ~4 GB |
 | `chat` | Qwen3-30B, nomic-embed, Qwen2.5-VL | ~25 GB |
 | `code` | Qwen3-30B | ~18 GB |
+
+**Features:**
+- Automatic Lemonade version upgrade (uninstall old + install new)
+- Model verification with quick inference test
+- Automatic re-download of corrupted models
 
 ---
 

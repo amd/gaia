@@ -19,11 +19,20 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from gaia.version import LEMONADE_VERSION
 
 log = logging.getLogger(__name__)
+
+# Rich imports for console output
+try:
+    from rich.console import Console
+
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
+    Console = None  # type: ignore
 
 # GitHub release URL patterns
 GITHUB_RELEASE_BASE = "https://github.com/lemonade-sdk/lemonade/releases/download"
@@ -70,6 +79,7 @@ class LemonadeInstaller:
         target_version: str = LEMONADE_VERSION,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         minimal: bool = False,
+        console: Optional[Any] = None,
     ):
         """
         Initialize the installer.
@@ -78,13 +88,22 @@ class LemonadeInstaller:
             target_version: Target Lemonade version to install
             progress_callback: Optional callback for download progress (bytes_downloaded, total_bytes)
             minimal: Use minimal installer (smaller download, fewer features)
+            console: Optional Rich Console for user-facing output (suppresses log messages)
         """
         self.target_version = target_version.lstrip("v")
         self.progress_callback = progress_callback
         self.minimal = minimal
         self.system = platform.system().lower()
+        self.console = console
 
-    def _refresh_path_from_registry(self) -> None:
+    def _print_status(self, message: str, style: str = "dim"):
+        """Print a status message to console or log."""
+        if self.console and RICH_AVAILABLE:
+            self.console.print(f"   [{style}]{message}[/{style}]")
+        else:
+            log.info(message)
+
+    def refresh_path_from_registry(self) -> None:
         """Refresh PATH from Windows registry after MSI install."""
         if self.system != "windows":
             return
@@ -128,7 +147,7 @@ class LemonadeInstaller:
         """
         try:
             # Refresh PATH from registry (in case MSI just updated it)
-            self._refresh_path_from_registry()
+            self.refresh_path_from_registry()
 
             # Try to find lemonade-server executable
             lemonade_path = shutil.which("lemonade-server")
@@ -273,7 +292,7 @@ class LemonadeInstaller:
         else:
             dest_path = Path(tempfile.gettempdir()) / filename
 
-        log.info(f"Downloading Lemonade from {url}")
+        self._print_status(f"Downloading from {url}")
 
         try:
             # Remove existing file if it exists (may be locked from previous attempt)
@@ -309,7 +328,7 @@ class LemonadeInstaller:
                         if self.progress_callback:
                             self.progress_callback(downloaded, total_size)
 
-            log.info(f"Downloaded installer to {dest_path}")
+            self._print_status(f"Downloaded to {dest_path}")
             return dest_path
 
         except urllib.error.HTTPError as e:
@@ -344,7 +363,7 @@ class LemonadeInstaller:
                 success=False, error=f"Installer not found: {installer_path}"
             )
 
-        log.info(f"Installing Lemonade from {installer_path}")
+        self._print_status(f"Installing from {installer_path}")
 
         try:
             if self.system == "windows":
@@ -486,7 +505,7 @@ class LemonadeInstaller:
         Returns:
             InstallResult with success status
         """
-        log.info("Uninstalling Lemonade Server")
+        self._print_status("Uninstalling Lemonade Server...")
 
         try:
             if self.system == "windows":
@@ -513,10 +532,13 @@ class LemonadeInstaller:
             installed_version = info.version.lstrip("v")
 
             # Create installer for the installed version (not target version)
-            uninstall_installer = LemonadeInstaller(target_version=installed_version)
+            # Pass console to child installer for consistent output
+            uninstall_installer = LemonadeInstaller(
+                target_version=installed_version, console=self.console
+            )
 
             # Download the MSI matching the installed version
-            log.info(f"Downloading MSI v{installed_version} for uninstall...")
+            self._print_status(f"Downloading MSI v{installed_version} for uninstall...")
             msi_path = uninstall_installer.download_installer()
 
             cmd = ["msiexec", "/x", str(msi_path)]

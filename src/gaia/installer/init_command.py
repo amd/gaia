@@ -13,12 +13,22 @@ Main entry point for `gaia init` command that:
 """
 
 import logging
+import os
 import sys
 import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 import requests
+
+# Rich imports for better CLI formatting
+try:
+    from rich.console import Console
+    from rich.panel import Panel
+
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
 
 from gaia.installer.lemonade_installer import LemonadeInfo, LemonadeInstaller
 from gaia.version import LEMONADE_VERSION
@@ -87,6 +97,7 @@ class InitCommand:
         profile: str = "chat",
         skip_models: bool = False,
         force_reinstall: bool = False,
+        force_models: bool = False,
         yes: bool = False,
         verbose: bool = False,
         progress_callback: Optional[Callable[[InitProgress], None]] = None,
@@ -98,6 +109,7 @@ class InitCommand:
             profile: Profile to initialize (minimal, chat, code, rag, all)
             skip_models: Skip model downloads
             force_reinstall: Force reinstall even if compatible version exists
+            force_models: Force re-download models even if already available
             yes: Skip confirmation prompts
             verbose: Enable verbose output
             progress_callback: Optional callback for progress updates
@@ -105,6 +117,7 @@ class InitCommand:
         self.profile = profile.lower()
         self.skip_models = skip_models
         self.force_reinstall = force_reinstall
+        self.force_models = force_models
         self.yes = yes
         self.verbose = verbose
         self.progress_callback = progress_callback
@@ -114,6 +127,9 @@ class InitCommand:
             valid = ", ".join(INIT_PROFILES.keys())
             raise ValueError(f"Invalid profile '{profile}'. Valid profiles: {valid}")
 
+        # Initialize Rich console if available (before installer for console pass-through)
+        self.console = Console() if RICH_AVAILABLE else None
+
         # Use minimal installer for minimal profile
         use_minimal = self.profile == "minimal"
 
@@ -121,35 +137,65 @@ class InitCommand:
             target_version=LEMONADE_VERSION,
             progress_callback=self._download_progress if verbose else None,
             minimal=use_minimal,
+            console=self.console,
         )
 
     def _print(self, message: str, end: str = "\n"):
         """Print message to stdout."""
-        print(message, end=end, flush=True)
+        if RICH_AVAILABLE and self.console:
+            if end == "":
+                self.console.print(message, end="")
+            else:
+                self.console.print(message)
+        else:
+            print(message, end=end, flush=True)
 
     def _print_header(self):
         """Print initialization header."""
-        self._print("")
-        self._print("=" * 60)
-        self._print("  GAIA Initialization")
-        self._print("=" * 60)
-        self._print("")
+        if RICH_AVAILABLE and self.console:
+            self.console.print()
+            self.console.print(
+                Panel(
+                    "[bold cyan]GAIA Initialization[/bold cyan]",
+                    border_style="cyan",
+                    padding=(0, 2),
+                )
+            )
+            self.console.print()
+        else:
+            self._print("")
+            self._print("=" * 60)
+            self._print("  GAIA Initialization")
+            self._print("=" * 60)
+            self._print("")
 
     def _print_step(self, step: int, total: int, message: str):
         """Print step header."""
-        self._print(f"Step {step}/{total}: {message}")
+        if RICH_AVAILABLE and self.console:
+            self.console.print(f"[bold blue]Step {step}/{total}:[/bold blue] {message}")
+        else:
+            self._print(f"Step {step}/{total}: {message}")
 
     def _print_success(self, message: str):
         """Print success message."""
-        self._print(f"   {message}")
+        if RICH_AVAILABLE and self.console:
+            self.console.print(f"   [green]✓[/green] {message}")
+        else:
+            self._print(f"   ✓ {message}")
 
     def _print_warning(self, message: str):
         """Print warning message."""
-        self._print(f"   ⚠️  {message}")
+        if RICH_AVAILABLE and self.console:
+            self.console.print(f"   [yellow]⚠️  {message}[/yellow]")
+        else:
+            self._print(f"   ⚠️  {message}")
 
     def _print_error(self, message: str):
         """Print error message."""
-        self._print(f"   ❌ {message}")
+        if RICH_AVAILABLE and self.console:
+            self.console.print(f"   [red]❌ {message}[/red]")
+        else:
+            self._print(f"   ❌ {message}")
 
     def _prompt_yes_no(self, prompt: str, default: bool = True) -> bool:
         """
@@ -165,9 +211,18 @@ class InitCommand:
         if self.yes:
             return True
 
-        suffix = "[Y/n]" if default else "[y/N]"
+        if default:
+            suffix = "[bold green]Y[/bold green]/n" if RICH_AVAILABLE else "[Y/n]"
+        else:
+            suffix = "y/[bold green]N[/bold green]" if RICH_AVAILABLE else "[y/N]"
+
         try:
-            response = input(f"   {prompt} {suffix}: ").strip().lower()
+            if RICH_AVAILABLE and self.console:
+                self.console.print(f"   {prompt} [{suffix}]: ", end="")
+                response = input().strip().lower()
+            else:
+                response = input(f"   {prompt} {suffix}: ").strip().lower()
+
             if not response:
                 return default
             return response in ("y", "yes")
@@ -320,13 +375,13 @@ class InitCommand:
 
     def _check_version_compatibility(self, info: LemonadeInfo) -> bool:
         """
-        Check if installed version is compatible and warn if not.
+        Check if installed version is compatible and upgrade if needed.
 
         Args:
             info: Lemonade installation info
 
         Returns:
-            True if compatible or user chooses to continue, False otherwise
+            True if compatible or upgrade successful, False otherwise
         """
         current = info.version_tuple
         target = self._parse_version(LEMONADE_VERSION)
@@ -341,38 +396,86 @@ class InitCommand:
 
             self._print("")
             self._print_warning("Version mismatch detected!")
-            self._print(f"      Installed: v{current_ver}")
-            self._print(f"      Expected:  v{target_ver}")
+            if RICH_AVAILABLE and self.console:
+                self.console.print(
+                    f"      [dim]Installed:[/dim] [red]v{current_ver}[/red]"
+                )
+                self.console.print(
+                    f"      [dim]Expected:[/dim]  [green]v{target_ver}[/green]"
+                )
+            else:
+                self._print(f"      Installed: v{current_ver}")
+                self._print(f"      Expected:  v{target_ver}")
             self._print("")
 
             if current < target:
-                self._print("   Your version is older than expected.")
-                self._print("   Some features may not work correctly.")
+                if RICH_AVAILABLE and self.console:
+                    self.console.print(
+                        "   [dim]Your version is older than expected.[/dim]"
+                    )
+                    self.console.print(
+                        "   [dim]Some features may not work correctly.[/dim]"
+                    )
+                else:
+                    self._print("   Your version is older than expected.")
+                    self._print("   Some features may not work correctly.")
             else:
-                self._print("   Your version is newer than expected.")
-                self._print("   This may cause compatibility issues.")
-
-            self._print("")
-            self._print("   Recommended next steps:")
-            self._print("   1. Uninstall current Lemonade Server")
-            if self.installer.system == "windows":
-                self._print(
-                    "      Windows: Settings > Apps > Lemonade Server > Uninstall"
-                )
-            else:
-                self._print("      Linux: sudo apt remove lemonade-server")
-            self._print("   2. Re-run: gaia init")
+                if RICH_AVAILABLE and self.console:
+                    self.console.print(
+                        "   [dim]Your version is newer than expected.[/dim]"
+                    )
+                    self.console.print(
+                        "   [dim]This may cause compatibility issues.[/dim]"
+                    )
+                else:
+                    self._print("   Your version is newer than expected.")
+                    self._print("   This may cause compatibility issues.")
             self._print("")
 
-            if self.force_reinstall:
-                return self._install_lemonade()
-
+            # Prompt user to upgrade
             if not self._prompt_yes_no(
-                "Continue with current version anyway?", default=False
+                f"Upgrade to v{target_ver}? (will uninstall current version)",
+                default=True,
             ):
-                return False
+                self._print_warning("Continuing with current version")
+                return True
+
+            return self._upgrade_lemonade(current_ver)
 
         return True
+
+    def _upgrade_lemonade(self, old_version: str) -> bool:
+        """
+        Uninstall old version and install the target version.
+
+        Args:
+            old_version: The currently installed version string
+
+        Returns:
+            True on success, False on failure
+        """
+        self._print("")
+        if RICH_AVAILABLE and self.console:
+            self.console.print(
+                f"   [bold]Uninstalling[/bold] Lemonade [red]v{old_version}[/red]..."
+            )
+        else:
+            self._print(f"   Uninstalling Lemonade v{old_version}...")
+
+        # Uninstall old version
+        try:
+            result = self.installer.uninstall(silent=True)
+            if result.success:
+                self._print_success("Uninstalled old version")
+            else:
+                self._print_error(f"Failed to uninstall: {result.error}")
+                self._print_warning("Attempting to install new version anyway...")
+        except Exception as e:
+            self._print_error(f"Uninstall error: {e}")
+            self._print_warning("Attempting to install new version anyway...")
+
+        # Install new version
+        return self._install_lemonade()
 
     def _install_lemonade(self) -> bool:
         """
@@ -382,7 +485,12 @@ class InitCommand:
             True on success, False on failure
         """
         self._print("")
-        self._print(f"   Downloading Lemonade v{LEMONADE_VERSION}...")
+        if RICH_AVAILABLE and self.console:
+            self.console.print(
+                f"   [bold]Downloading[/bold] Lemonade [cyan]v{LEMONADE_VERSION}[/cyan]..."
+            )
+        else:
+            self._print(f"   Downloading Lemonade v{LEMONADE_VERSION}...")
 
         try:
             # Download installer
@@ -391,14 +499,20 @@ class InitCommand:
             self._print_success("Download complete")
 
             # Install
-            self._print("   Installing...")
+            if RICH_AVAILABLE and self.console:
+                self.console.print("   [bold]Installing...[/bold]")
+            else:
+                self._print("   Installing...")
             result = self.installer.install(installer_path, silent=True)
 
             if result.success:
                 self._print_success(f"Installed Lemonade v{result.version}")
 
                 # Verify installation by checking version
-                self._print("   Verifying installation...")
+                if RICH_AVAILABLE and self.console:
+                    self.console.print("   [dim]Verifying installation...[/dim]")
+                else:
+                    self._print("   Verifying installation...")
                 verify_info = self.installer.check_installation()
 
                 if verify_info.installed and verify_info.version:
@@ -412,9 +526,14 @@ class InitCommand:
 
                 if "Administrator" in str(result.error) or "sudo" in str(result.error):
                     self._print("")
-                    self._print(
-                        "   Try running as Administrator (Windows) or with sudo (Linux)"
-                    )
+                    if RICH_AVAILABLE and self.console:
+                        self.console.print(
+                            "   [yellow]Try running as Administrator (Windows) or with sudo (Linux)[/yellow]"
+                        )
+                    else:
+                        self._print(
+                            "   Try running as Administrator (Windows) or with sudo (Linux)"
+                        )
 
                 return False
 
@@ -427,6 +546,7 @@ class InitCommand:
         Find the lemonade-server executable.
 
         Uses the installer's PATH refresh to pick up recent MSI changes.
+        Falls back to common installation paths if not found in PATH.
 
         Returns:
             Path to lemonade-server executable, or None if not found
@@ -434,16 +554,60 @@ class InitCommand:
         import shutil
 
         # Use installer's PATH refresh (reads from Windows registry)
-        self.installer._refresh_path_from_registry()
+        self.installer.refresh_path_from_registry()
 
-        return shutil.which("lemonade-server")
+        # Try to find in updated PATH
+        lemonade_path = shutil.which("lemonade-server")
+        if lemonade_path:
+            return lemonade_path
+
+        # Fallback: check common installation paths (Windows)
+        if sys.platform == "win32":
+            common_paths = [
+                # Per-user install (most common for MSI)
+                os.path.expandvars(
+                    r"%LOCALAPPDATA%\Programs\Lemonade Server\lemonade-server.exe"
+                ),
+                os.path.expandvars(
+                    r"%LOCALAPPDATA%\Lemonade Server\lemonade-server.exe"
+                ),
+                # System-wide install
+                r"C:\Program Files\Lemonade Server\lemonade-server.exe",
+                r"C:\Program Files (x86)\Lemonade Server\lemonade-server.exe",
+                # Potential alternative paths
+                os.path.expandvars(
+                    r"%USERPROFILE%\lemonade-server\lemonade-server.exe"
+                ),
+            ]
+
+            for path in common_paths:
+                if os.path.isfile(path):
+                    if self.verbose:
+                        log.debug(f"Found lemonade-server at fallback path: {path}")
+                    return path
+
+        # Fallback: check common installation paths (Linux)
+        elif sys.platform.startswith("linux"):
+            common_paths = [
+                "/usr/local/bin/lemonade-server",
+                "/usr/bin/lemonade-server",
+                os.path.expanduser("~/.local/bin/lemonade-server"),
+            ]
+
+            for path in common_paths:
+                if os.path.isfile(path):
+                    if self.verbose:
+                        log.debug(f"Found lemonade-server at fallback path: {path}")
+                    return path
+
+        return None
 
     def _ensure_server_running(self) -> bool:
         """
-        Ensure Lemonade server is running.
+        Ensure Lemonade server is running with health check verification.
 
         Returns:
-            True if server is running, False on failure
+            True if server is running and healthy, False on failure
         """
         import subprocess
 
@@ -458,19 +622,62 @@ class InitCommand:
                 health = client.health_check()
                 if health:
                     self._print_success("Server is already running")
+                    # Verify health status
+                    if isinstance(health, dict):
+                        status = health.get("status", "unknown")
+                        if status == "ok":
+                            self._print_success("Server health: OK")
+                        else:
+                            self._print_warning(f"Server status: {status}")
                     return True
             except Exception:
                 pass  # Server not running, try to start
 
             # Try to start the server
-            self._print("   Server not running, attempting to start...")
+            if RICH_AVAILABLE and self.console:
+                self.console.print(
+                    "   [dim]Server not running, attempting to start...[/dim]"
+                )
+            else:
+                self._print("   Server not running, attempting to start...")
 
             # Find lemonade-server executable
             lemonade_path = self._find_lemonade_server()
             if not lemonade_path:
-                self._print_error("lemonade-server not found")
-                self._print("   Try opening a new terminal to refresh PATH")
+                self._print_error("lemonade-server not found in PATH")
+                self._print("")
+                if RICH_AVAILABLE and self.console:
+                    self.console.print(
+                        "   [yellow]The MSI installer updated the system PATH, but your[/yellow]"
+                    )
+                    self.console.print(
+                        "   [yellow]current terminal session has the old PATH.[/yellow]"
+                    )
+                    self.console.print("")
+                    self.console.print("   [bold]To fix this:[/bold]")
+                    self.console.print(
+                        "   [dim]1.[/dim] Close this terminal and open a new one"
+                    )
+                    self.console.print(
+                        "   [dim]2.[/dim] Run [cyan]gaia init[/cyan] again"
+                    )
+                else:
+                    self._print(
+                        "   The MSI installer updated the system PATH, but your"
+                    )
+                    self._print("   current terminal session has the old PATH.")
+                    self._print("")
+                    self._print("   To fix this:")
+                    self._print("   1. Close this terminal and open a new one")
+                    self._print("   2. Run 'gaia init' again")
                 return False
+
+            # Show where we found the executable
+            if self.verbose:
+                if RICH_AVAILABLE and self.console:
+                    self.console.print(f"   [dim]Found: {lemonade_path}[/dim]")
+                else:
+                    self._print(f"   Found: {lemonade_path}")
 
             # Start lemonade-server serve in background
             try:
@@ -488,7 +695,10 @@ class InitCommand:
                 return False
 
             # Wait for server to be ready (poll health endpoint)
-            self._print("   Waiting for server to be ready...")
+            if RICH_AVAILABLE and self.console:
+                self.console.print("   [dim]Waiting for server to be ready...[/dim]")
+            else:
+                self._print("   Waiting for server to be ready...")
             max_wait = 30  # seconds
             wait_interval = 1
             elapsed = 0
@@ -501,24 +711,40 @@ class InitCommand:
                     health = client.health_check()
                     if health:
                         self._print_success("Server started successfully")
+                        # Verify health details
+                        if isinstance(health, dict):
+                            status = health.get("status", "unknown")
+                            if status == "ok":
+                                self._print_success("Server health: OK")
+                            else:
+                                self._print_warning(f"Server status: {status}")
                         return True
                 except Exception:
                     pass  # Keep waiting
 
             self._print_error("Server failed to start within timeout")
-            self._print("   Try starting manually with: lemonade-server serve")
+            if RICH_AVAILABLE and self.console:
+                self.console.print(
+                    "   [dim]Try starting manually with:[/dim] [cyan]lemonade-server serve[/cyan]"
+                )
+            else:
+                self._print("   Try starting manually with: lemonade-server serve")
             return False
 
         except ImportError as e:
             self._print_error(f"Lemonade SDK not installed: {e}")
-            self._print("   Run: pip install lemonade-sdk")
+            if RICH_AVAILABLE and self.console:
+                self.console.print(
+                    "   [dim]Run:[/dim] [cyan]pip install lemonade-sdk[/cyan]"
+                )
+            else:
+                self._print("   Run: pip install lemonade-sdk")
             return False
         except Exception as e:
             self._print_error(f"Failed to check/start server: {e}")
             return False
 
-    @staticmethod
-    def _create_progress_callback() -> Callable[[str, dict], None]:
+    def _create_progress_callback(self) -> Callable[[str, dict], None]:
         """
         Create a progress callback with its own state.
 
@@ -530,6 +756,7 @@ class InitCommand:
             "last_bytes": 0,
             "last_percent": -1,
         }
+        console = self.console if RICH_AVAILABLE else None
 
         def callback(event_type: str, data: dict) -> None:
             if event_type == "progress":
@@ -539,6 +766,11 @@ class InitCommand:
                 file_name = data.get("file", "")
                 file_index = data.get("file_index", 1)
                 total_files = data.get("total_files", 1)
+
+                # Skip events with invalid bytes_total (Lemonade server bug)
+                # These events can show 0 GB / 0 GB which is confusing
+                if bytes_total == 0 and bytes_downloaded == 0:
+                    return
 
                 # Calculate speed
                 now = time.time()
@@ -569,32 +801,85 @@ class InitCommand:
                     # Progress bar
                     bar_width = 20
                     filled = int(bar_width * percent / 100)
-                    bar = "=" * filled + "-" * (bar_width - filled)
+                    bar = "━" * filled + "─" * (bar_width - filled)
 
-                    # Multi-line detailed output
-                    lines = [
-                        f"   File: {file_name} ({file_index}/{total_files})",
-                        f"   [{bar}] {percent:3d}%  {dl_str} / {total_str}{speed_str}",
-                    ]
-                    # Clear and print (use \r to overwrite)
-                    print(f"\r{' ' * 80}\r{' ' * 80}", end="")  # Clear 2 lines
-                    print(f"\r\033[A{lines[0]:<78}")  # Move up and print file
-                    print(f"{lines[1]:<78}", end="", flush=True)
+                    # Single line progress (no flashing)
+                    progress_line = (
+                        f"   [{bar}] {percent:3d}%  {dl_str} / {total_str}{speed_str}"
+                    )
+                    print(f"\r{progress_line:<75}", end="", flush=True)
 
                     state["last_percent"] = percent
 
             elif event_type == "complete":
                 print()  # Newline after progress
-                print("   ✅ Download complete")
+                if console:
+                    console.print("   [green]✓[/green] Download complete")
+                else:
+                    print("   ✅ Download complete")
                 state["last_percent"] = -1
                 state["last_bytes"] = 0
 
             elif event_type == "error":
                 print()
                 error_msg = data.get("error", "Unknown error")
-                print(f"   ❌ Error: {error_msg}")
+                if console:
+                    console.print(f"   [red]❌ Error: {error_msg}[/red]")
+                else:
+                    print(f"   ❌ Error: {error_msg}")
 
         return callback
+
+    def _verify_model(self, client, model_id: str) -> tuple:
+        """
+        Verify a model works by running a quick inference test.
+
+        Args:
+            client: LemonadeClient instance
+            model_id: Model ID to verify
+
+        Returns:
+            Tuple of (success: bool, error_type: str or None)
+            error_type is "corrupted" for actual file issues, "server_error" for transient issues
+        """
+        try:
+            # Embedding models use different API - check if it's an embedding model
+            model_lower = model_id.lower()
+            is_embedding = "embed" in model_lower or "nomic" in model_lower
+
+            if is_embedding:
+                # Test embedding model
+                response = client.embeddings(
+                    model=model_id,
+                    input="test",
+                    timeout=60,  # Longer timeout for model loading
+                )
+                # Check if we got embeddings
+                if response and response.get("data"):
+                    return (True, None)
+            else:
+                # Test chat model with minimal tokens
+                response = client.chat_completions(
+                    model=model_id,
+                    messages=[{"role": "user", "content": "Hi"}],
+                    max_tokens=1,
+                    timeout=60,  # Longer timeout for model loading
+                    auto_download=False,  # Don't auto-download, we're testing
+                )
+                # Check if we got a valid response
+                if response and response.get("choices"):
+                    return (True, None)
+            return (False, "no_response")
+        except Exception as e:
+            error_str = str(e).lower()
+            # Check for actual corruption indicators
+            if any(
+                x in error_str for x in ["corrupt", "invalid", "truncated", "checksum"]
+            ):
+                return (False, "corrupted")
+            # Server errors are not corruption - model files are likely fine
+            log.debug(f"Model verification failed for {model_id}: {e}")
+            return (False, "server_error")
 
     def _download_models(self) -> bool:
         """
@@ -624,42 +909,169 @@ class InitCommand:
                 self._print_success("No models required for this profile")
                 return True
 
-            # Check which need downloading
-            models_to_download = []
-            models_available = []
+            # Track corrupted models for deletion before re-download
+            models_corrupted = []
 
-            for model_id in model_ids:
-                if client.check_model_available(model_id):
-                    models_available.append(model_id)
-                else:
-                    models_to_download.append(model_id)
+            # Force re-download: will delete each model just before re-downloading
+            if self.force_models:
+                models_to_redownload = []
+                for model_id in model_ids:
+                    if client.check_model_available(model_id):
+                        models_to_redownload.append(model_id)
 
-            if models_available:
-                self._print(
-                    f"   Already available: {len(models_available)}/{len(model_ids)} models"
-                )
-                for model_id in models_available:
-                    self._print(f"   ✅ {model_id}")
+                if models_to_redownload:
+                    if RICH_AVAILABLE and self.console:
+                        self.console.print(
+                            f"   [yellow]Force re-download requested[/yellow]"
+                        )
+                        self.console.print(
+                            f"   [dim]Will delete and re-download:[/dim] {len(models_to_redownload)} model(s)"
+                        )
+                        for model_id in models_to_redownload:
+                            self.console.print(
+                                f"   [red]🗑️[/red] [cyan]{model_id}[/cyan]"
+                            )
+                    else:
+                        self._print("   Force re-download requested")
+                        self._print(
+                            f"   Will delete and re-download: {len(models_to_redownload)} model(s)"
+                        )
+                        for model_id in models_to_redownload:
+                            self._print(f"   🗑️ {model_id}")
+                    self._print("")
+
+                    if not self._prompt_yes_no(
+                        "Delete existing models and re-download?", default=True
+                    ):
+                        self._print("   Skipping force re-download")
+                        return True
+
+                # All models need downloading (will delete just before each download)
+                models_to_download = list(model_ids)
+                models_available = []
+            else:
+                # Check which need downloading (with verification)
+                models_to_download = []
+                models_available = []
+                models_corrupted = []
+                models_missing = []
+
+                for model_id in model_ids:
+                    if client.check_model_available(model_id):
+                        # Verify the model actually works
+                        if RICH_AVAILABLE and self.console:
+                            self.console.print(
+                                f"   [dim]Verifying[/dim] [cyan]{model_id}[/cyan]...",
+                                end="",
+                            )
+                        else:
+                            print(f"   Verifying {model_id}...", end="", flush=True)
+
+                        success, error_type = self._verify_model(client, model_id)
+                        if success:
+                            models_available.append(model_id)
+                            if RICH_AVAILABLE and self.console:
+                                self.console.print(" [green]✓[/green]")
+                            else:
+                                print(" ✓")
+                        elif error_type == "corrupted":
+                            # Actual file corruption - needs re-download
+                            models_corrupted.append(model_id)
+                            models_to_download.append(model_id)
+                            if RICH_AVAILABLE and self.console:
+                                self.console.print(" [red]✗ corrupted[/red]")
+                            else:
+                                print(" ✗ corrupted")
+                        else:
+                            # Server error - model is likely fine, skip verification
+                            models_available.append(model_id)
+                            if RICH_AVAILABLE and self.console:
+                                self.console.print(
+                                    " [yellow]⚠ server error (assuming OK)[/yellow]"
+                                )
+                            else:
+                                print(" ⚠ server error (assuming OK)")
+                    else:
+                        models_missing.append(model_id)
+                        models_to_download.append(model_id)
+                        if RICH_AVAILABLE and self.console:
+                            self.console.print(
+                                f"   [yellow]📥[/yellow] [cyan]{model_id}[/cyan] [dim]not downloaded[/dim]"
+                            )
+                        else:
+                            print(f"   📥 {model_id} - not downloaded")
+
+                if models_corrupted:
+                    self._print("")
+                    self._print_warning(
+                        f"Found {len(models_corrupted)} corrupted model(s) - will re-download"
+                    )
 
             if not models_to_download:
                 self._print_success("All models already downloaded")
                 return True
 
-            self._print(f"   Need to download: {len(models_to_download)} model(s)")
-            for model_id in models_to_download:
-                self._print(f"   📥 {model_id}")
-            self._print(f"   Estimated size: {profile_config['approx_size']}")
-            self._print("")
+            # Skip redundant prompt if force_models already confirmed
+            if not self.force_models:
+                if RICH_AVAILABLE and self.console:
+                    self.console.print(
+                        f"   [bold]Need to download:[/bold] {len(models_to_download)} model(s)"
+                    )
+                    for model_id in models_to_download:
+                        self.console.print(
+                            f"   [yellow]📥[/yellow] [cyan]{model_id}[/cyan]"
+                        )
+                    self.console.print(
+                        f"   [dim]Estimated size:[/dim] {profile_config['approx_size']}"
+                    )
+                else:
+                    self._print(
+                        f"   Need to download: {len(models_to_download)} model(s)"
+                    )
+                    for model_id in models_to_download:
+                        self._print(f"   📥 {model_id}")
+                    self._print(f"   Estimated size: {profile_config['approx_size']}")
+                self._print("")
 
-            if not self._prompt_yes_no("Continue with download?", default=True):
-                self._print("   Skipping model downloads")
-                return True
+                if not self._prompt_yes_no("Continue with download?", default=True):
+                    self._print("   Skipping model downloads")
+                    return True
 
             # Download each model
             success = True
             for model_id in models_to_download:
                 self._print("")
-                self._print(f"   Downloading: {model_id}")
+
+                # Delete model if force re-download or corrupted
+                should_delete = (
+                    self.force_models or model_id in models_corrupted
+                ) and client.check_model_available(model_id)
+
+                if should_delete:
+                    reason = (
+                        "corrupted"
+                        if model_id in models_corrupted
+                        else "force re-download"
+                    )
+                    if RICH_AVAILABLE and self.console:
+                        self.console.print(
+                            f"   [dim]Deleting ({reason})[/dim] [cyan]{model_id}[/cyan]..."
+                        )
+                    else:
+                        self._print(f"   Deleting ({reason}) {model_id}...")
+                    try:
+                        client.delete_model(model_id)
+                        self._print_success(f"Deleted {model_id}")
+                    except Exception as e:
+                        self._print_error(f"Failed to delete {model_id}: {e}")
+                        # Continue to try downloading anyway
+
+                if RICH_AVAILABLE and self.console:
+                    self.console.print(
+                        f"   [bold]Downloading:[/bold] [cyan]{model_id}[/cyan]"
+                    )
+                else:
+                    self._print(f"   Downloading: {model_id}")
 
                 # Create progress callback for this model
                 progress_callback = self._create_progress_callback()
@@ -741,28 +1153,61 @@ class InitCommand:
 
     def _print_completion(self):
         """Print completion message with next steps."""
-        self._print("")
-        self._print("=" * 60)
-        self._print("  GAIA initialization complete!")
-        self._print("=" * 60)
-        self._print("")
-        self._print("  Quick start commands:")
-        self._print("    gaia chat              # Start interactive chat")
-        self._print("    gaia llm 'Hello'       # Quick LLM query")
-        self._print("    gaia talk              # Voice interaction")
-        self._print("")
+        if RICH_AVAILABLE and self.console:
+            self.console.print()
+            self.console.print(
+                Panel(
+                    "[bold green]GAIA initialization complete![/bold green]",
+                    border_style="green",
+                    padding=(0, 2),
+                )
+            )
+            self.console.print()
+            self.console.print("  [bold]Quick start commands:[/bold]")
+            self.console.print(
+                "    [cyan]gaia chat[/cyan]              Start interactive chat"
+            )
+            self.console.print(
+                "    [cyan]gaia llm 'Hello'[/cyan]       Quick LLM query"
+            )
+            self.console.print(
+                "    [cyan]gaia talk[/cyan]              Voice interaction"
+            )
+            self.console.print()
 
-        profile_config = INIT_PROFILES[self.profile]
-        if profile_config["agent"] == "minimal":
-            self._print("  Note: Minimal profile installed. For full features, run:")
-            self._print("    gaia init --profile chat")
+            profile_config = INIT_PROFILES[self.profile]
+            if profile_config["agent"] == "minimal":
+                self.console.print(
+                    "  [dim]Note: Minimal profile installed. For full features, run:[/dim]"
+                )
+                self.console.print("    [cyan]gaia init --profile chat[/cyan]")
+                self.console.print()
+        else:
             self._print("")
+            self._print("=" * 60)
+            self._print("  GAIA initialization complete!")
+            self._print("=" * 60)
+            self._print("")
+            self._print("  Quick start commands:")
+            self._print("    gaia chat              # Start interactive chat")
+            self._print("    gaia llm 'Hello'       # Quick LLM query")
+            self._print("    gaia talk              # Voice interaction")
+            self._print("")
+
+            profile_config = INIT_PROFILES[self.profile]
+            if profile_config["agent"] == "minimal":
+                self._print(
+                    "  Note: Minimal profile installed. For full features, run:"
+                )
+                self._print("    gaia init --profile chat")
+                self._print("")
 
 
 def run_init(
     profile: str = "chat",
     skip_models: bool = False,
     force_reinstall: bool = False,
+    force_models: bool = False,
     yes: bool = False,
     verbose: bool = False,
 ) -> int:
@@ -773,6 +1218,7 @@ def run_init(
         profile: Profile to initialize (minimal, chat, code, rag, all)
         skip_models: Skip model downloads
         force_reinstall: Force reinstall even if compatible version exists
+        force_models: Force re-download models (deletes then re-downloads)
         yes: Skip confirmation prompts
         verbose: Enable verbose output
 
@@ -784,6 +1230,7 @@ def run_init(
             profile=profile,
             skip_models=skip_models,
             force_reinstall=force_reinstall,
+            force_models=force_models,
             yes=yes,
             verbose=verbose,
         )
