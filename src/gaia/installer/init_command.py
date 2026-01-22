@@ -18,6 +18,8 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+import requests
+
 from gaia.installer.lemonade_installer import LemonadeInfo, LemonadeInstaller
 from gaia.version import LEMONADE_VERSION
 
@@ -523,41 +525,69 @@ class InitCommand:
         Returns:
             A callback function that tracks download progress
         """
-        state = {"last_percent": -1}
+        state = {
+            "last_update": time.time(),
+            "last_bytes": 0,
+            "last_percent": -1,
+        }
 
         def callback(event_type: str, data: dict) -> None:
             if event_type == "progress":
                 percent = data.get("percent", 0)
+                bytes_downloaded = data.get("bytes_downloaded", 0)
+                bytes_total = data.get("bytes_total", 0)
+                file_name = data.get("file", "")
+                file_index = data.get("file_index", 1)
+                total_files = data.get("total_files", 1)
+
+                # Calculate speed
+                now = time.time()
+                elapsed = now - state["last_update"]
+                speed_str = ""
+                if elapsed > 0.5:  # Update speed every 0.5 seconds
+                    bytes_delta = bytes_downloaded - state["last_bytes"]
+                    speed = bytes_delta / elapsed / 1024 / 1024  # MB/s
+                    speed_str = f" @ {speed:.1f} MB/s"
+                    state["last_update"] = now
+                    state["last_bytes"] = bytes_downloaded
+
+                # Only update display every 2% or at start/end
                 if (
                     percent >= state["last_percent"] + 2
                     or percent == 0
                     or percent == 100
+                    or speed_str
                 ):
+                    # Format sizes
+                    if bytes_total > 1024 * 1024 * 1024:  # > 1 GB
+                        dl_str = f"{bytes_downloaded / 1024 / 1024 / 1024:.2f} GB"
+                        total_str = f"{bytes_total / 1024 / 1024 / 1024:.2f} GB"
+                    else:
+                        dl_str = f"{bytes_downloaded / 1024 / 1024:.0f} MB"
+                        total_str = f"{bytes_total / 1024 / 1024:.0f} MB"
+
+                    # Progress bar
                     bar_width = 20
                     filled = int(bar_width * percent / 100)
                     bar = "=" * filled + "-" * (bar_width - filled)
 
-                    bytes_downloaded = data.get("bytes_downloaded", 0)
-                    bytes_total = data.get("bytes_total", 0)
+                    # Multi-line detailed output
+                    lines = [
+                        f"   File: {file_name} ({file_index}/{total_files})",
+                        f"   [{bar}] {percent:3d}%  {dl_str} / {total_str}{speed_str}",
+                    ]
+                    # Clear and print (use \r to overwrite)
+                    print(f"\r{' ' * 80}\r{' ' * 80}", end="")  # Clear 2 lines
+                    print(f"\r\033[A{lines[0]:<78}")  # Move up and print file
+                    print(f"{lines[1]:<78}", end="", flush=True)
 
-                    if bytes_total > 0:
-                        dl_str = f"{bytes_downloaded / 1024 / 1024 / 1024:.1f}"
-                        total_str = f"{bytes_total / 1024 / 1024 / 1024:.1f}"
-                        size_info = f"{dl_str} GB/{total_str} GB"
-                    else:
-                        size_info = f"{bytes_downloaded / 1024 / 1024:.0f} MB"
-
-                    file_index = data.get("file_index", 1)
-                    total_files = data.get("total_files", 1)
-
-                    line = f"   [{bar}] {percent:3d}% [{file_index}/{total_files}] {size_info}"
-                    print(f"\r{line:<80}", end="", flush=True)
                     state["last_percent"] = percent
 
             elif event_type == "complete":
                 print()  # Newline after progress
-                print("   ✅ OK")
+                print("   ✅ Download complete")
                 state["last_percent"] = -1
+                state["last_bytes"] = 0
 
             elif event_type == "error":
                 print()
@@ -637,13 +667,23 @@ class InitCommand:
                 try:
                     for event in client.pull_model_stream(
                         model_name=model_id,
-                        timeout=1800,  # 30 minute timeout
+                        timeout=7200,  # 2 hour timeout for large models
                         progress_callback=progress_callback,
                     ):
                         if event.get("event") == "error":
                             self._print_error(f"Failed to download {model_id}")
                             success = False
                             break
+                except requests.exceptions.Timeout:
+                    self._print("")
+                    self._print_error(f"Download timed out for {model_id}")
+                    self._print("   Try downloading via Lemonade app or retry later")
+                    success = False
+                except requests.exceptions.ConnectionError as e:
+                    self._print("")
+                    self._print_error(f"Connection error: {e}")
+                    self._print("   Check your network connection and retry")
+                    success = False
                 except Exception as e:
                     self._print("")
                     self._print_error(f"Download failed: {e}")
