@@ -1418,7 +1418,9 @@ class TestLemonadeClientIntegration(unittest.TestCase):
                     self.assertGreater(ctx_size, 0)
                     print(f"✅ Context size from recipe_options: {ctx_size}")
                 else:
-                    print("⚠️  ctx_size not found in recipe_options (model may not have it set)")
+                    print(
+                        "⚠️  ctx_size not found in recipe_options (model may not have it set)"
+                    )
         else:
             print("⚠️  'all_models_loaded' not found - using legacy format (pre-9.1.4)")
             if "context_size" in health:
@@ -1434,15 +1436,20 @@ class TestLemonadeClientIntegration(unittest.TestCase):
         # Context size should be > 0 if a model is loaded
         if health.get("model_loaded"):
             self.assertGreater(
-                status.context_size, 0,
-                "Context size should be > 0 when a model is loaded"
+                status.context_size,
+                0,
+                "Context size should be > 0 when a model is loaded",
             )
-            print(f"✅ get_status() correctly extracted context_size: {status.context_size}")
+            print(
+                f"✅ get_status() correctly extracted context_size: {status.context_size}"
+            )
 
         # Step 5: Verify validate_context_size() works
         print("\nStep 3: Testing validate_context_size()...")
         # Use a small required size that should pass
-        valid, error = self.client.validate_context_size(required_tokens=1024, quiet=True)
+        valid, error = self.client.validate_context_size(
+            required_tokens=1024, quiet=True
+        )
         self.assertTrue(valid, f"validate_context_size(1024) should pass: {error}")
         print("✅ validate_context_size(1024) passed")
 
@@ -1451,7 +1458,10 @@ class TestLemonadeClientIntegration(unittest.TestCase):
             valid, error = self.client.validate_context_size(
                 required_tokens=status.context_size, quiet=True
             )
-            self.assertTrue(valid, f"validate_context_size({status.context_size}) should pass: {error}")
+            self.assertTrue(
+                valid,
+                f"validate_context_size({status.context_size}) should pass: {error}",
+            )
             print(f"✅ validate_context_size({status.context_size}) passed")
 
         print("\n✅ Lemonade 9.1.4+ health check format test PASSED")

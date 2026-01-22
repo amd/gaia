@@ -2426,7 +2426,9 @@ class LemonadeClient:
             all_models = health.get("all_models_loaded", [])
             if all_models:
                 # Get context size from the first loaded model (typically the LLM)
-                reported_ctx = all_models[0].get("recipe_options", {}).get("ctx_size", 0)
+                reported_ctx = (
+                    all_models[0].get("recipe_options", {}).get("ctx_size", 0)
+                )
             else:
                 # Fallback for older Lemonade versions
                 reported_ctx = health.get("context_size", 0)
@@ -2469,8 +2471,8 @@ class LemonadeClient:
             # Lemonade 9.1.4+: context_size moved to all_models_loaded[N].recipe_options.ctx_size
             all_models = health.get("all_models_loaded", [])
             if all_models:
-                status.context_size = all_models[0].get("recipe_options", {}).get(
-                    "ctx_size", 0
+                status.context_size = (
+                    all_models[0].get("recipe_options", {}).get("ctx_size", 0)
                 )
             else:
                 # Fallback for older Lemonade versions
