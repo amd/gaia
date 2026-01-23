@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 
 # Rich imports for console output
 try:
-    from rich.console import Console
+    from rich.console import Console  # pylint: disable=unused-import
 
     RICH_AVAILABLE = True
 except ImportError:

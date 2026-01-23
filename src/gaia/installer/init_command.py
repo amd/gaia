@@ -816,9 +816,6 @@ class InitCommand:
                 percent = data.get("percent", 0)
                 bytes_downloaded = data.get("bytes_downloaded", 0)
                 bytes_total = data.get("bytes_total", 0)
-                file_name = data.get("file", "")
-                file_index = data.get("file_index", 1)
-                total_files = data.get("total_files", 1)
 
                 # Skip events with invalid bytes_total (Lemonade server bug)
                 # These events can show 0 GB / 0 GB which is confusing
@@ -951,7 +948,7 @@ class InitCommand:
                 if models_to_redownload:
                     if RICH_AVAILABLE and self.console:
                         self.console.print(
-                            f"   [yellow]Force re-download requested[/yellow]"
+                            "   [yellow]Force re-download requested[/yellow]"
                         )
                         self.console.print(
                             f"   [dim]Will delete and re-download:[/dim] {len(models_to_redownload)} model(s)"
@@ -1008,6 +1005,7 @@ class InitCommand:
             # Skip redundant prompt if force_models already confirmed
             if not self.force_models:
                 # Calculate estimated size for models being downloaded
+                # pylint: disable=protected-access
                 total_size_gb = sum(
                     client._estimate_model_size(m) for m in models_to_download
                 )
