@@ -276,7 +276,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
         self.console.print_header(f"🛠️ Registered Tools for {self.__class__.__name__}")
         self.console.print_separator()
 
-        for name, tool_info in _TOOL_REGISTRY.items():
+        for name, tool_info in self.get_tools_info().items():
             # Format parameters
             params = []
             for param_name, param_info in tool_info["parameters"].items():
@@ -308,6 +308,14 @@ You must respond ONLY in valid JSON. No text before { or after }.
         self.console.print_separator()
 
         return None
+
+    def get_tools_info(self) -> Dict[str, Any]:
+        """Get information about all registered tools."""
+        return _TOOL_REGISTRY
+
+    def get_tools(self) -> List[Dict[str, Any]]:
+        """Get a list of registered tools for the agent."""
+        return list(_TOOL_REGISTRY.values())
 
     def _extract_json_from_response(self, response: str) -> Optional[Dict[str, Any]]:
         """

@@ -236,7 +236,7 @@ gaia/
 ### Default Models
 - General tasks: `Qwen2.5-0.5B-Instruct-CPU`
 - Code/Agents: `Qwen3-Coder-30B-A3B-Instruct-GGUF`
-- Vision tasks: `Qwen3-VL-4B-Instruct-GGUF`
+- Vision tasks: `Qwen2.5-VL-7B-Instruct-GGU`
 
 ## CLI Commands
 
