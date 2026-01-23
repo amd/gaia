@@ -181,6 +181,7 @@ gaia uninstall [OPTIONS]
 | Option | Type | Description |
 |--------|------|-------------|
 | `--lemonade` | flag | Uninstall Lemonade Server |
+| `--models` | flag | Delete all downloaded models from HuggingFace cache |
 | `--yes, -y` | flag | Skip confirmation prompts |
 
 **Examples:**
@@ -190,14 +191,57 @@ gaia uninstall [OPTIONS]
 gaia uninstall --lemonade
 ```
 
+```bash Delete All Models
+gaia uninstall --models
+```
+
 ```bash Non-Interactive
 gaia uninstall --lemonade --yes
+```
+
+```bash Delete Models Non-Interactive
+gaia uninstall --models --yes
 ```
 </CodeGroup>
 
 <Tip>
 The uninstall command automatically downloads the correct MSI version matching your installed Lemonade to ensure clean removal.
 </Tip>
+
+<Warning>
+`--models` permanently deletes all models from `~/.cache/huggingface/hub/`. Use with caution - you'll need to re-download models after.
+</Warning>
+
+### Kill Command
+
+Stop running GAIA services.
+
+```bash
+gaia kill [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `--lemonade` | flag | Kill Lemonade Server and child processes |
+| `--port` | integer | Kill process on specific port |
+
+**Examples:**
+
+<CodeGroup>
+```bash Kill Lemonade Server
+gaia kill --lemonade
+```
+
+```bash Kill Process on Port
+gaia kill --port 8080
+```
+</CodeGroup>
+
+<Note>
+On Windows, `--lemonade` also kills orphaned `llama-server.exe` and `lemonade-tray.exe` processes.
+</Note>
 
 ---
 

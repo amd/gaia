@@ -2178,6 +2178,11 @@ Examples:
         action="store_true",
         help="Skip confirmation prompts",
     )
+    install_parser.add_argument(
+        "--silent",
+        action="store_true",
+        help="Silent installation (no UI, no desktop shortcuts)",
+    )
 
     # Uninstall command (uninstall specific components)
     uninstall_parser = subparsers.add_parser(
@@ -2899,8 +2904,8 @@ Let me know your answer!
         if result["success"]:
             print(f"✅ {result['message']}")
 
-            # Also kill any orphaned child processes
-            if args.lemonade:
+            # Also kill any orphaned child processes (Windows only)
+            if args.lemonade and sys.platform == "win32":
                 killed_any = False
                 try:
                     # Kill all llama-server.exe processes
@@ -4276,7 +4281,7 @@ Let me know your answer!
             try:
                 installer_path = installer.download_installer()
                 print("Installing...")
-                result = installer.install(installer_path, silent=True)
+                result = installer.install(installer_path, silent=args.silent)
 
                 if result.success:
                     # Verify installation
@@ -4433,7 +4438,7 @@ Let me know your answer!
             # Confirm uninstallation
             if not args.yes:
                 console.print(
-                    f"[bold]Uninstall Lemonade Server v{info.version}?[/bold] [y/N]: ",
+                    f"[bold]Uninstall Lemonade Server v{info.version}?[/bold] \\[y/N]: ",
                     end="",
                 )
                 response = input()
