@@ -523,14 +523,30 @@ async def async_main(action, **kwargs):
     # Create client for actions that use GaiaCliClient (not chat - it uses ChatAgent)
     client = None
     if action in ["prompt", "stats"]:
-        # Filter out audio-related parameters that are no longer part of GaiaCliClient
+        # Filter out parameters that are not accepted by GaiaCliClient
+        # GaiaCliClient only accepts: model, max_tokens, show_stats, logging_level
         audio_params = {
             "whisper_model_size",
             "audio_device_index",
             "silence_threshold",
             "no_tts",
         }
-        excluded_params = {"message", "stats", "assistant_name"} | audio_params
+        llm_provider_params = {
+            "use_claude",
+            "use_chatgpt",
+            "claude_model",
+            "base_url",
+        }
+        cli_params = {
+            "action",
+            "message",
+            "stats",
+            "assistant_name",
+            "stream",
+            "no_lemonade_check",
+            "list_tools",
+        }
+        excluded_params = cli_params | audio_params | llm_provider_params
         client_params = {k: v for k, v in kwargs.items() if k not in excluded_params}
         client = GaiaCliClient(**client_params)
 

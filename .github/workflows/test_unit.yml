@@ -41,6 +41,25 @@ jobs:
           uv pip install --system pytest pytest-cov
           uv pip install --system -e ".[api]"
 
+      - name: Validate CLI commands (dry-run)
+        run: |
+          echo "=== Validating CLI Commands ==="
+          echo "Testing CLI help and argument parsing (no server required)"
+          echo ""
+          # Validate gaia init command parses correctly
+          gaia init --help
+          echo "✅ gaia init --help passed"
+
+          # Validate other core commands
+          gaia --help
+          echo "✅ gaia --help passed"
+
+          gaia chat --help
+          echo "✅ gaia chat --help passed"
+
+          gaia prompt --help
+          echo "✅ gaia prompt --help passed"
+
       - name: Run unit tests
         run: |
           echo "=== Running Unit Tests ==="
@@ -67,6 +86,12 @@ jobs:
         run: |
           echo ""
           echo "=== Test Coverage ==="
+          echo "CLI Validation (Dry-Run):"
+          echo "  - gaia init --help: Command parsing and argument validation"
+          echo "  - gaia --help: Main CLI entry point"
+          echo "  - gaia chat --help: Chat command validation"
+          echo "  - gaia prompt --help: Prompt command validation"
+          echo ""
           echo "Unit Tests:"
           echo "  - DatabaseMixin: SQLite database access for agents"
           echo "  - FileWatcher: File system monitoring utilities"
@@ -76,6 +101,7 @@ jobs:
           echo "  - LLM Client: Language model client utilities"
           echo "  - ASR: Automatic speech recognition utilities"
           echo "  - TTS: Text-to-speech utilities"
+          echo "  - InitCommand: gaia init profiles and installer logic"
           echo ""
           echo "Integration Tests:"
           echo "  - DatabaseMixin + Agent: Full agent lifecycle with database"
