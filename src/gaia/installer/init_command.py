@@ -884,6 +884,12 @@ class InitCommand:
                 # Use agent profile defaults
                 model_ids = client.get_required_models(agent)
 
+            # Always include the default CPU model (used by gaia llm)
+            from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+            if DEFAULT_MODEL_NAME not in model_ids:
+                model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
+
             if not model_ids:
                 self._print_success("No models required for this profile")
                 return True
@@ -952,7 +958,8 @@ class InitCommand:
                             print(f"   📥 {model_id} - not downloaded")
 
             if not models_to_download:
-                self._print_success("All models already downloaded")
+                self._print("")
+                self._print_success(f"All {len(models_available)} model(s) ready")
                 return True
 
             # Skip redundant prompt if force_models already confirmed
