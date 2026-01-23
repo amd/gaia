@@ -61,11 +61,36 @@ def uvx(tool: str, *args: str) -> list[str]:
 
 def check_black(fix: bool = False) -> CheckResult:
     """Check code formatting with Black."""
-    print("\n[1/7] Checking code formatting with Black...")
+    if fix:
+        print("\n[1/2] Fixing code formatting with Black...")
+    else:
+        print("\n[1/7] Checking code formatting with Black...")
     print("-" * 40)
 
     if fix:
         cmd = uvx("black", *LINT_DIRS, "--config", "pyproject.toml")
+        print(f"[CMD] {' '.join(cmd)}")
+        exit_code, output = run_command(cmd)
+
+        # Count files that were reformatted
+        import re
+
+        reformatted_match = re.search(r"(\d+) files? reformatted", output)
+        reformatted_count = int(reformatted_match.group(1)) if reformatted_match else 0
+
+        # Also count individual "reformatted" lines
+        if reformatted_count == 0:
+            reformatted_count = output.count("reformatted")
+
+        if reformatted_count > 0:
+            print(f"\n[FIXED] Reformatted {reformatted_count} file(s):")
+            for line in output.split("\n"):
+                if "reformatted" in line.lower():
+                    print(f"   \033[92m{line}\033[0m")  # Green
+            return CheckResult("Code Formatting (Black)", True, False, 0, output)
+        else:
+            print("[OK] No files needed reformatting.")
+            return CheckResult("Code Formatting (Black)", True, False, 0, output)
     else:
         cmd = uvx(
             "black", "--check", "--diff", *LINT_DIRS, "--config", "pyproject.toml"
@@ -101,8 +126,7 @@ def check_black(fix: bool = False) -> CheckResult:
             if len(output.split("\n")) > 100:
                 print("... (output truncated, showing first 100 lines)")
 
-        if not fix:
-            print("\nFix with: python util/lint.py --black --fix")
+        print("\nFix with: python util/lint.py --fix")
         return CheckResult("Code Formatting (Black)", False, False, issues, output)
 
     print("[OK] Code formatting looks good!")
@@ -111,11 +135,29 @@ def check_black(fix: bool = False) -> CheckResult:
 
 def check_isort(fix: bool = False) -> CheckResult:
     """Check import sorting with isort."""
-    print("\n[2/7] Checking import sorting with isort...")
+    if fix:
+        print("\n[2/2] Fixing import sorting with isort...")
+    else:
+        print("\n[2/7] Checking import sorting with isort...")
     print("-" * 40)
 
     if fix:
         cmd = uvx("isort", *LINT_DIRS)
+        print(f"[CMD] {' '.join(cmd)}")
+        exit_code, output = run_command(cmd)
+
+        # Count files that were fixed (isort outputs "Fixing <file>")
+        fixed_files = [line for line in output.split("\n") if "Fixing " in line]
+        fixed_count = len(fixed_files)
+
+        if fixed_count > 0:
+            print(f"\n[FIXED] Fixed imports in {fixed_count} file(s):")
+            for line in fixed_files:
+                print(f"   \033[92m{line}\033[0m")  # Green
+            return CheckResult("Import Sorting (isort)", True, False, 0, output)
+        else:
+            print("[OK] No import sorting needed.")
+            return CheckResult("Import Sorting (isort)", True, False, 0, output)
     else:
         cmd = uvx("isort", "--check-only", "--diff", *LINT_DIRS)
 
@@ -132,8 +174,7 @@ def check_isort(fix: bool = False) -> CheckResult:
                 print(f"   {line}")
             if len(output.strip().split("\n")) > 30:
                 print("   ... (output truncated, showing first 30 lines)")
-        if not fix:
-            print("\nFix with: python util/lint.py --isort --fix")
+        print("\nFix with: python util/lint.py --fix")
         return CheckResult("Import Sorting (isort)", False, False, issues, output)
 
     print("[OK] Import sorting looks good!")
@@ -460,6 +501,19 @@ def print_summary(results: list[CheckResult]) -> int:
         return 1
 
 
+def print_fix_summary() -> None:
+    """Print simplified summary for fix-only mode."""
+    print("\n")
+    print("=" * 64)
+    print("                    FIX SUMMARY                                ")
+    print("=" * 64)
+    print()
+    print("[OK] Code formatting fixes applied!")
+    print()
+    print("[TIP] Run 'python util/lint.py' to verify all checks pass.")
+    print()
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -478,8 +532,8 @@ def main():
     )
     args = parser.parse_args()
 
-    # If no specific checks are requested, run all
-    run_all = args.all or not any(
+    # Determine if we're in fix-only mode (--fix without specific checks)
+    specific_checks = any(
         [
             args.black,
             args.isort,
@@ -488,14 +542,29 @@ def main():
             args.mypy,
             args.bandit,
             args.imports,
+            args.all,
         ]
     )
+    fix_only = args.fix and not specific_checks
+
+    # If no specific checks are requested and not fix-only, run all
+    run_all = args.all or (not specific_checks and not fix_only)
 
     print("=" * 40)
-    print("Running Code Quality Checks")
+    if fix_only:
+        print("Fixing Code Formatting Issues")
+    else:
+        print("Running Code Quality Checks")
     print("=" * 40)
 
     results: list[CheckResult] = []
+
+    if fix_only:
+        # Only run Black and isort when --fix is used alone
+        results.append(check_black(args.fix))
+        results.append(check_isort(args.fix))
+        print_fix_summary()
+        sys.exit(0)
 
     if args.black or run_all:
         results.append(check_black(args.fix))

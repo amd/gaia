@@ -126,22 +126,6 @@ class ChatAgent(Agent, RAGToolsMixin, FileToolsMixin, ShellToolsMixin, FileSearc
     Chat agent with RAG, file operations, and shell capabilities.
     """
 
-    SIMPLE_TOOLS = [
-        "list_indexed_documents",
-        "rag_status",
-        "query_documents",
-        "query_specific_file",
-        "search_indexed_chunks",
-        "dump_document",
-        "search_file_content",
-        "search_file",
-        "search_directory",
-        "read_file",
-        "write_file",
-        "index_directory",
-        "run_shell_command",
-    ]
-
     def __init__(self, config: Optional[ChatAgentConfig] = None):
         """Initialize Chat Agent with config."""
         pass
