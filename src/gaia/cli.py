@@ -523,14 +523,30 @@ async def async_main(action, **kwargs):
     # Create client for actions that use GaiaCliClient (not chat - it uses ChatAgent)
     client = None
     if action in ["prompt", "stats"]:
-        # Filter out audio-related parameters that are no longer part of GaiaCliClient
+        # Filter out parameters that are not accepted by GaiaCliClient
+        # GaiaCliClient only accepts: model, max_tokens, show_stats, logging_level
         audio_params = {
             "whisper_model_size",
             "audio_device_index",
             "silence_threshold",
             "no_tts",
         }
-        excluded_params = {"message", "stats", "assistant_name"} | audio_params
+        llm_provider_params = {
+            "use_claude",
+            "use_chatgpt",
+            "claude_model",
+            "base_url",
+        }
+        cli_params = {
+            "action",
+            "message",
+            "stats",
+            "assistant_name",
+            "stream",
+            "no_lemonade_check",
+            "list_tools",
+        }
+        excluded_params = cli_params | audio_params | llm_provider_params
         client_params = {k: v for k, v in kwargs.items() if k not in excluded_params}
         client = GaiaCliClient(**client_params)
 
@@ -1330,7 +1346,12 @@ Available agents: chat, code, talk, rag, blender, jira, docker, vlm, minimal, mc
         "kill", help="Kill process running on specific port", parents=[parent_parser]
     )
     kill_parser.add_argument(
-        "--port", type=int, required=True, help="Port number to kill process on"
+        "--port", type=int, default=None, help="Port number to kill process on"
+    )
+    kill_parser.add_argument(
+        "--lemonade",
+        action="store_true",
+        help="Kill Lemonade server (port 8000)",
     )
 
     # Add LLM app command
@@ -2111,6 +2132,97 @@ Examples:
         "--all", action="store_true", help="Clear all caches"
     )
 
+    # Init command (one-stop GAIA setup)
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Initialize GAIA: install Lemonade and download models",
+        parents=[parent_parser],
+    )
+    init_parser.add_argument(
+        "--profile",
+        "-p",
+        default="chat",
+        choices=["minimal", "chat", "code", "rag", "all"],
+        help="Profile to initialize: minimal, chat, code, rag, all (default: chat)",
+    )
+    init_parser.add_argument(
+        "--minimal",
+        action="store_true",
+        help="Use minimal profile (~2.5 GB) - shortcut for --profile minimal",
+    )
+    init_parser.add_argument(
+        "--skip-models",
+        action="store_true",
+        help="Skip model downloads (only install Lemonade)",
+    )
+    init_parser.add_argument(
+        "--force-reinstall",
+        action="store_true",
+        help="Force reinstall even if compatible version exists",
+    )
+    init_parser.add_argument(
+        "--force-models",
+        action="store_true",
+        help="Force re-download models (deletes then re-downloads each model)",
+    )
+    init_parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip confirmation prompts (non-interactive)",
+    )
+    init_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose output",
+    )
+
+    # Install command (install specific components)
+    install_parser = subparsers.add_parser(
+        "install",
+        help="Install GAIA components",
+        parents=[parent_parser],
+    )
+    install_parser.add_argument(
+        "--lemonade",
+        action="store_true",
+        help="Install Lemonade Server",
+    )
+    install_parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip confirmation prompts",
+    )
+    install_parser.add_argument(
+        "--silent",
+        action="store_true",
+        help="Silent installation (no UI, no desktop shortcuts)",
+    )
+
+    # Uninstall command (uninstall specific components)
+    uninstall_parser = subparsers.add_parser(
+        "uninstall",
+        help="Uninstall GAIA components",
+        parents=[parent_parser],
+    )
+    uninstall_parser.add_argument(
+        "--lemonade",
+        action="store_true",
+        help="Uninstall Lemonade Server",
+    )
+    uninstall_parser.add_argument(
+        "--models",
+        action="store_true",
+        help="Clear all downloaded models (frees disk space)",
+    )
+    uninstall_parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip confirmation prompts",
+    )
+
     args = parser.parse_args()
 
     # Check if action is specified
@@ -2793,10 +2905,52 @@ Let me know your answer!
 
     # Handle kill command
     if args.action == "kill":
-        log.info(f"Attempting to kill process on port {args.port}")
-        result = kill_process_by_port(args.port)
+        # Determine which port to kill
+        if args.lemonade:
+            port = 8000
+            log.info("Attempting to kill Lemonade server on port 8000")
+        elif args.port:
+            port = args.port
+            log.info(f"Attempting to kill process on port {port}")
+        else:
+            print("❌ Specify --lemonade or --port <number>")
+            return
+
+        result = kill_process_by_port(port)
         if result["success"]:
             print(f"✅ {result['message']}")
+
+            # Also kill any orphaned child processes (Windows only)
+            if args.lemonade and sys.platform == "win32":
+                killed_any = False
+                try:
+                    # Kill all llama-server.exe processes
+                    result = subprocess.run(
+                        "taskkill //F //IM llama-server.exe",
+                        shell=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    if result.returncode == 0:
+                        killed_any = True
+                except Exception:
+                    pass
+
+                try:
+                    # Kill all lemonade-tray.exe processes
+                    result = subprocess.run(
+                        "taskkill //F //IM lemonade-tray.exe",
+                        shell=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    if result.returncode == 0:
+                        killed_any = True
+                except Exception:
+                    pass
+
+                if killed_any:
+                    print("✅ Cleaned up child processes")
         else:
             print(f"❌ {result['message']}")
         return
@@ -4087,6 +4241,247 @@ Let me know your answer!
     if args.action == "visualize":
         handle_visualize_command(args)
         return
+
+    # Handle init command
+    if args.action == "init":
+        from gaia.installer.init_command import run_init
+
+        # --minimal flag overrides --profile
+        profile = "minimal" if args.minimal else args.profile
+
+        exit_code = run_init(
+            profile=profile,
+            skip_models=args.skip_models,
+            force_reinstall=args.force_reinstall,
+            force_models=args.force_models,
+            yes=args.yes,
+            verbose=getattr(args, "verbose", False),
+        )
+        sys.exit(exit_code)
+
+    # Handle install command
+    if args.action == "install":
+        if args.lemonade:
+            from gaia.installer.lemonade_installer import LemonadeInstaller
+            from gaia.version import LEMONADE_VERSION
+
+            installer = LemonadeInstaller()
+
+            # Check if already installed
+            info = installer.check_installation()
+            if info.installed and info.version:
+                installed_ver = info.version.lstrip("v")
+                target_ver = LEMONADE_VERSION.lstrip("v")
+
+                if installed_ver == target_ver:
+                    print(f"✅ Lemonade Server v{info.version} is already installed")
+                    sys.exit(0)
+                else:
+                    print(f"Lemonade Server v{info.version} is installed")
+                    print(f"GAIA requires v{LEMONADE_VERSION}")
+                    print("")
+                    print("To update, run:")
+                    print("  gaia uninstall --lemonade")
+                    print("  gaia install --lemonade")
+                    sys.exit(1)
+
+            # Confirm installation
+            if not args.yes:
+                response = input(f"Install Lemonade v{LEMONADE_VERSION}? [Y/n]: ")
+                if response.lower() == "n":
+                    print("Installation cancelled")
+                    sys.exit(0)
+
+            # Download and install
+            print("Downloading Lemonade Server...")
+            try:
+                installer_path = installer.download_installer()
+                print("Installing...")
+                result = installer.install(installer_path, silent=args.silent)
+
+                if result.success:
+                    # Verify installation
+                    verify_info = installer.check_installation()
+                    if verify_info.installed:
+                        print(f"✅ Installed Lemonade Server v{verify_info.version}")
+                    else:
+                        print(f"✅ Installed Lemonade Server v{result.version}")
+                    sys.exit(0)
+                else:
+                    print(f"❌ Installation failed: {result.error}")
+                    sys.exit(1)
+            except Exception as e:
+                print(f"❌ Installation failed: {e}")
+                sys.exit(1)
+        else:
+            print("Specify what to install: --lemonade")
+            sys.exit(1)
+
+    # Handle uninstall command
+    if args.action == "uninstall":
+        from rich.console import Console
+
+        console = Console()
+
+        # Handle model cache clearing
+        if args.models:
+            import shutil
+
+            try:
+                # Find HuggingFace cache directory
+                hf_cache = Path.home() / ".cache" / "huggingface" / "hub"
+                if sys.platform == "win32":
+                    hf_cache = (
+                        Path(os.path.expanduser("~")) / ".cache" / "huggingface" / "hub"
+                    )
+
+                if not hf_cache.exists():
+                    console.print("[yellow]📦 No model cache found[/yellow]")
+                    console.print(f"   [dim]Checked: {hf_cache}[/dim]")
+                    sys.exit(0)
+
+                # Find all model directories
+                model_dirs = list(hf_cache.glob("models--*"))
+                if not model_dirs:
+                    console.print("[green]✅ Model cache is already empty[/green]")
+                    console.print(f"   [dim]Location: {hf_cache}[/dim]")
+                    sys.exit(0)
+
+                # Calculate total size
+                total_size = 0
+                for model_dir in model_dirs:
+                    try:
+                        total_size += sum(
+                            f.stat().st_size
+                            for f in model_dir.rglob("*")
+                            if f.is_file()
+                        )
+                    except Exception:
+                        pass
+
+                size_gb = total_size / (1024**3)
+
+                # Show what will be deleted
+                console.print()
+                console.print(f"[bold]Found {len(model_dirs)} model(s) in cache[/bold]")
+                console.print(f"   [dim]Location: {hf_cache}[/dim]")
+                console.print(f"   [dim]Total size: ~{size_gb:.1f} GB[/dim]")
+                console.print()
+
+                # Confirm deletion
+                if not args.yes:
+                    console.print(
+                        f"[bold]Delete all {len(model_dirs)} model(s)?[/bold] [dim](frees ~{size_gb:.1f} GB)[/dim]"
+                    )
+                    console.print()
+                    console.print("   [y/N]: ", end="")
+                    response = input()
+                    if response.lower() != "y":
+                        console.print("[dim]Model deletion cancelled[/dim]")
+                        sys.exit(0)
+
+                console.print()
+                console.print(
+                    f"[bold blue]Deleting {len(model_dirs)} model(s)...[/bold blue]"
+                )
+                console.print()
+
+                success_count = 0
+                fail_count = 0
+
+                for model_dir in model_dirs:
+                    # Extract model name from directory
+                    model_name = model_dir.name.replace("models--", "").replace(
+                        "--", "/"
+                    )
+                    console.print(f"   [cyan]{model_name}[/cyan]... ", end="")
+                    try:
+                        shutil.rmtree(model_dir)
+                        console.print("[green]✅[/green]")
+                        success_count += 1
+                    except PermissionError:
+                        console.print("[red]❌ (locked)[/red]")
+                        fail_count += 1
+                    except Exception as e:
+                        console.print(f"[red]❌ ({e})[/red]")
+                        fail_count += 1
+
+                # Summary
+                console.print()
+                if success_count > 0:
+                    console.print(f"[green]✅ Deleted {success_count} model(s)[/green]")
+                if fail_count > 0:
+                    console.print(
+                        f"[red]❌ Failed to delete {fail_count} model(s)[/red]"
+                    )
+                    console.print()
+                    console.print("   [bold]If files are locked:[/bold]")
+                    console.print(
+                        "   [dim]1. Close all apps using models (gaia chat, etc.)[/dim]"
+                    )
+                    console.print(
+                        "   [dim]2. Stop Lemonade:[/dim] [cyan]gaia kill --lemonade[/cyan]"
+                    )
+                    console.print(
+                        "   [dim]3. Re-run:[/dim] [cyan]gaia uninstall --models[/cyan]"
+                    )
+
+                sys.exit(0 if fail_count == 0 else 1)
+
+            except Exception as e:
+                console.print(f"[red]❌ Error: {e}[/red]")
+                sys.exit(1)
+
+        # Handle Lemonade Server uninstallation
+        elif args.lemonade:
+            from gaia.installer.lemonade_installer import LemonadeInstaller
+
+            installer = LemonadeInstaller(console=console)
+
+            # Check if installed
+            info = installer.check_installation()
+            if not info.installed:
+                console.print("[green]✅ Lemonade Server is not installed[/green]")
+                sys.exit(0)
+
+            # Show installation details
+            console.print()
+            console.print(f"[bold]Found Lemonade Server v{info.version}[/bold]")
+            if info.path:
+                console.print(f"   [dim]Location: {info.path}[/dim]")
+            console.print()
+
+            # Confirm uninstallation
+            if not args.yes:
+                console.print(
+                    f"[bold]Uninstall Lemonade Server v{info.version}?[/bold] \\[y/N]: ",
+                    end="",
+                )
+                response = input()
+                if response.lower() != "y":
+                    console.print("[dim]Uninstall cancelled[/dim]")
+                    sys.exit(0)
+
+            # Uninstall
+            console.print()
+            console.print("[bold blue]Uninstalling Lemonade Server...[/bold blue]")
+            result = installer.uninstall(silent=True)
+
+            if result.success:
+                console.print()
+                console.print(
+                    "[green]✅ Lemonade Server uninstalled successfully[/green]"
+                )
+                sys.exit(0)
+            else:
+                console.print()
+                console.print(f"[red]❌ Uninstall failed: {result.error}[/red]")
+                sys.exit(1)
+        else:
+            console.print("[yellow]Specify what to uninstall:[/yellow]")
+            console.print("  [cyan]--lemonade[/cyan]  Uninstall Lemonade Server")
+            console.print("  [cyan]--models[/cyan]    Clear all downloaded models")
+            sys.exit(1)
 
     # Log error for unknown action
     log.error(f"Unknown action specified: {args.action}")

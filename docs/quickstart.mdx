@@ -4,7 +4,7 @@ description: "Build your first AI agent in 5 minutes"
 ---
 
 <Info>
-  **First time here?** Complete the [Setup](/setup) guide first to install Lemonade Server and uv.
+  **First time here?** Complete the [Setup](/setup) guide first to install uv (Python package manager).
 </Info>
 
 ## Install GAIA
@@ -67,6 +67,19 @@ Choose your platform and installation type, then follow the steps below.
     ```powershell
     gaia -v
     ```
+
+    ### Step 6: Initialize GAIA
+
+    Install Lemonade Server and download models with a single command:
+
+    ```powershell
+    gaia init --profile minimal
+    ```
+
+    <Note>
+      Use `--profile chat` for the full experience (~25GB) or `--profile minimal` for a quick start (~4GB).
+      See [CLI Reference](/reference/cli#init-command) for all profiles.
+    </Note>
   </Tab>
 
   <Tab title="Linux">
@@ -113,6 +126,19 @@ Choose your platform and installation type, then follow the steps below.
     ```bash
     gaia -v
     ```
+
+    ### Step 6: Initialize GAIA
+
+    Install Lemonade Server and download models with a single command:
+
+    ```bash
+    gaia init --profile minimal
+    ```
+
+    <Note>
+      Use `--profile chat` for the full experience (~25GB) or `--profile minimal` for a quick start (~4GB).
+      See [CLI Reference](/reference/cli#init-command) for all profiles.
+    </Note>
   </Tab>
 
   <Tab title="Windows (Dev)">
@@ -178,6 +204,19 @@ Choose your platform and installation type, then follow the steps below.
     <Note>
       Changes to GAIA source code will take effect immediately without reinstalling.
     </Note>
+
+    ### Step 6: Initialize GAIA
+
+    Install Lemonade Server and download models with a single command:
+
+    ```powershell
+    gaia init --profile minimal
+    ```
+
+    <Note>
+      Use `--profile chat` for the full experience (~25GB) or `--profile minimal` for a quick start (~4GB).
+      See [CLI Reference](/reference/cli#init-command) for all profiles.
+    </Note>
   </Tab>
 
   <Tab title="Linux (Dev)">
@@ -231,6 +270,19 @@ Choose your platform and installation type, then follow the steps below.
 
     <Note>
       Changes to GAIA source code will take effect immediately without reinstalling.
+    </Note>
+
+    ### Step 6: Initialize GAIA
+
+    Install Lemonade Server and download models with a single command:
+
+    ```bash
+    gaia init --profile minimal
+    ```
+
+    <Note>
+      Use `--profile chat` for the full experience (~25GB) or `--profile minimal` for a quick start (~4GB).
+      See [CLI Reference](/reference/cli#init-command) for all profiles.
     </Note>
   </Tab>
 </Tabs>

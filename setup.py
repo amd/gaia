@@ -36,6 +36,7 @@ setup(
         "gaia.apps.llm",
         "gaia.apps.summarize",
         "gaia.eval",
+        "gaia.installer",
         "gaia.rag",
         "gaia.mcp",
         "gaia.mcp.servers",
