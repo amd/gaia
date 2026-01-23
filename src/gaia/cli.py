@@ -2899,19 +2899,37 @@ Let me know your answer!
         if result["success"]:
             print(f"✅ {result['message']}")
 
-            # Also kill any orphaned llama-server processes
+            # Also kill any orphaned child processes
             if args.lemonade:
+                killed_any = False
                 try:
                     # Kill all llama-server.exe processes
-                    subprocess.run(
+                    result = subprocess.run(
                         "taskkill //F //IM llama-server.exe",
                         shell=True,
                         capture_output=True,
-                        check=False
+                        check=False,
                     )
-                    print("✅ Cleaned up llama-server child processes")
+                    if result.returncode == 0:
+                        killed_any = True
                 except Exception:
-                    pass  # Ignore errors if no llama-server processes exist
+                    pass
+
+                try:
+                    # Kill all lemonade-tray.exe processes
+                    result = subprocess.run(
+                        "taskkill //F //IM lemonade-tray.exe",
+                        shell=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    if result.returncode == 0:
+                        killed_any = True
+                except Exception:
+                    pass
+
+                if killed_any:
+                    print("✅ Cleaned up child processes")
         else:
             print(f"❌ {result['message']}")
         return
@@ -4335,7 +4353,7 @@ Let me know your answer!
                         f"[bold]Delete all {len(model_dirs)} model(s)?[/bold] [dim](frees ~{size_gb:.1f} GB)[/dim]"
                     )
                     console.print()
-                    console.print("   [dim][y/N]:[/dim] ", end="")
+                    console.print("   [y/N]: ", end="")
                     response = input()
                     if response.lower() != "y":
                         console.print("[dim]Model deletion cancelled[/dim]")
@@ -4415,7 +4433,7 @@ Let me know your answer!
             # Confirm uninstallation
             if not args.yes:
                 console.print(
-                    f"[bold]Uninstall Lemonade Server v{info.version}?[/bold] [dim][y/N]:[/dim] ",
+                    f"[bold]Uninstall Lemonade Server v{info.version}?[/bold] [y/N]: ",
                     end="",
                 )
                 response = input()

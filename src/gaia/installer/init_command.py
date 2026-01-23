@@ -308,10 +308,10 @@ class InitCommand:
             if not self._ensure_lemonade_installed():
                 return 1
 
-            # Step 2: Start server
+            # Step 2: Check server
             step_num = 2
             self._print("")
-            self._print_step(step_num, total_steps, "Starting Lemonade Server...")
+            self._print_step(step_num, total_steps, "Checking Lemonade Server...")
             if not self._ensure_server_running():
                 return 1
 
@@ -550,12 +550,14 @@ class InitCommand:
             self._print("")
             self._print_success("Download complete")
 
-            # Install
-            if RICH_AVAILABLE and self.console:
-                self.console.print("   [bold]Installing...[/bold]")
-            else:
-                self._print("   Installing...")
-            result = self.installer.install(installer_path, silent=True)
+            # Install (not silent so desktop icon is created)
+            self.console.print("   [bold]Installing...[/bold]")
+            self.console.print()
+            self.console.print(
+                "   [yellow]⚠️  The installer window will appear - please complete the installation[/yellow]"
+            )
+            self.console.print()
+            result = self.installer.install(installer_path, silent=False)
 
             if result.success:
                 self._print_success(f"Installed Lemonade v{result.version}")
@@ -690,18 +692,67 @@ class InitCommand:
             except Exception as e:
                 # Log the health check error for debugging
                 log.debug(f"Health check failed: {e}")
-                # Server not running, try to start
+                # Server not running, ask user to start it
 
-            # Try to start the server
-            if RICH_AVAILABLE and self.console:
+            # Server not running - ask user to start it manually
+            self._print_error("Lemonade Server is not running")
+            self.console.print()
+            self.console.print("   [bold]Please start Lemonade Server:[/bold]")
+            if sys.platform == "win32":
                 self.console.print(
-                    "   [dim]Server not running, attempting to start...[/dim]"
+                    "   [dim]• Double-click the Lemonade icon in your system tray, or[/dim]"
+                )
+                self.console.print(
+                    "   [dim]• Search for 'Lemonade' in Start Menu and launch it[/dim]"
                 )
             else:
-                self._print("   Server not running, attempting to start...")
+                self.console.print(
+                    "   [dim]• Run:[/dim] [cyan]lemonade-server serve &[/cyan]"
+                )
+            self.console.print()
 
-            # Find lemonade-server executable
-            lemonade_path = self._find_lemonade_server()
+            # Wait for user to start the server
+            try:
+                self.console.print(
+                    "   [bold]Press Enter when server is started...[/bold]", end=""
+                )
+                input()
+            except (EOFError, KeyboardInterrupt):
+                self.console.print()
+                self._print_error("Initialization cancelled")
+                return False
+
+            self.console.print()
+
+            # Check if server is now running
+            try:
+                health = client.health_check()
+                if health and isinstance(health, dict) and health.get("status") == "ok":
+                    self._print_success("Server is now running")
+                    self._print_success("Server health: OK")
+                    return True
+                else:
+                    self._print_error("Server still not responding")
+                    return False
+            except Exception:
+                self._print_error("Server still not responding")
+                return False
+
+            # Find lemonade executable
+            # On Windows, use lemonade-tray.exe (starts server properly with full environment)
+            # On Linux, use lemonade-server
+            if sys.platform == "win32":
+                # Try lemonade-tray.exe first (recommended way to start server)
+                tray_path = self._find_lemonade_server().replace(
+                    "lemonade-server.EXE", "lemonade-tray.exe"
+                )
+                if os.path.isfile(tray_path):
+                    lemonade_path = tray_path
+                else:
+                    lemonade_path = self._find_lemonade_server()
+            else:
+                lemonade_path = self._find_lemonade_server()
+
             if not lemonade_path:
                 self._print_error("lemonade-server not found in PATH")
                 self._print("")
@@ -738,33 +789,37 @@ class InitCommand:
             # Start lemonade-server serve in background
             try:
                 # Use subprocess.Popen to start in background
-                # NOTE: On Windows, redirecting to DEVNULL breaks environment inheritance
-                # for system() calls in Lemonade's C++ code (can't find powershell)
-                # Solution: Redirect to a log file instead
                 if sys.platform == "win32":
-                    # Windows: Redirect to .gaia cache directory
-                    gaia_cache = os.path.expanduser("~/.gaia")
-                    os.makedirs(gaia_cache, exist_ok=True)
-                    log_path = os.path.join(gaia_cache, "lemonade-server.log")
+                    # Windows: Start lemonade-tray.exe
+                    # Use shell=False with explicit environment to ensure PATH is passed
+                    server_env = os.environ.copy()
 
-                    if self.verbose:
-                        self.console.print(f"   [dim]Server logs: {log_path}[/dim]")
+                    # Ensure critical Windows paths are in PATH
+                    system_root = os.environ.get("SystemRoot", "C:\\Windows")
+                    critical_paths = [
+                        f"{system_root}\\System32",
+                        f"{system_root}\\System32\\WindowsPowerShell\\v1.0",
+                        f"{system_root}\\System32\\Wbem",
+                    ]
 
-                    log_file = open(log_path, "w")
+                    # Prepend critical paths to ensure they're found
+                    current_path = server_env.get("PATH", "")
+                    server_env["PATH"] = ";".join(critical_paths) + ";" + current_path
+
                     process = subprocess.Popen(
-                        [lemonade_path, "serve"],
-                        stdout=log_file,
-                        stderr=subprocess.STDOUT,
+                        [lemonade_path],
+                        env=server_env,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
                     )
                 else:
-                    # Unix: Use start_new_session
+                    # Unix: Use lemonade-server serve with start_new_session
                     process = subprocess.Popen(
                         [lemonade_path, "serve"],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                         start_new_session=True,
                     )
-                log.debug(f"Started lemonade-server with PID {process.pid}")
+                log.debug(f"Started lemonade with PID {process.pid}")
             except Exception as e:
                 self._print_error(f"Failed to start lemonade-server: {e}")
                 return False
@@ -1215,6 +1270,12 @@ class InitCommand:
             else:
                 model_ids = client.get_required_models(profile_config["agent"])
 
+            # Always include the default CPU model (used by gaia llm)
+            from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+            if DEFAULT_MODEL_NAME not in model_ids:
+                model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
+
             if not model_ids or self.skip_models:
                 return True
 
@@ -1288,18 +1349,20 @@ class InitCommand:
             elif models_failed:
                 self._print_warning(f"Models verified: {models_passed}/{total} passed")
                 self.console.print()
-                self.console.print("   [bold]Failed models may be corrupted. To fix:[/bold]")
+                self.console.print(
+                    "   [bold]Failed models may be corrupted. To fix:[/bold]"
+                )
                 self.console.print(
                     "   [dim]Option 1 - Delete all models and re-download:[/dim]"
                 )
-                self.console.print(
-                    "     [cyan]gaia uninstall --models --yes[/cyan]"
-                )
+                self.console.print("     [cyan]gaia uninstall --models --yes[/cyan]")
                 self.console.print(
                     f"     [cyan]gaia init --profile {self.profile} --yes[/cyan]"
                 )
                 self.console.print()
-                self.console.print("   [dim]Option 2 - Manually delete failed models:[/dim]")
+                self.console.print(
+                    "   [dim]Option 2 - Manually delete failed models:[/dim]"
+                )
 
                 # Show path for each failed model
                 hf_cache = os.path.expanduser("~/.cache/huggingface/hub")
@@ -1309,7 +1372,9 @@ class InitCommand:
                     # Find actual model directory (may have org prefix like ggml-org/model-name)
                     # Search for directories containing the model name
                     model_name_part = model_id.split("/")[-1]  # Get last part if has /
-                    matching_dirs = list(Path(hf_cache).glob(f"models--*{model_name_part}*"))
+                    matching_dirs = list(
+                        Path(hf_cache).glob(f"models--*{model_name_part}*")
+                    )
 
                     if matching_dirs:
                         model_path = str(matching_dirs[0])
@@ -1318,11 +1383,11 @@ class InitCommand:
                         )
                         if sys.platform == "win32":
                             self.console.print(
-                                f"       [yellow]rmdir /s /q[/yellow] [cyan]\"{model_path}\"[/cyan]"
+                                f'       [yellow]rmdir /s /q[/yellow] [cyan]"{model_path}"[/cyan]'
                             )
                         else:
                             self.console.print(
-                                f"       [yellow]rm -rf[/yellow] [cyan]\"{model_path}\"[/cyan]"
+                                f'       [yellow]rm -rf[/yellow] [cyan]"{model_path}"[/cyan]'
                             )
                     else:
                         # Fallback if directory not found
