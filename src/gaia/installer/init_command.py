@@ -262,15 +262,17 @@ class InitCommand:
             except (FileNotFoundError, OSError):
                 pass
 
-            # Update os.environ['PATH'] with fresh values
+            # Merge registry paths with current PATH (don't replace entirely)
             if user_path or system_path:
-                new_path = (
+                current_path = os.environ.get("PATH", "")
+                registry_path = (
                     f"{user_path};{system_path}"
                     if user_path and system_path
                     else (user_path or system_path)
                 )
-                os.environ["PATH"] = new_path
-                log.debug("Refreshed PATH from Windows registry")
+                # Prepend registry paths to preserve current session paths
+                os.environ["PATH"] = f"{registry_path};{current_path}"
+                log.debug("Merged registry PATH with current environment")
 
         except Exception as e:
             log.debug(f"Failed to refresh PATH: {e}")
@@ -681,8 +683,10 @@ class InitCommand:
                         else:
                             self._print_warning(f"Server status: {status}")
                     return True
-            except Exception:
-                pass  # Server not running, try to start
+            except Exception as e:
+                # Log the health check error for debugging
+                log.debug(f"Health check failed: {e}")
+                # Server not running, try to start
 
             # Try to start the server
             if RICH_AVAILABLE and self.console:
