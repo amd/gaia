@@ -1150,7 +1150,9 @@ class InitCommand:
                 )
                 # Check if we got a valid response
                 if response and response.get("choices"):
-                    content = response["choices"][0].get("message", {}).get("content", "")
+                    content = (
+                        response["choices"][0].get("message", {}).get("content", "")
+                    )
                     if content:
                         return (True, None)
                     return (False, "Empty response")
@@ -1214,9 +1216,7 @@ class InitCommand:
             # Test each model with a small inference request
             self.console.print()
             self.console.print("   [bold]Testing models with inference:[/bold]")
-            self.console.print(
-                "   [yellow]⚠️  Press Ctrl+C to skip.[/yellow]"
-            )
+            self.console.print("   [yellow]⚠️  Press Ctrl+C to skip.[/yellow]")
 
             models_passed = 0
             models_failed = []
@@ -1263,7 +1263,9 @@ class InitCommand:
             total = len(model_ids)
             self.console.print()
             if interrupted:
-                self._print_success(f"Verified {models_passed} model(s) before interruption")
+                self._print_success(
+                    f"Verified {models_passed} model(s) before interruption"
+                )
             elif models_failed:
                 self._print_warning(f"Models verified: {models_passed}/{total} passed")
             else:

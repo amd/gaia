@@ -2191,6 +2191,11 @@ Examples:
         help="Uninstall Lemonade Server",
     )
     uninstall_parser.add_argument(
+        "--models",
+        action="store_true",
+        help="Clear all downloaded models (frees disk space)",
+    )
+    uninstall_parser.add_argument(
         "--yes",
         "-y",
         action="store_true",
@@ -4261,12 +4266,123 @@ Let me know your answer!
 
     # Handle uninstall command
     if args.action == "uninstall":
-        if args.lemonade:
-            from rich.console import Console
+        from rich.console import Console
 
+        console = Console()
+
+        # Handle model cache clearing
+        if args.models:
+            import shutil
+
+            try:
+                # Find HuggingFace cache directory
+                hf_cache = Path.home() / ".cache" / "huggingface" / "hub"
+                if sys.platform == "win32":
+                    hf_cache = (
+                        Path(os.path.expanduser("~")) / ".cache" / "huggingface" / "hub"
+                    )
+
+                if not hf_cache.exists():
+                    console.print("[yellow]📦 No model cache found[/yellow]")
+                    console.print(f"   [dim]Checked: {hf_cache}[/dim]")
+                    sys.exit(0)
+
+                # Find all model directories
+                model_dirs = list(hf_cache.glob("models--*"))
+                if not model_dirs:
+                    console.print("[green]✅ Model cache is already empty[/green]")
+                    console.print(f"   [dim]Location: {hf_cache}[/dim]")
+                    sys.exit(0)
+
+                # Calculate total size
+                total_size = 0
+                for model_dir in model_dirs:
+                    try:
+                        total_size += sum(
+                            f.stat().st_size
+                            for f in model_dir.rglob("*")
+                            if f.is_file()
+                        )
+                    except Exception:
+                        pass
+
+                size_gb = total_size / (1024**3)
+
+                # Show what will be deleted
+                console.print()
+                console.print(f"[bold]Found {len(model_dirs)} model(s) in cache[/bold]")
+                console.print(f"   [dim]Location: {hf_cache}[/dim]")
+                console.print(f"   [dim]Total size: ~{size_gb:.1f} GB[/dim]")
+                console.print()
+
+                # Confirm deletion
+                if not args.yes:
+                    console.print(
+                        f"[bold]Delete all {len(model_dirs)} model(s)?[/bold] [dim](frees ~{size_gb:.1f} GB)[/dim]"
+                    )
+                    console.print()
+                    console.print("   [dim][y/N]:[/dim] ", end="")
+                    response = input()
+                    if response.lower() != "y":
+                        console.print("[dim]Model deletion cancelled[/dim]")
+                        sys.exit(0)
+
+                console.print()
+                console.print(
+                    f"[bold blue]Deleting {len(model_dirs)} model(s)...[/bold blue]"
+                )
+                console.print()
+
+                success_count = 0
+                fail_count = 0
+
+                for model_dir in model_dirs:
+                    # Extract model name from directory
+                    model_name = model_dir.name.replace("models--", "").replace(
+                        "--", "/"
+                    )
+                    console.print(f"   [cyan]{model_name}[/cyan]... ", end="")
+                    try:
+                        shutil.rmtree(model_dir)
+                        console.print("[green]✅[/green]")
+                        success_count += 1
+                    except PermissionError:
+                        console.print("[red]❌ (locked)[/red]")
+                        fail_count += 1
+                    except Exception as e:
+                        console.print(f"[red]❌ ({e})[/red]")
+                        fail_count += 1
+
+                # Summary
+                console.print()
+                if success_count > 0:
+                    console.print(f"[green]✅ Deleted {success_count} model(s)[/green]")
+                if fail_count > 0:
+                    console.print(
+                        f"[red]❌ Failed to delete {fail_count} model(s)[/red]"
+                    )
+                    console.print()
+                    console.print("   [bold]If files are locked:[/bold]")
+                    console.print(
+                        "   [dim]1. Close all apps using models (gaia chat, etc.)[/dim]"
+                    )
+                    console.print(
+                        "   [dim]2. Stop Lemonade:[/dim] [cyan]gaia kill --lemonade[/cyan]"
+                    )
+                    console.print(
+                        "   [dim]3. Re-run:[/dim] [cyan]gaia uninstall --models[/cyan]"
+                    )
+
+                sys.exit(0 if fail_count == 0 else 1)
+
+            except Exception as e:
+                console.print(f"[red]❌ Error: {e}[/red]")
+                sys.exit(1)
+
+        # Handle Lemonade Server uninstallation
+        elif args.lemonade:
             from gaia.installer.lemonade_installer import LemonadeInstaller
 
-            console = Console()
             installer = LemonadeInstaller(console=console)
 
             # Check if installed
@@ -4275,10 +4391,17 @@ Let me know your answer!
                 console.print("[green]✅ Lemonade Server is not installed[/green]")
                 sys.exit(0)
 
+            # Show installation details
+            console.print()
+            console.print(f"[bold]Found Lemonade Server v{info.version}[/bold]")
+            if info.path:
+                console.print(f"   [dim]Location: {info.path}[/dim]")
+            console.print()
+
             # Confirm uninstallation
             if not args.yes:
                 console.print(
-                    f"[bold]Uninstall Lemonade Server v{info.version}?[/bold] [dim][y/N][/dim]: ",
+                    f"[bold]Uninstall Lemonade Server v{info.version}?[/bold] [dim][y/N]:[/dim] ",
                     end="",
                 )
                 response = input()
@@ -4293,14 +4416,18 @@ Let me know your answer!
 
             if result.success:
                 console.print()
-                console.print("[green]✅ Lemonade Server uninstalled successfully[/green]")
+                console.print(
+                    "[green]✅ Lemonade Server uninstalled successfully[/green]"
+                )
                 sys.exit(0)
             else:
                 console.print()
                 console.print(f"[red]❌ Uninstall failed: {result.error}[/red]")
                 sys.exit(1)
         else:
-            print("Specify what to uninstall: --lemonade")
+            console.print("[yellow]Specify what to uninstall:[/yellow]")
+            console.print("  [cyan]--lemonade[/cyan]  Uninstall Lemonade Server")
+            console.print("  [cyan]--models[/cyan]    Clear all downloaded models")
             sys.exit(1)
 
     # Log error for unknown action
