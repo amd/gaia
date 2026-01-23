@@ -1266,6 +1266,14 @@ class InitCommand:
                 )
             elif models_failed:
                 self._print_warning(f"Models verified: {models_passed}/{total} passed")
+                self.console.print()
+                self.console.print("   [bold]Failed models may be corrupted. To fix:[/bold]")
+                self.console.print(
+                    "   [dim]1. Delete corrupted models:[/dim] [cyan]gaia uninstall --models --yes[/cyan]"
+                )
+                self.console.print(
+                    f"   [dim]2. Re-download:[/dim] [cyan]gaia init --profile {self.profile} --yes[/cyan]"
+                )
             else:
                 self._print_success(f"All {models_passed} model(s) verified")
 
