@@ -668,8 +668,6 @@ class InitCommand:
         Returns:
             True if server is running and healthy, False on failure
         """
-        import subprocess
-
         try:
             # Import here to avoid circular imports
             from gaia.llm.lemonade_client import LemonadeClient
@@ -737,127 +735,6 @@ class InitCommand:
             except Exception:
                 self._print_error("Server still not responding")
                 return False
-
-            # Find lemonade executable
-            # On Windows, use lemonade-tray.exe (starts server properly with full environment)
-            # On Linux, use lemonade-server
-            if sys.platform == "win32":
-                # Try lemonade-tray.exe first (recommended way to start server)
-                tray_path = self._find_lemonade_server().replace(
-                    "lemonade-server.EXE", "lemonade-tray.exe"
-                )
-                if os.path.isfile(tray_path):
-                    lemonade_path = tray_path
-                else:
-                    lemonade_path = self._find_lemonade_server()
-            else:
-                lemonade_path = self._find_lemonade_server()
-
-            if not lemonade_path:
-                self._print_error("lemonade-server not found in PATH")
-                self._print("")
-                if RICH_AVAILABLE and self.console:
-                    self.console.print(
-                        "   [yellow]The MSI installer updated the system PATH, but your[/yellow]"
-                    )
-                    self.console.print(
-                        "   [yellow]current terminal session has the old PATH.[/yellow]"
-                    )
-                    self.console.print("")
-                    self.console.print("   [bold]To fix this:[/bold]")
-                    self.console.print(
-                        "   [dim]1.[/dim] Close this terminal and open a new one"
-                    )
-                    self.console.print(
-                        "   [dim]2.[/dim] Run [cyan]gaia init[/cyan] again"
-                    )
-                else:
-                    self._print(
-                        "   The MSI installer updated the system PATH, but your"
-                    )
-                    self._print("   current terminal session has the old PATH.")
-                    self._print("")
-                    self._print("   To fix this:")
-                    self._print("   1. Close this terminal and open a new one")
-                    self._print("   2. Run 'gaia init' again")
-                return False
-
-            # Show where we found the executable (verbose only)
-            if self.verbose:
-                self.console.print(f"   [dim]Found: {lemonade_path}[/dim]")
-
-            # Start lemonade-server serve in background
-            try:
-                # Use subprocess.Popen to start in background
-                if sys.platform == "win32":
-                    # Windows: Start lemonade-tray.exe
-                    # Use shell=False with explicit environment to ensure PATH is passed
-                    server_env = os.environ.copy()
-
-                    # Ensure critical Windows paths are in PATH
-                    system_root = os.environ.get("SystemRoot", "C:\\Windows")
-                    critical_paths = [
-                        f"{system_root}\\System32",
-                        f"{system_root}\\System32\\WindowsPowerShell\\v1.0",
-                        f"{system_root}\\System32\\Wbem",
-                    ]
-
-                    # Prepend critical paths to ensure they're found
-                    current_path = server_env.get("PATH", "")
-                    server_env["PATH"] = ";".join(critical_paths) + ";" + current_path
-
-                    process = subprocess.Popen(
-                        [lemonade_path],
-                        env=server_env,
-                        creationflags=subprocess.CREATE_NO_WINDOW,
-                    )
-                else:
-                    # Unix: Use lemonade-server serve with start_new_session
-                    process = subprocess.Popen(
-                        [lemonade_path, "serve"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        start_new_session=True,
-                    )
-                log.debug(f"Started lemonade with PID {process.pid}")
-            except Exception as e:
-                self._print_error(f"Failed to start lemonade-server: {e}")
-                return False
-
-            # Wait for server to be ready (poll health endpoint)
-            if self.verbose:
-                self.console.print("   [dim]Waiting for server to be ready...[/dim]")
-            max_wait = 30  # seconds
-            wait_interval = 1
-            elapsed = 0
-
-            while elapsed < max_wait:
-                time.sleep(wait_interval)
-                elapsed += wait_interval
-
-                try:
-                    health = client.health_check()
-                    if health:
-                        self._print_success("Server started successfully")
-                        # Verify health details
-                        if isinstance(health, dict):
-                            status = health.get("status", "unknown")
-                            if status == "ok":
-                                self._print_success("Server health: OK")
-                            else:
-                                self._print_warning(f"Server status: {status}")
-                        return True
-                except Exception:
-                    pass  # Keep waiting
-
-            self._print_error("Server failed to start within timeout")
-            if RICH_AVAILABLE and self.console:
-                self.console.print(
-                    "   [dim]Try starting manually with:[/dim] [cyan]lemonade-server serve[/cyan]"
-                )
-            else:
-                self._print("   Try starting manually with: lemonade-server serve")
-            return False
 
         except ImportError as e:
             self._print_error(f"Lemonade SDK not installed: {e}")
