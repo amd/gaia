@@ -39,7 +39,7 @@ gaia llm "Explain quantum computing" --model Qwen2.5-0.5B-Instruct-CPU --max-tok
 gaia llm "Write a short poem" --no-stream
 ```
 
-**Requirements**: Requires lemonade-server to be running. Download and install from [lemonade-server.ai](https://lemonade-server.ai/). The command will provide helpful error messages if the server is not accessible.
+**Requirements**: Requires lemonade-server to be running. Run `gaia init` to automatically install Lemonade Server and download models, or install manually from [lemonade-server.ai](https://lemonade-server.ai/). The command will provide helpful error messages if the server is not accessible.
 
 **Platform Availability**: Windows and Linux
 
@@ -256,11 +256,14 @@ The following is a list of the currently supported LLMs in the generic version o
 
 ## Installing Additional Models
 
-GAIA uses Lemonade Server for model management. Additional models can be installed and managed through:
+GAIA uses Lemonade Server for model management. Models can be installed through:
+- **GAIA CLI**: Run `gaia init --profile <profile>` to download models for a specific use case (minimal, chat, code, rag, all)
 - **System Tray Icon**: Access the Lemonade model manager from the system tray
 - **Web UI**: Manage models through the Lemonade web interface
 
-For detailed instructions on installing and managing models, see the [Lemonade Server Model Management documentation](https://lemonade-server.ai/docs/server/server_models/).
+To remove all downloaded models: `gaia uninstall --models`
+
+For detailed instructions on installing and managing models, see the [Lemonade Server Model Management documentation](https://lemonade-server.ai/docs/server/server_models/) or the [CLI Reference](/reference/cli#init-command).
 
 # License
 

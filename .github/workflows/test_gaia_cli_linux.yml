@@ -151,7 +151,7 @@ jobs:
 
           # Test chat command with Qwen model (should now work with Lemonade)
           echo "Testing chat command with Qwen3-0.6B-GGUF model:"
-          timeout 30s gaia chat --model "Qwen3-0.6B-GGUF" "Hello, this is a test message. Please respond briefly." || echo "Chat command completed"
+          timeout 30s gaia chat --model "Qwen3-0.6B-GGUF" -q "Hello, this is a test message. Please respond briefly." || echo "Chat command completed"
 
           # Test prompt command with Qwen model
           echo "Testing prompt command with Qwen3-0.6B-GGUF model:"
