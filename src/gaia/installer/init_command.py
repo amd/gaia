@@ -270,9 +270,11 @@ class InitCommand:
                     if user_path and system_path
                     else (user_path or system_path)
                 )
+                # Expand environment variables like %SystemRoot%, %USERPROFILE%, etc.
+                registry_path = os.path.expandvars(registry_path)
                 # Prepend registry paths to preserve current session paths
                 os.environ["PATH"] = f"{registry_path};{current_path}"
-                log.debug("Merged registry PATH with current environment")
+                log.debug("Merged and expanded registry PATH with current environment")
 
         except Exception as e:
             log.debug(f"Failed to refresh PATH: {e}")
@@ -371,8 +373,8 @@ class InitCommand:
 
         if info.installed and info.version:
             self._print_success(f"Lemonade Server found: v{info.version}")
-            # Show the path where it was found
-            if info.path:
+            # Show the path where it was found (only in verbose mode)
+            if self.verbose and info.path:
                 self.console.print(f"   [dim]Path: {info.path}[/dim]")
 
             # Check version match
@@ -559,18 +561,20 @@ class InitCommand:
                 self._print_success(f"Installed Lemonade v{result.version}")
 
                 # Refresh PATH from Windows registry so current session can find lemonade-server
-                self.console.print("   [dim]Refreshing PATH environment...[/dim]")
+                if self.verbose:
+                    self.console.print("   [dim]Refreshing PATH environment...[/dim]")
                 self._refresh_path_environment()
 
                 # Verify installation by checking version
-                self.console.print("   [dim]Verifying installation...[/dim]")
+                if self.verbose:
+                    self.console.print("   [dim]Verifying installation...[/dim]")
                 verify_info = self.installer.check_installation()
 
                 if verify_info.installed and verify_info.version:
                     self._print_success(
                         f"Verified: lemonade-server v{verify_info.version}"
                     )
-                    if verify_info.path:
+                    if self.verbose and verify_info.path:
                         self.console.print(f"   [dim]Path: {verify_info.path}[/dim]")
 
                 return True
@@ -727,35 +731,47 @@ class InitCommand:
                     self._print("   2. Run 'gaia init' again")
                 return False
 
-            # Show where we found the executable
+            # Show where we found the executable (verbose only)
             if self.verbose:
-                if RICH_AVAILABLE and self.console:
-                    self.console.print(f"   [dim]Found: {lemonade_path}[/dim]")
-                else:
-                    self._print(f"   Found: {lemonade_path}")
+                self.console.print(f"   [dim]Found: {lemonade_path}[/dim]")
 
             # Start lemonade-server serve in background
             try:
                 # Use subprocess.Popen to start in background
-                # Redirect output to DEVNULL for clean background operation
-                # Pass full environment to ensure PowerShell is in PATH (needed for ZIP extraction)
-                process = subprocess.Popen(
-                    [lemonade_path, "serve"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,  # Detach from parent process
-                    env=os.environ.copy(),  # Inherit full environment including PATH
-                )
+                # NOTE: On Windows, redirecting to DEVNULL breaks environment inheritance
+                # for system() calls in Lemonade's C++ code (can't find powershell)
+                # Solution: Redirect to a log file instead
+                if sys.platform == "win32":
+                    # Windows: Redirect to .gaia cache directory
+                    gaia_cache = os.path.expanduser("~/.gaia")
+                    os.makedirs(gaia_cache, exist_ok=True)
+                    log_path = os.path.join(gaia_cache, "lemonade-server.log")
+
+                    if self.verbose:
+                        self.console.print(f"   [dim]Server logs: {log_path}[/dim]")
+
+                    log_file = open(log_path, "w")
+                    process = subprocess.Popen(
+                        [lemonade_path, "serve"],
+                        stdout=log_file,
+                        stderr=subprocess.STDOUT,
+                    )
+                else:
+                    # Unix: Use start_new_session
+                    process = subprocess.Popen(
+                        [lemonade_path, "serve"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
                 log.debug(f"Started lemonade-server with PID {process.pid}")
             except Exception as e:
                 self._print_error(f"Failed to start lemonade-server: {e}")
                 return False
 
             # Wait for server to be ready (poll health endpoint)
-            if RICH_AVAILABLE and self.console:
+            if self.verbose:
                 self.console.print("   [dim]Waiting for server to be ready...[/dim]")
-            else:
-                self._print("   Waiting for server to be ready...")
             max_wait = 30  # seconds
             wait_interval = 1
             elapsed = 0
@@ -826,11 +842,6 @@ class InitCommand:
                 if bytes_total == 0 and bytes_downloaded == 0:
                     return
 
-                # Calculate speed (only when we'll display it)
-                now = time.time()
-                elapsed = now - state["last_update"]
-                speed_str = ""
-
                 # Only update display every 2% or at start/end
                 should_update = (
                     percent >= state["last_percent"] + 2
@@ -840,12 +851,18 @@ class InitCommand:
 
                 if should_update:
                     # Calculate speed for this update
+                    now = time.time()
+                    elapsed = now - state["last_update"]
+                    speed_str = ""
+
                     if elapsed > 0.5:  # Only show speed if enough time passed
                         bytes_delta = bytes_downloaded - state["last_bytes"]
                         speed = bytes_delta / elapsed / 1024 / 1024  # MB/s
                         speed_str = f" @ {speed:.1f} MB/s"
-                        state["last_update"] = now
-                        state["last_bytes"] = bytes_downloaded
+
+                    # Always update tracking (even if not showing speed)
+                    state["last_update"] = now
+                    state["last_bytes"] = bytes_downloaded
                     # Format sizes
                     if bytes_total > 1024 * 1024 * 1024:  # > 1 GB
                         dl_str = f"{bytes_downloaded / 1024 / 1024 / 1024:.2f} GB"
@@ -1273,10 +1290,49 @@ class InitCommand:
                 self.console.print()
                 self.console.print("   [bold]Failed models may be corrupted. To fix:[/bold]")
                 self.console.print(
-                    "   [dim]1. Delete corrupted models:[/dim] [cyan]gaia uninstall --models --yes[/cyan]"
+                    "   [dim]Option 1 - Delete all models and re-download:[/dim]"
                 )
                 self.console.print(
-                    f"   [dim]2. Re-download:[/dim] [cyan]gaia init --profile {self.profile} --yes[/cyan]"
+                    "     [cyan]gaia uninstall --models --yes[/cyan]"
+                )
+                self.console.print(
+                    f"     [cyan]gaia init --profile {self.profile} --yes[/cyan]"
+                )
+                self.console.print()
+                self.console.print("   [dim]Option 2 - Manually delete failed models:[/dim]")
+
+                # Show path for each failed model
+                hf_cache = os.path.expanduser("~/.cache/huggingface/hub")
+                from pathlib import Path
+
+                for model_id, error in models_failed:
+                    # Find actual model directory (may have org prefix like ggml-org/model-name)
+                    # Search for directories containing the model name
+                    model_name_part = model_id.split("/")[-1]  # Get last part if has /
+                    matching_dirs = list(Path(hf_cache).glob(f"models--*{model_name_part}*"))
+
+                    if matching_dirs:
+                        model_path = str(matching_dirs[0])
+                        self.console.print(
+                            f"     [cyan]{model_id}[/cyan]: [dim]{model_path}[/dim]"
+                        )
+                        if sys.platform == "win32":
+                            self.console.print(
+                                f"       [yellow]rmdir /s /q[/yellow] [cyan]\"{model_path}\"[/cyan]"
+                            )
+                        else:
+                            self.console.print(
+                                f"       [yellow]rm -rf[/yellow] [cyan]\"{model_path}\"[/cyan]"
+                            )
+                    else:
+                        # Fallback if directory not found
+                        self.console.print(
+                            f"     [cyan]{model_id}[/cyan]: [dim]Not found in cache[/dim]"
+                        )
+
+                self.console.print()
+                self.console.print(
+                    f"     [dim]Then re-download:[/dim] [cyan]gaia init --profile {self.profile} --yes[/cyan]"
                 )
             else:
                 self._print_success(f"All {models_passed} model(s) verified")

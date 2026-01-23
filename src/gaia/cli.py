@@ -2898,6 +2898,20 @@ Let me know your answer!
         result = kill_process_by_port(port)
         if result["success"]:
             print(f"✅ {result['message']}")
+
+            # Also kill any orphaned llama-server processes
+            if args.lemonade:
+                try:
+                    # Kill all llama-server.exe processes
+                    subprocess.run(
+                        "taskkill //F //IM llama-server.exe",
+                        shell=True,
+                        capture_output=True,
+                        check=False
+                    )
+                    print("✅ Cleaned up llama-server child processes")
+                except Exception:
+                    pass  # Ignore errors if no llama-server processes exist
         else:
             print(f"❌ {result['message']}")
         return
