@@ -76,9 +76,6 @@ class MyAgent(Agent):
     # STATE_ERROR_RECOVERY = "ERROR_RECOVERY"
     # STATE_COMPLETION = "COMPLETION"
 
-    # Define tools that can execute without planning
-    SIMPLE_TOOLS = ["list_files", "read_file"]
-
     def __init__(
         self,
         use_claude: bool = False,

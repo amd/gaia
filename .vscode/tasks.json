@@ -53,6 +53,22 @@
             },
             "problemMatcher": "$tsc",
             "detail": "Compile GAIA VSCode extension"
+        },
+        {
+            "label": "Run GAIA docs",
+            "type": "shell",
+            "command": "npm install && npm run dev",
+            "options": {
+                "cwd": "${workspaceFolder}/docs"
+            },
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "focus": true
+            },
+            "problemMatcher": [],
+            "detail": "Install dependencies and run the GAIA documentation development server"
         }
     ],
     "inputs": [

@@ -273,11 +273,24 @@ class TestLemonadeClientMock(unittest.TestCase):
     @responses.activate
     def test_health_check(self):
         """Test health check API."""
-        # Mock response
+        # Mock response - Lemonade 9.1.4+ format
         health_response = {
             "status": "ok",
-            "checkpoint_loaded": "amd/Llama-3.2-3B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid",
             "model_loaded": TEST_MODEL,
+            "version": "9.1.4",
+            "all_models_loaded": [
+                {
+                    "backend_url": "http://127.0.0.1:8001/v1",
+                    "checkpoint": "amd/Llama-3.2-3B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid",
+                    "device": "gpu",
+                    "model_name": TEST_MODEL,
+                    "recipe": "oga-hybrid",
+                    "recipe_options": {
+                        "ctx_size": 8192,
+                    },
+                    "type": "llm",
+                }
+            ],
         }
         responses.add(
             responses.GET, f"{API_BASE}/health", json=health_response, status=200
@@ -798,11 +811,24 @@ class TestLemonadeClientMock(unittest.TestCase):
     @responses.activate
     def test_ready(self):
         """Test ready() method with mocked responses."""
-        # Mock a successful health check response
+        # Mock a successful health check response - Lemonade 9.1.4+ format
         health_response = {
             "status": "ok",
-            "checkpoint_loaded": "amd/Llama-3.2-3B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid",
             "model_loaded": TEST_MODEL,
+            "version": "9.1.4",
+            "all_models_loaded": [
+                {
+                    "backend_url": "http://127.0.0.1:8001/v1",
+                    "checkpoint": "amd/Llama-3.2-3B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid",
+                    "device": "gpu",
+                    "model_name": TEST_MODEL,
+                    "recipe": "oga-hybrid",
+                    "recipe_options": {
+                        "ctx_size": 8192,
+                    },
+                    "type": "llm",
+                }
+            ],
         }
         responses.add(
             responses.GET, f"{API_BASE}/health", json=health_response, status=200
@@ -1119,10 +1145,24 @@ class TestLemonadeClientMock(unittest.TestCase):
     @responses.activate
     def test_validate_context_size_sufficient(self):
         """Test validate_context_size returns True when context is sufficient."""
+        # Lemonade 9.1.4+ format: ctx_size in all_models_loaded[N].recipe_options
         health_response = {
             "status": "ok",
-            "context_size": 32768,
             "model_loaded": TEST_MODEL,
+            "version": "9.1.4",
+            "all_models_loaded": [
+                {
+                    "backend_url": "http://127.0.0.1:8001/v1",
+                    "checkpoint": "amd/Llama-3.2-3B-Instruct-GGUF",
+                    "device": "gpu",
+                    "model_name": TEST_MODEL,
+                    "recipe": "llamacpp",
+                    "recipe_options": {
+                        "ctx_size": 32768,
+                    },
+                    "type": "llm",
+                }
+            ],
         }
         responses.add(
             responses.GET, f"{API_BASE}/health", json=health_response, status=200
@@ -1138,10 +1178,24 @@ class TestLemonadeClientMock(unittest.TestCase):
     @responses.activate
     def test_validate_context_size_insufficient(self):
         """Test validate_context_size returns False when context is insufficient."""
+        # Lemonade 9.1.4+ format: ctx_size in all_models_loaded[N].recipe_options
         health_response = {
             "status": "ok",
-            "context_size": 4096,  # Less than required
             "model_loaded": TEST_MODEL,
+            "version": "9.1.4",
+            "all_models_loaded": [
+                {
+                    "backend_url": "http://127.0.0.1:8001/v1",
+                    "checkpoint": "amd/Llama-3.2-3B-Instruct-GGUF",
+                    "device": "gpu",
+                    "model_name": TEST_MODEL,
+                    "recipe": "llamacpp",
+                    "recipe_options": {
+                        "ctx_size": 4096,  # Less than required
+                    },
+                    "type": "llm",
+                }
+            ],
         }
         responses.add(
             responses.GET, f"{API_BASE}/health", json=health_response, status=200
@@ -1171,6 +1225,27 @@ class TestLemonadeClientMock(unittest.TestCase):
         )
 
         # Should return True to not block on connection errors
+        self.assertTrue(valid)
+        self.assertIsNone(error)
+
+    @responses.activate
+    def test_validate_context_size_legacy_format(self):
+        """Test validate_context_size with older Lemonade format (pre-9.1.4)."""
+        # Legacy format: context_size at top level (pre-9.1.4)
+        health_response = {
+            "status": "ok",
+            "context_size": 32768,
+            "model_loaded": TEST_MODEL,
+            "checkpoint_loaded": "amd/Llama-3.2-3B-Instruct-GGUF",
+        }
+        responses.add(
+            responses.GET, f"{API_BASE}/health", json=health_response, status=200
+        )
+
+        valid, error = self.client.validate_context_size(
+            required_tokens=32768, quiet=True
+        )
+
         self.assertTrue(valid)
         self.assertIsNone(error)
 
@@ -1293,6 +1368,103 @@ class TestLemonadeClientIntegration(unittest.TestCase):
         self.assertIn("status", response)
         self.assertEqual(response["status"], "ok")
         print("✅ Health check passed")
+
+    def test_integration_health_check_914_format(self):
+        """Integration test for Lemonade 9.1.4+ health check format.
+
+        Verifies that the new health check response format with all_models_loaded
+        is correctly parsed and context_size is properly extracted.
+
+        Lemonade 9.1.4+ moved context_size from top-level to:
+        all_models_loaded[N].recipe_options.ctx_size
+        """
+        print("\n=== Testing Lemonade 9.1.4+ Health Check Format ===")
+
+        # Step 1: Get raw health check response
+        print("Step 1: Fetching health check response...")
+        health = self.client.health_check()
+        print(f"Health response keys: {list(health.keys())}")
+
+        # Step 2: Verify basic health status
+        self.assertIn("status", health)
+        self.assertEqual(health["status"], "ok")
+        print("✅ Health status is 'ok'")
+
+        # Step 3: Check for Lemonade 9.1.4+ format (all_models_loaded)
+        if "all_models_loaded" in health:
+            print("✅ Found 'all_models_loaded' field (Lemonade 9.1.4+ format)")
+            all_models = health["all_models_loaded"]
+            self.assertIsInstance(all_models, list)
+            print(f"   Number of loaded models: {len(all_models)}")
+
+            if len(all_models) > 0:
+                first_model = all_models[0]
+                print(f"   First model keys: {list(first_model.keys())}")
+
+                # Verify model structure
+                self.assertIn("model_name", first_model)
+                self.assertIn("recipe_options", first_model)
+                print(f"   Model name: {first_model.get('model_name')}")
+                print(f"   Device: {first_model.get('device')}")
+                print(f"   Recipe: {first_model.get('recipe')}")
+
+                # Verify ctx_size in recipe_options
+                recipe_options = first_model.get("recipe_options", {})
+                print(f"   Recipe options: {recipe_options}")
+
+                if "ctx_size" in recipe_options:
+                    ctx_size = recipe_options["ctx_size"]
+                    self.assertIsInstance(ctx_size, int)
+                    self.assertGreater(ctx_size, 0)
+                    print(f"✅ Context size from recipe_options: {ctx_size}")
+                else:
+                    print(
+                        "⚠️  ctx_size not found in recipe_options (model may not have it set)"
+                    )
+        else:
+            print("⚠️  'all_models_loaded' not found - using legacy format (pre-9.1.4)")
+            if "context_size" in health:
+                print(f"   Legacy context_size: {health['context_size']}")
+
+        # Step 4: Verify get_status() extracts context_size correctly
+        print("\nStep 2: Testing get_status() context extraction...")
+        status = self.client.get_status()
+        self.assertTrue(status.running)
+        print(f"   Server running: {status.running}")
+        print(f"   Context size from get_status(): {status.context_size}")
+
+        # Context size should be > 0 if a model is loaded
+        if health.get("model_loaded"):
+            self.assertGreater(
+                status.context_size,
+                0,
+                "Context size should be > 0 when a model is loaded",
+            )
+            print(
+                f"✅ get_status() correctly extracted context_size: {status.context_size}"
+            )
+
+        # Step 5: Verify validate_context_size() works
+        print("\nStep 3: Testing validate_context_size()...")
+        # Use a small required size that should pass
+        valid, error = self.client.validate_context_size(
+            required_tokens=1024, quiet=True
+        )
+        self.assertTrue(valid, f"validate_context_size(1024) should pass: {error}")
+        print("✅ validate_context_size(1024) passed")
+
+        # Test with current context size (should pass)
+        if status.context_size > 0:
+            valid, error = self.client.validate_context_size(
+                required_tokens=status.context_size, quiet=True
+            )
+            self.assertTrue(
+                valid,
+                f"validate_context_size({status.context_size}) should pass: {error}",
+            )
+            print(f"✅ validate_context_size({status.context_size}) passed")
+
+        print("\n✅ Lemonade 9.1.4+ health check format test PASSED")
 
     def test_integration_basic_request(self):
         """Integration test for basic request handling."""

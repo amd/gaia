@@ -31,9 +31,20 @@ class TestChatAgent:
         return str(pdf_path)
 
     @pytest.fixture
-    def agent(self):
+    def agent(self, temp_dir):
         """Create Chat Agent instance."""
-        agent = ChatAgent(ChatAgentConfig(silent_mode=True, debug=False, max_steps=5))
+        # Use absolute paths for configuration
+        # On macOS, temp_dir might be in /var/... but resolved to /private/var/...
+        # We MUST use the resolved path for ChatAgent configuration because it uses
+        # realpath() internally for validation.
+        resolved_temp_dir = str(Path(temp_dir).resolve())
+        config = ChatAgentConfig(
+            silent_mode=True,
+            debug=False,
+            max_steps=5,
+            allowed_paths=[resolved_temp_dir, str(Path.cwd().resolve())],
+        )
+        agent = ChatAgent(config)
         yield agent
         # Cleanup
         agent.stop_watching()
@@ -89,17 +100,239 @@ class TestChatAgent:
         # Check if at least one expected key is present
         assert any(key in " ".join(keys) for key in expected_keys)
 
+    def test_system_prompt_updated_after_index(self, agent):
+        """Test that the system prompt includes indexed documents after indexing.
+
+        This test simulates what the /index command handler should do:
+        1. Index the document via agent.rag.index_document()
+        2. Update the system prompt via agent.update_system_prompt()
+
+        After these steps, the system prompt should list the indexed document.
+        """
+        # Use a test file in the project directory (within allowed paths)
+        test_dir = Path(__file__).parent / "test_data"
+        test_dir.mkdir(exist_ok=True)
+        test_file = test_dir / "test_document_for_prompt.txt"
+
+        try:
+            test_file.write_text("This is test content about machine learning and AI.")
+
+            # Verify initial state: no documents indexed
+            assert "No documents are currently indexed" in agent.system_prompt
+
+            # Mock the LemonadeClient to avoid needing server
+            mock_lemonade = Mock()
+            mock_lemonade.embeddings.return_value = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+            }
+
+            # Create a custom _load_embedder that sets our mock
+            def mock_load_embedder():
+                agent.rag.llm_client = mock_lemonade
+                agent.rag.embedder = mock_lemonade
+                agent.rag.use_lemonade_embeddings = True
+
+            with (
+                patch("gaia.rag.sdk.faiss") as mock_faiss,
+                patch.object(agent.rag, "_load_embedder", mock_load_embedder),
+            ):
+                # Setup mock FAISS index
+                mock_index = Mock()
+                mock_index.ntotal = 1
+                mock_faiss.IndexFlatL2.return_value = mock_index
+
+                # Step 1: Index the document (what /index command does)
+                result = agent.rag.index_document(str(test_file))
+                assert result.get("success"), f"Indexing failed: {result.get('error')}"
+
+            # Step 2: Update the system prompt (what /index command should do after indexing)
+            agent.update_system_prompt()
+
+            # After both steps, system prompt should be updated to list the document
+            assert "test_document_for_prompt.txt" in agent.system_prompt
+            assert "No documents are currently indexed" not in agent.system_prompt
+        finally:
+            # Cleanup
+            if test_file.exists():
+                test_file.unlink()
+            if test_dir.exists() and not any(test_dir.iterdir()):
+                test_dir.rmdir()
+
+    def test_indexed_files_tracked_after_index(self, agent):
+        """Test that indexed files are tracked in agent.indexed_files after indexing."""
+        test_dir = Path(__file__).parent / "test_data"
+        test_dir.mkdir(exist_ok=True)
+        test_file = test_dir / "test_tracking.txt"
+
+        try:
+            test_file.write_text("Content for tracking test.")
+
+            # Verify initial state
+            assert len(agent.rag.indexed_files) == 0
+
+            # Mock the LemonadeClient to avoid needing server
+            mock_lemonade = Mock()
+            mock_lemonade.embeddings.return_value = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+            }
+
+            # Create a custom _load_embedder that sets our mock
+            def mock_load_embedder():
+                agent.rag.llm_client = mock_lemonade
+                agent.rag.embedder = mock_lemonade
+                agent.rag.use_lemonade_embeddings = True
+
+            with (
+                patch("gaia.rag.sdk.faiss") as mock_faiss,
+                patch.object(agent.rag, "_load_embedder", mock_load_embedder),
+            ):
+                # Setup mock FAISS index
+                mock_index = Mock()
+                mock_index.ntotal = 1
+                mock_faiss.IndexFlatL2.return_value = mock_index
+
+                # Index the document
+                result = agent.rag.index_document(str(test_file))
+                assert result.get("success"), f"Indexing failed: {result.get('error')}"
+
+            # Verify file is tracked
+            assert str(test_file) in agent.rag.indexed_files
+            assert len(agent.rag.indexed_files) == 1
+        finally:
+            if test_file.exists():
+                test_file.unlink()
+            if test_dir.exists() and not any(test_dir.iterdir()):
+                test_dir.rmdir()
+
+    def test_multiple_documents_indexed(self, agent):
+        """Test indexing multiple documents updates system prompt correctly."""
+        test_dir = Path(__file__).parent / "test_data"
+        test_dir.mkdir(exist_ok=True)
+        test_file1 = test_dir / "doc1.txt"
+        test_file2 = test_dir / "doc2.txt"
+
+        try:
+            test_file1.write_text("First document about Python programming.")
+            test_file2.write_text("Second document about machine learning.")
+
+            # Mock the LemonadeClient to avoid needing server
+            mock_lemonade = Mock()
+            mock_lemonade.embeddings.return_value = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+            }
+
+            # Create a custom _load_embedder that sets our mock
+            def mock_load_embedder():
+                agent.rag.llm_client = mock_lemonade
+                agent.rag.embedder = mock_lemonade
+                agent.rag.use_lemonade_embeddings = True
+
+            with (
+                patch("gaia.rag.sdk.faiss") as mock_faiss,
+                patch.object(agent.rag, "_load_embedder", mock_load_embedder),
+            ):
+                # Setup mock FAISS index
+                mock_index = Mock()
+                mock_index.ntotal = 2
+                mock_faiss.IndexFlatL2.return_value = mock_index
+
+                # Index both documents
+                result1 = agent.rag.index_document(str(test_file1))
+                result2 = agent.rag.index_document(str(test_file2))
+                assert result1.get(
+                    "success"
+                ), f"Indexing failed: {result1.get('error')}"
+                assert result2.get(
+                    "success"
+                ), f"Indexing failed: {result2.get('error')}"
+
+            # Update system prompt
+            agent.update_system_prompt()
+
+            # Verify both documents in system prompt
+            assert "doc1.txt" in agent.system_prompt
+            assert "doc2.txt" in agent.system_prompt
+            assert len(agent.rag.indexed_files) == 2
+        finally:
+            for f in [test_file1, test_file2]:
+                if f.exists():
+                    f.unlink()
+            if test_dir.exists() and not any(test_dir.iterdir()):
+                test_dir.rmdir()
+
+    def test_rag_chunks_created_after_index(self, agent):
+        """Test that RAG chunks are created after indexing a document."""
+        test_dir = Path(__file__).parent / "test_data"
+        test_dir.mkdir(exist_ok=True)
+        test_file = test_dir / "test_chunks.txt"
+
+        try:
+            # Create content that will generate chunks
+            test_file.write_text(
+                "This is a test document with enough content to create chunks. "
+                "It contains information about artificial intelligence and machine learning. "
+                "The document discusses various topics including neural networks and deep learning."
+            )
+
+            # Verify initial state
+            assert len(agent.rag.chunks) == 0
+
+            # Mock the LemonadeClient to avoid needing server
+            mock_lemonade = Mock()
+            mock_lemonade.embeddings.return_value = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+            }
+
+            # Create a custom _load_embedder that sets our mock
+            def mock_load_embedder():
+                agent.rag.llm_client = mock_lemonade
+                agent.rag.embedder = mock_lemonade
+                agent.rag.use_lemonade_embeddings = True
+
+            with (
+                patch("gaia.rag.sdk.faiss") as mock_faiss,
+                patch.object(agent.rag, "_load_embedder", mock_load_embedder),
+            ):
+                # Setup mock FAISS index
+                mock_index = Mock()
+                mock_index.ntotal = 1
+                mock_faiss.IndexFlatL2.return_value = mock_index
+
+                # Index the document
+                result = agent.rag.index_document(str(test_file))
+                assert result.get("success"), f"Indexing failed: {result.get('error')}"
+
+            # Verify chunks were created
+            assert len(agent.rag.chunks) > 0
+            assert result.get("num_chunks", 0) > 0
+        finally:
+            if test_file.exists():
+                test_file.unlink()
+            if test_dir.exists() and not any(test_dir.iterdir()):
+                test_dir.rmdir()
+
 
 class TestChatAgentEval:
     """Evaluation tests for Chat Agent quality metrics."""
 
     @pytest.fixture
+    def temp_dir(self):
+        """Create temporary directory for test files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield tmpdir
+
+    @pytest.fixture
     def agent_with_docs(self, temp_dir):
         """Create agent with test documents."""
         # This would be expanded with actual test documents
+        resolved_temp_dir = str(Path(temp_dir).resolve())
         agent = ChatAgent(
             ChatAgentConfig(
-                silent_mode=True, debug=False, rag_documents=[], max_steps=10
+                silent_mode=True,
+                debug=False,
+                rag_documents=[],
+                max_steps=10,
+                allowed_paths=[resolved_temp_dir, str(Path.cwd().resolve())],
             )
         )
         yield agent
@@ -163,9 +396,17 @@ class TestChatAgentTools:
     """Test chat agent tools from mixins."""
 
     @pytest.fixture
-    def agent(self):
+    def agent(self, temp_dir):
         """Create Chat Agent instance."""
-        agent = ChatAgent(ChatAgentConfig(silent_mode=True, debug=False, max_steps=5))
+        # Use resolved paths for configuration
+        resolved_temp_dir = str(Path(temp_dir).resolve())
+        config = ChatAgentConfig(
+            silent_mode=True,
+            debug=False,
+            max_steps=5,
+            allowed_paths=[resolved_temp_dir, str(Path.cwd().resolve())],
+        )
+        agent = ChatAgent(config)
         yield agent
         agent.stop_watching()
 
@@ -247,27 +488,39 @@ class DataManager {
 
     def test_index_text_file(self, agent, sample_txt_file):
         """Test indexing a text file."""
-        success = agent.rag.index_document(sample_txt_file)
-        assert success
-        assert sample_txt_file in agent.rag.indexed_files
+        # Use str(Path().resolve()) for the input path to ensure it passes ChatAgent validation
+        # which uses os.path.realpath().resolve()
+        res_sample_path = str(Path(sample_txt_file).resolve())
+        result = agent.rag.index_document(res_sample_path)
+        assert result["success"], f"Indexing failed: {result.get('error')}"
+
+        # RAG stores paths as absolute() (not resolved)
+        abs_path = str(Path(res_sample_path).absolute())
+        assert abs_path in agent.rag.indexed_files
 
     def test_index_markdown_file(self, agent, sample_md_file):
         """Test indexing a markdown file."""
-        success = agent.rag.index_document(sample_md_file)
-        assert success
-        assert sample_md_file in agent.rag.indexed_files
+        res_sample_path = str(Path(sample_md_file).resolve())
+        result = agent.rag.index_document(res_sample_path)
+        assert result["success"], f"Indexing failed: {result.get('error')}"
+        abs_path = str(Path(res_sample_path).absolute())
+        assert abs_path in agent.rag.indexed_files
 
     def test_index_csv_file(self, agent, sample_csv_file):
         """Test indexing a CSV file."""
-        success = agent.rag.index_document(sample_csv_file)
-        assert success
-        assert sample_csv_file in agent.rag.indexed_files
+        res_sample_path = str(Path(sample_csv_file).resolve())
+        result = agent.rag.index_document(res_sample_path)
+        assert result["success"], f"Indexing failed: {result.get('error')}"
+        abs_path = str(Path(res_sample_path).absolute())
+        assert abs_path in agent.rag.indexed_files
 
     def test_index_json_file(self, agent, sample_json_file):
         """Test indexing a JSON file."""
-        success = agent.rag.index_document(sample_json_file)
-        assert success
-        assert sample_json_file in agent.rag.indexed_files
+        res_sample_path = str(Path(sample_json_file).resolve())
+        result = agent.rag.index_document(res_sample_path)
+        assert result["success"], f"Indexing failed: {result.get('error')}"
+        abs_path = str(Path(res_sample_path).absolute())
+        assert abs_path in agent.rag.indexed_files
 
     def test_query_after_indexing(self, agent, sample_txt_file):
         """Test querying after indexing a document."""
@@ -278,15 +531,19 @@ class DataManager {
 
     def test_index_python_file(self, agent, sample_python_file):
         """Test indexing a Python code file."""
-        success = agent.rag.index_document(sample_python_file)
-        assert success
-        assert sample_python_file in agent.rag.indexed_files
+        res_sample_path = str(Path(sample_python_file).resolve())
+        result = agent.rag.index_document(res_sample_path)
+        assert result["success"], f"Indexing failed: {result.get('error')}"
+        abs_path = str(Path(res_sample_path).absolute())
+        assert abs_path in agent.rag.indexed_files
 
     def test_index_javascript_file(self, agent, sample_js_file):
         """Test indexing a JavaScript file."""
-        success = agent.rag.index_document(sample_js_file)
-        assert success
-        assert sample_js_file in agent.rag.indexed_files
+        res_sample_path = str(Path(sample_js_file).resolve())
+        result = agent.rag.index_document(res_sample_path)
+        assert result["success"], f"Indexing failed: {result.get('error')}"
+        abs_path = str(Path(res_sample_path).absolute())
+        assert abs_path in agent.rag.indexed_files
 
     def test_query_code_file(self, agent, sample_python_file):
         """Test querying code after indexing."""
@@ -347,16 +604,26 @@ class DataManager {
             cmd = f'ls "{temp_dir}"'
 
         # We can't easily test this without mocking, but we can test the path validation
-        assert agent._is_path_allowed(temp_dir)
+        # Use str(Path().absolute()) to match agent configuration
+        abs_temp_dir = str(Path(temp_dir).absolute())
+        assert agent._is_path_allowed(abs_temp_dir)
 
 
 class TestChatAgentSummarization:
     """Test document summarization functionality."""
 
     @pytest.fixture
-    def agent(self):
+    def agent(self, temp_dir):
         """Create Chat Agent instance."""
-        agent = ChatAgent(ChatAgentConfig(silent_mode=True, debug=False, max_steps=5))
+        # Use resolved paths for configuration
+        resolved_temp_dir = str(Path(temp_dir).resolve())
+        config = ChatAgentConfig(
+            silent_mode=True,
+            debug=False,
+            max_steps=5,
+            allowed_paths=[resolved_temp_dir, str(Path.cwd().resolve())],
+        )
+        agent = ChatAgent(config)
         yield agent
         agent.stop_watching()
 
@@ -397,9 +664,23 @@ class TestChatAgentSessions:
     """Test session management functionality."""
 
     @pytest.fixture
-    def agent(self):
+    def temp_dir(self):
+        """Create temporary directory for test files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield tmpdir
+
+    @pytest.fixture
+    def agent(self, temp_dir):
         """Create Chat Agent instance."""
-        agent = ChatAgent(ChatAgentConfig(silent_mode=True, debug=False, max_steps=5))
+        # Use resolved paths for configuration
+        resolved_temp_dir = str(Path(temp_dir).resolve())
+        config = ChatAgentConfig(
+            silent_mode=True,
+            debug=False,
+            max_steps=5,
+            allowed_paths=[resolved_temp_dir, str(Path.cwd().resolve())],
+        )
+        agent = ChatAgent(config)
         yield agent
         agent.stop_watching()
 
@@ -536,10 +817,13 @@ class TestChatAgentPathValidation:
     def agent(self):
         """Create Chat Agent instance with restricted paths."""
         with tempfile.TemporaryDirectory() as tmpdir:
+            resolved_tmpdir = str(Path(tmpdir).resolve())
             agent = ChatAgent(
-                ChatAgentConfig(silent_mode=True, debug=False, allowed_paths=[tmpdir])
+                ChatAgentConfig(
+                    silent_mode=True, debug=False, allowed_paths=[resolved_tmpdir]
+                )
             )
-            yield agent, tmpdir
+            yield agent, resolved_tmpdir
             agent.stop_watching()
 
     def test_allowed_path(self, agent):
@@ -559,9 +843,17 @@ class TestChatAgentCodeSupport:
     """Test code file indexing and retrieval capabilities."""
 
     @pytest.fixture
-    def agent(self):
+    def agent(self, temp_dir):
         """Create Chat Agent instance."""
-        agent = ChatAgent(ChatAgentConfig(silent_mode=True, debug=False, max_steps=5))
+        # Use resolved paths for configuration
+        resolved_temp_dir = str(Path(temp_dir).resolve())
+        config = ChatAgentConfig(
+            silent_mode=True,
+            debug=False,
+            max_steps=5,
+            allowed_paths=[resolved_temp_dir, str(Path.cwd().resolve())],
+        )
+        agent = ChatAgent(config)
         yield agent
         agent.stop_watching()
 
@@ -701,8 +993,11 @@ $secondary-color: #6c757d;
         # Index all files
         for file in src_dir.glob("*"):
             if file.is_file():
-                success = agent.rag.index_document(str(file))
-                assert success
+                res_sample_path = str(file.resolve())
+                result = agent.rag.index_document(res_sample_path)
+                assert result[
+                    "success"
+                ], f"Indexing failed for {file}: {result.get('error')}"
 
         # Should have indexed 3 files
         assert len(agent.rag.indexed_files) == 3
@@ -748,8 +1043,11 @@ $secondary-color: #6c757d;
         # Index all files
         for file in web_dir.glob("*"):
             if file.is_file():
-                success = agent.rag.index_document(str(file))
-                assert success
+                res_sample_path = str(file.resolve())
+                result = agent.rag.index_document(res_sample_path)
+                assert result[
+                    "success"
+                ], f"Indexing failed for {file}: {result.get('error')}"
 
         # Should have indexed HTML, CSS, Vue, JSX, SCSS files
         assert len(agent.rag.indexed_files) == 5
