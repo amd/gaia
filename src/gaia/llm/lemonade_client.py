@@ -2073,7 +2073,7 @@ class LemonadeClient:
                 return
 
             # Model not loaded - load it (will download if needed without prompting)
-            self.log.info(f"Model '{model}' not loaded, loading...")
+            self.log.debug(f"Model '{model}' not loaded, loading...")
 
             try:
                 from rich.console import Console

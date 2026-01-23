@@ -230,6 +230,55 @@ class InitCommand:
             self._print("")
             return False
 
+    def _refresh_path_environment(self):
+        """
+        Refresh PATH environment variable from Windows registry.
+
+        This allows the current Python process to find executables
+        that were just installed by MSI, without requiring a terminal restart.
+        """
+        if sys.platform != "win32":
+            return
+
+        try:
+            import winreg
+
+            # Read user PATH from registry
+            user_path = ""
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as key:
+                    user_path, _ = winreg.QueryValueEx(key, "Path")
+            except (FileNotFoundError, OSError):
+                pass
+
+            # Read system PATH from registry
+            system_path = ""
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+                ) as key:
+                    system_path, _ = winreg.QueryValueEx(key, "Path")
+            except (FileNotFoundError, OSError):
+                pass
+
+            # Merge registry paths with current PATH (don't replace entirely)
+            if user_path or system_path:
+                current_path = os.environ.get("PATH", "")
+                registry_path = (
+                    f"{user_path};{system_path}"
+                    if user_path and system_path
+                    else (user_path or system_path)
+                )
+                # Expand environment variables like %SystemRoot%, %USERPROFILE%, etc.
+                registry_path = os.path.expandvars(registry_path)
+                # Prepend registry paths to preserve current session paths
+                os.environ["PATH"] = f"{registry_path};{current_path}"
+                log.debug("Merged and expanded registry PATH with current environment")
+
+        except Exception as e:
+            log.debug(f"Failed to refresh PATH: {e}")
+
     def _download_progress(self, downloaded: int, total: int):
         """Callback for download progress."""
         if total > 0:
@@ -259,10 +308,10 @@ class InitCommand:
             if not self._ensure_lemonade_installed():
                 return 1
 
-            # Step 2: Start server
+            # Step 2: Check server
             step_num = 2
             self._print("")
-            self._print_step(step_num, total_steps, "Starting Lemonade Server...")
+            self._print_step(step_num, total_steps, "Checking Lemonade Server...")
             if not self._ensure_server_running():
                 return 1
 
@@ -324,6 +373,9 @@ class InitCommand:
 
         if info.installed and info.version:
             self._print_success(f"Lemonade Server found: v{info.version}")
+            # Show the path where it was found (only in verbose mode)
+            if self.verbose and info.path:
+                self.console.print(f"   [dim]Path: {info.path}[/dim]")
 
             # Check version match
             if not self._check_version_compatibility(info):
@@ -498,27 +550,34 @@ class InitCommand:
             self._print("")
             self._print_success("Download complete")
 
-            # Install
-            if RICH_AVAILABLE and self.console:
-                self.console.print("   [bold]Installing...[/bold]")
-            else:
-                self._print("   Installing...")
-            result = self.installer.install(installer_path, silent=True)
+            # Install (not silent so desktop icon is created)
+            self.console.print("   [bold]Installing...[/bold]")
+            self.console.print()
+            self.console.print(
+                "   [yellow]⚠️  The installer window will appear - please complete the installation[/yellow]"
+            )
+            self.console.print()
+            result = self.installer.install(installer_path, silent=False)
 
             if result.success:
                 self._print_success(f"Installed Lemonade v{result.version}")
 
+                # Refresh PATH from Windows registry so current session can find lemonade-server
+                if self.verbose:
+                    self.console.print("   [dim]Refreshing PATH environment...[/dim]")
+                self._refresh_path_environment()
+
                 # Verify installation by checking version
-                if RICH_AVAILABLE and self.console:
+                if self.verbose:
                     self.console.print("   [dim]Verifying installation...[/dim]")
-                else:
-                    self._print("   Verifying installation...")
                 verify_info = self.installer.check_installation()
 
                 if verify_info.installed and verify_info.version:
                     self._print_success(
                         f"Verified: lemonade-server v{verify_info.version}"
                     )
+                    if self.verbose and verify_info.path:
+                        self.console.print(f"   [dim]Path: {verify_info.path}[/dim]")
 
                 return True
             else:
@@ -609,8 +668,6 @@ class InitCommand:
         Returns:
             True if server is running and healthy, False on failure
         """
-        import subprocess
-
         try:
             # Import here to avoid circular imports
             from gaia.llm.lemonade_client import LemonadeClient
@@ -630,106 +687,54 @@ class InitCommand:
                         else:
                             self._print_warning(f"Server status: {status}")
                     return True
-            except Exception:
-                pass  # Server not running, try to start
-
-            # Try to start the server
-            if RICH_AVAILABLE and self.console:
-                self.console.print(
-                    "   [dim]Server not running, attempting to start...[/dim]"
-                )
-            else:
-                self._print("   Server not running, attempting to start...")
-
-            # Find lemonade-server executable
-            lemonade_path = self._find_lemonade_server()
-            if not lemonade_path:
-                self._print_error("lemonade-server not found in PATH")
-                self._print("")
-                if RICH_AVAILABLE and self.console:
-                    self.console.print(
-                        "   [yellow]The MSI installer updated the system PATH, but your[/yellow]"
-                    )
-                    self.console.print(
-                        "   [yellow]current terminal session has the old PATH.[/yellow]"
-                    )
-                    self.console.print("")
-                    self.console.print("   [bold]To fix this:[/bold]")
-                    self.console.print(
-                        "   [dim]1.[/dim] Close this terminal and open a new one"
-                    )
-                    self.console.print(
-                        "   [dim]2.[/dim] Run [cyan]gaia init[/cyan] again"
-                    )
-                else:
-                    self._print(
-                        "   The MSI installer updated the system PATH, but your"
-                    )
-                    self._print("   current terminal session has the old PATH.")
-                    self._print("")
-                    self._print("   To fix this:")
-                    self._print("   1. Close this terminal and open a new one")
-                    self._print("   2. Run 'gaia init' again")
-                return False
-
-            # Show where we found the executable
-            if self.verbose:
-                if RICH_AVAILABLE and self.console:
-                    self.console.print(f"   [dim]Found: {lemonade_path}[/dim]")
-                else:
-                    self._print(f"   Found: {lemonade_path}")
-
-            # Start lemonade-server serve in background
-            try:
-                # Use subprocess.Popen to start in background
-                # Redirect output to DEVNULL for clean background operation
-                process = subprocess.Popen(
-                    [lemonade_path, "serve"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,  # Detach from parent process
-                )
-                log.debug(f"Started lemonade-server with PID {process.pid}")
             except Exception as e:
-                self._print_error(f"Failed to start lemonade-server: {e}")
-                return False
+                # Log the health check error for debugging
+                log.debug(f"Health check failed: {e}")
+                # Server not running, ask user to start it
 
-            # Wait for server to be ready (poll health endpoint)
-            if RICH_AVAILABLE and self.console:
-                self.console.print("   [dim]Waiting for server to be ready...[/dim]")
-            else:
-                self._print("   Waiting for server to be ready...")
-            max_wait = 30  # seconds
-            wait_interval = 1
-            elapsed = 0
-
-            while elapsed < max_wait:
-                time.sleep(wait_interval)
-                elapsed += wait_interval
-
-                try:
-                    health = client.health_check()
-                    if health:
-                        self._print_success("Server started successfully")
-                        # Verify health details
-                        if isinstance(health, dict):
-                            status = health.get("status", "unknown")
-                            if status == "ok":
-                                self._print_success("Server health: OK")
-                            else:
-                                self._print_warning(f"Server status: {status}")
-                        return True
-                except Exception:
-                    pass  # Keep waiting
-
-            self._print_error("Server failed to start within timeout")
-            if RICH_AVAILABLE and self.console:
+            # Server not running - ask user to start it manually
+            self._print_error("Lemonade Server is not running")
+            self.console.print()
+            self.console.print("   [bold]Please start Lemonade Server:[/bold]")
+            if sys.platform == "win32":
                 self.console.print(
-                    "   [dim]Try starting manually with:[/dim] [cyan]lemonade-server serve[/cyan]"
+                    "   [dim]• Double-click the Lemonade icon in your system tray, or[/dim]"
+                )
+                self.console.print(
+                    "   [dim]• Search for 'Lemonade' in Start Menu and launch it[/dim]"
                 )
             else:
-                self._print("   Try starting manually with: lemonade-server serve")
-            return False
+                self.console.print(
+                    "   [dim]• Run:[/dim] [cyan]lemonade-server serve &[/cyan]"
+                )
+            self.console.print()
+
+            # Wait for user to start the server
+            try:
+                self.console.print(
+                    "   [bold]Press Enter when server is started...[/bold]", end=""
+                )
+                input()
+            except (EOFError, KeyboardInterrupt):
+                self.console.print()
+                self._print_error("Initialization cancelled")
+                return False
+
+            self.console.print()
+
+            # Check if server is now running
+            try:
+                health = client.health_check()
+                if health and isinstance(health, dict) and health.get("status") == "ok":
+                    self._print_success("Server is now running")
+                    self._print_success("Server health: OK")
+                    return True
+                else:
+                    self._print_error("Server still not responding")
+                    return False
+            except Exception:
+                self._print_error("Server still not responding")
+                return False
 
         except ImportError as e:
             self._print_error(f"Lemonade SDK not installed: {e}")
@@ -763,33 +768,33 @@ class InitCommand:
                 percent = data.get("percent", 0)
                 bytes_downloaded = data.get("bytes_downloaded", 0)
                 bytes_total = data.get("bytes_total", 0)
-                file_name = data.get("file", "")
-                file_index = data.get("file_index", 1)
-                total_files = data.get("total_files", 1)
 
                 # Skip events with invalid bytes_total (Lemonade server bug)
                 # These events can show 0 GB / 0 GB which is confusing
                 if bytes_total == 0 and bytes_downloaded == 0:
                     return
 
-                # Calculate speed
-                now = time.time()
-                elapsed = now - state["last_update"]
-                speed_str = ""
-                if elapsed > 0.5:  # Update speed every 0.5 seconds
-                    bytes_delta = bytes_downloaded - state["last_bytes"]
-                    speed = bytes_delta / elapsed / 1024 / 1024  # MB/s
-                    speed_str = f" @ {speed:.1f} MB/s"
-                    state["last_update"] = now
-                    state["last_bytes"] = bytes_downloaded
-
                 # Only update display every 2% or at start/end
-                if (
+                should_update = (
                     percent >= state["last_percent"] + 2
                     or percent == 0
                     or percent == 100
-                    or speed_str
-                ):
+                )
+
+                if should_update:
+                    # Calculate speed for this update
+                    now = time.time()
+                    elapsed = now - state["last_update"]
+                    speed_str = ""
+
+                    if elapsed > 0.5:  # Only show speed if enough time passed
+                        bytes_delta = bytes_downloaded - state["last_bytes"]
+                        speed = bytes_delta / elapsed / 1024 / 1024  # MB/s
+                        speed_str = f" @ {speed:.1f} MB/s"
+
+                    # Always update tracking (even if not showing speed)
+                    state["last_update"] = now
+                    state["last_bytes"] = bytes_downloaded
                     # Format sizes
                     if bytes_total > 1024 * 1024 * 1024:  # > 1 GB
                         dl_str = f"{bytes_downloaded / 1024 / 1024 / 1024:.2f} GB"
@@ -832,7 +837,12 @@ class InitCommand:
 
     def _verify_model(self, client, model_id: str) -> tuple:
         """
-        Verify a model works by running a quick inference test.
+        Verify a model is available (downloaded) on the server.
+
+        Note: We only check if the model exists in the server's model list.
+        Running inference to verify would require loading each model, which is
+        slow and can cause server issues. If a model is corrupted, the error
+        will surface when the user tries to use it.
 
         Args:
             client: LemonadeClient instance
@@ -840,44 +850,13 @@ class InitCommand:
 
         Returns:
             Tuple of (success: bool, error_type: str or None)
-            error_type is "corrupted" for actual file issues, "server_error" for transient issues
         """
         try:
-            # Embedding models use different API - check if it's an embedding model
-            model_lower = model_id.lower()
-            is_embedding = "embed" in model_lower or "nomic" in model_lower
-
-            if is_embedding:
-                # Test embedding model
-                response = client.embeddings(
-                    model=model_id,
-                    input="test",
-                    timeout=60,  # Longer timeout for model loading
-                )
-                # Check if we got embeddings
-                if response and response.get("data"):
-                    return (True, None)
-            else:
-                # Test chat model with minimal tokens
-                response = client.chat_completions(
-                    model=model_id,
-                    messages=[{"role": "user", "content": "Hi"}],
-                    max_tokens=1,
-                    timeout=60,  # Longer timeout for model loading
-                    auto_download=False,  # Don't auto-download, we're testing
-                )
-                # Check if we got a valid response
-                if response and response.get("choices"):
-                    return (True, None)
-            return (False, "no_response")
+            # Check if model is in the available models list
+            if client.check_model_available(model_id):
+                return (True, None)
+            return (False, "not_found")
         except Exception as e:
-            error_str = str(e).lower()
-            # Check for actual corruption indicators
-            if any(
-                x in error_str for x in ["corrupt", "invalid", "truncated", "checksum"]
-            ):
-                return (False, "corrupted")
-            # Server errors are not corruption - model files are likely fine
             log.debug(f"Model verification failed for {model_id}: {e}")
             return (False, "server_error")
 
@@ -905,6 +884,12 @@ class InitCommand:
                 # Use agent profile defaults
                 model_ids = client.get_required_models(agent)
 
+            # Always include the default CPU model (used by gaia llm)
+            from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+            if DEFAULT_MODEL_NAME not in model_ids:
+                model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
+
             if not model_ids:
                 self._print_success("No models required for this profile")
                 return True
@@ -922,7 +907,7 @@ class InitCommand:
                 if models_to_redownload:
                     if RICH_AVAILABLE and self.console:
                         self.console.print(
-                            f"   [yellow]Force re-download requested[/yellow]"
+                            "   [yellow]Force re-download requested[/yellow]"
                         )
                         self.console.print(
                             f"   [dim]Will delete and re-download:[/dim] {len(models_to_redownload)} model(s)"
@@ -950,49 +935,20 @@ class InitCommand:
                 models_to_download = list(model_ids)
                 models_available = []
             else:
-                # Check which need downloading (with verification)
+                # Check which models need downloading
                 models_to_download = []
                 models_available = []
-                models_corrupted = []
-                models_missing = []
 
                 for model_id in model_ids:
                     if client.check_model_available(model_id):
-                        # Verify the model actually works
+                        models_available.append(model_id)
                         if RICH_AVAILABLE and self.console:
                             self.console.print(
-                                f"   [dim]Verifying[/dim] [cyan]{model_id}[/cyan]...",
-                                end="",
+                                f"   [green]✓[/green] [cyan]{model_id}[/cyan] [dim]downloaded[/dim]"
                             )
                         else:
-                            print(f"   Verifying {model_id}...", end="", flush=True)
-
-                        success, error_type = self._verify_model(client, model_id)
-                        if success:
-                            models_available.append(model_id)
-                            if RICH_AVAILABLE and self.console:
-                                self.console.print(" [green]✓[/green]")
-                            else:
-                                print(" ✓")
-                        elif error_type == "corrupted":
-                            # Actual file corruption - needs re-download
-                            models_corrupted.append(model_id)
-                            models_to_download.append(model_id)
-                            if RICH_AVAILABLE and self.console:
-                                self.console.print(" [red]✗ corrupted[/red]")
-                            else:
-                                print(" ✗ corrupted")
-                        else:
-                            # Server error - model is likely fine, skip verification
-                            models_available.append(model_id)
-                            if RICH_AVAILABLE and self.console:
-                                self.console.print(
-                                    " [yellow]⚠ server error (assuming OK)[/yellow]"
-                                )
-                            else:
-                                print(" ⚠ server error (assuming OK)")
+                            print(f"   ✓ {model_id} - downloaded")
                     else:
-                        models_missing.append(model_id)
                         models_to_download.append(model_id)
                         if RICH_AVAILABLE and self.console:
                             self.console.print(
@@ -1001,18 +957,24 @@ class InitCommand:
                         else:
                             print(f"   📥 {model_id} - not downloaded")
 
-                if models_corrupted:
-                    self._print("")
-                    self._print_warning(
-                        f"Found {len(models_corrupted)} corrupted model(s) - will re-download"
-                    )
-
             if not models_to_download:
-                self._print_success("All models already downloaded")
+                self._print("")
+                self._print_success(f"All {len(models_available)} model(s) ready")
                 return True
 
             # Skip redundant prompt if force_models already confirmed
             if not self.force_models:
+                # Calculate estimated size for models being downloaded
+                # pylint: disable=protected-access
+                total_size_gb = sum(
+                    client._estimate_model_size(m) for m in models_to_download
+                )
+                if total_size_gb >= 1.0:
+                    size_str = f"~{total_size_gb:.1f} GB"
+                else:
+                    size_str = f"~{total_size_gb * 1024:.0f} MB"
+
+                self._print("")  # Newline before download summary
                 if RICH_AVAILABLE and self.console:
                     self.console.print(
                         f"   [bold]Need to download:[/bold] {len(models_to_download)} model(s)"
@@ -1021,16 +983,14 @@ class InitCommand:
                         self.console.print(
                             f"   [yellow]📥[/yellow] [cyan]{model_id}[/cyan]"
                         )
-                    self.console.print(
-                        f"   [dim]Estimated size:[/dim] {profile_config['approx_size']}"
-                    )
+                    self.console.print(f"   [dim]Estimated size:[/dim] {size_str}")
                 else:
                     self._print(
                         f"   Need to download: {len(models_to_download)} model(s)"
                     )
                     for model_id in models_to_download:
                         self._print(f"   📥 {model_id}")
-                    self._print(f"   Estimated size: {profile_config['approx_size']}")
+                    self._print(f"   Estimated size: {size_str}")
                 self._print("")
 
                 if not self._prompt_yes_no("Continue with download?", default=True):
@@ -1107,9 +1067,65 @@ class InitCommand:
             self._print_error(f"Error downloading models: {e}")
             return False
 
+    def _test_model_inference(self, client, model_id: str) -> tuple:
+        """
+        Test a model with a small inference request.
+
+        Args:
+            client: LemonadeClient instance
+            model_id: Model ID to test
+
+        Returns:
+            Tuple of (success: bool, error_message: str or None)
+        """
+        try:
+            # Load the model first
+            client.load_model(model_id, auto_download=False, prompt=False)
+
+            # Check if this is an embedding model
+            is_embedding_model = "embed" in model_id.lower()
+
+            if is_embedding_model:
+                # Test embedding model with a simple text
+                response = client.embeddings(
+                    input_texts=["test"],
+                    model=model_id,
+                )
+                # Check if we got valid embeddings
+                if response and response.get("data"):
+                    embedding = response["data"][0].get("embedding", [])
+                    if embedding and len(embedding) > 0:
+                        return (True, None)
+                    return (False, "Empty embedding")
+                return (False, "Invalid response format")
+            else:
+                # Test LLM with a minimal chat request
+                response = client.chat_completions(
+                    model=model_id,
+                    messages=[{"role": "user", "content": "Say 'ok'"}],
+                    max_tokens=10,
+                    temperature=0,
+                )
+                # Check if we got a valid response
+                if response and response.get("choices"):
+                    content = (
+                        response["choices"][0].get("message", {}).get("content", "")
+                    )
+                    if content:
+                        return (True, None)
+                    return (False, "Empty response")
+                return (False, "Invalid response format")
+
+        except Exception as e:
+            error_msg = str(e)
+            # Truncate long error messages
+            if len(error_msg) > 100:
+                error_msg = error_msg[:100] + "..."
+            return (False, error_msg)
+
     def _verify_setup(self) -> bool:
         """
-        Verify the setup is working.
+        Verify the setup is working by testing each model with a small request.
 
         Returns:
             True if verification passes, False on failure
@@ -1131,21 +1147,146 @@ class InitCommand:
                 self._print_error("Server not responding")
                 return False
 
-            # Check models
+            # Get models to verify
             profile_config = INIT_PROFILES[self.profile]
             if profile_config["models"]:
                 model_ids = profile_config["models"]
             else:
                 model_ids = client.get_required_models(profile_config["agent"])
 
-            if model_ids and not self.skip_models:
-                available = sum(1 for m in model_ids if client.check_model_available(m))
-                self._print_success(f"Models ready: {available}/{len(model_ids)}")
+            # Always include the default CPU model (used by gaia llm)
+            from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
-                if available < len(model_ids):
-                    self._print_warning("Some models are not downloaded")
+            if DEFAULT_MODEL_NAME not in model_ids:
+                model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
 
-            return True
+            if not model_ids or self.skip_models:
+                return True
+
+            # Prompt to run model verification (can be slow)
+            self.console.print()
+            self.console.print(
+                "   [dim]Model verification loads each model and runs a small inference test.[/dim]"
+            )
+            self.console.print(
+                "   [dim]This may take a few minutes but ensures models work correctly.[/dim]"
+            )
+            self.console.print()
+
+            if not self._prompt_yes_no("Run model verification?", default=True):
+                self._print_success("Skipping model verification")
+                return True
+
+            # Test each model with a small inference request
+            self.console.print()
+            self.console.print("   [bold]Testing models with inference:[/bold]")
+            self.console.print("   [yellow]⚠️  Press Ctrl+C to skip.[/yellow]")
+
+            models_passed = 0
+            models_failed = []
+            interrupted = False
+
+            try:
+                for model_id in model_ids:
+                    # Check if model is available first
+                    if not client.check_model_available(model_id):
+                        self.console.print(
+                            f"   [yellow]⏭️[/yellow]  [cyan]{model_id}[/cyan] [dim]- not downloaded[/dim]"
+                        )
+                        continue
+
+                    # Show testing status
+                    self.console.print(
+                        f"   [dim]🔄[/dim] [cyan]{model_id}[/cyan] [dim]- testing...[/dim]",
+                        end="",
+                    )
+
+                    # Test the model
+                    success, error = self._test_model_inference(client, model_id)
+
+                    # Clear the line and show result
+                    print("\r" + " " * 80 + "\r", end="")
+                    if success:
+                        self.console.print(
+                            f"   [green]✓[/green]  [cyan]{model_id}[/cyan] [dim]- OK[/dim]"
+                        )
+                        models_passed += 1
+                    else:
+                        self.console.print(
+                            f"   [red]❌[/red] [cyan]{model_id}[/cyan] [dim]- {error}[/dim]"
+                        )
+                        models_failed.append((model_id, error))
+
+            except KeyboardInterrupt:
+                print("\r" + " " * 80 + "\r", end="")
+                self.console.print()
+                self._print_warning("Verification interrupted")
+                interrupted = True
+
+            # Summary
+            total = len(model_ids)
+            self.console.print()
+            if interrupted:
+                self._print_success(
+                    f"Verified {models_passed} model(s) before interruption"
+                )
+            elif models_failed:
+                self._print_warning(f"Models verified: {models_passed}/{total} passed")
+                self.console.print()
+                self.console.print(
+                    "   [bold]Failed models may be corrupted. To fix:[/bold]"
+                )
+                self.console.print(
+                    "   [dim]Option 1 - Delete all models and re-download:[/dim]"
+                )
+                self.console.print("     [cyan]gaia uninstall --models --yes[/cyan]")
+                self.console.print(
+                    f"     [cyan]gaia init --profile {self.profile} --yes[/cyan]"
+                )
+                self.console.print()
+                self.console.print(
+                    "   [dim]Option 2 - Manually delete failed models:[/dim]"
+                )
+
+                # Show path for each failed model
+                hf_cache = os.path.expanduser("~/.cache/huggingface/hub")
+                from pathlib import Path
+
+                for model_id, error in models_failed:
+                    # Find actual model directory (may have org prefix like ggml-org/model-name)
+                    # Search for directories containing the model name
+                    model_name_part = model_id.split("/")[-1]  # Get last part if has /
+                    matching_dirs = list(
+                        Path(hf_cache).glob(f"models--*{model_name_part}*")
+                    )
+
+                    if matching_dirs:
+                        model_path = str(matching_dirs[0])
+                        self.console.print(
+                            f"     [cyan]{model_id}[/cyan]: [dim]{model_path}[/dim]"
+                        )
+                        if sys.platform == "win32":
+                            self.console.print(
+                                f'       [yellow]rmdir /s /q[/yellow] [cyan]"{model_path}"[/cyan]'
+                            )
+                        else:
+                            self.console.print(
+                                f'       [yellow]rm -rf[/yellow] [cyan]"{model_path}"[/cyan]'
+                            )
+                    else:
+                        # Fallback if directory not found
+                        self.console.print(
+                            f"     [cyan]{model_id}[/cyan]: [dim]Not found in cache[/dim]"
+                        )
+
+                self.console.print()
+                self.console.print(
+                    f"     [dim]Then re-download:[/dim] [cyan]gaia init --profile {self.profile} --yes[/cyan]"
+                )
+            else:
+                self._print_success(f"All {models_passed} model(s) verified")
+
+            return True  # Don't fail init due to model issues
 
         except Exception as e:
             self._print_error(f"Verification failed: {e}")

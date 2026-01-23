@@ -119,9 +119,6 @@ class PathValidator:
 
             norm_real_path = normalize_macos(real_path_str)
 
-            # print(f"DEBUG: is_path_allowed({path})")
-            # print(f"DEBUG: norm_real_path: {norm_real_path}")
-
             # Check if real path is within any allowed directory
             for allowed_path in list(self.allowed_paths):
                 try:
@@ -132,16 +129,12 @@ class PathValidator:
                     allowed_path_str = str(res_allowed)
                     norm_allowed_path = normalize_macos(allowed_path_str)
 
-                    # print(f"DEBUG: Checking against {allowed_path_str} (norm: {norm_allowed_path})")
-
                     # Robust check using string prefix on normalized paths
                     if norm_real_path.startswith(norm_allowed_path):
-                        # print(f"DEBUG: MATCH FOUND")
                         return True
 
                     # Fallback to relative_to for safety
                     real_path.relative_to(res_allowed)
-                    # print(f"DEBUG: RELATIVE_TO MATCH FOUND")
                     return True
                 except (ValueError, RuntimeError):
                     continue
