@@ -1173,43 +1173,6 @@ You must respond ONLY in valid JSON. No text before { or after }.
             steps_taken += 1
             logger.debug(f"Step {steps_taken}/{steps_limit}")
 
-            # Check if we're at the limit and ask user if they want to continue
-            if steps_taken == steps_limit and final_answer is None:
-                # Show what was accomplished
-                max_steps_msg = self._generate_max_steps_message(
-                    conversation, steps_taken, steps_limit
-                )
-                self.console.print_warning(max_steps_msg)
-
-                # Ask user if they want to continue (skip in silent mode OR if stdin is not available)
-                # IMPORTANT: Never call input() in API/CI contexts to avoid blocking threads
-                import sys
-
-                has_stdin = sys.stdin and sys.stdin.isatty()
-                if has_stdin and not (
-                    hasattr(self, "silent_mode") and self.silent_mode
-                ):
-                    try:
-                        response = (
-                            input("\nContinue with 50 more steps? (y/n): ")
-                            .strip()
-                            .lower()
-                        )
-                        if response in ["y", "yes"]:
-                            steps_limit += 50
-                            self.console.print_info(
-                                f"✓ Continuing with {steps_limit} total steps...\n"
-                            )
-                        else:
-                            self.console.print_info("Stopping at user request.")
-                            break
-                    except (EOFError, KeyboardInterrupt):
-                        self.console.print_info("\nStopping at user request.")
-                        break
-                else:
-                    # Silent mode - just stop
-                    break
-
             # Display current step
             self.console.print_step_header(steps_taken, steps_limit)
 
@@ -2007,6 +1970,43 @@ You must respond ONLY in valid JSON. No text before { or after }.
                 self.execution_state = self.STATE_COMPLETION
                 self.console.print_final_answer(final_answer, streaming=self.streaming)
                 break
+
+            # Check if we're at the limit and ask user if they want to continue
+            if steps_taken == steps_limit and final_answer is None:
+                # Show what was accomplished
+                max_steps_msg = self._generate_max_steps_message(
+                    conversation, steps_taken, steps_limit
+                )
+                self.console.print_warning(max_steps_msg)
+
+                # Ask user if they want to continue (skip in silent mode OR if stdin is not available)
+                # IMPORTANT: Never call input() in API/CI contexts to avoid blocking threads
+                import sys
+
+                has_stdin = sys.stdin and sys.stdin.isatty()
+                if has_stdin and not (
+                    hasattr(self, "silent_mode") and self.silent_mode
+                ):
+                    try:
+                        response = (
+                            input("\nContinue with 50 more steps? (y/n): ")
+                            .strip()
+                            .lower()
+                        )
+                        if response in ["y", "yes"]:
+                            steps_limit += 50
+                            self.console.print_info(
+                                f"✓ Continuing with {steps_limit} total steps...\n"
+                            )
+                        else:
+                            self.console.print_info("Stopping at user request.")
+                            break
+                    except (EOFError, KeyboardInterrupt):
+                        self.console.print_info("\nStopping at user request.")
+                        break
+                else:
+                    # Silent mode - just stop
+                    break
 
         # Print completion message
         self.console.print_completion(steps_taken, steps_limit)
