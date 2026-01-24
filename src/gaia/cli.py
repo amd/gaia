@@ -171,7 +171,7 @@ def ensure_agent_models(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
     quiet: bool = False,
-    timeout: int = 1800,
+    _timeout: int = 1800,  # Reserved for future use
 ) -> bool:
     """
     Ensure all models required for an agent are downloaded.

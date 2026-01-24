@@ -1,0 +1,36 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: Update Release Branch
+
+# Trigger when version tags are pushed
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  update-release-branch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update release branch to current tag
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          echo "Updating release branch to tag: $TAG_NAME"
+
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Force update the release branch to point to this tag
+          git branch -f release "$TAG_NAME"
+          git push -f origin release
+
+          echo "✅ Release branch updated to $TAG_NAME"

@@ -468,9 +468,6 @@ def _prompt_user_for_delete(model_name: str) -> bool:
     Returns:
         True if user confirms, False if user declines
     """
-    import os
-    import sys
-
     # Get model storage paths
     if sys.platform == "win32":
         lemonade_cache = os.path.expandvars("%LOCALAPPDATA%\\lemonade\\")
@@ -2185,7 +2182,7 @@ class LemonadeClient:
         model_name: str,
         timeout: int = DEFAULT_MODEL_LOAD_TIMEOUT,
         auto_download: bool = False,
-        download_timeout: int = 7200,
+        _download_timeout: int = 7200,  # Reserved for future use
         llamacpp_args: Optional[str] = None,
         prompt: bool = True,
     ) -> Dict[str, Any]:
