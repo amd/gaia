@@ -11,6 +11,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from gaia.agents.base.console import AgentConsole
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
     DEFAULT_HOST,
@@ -53,25 +54,6 @@ DEFAULT_TEST_DATA_DIR = "output/test_data"
 DEFAULT_GROUNDTRUTH_DIR = "output/groundtruth"
 DEFAULT_EXPERIMENTS_DIR = "output/experiments"
 DEFAULT_EVALUATIONS_DIR = "output/evaluations"
-
-
-# Helper functions for download progress display
-def _format_bytes(b: int) -> str:
-    """Format bytes to human readable string."""
-    if b >= 1024 * 1024 * 1024:
-        return f"{b / (1024 * 1024 * 1024):.1f} GB"
-    elif b >= 1024 * 1024:
-        return f"{b / (1024 * 1024):.1f} MB"
-    elif b >= 1024:
-        return f"{b / 1024:.1f} KB"
-    return f"{b} B"
-
-
-def _make_progress_bar(percent: int, width: int = 20) -> str:
-    """Create a progress bar string."""
-    filled = int(width * percent / 100)
-    empty = width - filled
-    return f"[{'█' * filled}{'░' * empty}]"
 
 
 def check_lemonade_health(host=None, port=None):
@@ -189,7 +171,7 @@ def ensure_agent_models(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
     quiet: bool = False,
-    timeout: int = 1800,
+    _timeout: int = 1800,  # Reserved for future use
 ) -> bool:
     """
     Ensure all models required for an agent are downloaded.
@@ -229,86 +211,72 @@ def ensure_agent_models(
             log.debug(f"All models for {agent} agent already available")
             return True
 
+        # Use AgentConsole for nicely formatted progress display
+        console = AgentConsole()
+
         if not quiet:
-            print(
-                f"📥 Downloading {len(models_to_download)} model(s) for {agent} agent..."
+            console.print_info(
+                f"Downloading {len(models_to_download)} model(s) for {agent} agent"
             )
-            print()
 
-        # Progress tracking
-        last_percent = [-1]
-        last_file_index = [0]
-
-        def progress_callback(event_type: str, data: dict) -> None:
-            """Display download progress in CLI."""
-            if quiet:
-                return
-
-            if event_type == "progress":
-                percent = data.get("percent", 0)
-                file_name = data.get("file", "unknown")
-                file_index = data.get("file_index", 1)
-                total_files = data.get("total_files", 1)
-
-                # Print newline when moving to a new file
-                if file_index != last_file_index[0] and last_file_index[0] > 0:
-                    print()  # Newline for previous file
-                last_file_index[0] = file_index
-
-                # Update every 2% for smooth progress
-                if percent >= last_percent[0] + 2 or percent == 0 or percent == 100:
-                    bytes_downloaded = data.get("bytes_downloaded", 0)
-                    bytes_total = data.get("bytes_total", 0)
-
-                    # Create progress bar
-                    bar = _make_progress_bar(percent)
-                    progress_line = (
-                        f"   {bar} {percent:3d}% "
-                        f"[{file_index}/{total_files}] {file_name}: "
-                        f"{_format_bytes(bytes_downloaded)}/{_format_bytes(bytes_total)}"
-                    )
-                    print(f"\r{progress_line:<100}", end="", flush=True)
-                    last_percent[0] = percent
-
-            elif event_type == "complete":
-                print()  # Newline after progress
-                print("   ✅ Download complete")
-                last_percent[0] = -1
-                last_file_index[0] = 0
-
-            elif event_type == "error":
-                print()  # Newline after progress
-                error_msg = data.get("error", "Unknown error")
-                print(f"   ❌ Error: {error_msg}")
-
-        # Download each model
+        # Download each model with progress display
         for model_id in models_to_download:
-            last_percent[0] = -1
-
             if not quiet:
-                print(f"📥 {model_id}")
+                console.print_download_start(model_id)
 
             try:
-                for event in client.pull_model_stream(
-                    model_name=model_id,
-                    timeout=timeout,
-                    progress_callback=progress_callback,
-                ):
-                    if event.get("event") == "error":
+                event_count = 0
+                last_bytes = 0
+                last_time = time.time()
+
+                for event in client.pull_model_stream(model_name=model_id):
+                    event_count += 1
+                    event_type = event.get("event")
+
+                    if event_type == "progress":
+                        # Skip first 2 spurious events from Lemonade
+                        if event_count <= 2 or quiet:
+                            continue
+
+                        # Calculate download speed
+                        current_bytes = event.get("bytes_downloaded", 0)
+                        current_time = time.time()
+                        time_delta = current_time - last_time
+
+                        speed_mbps = 0.0
+                        if time_delta > 0.1 and current_bytes > last_bytes:
+                            bytes_delta = current_bytes - last_bytes
+                            speed_mbps = (bytes_delta / time_delta) / (1024 * 1024)
+                            last_bytes = current_bytes
+                            last_time = current_time
+
+                        console.print_download_progress(
+                            percent=event.get("percent", 0),
+                            bytes_downloaded=current_bytes,
+                            bytes_total=event.get("bytes_total", 0),
+                            speed_mbps=speed_mbps,
+                        )
+
+                    elif event_type == "complete":
+                        if not quiet:
+                            console.print_download_complete(model_id)
+
+                    elif event_type == "error":
+                        if not quiet:
+                            console.print_download_error(
+                                event.get("error", "Unknown error"), model_id
+                            )
                         log.error(f"Failed to download {model_id}")
                         return False
+
             except LemonadeClientError as e:
                 log.error(f"Failed to download {model_id}: {e}")
                 if not quiet:
-                    print(f"   ❌ Failed: {e}")
+                    console.print_download_error(str(e), model_id)
                 return False
 
-            if not quiet:
-                print()
-
         if not quiet:
-            print(f"✅ All models ready for {agent} agent")
-            print()
+            console.print_success(f"All models ready for {agent} agent")
 
         return True
 
@@ -1132,82 +1100,6 @@ def main():
         help="Enable step-through debugging mode (pause at each agent step)",
     )
     api_parser.set_defaults(action="api")
-
-    # Add model pull command
-    pull_parser = subparsers.add_parser(
-        "pull",
-        help="Download/install a model from the Lemonade Server registry",
-        parents=[parent_parser],
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Pull a registered model
-  gaia pull Qwen3-0.6B-GGUF
-
-  # Pull and register a custom model from HuggingFace
-  gaia pull user.Custom-Model-GGUF --checkpoint unsloth/Custom-Model-GGUF:Q4_K_M --recipe llamacpp
-
-  # Pull a reasoning model
-  gaia pull user.DeepSeek-GGUF --checkpoint unsloth/DeepSeek-R1-GGUF --recipe llamacpp --reasoning
-
-  # Pull a vision model with mmproj
-  gaia pull user.Vision-Model --checkpoint model/vision:Q4 --recipe llamacpp --vision --mmproj mmproj.gguf
-        """,
-    )
-    pull_parser.add_argument(
-        "model_name",
-        help="Name of the model to pull (use 'user.' prefix for custom models)",
-    )
-    pull_parser.add_argument(
-        "--checkpoint",
-        help="HuggingFace checkpoint for custom models (e.g., unsloth/Model-GGUF:Q4_K_M)",
-    )
-    pull_parser.add_argument(
-        "--recipe",
-        help="Lemonade recipe for custom models (e.g., llamacpp, oga-cpu)",
-    )
-    pull_parser.add_argument(
-        "--reasoning",
-        action="store_true",
-        help="Mark model as a reasoning model (like DeepSeek)",
-    )
-    pull_parser.add_argument(
-        "--vision",
-        action="store_true",
-        help="Mark model as having vision capabilities",
-    )
-    pull_parser.add_argument(
-        "--embedding",
-        action="store_true",
-        help="Mark model as an embedding model",
-    )
-    pull_parser.add_argument(
-        "--reranking",
-        action="store_true",
-        help="Mark model as a reranking model",
-    )
-    pull_parser.add_argument(
-        "--mmproj",
-        help="Multimodal projector file for vision models",
-    )
-    pull_parser.add_argument(
-        "--timeout",
-        type=int,
-        default=1200,
-        help="Timeout in seconds for model download (default: 1200)",
-    )
-    pull_parser.add_argument(
-        "--host",
-        default="localhost",
-        help="Lemonade server host (default: localhost)",
-    )
-    pull_parser.add_argument(
-        "--port",
-        type=int,
-        default=8000,
-        help="Lemonade server port (default: 8000)",
-    )
-    pull_parser.set_defaults(action="pull")
 
     # Add model download command
     download_parser = subparsers.add_parser(
@@ -2176,6 +2068,11 @@ Examples:
         action="store_true",
         help="Enable verbose output",
     )
+    init_parser.add_argument(
+        "--remote",
+        action="store_true",
+        help="Lemonade is hosted on a remote machine (skip local server start, still check version)",
+    )
 
     # Install command (install specific components)
     install_parser = subparsers.add_parser(
@@ -2905,147 +2802,47 @@ Let me know your answer!
 
     # Handle kill command
     if args.action == "kill":
-        # Determine which port to kill
         if args.lemonade:
-            port = 8000
-            log.info("Attempting to kill Lemonade server on port 8000")
+            # Use lemonade-server stop for graceful shutdown
+            try:
+                result = subprocess.run(
+                    ["lemonade-server", "stop"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    print("✅ Lemonade server stopped")
+                else:
+                    # Fallback to port kill if stop command fails
+                    log.warning(f"lemonade-server stop failed: {result.stderr}")
+                    port_result = kill_process_by_port(8000)
+                    if port_result["success"]:
+                        print(f"✅ {port_result['message']}")
+                    else:
+                        print(f"❌ {port_result['message']}")
+            except FileNotFoundError:
+                # lemonade-server not in PATH, fallback to port kill
+                log.warning("lemonade-server not found, falling back to port kill")
+                port_result = kill_process_by_port(8000)
+                if port_result["success"]:
+                    print(f"✅ {port_result['message']}")
+                else:
+                    print(f"❌ {port_result['message']}")
         elif args.port:
             port = args.port
             log.info(f"Attempting to kill process on port {port}")
+            result = kill_process_by_port(port)
+            if result["success"]:
+                print(f"✅ {result['message']}")
+            else:
+                print(f"❌ {result['message']}")
         else:
             print("❌ Specify --lemonade or --port <number>")
-            return
-
-        result = kill_process_by_port(port)
-        if result["success"]:
-            print(f"✅ {result['message']}")
-
-            # Also kill any orphaned child processes (Windows only)
-            if args.lemonade and sys.platform == "win32":
-                killed_any = False
-                try:
-                    # Kill all llama-server.exe processes
-                    result = subprocess.run(
-                        "taskkill //F //IM llama-server.exe",
-                        shell=True,
-                        capture_output=True,
-                        check=False,
-                    )
-                    if result.returncode == 0:
-                        killed_any = True
-                except Exception:
-                    pass
-
-                try:
-                    # Kill all lemonade-tray.exe processes
-                    result = subprocess.run(
-                        "taskkill //F //IM lemonade-tray.exe",
-                        shell=True,
-                        capture_output=True,
-                        check=False,
-                    )
-                    if result.returncode == 0:
-                        killed_any = True
-                except Exception:
-                    pass
-
-                if killed_any:
-                    print("✅ Cleaned up child processes")
-        else:
-            print(f"❌ {result['message']}")
         return
 
     # Import LemonadeManager for model commands error handling
     from gaia.llm.lemonade_manager import LemonadeManager
-
-    # Handle model pull command
-    if args.action == "pull":
-        log.info(f"Pulling model: {args.model_name}")
-        verbose = getattr(args, "verbose", False)
-        try:
-            client = LemonadeClient(host=args.host, port=args.port, verbose=verbose)
-
-            # Check if Lemonade server is running
-            if not check_lemonade_health(args.host, args.port):
-                LemonadeManager.print_server_error()
-                return
-
-            print(f"📥 Pulling model: {args.model_name}")
-
-            # Define a CLI progress callback for real-time updates
-            last_percent = [-1]  # Use list to allow mutation in closure
-            last_file_index = [0]
-
-            def cli_progress_callback(event_type: str, data: dict) -> None:
-                """Display download progress in CLI."""
-                if event_type == "progress":
-                    percent = data.get("percent", 0)
-                    file_name = data.get("file", "unknown")
-                    file_index = data.get("file_index", 1)
-                    total_files = data.get("total_files", 1)
-
-                    # Print newline when moving to a new file
-                    if file_index != last_file_index[0] and last_file_index[0] > 0:
-                        print()  # Newline for previous file
-                    last_file_index[0] = file_index
-
-                    # Update every 2% for smooth progress
-                    if percent >= last_percent[0] + 2 or percent == 0 or percent == 100:
-                        bytes_downloaded = data.get("bytes_downloaded", 0)
-                        bytes_total = data.get("bytes_total", 0)
-
-                        # Create progress bar
-                        bar = _make_progress_bar(percent)
-                        progress_line = (
-                            f"   {bar} {percent:3d}% "
-                            f"[{file_index}/{total_files}] {file_name}: "
-                            f"{_format_bytes(bytes_downloaded)}/{_format_bytes(bytes_total)}"
-                        )
-                        print(f"\r{progress_line:<100}", end="", flush=True)
-                        last_percent[0] = percent
-
-                elif event_type == "complete":
-                    print()  # Newline after progress
-                    print(f"✅ Model downloaded successfully: {args.model_name}")
-
-                elif event_type == "error":
-                    print()  # Newline after progress
-                    error_msg = data.get("error", "Unknown error")
-                    print(f"❌ Download failed: {error_msg}")
-
-            # Use streaming pull with progress callback
-            completed = False
-            for event in client.pull_model_stream(
-                model_name=args.model_name,
-                checkpoint=getattr(args, "checkpoint", None),
-                recipe=getattr(args, "recipe", None),
-                reasoning=getattr(args, "reasoning", False) or None,
-                vision=getattr(args, "vision", False) or None,
-                embedding=getattr(args, "embedding", False) or None,
-                reranking=getattr(args, "reranking", False) or None,
-                mmproj=getattr(args, "mmproj", None),
-                timeout=args.timeout,
-                progress_callback=cli_progress_callback,
-            ):
-                if event.get("event") == "complete":
-                    completed = True
-                elif event.get("event") == "error":
-                    sys.exit(1)
-
-            if not completed:
-                print("⚠️  Model pull completed without explicit complete event")
-
-        except LemonadeClientError as e:
-            print(f"❌ Error pulling model: {e}")
-            sys.exit(1)
-        except Exception as e:
-            error_msg = str(e).lower()
-            if "connection" in error_msg or "refused" in error_msg:
-                LemonadeManager.print_server_error()
-            else:
-                print(f"❌ Error: {e}")
-            sys.exit(1)
-        return
 
     # Handle model download command
     if args.action == "download":
@@ -3171,122 +2968,110 @@ Let me know your answer!
             agent_name = args.agent.lower()
             model_ids = client.get_required_models(agent_name)
 
+            console = AgentConsole()
+
             if not model_ids:
                 if agent_name != "all":
                     profile = client.get_agent_profile(agent_name)
                     if not profile:
-                        print(f"❌ Unknown agent: {agent_name}")
-                        print(f"   Available: {', '.join(client.list_agents())}")
+                        console.print_error(f"Unknown agent: {agent_name}")
+                        console.print_info(
+                            f"Available: {', '.join(client.list_agents())}"
+                        )
                         sys.exit(1)
-                print(f"📦 No models to download for '{agent_name}'")
+                console.print_info(f"No models to download for '{agent_name}'")
                 return
 
-            print(f"📥 Downloading {len(model_ids)} model(s) for '{agent_name}'...")
-            print()
+            console.print_info(
+                f"Downloading {len(model_ids)} model(s) for '{agent_name}'"
+            )
 
-            # Track progress per model
-            current_model = [None]
-            last_percent = [-1]
-            last_file_index = [0]
-
-            def download_progress_callback(event_type: str, data: dict) -> None:
-                """Display download progress in CLI."""
-                if event_type == "progress":
-                    percent = data.get("percent", 0)
-                    file_name = data.get("file", "unknown")
-                    file_index = data.get("file_index", 1)
-                    total_files = data.get("total_files", 1)
-
-                    # Print newline when moving to a new file
-                    if file_index != last_file_index[0] and last_file_index[0] > 0:
-                        print()  # Newline for previous file
-                    last_file_index[0] = file_index
-
-                    # Update every 2% for smooth progress
-                    if percent >= last_percent[0] + 2 or percent == 0 or percent == 100:
-                        bytes_downloaded = data.get("bytes_downloaded", 0)
-                        bytes_total = data.get("bytes_total", 0)
-
-                        # Create progress bar
-                        bar = _make_progress_bar(percent)
-                        progress_line = (
-                            f"   {bar} {percent:3d}% "
-                            f"[{file_index}/{total_files}] {file_name}: "
-                            f"{_format_bytes(bytes_downloaded)}/{_format_bytes(bytes_total)}"
-                        )
-                        print(f"\r{progress_line:<100}", end="", flush=True)
-                        last_percent[0] = percent
-
-                elif event_type == "complete":
-                    print()  # Newline after progress
-                    print("   ✅ Download complete")
-                    last_percent[0] = -1  # Reset for next model
-                    last_file_index[0] = 0
-
-                elif event_type == "error":
-                    print()  # Newline after progress
-                    error_msg = data.get("error", "Unknown error")
-                    print(f"   ❌ Error: {error_msg}")
-
-            # Download each model
+            # Download each model with progress display
             success_count = 0
             skip_count = 0
             fail_count = 0
 
             for model_id in model_ids:
-                current_model[0] = model_id
-                last_percent[0] = -1
-
                 # Check if already available
                 if client.check_model_available(model_id):
-                    print(f"✅ {model_id} (already downloaded)")
+                    console.print_download_skipped(model_id)
                     skip_count += 1
                     continue
 
-                print(f"📥 {model_id}")
+                console.print_download_start(model_id)
 
                 try:
                     completed = False
-                    for event in client.pull_model_stream(
-                        model_name=model_id,
-                        timeout=args.timeout,
-                        progress_callback=download_progress_callback,
-                    ):
-                        if event.get("event") == "complete":
+                    event_count = 0
+                    last_bytes = 0
+                    last_time = time.time()
+
+                    for event in client.pull_model_stream(model_name=model_id):
+                        event_count += 1
+                        event_type = event.get("event")
+
+                        if event_type == "progress":
+                            # Skip first 2 spurious events from Lemonade
+                            if event_count <= 2:
+                                continue
+
+                            # Calculate download speed
+                            current_bytes = event.get("bytes_downloaded", 0)
+                            current_time = time.time()
+                            time_delta = current_time - last_time
+
+                            speed_mbps = 0.0
+                            if time_delta > 0.1 and current_bytes > last_bytes:
+                                bytes_delta = current_bytes - last_bytes
+                                speed_mbps = (bytes_delta / time_delta) / (1024 * 1024)
+                                last_bytes = current_bytes
+                                last_time = current_time
+
+                            console.print_download_progress(
+                                percent=event.get("percent", 0),
+                                bytes_downloaded=current_bytes,
+                                bytes_total=event.get("bytes_total", 0),
+                                speed_mbps=speed_mbps,
+                            )
+
+                        elif event_type == "complete":
+                            console.print_download_complete(model_id)
                             completed = True
-                        elif event.get("event") == "error":
+
+                        elif event_type == "error":
+                            console.print_download_error(
+                                event.get("error", "Unknown error"), model_id
+                            )
                             fail_count += 1
                             break
 
                     if completed:
                         success_count += 1
                 except LemonadeClientError as e:
-                    print(f"   ❌ Failed: {e}")
+                    console.print_download_error(str(e), model_id)
                     fail_count += 1
 
-                print()
-
             # Summary
-            print("=" * 50)
-            print("📊 Download Summary:")
-            print(f"   ✅ Downloaded: {success_count}")
-            print(f"   ⏭️  Skipped (already available): {skip_count}")
+            console.print_info("=" * 50)
+            console.print_info("Download Summary:")
+            console.print_success(f"Downloaded: {success_count}")
+            console.print_info(f"Skipped (already available): {skip_count}")
             if fail_count > 0:
-                print(f"   ❌ Failed: {fail_count}")
-            print("=" * 50)
+                console.print_error(f"Failed: {fail_count}")
+            console.print_info("=" * 50)
 
             if fail_count > 0:
                 sys.exit(1)
 
         except LemonadeClientError as e:
-            print(f"❌ Error: {e}")
+            console.print_error(str(e))
             sys.exit(1)
         except Exception as e:
             error_msg = str(e).lower()
             if "connection" in error_msg or "refused" in error_msg:
                 LemonadeManager.print_server_error()
             else:
-                print(f"❌ Error: {e}")
+                console.print_error(str(e))
             sys.exit(1)
         return
 
@@ -4256,6 +4041,7 @@ Let me know your answer!
             force_models=args.force_models,
             yes=args.yes,
             verbose=getattr(args, "verbose", False),
+            remote=getattr(args, "remote", False),
         )
         sys.exit(exit_code)
 

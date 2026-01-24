@@ -733,59 +733,15 @@ gaia download --agent code
 
 ### Pull Command
 
-Download/install a specific model from the Lemonade Server registry.
+To download individual models, use the Lemonade Server CLI directly:
 
 ```bash
-gaia pull MODEL_NAME [OPTIONS]
+lemonade-server pull MODEL_NAME [OPTIONS]
 ```
 
-**Options:**
-
-| Option | Type | Description |
-|--------|------|-------------|
-| `--checkpoint` | string | HuggingFace checkpoint (e.g., unsloth/Model-GGUF:Q4_K_M) |
-| `--recipe` | string | Lemonade recipe (e.g., llamacpp, oga-cpu) |
-| `--reasoning` | flag | Mark as reasoning model (like DeepSeek) |
-| `--vision` | flag | Mark as having vision capabilities |
-| `--embedding` | flag | Mark as embedding model |
-| `--reranking` | flag | Mark as reranking model |
-| `--mmproj` | string | Multimodal projector file for vision models |
-| `--timeout` | integer | Timeout in seconds (default: 1200) |
-| `--host` | string | Lemonade server host (default: localhost) |
-| `--port` | integer | Lemonade server port (default: 8000) |
-
-**Examples:**
-
-<CodeGroup>
-```bash Pull Registered Model
-gaia pull Qwen3-0.6B-GGUF
-```
-
-```bash Custom Model
-gaia pull user.Custom-Model-GGUF \
-  --checkpoint unsloth/Custom-Model-GGUF:Q4_K_M \
-  --recipe llamacpp
-```
-
-```bash Reasoning Model
-gaia pull user.DeepSeek-GGUF \
-  --checkpoint unsloth/DeepSeek-R1-GGUF \
-  --recipe llamacpp \
-  --reasoning
-```
-
-```bash Vision Model
-gaia pull user.Vision-Model \
-  --checkpoint model/vision:Q4 \
-  --recipe llamacpp \
-  --vision \
-  --mmproj mmproj.gguf
-```
-</CodeGroup>
-
-<Note>
-Use the `user.` prefix for custom models not in the official registry. Custom models require both `--checkpoint` and `--recipe` parameters.
-</Note>
+<Tip>
+Use `lemonade-server list` to see all available models and their download status.
+</Tip>
 
 ---
 
