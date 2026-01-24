@@ -30,6 +30,7 @@ try:
 except ImportError:
     RICH_AVAILABLE = False
 
+from gaia.agents.base.console import AgentConsole
 from gaia.installer.lemonade_installer import LemonadeInfo, LemonadeInstaller
 from gaia.version import LEMONADE_VERSION
 
@@ -100,6 +101,7 @@ class InitCommand:
         force_models: bool = False,
         yes: bool = False,
         verbose: bool = False,
+        remote: bool = False,
         progress_callback: Optional[Callable[[InitProgress], None]] = None,
     ):
         """
@@ -112,6 +114,7 @@ class InitCommand:
             force_models: Force re-download models even if already available
             yes: Skip confirmation prompts
             verbose: Enable verbose output
+            remote: Lemonade is on a remote machine (skip local start, still check version)
             progress_callback: Optional callback for progress updates
         """
         self.profile = profile.lower()
@@ -120,6 +123,7 @@ class InitCommand:
         self.force_models = force_models
         self.yes = yes
         self.verbose = verbose
+        self.remote = remote
         self.progress_callback = progress_callback
 
         # Validate profile
@@ -129,6 +133,9 @@ class InitCommand:
 
         # Initialize Rich console if available (before installer for console pass-through)
         self.console = Console() if RICH_AVAILABLE else None
+
+        # Initialize AgentConsole for download progress display
+        self.agent_console = AgentConsole()
 
         # Use minimal installer for minimal profile
         use_minimal = self.profile == "minimal"
@@ -665,6 +672,9 @@ class InitCommand:
         """
         Ensure Lemonade server is running with health check verification.
 
+        In remote mode, only checks if server is reachable - does not prompt
+        user to start it (assumes it's managed externally).
+
         Returns:
             True if server is running and healthy, False on failure
         """
@@ -690,10 +700,31 @@ class InitCommand:
             except Exception as e:
                 # Log the health check error for debugging
                 log.debug(f"Health check failed: {e}")
-                # Server not running, ask user to start it
+                # Server not running
+
+            # In remote mode, don't prompt to start - just report error
+            if self.remote:
+                self._print_error("Remote Lemonade Server is not reachable")
+                self.console.print()
+                self.console.print(
+                    "   [dim]Ensure the remote Lemonade Server is running and accessible.[/dim]"
+                )
+                self.console.print(
+                    "   [dim]Check LEMONADE_HOST environment variable if using a custom host.[/dim]"
+                )
+                return False
 
             # Server not running - ask user to start it manually
             self._print_error("Lemonade Server is not running")
+
+            # In non-interactive mode (-y), fail immediately
+            if self.yes:
+                self.console.print()
+                self.console.print(
+                    "   [dim]Start Lemonade Server and run gaia init again.[/dim]"
+                )
+                return False
+
             self.console.print()
             self.console.print("   [bold]Please start Lemonade Server:[/bold]")
             if sys.platform == "win32":
@@ -749,92 +780,6 @@ class InitCommand:
             self._print_error(f"Failed to check/start server: {e}")
             return False
 
-    def _create_progress_callback(self) -> Callable[[str, dict], None]:
-        """
-        Create a progress callback with its own state.
-
-        Returns:
-            A callback function that tracks download progress
-        """
-        state = {
-            "last_update": time.time(),
-            "last_bytes": 0,
-            "last_percent": -1,
-        }
-        console = self.console if RICH_AVAILABLE else None
-
-        def callback(event_type: str, data: dict) -> None:
-            if event_type == "progress":
-                percent = data.get("percent", 0)
-                bytes_downloaded = data.get("bytes_downloaded", 0)
-                bytes_total = data.get("bytes_total", 0)
-
-                # Skip events with invalid bytes_total (Lemonade server bug)
-                # These events can show 0 GB / 0 GB which is confusing
-                if bytes_total == 0 and bytes_downloaded == 0:
-                    return
-
-                # Only update display every 2% or at start/end
-                should_update = (
-                    percent >= state["last_percent"] + 2
-                    or percent == 0
-                    or percent == 100
-                )
-
-                if should_update:
-                    # Calculate speed for this update
-                    now = time.time()
-                    elapsed = now - state["last_update"]
-                    speed_str = ""
-
-                    if elapsed > 0.5:  # Only show speed if enough time passed
-                        bytes_delta = bytes_downloaded - state["last_bytes"]
-                        speed = bytes_delta / elapsed / 1024 / 1024  # MB/s
-                        speed_str = f" @ {speed:.1f} MB/s"
-
-                    # Always update tracking (even if not showing speed)
-                    state["last_update"] = now
-                    state["last_bytes"] = bytes_downloaded
-                    # Format sizes
-                    if bytes_total > 1024 * 1024 * 1024:  # > 1 GB
-                        dl_str = f"{bytes_downloaded / 1024 / 1024 / 1024:.2f} GB"
-                        total_str = f"{bytes_total / 1024 / 1024 / 1024:.2f} GB"
-                    else:
-                        dl_str = f"{bytes_downloaded / 1024 / 1024:.0f} MB"
-                        total_str = f"{bytes_total / 1024 / 1024:.0f} MB"
-
-                    # Progress bar
-                    bar_width = 20
-                    filled = int(bar_width * percent / 100)
-                    bar = "━" * filled + "─" * (bar_width - filled)
-
-                    # Single line progress (no flashing)
-                    progress_line = (
-                        f"   [{bar}] {percent:3d}%  {dl_str} / {total_str}{speed_str}"
-                    )
-                    print(f"\r{progress_line:<75}", end="", flush=True)
-
-                    state["last_percent"] = percent
-
-            elif event_type == "complete":
-                print()  # Newline after progress
-                if console:
-                    console.print("   [green]✓[/green] Download complete")
-                else:
-                    print("   ✅ Download complete")
-                state["last_percent"] = -1
-                state["last_bytes"] = 0
-
-            elif event_type == "error":
-                print()
-                error_msg = data.get("error", "Unknown error")
-                if console:
-                    console.print(f"   [red]❌ Error: {error_msg}[/red]")
-                else:
-                    print(f"   ❌ Error: {error_msg}")
-
-        return callback
-
     def _verify_model(self, client, model_id: str) -> tuple:
         """
         Verify a model is available (downloaded) on the server.
@@ -863,6 +808,10 @@ class InitCommand:
     def _download_models(self) -> bool:
         """
         Download models for the selected profile.
+
+        Simplified approach: Just try to download all required models.
+        Lemonade handles the "already downloaded" case efficiently by
+        returning a complete event immediately.
 
         Returns:
             True if all models downloaded, False on failure
@@ -894,171 +843,98 @@ class InitCommand:
                 self._print_success("No models required for this profile")
                 return True
 
-            # Track corrupted models for deletion before re-download
-            models_corrupted = []
-
-            # Force re-download: will delete each model just before re-downloading
-            if self.force_models:
-                models_to_redownload = []
+            # Show which models will be ensured
+            if RICH_AVAILABLE and self.console:
+                self.console.print(
+                    f"   [bold]Ensuring {len(model_ids)} model(s) are downloaded:[/bold]"
+                )
                 for model_id in model_ids:
-                    if client.check_model_available(model_id):
-                        models_to_redownload.append(model_id)
-
-                if models_to_redownload:
-                    if RICH_AVAILABLE and self.console:
-                        self.console.print(
-                            "   [yellow]Force re-download requested[/yellow]"
-                        )
-                        self.console.print(
-                            f"   [dim]Will delete and re-download:[/dim] {len(models_to_redownload)} model(s)"
-                        )
-                        for model_id in models_to_redownload:
-                            self.console.print(
-                                f"   [red]🗑️[/red] [cyan]{model_id}[/cyan]"
-                            )
-                    else:
-                        self._print("   Force re-download requested")
-                        self._print(
-                            f"   Will delete and re-download: {len(models_to_redownload)} model(s)"
-                        )
-                        for model_id in models_to_redownload:
-                            self._print(f"   🗑️ {model_id}")
-                    self._print("")
-
-                    if not self._prompt_yes_no(
-                        "Delete existing models and re-download?", default=True
-                    ):
-                        self._print("   Skipping force re-download")
-                        return True
-
-                # All models need downloading (will delete just before each download)
-                models_to_download = list(model_ids)
-                models_available = []
+                    self.console.print(f"   [cyan]•[/cyan] {model_id}")
             else:
-                # Check which models need downloading
-                models_to_download = []
-                models_available = []
-
+                self._print(f"   Ensuring {len(model_ids)} model(s) are downloaded:")
                 for model_id in model_ids:
-                    if client.check_model_available(model_id):
-                        models_available.append(model_id)
-                        if RICH_AVAILABLE and self.console:
-                            self.console.print(
-                                f"   [green]✓[/green] [cyan]{model_id}[/cyan] [dim]downloaded[/dim]"
-                            )
-                        else:
-                            print(f"   ✓ {model_id} - downloaded")
-                    else:
-                        models_to_download.append(model_id)
-                        if RICH_AVAILABLE and self.console:
-                            self.console.print(
-                                f"   [yellow]📥[/yellow] [cyan]{model_id}[/cyan] [dim]not downloaded[/dim]"
-                            )
-                        else:
-                            print(f"   📥 {model_id} - not downloaded")
+                    self._print(f"   • {model_id}")
+            self._print("")
 
-            if not models_to_download:
-                self._print("")
-                self._print_success(f"All {len(models_available)} model(s) ready")
+            if not self._prompt_yes_no("Continue?", default=True):
+                self._print("   Skipping model downloads")
                 return True
 
-            # Skip redundant prompt if force_models already confirmed
-            if not self.force_models:
-                # Calculate estimated size for models being downloaded
-                # pylint: disable=protected-access
-                total_size_gb = sum(
-                    client._estimate_model_size(m) for m in models_to_download
-                )
-                if total_size_gb >= 1.0:
-                    size_str = f"~{total_size_gb:.1f} GB"
-                else:
-                    size_str = f"~{total_size_gb * 1024:.0f} MB"
-
-                self._print("")  # Newline before download summary
-                if RICH_AVAILABLE and self.console:
-                    self.console.print(
-                        f"   [bold]Need to download:[/bold] {len(models_to_download)} model(s)"
-                    )
-                    for model_id in models_to_download:
-                        self.console.print(
-                            f"   [yellow]📥[/yellow] [cyan]{model_id}[/cyan]"
-                        )
-                    self.console.print(f"   [dim]Estimated size:[/dim] {size_str}")
-                else:
-                    self._print(
-                        f"   Need to download: {len(models_to_download)} model(s)"
-                    )
-                    for model_id in models_to_download:
-                        self._print(f"   📥 {model_id}")
-                    self._print(f"   Estimated size: {size_str}")
-                self._print("")
-
-                if not self._prompt_yes_no("Continue with download?", default=True):
-                    self._print("   Skipping model downloads")
-                    return True
+            # Force re-download: delete models first
+            if self.force_models:
+                for model_id in model_ids:
+                    if client.check_model_available(model_id):
+                        if RICH_AVAILABLE and self.console:
+                            self.console.print(
+                                f"   [dim]Deleting (force re-download)[/dim] [cyan]{model_id}[/cyan]..."
+                            )
+                        else:
+                            self._print(
+                                f"   Deleting (force re-download) {model_id}..."
+                            )
+                        try:
+                            client.delete_model(model_id)
+                            self._print_success(f"Deleted {model_id}")
+                        except Exception as e:
+                            self._print_error(f"Failed to delete {model_id}: {e}")
 
             # Download each model
             success = True
-            for model_id in models_to_download:
+            for model_id in model_ids:
                 self._print("")
 
-                # Delete model if force re-download or corrupted
-                should_delete = (
-                    self.force_models or model_id in models_corrupted
-                ) and client.check_model_available(model_id)
-
-                if should_delete:
-                    reason = (
-                        "corrupted"
-                        if model_id in models_corrupted
-                        else "force re-download"
-                    )
-                    if RICH_AVAILABLE and self.console:
-                        self.console.print(
-                            f"   [dim]Deleting ({reason})[/dim] [cyan]{model_id}[/cyan]..."
-                        )
-                    else:
-                        self._print(f"   Deleting ({reason}) {model_id}...")
-                    try:
-                        client.delete_model(model_id)
-                        self._print_success(f"Deleted {model_id}")
-                    except Exception as e:
-                        self._print_error(f"Failed to delete {model_id}: {e}")
-                        # Continue to try downloading anyway
-
-                if RICH_AVAILABLE and self.console:
-                    self.console.print(
-                        f"   [bold]Downloading:[/bold] [cyan]{model_id}[/cyan]"
-                    )
-                else:
-                    self._print(f"   Downloading: {model_id}")
-
-                # Create progress callback for this model
-                progress_callback = self._create_progress_callback()
+                # Use AgentConsole for nicely formatted download progress
+                self.agent_console.print_download_start(model_id)
 
                 try:
-                    for event in client.pull_model_stream(
-                        model_name=model_id,
-                        timeout=7200,  # 2 hour timeout for large models
-                        progress_callback=progress_callback,
-                    ):
-                        if event.get("event") == "error":
-                            self._print_error(f"Failed to download {model_id}")
+                    event_count = 0
+                    last_bytes = 0
+                    last_time = time.time()
+
+                    for event in client.pull_model_stream(model_name=model_id):
+                        event_count += 1
+                        event_type = event.get("event")
+
+                        if event_type == "progress":
+                            # Skip first 2 spurious events from Lemonade
+                            if event_count <= 2:
+                                continue
+
+                            # Calculate download speed
+                            current_bytes = event.get("bytes_downloaded", 0)
+                            current_time = time.time()
+                            time_delta = current_time - last_time
+
+                            speed_mbps = 0.0
+                            if time_delta > 0.1 and current_bytes > last_bytes:
+                                bytes_delta = current_bytes - last_bytes
+                                speed_mbps = (bytes_delta / time_delta) / (1024 * 1024)
+                                last_bytes = current_bytes
+                                last_time = current_time
+
+                            self.agent_console.print_download_progress(
+                                percent=event.get("percent", 0),
+                                bytes_downloaded=current_bytes,
+                                bytes_total=event.get("bytes_total", 0),
+                                speed_mbps=speed_mbps,
+                            )
+
+                        elif event_type == "complete":
+                            self.agent_console.print_download_complete(model_id)
+
+                        elif event_type == "error":
+                            self.agent_console.print_download_error(
+                                event.get("error", "Unknown error"), model_id
+                            )
                             success = False
                             break
-                except requests.exceptions.Timeout:
-                    self._print("")
-                    self._print_error(f"Download timed out for {model_id}")
-                    self._print("   Try downloading via Lemonade app or retry later")
-                    success = False
+
                 except requests.exceptions.ConnectionError as e:
-                    self._print("")
-                    self._print_error(f"Connection error: {e}")
+                    self.agent_console.print_download_error(f"Connection error: {e}")
                     self._print("   Check your network connection and retry")
                     success = False
                 except Exception as e:
-                    self._print("")
-                    self._print_error(f"Download failed: {e}")
+                    self.agent_console.print_download_error(str(e), model_id)
                     success = False
 
             return success
@@ -1351,6 +1227,7 @@ def run_init(
     force_models: bool = False,
     yes: bool = False,
     verbose: bool = False,
+    remote: bool = False,
 ) -> int:
     """
     Entry point for `gaia init` command.
@@ -1362,6 +1239,7 @@ def run_init(
         force_models: Force re-download models (deletes then re-downloads)
         yes: Skip confirmation prompts
         verbose: Enable verbose output
+        remote: Lemonade is on a remote machine (skip local start, still check version)
 
     Returns:
         Exit code (0 for success, non-zero for failure)
@@ -1374,6 +1252,7 @@ def run_init(
             force_models=force_models,
             yes=yes,
             verbose=verbose,
+            remote=remote,
         )
         return cmd.run()
     except ValueError as e:
