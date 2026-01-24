@@ -17,13 +17,13 @@ on:
   merge_group:
   workflow_dispatch:
 
-# Cancel in-progress runs when a new run is triggered
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
+
+# Cancel in-progress runs when a new run is triggered
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # Run linting first (fast feedback)
@@ -38,17 +38,24 @@ jobs:
     uses: ./.github/workflows/test_unit.yml
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
+  # Test Lemonade Server basic functionality (critical dependency check)
+  test-lemonade-server:
+    name: Lemonade Server Smoke Test
+    needs: lint
+    uses: ./.github/workflows/test_lemonade_server.yml
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
   # Test Windows CLI with full Lemonade integration
   test-windows:
     name: Windows CLI Tests (Full Integration)
-    needs: lint
+    needs: [lint, test-lemonade-server]
     uses: ./.github/workflows/test_gaia_cli_windows.yml
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
   # Test Linux CLI with full Lemonade integration
   test-linux:
     name: Linux CLI Tests (Full Integration)
-    needs: lint
+    needs: [lint, test-lemonade-server]
     uses: ./.github/workflows/test_gaia_cli_linux.yml
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
@@ -84,14 +91,26 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [lint, unit-tests, test-windows, test-linux, test-mcp, test-code-agent, test-chat-agent, test-security]
-    if: always()
+    needs: [lint, unit-tests, test-lemonade-server, test-windows, test-linux, test-mcp, test-code-agent, test-chat-agent, test-security]
+    # Run always except when workflow or any dependency is cancelled (e.g., by cancel-in-progress)
+    if: >-
+      ${{ always() && !cancelled() &&
+          needs.lint.result != 'cancelled' &&
+          needs.unit-tests.result != 'cancelled' &&
+          needs.test-lemonade-server.result != 'cancelled' &&
+          needs.test-windows.result != 'cancelled' &&
+          needs.test-linux.result != 'cancelled' &&
+          needs.test-mcp.result != 'cancelled' &&
+          needs.test-code-agent.result != 'cancelled' &&
+          needs.test-chat-agent.result != 'cancelled' &&
+          needs.test-security.result != 'cancelled' }}
     steps:
       - name: Check test results
         run: |
           echo "=== GAIA CLI Test Summary ==="
           echo "Lint Status: ${{ needs.lint.result }}"
           echo "Unit Tests Status: ${{ needs.unit-tests.result }}"
+          echo "Lemonade Server Status: ${{ needs.test-lemonade-server.result }}"
           echo "Windows Tests Status: ${{ needs.test-windows.result }}"
           echo "Linux Tests Status: ${{ needs.test-linux.result }}"
           echo "MCP Tests Status: ${{ needs.test-mcp.result }}"
@@ -103,6 +122,7 @@ jobs:
           # Check if all tests were skipped (draft PR without ready_for_ci label)
           if [[ "${{ needs.lint.result }}" == "skipped" &&
                 "${{ needs.unit-tests.result }}" == "skipped" &&
+                "${{ needs.test-lemonade-server.result }}" == "skipped" &&
                 "${{ needs.test-windows.result }}" == "skipped" &&
                 "${{ needs.test-linux.result }}" == "skipped" &&
                 "${{ needs.test-mcp.result }}" == "skipped" &&
@@ -110,6 +130,19 @@ jobs:
                 "${{ needs.test-chat-agent.result }}" == "skipped" &&
                 "${{ needs.test-security.result }}" == "skipped" ]]; then
             echo "⏭️ All tests skipped (draft PR - add 'ready_for_ci' label to run)"
+            exit 0
+          fi
+
+          # Check if all integration tests were skipped/cancelled (workflow cancelled early)
+          if [[ "${{ needs.unit-tests.result }}" == "skipped" &&
+                "${{ needs.test-lemonade-server.result }}" == "skipped" &&
+                "${{ needs.test-windows.result }}" == "skipped" &&
+                "${{ needs.test-linux.result }}" == "skipped" &&
+                "${{ needs.test-mcp.result }}" == "skipped" &&
+                "${{ needs.test-code-agent.result }}" == "skipped" &&
+                "${{ needs.test-chat-agent.result }}" == "skipped" &&
+                "${{ needs.test-security.result }}" == "skipped" ]]; then
+            echo "⏭️ Workflow cancelled or lint failed - no integration tests ran"
             exit 0
           fi
 
@@ -121,6 +154,7 @@ jobs:
           # Determine overall status (success or skipped are both acceptable)
           if check_result "${{ needs.lint.result }}" &&
              check_result "${{ needs.unit-tests.result }}" &&
+             check_result "${{ needs.test-lemonade-server.result }}" &&
              check_result "${{ needs.test-windows.result }}" &&
              check_result "${{ needs.test-linux.result }}" &&
              check_result "${{ needs.test-mcp.result }}" &&
@@ -128,6 +162,7 @@ jobs:
              check_result "${{ needs.test-chat-agent.result }}" &&
              check_result "${{ needs.test-security.result }}"; then
             echo "✅ All tests passed!"
+            echo "- Lemonade Server: Basic functionality smoke test"
             echo "- Unit Tests: Fast SDK component tests (DatabaseMixin, LLM, ASR, TTS)"
             echo "- Windows: Full CLI functionality with Lemonade integration"
             echo "- Linux: Full CLI functionality with Lemonade integration"
@@ -140,6 +175,7 @@ jobs:
             echo "❌ Some tests failed:"
             [[ "${{ needs.lint.result }}" == "failure" ]] && echo "  - Linting failed"
             [[ "${{ needs.unit-tests.result }}" == "failure" ]] && echo "  - Unit tests failed"
+            [[ "${{ needs.test-lemonade-server.result }}" == "failure" ]] && echo "  - Lemonade Server smoke test failed"
             [[ "${{ needs.test-windows.result }}" == "failure" ]] && echo "  - Windows tests failed"
             [[ "${{ needs.test-linux.result }}" == "failure" ]] && echo "  - Linux tests failed"
             [[ "${{ needs.test-mcp.result }}" == "failure" ]] && echo "  - MCP tests failed"
@@ -153,6 +189,11 @@ jobs:
         run: |
           echo ""
           echo "=== Test Coverage by Platform ==="
+          echo "🔌 Lemonade Server (Smoke Test):"
+          echo "  ✅ Health endpoint verification"
+          echo "  ✅ Models endpoint verification"
+          echo "  ✅ Basic inference test"
+          echo ""
           echo "⚡ Unit Tests (Fast, No Dependencies):"
           echo "  ✅ DatabaseMixin: SQLite database access for agents"
           echo "  ✅ LLM Client: Language model client utilities"

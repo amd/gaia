@@ -111,7 +111,10 @@ jobs:
     name: Test Summary
     needs: test-mcp-agent
     runs-on: ubuntu-latest
-    if: always()
+    # Run always except when workflow or dependency is cancelled
+    if: >-
+      ${{ always() && !cancelled() &&
+          needs.test-mcp-agent.result != 'cancelled' }}
     permissions: {}
 
     steps:
