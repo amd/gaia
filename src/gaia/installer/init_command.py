@@ -312,10 +312,14 @@ class InitCommand:
         try:
             # Step 1: Check/Install Lemonade (skip for remote servers)
             if self.remote:
-                self._print_step(1, total_steps, "Skipping local Lemonade check (remote mode)...")
+                self._print_step(
+                    1, total_steps, "Skipping local Lemonade check (remote mode)..."
+                )
                 self._print_success("Using remote Lemonade Server")
             else:
-                self._print_step(1, total_steps, "Checking Lemonade Server installation...")
+                self._print_step(
+                    1, total_steps, "Checking Lemonade Server installation..."
+                )
                 if not self._ensure_lemonade_installed():
                     return 1
 
