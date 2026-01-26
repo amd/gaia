@@ -320,6 +320,7 @@
           {
             "group": "Release Notes",
             "pages": [
+              "releases/v0.15.2",
               "releases/v0.15.1",
               "releases/v0.15.0"
             ]
@@ -354,6 +355,10 @@
   },
   "navbar": {
     "links": [
+      {
+        "label": "v0.15.2 · Lemonade 9.1.4",
+        "href": "https://github.com/amd/gaia/releases"
+      },
       {
         "label": "Main Site",
         "href": "https://gaia.amd.com"
