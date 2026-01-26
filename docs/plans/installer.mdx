@@ -30,7 +30,7 @@ Key architectural decisions for the installer system:
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| **Python bundling** | Require Python 3.10+ pre-installed | Keeps installer small (<10KB), users manage Python |
+| **Python bundling** | Require Python 3.10+ pre-installed | Keeps installer small (under 10KB), users manage Python |
 | **Package manager** | `uv` (install if missing) | Fast, modern, Astral-backed, reliable |
 | **Installation location** | `~/.gaia/venv/` | User-space, no admin required |
 | **Windows primary** | PowerShell script + winget | Quick-start + discoverable install |
@@ -85,18 +85,18 @@ curl -fsSL https://amd-gaia.ai/install.sh | sh
 
 **Script Structure:**
 
-```powershell
+```text
 # scripts/install.ps1
 $ErrorActionPreference = "Stop"
 $GAIA_HOME = "$env:USERPROFILE\.gaia"
 $GAIA_VENV = "$GAIA_HOME\venv"
 $MIN_PYTHON_VERSION = [version]"3.10"
 
-function Test-PythonVersion { ... }
-function Install-Uv { ... }
-function Install-Gaia { ... }
-function Add-ToPath { ... }
-function Main { ... }
+function Test-PythonVersion  # Check Python >= 3.10
+function Install-Uv          # Install uv if missing
+function Install-Gaia        # Install GAIA package
+function Add-ToPath          # Update PATH registry
+function Main                # Orchestrate installation
 
 Main
 ```
@@ -147,7 +147,7 @@ Main
 
 **Script Structure:**
 
-```bash
+```text
 #!/bin/bash
 set -euo pipefail
 
@@ -156,12 +156,12 @@ GAIA_VENV="$GAIA_HOME/venv"
 MIN_PYTHON_MAJOR=3
 MIN_PYTHON_MINOR=10
 
-check_python() { ... }
-install_uv() { ... }
-create_venv() { ... }
-install_gaia() { ... }
-add_to_path() { ... }
-main() { ... }
+check_python   # Check Python >= 3.10
+install_uv     # Install uv if missing
+create_venv    # Create virtual environment
+install_gaia   # Install GAIA package
+add_to_path    # Update shell rc files
+main           # Orchestrate installation
 
 main "$@"
 ```
@@ -274,8 +274,8 @@ gaia update Flow
 
 | Package | Source | Endpoint |
 |---------|--------|----------|
-| GAIA | PyPI | `GET https://pypi.org/pypi/amd-gaia/json` → `.info.version` |
-| Lemonade | GitHub | `GET https://api.github.com/repos/lemonade-sdk/lemonade/releases/latest` → `.tag_name` |
+| GAIA | PyPI | `https://pypi.org/pypi/amd-gaia/json` (returns `.info.version`) |
+| Lemonade | GitHub | `https://api.github.com/repos/lemonade-sdk/lemonade/releases/latest` (returns `.tag_name`) |
 
 **Code Structure:**
 
@@ -288,7 +288,7 @@ class VersionInfo:
     update_available: bool
 
 class UpdateCommand:
-    def __init__(self, check_only: bool, gaia_only: bool, ...):
+    def __init__(self, check_only: bool, gaia_only: bool):
         self.version_checker = VersionChecker()
 
     def run(self) -> int:
@@ -382,7 +382,7 @@ Installers:
   - Architecture: x64
     InstallerType: exe
     InstallerUrl: https://github.com/amd/gaia/releases/download/v1.0.0/gaia-setup.exe
-    InstallerSha256: <computed-at-release>
+    InstallerSha256: COMPUTED_AT_RELEASE
     InstallerSwitches:
       Silent: /S
       SilentWithProgress: /S
@@ -501,11 +501,11 @@ gaia uninstall --purge  # Remove everything including models
 
 | Metric | Target |
 |--------|--------|
-| Install time (one-liner) | < 60 seconds |
-| Init time (minimal profile) | < 2 minutes |
-| Update time | < 30 seconds |
-| Install script size | < 10 KB |
-| winget review turnaround | < 48 hours |
+| Install time (one-liner) | Under 60 seconds |
+| Init time (minimal profile) | Under 2 minutes |
+| Update time | Under 30 seconds |
+| Install script size | Under 10 KB |
+| winget review turnaround | Under 48 hours |
 
 ---
 
