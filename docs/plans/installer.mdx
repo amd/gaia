@@ -1,53 +1,159 @@
 ---
-title: Lightweight Installer Plan
-description: Implementation plan for the GAIA one-command installation system
+title: GAIA Installer & Update Plan
+description: One-command installation and self-update system for GAIA
 ---
 
-# GAIA Lightweight Installer - Implementation Plan
+# GAIA Installer & Update System
 
 <Info>
-**Status:** Planning
-**Priority:** High
-[View full plan on GitHub](https://github.com/amd/gaia/blob/main/docs/plans/installer.md) • [Vote with 👍](https://github.com/amd/gaia/issues/168)
+**Status:** In Progress
+`gaia init` implemented • Install scripts & `gaia update` planned
 </Info>
 
-## Executive Summary
+## Overview
 
-Create a lightweight, cross-platform installer for GAIA core components that's as easy as installing `uv`:
+Three-part installation system:
+
+| Command | Purpose | Status |
+|---------|---------|--------|
+| `install.ps1` / `install.sh` | Install GAIA + dependencies | Planned |
+| `gaia init` | Setup Lemonade + download models | ✅ Implemented |
+| `gaia update` | Update GAIA + Lemonade packages | Planned |
+
+**Goal:** Zero to chatting in under 2 minutes.
+
+---
+
+## Part 1: Install Scripts
+
+One-liner installation (like uv, rustup):
 
 <CodeGroup>
 ```powershell Windows
 irm https://amd-gaia.ai/install.ps1 | iex
 ```
 
-```bash Linux/macOS
+```bash Linux
 curl -fsSL https://amd-gaia.ai/install.sh | sh
 ```
 </CodeGroup>
 
-**Goal:** Zero to chatting in under 2 minutes.
+### What the Scripts Do
+
+1. Check Python version (3.10+)
+2. Install uv if not present
+3. Create virtual environment (`~/.gaia/venv`)
+4. Install GAIA package
+5. Add to PATH
+6. Print next steps → `gaia init`
+
+### Files to Create
+
+| File | Description |
+|------|-------------|
+| `scripts/install.ps1` | Windows PowerShell installer |
+| `scripts/install.sh` | Linux/macOS bash installer |
 
 ---
 
-## What's Included
+## Part 2: `gaia init` (Implemented)
 
-### Core (Included by Default)
-
-| Component | Command | Description |
-|-----------|---------|-------------|
-| CLI Base | `gaia` | Core framework and commands |
-| Chat | `gaia chat` | Chat SDK with RAG |
-| Code Agent | `gaia-code` | AI coding assistant |
-| MCP | `gaia mcp` | Model Context Protocol servers |
-
-### Extended (Install Separately)
+Post-install setup - installs Lemonade Server and downloads models.
 
 ```bash
-gaia install emr      # Medical intake agent
-gaia install talk     # Voice agent (ASR/TTS)
-gaia install blender  # Blender automation
-gaia install jira     # Jira integration
-gaia install eval     # Evaluation framework
+gaia init [--profile PROFILE] [--skip-models] [--force-reinstall] [--force-models] [--yes]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--profile` | Profile to initialize (minimal, chat, code, rag, all) |
+| `--skip-models` | Skip model downloads |
+| `--force-reinstall` | Force reinstall Lemonade even if compatible |
+| `--force-models` | Force re-download all models (delete + download) |
+| `--yes` | Skip confirmation prompts |
+
+| Profile | Models | Size |
+|---------|--------|------|
+| `minimal` | Qwen3-4B | ~4 GB |
+| `chat` | Qwen3-30B, nomic-embed, Qwen2.5-VL | ~25 GB |
+| `code` | Qwen3-30B | ~18 GB |
+
+**Features:**
+- Automatic Lemonade version upgrade (uninstall old + install new)
+- Model verification with quick inference test
+- Automatic re-download of corrupted models
+
+---
+
+## Part 3: `gaia update`
+
+Self-update command for GAIA and Lemonade packages.
+
+```bash
+gaia update [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--check` | Check for updates without installing |
+| `--gaia-only` | Only update GAIA package |
+| `--lemonade-only` | Only update Lemonade Server |
+| `--version X.Y.Z` | Update to specific version |
+| `--yes` | Skip confirmation |
+
+### Example Output
+
+```
+$ gaia update --check
+
+Checking for updates...
+
+Package          Installed    Latest    Status
+─────────────────────────────────────────────────
+GAIA             1.2.0        1.3.0     Update available
+Lemonade Server  9.1.4        9.1.4     Up to date
+
+Run 'gaia update' to install updates.
+```
+
+### Implementation
+
+| File | Description |
+|------|-------------|
+| `src/gaia/installer/update_command.py` | Update logic |
+| `src/gaia/cli.py` | Add update subcommand |
+
+**Update sources:**
+- GAIA: PyPI API (`https://pypi.org/pypi/amd-gaia/json`)
+- Lemonade: GitHub releases API
+
+---
+
+## Additional Commands (Future)
+
+### `gaia doctor`
+
+System health check and diagnostics.
+
+```
+$ gaia doctor
+
+GAIA System Diagnostics
+========================================
+  ✓ Python version: 3.11.0
+  ✓ GAIA installation: 0.16.0
+  ✓ Lemonade server: Running
+  ✓ Default model: Loaded
+  ✓ Disk space: 45 GB available
+
+All checks passed!
+```
+
+### `gaia uninstall`
+
+```bash
+gaia uninstall          # Remove GAIA (keep data)
+gaia uninstall --purge  # Remove everything
 ```
 
 ---
@@ -67,128 +173,19 @@ gaia install eval     # Evaluation framework
   </Card>
   <Card title="pip/uv" icon="python">
     For developers
-    Integrates with venvs
-    `uv pip install amd-gaia`
+    `uv pip install gaia`
   </Card>
 </CardGroup>
 
 ---
 
-## Self-Management Commands
+## Implementation Order
 
-### Update GAIA
-
-```bash
-# Update to latest
-gaia update
-
-# Check for updates without installing
-gaia update --check
-
-# Update to specific version
-gaia update --version 0.16.0
-
-# Use beta channel
-gaia update --channel beta
-```
-
-### System Diagnostics
-
-```bash
-# Run health checks
-gaia doctor
-```
-
-Output:
-```
-GAIA System Diagnostics
-========================================
-
-  ✓ Python version: 3.11.0
-  ✓ GAIA installation: 0.16.0
-  ✓ Lemonade server: Running
-  ✓ Default model: Loaded
-  ✓ Disk space: 45 GB available
-  ✓ Memory: 12 GB available
-  ✓ Network: Connected
-
-All checks passed!
-```
-
-### Uninstall
-
-```bash
-# Remove GAIA (keep data)
-gaia uninstall
-
-# Remove everything including data
-gaia uninstall --purge
-```
-
----
-
-## Installation Flow
-
-```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontSize':'16px', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
-flowchart LR
-    A[/"Install Script"/] --> B(["Setup Environment"])
-    B --> C(["Install GAIA"])
-    C --> D[/"Ready to Use"/]
-
-    style A fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
-    style B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style C fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style D fill:#28a745,stroke:#1e7e34,stroke-width:2px,color:#fff
-
-    linkStyle 0,1,2 stroke:#ED1C24,stroke-width:2px
-```
-
----
-
-## Package Structure
-
-```toml
-[project.optional-dependencies]
-# Core - minimal
-core = ["click", "rich", "httpx", "pydantic"]
-
-# Chat - adds RAG
-chat = ["pypdf", "sentence-transformers", "faiss-cpu"]
-
-# MCP integration
-mcp = ["websockets"]
-
-# Default install
-default = ["amd-gaia[core]", "amd-gaia[chat]", "amd-gaia[mcp]"]
-
-# Extended (install separately)
-emr = ["amd-gaia[chat]", "pillow"]
-talk = ["sounddevice", "numpy"]
-eval = ["amd-gaia[chat]", "pandas"]
-```
-
----
-
-## Platform Support
-
-### Windows
-
-- PowerShell one-liner
-- winget package
-- Start Menu shortcuts
-- System tray integration (optional)
-
-### Linux
-
-- Bash one-liner
-- .desktop file for app launchers
-- Shell completion (bash, zsh, fish)
-
-### macOS
-
-- Bash one-liner
-- Homebrew formula (future)
+1. **Phase 1:** Install scripts (`install.ps1`, `install.sh`)
+2. **Phase 2:** `gaia update --check` (version checking)
+3. **Phase 3:** `gaia update` (actual updates)
+4. **Phase 4:** `gaia doctor` (diagnostics)
+5. **Phase 5:** winget package submission
 
 ---
 
@@ -197,19 +194,6 @@ eval = ["amd-gaia[chat]", "pandas"]
 | Metric | Target |
 |--------|--------|
 | Install time (one-liner) | < 60 seconds |
+| Init time (minimal profile) | < 2 minutes |
 | Update time | < 30 seconds |
 | Install script size | < 10 KB |
-| Core package size | < 50 MB |
-| Support tickets about install | < 5% of users |
-
----
-
-## Related
-
-- [Roadmap](/roadmap) - High-level feature timeline
-- [Chat UI Plan](/plans/chat-ui) - Desktop app that uses the installer
-- [Setup Guide](/setup) - Current installation instructions
-
-<Card title="Full Implementation Plan" icon="github" href="https://github.com/amd/gaia/blob/main/docs/plans/installer.md">
-  View the complete technical specification on GitHub
-</Card>

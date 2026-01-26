@@ -370,6 +370,10 @@ def interactive_mode(agent: ChatAgent):
                             f"\n📊 Summary: {success_count}/{len(doc_files)} documents indexed successfully"
                         )
 
+                        # Update system prompt to include newly indexed documents
+                        if success_count > 0:
+                            agent.update_system_prompt()
+
                     else:
                         # Single file
                         if not os.path.exists(arg):
@@ -417,6 +421,9 @@ def interactive_mode(agent: ChatAgent):
                                 )
                                 print(f"Total Chunks: {result.get('total_chunks', 0)}")
                                 print("=" * 60)
+
+                                # Update system prompt to include newly indexed document
+                                agent.update_system_prompt()
                             else:
                                 # Display error
                                 print("❌ INDEXING FAILED")

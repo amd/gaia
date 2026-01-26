@@ -89,8 +89,8 @@ DEFAULT_MODEL_NAME = "Qwen2.5-0.5B-Instruct-CPU"
 # Increased to accommodate long-running coding and evaluation tasks
 DEFAULT_REQUEST_TIMEOUT = 900
 # Default timeout in seconds for model loading operations
-# Increased for large model downloads and loading
-DEFAULT_MODEL_LOAD_TIMEOUT = 1200
+# Increased for large model downloads and loading (10x increase for streaming stability)
+DEFAULT_MODEL_LOAD_TIMEOUT = 12000
 
 
 # =========================================================================
@@ -413,21 +413,24 @@ def _prompt_user_for_repair(model_name: str) -> bool:
         table.add_row(
             "Status:", "[yellow]Download incomplete or files corrupted[/yellow]"
         )
-        table.add_row("Action:", "Delete and re-download the model")
+        table.add_row(
+            "Action:",
+            "[green]Resume download (Lemonade will continue where it left off)[/green]",
+        )
 
         console.print(
             Panel(
                 table,
-                title="[bold yellow]⚠️  Corrupt Model Download Detected[/bold yellow]",
+                title="[bold yellow]⚠️  Incomplete Model Download Detected[/bold yellow]",
                 border_style="yellow",
             )
         )
         console.print()
 
         while True:
-            response = input("Delete and re-download? [Y/n]: ").strip().lower()
+            response = input("Resume download? [Y/n]: ").strip().lower()
             if response in ("", "y", "yes"):
-                console.print("[green]✓[/green] Proceeding with repair...")
+                console.print("[green]✓[/green] Resuming download...")
                 return True
             elif response in ("n", "no"):
                 console.print("[dim]Cancelled.[/dim]")
@@ -438,18 +441,98 @@ def _prompt_user_for_repair(model_name: str) -> bool:
     except ImportError:
         # Fall back to plain text formatting
         print("\n" + "=" * 60)
-        print(f"{_emoji('⚠️', '[WARNING]')} Corrupt Model Download Detected")
+        print(f"{_emoji('⚠️', '[WARNING]')} Incomplete Model Download Detected")
         print("=" * 60)
         print(f"Model: {model_name}")
         print("Status: Download incomplete or files corrupted")
-        print("Action: Delete and re-download the model")
+        print("Action: Resume download (Lemonade will continue where it left off)")
         print("=" * 60)
 
         while True:
-            response = input("Delete and re-download? [Y/n]: ").strip().lower()
+            response = input("Resume download? [Y/n]: ").strip().lower()
             if response in ("", "y", "yes"):
                 return True
             elif response in ("n", "no"):
+                return False
+            else:
+                print("Please enter 'y' or 'n'")
+
+
+def _prompt_user_for_delete(model_name: str) -> bool:
+    """
+    Prompt user for confirmation to delete a model and re-download from scratch.
+
+    Args:
+        model_name: Name of the model to delete
+
+    Returns:
+        True if user confirms, False if user declines
+    """
+    # Get model storage paths
+    if sys.platform == "win32":
+        lemonade_cache = os.path.expandvars("%LOCALAPPDATA%\\lemonade\\")
+        hf_cache = os.path.expandvars("%USERPROFILE%\\.cache\\huggingface\\hub\\")
+    else:
+        lemonade_cache = os.path.expanduser("~/.local/share/lemonade/")
+        hf_cache = os.path.expanduser("~/.cache/huggingface/hub/")
+
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+
+        console = Console()
+        console.print()
+
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column(style="dim")
+        table.add_column()
+        table.add_row("Model:", f"[cyan]{model_name}[/cyan]")
+        table.add_row(
+            "Status:", "[yellow]Resume failed, files may be corrupted[/yellow]"
+        )
+        table.add_row("Action:", "[red]Delete model and download fresh[/red]")
+        table.add_row("", "")
+        table.add_row("Storage:", f"[dim]{lemonade_cache}[/dim]")
+        table.add_row("", f"[dim]{hf_cache}[/dim]")
+
+        console.print(
+            Panel(
+                table,
+                title="[bold yellow]⚠️  Delete and Re-download?[/bold yellow]",
+                border_style="yellow",
+            )
+        )
+
+        while True:
+            response = (
+                input("Delete and re-download from scratch? [y/N]: ").strip().lower()
+            )
+            if response in ("y", "yes"):
+                console.print("[green]✓[/green] Deleting and re-downloading...")
+                return True
+            elif response in ("", "n", "no"):
+                console.print("[dim]Cancelled.[/dim]")
+                return False
+            else:
+                console.print("[dim]Please enter 'y' or 'n'[/dim]")
+
+    except ImportError:
+        print("\n" + "=" * 60)
+        print(f"{_emoji('⚠️', '[WARNING]')} Resume failed")
+        print(f"Model: {model_name}")
+        print(f"Storage: {lemonade_cache}")
+        print(f"         {hf_cache}")
+        print("Delete and download fresh?")
+        print("=" * 60)
+
+        while True:
+            response = (
+                input("Delete and re-download from scratch? [y/N]: ").strip().lower()
+            )
+            if response in ("y", "yes"):
+                return True
+            elif response in ("", "n", "no"):
                 return False
             else:
                 print("Please enter 'y' or 'n'")
@@ -1640,8 +1723,6 @@ class LemonadeClient:
         embedding: Optional[bool] = None,
         reranking: Optional[bool] = None,
         mmproj: Optional[str] = None,
-        timeout: int = DEFAULT_MODEL_LOAD_TIMEOUT,
-        progress_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     ) -> Generator[Dict[str, Any], None, None]:
         """
         Install a model on the server with streaming progress updates.
@@ -1658,34 +1739,23 @@ class LemonadeClient:
             embedding: Whether the model is an embedding model (for registering new models)
             reranking: Whether the model is a reranking model (for registering new models)
             mmproj: Multimodal Projector file for vision models (for registering new models)
-            timeout: Request timeout in seconds (longer for model installation)
-            progress_callback: Optional callback function called with progress dict on each event.
-                               Signature: callback(event_type: str, data: dict) -> None
-                               event_type is one of: "progress", "complete", "error"
 
         Yields:
             Dict containing progress event data with fields:
-            - For "progress" events: file, file_index, total_files, bytes_downloaded,
-              bytes_total, percent
-            - For "complete" events: file_index, total_files, percent (100)
-            - For "error" events: error message
+            - event: "progress", "complete", or "error"
+            - For "progress": file, file_index, total_files, bytes_downloaded, bytes_total, percent
+            - For "complete": file_index, total_files, percent (100)
+            - For "error": error message
 
         Raises:
             LemonadeClientError: If the model installation fails
 
         Example:
-            # Using as generator
             for event in client.pull_model_stream("Qwen3-0.6B-GGUF"):
-                if event.get("event") == "progress":
+                if event["event"] == "progress":
                     print(f"Downloading: {event['percent']}%")
-
-            # Using with callback
-            def on_progress(event_type, data):
-                if event_type == "progress":
-                    print(f"{data['file']}: {data['percent']}%")
-
-            for _ in client.pull_model_stream("Qwen3-0.6B-GGUF", progress_callback=on_progress):
-                pass
+                elif event["event"] == "complete":
+                    print("Done!")
         """
         self.log.info(f"Installing {model_name} with streaming progress")
 
@@ -1708,12 +1778,21 @@ class LemonadeClient:
 
         url = f"{self.base_url}/pull"
 
+        # Use separate connect and read timeouts to handle SSE streams properly:
+        # - Connect timeout: 30 seconds (fast connection establishment)
+        # - Read timeout: 120 seconds (timeout if no data for 2 minutes)
+        # This detects stuck downloads while still allowing normal long downloads
+        # (as long as bytes keep flowing). The timeout is between receiving chunks,
+        # not total time, so long downloads with steady progress will work fine.
+        connect_timeout = 30
+        read_timeout = 120  # Timeout if no data received for 2 minutes
+
         try:
             response = requests.post(
                 url,
                 json=request_data,
                 headers={"Content-Type": "application/json"},
-                timeout=timeout,
+                timeout=(connect_timeout, read_timeout),
                 stream=True,
             )
 
@@ -1725,10 +1804,13 @@ class LemonadeClient:
             # Parse SSE stream
             event_type = None
             received_complete = False
+
             try:
-                for line in response.iter_lines(decode_unicode=True):
-                    if not line:
+                for line_bytes in response.iter_lines():
+                    if not line_bytes:
                         continue
+
+                    line = line_bytes.decode("utf-8", errors="replace")
 
                     if line.startswith("event:"):
                         event_type = line[6:].strip()
@@ -1738,28 +1820,20 @@ class LemonadeClient:
                             data = json.loads(data_str)
                             data["event"] = event_type or "progress"
 
-                            # Call the progress callback if provided
-                            if progress_callback:
-                                progress_callback(event_type or "progress", data)
-
+                            # Yield all events - let the consumer handle throttling
                             yield data
 
-                            # Track complete event
                             if event_type == "complete":
                                 received_complete = True
-
-                            # Check for error event
-                            if event_type == "error":
-                                error_msg = data.get(
-                                    "error", "Unknown error during model pull"
+                            elif event_type == "error":
+                                raise LemonadeClientError(
+                                    data.get("error", "Unknown error during model pull")
                                 )
-                                raise LemonadeClientError(error_msg)
 
                         except json.JSONDecodeError:
                             self.log.warning(f"Failed to parse SSE data: {data_str}")
                             continue
             except requests.exceptions.ChunkedEncodingError:
-                # Connection closed by server - this is normal after complete event
                 if not received_complete:
                     raise
 
@@ -2073,8 +2147,31 @@ class LemonadeClient:
                 return
 
             # Model not loaded - load it (will download if needed without prompting)
-            self.log.info(f"Model '{model}' not loaded, loading...")
+            self.log.debug(f"Model '{model}' not loaded, loading...")
+
+            try:
+                from rich.console import Console
+
+                console = Console()
+                console.print(
+                    f"[bold blue]🔄 Loading model:[/bold blue] [cyan]{model}[/cyan]..."
+                )
+            except ImportError:
+                console = None
+                print(f"🔄 Loading model: {model}...")
+
             self.load_model(model, auto_download=True, prompt=False)
+
+            # Print model ready message
+            try:
+                if console:
+                    console.print(
+                        f"[bold green]✅ Model loaded:[/bold green] [cyan]{model}[/cyan]"
+                    )
+                else:
+                    print(f"✅ Model loaded: {model}")
+            except Exception:
+                pass  # Ignore print errors
 
         except Exception as e:
             # Log but don't fail - let the actual request fail with proper error
@@ -2085,7 +2182,7 @@ class LemonadeClient:
         model_name: str,
         timeout: int = DEFAULT_MODEL_LOAD_TIMEOUT,
         auto_download: bool = False,
-        download_timeout: int = 7200,
+        _download_timeout: int = 7200,  # Reserved for future use
         llamacpp_args: Optional[str] = None,
         prompt: bool = True,
     ) -> Dict[str, Any]:
@@ -2133,39 +2230,97 @@ class LemonadeClient:
             original_error = str(e)
 
             # Check if this is a corrupt/incomplete download error
-            if self._is_corrupt_download_error(e):
+            is_corrupt = self._is_corrupt_download_error(e)
+            if is_corrupt:
                 self.log.warning(
-                    f"{_emoji('⚠️', '[CORRUPT]')} Model '{model_name}' has incomplete "
+                    f"{_emoji('⚠️', '[INCOMPLETE]')} Model '{model_name}' has incomplete "
                     f"or corrupted files"
                 )
 
-                # Prompt user for confirmation to delete and re-download
+                # Prompt user for confirmation to resume download
                 if not _prompt_user_for_repair(model_name):
                     raise ModelDownloadCancelledError(
-                        f"User declined to repair corrupt model: {model_name}"
+                        f"User declined to repair incomplete model: {model_name}"
                     )
 
-                # Delete the corrupt model
+                # Try to resume download first (Lemonade handles partial files)
                 self.log.info(
-                    f"{_emoji('🗑️', '[DELETE]')} Deleting corrupt model: {model_name}"
+                    f"{_emoji('📥', '[RESUME]')} Attempting to resume download..."
                 )
-                try:
-                    self.delete_model(model_name)
-                    self.log.info(
-                        f"{_emoji('✅', '[OK]')} Deleted corrupt model: {model_name}"
-                    )
-                except Exception as delete_error:
-                    self.log.warning(f"Failed to delete corrupt model: {delete_error}")
-                    # Continue anyway - the download may still work
 
-                # Now trigger a fresh download by falling through to auto-download flow
-                # (the model is now "not found" so _is_model_error will match)
+                try:
+                    # First attempt: resume download
+                    download_complete = False
+                    for event in self.pull_model_stream(model_name=model_name):
+                        event_type = event.get("event")
+                        if event_type == "complete":
+                            download_complete = True
+                        elif event_type == "error":
+                            raise LemonadeClientError(event.get("error", "Unknown"))
+
+                    if download_complete:
+                        # Retry loading
+                        response = self._send_request(
+                            "post", url, request_data, timeout=timeout
+                        )
+                        self.log.info(
+                            f"{_emoji('✅', '[OK]')} Loaded {model_name} after resume"
+                        )
+                        self.model = model_name
+                        return response
+
+                except Exception as resume_error:
+                    self.log.warning(
+                        f"{_emoji('⚠️', '[RETRY]')} Resume failed: {resume_error}"
+                    )
+
+                    # Prompt user before deleting
+                    if not _prompt_user_for_delete(model_name):
+                        raise LemonadeClientError(
+                            f"Resume download failed for '{model_name}'. "
+                            f"You can manually delete the model and try again."
+                        )
+
+                    # Second attempt: delete and re-download from scratch
+                    try:
+                        self.log.info(
+                            f"{_emoji('🗑️', '[DELETE]')} Deleting corrupt model..."
+                        )
+                        self.delete_model(model_name)
+
+                        self.log.info(
+                            f"{_emoji('📥', '[FRESH]')} Starting fresh download..."
+                        )
+                        download_complete = False
+                        for event in self.pull_model_stream(model_name=model_name):
+                            event_type = event.get("event")
+                            if event_type == "complete":
+                                download_complete = True
+                            elif event_type == "error":
+                                raise LemonadeClientError(event.get("error", "Unknown"))
+
+                        if download_complete:
+                            # Retry loading
+                            response = self._send_request(
+                                "post", url, request_data, timeout=timeout
+                            )
+                            self.log.info(
+                                f"{_emoji('✅', '[OK]')} Loaded {model_name} after fresh download"
+                            )
+                            self.model = model_name
+                            return response
+
+                    except Exception as fresh_error:
+                        self.log.error(
+                            f"{_emoji('❌', '[FAIL]')} Fresh download also failed: {fresh_error}"
+                        )
+                        raise LemonadeClientError(
+                            f"Failed to repair model '{model_name}' after both resume and fresh download attempts. "
+                            f"Please check your network connection and disk space, then try again."
+                        )
 
             # Check if this is a "model not found" error and auto_download is enabled
-            if not (
-                auto_download
-                and (self._is_model_error(e) or self._is_corrupt_download_error(e))
-            ):
+            if not (auto_download and self._is_model_error(e)):
                 # Not a model error or auto_download disabled - re-raise
                 self.log.error(f"Failed to load {model_name}: {original_error}")
                 if isinstance(e, LemonadeClientError):
@@ -2211,24 +2366,45 @@ class LemonadeClient:
                 self.active_downloads[model_name] = download_task
 
             try:
-                # Trigger model download
-                self.pull_model(model_name, timeout=download_timeout)
-
-                # Wait for download to complete (with cancellation support)
+                # Use streaming download for better performance and no timeouts
                 self.log.info(
-                    f"   {_emoji('⏳', '[WAIT]')} Waiting for model download to complete..."
-                )
-                self.log.info(
-                    f"   {_emoji('💡', '[TIP]')} Tip: You can cancel with "
-                    f"client.cancel_download(model_name)"
+                    f"   {_emoji('⏳', '[DOWNLOAD]')} Downloading model with streaming..."
                 )
 
-                if self._wait_for_model_download(
-                    model_name,
-                    timeout=download_timeout,
-                    show_progress=True,
-                    download_task=download_task,
-                ):
+                # Stream download with simple progress logging
+                download_complete = False
+                last_logged_percent = -10  # Log at 0%, 10%, 20%, etc.
+
+                for event in self.pull_model_stream(model_name=model_name):
+                    # Check for cancellation
+                    if download_task and download_task.is_cancelled():
+                        raise ModelDownloadCancelledError(
+                            f"Download cancelled: {model_name}"
+                        )
+
+                    event_type = event.get("event")
+                    if event_type == "progress":
+                        percent = event.get("percent", 0)
+                        # Log every 10%
+                        if percent >= last_logged_percent + 10:
+                            bytes_dl = event.get("bytes_downloaded", 0)
+                            bytes_total = event.get("bytes_total", 0)
+                            if bytes_total > 0:
+                                gb_dl = bytes_dl / (1024**3)
+                                gb_total = bytes_total / (1024**3)
+                                self.log.info(
+                                    f"   {_emoji('📥', '[PROGRESS]')} "
+                                    f"{percent}% ({gb_dl:.1f}/{gb_total:.1f} GB)"
+                                )
+                            last_logged_percent = percent
+                    elif event_type == "complete":
+                        download_complete = True
+                    elif event_type == "error":
+                        raise LemonadeClientError(
+                            f"Download failed: {event.get('error', 'Unknown error')}"
+                        )
+
+                if download_complete:
                     # Retry loading after successful download
                     self.log.info(
                         f"{_emoji('🔄', '[RETRY]')} Retrying model load: {model_name}"
@@ -2243,7 +2419,7 @@ class LemonadeClient:
                     return response
                 else:
                     raise LemonadeClientError(
-                        f"Model download timed out for '{model_name}'"
+                        f"Model download did not complete for '{model_name}'"
                     )
 
             except ModelDownloadCancelledError:
@@ -2421,7 +2597,17 @@ class LemonadeClient:
         """
         try:
             health = self.health_check()
-            reported_ctx = health.get("context_size", 0)
+
+            # Lemonade 9.1.4+: context_size moved to all_models_loaded[N].recipe_options.ctx_size
+            all_models = health.get("all_models_loaded", [])
+            if all_models:
+                # Get context size from the first loaded model (typically the LLM)
+                reported_ctx = (
+                    all_models[0].get("recipe_options", {}).get("ctx_size", 0)
+                )
+            else:
+                # Fallback for older Lemonade versions
+                reported_ctx = health.get("context_size", 0)
 
             if reported_ctx >= required_tokens:
                 self.log.debug(
@@ -2457,7 +2643,16 @@ class LemonadeClient:
             health = self.health_check()
             status.running = True
             status.health_data = health
-            status.context_size = health.get("context_size", 0)
+
+            # Lemonade 9.1.4+: context_size moved to all_models_loaded[N].recipe_options.ctx_size
+            all_models = health.get("all_models_loaded", [])
+            if all_models:
+                status.context_size = (
+                    all_models[0].get("recipe_options", {}).get("ctx_size", 0)
+                )
+            else:
+                # Fallback for older Lemonade versions
+                status.context_size = health.get("context_size", 0)
 
             # Get loaded models
             models_response = self.list_models()
@@ -2541,8 +2736,6 @@ class LemonadeClient:
     def download_agent_models(
         self,
         agent: str = "all",
-        timeout: int = DEFAULT_MODEL_LOAD_TIMEOUT,
-        progress_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
         """
         Download all models required for an agent with streaming progress.
@@ -2552,9 +2745,6 @@ class LemonadeClient:
 
         Args:
             agent: Agent name (chat, code, rag, etc.) or "all" for all models
-            timeout: Timeout per model in seconds
-            progress_callback: Optional callback for progress updates.
-                               Signature: callback(event_type: str, data: dict) -> None
 
         Returns:
             Dict with download results:
@@ -2563,11 +2753,9 @@ class LemonadeClient:
             - errors: List[str] - Any error messages
 
         Example:
-            def on_progress(event_type, data):
-                if event_type == "progress":
-                    print(f"{data['file']}: {data['percent']}%")
-
-            result = client.download_agent_models("chat", progress_callback=on_progress)
+            result = client.download_agent_models("chat")
+            for event in client.pull_model_stream("model-id"):
+                print(f"{event.get('percent', 0)}%")
         """
         model_ids = self.get_required_models(agent)
 
@@ -2597,15 +2785,12 @@ class LemonadeClient:
                 self.log.info(f"Downloading model: {model_id}")
                 completed = False
 
-                for event in self.pull_model_stream(
-                    model_name=model_id,
-                    timeout=timeout,
-                    progress_callback=progress_callback,
-                ):
-                    if event.get("event") == "complete":
+                for event in self.pull_model_stream(model_name=model_id):
+                    event_type = event.get("event")
+                    if event_type == "complete":
                         completed = True
                         model_result["status"] = "completed"
-                    elif event.get("event") == "error":
+                    elif event_type == "error":
                         model_result["status"] = "error"
                         model_result["error"] = event.get("error", "Unknown error")
                         results["errors"].append(f"{model_id}: {model_result['error']}")

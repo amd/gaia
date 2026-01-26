@@ -1233,6 +1233,132 @@ class AgentConsole(OutputHandler):
         else:
             print(f"✅ Model {status}: {model_name}")
 
+    # === Download Progress Methods ===
+
+    def print_download_start(self, model_name: str) -> None:
+        """
+        Print download starting notification.
+
+        Args:
+            model_name: Name of the model being downloaded
+        """
+        if self.rich_available and self.console:
+            self.console.print()
+            self.console.print(
+                f"[bold blue]📥 Downloading:[/bold blue] [cyan]{model_name}[/cyan]"
+            )
+        else:
+            rprint(f"\n📥 Downloading: {model_name}")
+
+    def print_download_progress(
+        self,
+        percent: int,
+        bytes_downloaded: int,
+        bytes_total: int,
+        speed_mbps: float = 0.0,
+    ) -> None:
+        """
+        Print download progress with a progress bar that updates in place.
+
+        Args:
+            percent: Download percentage (0-100)
+            bytes_downloaded: Bytes downloaded so far
+            bytes_total: Total bytes to download
+            speed_mbps: Download speed in MB/s (optional)
+        """
+        import sys
+
+        # Format sizes
+        if bytes_total > 1024**3:  # > 1 GB
+            dl_str = f"{bytes_downloaded / 1024**3:.2f} GB"
+            total_str = f"{bytes_total / 1024**3:.2f} GB"
+        elif bytes_total > 1024**2:  # > 1 MB
+            dl_str = f"{bytes_downloaded / 1024**2:.0f} MB"
+            total_str = f"{bytes_total / 1024**2:.0f} MB"
+        else:
+            dl_str = f"{bytes_downloaded / 1024:.0f} KB"
+            total_str = f"{bytes_total / 1024:.0f} KB"
+
+        # Progress bar characters
+        bar_width = 25
+        filled = int(bar_width * percent / 100)
+        bar = "━" * filled + "─" * (bar_width - filled)
+
+        # Build progress line with optional speed
+        progress_line = f"   [{bar}] {percent:3d}%  {dl_str} / {total_str}"
+        if speed_mbps > 0.1:
+            progress_line += f" @ {speed_mbps:.0f} MB/s"
+
+        # Update in place with carriage return
+        sys.stdout.write(f"\r{progress_line:<80}")
+        sys.stdout.flush()
+
+    def print_download_complete(self, model_name: str = None) -> None:
+        """
+        Print download complete notification.
+
+        Args:
+            model_name: Optional name of the downloaded model
+        """
+        if self.rich_available and self.console:
+            self.console.print()  # Newline after progress bar
+            if model_name:
+                self.console.print(
+                    f"   [green]✅ Downloaded successfully:[/green] [cyan]{model_name}[/cyan]"
+                )
+            else:
+                self.console.print("   [green]✅ Download complete[/green]")
+        else:
+            rprint()
+            msg = (
+                f"   ✅ Downloaded: {model_name}"
+                if model_name
+                else "   ✅ Download complete"
+            )
+            rprint(msg)
+
+    def print_download_error(self, error_message: str, model_name: str = None) -> None:
+        """
+        Print download error notification.
+
+        Args:
+            error_message: Error description
+            model_name: Optional name of the model that failed
+        """
+        if self.rich_available and self.console:
+            self.console.print()  # Newline after progress bar
+            if model_name:
+                self.console.print(
+                    f"   [red]❌ Download failed for {model_name}:[/red] {error_message}"
+                )
+            else:
+                self.console.print(f"   [red]❌ Download failed:[/red] {error_message}")
+        else:
+            rprint()
+            msg = (
+                f"   ❌ Download failed for {model_name}: {error_message}"
+                if model_name
+                else f"   ❌ Download failed: {error_message}"
+            )
+            rprint(msg)
+
+    def print_download_skipped(
+        self, model_name: str, reason: str = "already downloaded"
+    ) -> None:
+        """
+        Print download skipped notification.
+
+        Args:
+            model_name: Name of the model that was skipped
+            reason: Reason for skipping
+        """
+        if self.rich_available and self.console:
+            self.console.print(
+                f"[green]✅[/green] [cyan]{model_name}[/cyan] [dim]({reason})[/dim]"
+            )
+        else:
+            rprint(f"✅ {model_name} ({reason})")
+
     def print_extraction_start(
         self, image_num: int, page_num: int, mime_type: str
     ) -> None:

@@ -53,6 +53,216 @@ GAIA provides a comprehensive command-line interface (CLI) for interacting with 
 
 ---
 
+## Initialization
+
+### Init Command
+
+<Note>
+**New users start here!** The `gaia init` command is the easiest way to get GAIA running.
+</Note>
+
+Initialize GAIA with a single command: installs Lemonade Server and downloads required models.
+
+<video
+  autoPlay
+  loop
+  muted
+  playsInline
+  className="w-full rounded-lg"
+  src="https://assets.amd-gaia.ai/videos/gaia-init.webm"
+/>
+
+```bash
+gaia init [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--profile, -p` | string | chat | Profile to initialize (minimal, chat, code, rag, all) |
+| `--minimal` | flag | false | Shortcut for `--profile minimal` |
+| `--skip-models` | flag | false | Skip model downloads (only install Lemonade) |
+| `--force-reinstall` | flag | false | Force reinstall even if compatible version exists |
+| `--force-models` | flag | false | Force re-download models (deletes then re-downloads each model) |
+| `--yes, -y` | flag | false | Skip confirmation prompts (non-interactive) |
+| `--verbose` | flag | false | Enable verbose output |
+| `--remote` | flag | false | Use remote Lemonade server (skip local install/start, still checks version) |
+
+**Available Profiles:**
+
+| Profile | Models | Description | Approx Size |
+|---------|--------|-------------|-------------|
+| `minimal` | Qwen3-4B | Fast setup with lightweight model | ~2.5 GB |
+| `chat` | Qwen3-Coder-30B, nomic-embed, Qwen2.5-VL-7B | Interactive chat with RAG and vision | ~25 GB |
+| `code` | Qwen3-Coder-30B | Autonomous coding assistant | ~18 GB |
+| `rag` | Qwen3-Coder-30B, nomic-embed, Qwen2.5-VL-7B | Document Q&A with retrieval and vision | ~25 GB |
+| `all` | All models | All models for all agents | ~26 GB |
+
+<Note>
+All profiles also include the lightweight `Qwen2.5-0.5B` CPU model used by `gaia llm` for quick queries.
+</Note>
+
+**Examples:**
+
+<CodeGroup>
+```bash Quick Start (Recommended)
+gaia init
+```
+
+```bash Minimal Setup (Fast)
+gaia init --minimal
+```
+
+```bash Code Development
+gaia init --profile code
+```
+
+```bash Non-Interactive CI/CD
+gaia init --profile chat --yes
+```
+
+```bash Remote Lemonade Server
+gaia init --remote
+```
+
+```bash Force Reinstall Lemonade
+gaia init --force-reinstall
+```
+
+```bash Force Re-download Models
+gaia init --force-models
+```
+</CodeGroup>
+
+**What It Does:**
+
+1. **Checks Lemonade Server** - Detects if installed and verifies version compatibility
+2. **Installs/Upgrades Lemonade** - Downloads and installs from GitHub releases (Windows/Linux only). Automatically uninstalls old version if version mismatch detected.
+3. **Checks Server** - Ensures Lemonade server is running (prompts to start if not)
+4. **Downloads Models** - Pulls required models for the selected profile
+5. **Verifies Setup** - Tests each model with inference to detect corrupted downloads
+
+<Warning>
+**Platform Support:** Automatic installation supports Windows (MSI) and Linux (DEB) only. macOS users should install Lemonade Server manually from [lemonade-server.ai](https://www.lemonade-server.ai).
+</Warning>
+
+<Tip>
+**Automatic Upgrade:** If your installed Lemonade version doesn't match the expected version, `gaia init` will offer to automatically uninstall the old version and install the correct one.
+</Tip>
+
+<Tip>
+**Corrupted Model Detection:** `gaia init` verifies each model with a quick inference test. If a model fails verification (e.g., corrupted download), you'll see instructions to manually delete and re-download it, or use `gaia init --force-models` to force re-download all models.
+</Tip>
+
+### Install Command
+
+Install individual GAIA components.
+
+```bash
+gaia install [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `--lemonade` | flag | Install Lemonade Server |
+| `--yes, -y` | flag | Skip confirmation prompts |
+
+**Examples:**
+
+<CodeGroup>
+```bash Install Lemonade
+gaia install --lemonade
+```
+
+```bash Non-Interactive
+gaia install --lemonade --yes
+```
+</CodeGroup>
+
+<Note>
+If a different version of Lemonade is already installed, you'll be prompted to uninstall first.
+</Note>
+
+### Uninstall Command
+
+Uninstall GAIA components.
+
+```bash
+gaia uninstall [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `--lemonade` | flag | Uninstall Lemonade Server |
+| `--models` | flag | Delete all downloaded models from HuggingFace cache |
+| `--yes, -y` | flag | Skip confirmation prompts |
+
+**Examples:**
+
+<CodeGroup>
+```bash Uninstall Lemonade
+gaia uninstall --lemonade
+```
+
+```bash Delete All Models
+gaia uninstall --models
+```
+
+```bash Non-Interactive
+gaia uninstall --lemonade --yes
+```
+
+```bash Delete Models Non-Interactive
+gaia uninstall --models --yes
+```
+</CodeGroup>
+
+<Tip>
+The uninstall command automatically downloads the correct MSI version matching your installed Lemonade to ensure clean removal.
+</Tip>
+
+<Warning>
+`--models` permanently deletes all models from `~/.cache/huggingface/hub/`. Use with caution - you'll need to re-download models after.
+</Warning>
+
+### Kill Command
+
+Stop running GAIA services.
+
+```bash
+gaia kill [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `--lemonade` | flag | Kill Lemonade Server and child processes |
+| `--port` | integer | Kill process on specific port |
+
+**Examples:**
+
+<CodeGroup>
+```bash Kill Lemonade Server
+gaia kill --lemonade
+```
+
+```bash Kill Process on Port
+gaia kill --port 8080
+```
+</CodeGroup>
+
+<Note>
+On Windows, `--lemonade` also kills orphaned `llama-server.exe` and `lemonade-tray.exe` processes.
+</Note>
+
+---
+
 ## Core Commands
 
 ### LLM Direct Query
@@ -541,59 +751,15 @@ gaia download --agent code
 
 ### Pull Command
 
-Download/install a specific model from the Lemonade Server registry.
+To download individual models, use the Lemonade Server CLI directly:
 
 ```bash
-gaia pull MODEL_NAME [OPTIONS]
+lemonade-server pull MODEL_NAME [OPTIONS]
 ```
 
-**Options:**
-
-| Option | Type | Description |
-|--------|------|-------------|
-| `--checkpoint` | string | HuggingFace checkpoint (e.g., unsloth/Model-GGUF:Q4_K_M) |
-| `--recipe` | string | Lemonade recipe (e.g., llamacpp, oga-cpu) |
-| `--reasoning` | flag | Mark as reasoning model (like DeepSeek) |
-| `--vision` | flag | Mark as having vision capabilities |
-| `--embedding` | flag | Mark as embedding model |
-| `--reranking` | flag | Mark as reranking model |
-| `--mmproj` | string | Multimodal projector file for vision models |
-| `--timeout` | integer | Timeout in seconds (default: 1200) |
-| `--host` | string | Lemonade server host (default: localhost) |
-| `--port` | integer | Lemonade server port (default: 8000) |
-
-**Examples:**
-
-<CodeGroup>
-```bash Pull Registered Model
-gaia pull Qwen3-0.6B-GGUF
-```
-
-```bash Custom Model
-gaia pull user.Custom-Model-GGUF \
-  --checkpoint unsloth/Custom-Model-GGUF:Q4_K_M \
-  --recipe llamacpp
-```
-
-```bash Reasoning Model
-gaia pull user.DeepSeek-GGUF \
-  --checkpoint unsloth/DeepSeek-R1-GGUF \
-  --recipe llamacpp \
-  --reasoning
-```
-
-```bash Vision Model
-gaia pull user.Vision-Model \
-  --checkpoint model/vision:Q4 \
-  --recipe llamacpp \
-  --vision \
-  --mmproj mmproj.gguf
-```
-</CodeGroup>
-
-<Note>
-Use the `user.` prefix for custom models not in the official registry. Custom models require both `--checkpoint` and `--recipe` parameters.
-</Note>
+<Tip>
+Use `lemonade-server list` to see all available models and their download status.
+</Tip>
 
 ---
 
@@ -808,15 +974,27 @@ gaia youtube \
 Terminate processes running on specific ports.
 
 ```bash
-gaia kill --port PORT_NUMBER
+gaia kill [OPTIONS]
 ```
 
-**Example:**
+**Options:**
 
-Kill process on port 8000:
-```bash
+| Option | Type | Description |
+|--------|------|-------------|
+| `--port` | integer | Port number to kill process on |
+| `--lemonade` | flag | Kill Lemonade server (port 8000) |
+
+**Examples:**
+
+<CodeGroup>
+```bash Kill Lemonade Server
+gaia kill --lemonade
+```
+
+```bash Kill by Port
 gaia kill --port 8000
 ```
+</CodeGroup>
 
 This command will:
 - Find the process ID (PID) bound to the specified port

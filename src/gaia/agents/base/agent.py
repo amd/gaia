@@ -61,10 +61,6 @@ class Agent(abc.ABC):
     STATE_ERROR_RECOVERY = "ERROR_RECOVERY"
     STATE_COMPLETION = "COMPLETION"
 
-    # Define tools that can execute directly without requiring a plan
-    # Subclasses can override this to specify domain-specific simple tools
-    SIMPLE_TOOLS = []
-
     def __init__(
         self,
         use_claude: bool = False,
@@ -280,7 +276,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
         self.console.print_header(f"🛠️ Registered Tools for {self.__class__.__name__}")
         self.console.print_separator()
 
-        for name, tool_info in _TOOL_REGISTRY.items():
+        for name, tool_info in self.get_tools_info().items():
             # Format parameters
             params = []
             for param_name, param_info in tool_info["parameters"].items():
@@ -312,6 +308,14 @@ You must respond ONLY in valid JSON. No text before { or after }.
         self.console.print_separator()
 
         return None
+
+    def get_tools_info(self) -> Dict[str, Any]:
+        """Get information about all registered tools."""
+        return _TOOL_REGISTRY
+
+    def get_tools(self) -> List[Dict[str, Any]]:
+        """Get a list of registered tools for the agent."""
+        return list(_TOOL_REGISTRY.values())
 
     def _extract_json_from_response(self, response: str) -> Optional[Dict[str, Any]]:
         """
@@ -1177,43 +1181,6 @@ You must respond ONLY in valid JSON. No text before { or after }.
             steps_taken += 1
             logger.debug(f"Step {steps_taken}/{steps_limit}")
 
-            # Check if we're at the limit and ask user if they want to continue
-            if steps_taken == steps_limit and final_answer is None:
-                # Show what was accomplished
-                max_steps_msg = self._generate_max_steps_message(
-                    conversation, steps_taken, steps_limit
-                )
-                self.console.print_warning(max_steps_msg)
-
-                # Ask user if they want to continue (skip in silent mode OR if stdin is not available)
-                # IMPORTANT: Never call input() in API/CI contexts to avoid blocking threads
-                import sys
-
-                has_stdin = sys.stdin and sys.stdin.isatty()
-                if has_stdin and not (
-                    hasattr(self, "silent_mode") and self.silent_mode
-                ):
-                    try:
-                        response = (
-                            input("\nContinue with 50 more steps? (y/n): ")
-                            .strip()
-                            .lower()
-                        )
-                        if response in ["y", "yes"]:
-                            steps_limit += 50
-                            self.console.print_info(
-                                f"✓ Continuing with {steps_limit} total steps...\n"
-                            )
-                        else:
-                            self.console.print_info("Stopping at user request.")
-                            break
-                    except (EOFError, KeyboardInterrupt):
-                        self.console.print_info("\nStopping at user request.")
-                        break
-                else:
-                    # Silent mode - just stop
-                    break
-
             # Display current step
             self.console.print_step_header(steps_taken, steps_limit)
 
@@ -1668,9 +1635,6 @@ You must respond ONLY in valid JSON. No text before { or after }.
             # Add assistant response to messages for chat history
             messages.append({"role": "assistant", "content": response})
 
-            # Validate the response has a plan if required
-            self._validate_plan_required(parsed, steps_taken)
-
             # If the LLM needs to create a plan first, re-prompt it specifically for that
             if "needs_plan" in parsed and parsed["needs_plan"]:
                 # Prepare a special prompt that specifically requests a plan
@@ -2015,8 +1979,42 @@ You must respond ONLY in valid JSON. No text before { or after }.
                 self.console.print_final_answer(final_answer, streaming=self.streaming)
                 break
 
-            # Validate plan required
-            self._validate_plan_required(parsed, steps_taken)
+            # Check if we're at the limit and ask user if they want to continue
+            if steps_taken == steps_limit and final_answer is None:
+                # Show what was accomplished
+                max_steps_msg = self._generate_max_steps_message(
+                    conversation, steps_taken, steps_limit
+                )
+                self.console.print_warning(max_steps_msg)
+
+                # Ask user if they want to continue (skip in silent mode OR if stdin is not available)
+                # IMPORTANT: Never call input() in API/CI contexts to avoid blocking threads
+                import sys
+
+                has_stdin = sys.stdin and sys.stdin.isatty()
+                if has_stdin and not (
+                    hasattr(self, "silent_mode") and self.silent_mode
+                ):
+                    try:
+                        response = (
+                            input("\nContinue with 50 more steps? (y/n): ")
+                            .strip()
+                            .lower()
+                        )
+                        if response in ["y", "yes"]:
+                            steps_limit += 50
+                            self.console.print_info(
+                                f"✓ Continuing with {steps_limit} total steps...\n"
+                            )
+                        else:
+                            self.console.print_info("Stopping at user request.")
+                            break
+                    except (EOFError, KeyboardInterrupt):
+                        self.console.print_info("\nStopping at user request.")
+                        break
+                else:
+                    # Silent mode - just stop
+                    break
 
         # Print completion message
         self.console.print_completion(steps_taken, steps_limit)
@@ -2132,46 +2130,3 @@ You must respond ONLY in valid JSON. No text before { or after }.
             List of error messages
         """
         return self.error_history
-
-    def _validate_plan_required(self, parsed: Dict[str, Any], step: int) -> None:
-        """
-        Validate that the response includes a plan when required by the agent.
-
-        Args:
-            parsed: The parsed response from the LLM
-            step: The current step number
-        """
-        # Skip validation if we're not in planning mode or if we're already executing a plan
-        if self.execution_state != self.STATE_PLANNING or self.current_plan is not None:
-            return
-
-        # Allow simple single-tool operations without requiring a plan
-        if "tool" in parsed and step == 1:
-            tool_name = parsed.get("tool", "")
-            # List of tools that can execute directly without a plan
-            simple_tools = self.SIMPLE_TOOLS
-            if tool_name in simple_tools:
-                logger.debug(f"Allowing direct execution of simple tool: {tool_name}")
-                return
-
-        # Check if plan is missing on the first step
-        # BUT: Allow direct answers without plans (for simple conversational queries)
-        if "plan" not in parsed and "answer" not in parsed and step == 1:
-            warning_msg = f"No plan found in step {step} response. The agent should create a plan for all tasks."
-            logger.warning(warning_msg)
-            self.console.print_warning(warning_msg)
-
-            # For the first step, we'll add a flag to indicate we need to re-prompt for a plan
-            parsed["needs_plan"] = True
-
-            # If there's a tool in the response, store it but don't execute it yet
-            if "tool" in parsed:
-                parsed["deferred_tool"] = parsed["tool"]
-                parsed["deferred_tool_args"] = parsed.get("tool_args", {})
-                # Remove the tool so it won't be executed
-                del parsed["tool"]
-                if "tool_args" in parsed:
-                    del parsed["tool_args"]
-
-            # Set state to indicate we need planning
-            self.execution_state = self.STATE_PLANNING

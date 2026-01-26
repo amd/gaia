@@ -47,6 +47,7 @@ class FileSearchToolsMixin:
         from gaia.agents.base.tools import tool
 
         @tool(
+            atomic=True,
             name="search_file",
             description="Search for files by name/pattern across entire drive(s). Searches common locations first, then does deep search. Use when user asks 'find X on my drive'.",
             parameters={
@@ -290,6 +291,7 @@ class FileSearchToolsMixin:
                 }
 
         @tool(
+            atomic=True,
             name="search_directory",
             description="Search for a directory by name starting from a root path. Use when user asks to find or index 'my data folder' or similar.",
             parameters={
@@ -385,6 +387,7 @@ class FileSearchToolsMixin:
                 }
 
         @tool(
+            atomic=True,
             name="read_file",
             description="Read any file and intelligently analyze based on file type. Supports Python, Markdown, and other text files.",
             parameters={
@@ -509,6 +512,7 @@ class FileSearchToolsMixin:
                 return {"status": "error", "error": str(e)}
 
         @tool(
+            atomic=True,
             name="search_file_content",
             description="Search for text patterns within files on disk (like grep). Searches actual file contents, not indexed documents.",
             parameters={
@@ -656,6 +660,7 @@ class FileSearchToolsMixin:
                 }
 
         @tool(
+            atomic=True,
             name="write_file",
             description="Write content to any file. Creates parent directories if needed.",
             parameters={

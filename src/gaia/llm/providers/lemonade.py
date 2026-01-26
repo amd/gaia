@@ -47,18 +47,13 @@ class LemonadeProvider(LLMClient):
         stream: bool = False,
         **kwargs,
     ) -> Union[str, Iterator[str]]:
-        # Use provided model, instance model, or default CPU model
-        effective_model = model or self._model or DEFAULT_MODEL_NAME
-
-        # Default to low temperature for deterministic responses (matches old LLMClient behavior)
-        kwargs.setdefault("temperature", 0.1)
-
-        response = self._backend.completions(
-            model=effective_model, prompt=prompt, stream=stream, **kwargs
+        # Use chat endpoint (completions endpoint not available in Lemonade v9.1+)
+        return self.chat(
+            [{"role": "user", "content": prompt}],
+            model=model,
+            stream=stream,
+            **kwargs,
         )
-        if stream:
-            return self._handle_stream(response)
-        return self._extract_text(response)
 
     def chat(
         self,
@@ -114,7 +109,10 @@ class LemonadeProvider(LLMClient):
         for chunk in response:
             if "choices" in chunk and chunk["choices"]:
                 delta = chunk["choices"][0].get("delta", {})
-                if "content" in delta:
-                    yield delta["content"]
+                content = delta.get("content")
+                if content:
+                    yield content
                 elif "text" in chunk["choices"][0]:
-                    yield chunk["choices"][0]["text"]
+                    text = chunk["choices"][0]["text"]
+                    if text:
+                        yield text

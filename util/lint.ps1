@@ -51,13 +51,39 @@ $script:BanditIssues = 0
 
 # Function to run Black
 function Invoke-Black {
-    Write-Host "`n[1/7] Checking code formatting with Black..." -ForegroundColor Cyan
+    if ($Fix) {
+        Write-Host "`n[1/2] Fixing code formatting with Black..." -ForegroundColor Cyan
+    } else {
+        Write-Host "`n[1/7] Checking code formatting with Black..." -ForegroundColor Cyan
+    }
     Write-Host "----------------------------------------"
 
     if ($Fix) {
         $cmd = "uvx black $SRC_DIR $TEST_DIR --config pyproject.toml"
         Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
         $blackOutput = & uvx black $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1 | Out-String -Width 4096
+
+        # Count files that were reformatted
+        $reformattedCount = ($blackOutput | Select-String "reformatted" | Measure-Object).Count
+        # Also check for "file reformatted" or "files reformatted" pattern
+        if ($blackOutput -match "(\d+) files? reformatted") {
+            $reformattedCount = [int]$matches[1]
+        }
+
+        if ($reformattedCount -gt 0) {
+            Write-Host "`n[FIXED] Reformatted $reformattedCount file(s):" -ForegroundColor Green
+            $blackOutput -split "`n" | Where-Object { $_ -match "reformatted" } | ForEach-Object {
+                Write-Host "   $_" -ForegroundColor DarkGreen
+            }
+            $script:BlackPassed = $true
+            $script:BlackIssues = 0
+            return $true
+        } else {
+            Write-Host "[OK] No files needed reformatting." -ForegroundColor Green
+            $script:BlackPassed = $true
+            $script:BlackIssues = 0
+            return $true
+        }
     } else {
         $cmd = "uvx black --check --diff $SRC_DIR $TEST_DIR --config pyproject.toml"
         Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
@@ -97,9 +123,7 @@ function Invoke-Black {
             }
         }
 
-        if (-not $Fix) {
-            Write-Host "`nFix with: powershell util\lint.ps1 -RunBlack -Fix" -ForegroundColor Yellow
-        }
+        Write-Host "`nFix with: powershell util\lint.ps1 -Fix" -ForegroundColor Yellow
         $script:ErrorCount++
         $script:BlackPassed = $false
         return $false
@@ -111,13 +135,36 @@ function Invoke-Black {
 
 # Function to run isort
 function Invoke-Isort {
-    Write-Host "`n[2/7] Checking import sorting with isort..." -ForegroundColor Cyan
+    if ($Fix) {
+        Write-Host "`n[2/2] Fixing import sorting with isort..." -ForegroundColor Cyan
+    } else {
+        Write-Host "`n[2/7] Checking import sorting with isort..." -ForegroundColor Cyan
+    }
     Write-Host "----------------------------------------"
 
     if ($Fix) {
         $cmd = "uvx isort $SRC_DIR $TEST_DIR"
         Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
         $isortOutput = & uvx isort $SRC_DIR $TEST_DIR 2>&1 | Out-String -Width 4096
+
+        # Count files that were fixed (isort outputs "Fixing <file>")
+        $fixedFiles = @($isortOutput -split "`n" | Where-Object { $_ -match "Fixing " })
+        $fixedCount = $fixedFiles.Count
+
+        if ($fixedCount -gt 0) {
+            Write-Host "`n[FIXED] Fixed imports in $fixedCount file(s):" -ForegroundColor Green
+            $fixedFiles | ForEach-Object {
+                Write-Host "   $_" -ForegroundColor DarkGreen
+            }
+            $script:IsortPassed = $true
+            $script:IsortIssues = 0
+            return $true
+        } else {
+            Write-Host "[OK] No import sorting needed." -ForegroundColor Green
+            $script:IsortPassed = $true
+            $script:IsortIssues = 0
+            return $true
+        }
     } else {
         $cmd = "uvx isort --check-only --diff $SRC_DIR $TEST_DIR"
         Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
@@ -139,9 +186,7 @@ function Invoke-Isort {
                 Write-Host "   ... (output truncated, showing first 30 lines)" -ForegroundColor DarkGray
             }
         }
-        if (-not $Fix) {
-            Write-Host "`nFix with: powershell util\lint.ps1 -RunIsort -Fix" -ForegroundColor Yellow
-        }
+        Write-Host "`nFix with: powershell util\lint.ps1 -Fix" -ForegroundColor Yellow
         $script:ErrorCount++
         $script:IsortPassed = $false
         return $false
@@ -364,14 +409,26 @@ function Invoke-ImportTests {
     return $true
 }
 
+# Determine run mode
+$FixOnly = $Fix -and -not ($RunPylint -or $RunBlack -or $RunIsort -or $RunFlake8 -or $RunMyPy -or $RunBandit -or $RunImportTests -or $All)
+
 # Print header
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Running Code Quality Checks" -ForegroundColor Cyan
+if ($FixOnly) {
+    Write-Host "Fixing Code Formatting Issues" -ForegroundColor Cyan
+} else {
+    Write-Host "Running Code Quality Checks" -ForegroundColor Cyan
+}
 Write-Host "========================================" -ForegroundColor Cyan
 
 # Run based on arguments
+# If -Fix is specified alone, only run fixable checks (Black and isort)
 # If no specific options are provided, run all by default
-if (-not ($RunPylint -or $RunBlack -or $RunIsort -or $RunFlake8 -or $RunMyPy -or $RunBandit -or $RunImportTests -or $All)) {
+if ($FixOnly) {
+    # Only run Black and isort when -Fix is used alone
+    $RunBlack = $true
+    $RunIsort = $true
+} elseif (-not ($RunPylint -or $RunBlack -or $RunIsort -or $RunFlake8 -or $RunMyPy -or $RunBandit -or $RunImportTests -or $All)) {
     $All = $true
 }
 
@@ -401,6 +458,20 @@ if ($RunImportTests -or $All) {
 
 if ($RunBandit -or $All) {
     Invoke-Bandit | Out-Null
+}
+
+# Handle fix-only mode with simplified output
+if ($FixOnly) {
+    Write-Host "`n"
+    Write-Host "================================================================" -ForegroundColor Cyan
+    Write-Host "                    FIX SUMMARY                                " -ForegroundColor Cyan
+    Write-Host "================================================================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "[OK] Code formatting fixes applied!" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "[TIP] Run 'powershell util\lint.ps1' to verify all checks pass." -ForegroundColor Yellow
+    Write-Host ""
+    exit 0
 }
 
 # Collect file statistics

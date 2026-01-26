@@ -75,6 +75,8 @@ from typing import Callable
 
 def tool(
     func: Callable = None,
+    *,
+    atomic: bool = False,
     **kwargs  # Ignored, for backward compatibility
 ) -> Callable:
     """
@@ -88,6 +90,9 @@ def tool(
 
     Args:
         func: Function to register (when used as @tool)
+        atomic: If True, marks this tool as suitable for direct execution
+                without multi-step planning. Use for simple, self-contained
+                operations (default: False)
         **kwargs: Optional arguments (ignored)
 
     Returns:
@@ -126,7 +131,8 @@ _TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {}
                 "required": bool, # True if no default value
             }
         },
-        "function": Callable      # Original function
+        "function": Callable,     # Original function
+        "atomic": bool            # True if marked as atomic (direct execution)
     }
 }
 ```
@@ -185,7 +191,42 @@ def calculate(expression: str) -> float:
 }
 ```
 
-### Example 2: Tool with Optional Parameters
+### Example 2: Atomic Tool (Simple Operations)
+
+```python
+@tool(atomic=True)
+def get_system_info() -> dict:
+    """
+    Get current system information.
+
+    This is a simple, self-contained operation suitable for direct
+    execution without multi-step planning.
+
+    Returns:
+        Dictionary with system info (platform, CPU, memory)
+    """
+    import platform
+    import psutil
+
+    return {
+        "platform": platform.system(),
+        "cpu_count": psutil.cpu_count(),
+        "memory_gb": psutil.virtual_memory().total / (1024**3)
+    }
+
+# Registry entry includes atomic flag:
+{
+    "get_system_info": {
+        "name": "get_system_info",
+        "description": "Get current system information...",
+        "parameters": {},
+        "function": <function get_system_info>,
+        "atomic": True  # Marked as atomic
+    }
+}
+```
+
+### Example 3: Tool with Optional Parameters
 
 ```python
 @tool
@@ -386,7 +427,8 @@ _TOOL_REGISTRY[tool_name] = {
     "name": tool_name,
     "description": f.__doc__ or "",
     "parameters": params,
-    "function": f
+    "function": f,
+    "atomic": atomic  # Defaults to False
 }
 ```
 
