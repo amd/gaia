@@ -504,8 +504,9 @@ jobs:
         id: tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
-          TAG_NAME="${{ github.event.workflow_run.head_branch }}"
+          TAG_NAME="$HEAD_BRANCH"
           echo "Candidate tag: $TAG_NAME"
 
           # Validate semantic version format (vX.Y.Z)
