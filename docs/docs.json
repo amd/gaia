@@ -309,6 +309,7 @@
               "plans/chat-ui",
               "plans/mcp-client",
               "plans/cua",
+              "plans/docker-containers",
               "plans/mcp-docs"
             ]
           }
