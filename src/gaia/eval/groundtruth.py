@@ -20,6 +20,7 @@ class UseCase(Enum):
     SUMMARIZATION = "summarization"
     QA = "qa"
     EMAIL = "email"
+    PDF = "pdf"
 
 
 class GroundTruthGenerator:
@@ -149,6 +150,36 @@ class GroundTruthGenerator:
 
     Focus on generating comprehensive summaries and analysis for business email evaluation. Always include exactly 5 qa_pairs.
     
+    IMPORTANT: Return ONLY the JSON object with no additional text, explanations, or formatting.
+    """
+        elif use_case == UseCase.PDF:
+            return f"""
+    Given this PDF document, generate comprehensive ground truth summaries and key information extraction for evaluation.
+    Analyze the document content and provide structured summaries with evaluation criteria.
+    Return a json formatted response as follows:
+    {{
+        'source': 'path/to/pdf',
+        'document_metadata': {{
+            'document_type': 'type of document (e.g., technical_spec, business_proposal, research_report)',
+            'estimated_pages': 'estimated number of pages or length',
+            'primary_topic': 'main topic or subject matter',
+            'complexity_level': 'low/medium/high technical or content complexity'
+        }},
+        'summaries': {{
+            'executive_summary': 'high-level overview of document purpose and content',
+            'detailed_summary': 'comprehensive summary with key details and sections'
+        }},
+        'evaluation_criteria': {{
+            'summary_completeness': 'how complete should a good document summary be',
+            'summary_accuracy': 'what constitutes accurate information extraction',
+            'relevance': 'what information is most relevant to include',
+            'technical_understanding': 'how well should technical content be captured',
+            'structure_preservation': 'how well should document structure be maintained'
+        }}
+    }}
+
+    Focus on generating comprehensive summaries and analysis for PDF document evaluation.
+
     IMPORTANT: Return ONLY the JSON object with no additional text, explanations, or formatting.
     """
         else:
@@ -774,6 +805,12 @@ Examples:
   # Process a transcript for Q&A generation
   python -m gaia.eval.groundtruth -f ./data/transcripts/meeting.txt --use-case qa
 
+  # Process a PDF document for comprehensive analysis
+  python -m gaia.eval.groundtruth -f ./data/pdfs/technical_spec.pdf --use-case pdf
+
+  # Process all PDF files in a directory (creates consolidated file)
+  python -m gaia.eval.groundtruth -d ./output/pdfs -p "*.pdf" --use-case pdf
+  
   # Process all HTML files in a directory for RAG (creates consolidated file)
   python -m gaia.eval.groundtruth -d ./data/html/blender
 
@@ -967,6 +1004,14 @@ Examples:
                 )
             elif use_case == UseCase.QA:
                 print(f"  Q&A pairs: {len(result['analysis']['qa_pairs'])}")
+                print(
+                    f"  Evaluation criteria: {len(result['analysis']['evaluation_criteria'])} categories"
+                )
+            elif use_case == UseCase.PDF:
+                print(f"  Q&A pairs: {len(result['analysis']['qa_pairs'])}")
+                print(
+                    f"  Summary types generated: {len(result['analysis']['summaries'])} different formats"
+                )
                 print(
                     f"  Evaluation criteria: {len(result['analysis']['evaluation_criteria'])} categories"
                 )
