@@ -1,0 +1,14 @@
+# CodeQL Configuration
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: "GAIA CodeQL Config"
+
+# Suppress false positive for claude.yml workflow
+# The pull_request_target + checkout pattern is flagged as dangerous, but our workflow is safe because:
+# 1. We only checkout PR code for Claude to READ (not execute)
+# 2. No build/install steps that would execute PR code (npm install, pip install, make, etc.)
+# 3. Claude only reads files and posts review comments
+# See: .github/workflows/claude.yml lines 9-15 for full security documentation
+paths-ignore:
+  - '.github/workflows/claude.yml'
