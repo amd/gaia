@@ -321,6 +321,77 @@ jobs:
               echo ================================================================
           )
 
+      - name: Run Lemonade Client Integration Tests (CMD)
+        shell: cmd
+        env:
+          PYTHONUTF8: 1
+          GAIA_TEST_MODEL: Llama-3.2-3B-Instruct-Hybrid
+        run: |
+          REM Activate virtual environment
+          call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
+
+          echo ================================================================
+          echo              LEMONADE CLIENT INTEGRATION TESTS
+          echo ================================================================
+          echo Virtual Environment: %VIRTUAL_ENV%
+          echo Python Version:
+          python --version
+          echo Test Model: %GAIA_TEST_MODEL%
+          echo Working Directory: %CD%
+          echo.
+
+          REM Initialize test tracking
+          set lemonade_exit=0
+
+          REM ================================================================
+          REM TEST_LEMONADE_CLIENT.PY - INTEGRATION TESTS ONLY
+          REM ================================================================
+          echo ****************************************************************
+          echo                 LEMONADE CLIENT INTEGRATION TESTS
+          echo ****************************************************************
+          echo Starting test_lemonade_client.py integration tests at %TIME%...
+          echo.
+
+          REM Run only integration tests (skip mock tests which don't need server)
+          python -m pytest tests\test_lemonade_client.py -vs --tb=short -k "Integration"
+          set lemonade_exit=%ERRORLEVEL%
+
+          echo.
+          echo ----------------------------------------------------------------
+          echo test_lemonade_client.py completed at %TIME% with exit code: %lemonade_exit%
+          if %lemonade_exit% equ 0 (
+              echo [SUCCESS] Lemonade client integration tests passed
+          ) else (
+              echo [FAILURE] Lemonade client integration tests failed with exit code %lemonade_exit%
+              echo Full error output displayed above - no truncation
+          )
+          echo ----------------------------------------------------------------
+          echo.
+
+          REM ================================================================
+          REM LEMONADE CLIENT TEST SUMMARY
+          REM ================================================================
+          echo ================================================================
+          echo                LEMONADE CLIENT TEST SUMMARY
+          echo ================================================================
+          echo test_lemonade_client.py:  exit code %lemonade_exit%
+          echo ================================================================
+
+          if %lemonade_exit% neq 0 (
+              echo [FAILURE] Lemonade client integration tests failed
+              echo ================================================================
+              echo FAILED TEST:
+              echo   - test_lemonade_client.py ^(exit code %lemonade_exit%^)
+              echo ================================================================
+              echo IMPORTANT: All error messages are displayed in full above
+              echo No PowerShell wrapping or truncation - raw Python output preserved
+              echo ================================================================
+              exit /b 1
+          ) else (
+              echo [SUCCESS] Lemonade client integration tests passed successfully
+              echo ================================================================
+          )
+
       - name: Debug GAIA Logs on Failure
         if: failure()
         shell: cmd

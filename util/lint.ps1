@@ -22,11 +22,8 @@ $env:PYTHONUTF8 = "1"
 chcp 65001 | Out-Null  # Set console code page to UTF-8
 
 # Configuration
-$PYTHON_PATH = "python"
-$PYLINT_PATH = "pylint"
 $SRC_DIR = "src\gaia"
 $TEST_DIR = "tests"
-$INSTALLER_DIR = "installer"
 $PYLINT_CONFIG = ".pylintrc"
 $DISABLED_CHECKS = "C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718"
 $EXCLUDE_DIRS = ".git,__pycache__,venv,.venv,.mypy_cache,.tox,.eggs,_build,buck-out,node_modules"
@@ -54,17 +51,43 @@ $script:BanditIssues = 0
 
 # Function to run Black
 function Invoke-Black {
-    Write-Host "`n[1/7] Checking code formatting with Black..." -ForegroundColor Cyan
+    if ($Fix) {
+        Write-Host "`n[1/2] Fixing code formatting with Black..." -ForegroundColor Cyan
+    } else {
+        Write-Host "`n[1/7] Checking code formatting with Black..." -ForegroundColor Cyan
+    }
     Write-Host "----------------------------------------"
 
     if ($Fix) {
-        $cmd = "$PYTHON_PATH -m black $INSTALLER_DIR $SRC_DIR $TEST_DIR --config pyproject.toml"
+        $cmd = "uvx black $SRC_DIR $TEST_DIR --config pyproject.toml"
         Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-        $blackOutput = & $PYTHON_PATH -m black $INSTALLER_DIR $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1 | Out-String -Width 4096
+        $blackOutput = & uvx black $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1 | Out-String -Width 4096
+
+        # Count files that were reformatted
+        $reformattedCount = ($blackOutput | Select-String "reformatted" | Measure-Object).Count
+        # Also check for "file reformatted" or "files reformatted" pattern
+        if ($blackOutput -match "(\d+) files? reformatted") {
+            $reformattedCount = [int]$matches[1]
+        }
+
+        if ($reformattedCount -gt 0) {
+            Write-Host "`n[FIXED] Reformatted $reformattedCount file(s):" -ForegroundColor Green
+            $blackOutput -split "`n" | Where-Object { $_ -match "reformatted" } | ForEach-Object {
+                Write-Host "   $_" -ForegroundColor DarkGreen
+            }
+            $script:BlackPassed = $true
+            $script:BlackIssues = 0
+            return $true
+        } else {
+            Write-Host "[OK] No files needed reformatting." -ForegroundColor Green
+            $script:BlackPassed = $true
+            $script:BlackIssues = 0
+            return $true
+        }
     } else {
-        $cmd = "$PYTHON_PATH -m black --check --diff $INSTALLER_DIR $SRC_DIR $TEST_DIR --config pyproject.toml"
+        $cmd = "uvx black --check --diff $SRC_DIR $TEST_DIR --config pyproject.toml"
         Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-        $blackOutput = & $PYTHON_PATH -m black --check --diff $INSTALLER_DIR $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1 | Out-String -Width 4096
+        $blackOutput = & uvx black --check --diff $SRC_DIR $TEST_DIR --config pyproject.toml 2>&1 | Out-String -Width 4096
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -73,9 +96,34 @@ function Invoke-Black {
         if ($script:BlackIssues -eq 0) { $script:BlackIssues = 1 }
 
         Write-Host "`n[!] Code formatting issues found." -ForegroundColor Red
-        if (-not $Fix) {
-            Write-Host "Fix with: powershell util\lint.ps1 -RunBlack -Fix" -ForegroundColor Yellow
+
+        # Show which files would be reformatted
+        Write-Host "`n[FILES] Files that would be reformatted:" -ForegroundColor Yellow
+        $blackOutput | Select-String "would reformat" | ForEach-Object {
+            Write-Host "   $_" -ForegroundColor DarkYellow
         }
+
+        # Show the diff output (first 100 lines to avoid overwhelming terminal)
+        if ($blackOutput.Length -gt 0) {
+            Write-Host "`n[DIFF] Formatting differences:" -ForegroundColor Yellow
+            $diffLines = ($blackOutput -split "`n") | Select-Object -First 100
+            $diffLines | ForEach-Object {
+                if ($_ -match "^---" -or $_ -match "^\+\+\+") {
+                    Write-Host $_ -ForegroundColor Cyan
+                } elseif ($_ -match "^-") {
+                    Write-Host $_ -ForegroundColor Red
+                } elseif ($_ -match "^\+") {
+                    Write-Host $_ -ForegroundColor Green
+                } else {
+                    Write-Host $_ -ForegroundColor DarkGray
+                }
+            }
+            if (($blackOutput -split "`n").Count -gt 100) {
+                Write-Host "... (output truncated, showing first 100 lines)" -ForegroundColor DarkGray
+            }
+        }
+
+        Write-Host "`nFix with: powershell util\lint.ps1 -Fix" -ForegroundColor Yellow
         $script:ErrorCount++
         $script:BlackPassed = $false
         return $false
@@ -87,17 +135,40 @@ function Invoke-Black {
 
 # Function to run isort
 function Invoke-Isort {
-    Write-Host "`n[2/7] Checking import sorting with isort..." -ForegroundColor Cyan
+    if ($Fix) {
+        Write-Host "`n[2/2] Fixing import sorting with isort..." -ForegroundColor Cyan
+    } else {
+        Write-Host "`n[2/7] Checking import sorting with isort..." -ForegroundColor Cyan
+    }
     Write-Host "----------------------------------------"
 
     if ($Fix) {
-        $cmd = "$PYTHON_PATH -m isort $INSTALLER_DIR $SRC_DIR $TEST_DIR"
+        $cmd = "uvx isort $SRC_DIR $TEST_DIR"
         Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-        $isortOutput = & $PYTHON_PATH -m isort $INSTALLER_DIR $SRC_DIR $TEST_DIR 2>&1 | Out-String -Width 4096
+        $isortOutput = & uvx isort $SRC_DIR $TEST_DIR 2>&1 | Out-String -Width 4096
+
+        # Count files that were fixed (isort outputs "Fixing <file>")
+        $fixedFiles = @($isortOutput -split "`n" | Where-Object { $_ -match "Fixing " })
+        $fixedCount = $fixedFiles.Count
+
+        if ($fixedCount -gt 0) {
+            Write-Host "`n[FIXED] Fixed imports in $fixedCount file(s):" -ForegroundColor Green
+            $fixedFiles | ForEach-Object {
+                Write-Host "   $_" -ForegroundColor DarkGreen
+            }
+            $script:IsortPassed = $true
+            $script:IsortIssues = 0
+            return $true
+        } else {
+            Write-Host "[OK] No import sorting needed." -ForegroundColor Green
+            $script:IsortPassed = $true
+            $script:IsortIssues = 0
+            return $true
+        }
     } else {
-        $cmd = "$PYTHON_PATH -m isort --check-only --diff $INSTALLER_DIR $SRC_DIR $TEST_DIR"
+        $cmd = "uvx isort --check-only --diff $SRC_DIR $TEST_DIR"
         Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-        $isortOutput = & $PYTHON_PATH -m isort --check-only --diff $INSTALLER_DIR $SRC_DIR $TEST_DIR 2>&1 | Out-String -Width 4096
+        $isortOutput = & uvx isort --check-only --diff $SRC_DIR $TEST_DIR 2>&1 | Out-String -Width 4096
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -106,9 +177,16 @@ function Invoke-Isort {
         if ($script:IsortIssues -eq 0) { $script:IsortIssues = 1 }
 
         Write-Host "`n[!] Import sorting issues found." -ForegroundColor Red
-        if (-not $Fix) {
-            Write-Host "Fix with: powershell util\lint.ps1 -RunIsort -Fix" -ForegroundColor Yellow
+        # Show the actual error output
+        if ($isortOutput.Trim()) {
+            Write-Host "`n[OUTPUT]" -ForegroundColor White
+            $lines = ($isortOutput -split "`n") | Select-Object -First 30
+            $lines | ForEach-Object { Write-Host "   $_" -ForegroundColor Yellow }
+            if (($isortOutput -split "`n").Count -gt 30) {
+                Write-Host "   ... (output truncated, showing first 30 lines)" -ForegroundColor DarkGray
+            }
         }
+        Write-Host "`nFix with: powershell util\lint.ps1 -Fix" -ForegroundColor Yellow
         $script:ErrorCount++
         $script:IsortPassed = $false
         return $false
@@ -123,9 +201,9 @@ function Invoke-Pylint {
     Write-Host "`n[3/7] Running Pylint (errors only)..." -ForegroundColor Cyan
     Write-Host "----------------------------------------"
 
-    $cmd = "$PYTHON_PATH -m $PYLINT_PATH $SRC_DIR --rcfile $PYLINT_CONFIG --disable $DISABLED_CHECKS"
+    $cmd = "uvx pylint $SRC_DIR --rcfile $PYLINT_CONFIG --disable $DISABLED_CHECKS"
     Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-    $pylintOutput = & $PYTHON_PATH -m $PYLINT_PATH $SRC_DIR --rcfile $PYLINT_CONFIG --disable $DISABLED_CHECKS 2>&1 | Out-String -Width 4096
+    $pylintOutput = & uvx pylint $SRC_DIR --rcfile $PYLINT_CONFIG --disable $DISABLED_CHECKS 2>&1 | Out-String -Width 4096
 
     if ($LASTEXITCODE -ne 0) {
         # Count error lines (lines starting with file path and containing error indicators)
@@ -148,9 +226,9 @@ function Invoke-Flake8 {
     Write-Host "`n[4/7] Running Flake8..." -ForegroundColor Cyan
     Write-Host "----------------------------------------"
 
-    $cmd = "$PYTHON_PATH -m flake8 $INSTALLER_DIR $SRC_DIR $TEST_DIR --exclude=$EXCLUDE_DIRS --count --statistics --max-line-length=88 --extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722"
+    $cmd = "uvx flake8 $SRC_DIR $TEST_DIR --exclude=$EXCLUDE_DIRS --count --statistics --max-line-length=88 --extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722"
     Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-    $flake8Output = & $PYTHON_PATH -m flake8 $INSTALLER_DIR $SRC_DIR $TEST_DIR --exclude=$EXCLUDE_DIRS --count --statistics --max-line-length=88 --extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722 2>&1 | Out-String -Width 4096
+    $flake8Output = & uvx flake8 $SRC_DIR $TEST_DIR --exclude=$EXCLUDE_DIRS --count --statistics --max-line-length=88 --extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722 2>&1 | Out-String -Width 4096
 
     if ($LASTEXITCODE -ne 0) {
         # Count actual violation lines (format: filepath:line:col: error_code message)
@@ -176,9 +254,9 @@ function Invoke-MyPy {
     Write-Host "`n[5/7] Running MyPy type checking (warning only)..." -ForegroundColor Cyan
     Write-Host "----------------------------------------"
 
-    $cmd = "$PYTHON_PATH -m mypy $SRC_DIR --ignore-missing-imports"
+    $cmd = "uvx mypy $SRC_DIR --ignore-missing-imports"
     Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-    $mypyOutput = & $PYTHON_PATH -m mypy $SRC_DIR --ignore-missing-imports 2>&1 | Out-String -Width 4096
+    $mypyOutput = & uvx mypy $SRC_DIR --ignore-missing-imports 2>&1 | Out-String -Width 4096
 
     if ($LASTEXITCODE -ne 0) {
         # Count error lines (format: filepath:line: error: message)
@@ -206,9 +284,9 @@ function Invoke-Bandit {
     Write-Host "`n[6/7] Running security check with Bandit (warning only)..." -ForegroundColor Cyan
     Write-Host "----------------------------------------"
 
-    $cmd = "$PYTHON_PATH -m bandit -r $SRC_DIR -ll --exclude $EXCLUDE_DIRS"
+    $cmd = "uvx bandit -r $SRC_DIR -ll --exclude $EXCLUDE_DIRS"
     Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-    $banditOutput = & $PYTHON_PATH -m bandit -r $SRC_DIR -ll --exclude $EXCLUDE_DIRS 2>&1 | Out-String -Width 4096
+    $banditOutput = & uvx bandit -r $SRC_DIR -ll --exclude $EXCLUDE_DIRS 2>&1 | Out-String -Width 4096
 
     if ($LASTEXITCODE -ne 0) {
         # Count issue lines (look for >> Issue: patterns)
@@ -238,22 +316,86 @@ function Invoke-ImportTests {
     Write-Host "----------------------------------------"
 
     $imports = @(
-        @{Module="gaia.cli"; Desc="CLI module"},
-        @{Module="gaia.chat.sdk"; Desc="Chat SDK"},
-        @{Module="gaia.llm.llm_client"; Desc="LLM client"},
-        @{Module="gaia.agents.base.agent"; Desc="Base agent"}
+        # Core CLI
+        @{Module="gaia.cli"; Desc="CLI module"; Optional=$false},
+
+        # LLM Clients (test module and key exports)
+        @{Module="gaia.llm"; Desc="LLM package"; Optional=$false},
+        @{Import="from gaia.llm import LLMClient"; Desc="LLM client class"; Optional=$false},
+        @{Import="from gaia.llm import VLMClient"; Desc="Vision LLM client"; Optional=$false},
+        @{Import="from gaia.llm import create_client"; Desc="LLM factory"; Optional=$false},
+        @{Import="from gaia.llm import NotSupportedError"; Desc="LLM exception"; Optional=$false},
+
+        # Chat SDK
+        @{Module="gaia.chat.sdk"; Desc="Chat SDK module"; Optional=$false},
+        @{Import="from gaia.chat.sdk import ChatSDK"; Desc="Chat SDK class"; Optional=$false},
+        @{Import="from gaia.chat.sdk import ChatConfig"; Desc="Chat configuration"; Optional=$false},
+        @{Import="from gaia.chat.sdk import ChatSession"; Desc="Chat session"; Optional=$false},
+        @{Import="from gaia.chat.sdk import ChatResponse"; Desc="Chat response"; Optional=$false},
+        @{Import="from gaia.chat.sdk import quick_chat"; Desc="Quick chat function"; Optional=$false},
+
+        # RAG SDK
+        @{Module="gaia.rag.sdk"; Desc="RAG SDK module"; Optional=$false},
+        @{Import="from gaia.rag.sdk import RAGSDK"; Desc="RAG SDK class"; Optional=$false},
+        @{Import="from gaia.rag.sdk import RAGConfig"; Desc="RAG configuration"; Optional=$false},
+        @{Import="from gaia.rag.sdk import quick_rag"; Desc="Quick RAG function"; Optional=$false},
+
+        # Base Agent System
+        @{Module="gaia.agents.base.agent"; Desc="Base agent module"; Optional=$false},
+        @{Import="from gaia.agents.base.agent import Agent"; Desc="Base Agent class"; Optional=$false},
+        @{Import="from gaia.agents.base import MCPAgent"; Desc="MCP agent mixin"; Optional=$false},
+        @{Import="from gaia.agents.base import tool"; Desc="Tool decorator"; Optional=$false},
+
+        # Specialized Agents
+        @{Import="from gaia.agents.chat import ChatAgent"; Desc="Chat agent"; Optional=$false},
+        @{Import="from gaia.agents.code import CodeAgent"; Desc="Code agent"; Optional=$false},
+        @{Import="from gaia.agents.jira import JiraAgent"; Desc="Jira agent"; Optional=$false},
+        @{Import="from gaia.agents.docker import DockerAgent"; Desc="Docker agent"; Optional=$false},
+        @{Import="from gaia.agents.blender import BlenderAgent"; Desc="Blender agent"; Optional=$false},
+        @{Import="from gaia.agents.emr import MedicalIntakeAgent"; Desc="Medical intake agent"; Optional=$false},
+        @{Import="from gaia.agents.routing import RoutingAgent"; Desc="Routing agent"; Optional=$false},
+
+        # Database
+        @{Import="from gaia.database import DatabaseAgent"; Desc="Database agent"; Optional=$false},
+        @{Import="from gaia.database import DatabaseMixin"; Desc="Database mixin"; Optional=$false},
+
+        # Utilities
+        @{Import="from gaia.utils import FileWatcher"; Desc="File watcher"; Optional=$false},
+        @{Import="from gaia.utils import FileWatcherMixin"; Desc="File watcher mixin"; Optional=$false}
     )
 
     $failed = $false
     $script:ImportsIssues = 0
     foreach ($import in $imports) {
-        $cmd = "$PYTHON_PATH -c `"import $($import.Module); print('OK: $($import.Desc) imports')`""
-        Write-Host "[CMD] $cmd" -ForegroundColor DarkGray
-        & $PYTHON_PATH -c "import $($import.Module); print('OK: $($import.Desc) imports')" 2>&1 | Out-String -Width 4096
+        # Handle both "Module" (import x) and "Import" (from x import y) syntax
+        if ($import.Module) {
+            $importStr = "import $($import.Module)"
+            $cmd = "$importStr; print('OK')"
+        } elseif ($import.Import) {
+            $importStr = $import.Import
+            $cmd = "$importStr; print('OK')"
+        }
+
+        $desc = $import.Desc.PadRight(35)
+        $result = & uv run python -c $cmd 2>&1 | Out-String
+
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "[!] Failed to import $($import.Module)" -ForegroundColor Red
-            $failed = $true
-            $script:ImportsIssues++
+            # Extract error message
+            $errorLine = $result -split "`n" | Where-Object { $_ -match "Error:|ImportError:|ModuleNotFoundError:" } | Select-Object -First 1
+
+            if ($import.Optional) {
+                $errorMsg = if ($errorLine) { " ($($errorLine.Trim()))" } else { " (optional dependency)" }
+                Write-Host "[SKIP] $desc - $importStr$errorMsg" -ForegroundColor Yellow
+            } else {
+                Write-Host "[FAIL] $desc - $importStr" -ForegroundColor Red
+                if ($errorLine) {
+                    Write-Host "       Error: $($errorLine.Trim())" -ForegroundColor DarkRed
+                }
+                $failed = $true
+                $script:ImportsIssues++
+            }
+        } else {
+            Write-Host "[OK]   $desc - $importStr" -ForegroundColor Green
         }
     }
 
@@ -267,14 +409,26 @@ function Invoke-ImportTests {
     return $true
 }
 
+# Determine run mode
+$FixOnly = $Fix -and -not ($RunPylint -or $RunBlack -or $RunIsort -or $RunFlake8 -or $RunMyPy -or $RunBandit -or $RunImportTests -or $All)
+
 # Print header
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Running Code Quality Checks" -ForegroundColor Cyan
+if ($FixOnly) {
+    Write-Host "Fixing Code Formatting Issues" -ForegroundColor Cyan
+} else {
+    Write-Host "Running Code Quality Checks" -ForegroundColor Cyan
+}
 Write-Host "========================================" -ForegroundColor Cyan
 
 # Run based on arguments
+# If -Fix is specified alone, only run fixable checks (Black and isort)
 # If no specific options are provided, run all by default
-if (-not ($RunPylint -or $RunBlack -or $RunIsort -or $RunFlake8 -or $RunMyPy -or $RunBandit -or $RunImportTests -or $All)) {
+if ($FixOnly) {
+    # Only run Black and isort when -Fix is used alone
+    $RunBlack = $true
+    $RunIsort = $true
+} elseif (-not ($RunPylint -or $RunBlack -or $RunIsort -or $RunFlake8 -or $RunMyPy -or $RunBandit -or $RunImportTests -or $All)) {
     $All = $true
 }
 
@@ -306,9 +460,23 @@ if ($RunBandit -or $All) {
     Invoke-Bandit | Out-Null
 }
 
+# Handle fix-only mode with simplified output
+if ($FixOnly) {
+    Write-Host "`n"
+    Write-Host "================================================================" -ForegroundColor Cyan
+    Write-Host "                    FIX SUMMARY                                " -ForegroundColor Cyan
+    Write-Host "================================================================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "[OK] Code formatting fixes applied!" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "[TIP] Run 'powershell util\lint.ps1' to verify all checks pass." -ForegroundColor Yellow
+    Write-Host ""
+    exit 0
+}
+
 # Collect file statistics
 Write-Host "`nCollecting statistics..." -ForegroundColor DarkGray
-$pyFiles = @(Get-ChildItem -Path $SRC_DIR,$TEST_DIR,$INSTALLER_DIR -Recurse -Filter "*.py" -File)
+$pyFiles = @(Get-ChildItem -Path $SRC_DIR,$TEST_DIR -Recurse -Filter "*.py" -File)
 $totalPyFiles = $pyFiles.Count
 $totalLines = 0
 foreach ($file in $pyFiles) {
@@ -326,7 +494,7 @@ Write-Host ""
 Write-Host "[STATS] Project Statistics:" -ForegroundColor White
 Write-Host "   - Python Files: $totalPyFiles" -ForegroundColor Gray
 Write-Host "   - Lines of Code: $($totalLines.ToString('N0'))" -ForegroundColor Gray
-Write-Host "   - Directories: src/gaia, tests, installer" -ForegroundColor Gray
+Write-Host "   - Directories: src/gaia, tests" -ForegroundColor Gray
 
 # Build results table
 $results = @()

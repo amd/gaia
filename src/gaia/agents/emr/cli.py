@@ -636,7 +636,7 @@ def cmd_test(args):
 
     from PIL import Image
 
-    from gaia.llm.vlm_client import VLMClient
+    from gaia.llm import VLMClient
 
     file_path = Path(args.file)
     if not file_path.exists():

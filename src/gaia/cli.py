@@ -11,6 +11,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from gaia.agents.base.console import AgentConsole
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
     DEFAULT_HOST,
@@ -53,25 +54,6 @@ DEFAULT_TEST_DATA_DIR = "output/test_data"
 DEFAULT_GROUNDTRUTH_DIR = "output/groundtruth"
 DEFAULT_EXPERIMENTS_DIR = "output/experiments"
 DEFAULT_EVALUATIONS_DIR = "output/evaluations"
-
-
-# Helper functions for download progress display
-def _format_bytes(b: int) -> str:
-    """Format bytes to human readable string."""
-    if b >= 1024 * 1024 * 1024:
-        return f"{b / (1024 * 1024 * 1024):.1f} GB"
-    elif b >= 1024 * 1024:
-        return f"{b / (1024 * 1024):.1f} MB"
-    elif b >= 1024:
-        return f"{b / 1024:.1f} KB"
-    return f"{b} B"
-
-
-def _make_progress_bar(percent: int, width: int = 20) -> str:
-    """Create a progress bar string."""
-    filled = int(width * percent / 100)
-    empty = width - filled
-    return f"[{'█' * filled}{'░' * empty}]"
 
 
 def check_lemonade_health(host=None, port=None):
@@ -189,7 +171,7 @@ def ensure_agent_models(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
     quiet: bool = False,
-    timeout: int = 1800,
+    _timeout: int = 1800,  # Reserved for future use
 ) -> bool:
     """
     Ensure all models required for an agent are downloaded.
@@ -229,86 +211,72 @@ def ensure_agent_models(
             log.debug(f"All models for {agent} agent already available")
             return True
 
+        # Use AgentConsole for nicely formatted progress display
+        console = AgentConsole()
+
         if not quiet:
-            print(
-                f"📥 Downloading {len(models_to_download)} model(s) for {agent} agent..."
+            console.print_info(
+                f"Downloading {len(models_to_download)} model(s) for {agent} agent"
             )
-            print()
 
-        # Progress tracking
-        last_percent = [-1]
-        last_file_index = [0]
-
-        def progress_callback(event_type: str, data: dict) -> None:
-            """Display download progress in CLI."""
-            if quiet:
-                return
-
-            if event_type == "progress":
-                percent = data.get("percent", 0)
-                file_name = data.get("file", "unknown")
-                file_index = data.get("file_index", 1)
-                total_files = data.get("total_files", 1)
-
-                # Print newline when moving to a new file
-                if file_index != last_file_index[0] and last_file_index[0] > 0:
-                    print()  # Newline for previous file
-                last_file_index[0] = file_index
-
-                # Update every 2% for smooth progress
-                if percent >= last_percent[0] + 2 or percent == 0 or percent == 100:
-                    bytes_downloaded = data.get("bytes_downloaded", 0)
-                    bytes_total = data.get("bytes_total", 0)
-
-                    # Create progress bar
-                    bar = _make_progress_bar(percent)
-                    progress_line = (
-                        f"   {bar} {percent:3d}% "
-                        f"[{file_index}/{total_files}] {file_name}: "
-                        f"{_format_bytes(bytes_downloaded)}/{_format_bytes(bytes_total)}"
-                    )
-                    print(f"\r{progress_line:<100}", end="", flush=True)
-                    last_percent[0] = percent
-
-            elif event_type == "complete":
-                print()  # Newline after progress
-                print("   ✅ Download complete")
-                last_percent[0] = -1
-                last_file_index[0] = 0
-
-            elif event_type == "error":
-                print()  # Newline after progress
-                error_msg = data.get("error", "Unknown error")
-                print(f"   ❌ Error: {error_msg}")
-
-        # Download each model
+        # Download each model with progress display
         for model_id in models_to_download:
-            last_percent[0] = -1
-
             if not quiet:
-                print(f"📥 {model_id}")
+                console.print_download_start(model_id)
 
             try:
-                for event in client.pull_model_stream(
-                    model_name=model_id,
-                    timeout=timeout,
-                    progress_callback=progress_callback,
-                ):
-                    if event.get("event") == "error":
+                event_count = 0
+                last_bytes = 0
+                last_time = time.time()
+
+                for event in client.pull_model_stream(model_name=model_id):
+                    event_count += 1
+                    event_type = event.get("event")
+
+                    if event_type == "progress":
+                        # Skip first 2 spurious events from Lemonade
+                        if event_count <= 2 or quiet:
+                            continue
+
+                        # Calculate download speed
+                        current_bytes = event.get("bytes_downloaded", 0)
+                        current_time = time.time()
+                        time_delta = current_time - last_time
+
+                        speed_mbps = 0.0
+                        if time_delta > 0.1 and current_bytes > last_bytes:
+                            bytes_delta = current_bytes - last_bytes
+                            speed_mbps = (bytes_delta / time_delta) / (1024 * 1024)
+                            last_bytes = current_bytes
+                            last_time = current_time
+
+                        console.print_download_progress(
+                            percent=event.get("percent", 0),
+                            bytes_downloaded=current_bytes,
+                            bytes_total=event.get("bytes_total", 0),
+                            speed_mbps=speed_mbps,
+                        )
+
+                    elif event_type == "complete":
+                        if not quiet:
+                            console.print_download_complete(model_id)
+
+                    elif event_type == "error":
+                        if not quiet:
+                            console.print_download_error(
+                                event.get("error", "Unknown error"), model_id
+                            )
                         log.error(f"Failed to download {model_id}")
                         return False
+
             except LemonadeClientError as e:
                 log.error(f"Failed to download {model_id}: {e}")
                 if not quiet:
-                    print(f"   ❌ Failed: {e}")
+                    console.print_download_error(str(e), model_id)
                 return False
 
-            if not quiet:
-                print()
-
         if not quiet:
-            print(f"✅ All models ready for {agent} agent")
-            print()
+            console.print_success(f"All models ready for {agent} agent")
 
         return True
 
@@ -523,14 +491,30 @@ async def async_main(action, **kwargs):
     # Create client for actions that use GaiaCliClient (not chat - it uses ChatAgent)
     client = None
     if action in ["prompt", "stats"]:
-        # Filter out audio-related parameters that are no longer part of GaiaCliClient
+        # Filter out parameters that are not accepted by GaiaCliClient
+        # GaiaCliClient only accepts: model, max_tokens, show_stats, logging_level
         audio_params = {
             "whisper_model_size",
             "audio_device_index",
             "silence_threshold",
             "no_tts",
         }
-        excluded_params = {"message", "stats", "assistant_name"} | audio_params
+        llm_provider_params = {
+            "use_claude",
+            "use_chatgpt",
+            "claude_model",
+            "base_url",
+        }
+        cli_params = {
+            "action",
+            "message",
+            "stats",
+            "assistant_name",
+            "stream",
+            "no_lemonade_check",
+            "list_tools",
+        }
+        excluded_params = cli_params | audio_params | llm_provider_params
         client_params = {k: v for k, v in kwargs.items() if k not in excluded_params}
         client = GaiaCliClient(**client_params)
 
@@ -1117,82 +1101,6 @@ def main():
     )
     api_parser.set_defaults(action="api")
 
-    # Add model pull command
-    pull_parser = subparsers.add_parser(
-        "pull",
-        help="Download/install a model from the Lemonade Server registry",
-        parents=[parent_parser],
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Pull a registered model
-  gaia pull Qwen3-0.6B-GGUF
-
-  # Pull and register a custom model from HuggingFace
-  gaia pull user.Custom-Model-GGUF --checkpoint unsloth/Custom-Model-GGUF:Q4_K_M --recipe llamacpp
-
-  # Pull a reasoning model
-  gaia pull user.DeepSeek-GGUF --checkpoint unsloth/DeepSeek-R1-GGUF --recipe llamacpp --reasoning
-
-  # Pull a vision model with mmproj
-  gaia pull user.Vision-Model --checkpoint model/vision:Q4 --recipe llamacpp --vision --mmproj mmproj.gguf
-        """,
-    )
-    pull_parser.add_argument(
-        "model_name",
-        help="Name of the model to pull (use 'user.' prefix for custom models)",
-    )
-    pull_parser.add_argument(
-        "--checkpoint",
-        help="HuggingFace checkpoint for custom models (e.g., unsloth/Model-GGUF:Q4_K_M)",
-    )
-    pull_parser.add_argument(
-        "--recipe",
-        help="Lemonade recipe for custom models (e.g., llamacpp, oga-cpu)",
-    )
-    pull_parser.add_argument(
-        "--reasoning",
-        action="store_true",
-        help="Mark model as a reasoning model (like DeepSeek)",
-    )
-    pull_parser.add_argument(
-        "--vision",
-        action="store_true",
-        help="Mark model as having vision capabilities",
-    )
-    pull_parser.add_argument(
-        "--embedding",
-        action="store_true",
-        help="Mark model as an embedding model",
-    )
-    pull_parser.add_argument(
-        "--reranking",
-        action="store_true",
-        help="Mark model as a reranking model",
-    )
-    pull_parser.add_argument(
-        "--mmproj",
-        help="Multimodal projector file for vision models",
-    )
-    pull_parser.add_argument(
-        "--timeout",
-        type=int,
-        default=1200,
-        help="Timeout in seconds for model download (default: 1200)",
-    )
-    pull_parser.add_argument(
-        "--host",
-        default="localhost",
-        help="Lemonade server host (default: localhost)",
-    )
-    pull_parser.add_argument(
-        "--port",
-        type=int,
-        default=8000,
-        help="Lemonade server port (default: 8000)",
-    )
-    pull_parser.set_defaults(action="pull")
-
     # Add model download command
     download_parser = subparsers.add_parser(
         "download",
@@ -1330,7 +1238,12 @@ Available agents: chat, code, talk, rag, blender, jira, docker, vlm, minimal, mc
         "kill", help="Kill process running on specific port", parents=[parent_parser]
     )
     kill_parser.add_argument(
-        "--port", type=int, required=True, help="Port number to kill process on"
+        "--port", type=int, default=None, help="Port number to kill process on"
+    )
+    kill_parser.add_argument(
+        "--lemonade",
+        action="store_true",
+        help="Kill Lemonade server (port 8000)",
     )
 
     # Add LLM app command
@@ -2111,6 +2024,102 @@ Examples:
         "--all", action="store_true", help="Clear all caches"
     )
 
+    # Init command (one-stop GAIA setup)
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Initialize GAIA: install Lemonade and download models",
+        parents=[parent_parser],
+    )
+    init_parser.add_argument(
+        "--profile",
+        "-p",
+        default="chat",
+        choices=["minimal", "chat", "code", "rag", "all"],
+        help="Profile to initialize: minimal, chat, code, rag, all (default: chat)",
+    )
+    init_parser.add_argument(
+        "--minimal",
+        action="store_true",
+        help="Use minimal profile (~2.5 GB) - shortcut for --profile minimal",
+    )
+    init_parser.add_argument(
+        "--skip-models",
+        action="store_true",
+        help="Skip model downloads (only install Lemonade)",
+    )
+    init_parser.add_argument(
+        "--force-reinstall",
+        action="store_true",
+        help="Force reinstall even if compatible version exists",
+    )
+    init_parser.add_argument(
+        "--force-models",
+        action="store_true",
+        help="Force re-download models (deletes then re-downloads each model)",
+    )
+    init_parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip confirmation prompts (non-interactive)",
+    )
+    init_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose output",
+    )
+    init_parser.add_argument(
+        "--remote",
+        action="store_true",
+        help="Lemonade is hosted on a remote machine (skip local server start, still check version)",
+    )
+
+    # Install command (install specific components)
+    install_parser = subparsers.add_parser(
+        "install",
+        help="Install GAIA components",
+        parents=[parent_parser],
+    )
+    install_parser.add_argument(
+        "--lemonade",
+        action="store_true",
+        help="Install Lemonade Server",
+    )
+    install_parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip confirmation prompts",
+    )
+    install_parser.add_argument(
+        "--silent",
+        action="store_true",
+        help="Silent installation (no UI, no desktop shortcuts)",
+    )
+
+    # Uninstall command (uninstall specific components)
+    uninstall_parser = subparsers.add_parser(
+        "uninstall",
+        help="Uninstall GAIA components",
+        parents=[parent_parser],
+    )
+    uninstall_parser.add_argument(
+        "--lemonade",
+        action="store_true",
+        help="Uninstall Lemonade Server",
+    )
+    uninstall_parser.add_argument(
+        "--models",
+        action="store_true",
+        help="Clear all downloaded models (frees disk space)",
+    )
+    uninstall_parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip confirmation prompts",
+    )
+
     args = parser.parse_args()
 
     # Check if action is specified
@@ -2664,9 +2673,7 @@ Examples:
                 print(f"❌ Error: Failed to initialize TTS: {e}")
                 return
 
-            test_text = (
-                args.test_text
-                or """
+            test_text = args.test_text or """
 Let's play a game of trivia. I'll ask you a series of questions on a particular topic,
 and you try to answer them to the best of your ability.
 
@@ -2682,7 +2689,6 @@ E) Edgar Allan Poe
 
 Let me know your answer!
 """
-            )
 
             if args.test_type == "tts-preprocessing":
                 tts.test_preprocessing(test_text)
@@ -2796,105 +2802,47 @@ Let me know your answer!
 
     # Handle kill command
     if args.action == "kill":
-        log.info(f"Attempting to kill process on port {args.port}")
-        result = kill_process_by_port(args.port)
-        if result["success"]:
-            print(f"✅ {result['message']}")
+        if args.lemonade:
+            # Use lemonade-server stop for graceful shutdown
+            try:
+                result = subprocess.run(
+                    ["lemonade-server", "stop"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    print("✅ Lemonade server stopped")
+                else:
+                    # Fallback to port kill if stop command fails
+                    log.warning(f"lemonade-server stop failed: {result.stderr}")
+                    port_result = kill_process_by_port(8000)
+                    if port_result["success"]:
+                        print(f"✅ {port_result['message']}")
+                    else:
+                        print(f"❌ {port_result['message']}")
+            except FileNotFoundError:
+                # lemonade-server not in PATH, fallback to port kill
+                log.warning("lemonade-server not found, falling back to port kill")
+                port_result = kill_process_by_port(8000)
+                if port_result["success"]:
+                    print(f"✅ {port_result['message']}")
+                else:
+                    print(f"❌ {port_result['message']}")
+        elif args.port:
+            port = args.port
+            log.info(f"Attempting to kill process on port {port}")
+            result = kill_process_by_port(port)
+            if result["success"]:
+                print(f"✅ {result['message']}")
+            else:
+                print(f"❌ {result['message']}")
         else:
-            print(f"❌ {result['message']}")
+            print("❌ Specify --lemonade or --port <number>")
         return
 
     # Import LemonadeManager for model commands error handling
     from gaia.llm.lemonade_manager import LemonadeManager
-
-    # Handle model pull command
-    if args.action == "pull":
-        log.info(f"Pulling model: {args.model_name}")
-        verbose = getattr(args, "verbose", False)
-        try:
-            client = LemonadeClient(host=args.host, port=args.port, verbose=verbose)
-
-            # Check if Lemonade server is running
-            if not check_lemonade_health(args.host, args.port):
-                LemonadeManager.print_server_error()
-                return
-
-            print(f"📥 Pulling model: {args.model_name}")
-
-            # Define a CLI progress callback for real-time updates
-            last_percent = [-1]  # Use list to allow mutation in closure
-            last_file_index = [0]
-
-            def cli_progress_callback(event_type: str, data: dict) -> None:
-                """Display download progress in CLI."""
-                if event_type == "progress":
-                    percent = data.get("percent", 0)
-                    file_name = data.get("file", "unknown")
-                    file_index = data.get("file_index", 1)
-                    total_files = data.get("total_files", 1)
-
-                    # Print newline when moving to a new file
-                    if file_index != last_file_index[0] and last_file_index[0] > 0:
-                        print()  # Newline for previous file
-                    last_file_index[0] = file_index
-
-                    # Update every 2% for smooth progress
-                    if percent >= last_percent[0] + 2 or percent == 0 or percent == 100:
-                        bytes_downloaded = data.get("bytes_downloaded", 0)
-                        bytes_total = data.get("bytes_total", 0)
-
-                        # Create progress bar
-                        bar = _make_progress_bar(percent)
-                        progress_line = (
-                            f"   {bar} {percent:3d}% "
-                            f"[{file_index}/{total_files}] {file_name}: "
-                            f"{_format_bytes(bytes_downloaded)}/{_format_bytes(bytes_total)}"
-                        )
-                        print(f"\r{progress_line:<100}", end="", flush=True)
-                        last_percent[0] = percent
-
-                elif event_type == "complete":
-                    print()  # Newline after progress
-                    print(f"✅ Model downloaded successfully: {args.model_name}")
-
-                elif event_type == "error":
-                    print()  # Newline after progress
-                    error_msg = data.get("error", "Unknown error")
-                    print(f"❌ Download failed: {error_msg}")
-
-            # Use streaming pull with progress callback
-            completed = False
-            for event in client.pull_model_stream(
-                model_name=args.model_name,
-                checkpoint=getattr(args, "checkpoint", None),
-                recipe=getattr(args, "recipe", None),
-                reasoning=getattr(args, "reasoning", False) or None,
-                vision=getattr(args, "vision", False) or None,
-                embedding=getattr(args, "embedding", False) or None,
-                reranking=getattr(args, "reranking", False) or None,
-                mmproj=getattr(args, "mmproj", None),
-                timeout=args.timeout,
-                progress_callback=cli_progress_callback,
-            ):
-                if event.get("event") == "complete":
-                    completed = True
-                elif event.get("event") == "error":
-                    sys.exit(1)
-
-            if not completed:
-                print("⚠️  Model pull completed without explicit complete event")
-
-        except LemonadeClientError as e:
-            print(f"❌ Error pulling model: {e}")
-            sys.exit(1)
-        except Exception as e:
-            error_msg = str(e).lower()
-            if "connection" in error_msg or "refused" in error_msg:
-                LemonadeManager.print_server_error()
-            else:
-                print(f"❌ Error: {e}")
-            sys.exit(1)
-        return
 
     # Handle model download command
     if args.action == "download":
@@ -3020,122 +2968,110 @@ Let me know your answer!
             agent_name = args.agent.lower()
             model_ids = client.get_required_models(agent_name)
 
+            console = AgentConsole()
+
             if not model_ids:
                 if agent_name != "all":
                     profile = client.get_agent_profile(agent_name)
                     if not profile:
-                        print(f"❌ Unknown agent: {agent_name}")
-                        print(f"   Available: {', '.join(client.list_agents())}")
+                        console.print_error(f"Unknown agent: {agent_name}")
+                        console.print_info(
+                            f"Available: {', '.join(client.list_agents())}"
+                        )
                         sys.exit(1)
-                print(f"📦 No models to download for '{agent_name}'")
+                console.print_info(f"No models to download for '{agent_name}'")
                 return
 
-            print(f"📥 Downloading {len(model_ids)} model(s) for '{agent_name}'...")
-            print()
+            console.print_info(
+                f"Downloading {len(model_ids)} model(s) for '{agent_name}'"
+            )
 
-            # Track progress per model
-            current_model = [None]
-            last_percent = [-1]
-            last_file_index = [0]
-
-            def download_progress_callback(event_type: str, data: dict) -> None:
-                """Display download progress in CLI."""
-                if event_type == "progress":
-                    percent = data.get("percent", 0)
-                    file_name = data.get("file", "unknown")
-                    file_index = data.get("file_index", 1)
-                    total_files = data.get("total_files", 1)
-
-                    # Print newline when moving to a new file
-                    if file_index != last_file_index[0] and last_file_index[0] > 0:
-                        print()  # Newline for previous file
-                    last_file_index[0] = file_index
-
-                    # Update every 2% for smooth progress
-                    if percent >= last_percent[0] + 2 or percent == 0 or percent == 100:
-                        bytes_downloaded = data.get("bytes_downloaded", 0)
-                        bytes_total = data.get("bytes_total", 0)
-
-                        # Create progress bar
-                        bar = _make_progress_bar(percent)
-                        progress_line = (
-                            f"   {bar} {percent:3d}% "
-                            f"[{file_index}/{total_files}] {file_name}: "
-                            f"{_format_bytes(bytes_downloaded)}/{_format_bytes(bytes_total)}"
-                        )
-                        print(f"\r{progress_line:<100}", end="", flush=True)
-                        last_percent[0] = percent
-
-                elif event_type == "complete":
-                    print()  # Newline after progress
-                    print("   ✅ Download complete")
-                    last_percent[0] = -1  # Reset for next model
-                    last_file_index[0] = 0
-
-                elif event_type == "error":
-                    print()  # Newline after progress
-                    error_msg = data.get("error", "Unknown error")
-                    print(f"   ❌ Error: {error_msg}")
-
-            # Download each model
+            # Download each model with progress display
             success_count = 0
             skip_count = 0
             fail_count = 0
 
             for model_id in model_ids:
-                current_model[0] = model_id
-                last_percent[0] = -1
-
                 # Check if already available
                 if client.check_model_available(model_id):
-                    print(f"✅ {model_id} (already downloaded)")
+                    console.print_download_skipped(model_id)
                     skip_count += 1
                     continue
 
-                print(f"📥 {model_id}")
+                console.print_download_start(model_id)
 
                 try:
                     completed = False
-                    for event in client.pull_model_stream(
-                        model_name=model_id,
-                        timeout=args.timeout,
-                        progress_callback=download_progress_callback,
-                    ):
-                        if event.get("event") == "complete":
+                    event_count = 0
+                    last_bytes = 0
+                    last_time = time.time()
+
+                    for event in client.pull_model_stream(model_name=model_id):
+                        event_count += 1
+                        event_type = event.get("event")
+
+                        if event_type == "progress":
+                            # Skip first 2 spurious events from Lemonade
+                            if event_count <= 2:
+                                continue
+
+                            # Calculate download speed
+                            current_bytes = event.get("bytes_downloaded", 0)
+                            current_time = time.time()
+                            time_delta = current_time - last_time
+
+                            speed_mbps = 0.0
+                            if time_delta > 0.1 and current_bytes > last_bytes:
+                                bytes_delta = current_bytes - last_bytes
+                                speed_mbps = (bytes_delta / time_delta) / (1024 * 1024)
+                                last_bytes = current_bytes
+                                last_time = current_time
+
+                            console.print_download_progress(
+                                percent=event.get("percent", 0),
+                                bytes_downloaded=current_bytes,
+                                bytes_total=event.get("bytes_total", 0),
+                                speed_mbps=speed_mbps,
+                            )
+
+                        elif event_type == "complete":
+                            console.print_download_complete(model_id)
                             completed = True
-                        elif event.get("event") == "error":
+
+                        elif event_type == "error":
+                            console.print_download_error(
+                                event.get("error", "Unknown error"), model_id
+                            )
                             fail_count += 1
                             break
 
                     if completed:
                         success_count += 1
                 except LemonadeClientError as e:
-                    print(f"   ❌ Failed: {e}")
+                    console.print_download_error(str(e), model_id)
                     fail_count += 1
 
-                print()
-
             # Summary
-            print("=" * 50)
-            print("📊 Download Summary:")
-            print(f"   ✅ Downloaded: {success_count}")
-            print(f"   ⏭️  Skipped (already available): {skip_count}")
+            console.print_info("=" * 50)
+            console.print_info("Download Summary:")
+            console.print_success(f"Downloaded: {success_count}")
+            console.print_info(f"Skipped (already available): {skip_count}")
             if fail_count > 0:
-                print(f"   ❌ Failed: {fail_count}")
-            print("=" * 50)
+                console.print_error(f"Failed: {fail_count}")
+            console.print_info("=" * 50)
 
             if fail_count > 0:
                 sys.exit(1)
 
         except LemonadeClientError as e:
-            print(f"❌ Error: {e}")
+            console.print_error(str(e))
             sys.exit(1)
         except Exception as e:
             error_msg = str(e).lower()
             if "connection" in error_msg or "refused" in error_msg:
                 LemonadeManager.print_server_error()
             else:
-                print(f"❌ Error: {e}")
+                console.print_error(str(e))
             sys.exit(1)
         return
 
@@ -4090,6 +4026,248 @@ Let me know your answer!
     if args.action == "visualize":
         handle_visualize_command(args)
         return
+
+    # Handle init command
+    if args.action == "init":
+        from gaia.installer.init_command import run_init
+
+        # --minimal flag overrides --profile
+        profile = "minimal" if args.minimal else args.profile
+
+        exit_code = run_init(
+            profile=profile,
+            skip_models=args.skip_models,
+            force_reinstall=args.force_reinstall,
+            force_models=args.force_models,
+            yes=args.yes,
+            verbose=getattr(args, "verbose", False),
+            remote=getattr(args, "remote", False),
+        )
+        sys.exit(exit_code)
+
+    # Handle install command
+    if args.action == "install":
+        if args.lemonade:
+            from gaia.installer.lemonade_installer import LemonadeInstaller
+            from gaia.version import LEMONADE_VERSION
+
+            installer = LemonadeInstaller()
+
+            # Check if already installed
+            info = installer.check_installation()
+            if info.installed and info.version:
+                installed_ver = info.version.lstrip("v")
+                target_ver = LEMONADE_VERSION.lstrip("v")
+
+                if installed_ver == target_ver:
+                    print(f"✅ Lemonade Server v{info.version} is already installed")
+                    sys.exit(0)
+                else:
+                    print(f"Lemonade Server v{info.version} is installed")
+                    print(f"GAIA requires v{LEMONADE_VERSION}")
+                    print("")
+                    print("To update, run:")
+                    print("  gaia uninstall --lemonade")
+                    print("  gaia install --lemonade")
+                    sys.exit(1)
+
+            # Confirm installation
+            if not args.yes:
+                response = input(f"Install Lemonade v{LEMONADE_VERSION}? [Y/n]: ")
+                if response.lower() == "n":
+                    print("Installation cancelled")
+                    sys.exit(0)
+
+            # Download and install
+            print("Downloading Lemonade Server...")
+            try:
+                installer_path = installer.download_installer()
+                print("Installing...")
+                result = installer.install(installer_path, silent=args.silent)
+
+                if result.success:
+                    # Verify installation
+                    verify_info = installer.check_installation()
+                    if verify_info.installed:
+                        print(f"✅ Installed Lemonade Server v{verify_info.version}")
+                    else:
+                        print(f"✅ Installed Lemonade Server v{result.version}")
+                    sys.exit(0)
+                else:
+                    print(f"❌ Installation failed: {result.error}")
+                    sys.exit(1)
+            except Exception as e:
+                print(f"❌ Installation failed: {e}")
+                sys.exit(1)
+        else:
+            print("Specify what to install: --lemonade")
+            sys.exit(1)
+
+    # Handle uninstall command
+    if args.action == "uninstall":
+        from rich.console import Console
+
+        console = Console()
+
+        # Handle model cache clearing
+        if args.models:
+            import shutil
+
+            try:
+                # Find HuggingFace cache directory
+                hf_cache = Path.home() / ".cache" / "huggingface" / "hub"
+                if sys.platform == "win32":
+                    hf_cache = (
+                        Path(os.path.expanduser("~")) / ".cache" / "huggingface" / "hub"
+                    )
+
+                if not hf_cache.exists():
+                    console.print("[yellow]📦 No model cache found[/yellow]")
+                    console.print(f"   [dim]Checked: {hf_cache}[/dim]")
+                    sys.exit(0)
+
+                # Find all model directories
+                model_dirs = list(hf_cache.glob("models--*"))
+                if not model_dirs:
+                    console.print("[green]✅ Model cache is already empty[/green]")
+                    console.print(f"   [dim]Location: {hf_cache}[/dim]")
+                    sys.exit(0)
+
+                # Calculate total size
+                total_size = 0
+                for model_dir in model_dirs:
+                    try:
+                        total_size += sum(
+                            f.stat().st_size
+                            for f in model_dir.rglob("*")
+                            if f.is_file()
+                        )
+                    except Exception:
+                        pass
+
+                size_gb = total_size / (1024**3)
+
+                # Show what will be deleted
+                console.print()
+                console.print(f"[bold]Found {len(model_dirs)} model(s) in cache[/bold]")
+                console.print(f"   [dim]Location: {hf_cache}[/dim]")
+                console.print(f"   [dim]Total size: ~{size_gb:.1f} GB[/dim]")
+                console.print()
+
+                # Confirm deletion
+                if not args.yes:
+                    console.print(
+                        f"[bold]Delete all {len(model_dirs)} model(s)?[/bold] [dim](frees ~{size_gb:.1f} GB)[/dim]"
+                    )
+                    console.print()
+                    console.print("   [y/N]: ", end="")
+                    response = input()
+                    if response.lower() != "y":
+                        console.print("[dim]Model deletion cancelled[/dim]")
+                        sys.exit(0)
+
+                console.print()
+                console.print(
+                    f"[bold blue]Deleting {len(model_dirs)} model(s)...[/bold blue]"
+                )
+                console.print()
+
+                success_count = 0
+                fail_count = 0
+
+                for model_dir in model_dirs:
+                    # Extract model name from directory
+                    model_name = model_dir.name.replace("models--", "").replace(
+                        "--", "/"
+                    )
+                    console.print(f"   [cyan]{model_name}[/cyan]... ", end="")
+                    try:
+                        shutil.rmtree(model_dir)
+                        console.print("[green]✅[/green]")
+                        success_count += 1
+                    except PermissionError:
+                        console.print("[red]❌ (locked)[/red]")
+                        fail_count += 1
+                    except Exception as e:
+                        console.print(f"[red]❌ ({e})[/red]")
+                        fail_count += 1
+
+                # Summary
+                console.print()
+                if success_count > 0:
+                    console.print(f"[green]✅ Deleted {success_count} model(s)[/green]")
+                if fail_count > 0:
+                    console.print(
+                        f"[red]❌ Failed to delete {fail_count} model(s)[/red]"
+                    )
+                    console.print()
+                    console.print("   [bold]If files are locked:[/bold]")
+                    console.print(
+                        "   [dim]1. Close all apps using models (gaia chat, etc.)[/dim]"
+                    )
+                    console.print(
+                        "   [dim]2. Stop Lemonade:[/dim] [cyan]gaia kill --lemonade[/cyan]"
+                    )
+                    console.print(
+                        "   [dim]3. Re-run:[/dim] [cyan]gaia uninstall --models[/cyan]"
+                    )
+
+                sys.exit(0 if fail_count == 0 else 1)
+
+            except Exception as e:
+                console.print(f"[red]❌ Error: {e}[/red]")
+                sys.exit(1)
+
+        # Handle Lemonade Server uninstallation
+        elif args.lemonade:
+            from gaia.installer.lemonade_installer import LemonadeInstaller
+
+            installer = LemonadeInstaller(console=console)
+
+            # Check if installed
+            info = installer.check_installation()
+            if not info.installed:
+                console.print("[green]✅ Lemonade Server is not installed[/green]")
+                sys.exit(0)
+
+            # Show installation details
+            console.print()
+            console.print(f"[bold]Found Lemonade Server v{info.version}[/bold]")
+            if info.path:
+                console.print(f"   [dim]Location: {info.path}[/dim]")
+            console.print()
+
+            # Confirm uninstallation
+            if not args.yes:
+                console.print(
+                    f"[bold]Uninstall Lemonade Server v{info.version}?[/bold] \\[y/N]: ",
+                    end="",
+                )
+                response = input()
+                if response.lower() != "y":
+                    console.print("[dim]Uninstall cancelled[/dim]")
+                    sys.exit(0)
+
+            # Uninstall
+            console.print()
+            console.print("[bold blue]Uninstalling Lemonade Server...[/bold blue]")
+            result = installer.uninstall(silent=True)
+
+            if result.success:
+                console.print()
+                console.print(
+                    "[green]✅ Lemonade Server uninstalled successfully[/green]"
+                )
+                sys.exit(0)
+            else:
+                console.print()
+                console.print(f"[red]❌ Uninstall failed: {result.error}[/red]")
+                sys.exit(1)
+        else:
+            console.print("[yellow]Specify what to uninstall:[/yellow]")
+            console.print("  [cyan]--lemonade[/cyan]  Uninstall Lemonade Server")
+            console.print("  [cyan]--models[/cyan]    Clear all downloaded models")
+            sys.exit(1)
 
     # Log error for unknown action
     log.error(f"Unknown action specified: {args.action}")

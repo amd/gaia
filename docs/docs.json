@@ -53,7 +53,7 @@
               {
                 "group": "Hardware Advisor Agent",
                 "pages": [
-                  "playbooks/hardware-advisor/part-1-getting-started"
+                  "playbooks/hardware-advisor/index"
                 ]
               },
               {
@@ -222,8 +222,6 @@
           {
             "group": "Packaging",
             "pages": [
-              "spec/web-ui-packaging",
-              "spec/nsis-installer",
               "spec/electron-integration"
             ]
           },
@@ -289,7 +287,6 @@
           {
             "group": "Packaging & Distribution",
             "pages": [
-              "deployment/installer",
               "deployment/ui",
               "deployment/testing-electron"
             ]
@@ -309,7 +306,10 @@
             "group": "Plans",
             "pages": [
               "plans/installer",
-              "plans/chat-ui"
+              "plans/chat-ui",
+              "plans/mcp-client",
+              "plans/cua",
+              "plans/mcp-docs"
             ]
           }
         ]
@@ -320,6 +320,7 @@
           {
             "group": "Release Notes",
             "pages": [
+              "releases/v0.15.2",
               "releases/v0.15.1",
               "releases/v0.15.0"
             ]
@@ -354,6 +355,10 @@
   },
   "navbar": {
     "links": [
+      {
+        "label": "v0.15.2 · Lemonade 9.1.4",
+        "href": "https://github.com/amd/gaia/releases"
+      },
       {
         "label": "Main Site",
         "href": "https://gaia.amd.com"

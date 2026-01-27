@@ -1,0 +1,115 @@
+---
+title: "v0.15.2"
+description: "Streamlined setup, Lemonade 9.1.4 support, MCP ecosystem roadmap, and documentation improvements"
+---
+
+# GAIA v0.15.2 Release Notes
+
+## Overview
+
+This release focuses on **streamlined setup experience** with improvements to `gaia init`, **Lemonade 9.1.4 compatibility**, expanded **MCP ecosystem roadmap**, and numerous **documentation fixes** based on manual testing.
+
+## What's New
+
+### Improved `gaia init` Command
+Enhanced one-stop setup command for reliability and user experience:
+- **Simplified Download Flow**: Downloads all required models directly instead of pre-checking availability
+- **Download Speed Display**: Progress bar now shows download speed (e.g., `@ 75 MB/s`)
+- **Remote Server Support**: New `--remote` flag for remote Lemonade server setups
+- **Graceful Shutdown**: `gaia kill --lemonade` now uses graceful `lemonade-server stop`
+- **Removed Redundancy**: `gaia pull` command removed (use `lemonade-server pull` instead)
+
+```bash
+# Quick setup with speed display
+gaia init
+
+# For remote Lemonade server setups
+gaia init --remote
+```
+
+### Lemonade 9.1.4 Support
+Full compatibility with Lemonade Server 9.1.4:
+- **Health Check Updates**: Updated health check format handling
+- **Version Display**: Docs navbar shows `v0.15.2 · Lemonade 9.1.4`
+
+### Computer Use Agent (CUA) Documentation
+New documentation and roadmap for the Computer Use Agent:
+- **Technical Specification**: GUI automation capabilities
+- **Roadmap**: Screen capture, element detection, action execution
+- **Integration Patterns**: Works with existing agent framework
+
+### MCP Ecosystem Roadmap
+Expanded Model Context Protocol plans for Q1 2026:
+- **MCP Client Mixin**: Plan for client-side MCP integration
+- **Ecosystem Roadmap**: Comprehensive Q1 2026 timeline
+- **Documentation**: Enhanced MCP documentation coverage
+
+### Release Branch Automation
+GitHub Action automatically updates the `release` branch on tag push:
+- **Mintlify Integration**: Seamless docs deployment on releases
+- **Version Tracking**: Navbar displays current version automatically
+
+<Warning>
+**Breaking Change**: The `gaia pull` command has been removed. Use `lemonade-server pull` directly instead.
+</Warning>
+
+## Improvements
+
+### Developer Experience
+- **Lint Script Improvements**: Enhanced `--fix` mode for better auto-formatting (#229)
+- **uvx Auto-Download**: Lint utilities now use uvx for automatic tool installation (#218)
+- **Import Validation**: Fixed import inconsistencies and enhanced validation (#204)
+- **Max-Steps Warning**: Now appears after final step completes, not before (#249)
+
+### Documentation
+Based on manual testing, several guides were corrected:
+- **Chat SDK Guide**: Fixed examples and workflows (#194)
+- **Blender Agent Guide**: Corrected setup and usage instructions (#195)
+- **Hardware Advisor Playbook**: Fixed structure and renamed to index.mdx (#217)
+- **Hardware Advisor Agent**: Fixed 'No Plan Found' warning for simple queries (#216)
+
+### UI/UX
+- **Navbar Improvements**: Added bottom border and improved tab visibility (#212)
+
+### Infrastructure
+- **Legacy Installer Removed**: NSIS Windows Installer removed in favor of Python packages (#192)
+- **Dependabot**: Set to monitor-only mode to reduce PR noise
+- **GitHub Actions**: Bumped action versions across the repository (#198)
+
+## Bug Fixes
+
+- **#249**: Max-steps warning timing - now appears after final step completes
+- **#221**: Related max-steps warning timing issue
+- **#250**: Model download flow reliability in `gaia init`
+- **#216**: Hardware Advisor Agent 'No Plan Found' warning for simple queries
+
+## Breaking Changes
+
+| Change | Migration |
+|--------|-----------|
+| `gaia pull` removed | Use `lemonade-server pull` directly |
+| Legacy NSIS installer removed | Use Python package installation (`pip install amd-gaia`) |
+
+## Full Changelog
+
+**18 commits** from multiple contributors
+
+Key PRs:
+- #249 - Fix max-steps warning timing to appear after final step completes
+- #219 - Add `gaia init` command for one-stop setup
+- #229 - Improve `--fix` mode for lint scripts
+- #228 - Update and support Lemonade 9.1.4 health check format
+- #225 - Add Computer Use Agent (CUA) Documentation and Roadmap
+- #218 - Update lint utilities to use uvx for auto-downloading tools
+- #217 - Fix Hardware Advisor Playbook structure
+- #216 - Fix Hardware Advisor Agent 'No Plan Found' warning
+- #212 - Add navbar bottom border and improve tab visibility
+- #206 - MCP Client Mixin Plan and Roadmap
+- #204 - Fix Import Inconsistencies and Enhance Validation
+- #202 - Q1 2026 MCP Ecosystem Roadmap
+- #198 - Bump the github-actions group
+- #195 - Fix Blender Agent guide based on manual testing
+- #194 - Fix Chat SDK guide based on manual testing
+- #192 - Remove Legacy NSIS Windows Installer
+
+Full Changelog: [v0.15.1...v0.15.2](https://github.com/amd/gaia/compare/v0.15.1...v0.15.2)

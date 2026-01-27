@@ -102,6 +102,7 @@ class ShellToolsMixin:
         from gaia.agents.base.tools import tool
 
         @tool(
+            atomic=True,
             name="run_shell_command",
             description="Execute a shell/terminal command. Useful for listing directories (ls/dir), checking files (cat, stat), finding files (find), text processing (grep, head, tail), and navigation (pwd).",
             parameters={

@@ -151,7 +151,7 @@ jobs:
 
           # Test chat command with Qwen model (should now work with Lemonade)
           echo "Testing chat command with Qwen3-0.6B-GGUF model:"
-          timeout 30s gaia chat --model "Qwen3-0.6B-GGUF" "Hello, this is a test message. Please respond briefly." || echo "Chat command completed"
+          timeout 30s gaia chat --model "Qwen3-0.6B-GGUF" -q "Hello, this is a test message. Please respond briefly." || echo "Chat command completed"
 
           # Test prompt command with Qwen model
           echo "Testing prompt command with Qwen3-0.6B-GGUF model:"
@@ -192,6 +192,20 @@ jobs:
             echo "✅ RAG tests passed successfully!"
           else
             echo "❌ RAG tests failed with exit code: ${RAG_TEST_EXIT}"
+            echo "Note: Error details displayed above"
+          fi
+
+          echo ""
+          echo "=== Testing Lemonade Client Integration ==="
+          echo "Testing LemonadeClient API with running server"
+
+          # Run the lemonade client integration tests (skip hybrid NPU test - no NPU on Linux)
+          GAIA_TEST_MODEL="Qwen3-0.6B-GGUF" python -m pytest tests/test_lemonade_client.py -vs --tb=short -k "Integration and not hybrid" || LEMONADE_TEST_EXIT=$?
+
+          if [ "${LEMONADE_TEST_EXIT:-0}" -eq 0 ]; then
+            echo "✅ Lemonade client integration tests passed successfully!"
+          else
+            echo "❌ Lemonade client integration tests failed with exit code: ${LEMONADE_TEST_EXIT}"
             echo "Note: Error details displayed above"
           fi
 
@@ -294,6 +308,7 @@ jobs:
           echo "   ✅ Evaluation commands (eval, groundtruth, report, etc.)"
           echo "   ✅ Summarizer CLI integration (gaia summarize command)"
           echo "   ✅ RAG (Retrieval-Augmented Generation) functionality"
+          echo "   ✅ Lemonade client integration (API tests)"
           echo "   ✅ Cross-platform compatibility"
           echo "   ✅ Process management and cleanup"
           echo ""

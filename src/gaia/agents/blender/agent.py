@@ -24,9 +24,6 @@ class BlenderAgent(Agent):
     Inherits core functionality from the base Agent class.
     """
 
-    # Define Blender-specific tools that can execute directly without requiring a plan
-    SIMPLE_TOOLS = ["clear_scene", "get_scene_info"]
-
     def __init__(
         self,
         mcp: Optional[MCPClient] = None,
@@ -80,7 +77,7 @@ class BlenderAgent(Agent):
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Blender agent."""
         # Get formatted tools from registry
-        return f"""
+        return """
 You are a specialized Blender 3D assistant that can create and modify 3D scenes.
 You will use a set of tools to accomplish tasks based on the user's request.
 
@@ -169,7 +166,7 @@ Examples of colored requests:
     def _register_tools(self):
         """Register all Blender-related tools for the agent."""
 
-        @tool
+        @tool(atomic=True)
         def clear_scene() -> Dict[str, Any]:
             """
             Remove all objects from the current Blender scene.
@@ -283,7 +280,7 @@ Examples of colored requests:
                 return {"status": "error", "error": str(e)}
 
         # @tool
-        def get_object_info(name: str) -> Dict[str, Any]:
+        def _get_object_info(name: str) -> Dict[str, Any]:
             """
             Get information about an object in the scene.
 
@@ -354,7 +351,7 @@ Examples of colored requests:
                 return {"status": "error", "error": str(e)}
 
         # @tool
-        def delete_object(name: str) -> Dict[str, Any]:
+        def _delete_object(name: str) -> Dict[str, Any]:
             """
             Delete an object from the scene.
 
@@ -382,7 +379,7 @@ Examples of colored requests:
                 self.error_history.append(str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(atomic=True)
         def get_scene_info() -> Dict[str, Any]:
             """
             Get information about the current scene.
@@ -407,7 +404,7 @@ Examples of colored requests:
                 return {"status": "error", "error": str(e)}
 
         # @tool
-        def execute_blender_code(code: str) -> Dict[str, Any]:
+        def _execute_blender_code(code: str) -> Dict[str, Any]:
             """
             Execute arbitrary Python code in Blender with error handling.
 
@@ -436,7 +433,7 @@ Examples of colored requests:
                 return {"status": "error", "error": str(e)}
 
         # @tool
-        def diagnose_scene() -> Dict[str, Any]:
+        def _diagnose_scene() -> Dict[str, Any]:
             """
             Diagnose the current Blender scene for common issues.
             Returns information about objects, materials, and potential problems.

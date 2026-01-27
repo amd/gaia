@@ -595,8 +595,7 @@ def create_app(
             """
             if search:
                 results = _agent_instance.query(
-                    base_query
-                    + """
+                    base_query + """
                     WHERE p.first_name LIKE :search OR p.last_name LIKE :search
                     ORDER BY p.created_at DESC
                     LIMIT :limit OFFSET :offset
@@ -605,8 +604,7 @@ def create_app(
                 )
             else:
                 results = _agent_instance.query(
-                    base_query
-                    + """
+                    base_query + """
                     ORDER BY p.created_at DESC
                     LIMIT :limit OFFSET :offset
                     """,

@@ -98,9 +98,21 @@ description: Solutions for common GAIA issues and errors
     curl http://localhost:8000/api/v1/models
     ```
 
-    If not running, start it:
+    If not running, start it via the Lemonade tray icon (Windows) or:
     ```bash
     lemonade-server serve
+    ```
+
+    If Lemonade is not installed, run:
+    ```bash
+    gaia init
+    ```
+  </Accordion>
+
+  <Accordion title="Lemonade Server won't stop" icon="circle-stop">
+    Use the kill command to force stop Lemonade and child processes:
+    ```bash
+    gaia kill --lemonade
     ```
   </Accordion>
 </AccordionGroup>
@@ -146,6 +158,41 @@ description: Solutions for common GAIA issues and errors
     Stop existing server or use a different port:
     ```bash
     gaia api --port 5001
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Model Issues
+
+<AccordionGroup>
+  <Accordion title="Model appears corrupted or gives errors" icon="file-circle-exclamation">
+    Models can become corrupted from partial downloads or disk issues. Re-run init with force-models:
+    ```bash
+    gaia init --force-models
+    ```
+
+    Or delete all models and re-download:
+    ```bash
+    gaia uninstall --models --yes
+    gaia init --profile chat
+    ```
+  </Accordion>
+
+  <Accordion title="Model download stuck or failed" icon="cloud-arrow-down">
+    Check your network connection and retry. For large models, ensure sufficient disk space (~25GB for chat profile).
+
+    ```bash
+    # Retry with verbose output
+    gaia init --profile chat --verbose
+    ```
+  </Accordion>
+
+  <Accordion title="Wrong model version installed" icon="code-branch">
+    Force re-download to get the latest version:
+    ```bash
+    gaia init --force-models --yes
     ```
   </Accordion>
 </AccordionGroup>

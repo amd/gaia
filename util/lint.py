@@ -29,12 +29,12 @@ class CheckResult:
 # Configuration
 SRC_DIR = "src/gaia"
 TEST_DIR = "tests"
-INSTALLER_DIR = "installer"
 PYLINT_CONFIG = ".pylintrc"
 DISABLED_CHECKS = "C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718"
 EXCLUDE_DIRS = (
     ".git,__pycache__,venv,.venv,.mypy_cache,.tox,.eggs,_build,buck-out,node_modules"
 )
+LINT_DIRS = [SRC_DIR, TEST_DIR]
 
 
 def run_command(cmd: list[str], check: bool = False) -> tuple[int, str]:
@@ -54,35 +54,47 @@ def run_command(cmd: list[str], check: bool = False) -> tuple[int, str]:
         return 1, f"Command not found: {cmd[0]}"
 
 
+def uvx(tool: str, *args: str) -> list[str]:
+    """Build a uvx command for a tool (auto-downloads if not installed)."""
+    return ["uvx", tool, *args]
+
+
 def check_black(fix: bool = False) -> CheckResult:
     """Check code formatting with Black."""
-    print("\n[1/7] Checking code formatting with Black...")
+    if fix:
+        print("\n[1/2] Fixing code formatting with Black...")
+    else:
+        print("\n[1/7] Checking code formatting with Black...")
     print("-" * 40)
 
     if fix:
-        cmd = [
-            sys.executable,
-            "-m",
-            "black",
-            INSTALLER_DIR,
-            SRC_DIR,
-            TEST_DIR,
-            "--config",
-            "pyproject.toml",
-        ]
+        cmd = uvx("black", *LINT_DIRS, "--config", "pyproject.toml")
+        print(f"[CMD] {' '.join(cmd)}")
+        exit_code, output = run_command(cmd)
+
+        # Count files that were reformatted
+        import re
+
+        reformatted_match = re.search(r"(\d+) files? reformatted", output)
+        reformatted_count = int(reformatted_match.group(1)) if reformatted_match else 0
+
+        # Also count individual "reformatted" lines
+        if reformatted_count == 0:
+            reformatted_count = output.count("reformatted")
+
+        if reformatted_count > 0:
+            print(f"\n[FIXED] Reformatted {reformatted_count} file(s):")
+            for line in output.split("\n"):
+                if "reformatted" in line.lower():
+                    print(f"   \033[92m{line}\033[0m")  # Green
+            return CheckResult("Code Formatting (Black)", True, False, 0, output)
+        else:
+            print("[OK] No files needed reformatting.")
+            return CheckResult("Code Formatting (Black)", True, False, 0, output)
     else:
-        cmd = [
-            sys.executable,
-            "-m",
-            "black",
-            "--check",
-            "--diff",
-            INSTALLER_DIR,
-            SRC_DIR,
-            TEST_DIR,
-            "--config",
-            "pyproject.toml",
-        ]
+        cmd = uvx(
+            "black", "--check", "--diff", *LINT_DIRS, "--config", "pyproject.toml"
+        )
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
@@ -91,8 +103,30 @@ def check_black(fix: bool = False) -> CheckResult:
         # Count files that would be reformatted
         issues = output.count("would reformat") or 1
         print(f"\n[!] Code formatting issues found.")
-        if not fix:
-            print("Fix with: python util/lint.py --black --fix")
+
+        # Show which files would be reformatted
+        print("\n[FILES] Files that would be reformatted:")
+        for line in output.split("\n"):
+            if "would reformat" in line:
+                print(f"   {line}")
+
+        # Show the diff output (first 100 lines)
+        if output:
+            print("\n[DIFF] Formatting differences:")
+            lines = output.split("\n")[:100]
+            for line in lines:
+                if line.startswith("---") or line.startswith("+++"):
+                    print(f"\033[96m{line}\033[0m")  # Cyan
+                elif line.startswith("-"):
+                    print(f"\033[91m{line}\033[0m")  # Red
+                elif line.startswith("+"):
+                    print(f"\033[92m{line}\033[0m")  # Green
+                else:
+                    print(f"\033[90m{line}\033[0m")  # Dark gray
+            if len(output.split("\n")) > 100:
+                print("... (output truncated, showing first 100 lines)")
+
+        print("\nFix with: python util/lint.py --fix")
         return CheckResult("Code Formatting (Black)", False, False, issues, output)
 
     print("[OK] Code formatting looks good!")
@@ -101,22 +135,31 @@ def check_black(fix: bool = False) -> CheckResult:
 
 def check_isort(fix: bool = False) -> CheckResult:
     """Check import sorting with isort."""
-    print("\n[2/7] Checking import sorting with isort...")
+    if fix:
+        print("\n[2/2] Fixing import sorting with isort...")
+    else:
+        print("\n[2/7] Checking import sorting with isort...")
     print("-" * 40)
 
     if fix:
-        cmd = [sys.executable, "-m", "isort", INSTALLER_DIR, SRC_DIR, TEST_DIR]
+        cmd = uvx("isort", *LINT_DIRS)
+        print(f"[CMD] {' '.join(cmd)}")
+        exit_code, output = run_command(cmd)
+
+        # Count files that were fixed (isort outputs "Fixing <file>")
+        fixed_files = [line for line in output.split("\n") if "Fixing " in line]
+        fixed_count = len(fixed_files)
+
+        if fixed_count > 0:
+            print(f"\n[FIXED] Fixed imports in {fixed_count} file(s):")
+            for line in fixed_files:
+                print(f"   \033[92m{line}\033[0m")  # Green
+            return CheckResult("Import Sorting (isort)", True, False, 0, output)
+        else:
+            print("[OK] No import sorting needed.")
+            return CheckResult("Import Sorting (isort)", True, False, 0, output)
     else:
-        cmd = [
-            sys.executable,
-            "-m",
-            "isort",
-            "--check-only",
-            "--diff",
-            INSTALLER_DIR,
-            SRC_DIR,
-            TEST_DIR,
-        ]
+        cmd = uvx("isort", "--check-only", "--diff", *LINT_DIRS)
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
@@ -124,8 +167,14 @@ def check_isort(fix: bool = False) -> CheckResult:
     if exit_code != 0:
         issues = output.count("would reformat") + output.count("ERROR") or 1
         print(f"\n[!] Import sorting issues found.")
-        if not fix:
-            print("Fix with: python util/lint.py --isort --fix")
+        # Show the actual error output
+        if output.strip():
+            print("\n[OUTPUT]")
+            for line in output.strip().split("\n")[:30]:
+                print(f"   {line}")
+            if len(output.strip().split("\n")) > 30:
+                print("   ... (output truncated, showing first 30 lines)")
+        print("\nFix with: python util/lint.py --fix")
         return CheckResult("Import Sorting (isort)", False, False, issues, output)
 
     print("[OK] Import sorting looks good!")
@@ -137,16 +186,9 @@ def check_pylint() -> CheckResult:
     print("\n[3/7] Running Pylint (errors only)...")
     print("-" * 40)
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "pylint",
-        SRC_DIR,
-        "--rcfile",
-        PYLINT_CONFIG,
-        "--disable",
-        DISABLED_CHECKS,
-    ]
+    cmd = uvx(
+        "pylint", SRC_DIR, "--rcfile", PYLINT_CONFIG, "--disable", DISABLED_CHECKS
+    )
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
@@ -169,19 +211,15 @@ def check_flake8() -> CheckResult:
     print("\n[4/7] Running Flake8...")
     print("-" * 40)
 
-    cmd = [
-        sys.executable,
-        "-m",
+    cmd = uvx(
         "flake8",
-        INSTALLER_DIR,
-        SRC_DIR,
-        TEST_DIR,
+        *LINT_DIRS,
         f"--exclude={EXCLUDE_DIRS}",
         "--count",
         "--statistics",
         "--max-line-length=88",
         "--extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722",
-    ]
+    )
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
@@ -206,13 +244,7 @@ def check_mypy() -> CheckResult:
     print("\n[5/7] Running MyPy type checking (warning only)...")
     print("-" * 40)
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "mypy",
-        SRC_DIR,
-        "--ignore-missing-imports",
-    ]
+    cmd = uvx("mypy", SRC_DIR, "--ignore-missing-imports")
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
@@ -239,16 +271,7 @@ def check_bandit() -> CheckResult:
     print("\n[6/7] Running security check with Bandit (warning only)...")
     print("-" * 40)
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "bandit",
-        "-r",
-        SRC_DIR,
-        "-ll",
-        "--exclude",
-        EXCLUDE_DIRS,
-    ]
+    cmd = uvx("bandit", "-r", SRC_DIR, "-ll", "--exclude", EXCLUDE_DIRS)
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
@@ -270,34 +293,105 @@ def check_bandit() -> CheckResult:
 
 
 def check_imports() -> CheckResult:
-    """Test critical imports."""
-    print("\n[7/7] Testing critical imports...")
+    """Test comprehensive SDK imports."""
+    print("\n[7/7] Testing comprehensive SDK imports...")
     print("-" * 40)
 
-    imports = [
-        ("gaia.cli", "CLI module"),
-        ("gaia.chat.sdk", "Chat SDK"),
-        ("gaia.llm", "LLM client"),
-        ("gaia.agents.base.agent", "Base agent"),
+    # Comprehensive import tests matching lint.ps1
+    tests = [
+        # Core CLI
+        ("import", "gaia.cli", "CLI module", False),
+        # LLM Clients
+        ("import", "gaia.llm", "LLM package", False),
+        ("from", "gaia.llm", "LLMClient", "LLM client class", False),
+        ("from", "gaia.llm", "VLMClient", "Vision LLM client", False),
+        ("from", "gaia.llm", "create_client", "LLM factory", False),
+        ("from", "gaia.llm", "NotSupportedError", "LLM exception", False),
+        # Chat SDK
+        ("import", "gaia.chat.sdk", "Chat SDK module", False),
+        ("from", "gaia.chat.sdk", "ChatSDK", "Chat SDK class", False),
+        ("from", "gaia.chat.sdk", "ChatConfig", "Chat configuration", False),
+        ("from", "gaia.chat.sdk", "ChatSession", "Chat session", False),
+        ("from", "gaia.chat.sdk", "ChatResponse", "Chat response", False),
+        ("from", "gaia.chat.sdk", "quick_chat", "Quick chat function", False),
+        # RAG SDK
+        ("import", "gaia.rag.sdk", "RAG SDK module", False),
+        ("from", "gaia.rag.sdk", "RAGSDK", "RAG SDK class", False),
+        ("from", "gaia.rag.sdk", "RAGConfig", "RAG configuration", False),
+        ("from", "gaia.rag.sdk", "quick_rag", "Quick RAG function", False),
+        # Base Agent System
+        ("import", "gaia.agents.base.agent", "Base agent module", False),
+        ("from", "gaia.agents.base.agent", "Agent", "Base Agent class", False),
+        ("from", "gaia.agents.base", "MCPAgent", "MCP agent mixin", False),
+        ("from", "gaia.agents.base", "tool", "Tool decorator", False),
+        # Specialized Agents
+        ("from", "gaia.agents.chat", "ChatAgent", "Chat agent", False),
+        ("from", "gaia.agents.code", "CodeAgent", "Code agent", False),
+        ("from", "gaia.agents.jira", "JiraAgent", "Jira agent", False),
+        ("from", "gaia.agents.docker", "DockerAgent", "Docker agent", False),
+        ("from", "gaia.agents.blender", "BlenderAgent", "Blender agent", False),
+        (
+            "from",
+            "gaia.agents.emr",
+            "MedicalIntakeAgent",
+            "Medical intake agent",
+            False,
+        ),
+        ("from", "gaia.agents.routing", "RoutingAgent", "Routing agent", False),
+        # Database
+        ("from", "gaia.database", "DatabaseAgent", "Database agent", False),
+        ("from", "gaia.database", "DatabaseMixin", "Database mixin", False),
+        # Utilities
+        ("from", "gaia.utils", "FileWatcher", "File watcher", False),
+        ("from", "gaia.utils", "FileWatcherMixin", "File watcher mixin", False),
     ]
 
     failed = False
     issues = 0
 
-    for module, desc in imports:
-        cmd = [sys.executable, "-c", f"import {module}; print('OK: {desc} imports')"]
-        print(f"[CMD] {' '.join(cmd)}")
+    for test in tests:
+        if test[0] == "import":
+            # Simple module import
+            module, desc, optional = test[1], test[2], test[3]
+            import_str = f"import {module}"
+        else:
+            # from X import Y
+            module, name, desc, optional = test[1], test[2], test[3], test[4]
+            import_str = f"from {module} import {name}"
+
+        test_code = f"{import_str}; print('OK')"
+        cmd = [sys.executable, "-c", test_code]
         exit_code, output = run_command(cmd)
-        print(output.strip())
+
         if exit_code != 0:
-            print(f"[!] Failed to import {module}")
-            failed = True
-            issues += 1
+            # Extract error message from output
+            error_line = ""
+            for line in output.strip().split("\n"):
+                if (
+                    "Error:" in line
+                    or "ImportError:" in line
+                    or "ModuleNotFoundError:" in line
+                ):
+                    error_line = line.strip()
+                    break
+
+            if optional:
+                print(
+                    f"[SKIP] {desc:35} - {import_str} ({error_line if error_line else 'optional dependency'})"
+                )
+            else:
+                print(f"[FAIL] {desc:35} - {import_str}")
+                if error_line:
+                    print(f"       Error: {error_line}")
+                failed = True
+                issues += 1
+        else:
+            print(f"[OK]   {desc:35} - {import_str}")
 
     if failed:
         return CheckResult("Import Validation", False, False, issues, "")
 
-    print("[OK] All imports working!")
+    print(f"\n[OK] All required imports working!")
     return CheckResult("Import Validation", True, False, 0, "")
 
 
@@ -306,7 +400,7 @@ def count_python_files() -> tuple[int, int]:
     total_files = 0
     total_lines = 0
 
-    for dir_name in [SRC_DIR, TEST_DIR, INSTALLER_DIR]:
+    for dir_name in LINT_DIRS:
         dir_path = Path(dir_name)
         if dir_path.exists():
             for py_file in dir_path.rglob("*.py"):
@@ -332,7 +426,7 @@ def print_summary(results: list[CheckResult]) -> int:
     print("[STATS] Project Statistics:")
     print(f"   - Python Files: {total_files}")
     print(f"   - Lines of Code: {total_lines:,}")
-    print(f"   - Directories: {SRC_DIR}, {TEST_DIR}, {INSTALLER_DIR}")
+    print(f"   - Directories: {', '.join(LINT_DIRS)}")
 
     # Build results
     pass_count = 0
@@ -407,6 +501,19 @@ def print_summary(results: list[CheckResult]) -> int:
         return 1
 
 
+def print_fix_summary() -> None:
+    """Print simplified summary for fix-only mode."""
+    print("\n")
+    print("=" * 64)
+    print("                    FIX SUMMARY                                ")
+    print("=" * 64)
+    print()
+    print("[OK] Code formatting fixes applied!")
+    print()
+    print("[TIP] Run 'python util/lint.py' to verify all checks pass.")
+    print()
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -425,8 +532,8 @@ def main():
     )
     args = parser.parse_args()
 
-    # If no specific checks are requested, run all
-    run_all = args.all or not any(
+    # Determine if we're in fix-only mode (--fix without specific checks)
+    specific_checks = any(
         [
             args.black,
             args.isort,
@@ -435,14 +542,29 @@ def main():
             args.mypy,
             args.bandit,
             args.imports,
+            args.all,
         ]
     )
+    fix_only = args.fix and not specific_checks
+
+    # If no specific checks are requested and not fix-only, run all
+    run_all = args.all or (not specific_checks and not fix_only)
 
     print("=" * 40)
-    print("Running Code Quality Checks")
+    if fix_only:
+        print("Fixing Code Formatting Issues")
+    else:
+        print("Running Code Quality Checks")
     print("=" * 40)
 
     results: list[CheckResult] = []
+
+    if fix_only:
+        # Only run Black and isort when --fix is used alone
+        results.append(check_black(args.fix))
+        results.append(check_isort(args.fix))
+        print_fix_summary()
+        sys.exit(0)
 
     if args.black or run_all:
         results.append(check_black(args.fix))

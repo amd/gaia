@@ -1,0 +1,39 @@
+/* ===========================================
+   Top Navigation Tab Visibility Improvements
+   GitHub Issue #208
+   =========================================== */
+
+/* Increase contrast for inactive tab text (light mode) */
+.nav-tabs .nav-tabs-item {
+  color: rgb(156 163 175) !important;  /* gray-400 in light mode */
+}
+
+/* Dark mode: Make inactive tabs more visible */
+.dark .nav-tabs .nav-tabs-item {
+  color: rgb(209 213 219) !important;  /* gray-300 - much more visible than gray-400 */
+}
+
+/* Keep active tab styling distinct (light mode) */
+.nav-tabs .nav-tabs-item:has(> div.bg-primary) {
+  color: rgb(31 41 55) !important;  /* gray-800 */
+}
+
+/* Keep active tab styling distinct (dark mode) */
+.dark .nav-tabs .nav-tabs-item:has(> div.bg-primary) {
+  color: rgb(229 231 235) !important;  /* gray-200 */
+}
+
+/* Increase active tab underline thickness from 1.5px to 3.5px */
+.nav-tabs .nav-tabs-item > div {
+  height: 3.5px;
+}
+
+/* Add subtle bottom border to navbar for visual separation */
+#navbar {
+  border-bottom: 1px solid rgb(var(--gray-500) / 0.3);
+}
+
+/* Dark mode: Use darker border for better contrast */
+.dark #navbar {
+  border-bottom: 1px solid rgb(var(--gray-500) / 0.4);
+}
