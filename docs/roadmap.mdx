@@ -150,17 +150,17 @@ Official Docker images for running GAIA in isolated environments. All images are
 
 <CodeGroup>
 ```bash Linux Runtime
-docker run -dit --name gaia -e LEMONADE_BASE_URL=http://host.docker.internal:8080 amd/gaia:linux
+docker run -dit --name gaia -e LEMONADE_BASE_URL=<lemonade-url> amd/gaia:linux
 docker exec -it gaia zsh
 ```
 
 ```bash Windows Runtime
-docker run -dit --name gaia -e LEMONADE_BASE_URL=http://host.docker.internal:8080 amd/gaia:windows
+docker run -dit --name gaia -e LEMONADE_BASE_URL=<lemonade-url> amd/gaia:windows
 docker exec -it gaia powershell
 ```
 
 ```bash Development (with Claude Code)
-docker run -dit --name gaia-dev -e LEMONADE_BASE_URL=http://host.docker.internal:8080 -e GITHUB_TOKEN=ghp_xxx amd/gaia:dev
+docker run -dit --name gaia-dev -e LEMONADE_BASE_URL=<lemonade-url> -e GITHUB_TOKEN=<github-token> amd/gaia:dev
 docker exec -it gaia-dev zsh
 ```
 </CodeGroup>
@@ -170,7 +170,7 @@ Key capabilities:
 - **Windows image**: Native Windows container for Windows Server environments
 - **Development image**: Full dev environment with UV, Node.js 20, GitHub CLI, and Claude Code with sandboxing
 - **Consistent ports**: All images expose the same ports (3000, 5173, 8000, 9229, 9222) for API, debugging, and frontend dev
-- **Environment config**: Set `LEMONADE_BASE_URL` at container creation to connect to your host's Lemonade Server
+- **Environment config**: Set `LEMONADE_BASE_URL` at container creation to connect to a Lemonade Server
 
 → [View detailed plan](/plans/docker-containers) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/270)
 

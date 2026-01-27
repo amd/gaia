@@ -21,20 +21,20 @@ All images are self-contained—you create the container, then connect from your
 
 ## Motivation
 
-**Problem:** Setting up GAIA requires Python, dependencies, and proper configuration. Development requires additional tools (Node.js, GitHub CLI, Claude Code). Windows users face extra complexity.
+Pre-built Docker images enable rapid testing and development with GAIA in one or two commands. Spin up an isolated environment, run tests, and tear it down instantly.
 
-**Solution:** Pre-built Docker images that provide:
-- Instant GAIA runtime (just `docker run` + `docker exec`)
-- Consistent development environment across all platforms
-- Isolation from host system (no conflicts with existing Python/Node installations)
-- Easy cleanup (remove container when done)
+**Key benefits:**
+- **Rapid testing**: Launch GAIA in seconds with `docker run` + `docker exec`
+- **Clean isolation**: Test different configurations without affecting your host system
+- **Consistent environments**: Same setup across all platforms and team members
+- **Quick cleanup**: Remove containers when done, no residual files
 
 **Use cases:**
-- Try GAIA without installing Python
-- Develop GAIA contributions in isolated environment
-- Run GAIA on Windows without native setup
-- Test GAIA with different configurations
-- Deploy GAIA in containerized infrastructure
+- Rapid prototyping and experimentation
+- CI/CD pipelines and automated testing
+- Development in isolated environments
+- Multi-configuration testing
+- Containerized deployments
 
 ## Architecture
 
@@ -44,7 +44,7 @@ All three images follow the same pattern:
 
 ```bash
 # 1. Create container (runs in background)
-docker run -dit --name CONTAINER_NAME -e LEMONADE_BASE_URL=http://host.docker.internal:8080 IMAGE_NAME
+docker run -dit --name CONTAINER_NAME -e LEMONADE_BASE_URL=<lemonade-url> IMAGE_NAME
 
 # 2. Connect from host terminal
 docker exec -it CONTAINER_NAME SHELL
@@ -87,7 +87,7 @@ docker run -dit -p 8000:8000 -p 3000:3000 ...
 - Git, curl, basic utilities
 
 **Environment variables:**
-- `LEMONADE_BASE_URL` - URL to Lemonade Server on host (required)
+- `LEMONADE_BASE_URL` - Lemonade URL (required)
 
 **Example usage:**
 ```bash
@@ -95,7 +95,7 @@ docker run -dit -p 8000:8000 -p 3000:3000 ...
 docker run -dit \
   --name gaia \
   -p 8000:8000 \
-  -e LEMONADE_BASE_URL=http://host.docker.internal:8080 \
+  -e LEMONADE_BASE_URL=<lemonade-url> \
   amd/gaia:linux
 
 # Connect and use GAIA
@@ -143,7 +143,7 @@ CMD ["tail", "-f", "/dev/null"]
 - Git for Windows
 
 **Environment variables:**
-- `LEMONADE_BASE_URL` - URL to Lemonade Server on host (required)
+- `LEMONADE_BASE_URL` - Lemonade URL (required)
 
 **Example usage:**
 ```powershell
@@ -151,7 +151,7 @@ CMD ["tail", "-f", "/dev/null"]
 docker run -dit `
   --name gaia `
   -p 8000:8000 `
-  -e LEMONADE_BASE_URL=http://host.docker.internal:8080 `
+  -e LEMONADE_BASE_URL=<lemonade-url> `
   amd/gaia:windows
 
 # Connect and use GAIA
@@ -203,7 +203,7 @@ CMD ["powershell", "-NoExit", "-Command", "while ($true) { Start-Sleep -Seconds 
 - GAIA repository (cloned to `/src/gaia` on first run)
 
 **Environment variables (required at `docker run`):**
-- `LEMONADE_BASE_URL` - URL to Lemonade Server on host
+- `LEMONADE_BASE_URL` - Lemonade URL
 - `GITHUB_TOKEN` - Token for cloning GAIA repo on startup
 
 **Example usage:**
@@ -213,8 +213,8 @@ docker run -dit \
   --name gaia-dev \
   -p 8000:8000 \
   -p 3000:3000 \
-  -e LEMONADE_BASE_URL=http://host.docker.internal:8080 \
-  -e GITHUB_TOKEN=ghp_yourtokenhere \
+  -e LEMONADE_BASE_URL=<lemonade-url> \
+  -e GITHUB_TOKEN=<github-token> \
   amd/gaia:dev
 
 # Connect and develop
@@ -312,7 +312,7 @@ if [ -z "$GITHUB_TOKEN" ]; then
 fi
 
 if [ -z "$LEMONADE_BASE_URL" ]; then
-    echo "WARNING: LEMONADE_BASE_URL not set. Set it to connect to Lemonade Server on host."
+    echo "WARNING: LEMONADE_BASE_URL not set. Set it to connect to a Lemonade Server."
 fi
 
 # Authenticate GitHub CLI
@@ -350,63 +350,29 @@ tail -f /dev/null
 
 ---
 
-## Volume Mounts (Optional)
+## Connecting to Lemonade Server
 
-While images are self-contained, you can mount volumes for persistence:
+All images require `LEMONADE_BASE_URL` to connect to a Lemonade Server.
 
-### Linux/Dev Image
-
-```bash
-# Persist model cache
-docker run -dit \
-  -v ~/.cache/huggingface:/root/.cache/huggingface \
-  -e LEMONADE_BASE_URL=http://host.docker.internal:8080 \
-  amd/gaia:linux
-
-# Dev: Mount GAIA source (skip repo cloning)
-docker run -dit \
-  -v $(pwd):/src/gaia \
-  -e LEMONADE_BASE_URL=http://host.docker.internal:8080 \
-  amd/gaia:dev
-```
-
-### Windows Image
-
-```powershell
-# Persist model cache
-docker run -dit `
-  -v C:\Users\YourName\.cache\huggingface:C:\Users\ContainerAdministrator\.cache\huggingface `
-  -e LEMONADE_BASE_URL=http://host.docker.internal:8080 `
-  amd/gaia:windows
-```
-
----
-
-## Connecting to Host Lemonade Server
-
-All images require `LEMONADE_BASE_URL` to connect to a Lemonade Server running on the host machine.
-
-### Host setup (run before creating container):
+### Server setup:
 
 ```bash
-# Install Lemonade Server on host
+# Install Lemonade Server
 pip install lemonade-server
 
-# Start server (listens on all interfaces)
+# Start server
 lemonade-server serve --host 0.0.0.0 --port 8080
 ```
 
 ### Container configuration:
 
-```bash
-# Linux/macOS/Windows host
--e LEMONADE_BASE_URL=http://host.docker.internal:8080
+Set `LEMONADE_BASE_URL` to the URL of your Lemonade Server when creating the container:
 
-# Linux host with custom network
--e LEMONADE_BASE_URL=http://172.17.0.1:8080
+```bash
+-e LEMONADE_BASE_URL=<lemonade-url>
 ```
 
-**Note:** `host.docker.internal` resolves to the host machine's IP from inside the container (Docker Desktop feature).
+**Note:** Use `host.docker.internal` to reference the host machine from inside the container (Docker Desktop feature).
 
 ---
 
@@ -438,84 +404,6 @@ Images follow GAIA's semantic versioning:
 - `amd/gaia:linux` (latest)
 - `amd/gaia:linux-0.15.2` (specific version)
 - `amd/gaia:dev` (latest dev environment)
-
----
-
-## Security Considerations
-
-### Runtime Images (Linux/Windows)
-
-- Run as root inside container (isolated from host)
-- No privileged mode required
-- Network isolation via Docker networking
-- Optional: Run with `--read-only` flag for immutable filesystem
-
-### Development Image
-
-- Requires `GITHUB_TOKEN` for repo cloning (use fine-grained PAT with minimal scopes)
-- Claude Code sandboxing uses `bubblewrap` (Linux kernel namespaces)
-- `enableWeakerNestedSandbox` required for Docker-in-Docker scenarios
-- Optional: Use Docker socket mounting for true Docker-in-Docker (requires `--privileged`)
-
-**Best practices:**
-```bash
-# Use read-only filesystem (runtime images)
-docker run -dit --read-only --tmpfs /tmp amd/gaia:linux
-
-# Limit resources
-docker run -dit --memory="2g" --cpus="2" amd/gaia:linux
-
-# Non-root user (add to Dockerfile)
-RUN useradd -m -s /bin/zsh gaia
-USER gaia
-```
-
----
-
-## FAQ
-
-### Why not use .devcontainer?
-
-The dev image is designed for standalone development, not VSCode integration. Users who want VSCode integration can still use `.devcontainer.json` with the dev image as the base.
-
-### Can I run the dev image without GitHub token?
-
-No, the entrypoint script requires `GITHUB_TOKEN` to clone the repository. If you want to develop without a token, mount the GAIA source as a volume instead:
-
-```bash
-docker run -dit -v $(pwd):/src/gaia -e LEMONADE_BASE_URL=... amd/gaia:dev
-```
-
-### Why expose so many ports?
-
-All images expose the same ports (3000, 5173, 8000, 9229, 9222) for consistency, even if not all images use all ports. This makes port mapping predictable across images.
-
-### Can I run Lemonade Server inside the container?
-
-Technically yes, but not recommended. Lemonade Server benefits from host GPU/NPU access. Run it on the host and connect via `LEMONADE_BASE_URL`.
-
-### How do I update GAIA in runtime images?
-
-Runtime images have GAIA baked in. To update:
-1. Pull the latest image: `docker pull amd/gaia:linux`
-2. Recreate container with new image
-
-For dev image, just `git pull` inside `/src/gaia`.
-
----
-
-## Timeline
-
-- **Q1 2026**: Initial release with all three images
-- **Continuous**: Updates aligned with GAIA releases
-
----
-
-## Related Plans
-
-- [Lightweight Installer](/plans/installer) - One-command installation
-- [Chat Desktop UI](/plans/chat-ui) - Desktop chat application
-- [MCP Client Mixin](/plans/mcp-client) - Computer Use Agents
 
 ---
 
