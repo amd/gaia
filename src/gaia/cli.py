@@ -2060,6 +2060,48 @@ Examples:
         "--verbose", action="store_true", help="Enable verbose logging"
     )
 
+    # MCP Client commands (connect to external MCP servers)
+    mcp_add_parser = mcp_subparsers.add_parser(
+        "add", help="Add an MCP server connection"
+    )
+    mcp_add_parser.add_argument("name", help="Friendly name for the server")
+    mcp_add_parser.add_argument("command", help="Command to start the MCP server")
+    mcp_add_parser.add_argument(
+        "--config",
+        help="Path to MCP servers config file (default: ~/.gaia/mcp_servers.json)",
+    )
+
+    mcp_list_parser = mcp_subparsers.add_parser(
+        "list", help="List configured MCP servers"
+    )
+    mcp_list_parser.add_argument(
+        "--config",
+        help="Path to MCP servers config file (default: ~/.gaia/mcp_servers.json)",
+    )
+
+    mcp_remove_parser = mcp_subparsers.add_parser(
+        "remove", help="Remove an MCP server"
+    )
+    mcp_remove_parser.add_argument("name", help="Name of the server to remove")
+    mcp_remove_parser.add_argument(
+        "--config",
+        help="Path to MCP servers config file (default: ~/.gaia/mcp_servers.json)",
+    )
+
+    mcp_tools_parser = mcp_subparsers.add_parser(
+        "tools", help="List tools from an MCP server"
+    )
+    mcp_tools_parser.add_argument("name", help="Name of the MCP server")
+    mcp_tools_parser.add_argument(
+        "--config",
+        help="Path to MCP servers config file (default: ~/.gaia/mcp_servers.json)",
+    )
+
+    mcp_test_client_parser = mcp_subparsers.add_parser(
+        "test-client", help="Test MCP client connection"
+    )
+    mcp_test_client_parser.add_argument("name", help="Name of the MCP server to test")
+
     # Cache command (for Context7 cache management)
     cache_parser = subparsers.add_parser(
         "cache", help="Manage Context7 API cache and rate limiting"
@@ -5314,6 +5356,16 @@ def handle_mcp_command(args):
         handle_mcp_agent(args)
     elif args.mcp_action == "docker":
         handle_mcp_docker(args)
+    elif args.mcp_action == "add":
+        handle_mcp_add(args)
+    elif args.mcp_action == "list":
+        handle_mcp_list(args)
+    elif args.mcp_action == "remove":
+        handle_mcp_remove(args)
+    elif args.mcp_action == "tools":
+        handle_mcp_tools(args)
+    elif args.mcp_action == "test-client":
+        handle_mcp_test_client(args)
     else:
         log.error(f"Unknown MCP action: {args.mcp_action}")
         print(f"❌ Unknown MCP action: {args.mcp_action}")
@@ -5884,6 +5936,157 @@ def handle_mcp_docker(args):
     except Exception as e:
         log.error(f"Error starting Docker MCP server: {e}")
         print(f"❌ Error starting Docker MCP server: {e}")
+
+
+def handle_mcp_add(args):
+    """Add an MCP server connection."""
+    from gaia.mcp import MCPClientManager
+    from gaia.mcp.client.config import MCPConfig
+
+    config = MCPConfig(args.config) if args.config else MCPConfig()
+    manager = MCPClientManager(config=config)
+
+    try:
+        print(f"📡 Connecting to MCP server '{args.name}'...")
+        client = manager.add_server(args.name, command=args.command)
+
+        tools = client.list_tools()
+        print(f"✅ Successfully connected to '{args.name}'")
+        print(f"   Server: {client.server_info.get('name', 'Unknown')}")
+        print(f"   Version: {client.server_info.get('version', 'Unknown')}")
+        print(f"   Tools: {len(tools)} available")
+
+        config_path = args.config if args.config else "~/.gaia/mcp_servers.json"
+        print(f"   Saved to: {config_path}")
+
+    except Exception as e:
+        print(f"❌ Error connecting to MCP server: {e}")
+
+
+def handle_mcp_list(args):
+    """List configured MCP servers."""
+    from gaia.mcp import MCPConfig
+
+    config = MCPConfig(args.config) if args.config else MCPConfig()
+    servers = config.get_servers()
+
+    config_path = args.config if args.config else "~/.gaia/mcp_servers.json"
+
+    if not servers:
+        print("📋 No MCP servers configured")
+        print(f"   Config: {config_path}")
+        print("\nAdd a server with: gaia mcp add <name> <command>")
+        if args.config:
+            print(f"                or: gaia mcp add <name> <command> --config {args.config}")
+        return
+
+    print(f"📋 Configured MCP Servers ({len(servers)}):")
+    print(f"   Config: {config_path}")
+    print("=" * 60)
+
+    for name, server_config in servers.items():
+        command = server_config.get("command", "Unknown")
+        print(f"\n🔹 {name}")
+        print(f"   Command: {command}")
+
+
+def handle_mcp_remove(args):
+    """Remove an MCP server."""
+    from gaia.mcp import MCPConfig
+
+    config = MCPConfig(args.config) if args.config else MCPConfig()
+
+    if not config.server_exists(args.name):
+        print(f"❌ MCP server '{args.name}' not found")
+        return
+
+    config.remove_server(args.name)
+    print(f"✅ Removed MCP server '{args.name}'")
+
+
+def handle_mcp_tools(args):
+    """List tools from an MCP server."""
+    from gaia.mcp import MCPClientManager
+    from gaia.mcp.client.config import MCPConfig
+
+    config = MCPConfig(args.config) if args.config else MCPConfig()
+    manager = MCPClientManager(config=config)
+
+    try:
+        # Try to get existing client or connect
+        client = manager.get_client(args.name)
+        if not client:
+            print(f"📡 Connecting to MCP server '{args.name}'...")
+            # Load from config
+            manager.load_from_config()
+            client = manager.get_client(args.name)
+
+        if not client:
+            print(f"❌ MCP server '{args.name}' not found")
+            print("\nAvailable servers:")
+            for server in manager.list_servers():
+                print(f"  - {server}")
+            return
+
+        tools = client.list_tools()
+
+        print(f"🔧 Tools from '{args.name}' ({len(tools)}):")
+        print("=" * 60)
+
+        for tool in tools:
+            print(f"\n🔹 {tool.name}")
+            print(f"   Description: {tool.description}")
+            params = tool.input_schema.get("properties", {})
+            if params:
+                print(f"   Parameters: {', '.join(params.keys())}")
+
+    except Exception as e:
+        print(f"❌ Error listing tools: {e}")
+
+
+def handle_mcp_test_client(args):
+    """Test MCP client connection."""
+    from gaia.mcp import MCPClientManager
+
+    manager = MCPClientManager()
+
+    try:
+        print(f"🧪 Testing MCP server '{args.name}'...")
+
+        # Try to get existing client or connect
+        client = manager.get_client(args.name)
+        if not client:
+            print(f"📡 Connecting...")
+            manager.load_from_config()
+            client = manager.get_client(args.name)
+
+        if not client:
+            print(f"❌ MCP server '{args.name}' not found")
+            return
+
+        # Test connection
+        print(f"✅ Connection: OK")
+        print(f"   Server: {client.server_info.get('name', 'Unknown')}")
+
+        # List tools
+        tools = client.list_tools()
+        print(f"✅ Tools: {len(tools)} available")
+
+        if tools:
+            # Test first tool if it exists
+            test_tool = tools[0]
+            print(f"\n🧪 Testing tool: {test_tool.name}")
+            print(f"   Description: {test_tool.description}")
+
+            # Show parameters
+            params = test_tool.input_schema.get("properties", {})
+            if params:
+                print(f"   Parameters: {', '.join(params.keys())}")
+
+        print("\n✅ All tests passed!")
+
+    except Exception as e:
+        print(f"❌ Test failed: {e}")
 
 
 if __name__ == "__main__":

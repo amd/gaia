@@ -694,11 +694,118 @@ curl http://localhost:8080/health
 
 ---
 
+## MCP Client
+
+<Card title="MCP Client" icon="plug" href="/guides/mcp-client">
+  Connect GAIA agents to external MCP servers
+</Card>
+
+Configure MCP servers that your agents can connect to. Servers are saved to `~/.gaia/mcp_servers.json` by default, or to a custom config file using `--config`.
+
+### Commands
+
+#### `gaia mcp add`
+
+Add an MCP server to configuration.
+
+```bash
+gaia mcp add <server-name> "<command>" [--config PATH]
+```
+
+**Arguments:**
+- `<server-name>` - Unique identifier for the server (e.g., "time", "memory")
+- `"<command>"` - Shell command to start the MCP server (must be quoted)
+
+**Options:**
+- `--config PATH` - Custom config file path (default: `~/.gaia/mcp_servers.json`)
+
+**Examples:**
+```bash
+# Add to user config (default)
+gaia mcp add time "uvx mcp-server-time"
+gaia mcp add memory "npx -y @modelcontextprotocol/server-memory"
+
+# Add to project config (can be committed to git)
+gaia mcp add time "uvx mcp-server-time" --config ./mcp_servers.json
+```
+
+#### `gaia mcp list`
+
+List all configured MCP servers.
+
+```bash
+gaia mcp list [--config PATH]
+```
+
+**Options:**
+- `--config PATH` - Custom config file path (default: `~/.gaia/mcp_servers.json`)
+
+**Example:**
+```bash
+# List from user config
+gaia mcp list
+
+# List from project config
+gaia mcp list --config ./mcp_servers.json
+```
+
+#### `gaia mcp remove`
+
+Remove an MCP server from configuration.
+
+```bash
+gaia mcp remove <server-name> [--config PATH]
+```
+
+**Arguments:**
+- `<server-name>` - Name of the server to remove
+
+**Options:**
+- `--config PATH` - Custom config file path (default: `~/.gaia/mcp_servers.json`)
+
+**Example:**
+```bash
+# Remove from user config
+gaia mcp remove time
+
+# Remove from project config
+gaia mcp remove memory --config ./mcp_servers.json
+```
+
+#### `gaia mcp tools`
+
+List tools available from a configured MCP server.
+
+```bash
+gaia mcp tools <server-name> [--config PATH]
+```
+
+**Arguments:**
+- `<server-name>` - Name of the server to query
+
+**Options:**
+- `--config PATH` - Custom config file path (default: `~/.gaia/mcp_servers.json`)
+
+**Example:**
+```bash
+# List tools from time server
+gaia mcp tools time
+
+# List tools using project config
+gaia mcp tools memory --config ./mcp_servers.json
+```
+
+[→ Full MCP Client Guide](/guides/mcp-client)
+
+---
+
 ## MCP Bridge
 
-<Card title="MCP Integration" icon="plug" href="/integrations/mcp">
-  Model Context Protocol for external integrations
+<Card title="MCP Bridge" icon="server" href="/integrations/mcp">
+  Expose GAIA agents as MCP servers
 </Card>
+
+The MCP Bridge allows other applications to use GAIA agents as MCP servers.
 
 ### Quick Start
 

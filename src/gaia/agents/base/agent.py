@@ -768,10 +768,13 @@ You must respond ONLY in valid JSON. No text before { or after }.
         sig = inspect.signature(tool)
 
         # Get required parameters (those without defaults)
+        # Skip VAR_KEYWORD (**kwargs) and VAR_POSITIONAL (*args) parameters
         required_args = {
             name: param
             for name, param in sig.parameters.items()
-            if param.default == inspect.Parameter.empty and name != "return"
+            if param.default == inspect.Parameter.empty
+            and name != "return"
+            and param.kind not in (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL)
         }
 
         # Check for missing required arguments
