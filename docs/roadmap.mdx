@@ -31,24 +31,28 @@ graph LR
     Q1["Q1 2026<br/>Lightweight Installer<br/><small>One-command install</small>"]
     Q1B["Q1 2026<br/>Chat Desktop UI<br/><small>Privacy-first RAG</small>"]
     Q1C["Q1 2026<br/>MCP Client Mixin<br/><small>Computer Use Agents</small>"]
+    Q1D["Q1 2026<br/>SD Agent<br/><small>Stable Diffusion optimization</small>"]
     Q2["Q2 2026<br/>MCP Docs Server<br/><small>AI assistant context</small>"]
     Q3["Q3 2026<br/>TBD<br/><small>Community-driven</small>"]
 
     Q1 -.-> Q1B
     Q1B --> Q1C
-    Q1C --> Q2
+    Q1C -.-> Q1D
+    Q1D --> Q2
     Q2 --> Q3
 
     style Q1 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style Q1B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style Q1C fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style Q1D fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style Q2 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style Q3 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
 
     linkStyle 0 stroke:#ED1C24,stroke-width:2px,stroke-dasharray: 5 5
     linkStyle 1 stroke:#ED1C24,stroke-width:2px
-    linkStyle 2 stroke:#ED1C24,stroke-width:2px
+    linkStyle 2 stroke:#ED1C24,stroke-width:2px,stroke-dasharray: 5 5
     linkStyle 3 stroke:#ED1C24,stroke-width:2px
+    linkStyle 4 stroke:#ED1C24,stroke-width:2px
 ```
 
 ### Q1 2026: Lightweight Installer
@@ -133,6 +137,38 @@ Built as a reference design, CUA demonstrates how to create computer-use agents 
 CUA validates the MCP Client Mixin framework and serves as a template for building other computer-use agents.
 
 → [View detailed plan](/plans/cua) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/224)
+
+### Q1 2026: SD Agent
+
+**Intelligent Stable Diffusion optimization assistant**
+
+An AI agent that optimizes both prompts and generation parameters for Stable Diffusion, producing professional-quality images from simple descriptions. Built with AMD NPU-accelerated LLMs.
+
+```bash
+# Analyze and enhance prompt, optimize parameters
+gaia sd generate "a mountain landscape"
+
+# Search your generation history
+gaia sd search "show me all cyberpunk images"
+
+# Browse gallery with ratings and annotations
+gaia sd gallery
+```
+
+Dual optimization approach: enhance text prompts AND recommend optimal SD parameters (model, size, steps, cfg_scale). Includes searchable database with gallery UI for managing your creations.
+
+Key capabilities:
+- LLM-powered prompt enhancement and parameter optimization
+- SQLite database with natural language search
+- Gallery UI with chat interface for image creation
+- Rating system that learns your preferences
+- Template library with proven prompt+parameter combinations
+- Terminal image display for immediate feedback
+- Reference-based generation using your top-rated images
+
+Transform "a cat" into professional SD images through intelligent optimization of all generation parameters, with a searchable gallery that learns your aesthetic preferences.
+
+→ [View detailed plan](/plans/image-agent) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/272)
 
 ### Q2 2026: MCP Docs Server
 
