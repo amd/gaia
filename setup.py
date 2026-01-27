@@ -80,6 +80,7 @@ setup(
         "python-dotenv",
         "aiohttp",
         "rich",
+        "requests",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",
     ],
