@@ -32,23 +32,27 @@ graph LR
     Q1B["Q1 2026<br/>Chat Desktop UI<br/><small>Privacy-first RAG</small>"]
     Q1C["Q1 2026<br/>MCP Client Mixin<br/><small>Computer Use Agents</small>"]
     Q2["Q2 2026<br/>MCP Docs Server<br/><small>AI assistant context</small>"]
+    Q2B["Q2 2026<br/>AI PC Agents Hub<br/><small>Discover & compete</small>"]
     Q3["Q3 2026<br/>TBD<br/><small>Community-driven</small>"]
 
     Q1 -.-> Q1B
     Q1B --> Q1C
     Q1C --> Q2
-    Q2 --> Q3
+    Q2 -.-> Q2B
+    Q2B --> Q3
 
     style Q1 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style Q1B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style Q1C fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style Q2 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style Q2B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style Q3 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
 
     linkStyle 0 stroke:#ED1C24,stroke-width:2px,stroke-dasharray: 5 5
     linkStyle 1 stroke:#ED1C24,stroke-width:2px
     linkStyle 2 stroke:#ED1C24,stroke-width:2px
-    linkStyle 3 stroke:#ED1C24,stroke-width:2px
+    linkStyle 3 stroke:#ED1C24,stroke-width:2px,stroke-dasharray: 5 5
+    linkStyle 4 stroke:#ED1C24,stroke-width:2px
 ```
 
 ### Q1 2026: Lightweight Installer
@@ -129,6 +133,33 @@ Make AI assistants expert GAIA developers out of the box.
 
 → [View detailed plan](/plans/mcp-docs) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/201)
 
+### Q2 2026: AI PC Agents Hub
+
+**The App Store for AI PC agents—discover, try, compete, and run locally**
+
+A community platform where developers publish agents, users discover solutions, and the community decides what's best:
+
+<CardGroup cols={3}>
+  <Card title="Agents Hub" icon="grid">
+    Browse and install AI PC agents
+  </Card>
+  <Card title="Agent Arena" icon="play">
+    Try agents on AMD Strix Halo cloud
+  </Card>
+  <Card title="Competitions" icon="trophy">
+    Compete for prizes and recognition
+  </Card>
+</CardGroup>
+
+Key capabilities:
+- One-click "Try in Agent Arena" on AMD Strix Halo hardware
+- `gaia agent install <name>` for local deployment
+- Themed competitions with real prizes
+- Community voting and leaderboards
+- Developer profiles with badges and recognition
+
+→ [View detailed plan](/plans/agent-hub)
+
 ---
 
 ## Recently Shipped
@@ -181,4 +212,4 @@ The more votes an issue gets, the higher priority it becomes. Your input directl
 
 ---
 
-*Updated: January 19, 2026*
+*Updated: January 26, 2026*
