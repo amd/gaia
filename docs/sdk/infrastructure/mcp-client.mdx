@@ -1,0 +1,163 @@
+---
+title: "MCP Client SDK"
+description: "SDK reference for connecting agents to MCP servers"
+---
+
+## Overview
+
+The MCP Client SDK enables GAIA agents to connect to external MCP (Model Context Protocol) servers and use their tools. This provides universal tool integration with automatic discovery and registration.
+
+<Note>
+For detailed usage examples, see the [MCP Client Guide](/guides/mcp-client).
+For implementation details, see the [Technical Specification](/spec/mcp-client).
+</Note>
+
+## Installation
+
+```python
+from gaia.mcp import MCPClient, MCPClientManager
+from gaia.agents.base.mcp_client_mixin import MCPClientMixin
+```
+
+## Quick Example
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.mcp_client_mixin import MCPClientMixin
+
+class MyAgent(Agent, MCPClientMixin):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        # Connect to MCP server
+        self.connect_mcp_server(
+            "filesystem",
+            "npx @modelcontextprotocol/server-filesystem /tmp"
+        )
+
+# Create and use agent
+agent = MyAgent()
+result = agent.run("List all files in /tmp")
+```
+
+## Core Methods
+
+### MCPClientMixin
+
+| Method | Description | Returns |
+|--------|-------------|---------|
+| `connect_mcp_server(name, command)` | Connect to MCP server | `bool` |
+| `disconnect_mcp_server(name)` | Disconnect from server | `None` |
+| `list_mcp_servers()` | List connected servers | `List[str]` |
+| `get_mcp_client(name)` | Get client by name | `MCPClient` |
+
+### MCPClient
+
+| Method | Description | Returns |
+|--------|-------------|---------|
+| `from_command(name, command)` | Create client (factory) | `MCPClient` |
+| `connect()` | Connect to server | `bool` |
+| `disconnect()` | Disconnect | `None` |
+| `list_tools(refresh=False)` | List available tools | `List[MCPTool]` |
+| `call_tool(name, args)` | Execute tool | `Dict` |
+| `is_connected()` | Check connection | `bool` |
+
+### MCPClientManager
+
+| Method | Description | Returns |
+|--------|-------------|---------|
+| `add_server(name, command)` | Add server | `MCPClient` |
+| `remove_server(name)` | Remove server | `None` |
+| `get_client(name)` | Get client | `MCPClient` |
+| `list_servers()` | List servers | `List[str]` |
+| `load_from_config()` | Load from config | `None` |
+| `disconnect_all()` | Disconnect all | `None` |
+
+## CLI Commands
+
+```bash
+# Add server
+gaia mcp add <name> <command>
+
+# List servers
+gaia mcp list
+
+# List tools
+gaia mcp tools <name>
+
+# Test connection
+gaia mcp test-client <name>
+
+# Remove server
+gaia mcp remove <name>
+```
+
+## Configuration
+
+Servers are saved to `~/.gaia/mcp_servers.json`:
+
+```json
+{
+  "servers": {
+    "filesystem": {
+      "command": "npx @modelcontextprotocol/server-filesystem /tmp"
+    }
+  }
+}
+```
+
+## Tool Namespacing
+
+MCP tools are automatically namespaced to prevent collisions:
+
+- **MCP Tool:** `read_file`
+- **GAIA Tool:** `mcp_filesystem_read_file`
+- **Description:** `[MCP:filesystem] Read file contents from disk`
+
+This ensures multiple servers with the same tool name work correctly:
+
+```python
+# Both work without conflicts:
+# - mcp_fs1_read_file → reads from filesystem
+# - mcp_github_read_file → reads from GitHub
+```
+
+## Error Handling
+
+```python
+# Connection errors
+success = agent.connect_mcp_server("server", "command")
+if not success:
+    print("Failed to connect")
+
+# Tool execution errors
+try:
+    result = client.call_tool("tool", {"arg": "value"})
+except RuntimeError as e:
+    print(f"Tool failed: {e}")
+```
+
+## Debug Mode
+
+Enable detailed logging:
+
+```python
+# Via MCPClient
+client = MCPClient.from_command("server", "command", debug=True)
+
+# Via manager
+manager = MCPClientManager(debug=True)
+```
+
+## Related Documentation
+
+- [MCP Client Guide](/guides/mcp-client) - Complete usage guide
+- [Technical Specification](/spec/mcp-client) - Implementation details
+- [MCP Server SDK](/sdk/infrastructure/mcp) - Build MCP servers
+- [Agent System](/sdk/core/agent-system) - Agent framework
+
+---
+
+<Note>
+**License**: This SDK reference is part of the GAIA project and is subject to the [project's license](https://github.com/amd/gaia/blob/main/LICENSE).
+</Note>

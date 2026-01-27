@@ -43,7 +43,8 @@
               "guides/blender",
               "guides/jira",
               "guides/docker",
-              "guides/routing"
+              "guides/routing",
+              "guides/mcp-client"
             ]
           },
           {
@@ -108,7 +109,8 @@
                 "group": "Infrastructure",
                 "pages": [
                   "sdk/infrastructure/api-server",
-                  "sdk/infrastructure/mcp"
+                  "sdk/infrastructure/mcp",
+                  "sdk/infrastructure/mcp-client"
                 ]
               },
               {
@@ -185,7 +187,8 @@
               "spec/api-agent",
               "spec/mcp-agent",
               "spec/api-server",
-              "spec/mcp-server"
+              "spec/mcp-server",
+              "spec/mcp-client"
             ]
           },
           {
