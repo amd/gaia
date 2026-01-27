@@ -75,14 +75,19 @@ try {
     }
     Write-Host ""
 
-    # Check installation
+    # Check installation - try PATH first, then .venv
     Write-Host "=== Checking Installation ==="
-    $lemonadeExe = ".\.venv\Scripts\lemonade-server.exe"
-    if (-not (Test-Path $lemonadeExe)) {
-        Write-Host "[ERROR] lemonade-server.exe not found at: $lemonadeExe"
+    $lemonadeCmd = Get-Command "lemonade-server" -ErrorAction SilentlyContinue
+    if ($lemonadeCmd) {
+        $lemonadeExe = $lemonadeCmd.Source
+        Write-Host "[OK] Found on PATH: $lemonadeExe"
+    } elseif (Test-Path ".\.venv\Scripts\lemonade-server.exe") {
+        $lemonadeExe = ".\.venv\Scripts\lemonade-server.exe"
+        Write-Host "[OK] Found in .venv: $lemonadeExe"
+    } else {
+        Write-Host "[ERROR] lemonade-server not found on PATH or in .venv"
         exit 1
     }
-    Write-Host "[OK] Found: $lemonadeExe"
     Write-Host ""
 
     # Clear cache if requested
