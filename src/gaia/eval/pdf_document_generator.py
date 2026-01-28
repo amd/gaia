@@ -677,7 +677,7 @@ Examples:
         print(f"  Total content tokens: {total_content_tokens:,}")
 
         print(f"\n💰 API Usage:")
-        print(f"  Total API tokens (input+output): {total_api_tokens:,}")
+        print(f"  Total token count (input+output): {total_api_tokens:,}")
         print(f"  Total cost: ${total_cost:.4f}")
         print(f"  Average cost per file: ${avg_cost:.4f}")
 

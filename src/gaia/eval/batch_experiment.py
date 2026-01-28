@@ -373,11 +373,32 @@ class BatchExperimentRunner:
     ) -> Dict:
         """Process summarization using SummarizerAgent with prompts.py styles."""
         try:
+            # Determine if source is a PDF
+            is_pdf = (
+                source_file and Path(source_file).suffix.lower() == ".pdf"
+                if source_file
+                else False
+            )
+
             # Map experiment components to prompts.py styles
             style_mapping = {
                 "executive_summary": "brief",
                 "detailed_summary": "detailed",
             }
+
+            # For non-PDF files, detect content type and add appropriate styles
+            if not is_pdf:
+                # Use the existing summarizer agent to detect content type
+                content_type = self.summarizer_agent.detect_content_type(
+                    transcript, input_type="auto"
+                )
+
+                # Add action_items for both email and transcript
+                style_mapping["action_items"] = "action_items"
+
+                # Add participants only for emails
+                if content_type == "email":
+                    style_mapping["participants"] = "participants"
 
             # Get the styles to request from the agent (only from style_mapping keys to avoid duplicates)
             requested_styles = list(
@@ -494,11 +515,32 @@ class BatchExperimentRunner:
     ) -> Dict:
         """Process summarization using SummarizerAgent's summarize or summarize_file method."""
         try:
+            # Determine if source is a PDF
+            is_pdf = (
+                source_file and Path(source_file).suffix.lower() == ".pdf"
+                if source_file
+                else False
+            )
+
             # Map experiment components to prompts.py styles
             style_mapping = {
                 "executive_summary": "brief",
                 "detailed_summary": "detailed",
             }
+
+            # For non-PDF files, detect content type and add appropriate styles
+            if not is_pdf:
+                # Use the existing summarizer agent to detect content type
+                content_type = self.summarizer_agent.detect_content_type(
+                    transcript, input_type="auto"
+                )
+
+                # Add action_items for both email and transcript
+                style_mapping["action_items"] = "action_items"
+
+                # Add participants only for emails
+                if content_type == "email":
+                    style_mapping["participants"] = "participants"
 
             # Get the styles to request from the agent (only unique styles)
             requested_styles = list(set(style_mapping.values()))
@@ -1390,6 +1432,16 @@ class BatchExperimentRunner:
                 # Use the structured response directly from independent calls
                 generated_summaries = result["response"]
 
+                # Detect content type for this document
+                source_file = data_item.get("source_file", "")
+                if source_file and Path(source_file).suffix.lower() == ".pdf":
+                    content_type = "pdf"
+                else:
+                    # Detect email vs transcript for non-PDF files
+                    content_type = self.summarizer_agent.detect_content_type(
+                        data_item["transcript"], input_type="auto"
+                    )
+
                 # Create summarization result entry
                 result_entry = {
                     "transcript": (
@@ -1398,7 +1450,8 @@ class BatchExperimentRunner:
                         else data_item["transcript"]
                     ),
                     "generated_summaries": generated_summaries,
-                    "source_file": data_item.get("source_file", ""),
+                    "source_file": source_file,
+                    "content_type": content_type,  # Add detected content type
                 }
 
                 # Add ground truth summaries if available (from groundtruth files)

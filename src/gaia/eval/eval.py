@@ -1149,25 +1149,68 @@ class Evaluator:
                     "overall_quality": "",
                 }
 
-                # Compare generated vs ground truth if available
-                if groundtruth_summaries:
-                    prompt = f"""
-                    Analyze this summarization system result by comparing the generated summary against the ground truth.
+                # Determine document type from stored content_type or fall back to file extension
+                content_type = summary_result.get("content_type")
+                if not content_type:
+                    # Fallback for older experiments without content_type field
+                    source_file = summary_result.get("source_file", "")
+                    content_type = (
+                        "pdf" if source_file.lower().endswith(".pdf") else "transcript"
+                    )
 
-                    GENERATED SUMMARY:
+                # Build prompt sections based on document type
+                if content_type == "pdf":
+                    # For PDFs, only include executive and detailed summaries
+                    generated_sections = f"""
+                    Executive Summary: {generated_summaries.get('executive_summary', 'N/A')}
+                    Detailed Summary: {generated_summaries.get('detailed_summary', 'N/A')}"""
+
+                    groundtruth_sections = (
+                        f"""
+                    Executive Summary: {groundtruth_summaries.get('executive_summary', 'N/A')}
+                    Detailed Summary: {groundtruth_summaries.get('detailed_summary', 'N/A')}"""
+                        if groundtruth_summaries
+                        else ""
+                    )
+
+                    evaluation_criteria = """
+                    1. Executive Summary Quality: How well does the executive summary capture the key points? Is it concise and high-level?
+                    2. Detailed Summary Completeness: Are all important details covered in the detailed summary? Does it provide sufficient context and depth?"""
+
+                    json_fields = """
+                        "executive_summary_quality": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},
+                        "detail_completeness": {{
+                            "rating": "excellent/good/fair/poor", 
+                            "explanation": "detailed analysis"
+                        }},"""
+                elif content_type == "email":
+                    # For emails, include action items and participants
+                    generated_sections = f"""
                     Executive Summary: {generated_summaries.get('executive_summary', 'N/A')}
                     Detailed Summary: {generated_summaries.get('detailed_summary', 'N/A')}
+                    Action Items: {generated_summaries.get('action_items', [])}
+                    Participants: {generated_summaries.get('participants', [])}"""
 
-                    GROUND TRUTH SUMMARY:
+                    groundtruth_sections = (
+                        f"""
                     Executive Summary: {groundtruth_summaries.get('executive_summary', 'N/A')}
                     Detailed Summary: {groundtruth_summaries.get('detailed_summary', 'N/A')}
+                    Action Items: {groundtruth_summaries.get('action_items', [])}
+                    Participants: {groundtruth_summaries.get('participants', [])}"""
+                        if groundtruth_summaries
+                        else ""
+                    )
 
-                    Evaluate the generated summary on these criteria (rate each as excellent/good/fair/poor):
+                    evaluation_criteria = """
                     1. Executive Summary Quality: How well does the executive summary capture the key points? Is it concise and high-level?
                     2. Detailed Summary Completeness: Are all important details covered in the detailed summary? Does it provide sufficient context and depth?
+                    3. Action Items Accuracy: Are action items correctly identified and detailed?
+                    4. Participant Identification: Are participants correctly identified?"""
 
-                    Return your analysis in this JSON format:
-                    {{
+                    json_fields = """
                         "executive_summary_quality": {{
                             "rating": "excellent/good/fair/poor",
                             "explanation": "detailed analysis"
@@ -1176,27 +1219,105 @@ class Evaluator:
                             "rating": "excellent/good/fair/poor", 
                             "explanation": "detailed analysis"
                         }},
+                        "action_items_structure": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},
+                        "participant_information": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},"""
+                else:
+                    # For transcripts, include only action items (no participants)
+                    generated_sections = f"""
+                    Executive Summary: {generated_summaries.get('executive_summary', 'N/A')}
+                    Detailed Summary: {generated_summaries.get('detailed_summary', 'N/A')}
+                    Action Items: {generated_summaries.get('action_items', [])}"""
+
+                    groundtruth_sections = (
+                        f"""
+                    Executive Summary: {groundtruth_summaries.get('executive_summary', 'N/A')}
+                    Detailed Summary: {groundtruth_summaries.get('detailed_summary', 'N/A')}
+                    Action Items: {groundtruth_summaries.get('action_items', [])}"""
+                        if groundtruth_summaries
+                        else ""
+                    )
+
+                    evaluation_criteria = """
+                    1. Executive Summary Quality: How well does the executive summary capture the key points? Is it concise and high-level?
+                    2. Detailed Summary Completeness: Are all important details covered in the detailed summary? Does it provide sufficient context and depth?
+                    3. Action Items Accuracy: Are action items correctly identified and detailed?"""
+
+                    json_fields = """
+                        "executive_summary_quality": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},
+                        "detail_completeness": {{
+                            "rating": "excellent/good/fair/poor", 
+                            "explanation": "detailed analysis"
+                        }},
+                        "action_items_structure": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},"""
+
+                # Compare generated vs ground truth if available
+                if groundtruth_summaries:
+                    prompt = f"""
+                    Analyze this summarization system result by comparing the generated summary against the ground truth.
+
+                    GENERATED SUMMARY:
+                    {generated_sections}
+                    
+                    GROUND TRUTH SUMMARY:
+                    {groundtruth_sections}
+
+                    Evaluate the generated summary on these criteria (rate each as excellent/good/fair/poor):
+                    {evaluation_criteria}
+
+                    Return your analysis in this JSON format:
+                    {{
+                        {json_fields}
                         "overall_quality": "excellent/good/fair/poor"
                     }}
                     """
                 else:
-                    # Analyze standalone summary quality
-                    prompt = f"""
-                    Analyze this generated document summary for quality and completeness.
+                    # Analyze standalone summary quality (no ground truth)
+                    if content_type == "pdf":
+                        # For PDFs, only evaluate executive and detailed summaries
+                        standalone_sections = f"""
+                    Executive Summary: {generated_summaries.get('executive_summary', 'N/A')}
+                    Detailed Summary: {generated_summaries.get('detailed_summary', 'N/A')}"""
 
-                    GENERATED SUMMARY:
+                        standalone_criteria = """
+                    1. Executive Summary Quality: Is it clear, concise, and high-level? Does it effectively capture the main points?
+                    2. Detailed Summary Completeness: Does the detailed summary provide sufficient context and depth? Are all important details covered?"""
+
+                        standalone_json = """
+                        "executive_summary_quality": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},
+                        "detail_completeness": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},"""
+                    elif content_type == "email":
+                        # For emails, evaluate action items and participants
+                        standalone_sections = f"""
                     Executive Summary: {generated_summaries.get('executive_summary', 'N/A')}
                     Detailed Summary: {generated_summaries.get('detailed_summary', 'N/A')}
+                    Action Items: {generated_summaries.get('action_items', [])}
+                    Participants: {generated_summaries.get('participants', [])}"""
 
-                    Evaluate the summary quality (rate each as excellent/good/fair/poor):
+                        standalone_criteria = """
                     1. Executive Summary Quality: Is it clear, concise, and high-level? Does it effectively capture the main points?
                     2. Detailed Summary Completeness: Does the detailed summary provide sufficient context and depth? Are all important details covered?
+                    3. Action Items Structure: Are action items specific and actionable?
+                    4. Participant Information: Are participants properly identified?"""
 
-                    IMPORTANT: Return ONLY valid JSON with no additional text, markdown formatting, or explanations.
-                    Ensure all JSON syntax is correct - no trailing commas, proper quotes, and complete structure.
-
-                    Return your analysis in this exact JSON format:
-                    {{
+                        standalone_json = """
                         "executive_summary_quality": {{
                             "rating": "excellent/good/fair/poor",
                             "explanation": "detailed analysis"
@@ -1205,6 +1326,55 @@ class Evaluator:
                             "rating": "excellent/good/fair/poor",
                             "explanation": "detailed analysis"
                         }},
+                        "action_items_structure": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},
+                        "participant_information": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},"""
+                    else:
+                        # For transcripts, evaluate action items only (no participants)
+                        standalone_sections = f"""
+                    Executive Summary: {generated_summaries.get('executive_summary', 'N/A')}
+                    Detailed Summary: {generated_summaries.get('detailed_summary', 'N/A')}
+                    Action Items: {generated_summaries.get('action_items', [])}"""
+
+                        standalone_criteria = """
+                    1. Executive Summary Quality: Is it clear, concise, and high-level? Does it effectively capture the main points?
+                    2. Detailed Summary Completeness: Does the detailed summary provide sufficient context and depth? Are all important details covered?
+                    3. Action Items Structure: Are action items specific and actionable?"""
+
+                        standalone_json = """
+                        "executive_summary_quality": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},
+                        "detail_completeness": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},
+                        "action_items_structure": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},"""
+
+                    prompt = f"""
+                    Analyze this generated document summary for quality and completeness.
+
+                    GENERATED SUMMARY:
+                    {standalone_sections}
+                    
+                    Evaluate the summary quality (rate each as excellent/good/fair/poor):
+                    {standalone_criteria}
+
+                    IMPORTANT: Return ONLY valid JSON with no additional text, markdown formatting, or explanations.
+                    Ensure all JSON syntax is correct - no trailing commas, proper quotes, and complete structure.
+
+                    Return your analysis in this exact JSON format:
+                    {{
+                        {standalone_json}
                         "overall_quality": "excellent/good/fair/poor"
                     }}
                     """
