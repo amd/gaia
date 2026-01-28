@@ -738,6 +738,25 @@ gaia mcp tools time
 gaia mcp tools memory --config ./mcp_servers.json
 ```
 
+#### `gaia mcp test-client`
+
+Test connection to a configured MCP server.
+
+```bash
+gaia mcp test-client <server-name> [--config PATH]
+```
+
+**Arguments:**
+- `<server-name>` - Name of the server to test
+
+**Options:**
+- `--config PATH` - Custom config file path (default: `~/.gaia/mcp_servers.json`)
+
+**Example:**
+```bash
+gaia mcp test-client time
+```
+
 [→ Full MCP Client Guide](/guides/mcp-client)
 
 ---
