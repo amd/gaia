@@ -26,33 +26,39 @@ Timelines are estimates and may shift based on community feedback and technical 
 ### Timeline
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontSize':'16px', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
-graph LR
-    Q1["Q1 2026<br/>Lightweight Installer<br/><small>One-command install</small>"]
-    Q1B["Q1 2026<br/>Chat Desktop UI<br/><small>Privacy-first RAG</small>"]
-    Q1C["Q1 2026<br/>MCP Client Mixin<br/><small>Computer Use Agents</small>"]
-    Q1D["Q1 2026<br/>SD Agent<br/><small>Stable Diffusion optimization</small>"]
-    Q2["Q2 2026<br/>MCP Docs Server<br/><small>AI assistant context</small>"]
-    Q3["Q3 2026<br/>TBD<br/><small>Community-driven</small>"]
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontSize':'14px', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+graph TD
+    subgraph Q1["Q1 2026"]
+        A("Lightweight Installer<br/><i>One-command install</i>")
+        B("Chat Desktop UI<br/><i>Privacy-first RAG</i>")
+        C("MCP Client Mixin<br/><i>Computer Use Agents</i>")
+        D("SD Agent<br/><i>Stable Diffusion optimization</i>")
+    end
 
-    Q1 -.-> Q1B
-    Q1B --> Q1C
-    Q1C -.-> Q1D
-    Q1D --> Q2
-    Q2 --> Q3
+    subgraph Q2["Q2 2026"]
+        E("MCP Docs Server<br/><i>AI assistant context</i>")
+    end
 
-    style Q1 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style Q1B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style Q1C fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style Q1D fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style Q2 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style Q3 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    subgraph Q3["Q3 2026"]
+        F("Community-Driven<br/><i>Vote on GitHub</i>")
+    end
 
-    linkStyle 0 stroke:#ED1C24,stroke-width:2px,stroke-dasharray: 5 5
-    linkStyle 1 stroke:#ED1C24,stroke-width:2px
-    linkStyle 2 stroke:#ED1C24,stroke-width:2px,stroke-dasharray: 5 5
-    linkStyle 3 stroke:#ED1C24,stroke-width:2px
-    linkStyle 4 stroke:#ED1C24,stroke-width:2px
+    A --> B
+    A --> D
+    B --> C
+    C --> E
+    E --> F
+
+    style A fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style C fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style D fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style E fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style F fill:#2d2d2d,stroke:#555,stroke-width:2px,color:#fff
+
+    style Q1 fill:transparent,stroke:#F4484D,stroke-width:2px,stroke-dasharray: 5 5,color:#F4484D
+    style Q2 fill:transparent,stroke:#F4484D,stroke-width:2px,stroke-dasharray: 5 5,color:#F4484D
+    style Q3 fill:transparent,stroke:#555,stroke-width:2px,stroke-dasharray: 5 5,color:#888
 ```
 
 ### Q1 2026: Lightweight Installer

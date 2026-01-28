@@ -35,6 +35,14 @@ An AI agent that helps users generate better Stable Diffusion images through int
 
 **Goal:** Make professional-quality Stable Diffusion image generation accessible through intelligent optimization of all generation parameters, with a searchable database and gallery for managing your creations. The agent learns from your ratings to personalize future recommendations based on your unique aesthetic preferences.
 
+<Frame>
+  <img src="/plans/sd-agent-mockup/images/sd-agent-mockup.jpg" alt="SD Agent Gallery UI mockup showing task queue, generation progress, and image gallery with ratings" />
+</Frame>
+
+<Note>
+[View the interactive mockup](/plans/sd-agent-mockup/index.html) for a full preview of the gallery UI.
+</Note>
+
 ---
 
 ## System Architecture
@@ -42,136 +50,63 @@ An AI agent that helps users generate better Stable Diffusion images through int
 ### High-Level Overview
 
 ```mermaid
-graph TB
-    subgraph "User Input Layer"
-        User["👤 User"]
-        UserInput["Text Prompt<br/>+ Preferences"]
-        UserFeedback["Rating<br/>Tags<br/>Notes<br/>Favorites"]
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontSize':'14px', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+graph TD
+    subgraph UI["User Interface"]
+        CLI("CLI<br/><i>gaia sd ...</i>")
+        Gallery("Gallery UI<br/><i>Web/Electron</i>")
     end
 
-    subgraph "User Interfaces"
-        CLI["🖥️ CLI<br/>(gaia sd ...)"]
-        GalleryUI["🌐 Gallery UI<br/>(Web/Electron)"]
-        TaskInterface["📋 Task Interface<br/>(Submit → Process → Result)"]
-        TermDisplay["🖼️ Terminal Display<br/>(Sixel/iTerm2/Kitty)"]
+    subgraph Agent["SD Agent"]
+        Core("SDAgent<br/><i>Orchestration</i>")
+        Enhance("Prompt Enhancer<br/><i>LLM-powered</i>")
+        Params("Parameter Optimizer<br/><i>Model, Size, Steps</i>")
+        Eval("Image Evaluator<br/><i>VLM-powered</i>")
     end
 
-    subgraph "SD Optimization Agent"
-        Agent["🤖 SDAgent<br/>(Agent + DatabaseMixin)"]
-
-        subgraph "Core Components"
-            PromptEnh["✨ Prompt Enhancer<br/>(LLM-powered)"]
-            ParamOpt["⚙️ Parameter Optimizer<br/>(Model, Size, Steps, CFG)"]
-            Analyzer["📊 Prompt Analyzer<br/>(Quality Scoring)"]
-            ImgEval["👁️ Image Evaluator<br/>(VLM-powered)"]
-        end
-
-        subgraph "Intelligence Layer"
-            Search["🔍 NL Search<br/>(LLM → SQL)"]
-            Learn["🧠 Preference Learner<br/>(Rating Analysis)"]
-            Templates["📚 Template Library<br/>(DB-backed)"]
-        end
-
-        subgraph "Utilities"
-            Export["📤 Export<br/>(JSON/CSV/ZIP)"]
-            Cache["🗄️ Cache Manager"]
-        end
+    subgraph Backend["AMD NPU Backend"]
+        LLM("LLM<br/><i>Qwen3-4B</i>")
+        VLM("VLM<br/><i>Qwen3-VL-4B</i>")
+        SD("Stable Diffusion<br/><i>SD-Turbo</i>")
     end
 
-    subgraph "Storage Layer"
-        DB[(💾 SQLite Database<br/>• generations<br/>• templates<br/>• prompt_versions<br/>• user preferences)]
-        Files[("📁 Image Files<br/>.gaia/cache/sd/images/<br/>+ thumbnails")]
+    subgraph Storage["Storage"]
+        DB[("SQLite<br/><i>Metadata</i>")]
+        Files[("Images<br/><i>.gaia/cache/</i>")]
     end
 
-    subgraph "AMD NPU-Accelerated Backend"
-        LLM["🚀 LLM<br/>(Qwen3-4B-Instruct-2507-FLM)<br/>Lemonade Server / AMD NPU"]
-        VLM["👁️ VLM<br/>(Qwen3-VL-4B)<br/>Lemonade Server / AMD NPU"]
-        SD["🎨 Stable Diffusion<br/>(SD-Turbo / SDXL-Turbo)<br/>Lemonade Server"]
-    end
+    CLI --> Core
+    Gallery --> Core
 
-    subgraph "Communication Layer"
-        REST["REST API"]
-        WS["WebSocket<br/>(Real-time Updates)"]
-    end
+    Core --> Enhance
+    Core --> Params
+    Core --> Eval
 
-    %% User Input Flow
-    User -->|Enter| UserInput
-    User -->|Provide| UserFeedback
-    UserInput -->|CLI Commands| CLI
-    UserInput -->|Submit Task| TaskInterface
-    UserFeedback -->|via UI| GalleryUI
+    Enhance --> LLM
+    Params --> LLM
+    Eval --> VLM
+    Core --> SD
 
-    %% Interface to Agent
-    CLI -->|Direct Call| Agent
-    TaskInterface -->|REST API| REST
-    GalleryUI -->|REST API| REST
-    REST -->|Forward| Agent
+    SD --> Files
+    Core --> DB
+    Eval --> Core
 
-    %% Agent Processing Flow
-    Agent -->|Analyze| Analyzer
-    Agent -->|Enhance| PromptEnh
-    Agent -->|Optimize| ParamOpt
-    Agent -->|Generate| SD
-    Agent -->|Search/Filter| Search
-    Agent -->|Apply Template| Templates
-    Agent -->|Export Data| Export
-    Agent -->|Manage Cache| Cache
+    style Core fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style Enhance fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style Params fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style Eval fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style CLI fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style Gallery fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style LLM fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style VLM fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style SD fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style DB fill:#2d2d2d,stroke:#555,stroke-width:2px,color:#fff
+    style Files fill:#2d2d2d,stroke:#555,stroke-width:2px,color:#fff
 
-    %% LLM Integration
-    PromptEnh -->|Prompt Enhancement| LLM
-    ParamOpt -->|Parameter Recommendation| LLM
-    Search -->|Query Translation| LLM
-    Analyzer -->|Quality Scoring| LLM
-
-    %% VLM Integration (Image Evaluation)
-    Agent -->|Evaluate| ImgEval
-    ImgEval -->|Analyze Image| VLM
-    VLM -->|Quality Scores| ImgEval
-    ImgEval -->|Feedback| PromptEnh
-    ImgEval -->|Param Adjustments| ParamOpt
-
-    %% Personalization & Learning
-    Learn -->|Analyze Patterns| DB
-    Learn -->|User Preferences| PromptEnh
-    Learn -->|Best Params| ParamOpt
-
-    %% Storage Operations
-    Agent -->|Save Metadata| DB
-    Agent -->|Save Images| Files
-    Agent -->|Load History| DB
-    Agent -->|Load Images| Files
-    Templates -->|CRUD| DB
-
-    %% User Feedback Loop
-    UserFeedback -->|Store| DB
-    DB -->|Feed to| Learn
-
-    %% Gallery Features
-    GalleryUI -->|Browse/Search| REST
-    REST -->|Query| DB
-    DB -->|Results| REST
-    REST -->|Image Paths| GalleryUI
-    GalleryUI -->|Display| Files
-
-    %% Image Display
-    Agent -->|Display| TermDisplay
-    TermDisplay -->|Render| CLI
-    Agent -->|Stream Progress| WS
-    WS -->|Update| GalleryUI
-
-    %% Image Generation Flow
-    SD -->|Base64 PNG| Agent
-    Agent -->|Decode + Save| Files
-    Agent -->|Save Metadata| DB
-
-    style Agent fill:#ED1C24,stroke:#C8171E,color:#fff,stroke-width:3px
-    style LLM fill:#F4484D,stroke:#ED1C24,color:#fff
-    style VLM fill:#F4484D,stroke:#ED1C24,color:#fff
-    style SD fill:#F4484D,stroke:#ED1C24,color:#fff
-    style ImgEval fill:#9B59B6,stroke:#8E44AD,color:#fff
-    style DB fill:#2d2d2d,stroke:#1a1a1a,color:#fff
-    style User fill:#4A90E2,stroke:#357ABD,color:#fff
-    style Learn fill:#FFA500,stroke:#FF8C00,color:#fff
+    style UI fill:transparent,stroke:#F4484D,stroke-width:2px,stroke-dasharray: 5 5,color:#F4484D
+    style Agent fill:transparent,stroke:#ED1C24,stroke-width:2px,stroke-dasharray: 5 5,color:#ED1C24
+    style Backend fill:transparent,stroke:#F4484D,stroke-width:2px,stroke-dasharray: 5 5,color:#F4484D
+    style Storage fill:transparent,stroke:#555,stroke-width:2px,stroke-dasharray: 5 5,color:#888
 ```
 
 ### Data Flow
@@ -237,8 +172,10 @@ graph TB
 | **Template Library** | SD-specific patterns (photorealistic, anime, etc.) | Codify proven prompt+parameter combinations |
 | **Storage** | SQLite database + file system | DatabaseMixin, queryable history, fast retrieval |
 | **Database Schema** | generations, templates, prompt_versions, evaluations | Structured storage for all generation + evaluation data |
-| **Image Files** | `.gaia/cache/sd/images/` | File system for actual image binaries |
-| **Gallery UI** | Task-based web interface (Electron or browser) | Submit tasks → view results, browse, annotate, rate |
+| **Image Files** | `.gaia/cache/sd/images/` | Internal cache for generated images (not user-facing) |
+| **Output Formats** | PNG (default), JPEG | PNG for quality, JPEG for smaller file size |
+| **Image Download** | Explicit download to ~/Downloads | Gallery download button exports to user's Downloads folder |
+| **Gallery UI** | Task-based web interface (Electron or browser) | Submit tasks → view results, browse, annotate, rate, download |
 | **Terminal Display** | `rich` + `term-image` | CLI image preview |
 | **Metadata Format** | Database rows + JSON export | Queryable + portable |
 
@@ -276,7 +213,8 @@ src/gaia/agents/sd/
 ├── integrations/
 │   ├── __init__.py
 │   ├── image_generator.py      # Lemonade Server SD API wrapper
-│   ├── image_utils.py          # Image processing, format conversion
+│   ├── image_utils.py          # Image processing, PNG/JPEG conversion
+│   ├── download_manager.py     # Export images to ~/Downloads folder
 │   └── terminal_display.py     # Terminal image rendering
 └── templates/
     └── default_templates.json  # Starter template set (inserted into DB)
@@ -308,6 +246,7 @@ CREATE TABLE generations (
 
     -- Image data
     image_path TEXT NOT NULL,      -- Relative path to .gaia/cache/sd/images/
+    image_format TEXT DEFAULT 'png', -- Output format: 'png' or 'jpeg'
     image_hash TEXT,               -- SHA256 hash for deduplication
 
     -- User annotations (for gallery)
@@ -434,7 +373,8 @@ DatabaseMixin
       │   ├── get_top_rated               # Get highest rated generations
       │   ├── tag_generation              # Add tags for organization
       │   ├── rate_generation             # Set user rating (1-5 stars)
-      │   └── add_notes                   # Annotate with notes
+      │   ├── add_notes                   # Annotate with notes
+      │   └── download_image              # Export to ~/Downloads (PNG or JPEG)
       │
       ├── Template Tools:
       │   ├── list_templates              # Browse available templates
@@ -463,6 +403,7 @@ DatabaseMixin
       └── Gallery:
           ├── GalleryServer               # Task-based web UI server
           ├── GalleryAPI                  # REST API for task submission
+          ├── DownloadManager             # Export images to ~/Downloads (PNG/JPEG)
           └── Database (SQLite)           # Persistent storage
 ```
 
@@ -472,186 +413,282 @@ DatabaseMixin
 
 ### Mode 1: Prompt Enhancement Only
 
-**Use Case:** Get better prompts without generating images yet
+**Use Case:** Optimize prompts before generating
 
 ```bash
-# Enhance a Stable Diffusion prompt
-gaia prompt enhance "a mountain" --for sd
-
-# Analyze prompt quality
-gaia prompt analyze "a serene mountain landscape at sunset"
-
-# Refine iteratively
-gaia prompt refine "cyberpunk city" --iterations 3
+gaia sd enhance "a mountain"
 ```
 
 **Terminal Output:**
 ```
-🧠 Analyzing your prompt...
+─────────────────────────────────────────────────────────
+ SD AGENT · Prompt Enhancement
+─────────────────────────────────────────────────────────
 
-Original: "a mountain"
-Domain: Stable Diffusion
+INPUT    "a mountain"                              3/10
 
-📊 Quality Score: 3/10
-   ❌ Missing: style descriptors, lighting, quality keywords
-   ❌ Too brief: may produce generic results
-   ✅ Clear subject
+AGENT ACTIONS
+  → Analyzing intent...
+  → Adding style: photorealistic
+  → Adding lighting: golden hour, atmospheric
+  → Adding details: snow-capped peaks, misty valleys
+  → Adding quality: high quality, 4k
 
-✨ Enhanced Version:
-   "a serene mountain landscape at sunset, golden hour lighting,
-    detailed snow-capped peaks, atmospheric perspective, misty valleys,
-    high quality, photorealistic, 4k"
+OUTPUT   "a serene mountain landscape at sunset,   9/10
+          golden hour lighting, detailed snow-capped
+          peaks, atmospheric perspective, misty
+          valleys, high quality, photorealistic, 4k"
 
-📈 Quality Score: 9/10
-   ✅ Style: photorealistic landscape
-   ✅ Lighting: golden hour, atmospheric
-   ✅ Quality: high quality, 4k
-   ✅ Details: snow-capped peaks, misty valleys
-   ✅ Token count: 23/77 (optimal)
+TOKENS   23/77 ✓
 
-💾 Saved to: .gaia/cache/prompts/mountain_v1.json
-
-Would you like to:
-  [g] Generate image with this prompt
-  [r] Refine further
-  [c] Compare with variations
-  [s] Save to template library
+─────────────────────────────────────────────────────────
 ```
 
-### Mode 2: Enhance + Generate (Integrated)
+### Mode 2: Full Generation Pipeline
 
-**Use Case:** One command to enhance and visualize
+**Use Case:** Generate with automatic quality iteration
 
 ```bash
-# Enhance prompt and generate image immediately
-gaia prompt generate "a mountain"
-
-# Or use shorthand
-gaia pg "a mountain"
+gaia sd generate "a mountain"
+gaia sd generate "a mountain" --format jpeg  # Output as JPEG instead of PNG
 ```
 
 **Terminal Output:**
 ```
-🎨 PromptAgent: Enhance + Generate Workflow
+─────────────────────────────────────────────────────────
+ SD AGENT · Generate
+─────────────────────────────────────────────────────────
 
-Step 1: Enhancing prompt...
-✨ Enhanced: "a serene mountain landscape at sunset, golden hour..."
+INPUT    "a mountain"
 
-Step 2: Generating image with SD-Turbo...
-⚡ AMD Ryzen AI NPU acceleration enabled
+AGENT ACTIONS
+  [1/4] Enhancing prompt ························· done
+  [2/4] Optimizing parameters ···················· done
+        → SD-Turbo · 512x512 · 4 steps · cfg 1.0
+  [3/4] Generating image ························· done
+  [4/4] VLM evaluation ··························· done
 
-🖼️  [Image displayed inline in terminal]
+─────────────────────────────────────────────────────────
+ ITERATION 1
+─────────────────────────────────────────────────────────
 
-✅ Results saved:
-   Prompt: .gaia/cache/prompts/mountain_v1.json
-   Image:  .gaia/cache/prompts/images/mountain_v1.png
+ ┌─────────────────────────────────────────────────────┐
+ │                                                     │
+ │                   [IMAGE PREVIEW]                   │
+ │                                                     │
+ └─────────────────────────────────────────────────────┘
 
-Quality comparison:
-  Original prompt score: 3/10
-  Enhanced prompt score: 9/10
-  Visual quality: Excellent (manual review)
+ VLM SCORES                              OVERALL 7.6/10
+ ├─ Composition        8    ████████░░
+ ├─ Lighting           7    ███████░░░
+ ├─ Prompt adherence   6    ██████░░░░  "snow detail missing"
+ ├─ Style              8    ████████░░
+ └─ Technical          9    █████████░
 
-Next steps:
-  - Try variations: gaia pg "a mountain" --variations 4
-  - Refine style: gaia prompt refine <prompt-id> --style anime
-  - Save as template: gaia prompt save <prompt-id> --name "scenic-landscape"
+ STATUS   ✓ Passed threshold (7.0) · 1 iteration
+
+─────────────────────────────────────────────────────────
+ OUTPUT   .gaia/cache/sd/images/mountain_001.png
+─────────────────────────────────────────────────────────
 ```
 
-### Mode 3: Interactive Refinement
+**With Iteration (below threshold):**
+```
+─────────────────────────────────────────────────────────
+ SD AGENT · Generate (Quality Target: 8.0)
+─────────────────────────────────────────────────────────
 
-**Use Case:** Collaborative prompt engineering session
+INPUT    "a dragon breathing fire"
+
+─────────────────────────────────────────────────────────
+ ITERATION 1                             SCORE 6.2/10 ✗
+─────────────────────────────────────────────────────────
+ VLM feedback: "Fire lacks intensity, scales need detail"
+
+ AGENT ACTIONS
+  → Refining prompt: added "intense flames, detailed scales"
+  → Adjusting params: steps 4 → 6
+
+─────────────────────────────────────────────────────────
+ ITERATION 2                             SCORE 7.4/10 ✗
+─────────────────────────────────────────────────────────
+ VLM feedback: "Better fire, composition could be stronger"
+
+ AGENT ACTIONS
+  → Refining prompt: added "dramatic angle, epic composition"
+
+─────────────────────────────────────────────────────────
+ ITERATION 3 (FINAL)                     SCORE 8.3/10 ✓
+─────────────────────────────────────────────────────────
+
+ ┌─────────────────────────────────────────────────────┐
+ │                   [FINAL IMAGE]                     │
+ └─────────────────────────────────────────────────────┘
+
+ STATUS   ✓ Passed after 3 iterations
+ OUTPUT   .gaia/cache/sd/images/dragon_003.png
+─────────────────────────────────────────────────────────
+```
+
+### Mode 3: Task Queue
+
+**Use Case:** Batch processing with autonomous execution
 
 ```bash
-gaia prompt
-```
-
-**Interactive Session:**
-```
-🧠 PromptAgent - Interactive Mode
-
-> What would you like to create?
-User: A futuristic city
-
-> Domain: [sd] Stable Diffusion, [llm] Text Generation, [code] Code
-User: sd
-
-> I'll analyze and enhance your prompt...
-
-Original: "A futuristic city"
-Score: 4/10
-
-Enhanced Options:
-
-[1] Photorealistic Style (Score: 9/10)
-    "A futuristic city at night, neon lights, flying cars, towering
-     skyscrapers, holographic advertisements, rainy streets with
-     reflections, photorealistic, detailed architecture, 4k"
-
-[2] Cyberpunk Aesthetic (Score: 9/10)
-    "A cyberpunk futuristic city, dark atmosphere, purple and blue neon
-     signs, dense urban environment, steam rising from streets, night scene,
-     cinematic lighting, blade runner inspired"
-
-[3] Clean Utopian (Score: 8/10)
-    "A bright futuristic city, clean white buildings, green parks, solar
-     panels, clear blue sky, optimistic atmosphere, sustainable architecture,
-     people walking, daytime, high quality"
-
-> Select option or type custom changes:
-User: 2
-
-> Generate image now? [Y/n]
-User: y
-
-> [Generates and displays image]
-
-> How's the result?
-  [g] Good - save this prompt as template
-  [r] Refine - adjust the prompt
-  [v] Variations - try different seeds
-  [n] New - start over
-User: g
-
-> Template name:
-User: cyberpunk-city
-
-✅ Saved template: cyberpunk-city
-   Reuse with: gaia prompt use cyberpunk-city "metropolis"
-```
-
-### Mode 4: A/B Testing
-
-**Use Case:** Compare different prompt approaches
-
-```bash
-# Compare multiple enhancement strategies
-gaia prompt compare "a dragon" --strategies photorealistic,anime,oil-painting
+gaia sd submit "a futuristic city at night"
+gaia sd submit "a dragon in a cave" --model SDXL-Turbo
+gaia sd submit "portrait of a wizard" --quality 8.5
+gaia sd queue
 ```
 
 **Terminal Output:**
 ```
-🔬 A/B Testing: 3 prompt strategies
+─────────────────────────────────────────────────────────
+ SD AGENT · Task Queue
+─────────────────────────────────────────────────────────
 
-Strategy 1: Photorealistic (Score: 9/10)
-  Enhanced: "A majestic dragon, realistic scales, detailed anatomy..."
-  [Generated image displayed]
+ #   PROMPT                          STATUS       SCORE
+ ─────────────────────────────────────────────────────────
+ 1   a futuristic city at night      ✓ done       8.2
+ 2   a dragon in a cave              ● running    6.1 → iter 2
+ 3   portrait of a wizard            ○ pending    -
 
-Strategy 2: Anime (Score: 8/10)
-  Enhanced: "A dragon, anime style, vibrant colors, cel shaded..."
-  [Generated image displayed]
+─────────────────────────────────────────────────────────
+ TASK #2 · In Progress
+─────────────────────────────────────────────────────────
 
-Strategy 3: Oil Painting (Score: 9/10)
-  Enhanced: "A dragon, oil painting style, classical brushstrokes..."
-  [Generated image displayed]
+ AGENT ACTIONS
+  [✓] Enhance prompt
+  [✓] Generate (iteration 1)
+  [✓] VLM evaluate → 6.1/10 (below 7.0)
+  [●] Refining: "adding dramatic cave lighting"
+  [ ] Generate (iteration 2)
+  [ ] VLM evaluate
 
-📊 Results saved to: .gaia/cache/prompts/dragon_comparison/
-   - Contains 3 prompts + images + metadata
-
-> Which strategy worked best?
-User: 1
-
-✅ Photorealistic strategy saved as preferred for "dragon" subject
+─────────────────────────────────────────────────────────
+ Completed: 1 · Running: 1 · Pending: 1
+─────────────────────────────────────────────────────────
 ```
+
+**View task details:**
+```bash
+gaia sd show 1
+```
+
+```
+─────────────────────────────────────────────────────────
+ TASK #1 · Complete
+─────────────────────────────────────────────────────────
+
+ INPUT     "a futuristic city at night"
+ OUTPUT    "a futuristic cyberpunk city at night, neon
+            lights reflecting on wet streets..."
+
+ PARAMS    SD-Turbo · 512x512 · 4 steps · seed 48291
+
+ ┌─────────────────────────────────────────────────────┐
+ │                   [FINAL IMAGE]                     │
+ └─────────────────────────────────────────────────────┘
+
+ ITERATIONS
+  1 → 6.8/10  "needs more neon contrast"
+  2 → 8.2/10  ✓ passed
+
+ FINAL SCORE                                     8.2/10
+ ├─ Composition        8    ████████░░
+ ├─ Lighting           9    █████████░
+ ├─ Prompt adherence   8    ████████░░
+ ├─ Style              8    ████████░░
+ └─ Technical          8    ████████░░
+
+─────────────────────────────────────────────────────────
+```
+
+### Mode 4: Strategy Comparison
+
+**Use Case:** A/B test different styles with VLM scoring
+
+```bash
+gaia sd compare "a dragon" --styles photorealistic,anime,oil-painting
+```
+
+**Terminal Output:**
+```
+─────────────────────────────────────────────────────────
+ SD AGENT · Compare Strategies
+─────────────────────────────────────────────────────────
+
+ INPUT    "a dragon"
+ STYLES   photorealistic · anime · oil-painting
+
+ AGENT ACTIONS
+  [✓] Enhanced prompt × 3 styles
+  [✓] Generated images × 3
+  [✓] VLM evaluated × 3
+
+─────────────────────────────────────────────────────────
+ RESULTS
+─────────────────────────────────────────────────────────
+
+ ┌─────────────┬─────────────┬─────────────┐
+ │ PHOTO       │ ANIME       │ OIL         │
+ │             │             │             │
+ │  [IMAGE]    │  [IMAGE]    │  [IMAGE]    │
+ │             │             │             │
+ │   8.8/10    │   7.8/10    │   8.8/10    │
+ └─────────────┴─────────────┴─────────────┘
+
+ STYLE           COMP  LIGHT PROMPT STYLE  TECH   SCORE
+ ─────────────────────────────────────────────────────────
+ photorealistic   9     8     9      9      9     8.8 ★
+ anime            8     7     8      9      7     7.8
+ oil-painting     9     9     8     10      8     8.8 ★
+
+ VLM NOTES
+  photo  → "Excellent detail, realistic lighting on scales"
+  anime  → "Good style, minor background artifacts"
+  oil    → "Beautiful texture, strong composition"
+
+─────────────────────────────────────────────────────────
+ WINNER   Tie: photorealistic & oil-painting (8.8/10)
+─────────────────────────────────────────────────────────
+```
+
+### Mode 5: Download Images
+
+**Use Case:** Export images from gallery to Downloads folder
+
+```bash
+# Download single image (default PNG)
+gaia sd download 1
+
+# Download as JPEG
+gaia sd download 1 --format jpeg
+
+# Download multiple images
+gaia sd download 1 2 3 --format png
+
+# Download all favorites
+gaia sd download --favorites
+```
+
+**Terminal Output:**
+```
+─────────────────────────────────────────────────────────
+ SD AGENT · Download
+─────────────────────────────────────────────────────────
+
+ TASK #1   "a futuristic city at night"
+
+ FORMAT    PNG
+ OUTPUT    ~/Downloads/sd_futuristic_city_001.png
+
+ ✓ Downloaded successfully
+
+─────────────────────────────────────────────────────────
+```
+
+**Gallery UI:** Each image card displays a download button. Clicking opens a format picker (PNG/JPEG) and saves to the user's Downloads folder.
 
 ---
 
@@ -1252,32 +1289,50 @@ def test_prompt_consistency(
 
 **Consistency Test Output:**
 
+```bash
+gaia sd test "a serene mountain landscape at sunset" --seeds 4
 ```
-🧪 Testing Prompt Consistency
 
-Prompt: "a serene mountain landscape at sunset, golden hour lighting..."
-Score: 9/10
+```
+─────────────────────────────────────────────────────────
+ SD AGENT · Consistency Test
+─────────────────────────────────────────────────────────
 
-Generating 4 test images with different seeds...
+ PROMPT   "a serene mountain landscape at sunset..."
 
-┌──────────────────┬──────────────────┐
-│  Seed: 12345     │  Seed: 23456     │
-│  [Image]         │  [Image]         │
-├──────────────────┼──────────────────┤
-│  Seed: 34567     │  Seed: 45678     │
-│  [Image]         │  [Image]         │
-└──────────────────┴──────────────────┘
+ AGENT ACTIONS
+  [✓] Generated 4 images with different seeds
+  [✓] VLM evaluated all images
 
-📊 Consistency Analysis:
-  ✅ Consistent subject: All images show mountains
-  ✅ Consistent lighting: All have golden hour/sunset
-  ✅ Consistent quality: All high detail
-  ⚠️  Variation: Mountain shapes differ (expected)
+─────────────────────────────────────────────────────────
+ RESULTS
+─────────────────────────────────────────────────────────
 
-  Verdict: EXCELLENT prompt consistency
-  Recommended for production use
+ ┌─────────────┬─────────────┐
+ │ seed 12345  │ seed 23456  │
+ │  [IMAGE]    │  [IMAGE]    │
+ │    8.4      │    7.9      │
+ ├─────────────┼─────────────┤
+ │ seed 34567  │ seed 45678  │
+ │  [IMAGE]    │  [IMAGE]    │
+ │    8.1      │    8.6 ★    │
+ └─────────────┴─────────────┘
 
-💾 Saved to: .gaia/cache/prompts/mountain_landscape/images/variations/
+ CONSISTENCY ANALYSIS
+  Range        7.9 - 8.6  (variance: 0.7)
+  Average      8.25/10
+  Best seed    45678
+
+ CATEGORY VARIANCE
+  Composition      8-9   ████░  low variance ✓
+  Lighting         8-9   ████░  low variance ✓
+  Prompt           7-9   ███░░  moderate
+  Style            8-9   ████░  low variance ✓
+  Technical        7-9   ███░░  moderate
+
+─────────────────────────────────────────────────────────
+ VERDICT   Excellent consistency · Use seed 45678
+─────────────────────────────────────────────────────────
 ```
 
 ---
@@ -2371,6 +2426,42 @@ Update `docs/reference/cli.mdx`:
 - Frontend: React/Vue + Tailwind CSS
 - Communication: REST API + WebSockets for live updates
 - Packaging: Electron wrapper for desktop app
+
+**Web UI Mockup:**
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  SD Agent                                          Queue (3)   Gallery  │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │  Enter prompt...                                          Submit │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│  ○ Lock parameters   Model: [Auto ▼]  Size: [Auto ▼]  Quality: [7.0]   │
+│                                                                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│  QUEUE                                                                  │
+│  ───────────────────────────────────────────────────────────────────── │
+│  ● Task #4   "a cyberpunk city"           Generating (iter 2)   6.2    │
+│    ├── [============================····] 70%                          │
+│    └── VLM: "Adding more neon contrast"                                │
+│                                                                         │
+│  ○ Task #5   "portrait of an elf"         Pending                      │
+│  ○ Task #6   "abstract art patterns"      Pending                      │
+│                                                                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│  RECENT                                                                 │
+│  ───────────────────────────────────────────────────────────────────── │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐          │
+│  │         │ │         │ │         │ │         │ │         │          │
+│  │  IMG 1  │ │  IMG 2  │ │  IMG 3  │ │  IMG 4  │ │  IMG 5  │          │
+│  │         │ │         │ │         │ │         │ │         │          │
+│  │  8.4/10 │ │  7.9/10 │ │  8.8/10 │ │  8.1/10 │ │  9.2/10 │          │
+│  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘          │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 **Deliverable:** Standalone UI at `http://localhost:5000` with task-based image creation, queue management, and searchable gallery
 
