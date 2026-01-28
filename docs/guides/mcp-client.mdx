@@ -30,48 +30,80 @@ MCP is an open protocol that standardizes how AI applications connect to externa
 
 ## Quick Start
 
+Build a working MCP-powered agent in 2 minutes.
+
 <Steps>
-  <Step title="Add an MCP Server">
-    Connect to an MCP server using the CLI. This saves the server configuration to `~/.gaia/mcp_servers.json` for reuse:
+  <Step title="Create the Agent">
+    Create a file `time_agent.py` with this complete example:
 
-    ```bash
-    # Format: gaia mcp add <server-name> "<command>"
-    gaia mcp add time "uvx mcp-server-time"
-    ```
-
-    The command above:
-    - Creates a server named "time"
-    - Uses `uvx` to run the `mcp-server-time` package
-    - Saves the configuration for later use
-  </Step>
-
-  <Step title="Use in Your Agent">
-    Add the MCPClientMixin to your agent:
-
-    ```python
+    ```python time_agent.py
     from gaia.agents.base.agent import Agent
     from gaia.agents.base.mcp_client_mixin import MCPClientMixin
 
-    class MyAgent(Agent, MCPClientMixin):
+    class TimeAgent(Agent, MCPClientMixin):
         def __init__(self, **kwargs):
-            super().__init__(**kwargs)
-            # Connect to the time server
-            self.connect_mcp_server(
-                "time",
-                "uvx mcp-server-time"
-            )
+            # Skip Lemonade initialization to avoid subprocess conflicts
+            kwargs.setdefault('skip_lemonade', True)
+
+            # Initialize both parent classes
+            Agent.__init__(self, **kwargs)
+            MCPClientMixin.__init__(self)
+
+            # Connect to MCP time server
+            print("Connecting to MCP time server...")
+            success = self.connect_mcp_server("time", "uvx mcp-server-time")
+            print(f"  time: {'✓' if success else '✗'}")
+
+            # Rebuild system prompt to include MCP tools
+            self._rebuild_system_prompt()
+
+        def _get_system_prompt(self) -> str:
+            return """You are a helpful AI assistant with access to a time server.
+Use the get_current_time tool to answer time-related questions."""
+
+        def _register_tools(self) -> None:
+            # MCP tools are auto-registered by MCPClientMixin
+            pass
+
+        def _rebuild_system_prompt(self) -> None:
+            self.system_prompt = self._get_system_prompt()
+            tools_description = self._format_tools_for_prompt()
+            self.system_prompt += f"\n\nAVAILABLE TOOLS:\n{tools_description}"
+
+    # Run the agent
+    if __name__ == "__main__":
+        agent = TimeAgent()
+        result = agent.process_query("What time is it in Tokyo?")
+        print(f"\nResult: {result.get('result')}")
     ```
   </Step>
 
   <Step title="Run Your Agent">
-    The agent now has access to all time server tools:
+    Run the complete example:
 
-    ```python
-    agent = MyAgent()
-    result = agent.run("What time is it in Tokyo?")
+    ```bash
+    python time_agent.py
+    ```
+
+    **Expected output:**
+    ```
+    Connecting to MCP time server...
+      time: ✓
+
+    Result: The current time in Tokyo is [current time]
     ```
   </Step>
 </Steps>
+
+**What just happened?**
+- The agent connected to the MCP time server via subprocess
+- The `get_current_time` tool was automatically discovered and registered
+- The LLM decided to call the tool based on your query
+- The tool result was formatted into a natural language response
+
+<Tip>
+  For production use, configure servers once using `gaia mcp add` and load them from config. See [`examples/mcp_config_based_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_config_based_agent.py) for the recommended pattern.
+</Tip>
 
 ## Prerequisites
 
