@@ -310,6 +310,7 @@
               "plans/chat-ui",
               "plans/mcp-client",
               "plans/cua",
+              "plans/image-agent",
               "plans/mcp-docs"
             ]
           }
