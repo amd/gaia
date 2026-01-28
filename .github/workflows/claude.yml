@@ -27,8 +27,9 @@ on:
     types: [opened, ready_for_review]
   pull_request_review_comment:
     types: [created, edited]
-  release:
-    types: [created]
+  workflow_run:
+    workflows: ["PyPi"]
+    types: [completed]
 
 permissions:
   contents: write  # Allows Claude to post suggested changes (requires write for GitHub API)
@@ -485,28 +486,67 @@ jobs:
             - Assume good intent
             - Welcome contributors
 
-  # Generate release notes when a new release is created
+  # Generate release notes when PyPi workflow completes successfully on a tag
   release-notes:
-    if: github.event_name == 'release'
+    if: |
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
     runs-on: ubuntu-latest
     permissions:
       contents: write  # For committing release notes
       issues: write    # For creating failure notification issue
     concurrency:
-      group: claude-release-notes-${{ github.event.release.tag_name }}
+      group: claude-release-notes-${{ github.event.workflow_run.head_branch }}
       cancel-in-progress: false
     steps:
+      - name: Extract and validate tag name
+        id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          TAG_NAME="$HEAD_BRANCH"
+          echo "Candidate tag: $TAG_NAME"
+
+          # Validate semantic version format (vX.Y.Z)
+          if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ '$TAG_NAME' is not a valid semantic version tag (expected vX.Y.Z)"
+            echo "SKIP=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Verify the GitHub release exists
+          if ! gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "❌ GitHub release for '$TAG_NAME' does not exist yet"
+            echo "SKIP=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "✅ Valid tag and release exists: $TAG_NAME"
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "SKIP=false" >> $GITHUB_OUTPUT
+
       - name: Checkout repository
+        if: steps.tag.outputs.SKIP != 'true'
         uses: actions/checkout@v6
         with:
           ref: main       # Checkout main branch (not tag) so we can commit
           fetch-depth: 0  # Full history for tag comparison
           token: ${{ secrets.RELEASE_PAT }}  # PAT needed to push past branch protection
 
+      - name: Fetch all tags
+        if: steps.tag.outputs.SKIP != 'true'
+        run: |
+          git fetch --tags --force
+          echo "Tags available:"
+          git tag -l | tail -10
+
       - name: Generate release context
+        if: steps.tag.outputs.SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CURRENT_TAG: ${{ github.event.release.tag_name }}
+          CURRENT_TAG: ${{ steps.tag.outputs.TAG_NAME }}
         run: |
           echo "Generating release context for $CURRENT_TAG"
 
@@ -602,6 +642,7 @@ jobs:
           ls -la release-diffs/ 2>/dev/null || echo "No diff files"
 
       - name: Generate release notes with Claude
+        if: steps.tag.outputs.SKIP != 'true'
         id: generate-notes
         uses: anthropics/claude-code-action@beta
         with:
@@ -610,7 +651,7 @@ jobs:
           max_turns: 30
           model: claude-opus-4-5-20251101
           prompt: |
-            Generate comprehensive release notes for GAIA version ${{ github.event.release.tag_name }}.
+            Generate comprehensive release notes for GAIA version ${{ steps.tag.outputs.TAG_NAME }}.
 
             ## FIRST ACTIONS
             1. Read release-context.txt - Contains commit log, contributors, PRs, and list of diff files
@@ -640,7 +681,7 @@ jobs:
             ### 1. `RELEASE_NOTES.md` - For GitHub Release
             Plain markdown for the GitHub release page.
 
-            ### 2. `docs/releases/${{ github.event.release.tag_name }}.mdx` - For Documentation Site
+            ### 2. `docs/releases/${{ steps.tag.outputs.TAG_NAME }}.mdx` - For Documentation Site
             MDX format with Mintlify frontmatter for the documentation website.
 
             ## Release Notes Format (use for BOTH files)
@@ -648,14 +689,14 @@ jobs:
             For the MDX file, add this frontmatter at the top:
             ```
             ---
-            title: "${{ github.event.release.tag_name }}"
+            title: "${{ steps.tag.outputs.TAG_NAME }}"
             description: "[One-line summary of this release]"
             ---
             ```
 
             Then use this content structure for both files:
 
-            # GAIA ${{ github.event.release.tag_name }} Release Notes
+            # GAIA ${{ steps.tag.outputs.TAG_NAME }} Release Notes
 
             ## Overview
 
@@ -692,7 +733,7 @@ jobs:
             Key PRs:
             - #[number] - [PR title]
 
-            Full Changelog: [${{ env.PREVIOUS_TAG }}...${{ github.event.release.tag_name }}](https://github.com/amd/gaia/compare/${{ env.PREVIOUS_TAG }}...${{ github.event.release.tag_name }})
+            Full Changelog: [${{ env.PREVIOUS_TAG }}...${{ steps.tag.outputs.TAG_NAME }}](https://github.com/amd/gaia/compare/${{ env.PREVIOUS_TAG }}...${{ steps.tag.outputs.TAG_NAME }})
 
             ## Guidelines
 
@@ -712,7 +753,7 @@ jobs:
 
             IMPORTANT: You MUST write BOTH files:
             1. `RELEASE_NOTES.md` (for GitHub release)
-            2. `docs/releases/${{ github.event.release.tag_name }}.mdx` (for documentation site)
+            2. `docs/releases/${{ steps.tag.outputs.TAG_NAME }}.mdx` (for documentation site)
 
             ## MANDATORY: Review Your Changes
             After writing the release notes files, you MUST:
@@ -725,8 +766,9 @@ jobs:
             Do NOT skip this review step - always verify your output before completing.
 
       - name: Verify and validate release notes
+        if: steps.tag.outputs.SKIP != 'true'
         env:
-          TAG_NAME: ${{ github.event.release.tag_name }}
+          TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
         run: |
           echo "Checking for generated release notes..."
 
@@ -746,8 +788,9 @@ jobs:
           python util/validate_release_notes.py "docs/releases/$TAG_NAME.mdx" --tag "$TAG_NAME"
 
       - name: Update docs.json with new release
+        if: steps.tag.outputs.SKIP != 'true'
         env:
-          TAG_NAME: ${{ github.event.release.tag_name }}
+          TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
         run: |
           # Add the new release to docs.json navigation
           # Insert at the beginning of the releases array (newest first)
@@ -801,13 +844,15 @@ jobs:
 
           with open(docs_json_path, 'w') as f:
               json.dump(docs, f, indent=2)
+              f.write('\n')  # Ensure trailing newline for linting
 
           print(f"✅ Added {new_page} to docs.json")
           EOF
 
       - name: Bump version.py to next patch version
+        if: steps.tag.outputs.SKIP != 'true'
         env:
-          TAG_NAME: ${{ github.event.release.tag_name }}
+          TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
         run: |
           # Extract version from tag (strip 'v' prefix if present)
           RELEASED_VERSION="${TAG_NAME#v}"
@@ -838,9 +883,10 @@ jobs:
           echo "✅ version.py bumped to $NEXT_VERSION"
 
       - name: Commit release notes and version bump
+        if: steps.tag.outputs.SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ github.event.release.tag_name }}
+          TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
           NEXT_VERSION: ${{ env.NEXT_VERSION }}
         run: |
           git config user.name "github-actions[bot]"
@@ -858,20 +904,26 @@ jobs:
           fi
 
       - name: Update GitHub Release
+        if: steps.tag.outputs.SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ github.event.release.tag_name }}
+          TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
         run: |
           echo "Updating GitHub release with generated notes..."
           gh release edit "$TAG_NAME" --notes-file RELEASE_NOTES.md
           echo "✅ GitHub release updated successfully"
 
       - name: Notify on failure
-        if: failure()
+        if: failure() && steps.tag.outputs.SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ github.event.release.tag_name }}
+          TAG_NAME: ${{ steps.tag.outputs.TAG_NAME || github.event.workflow_run.head_branch }}
         run: |
+          # Fallback if TAG_NAME is empty
+          if [ -z "$TAG_NAME" ]; then
+            TAG_NAME="unknown"
+          fi
+
           gh issue create \
             --title "⚠️ Release notes generation failed for $TAG_NAME" \
             --body "The automated release notes generation for **$TAG_NAME** failed.
