@@ -46,7 +46,7 @@ class MCPClientManager:
         if name in self._clients:
             raise ValueError(f"MCP server '{name}' already exists")
 
-        logger.info(f"Adding MCP server: {name}")
+        logger.debug(f"Adding MCP server: {name}")
 
         # Create client
         if command:
@@ -67,7 +67,7 @@ class MCPClientManager:
         # Save to config
         self.config.add_server(name, {"command": command} if command else config)
 
-        logger.info(f"Successfully added MCP server: {name}")
+        logger.debug(f"Successfully added MCP server: {name}")
         return client
 
     def remove_server(self, name: str) -> None:
@@ -80,7 +80,7 @@ class MCPClientManager:
             logger.warning(f"MCP server '{name}' not found")
             return
 
-        logger.info(f"Removing MCP server: {name}")
+        logger.debug(f"Removing MCP server: {name}")
 
         client = self._clients[name]
         client.disconnect()
@@ -88,7 +88,7 @@ class MCPClientManager:
 
         self.config.remove_server(name)
 
-        logger.info(f"Successfully removed MCP server: {name}")
+        logger.debug(f"Successfully removed MCP server: {name}")
 
     def get_client(self, name: str) -> Optional[MCPClient]:
         """Get a client by name.
@@ -111,7 +111,7 @@ class MCPClientManager:
 
     def disconnect_all(self) -> None:
         """Disconnect from all MCP servers."""
-        logger.info("Disconnecting from all MCP servers")
+        logger.debug("Disconnecting from all MCP servers")
 
         for name, client in list(self._clients.items()):
             try:
@@ -129,10 +129,10 @@ class MCPClientManager:
         servers = self.config.get_servers()
 
         if not servers:
-            logger.info("No MCP servers configured")
+            logger.debug("No MCP servers configured")
             return
 
-        logger.info(f"Loading {len(servers)} MCP servers from configuration")
+        logger.debug(f"Loading {len(servers)} MCP servers from configuration")
 
         for name, server_config in servers.items():
             if name in self._clients:
@@ -145,7 +145,7 @@ class MCPClientManager:
                     client = MCPClient.from_command(name, command, debug=self.debug)
                     if client.connect():
                         self._clients[name] = client
-                        logger.info(f"Loaded MCP server: {name}")
+                        logger.debug(f"Loaded MCP server: {name}")
                     else:
                         logger.warning(f"Failed to connect to configured server: {name}")
                 else:

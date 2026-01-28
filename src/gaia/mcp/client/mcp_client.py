@@ -98,7 +98,7 @@ class MCPClient:
         Returns:
             bool: True if connection and initialization successful
         """
-        logger.info(f"Connecting to MCP server '{self.name}'...")
+        logger.debug(f"Connecting to MCP server '{self.name}'...")
 
         if not self.transport.connect():
             logger.error(f"Failed to establish transport connection to '{self.name}'")
@@ -128,7 +128,7 @@ class MCPClient:
             result = response.get("result", {})
             self.server_info = result.get("serverInfo", {})
 
-            logger.info(
+            logger.debug(
                 f"Connected to '{self.name}' - {self.server_info.get('name', 'Unknown')}"
             )
             return True
@@ -241,7 +241,7 @@ class MCPClient:
         if not self.is_connected():
             raise RuntimeError(f"Not connected to MCP server '{self.name}'")
 
-        logger.info(f"Invoking MCP tool: {tool_name} from server '{self.name}'")
+        logger.debug(f"Invoking MCP tool: {tool_name} from server '{self.name}'")
 
         if self.debug:
             logger.debug(f"  Arguments: {json.dumps(arguments, indent=2)}")
@@ -269,7 +269,7 @@ class MCPClient:
             logger.debug(f"Tool {tool_name} completed successfully")
             logger.debug(f"  Response: {json.dumps(result, indent=2)}")
 
-        logger.info(f"Tool {tool_name} completed successfully")
+        logger.debug(f"Tool {tool_name} completed successfully")
         return result
 
     def create_tool_wrapper(self, tool: MCPTool) -> Callable[..., Dict[str, Any]]:
