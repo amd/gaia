@@ -52,17 +52,17 @@ class SDToolsMixin:
         sd_generations: List of generations from this session
     """
 
-    # Mixin state (set by init_sd)
-    sd_endpoint: str = "http://localhost:8000/api/v1/images/generations"
-    sd_output_dir: Path = Path(".gaia/cache/sd/images")
-    sd_default_model: str = "SD-Turbo"
-    sd_default_size: str = "512x512"
-    sd_default_steps: int = 4
-    sd_generations: List[Dict[str, Any]] = []
-
-    # Supported configurations
+    # Supported configurations (class constants)
     SD_MODELS = ["SD-Turbo", "SDXL-Turbo"]
     SD_SIZES = ["512x512", "768x768", "1024x1024"]
+
+    # Instance state (initialized by init_sd)
+    sd_endpoint: str
+    sd_output_dir: Path
+    sd_default_model: str
+    sd_default_size: str
+    sd_default_steps: int
+    sd_generations: List[Dict[str, Any]]
 
     def init_sd(
         self,
@@ -73,7 +73,7 @@ class SDToolsMixin:
         default_steps: int = 4,
     ) -> None:
         """
-        Initialize SD tools configuration.
+        Initialize SD tools configuration. Must be called before using SD tools.
 
         Args:
             base_url: Lemonade Server base URL
@@ -81,6 +81,13 @@ class SDToolsMixin:
             default_model: Default SD model (SD-Turbo or SDXL-Turbo)
             default_size: Default image size (512x512, 768x768, 1024x1024)
             default_steps: Default inference steps (4 for Turbo models)
+
+        Example:
+            self.init_sd(
+                base_url="http://localhost:8000",
+                output_dir="./my_images",
+                default_model="SDXL-Turbo",
+            )
         """
         self.sd_endpoint = f"{base_url}/api/v1/images/generations"
         self.sd_output_dir = Path(output_dir) if output_dir else Path(".gaia/cache/sd/images")
@@ -89,7 +96,7 @@ class SDToolsMixin:
         self.sd_default_model = default_model
         self.sd_default_size = default_size
         self.sd_default_steps = default_steps
-        self.sd_generations = []
+        self.sd_generations = []  # Instance-level list for session history
 
         logger.info(f"SD tools initialized: endpoint={self.sd_endpoint}, output={self.sd_output_dir}")
 

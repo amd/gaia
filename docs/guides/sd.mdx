@@ -1,0 +1,223 @@
+---
+title: Image Generation
+description: Generate images using Stable Diffusion with AMD NPU acceleration
+---
+
+# Image Generation Guide
+
+Generate images from text descriptions using Stable Diffusion, powered by AMD NPU acceleration through Lemonade Server.
+
+## Prerequisites
+
+1. **Lemonade Server** running with an SD model:
+```bash
+lemonade-server serve --model SD-Turbo
+```
+
+2. **GAIA SDK** installed:
+```bash
+pip install amd-gaia
+```
+
+## Quick Start
+
+### Using the Example Agent
+
+```bash
+python examples/sd_agent_example.py
+```
+
+This starts an interactive session where you can describe images to generate.
+
+### Programmatic Usage
+
+```python
+from gaia.agents.base import Agent
+from gaia.agents.sd import SDToolsMixin
+
+class ImageAgent(Agent, SDToolsMixin):
+    def __init__(self):
+        super().__init__()
+        self.init_sd(output_dir="./my_images")
+        self.register_sd_tools()
+
+    def _get_system_prompt(self):
+        return "You generate images. Use generate_image tool."
+
+agent = ImageAgent()
+agent.run("Create an image of a sunset over mountains")
+```
+
+### Direct Tool Usage
+
+```python
+from gaia.agents.sd import SDToolsMixin
+
+# Use mixin directly for simple cases
+mixin = SDToolsMixin()
+mixin.init_sd(output_dir="./images")
+
+result = mixin._generate_image(
+    prompt="a cyberpunk city at night, neon lights, rain, 4k",
+    model="SD-Turbo",
+    size="512x512"
+)
+
+print(f"Image saved to: {result['image_path']}")
+```
+
+## Available Tools
+
+The `SDToolsMixin` provides three tools:
+
+| Tool | Description |
+|------|-------------|
+| `generate_image` | Generate an image from a text prompt |
+| `list_sd_models` | List available SD models and settings |
+| `get_generation_history` | View images generated in this session |
+
+### generate_image
+
+```python
+result = agent._generate_image(
+    prompt="a dragon on a cliff at sunset",
+    model="SD-Turbo",      # or "SDXL-Turbo"
+    size="512x512",        # or "768x768", "1024x1024"
+    steps=4,               # inference steps
+    seed=42                # for reproducibility
+)
+```
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "image_path": "./images/a_dragon_on_a_cliff_SD-Turbo_20260128_143022.png",
+    "prompt": "a dragon on a cliff at sunset",
+    "model": "SD-Turbo",
+    "size": "512x512",
+    "generation_time_ms": 2340
+}
+```
+
+## Supported Models
+
+| Model | Best For | Recommended Size | Speed |
+|-------|----------|------------------|-------|
+| **SD-Turbo** | Fast iteration, testing | 512x512 | ~2-3 sec |
+| **SDXL-Turbo** | Higher quality | 1024x1024 | ~5-8 sec |
+
+## Prompt Tips
+
+Enhance simple prompts for better results:
+
+| Simple | Enhanced |
+|--------|----------|
+| "a cat" | "fluffy orange cat, soft lighting, detailed fur, photorealistic, 4k" |
+| "sunset" | "vibrant sunset over ocean, golden hour, dramatic clouds, wide angle" |
+| "robot" | "futuristic robot, chrome finish, studio lighting, sci-fi, detailed" |
+
+**Key elements to add:**
+- **Style**: photorealistic, anime, oil painting, digital art
+- **Lighting**: golden hour, dramatic, soft, studio
+- **Quality**: detailed, 4k, masterpiece, high quality
+- **Composition**: rule of thirds, centered, wide angle
+
+## Configuration
+
+### Output Directory
+
+Images are saved to `.gaia/cache/sd/images/` by default. Customize with:
+
+```python
+self.init_sd(output_dir="./my_custom_folder")
+```
+
+### Lemonade Server URL
+
+If running on a different host/port:
+
+```python
+self.init_sd(base_url="http://192.168.1.100:8000")
+```
+
+### Default Settings
+
+```python
+self.init_sd(
+    default_model="SDXL-Turbo",  # Use higher quality model
+    default_size="1024x1024",    # Larger images
+    default_steps=4,             # More steps = better quality
+)
+```
+
+## Error Handling
+
+The mixin returns structured errors:
+
+```python
+result = mixin._generate_image("test")
+
+if result["status"] == "error":
+    print(f"Error: {result['error']}")
+else:
+    print(f"Success: {result['image_path']}")
+```
+
+**Common errors:**
+- `Cannot connect to Lemonade Server` - Server not running
+- `Invalid model` - Use SD-Turbo or SDXL-Turbo
+- `Image generation timed out` - Server overloaded
+
+## Health Check
+
+Verify the SD endpoint is available:
+
+```python
+health = agent.sd_health_check()
+if health["status"] == "healthy":
+    print("Ready to generate!")
+else:
+    print(f"Error: {health['error']}")
+```
+
+## Example: Building a Custom Image Agent
+
+```python
+from gaia.agents.base import Agent
+from gaia.agents.sd import SDToolsMixin
+
+class ArtistAgent(Agent, SDToolsMixin):
+    """An agent that creates art in different styles."""
+
+    def __init__(self, style: str = "photorealistic"):
+        super().__init__()
+        self.style = style
+        self.init_sd(output_dir=f"./art/{style}")
+        self.register_sd_tools()
+
+    def _get_system_prompt(self):
+        return f"""You are an artist specializing in {self.style} images.
+
+When asked to create an image, enhance the prompt with {self.style} style
+keywords, then use generate_image.
+
+Style keywords for {self.style}:
+- photorealistic: detailed, 4k, realistic lighting, photograph
+- anime: vibrant colors, cel shading, manga style
+- oil painting: brush strokes, canvas texture, classical art
+"""
+
+# Create different style agents
+photo_agent = ArtistAgent(style="photorealistic")
+anime_agent = ArtistAgent(style="anime")
+
+photo_agent.run("Create a portrait of a wizard")
+anime_agent.run("Create a portrait of a wizard")
+```
+
+## Next Steps
+
+- [SD Agent Plan](/plans/image-agent) - Full agent with VLM evaluation and iteration
+- [Agent System](/sdk/core/agent-system) - Learn about the base Agent class
+- [Tool Decorator](/sdk/core/tools) - Creating custom tools

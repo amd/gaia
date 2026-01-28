@@ -518,6 +518,48 @@ gaia blender --example 2
 
 ---
 
+### SD Command
+
+<Card title="Image Generation" icon="image" href="/guides/sd">
+  Generate images using Stable Diffusion with AMD NPU acceleration
+</Card>
+
+```bash
+gaia sd <prompt> [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `prompt` | string | - | Text description of the image to generate |
+| `-i, --interactive` | flag | false | Run in interactive mode |
+| `--sd-model` | string | SD-Turbo | Model: SD-Turbo or SDXL-Turbo |
+| `--size` | string | 512x512 | Image size: 512x512, 768x768, 1024x1024 |
+| `--output-dir` | path | .gaia/cache/sd/images | Directory to save images |
+| `--seed` | integer | random | Seed for reproducibility |
+
+**Examples:**
+
+Generate a single image:
+```bash
+gaia sd "a sunset over mountains, golden hour, 4k"
+```
+
+Use SDXL-Turbo for higher quality:
+```bash
+gaia sd "cyberpunk city at night" --sd-model SDXL-Turbo --size 1024x1024
+```
+
+Interactive mode:
+```bash
+gaia sd -i
+```
+
+[→ Full Image Generation Documentation](/guides/sd)
+
+---
+
 ### Talk Command
 
 <Card title="Voice Interaction" icon="microphone" href="/guides/talk">

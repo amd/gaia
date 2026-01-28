@@ -987,6 +987,46 @@ def main():
         help="Port for the Blender MCP server (default: 9876)",
     )
 
+    # Add SD (Stable Diffusion) image generation command
+    sd_parser = subparsers.add_parser(
+        "sd",
+        help="Generate images using Stable Diffusion",
+    )
+    sd_parser.add_argument(
+        "prompt",
+        nargs="?",
+        help="Text description of the image to generate",
+    )
+    sd_parser.add_argument(
+        "-i",
+        "--interactive",
+        action="store_true",
+        help="Run in interactive mode",
+    )
+    sd_parser.add_argument(
+        "--sd-model",
+        dest="sd_model",
+        choices=["SD-Turbo", "SDXL-Turbo"],
+        default="SD-Turbo",
+        help="Stable Diffusion model to use (default: SD-Turbo)",
+    )
+    sd_parser.add_argument(
+        "--size",
+        choices=["512x512", "768x768", "1024x1024"],
+        default="512x512",
+        help="Image size (default: 512x512)",
+    )
+    sd_parser.add_argument(
+        "--output-dir",
+        default=".gaia/cache/sd/images",
+        help="Directory to save generated images",
+    )
+    sd_parser.add_argument(
+        "--seed",
+        type=int,
+        help="Random seed for reproducibility",
+    )
+
     # Add Jira app command
     jira_parser = subparsers.add_parser(
         "jira",
@@ -4003,6 +4043,11 @@ Let me know your answer!
         handle_blender_command(args)
         return
 
+    # Handle SD (image generation) command
+    if args.action == "sd":
+        handle_sd_command(args)
+        return
+
     # Handle Jira command
     if args.action == "jira":
         handle_jira_command(args)
@@ -4890,6 +4935,88 @@ def handle_visualize_command(args):
             print("⚠️  Server force-killed")
         except Exception as e:
             print(f"⚠️  Error stopping server: {e}")
+
+
+def handle_sd_command(args):
+    """
+    Handle the SD (Stable Diffusion) image generation command.
+
+    Args:
+        args: Parsed command line arguments for the sd command
+    """
+    from gaia.agents.sd import SDToolsMixin
+
+    # Create mixin instance for direct usage
+    sd = SDToolsMixin()
+    sd.init_sd(
+        output_dir=args.output_dir,
+        default_model=args.sd_model,
+        default_size=args.size,
+    )
+
+    # Check health
+    health = sd.sd_health_check()
+    if health["status"] != "healthy":
+        print(f"Error: {health.get('error', 'SD endpoint unavailable')}")
+        print("Make sure Lemonade Server is running: lemonade-server serve --model SD-Turbo")
+        sys.exit(1)
+
+    # Interactive mode
+    if args.interactive:
+        print("=" * 60)
+        print("SD Image Generator (Interactive Mode)")
+        print("=" * 60)
+        print(f"Model: {args.sd_model} | Size: {args.size}")
+        print(f"Output: {args.output_dir}")
+        print("Type 'quit' to exit.")
+        print("=" * 60)
+        print()
+
+        while True:
+            try:
+                prompt = input("Prompt: ").strip()
+                if not prompt:
+                    continue
+                if prompt.lower() in ("quit", "exit", "q"):
+                    print("Goodbye!")
+                    break
+
+                print("Generating...")
+                result = sd._generate_image(prompt, seed=args.seed)
+
+                if result["status"] == "success":
+                    print(f"Saved: {result['image_path']}")
+                    print(f"Time: {result['generation_time_ms']}ms")
+                else:
+                    print(f"Error: {result['error']}")
+                print()
+
+            except KeyboardInterrupt:
+                print("\nGoodbye!")
+                break
+
+    # Single prompt mode
+    elif args.prompt:
+        print(f"Generating: {args.prompt}")
+        result = sd._generate_image(args.prompt, seed=args.seed)
+
+        if result["status"] == "success":
+            print(f"Saved: {result['image_path']}")
+            print(f"Model: {result['model']} | Size: {result['size']}")
+            print(f"Time: {result['generation_time_ms']}ms")
+        else:
+            print(f"Error: {result['error']}")
+            sys.exit(1)
+
+    # No prompt - show help
+    else:
+        print("Usage: gaia sd <prompt> [options]")
+        print("       gaia sd -i  (interactive mode)")
+        print()
+        print("Examples:")
+        print('  gaia sd "a sunset over mountains"')
+        print('  gaia sd "cyberpunk city" --model SDXL-Turbo --size 1024x1024')
+        print("  gaia sd -i")
 
 
 def handle_blender_command(args):
