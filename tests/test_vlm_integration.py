@@ -139,7 +139,7 @@ def test_vlm_extraction_on_real_image():
 
     # Initialize VLM
     vlm = VLMClient(
-        vlm_model="Qwen2.5-VL-7B-Instruct-GGUF",
+        vlm_model="Qwen3-VL-4B-Instruct-GGUF",
         fallback_model="Qwen3-0.6B-GGUF",
         auto_load=True,
     )
@@ -206,7 +206,7 @@ def test_vlm_batch_extraction():
 
     # Use context manager for auto cleanup
     with VLMClient(
-        vlm_model="Qwen2.5-VL-7B-Instruct-GGUF", fallback_model="Qwen3-0.6B-GGUF"
+        vlm_model="Qwen3-VL-4B-Instruct-GGUF", fallback_model="Qwen3-0.6B-GGUF"
     ) as vlm:
 
         total_images_processed = 0
@@ -284,7 +284,7 @@ def run_all_tests():
     print("VLM INTEGRATION TEST SUITE")
     print("=" * 80)
     print("\nThese tests call the REAL VLM model via Lemonade - no mocks!")
-    print("Ensure Lemonade server is running with Qwen2.5-VL-7B-Instruct-GGUF loaded.")
+    print("Ensure Lemonade server is running with Qwen3-VL-4B-Instruct-GGUF loaded.")
     print("=" * 80)
 
     results = {}
