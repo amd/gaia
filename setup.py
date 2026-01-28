@@ -39,6 +39,8 @@ setup(
         "gaia.installer",
         "gaia.rag",
         "gaia.mcp",
+        "gaia.mcp.client",
+        "gaia.mcp.client.transports",
         "gaia.mcp.servers",
         "gaia.agents",
         "gaia.agents.base",

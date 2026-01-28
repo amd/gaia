@@ -40,7 +40,7 @@ class MCPClientMixin:
         Returns:
             bool: True if connection and tool registration successful
         """
-        logger.info(f"Connecting to MCP server '{name}'...")
+        logger.debug(f"Connecting to MCP server '{name}'...")
 
         if getattr(self, "debug", False):
             print(f"[DEBUG] Command: {command}")
@@ -52,7 +52,7 @@ class MCPClientMixin:
                 # Register tools
                 self._register_mcp_tools(client)
 
-                logger.info(
+                logger.debug(
                     f"Connected to '{name}' - {client.server_info.get('name', 'Unknown')}"
                 )
                 return True
@@ -108,7 +108,7 @@ class MCPClientMixin:
         # Disconnect
         self._mcp_manager.remove_server(name)
 
-        logger.info(f"Disconnected from MCP server '{name}'")
+        logger.debug(f"Disconnected from MCP server '{name}'")
 
     def list_mcp_servers(self) -> List[str]:
         """List all connected MCP servers.
@@ -151,8 +151,7 @@ class MCPClientMixin:
 
             logger.debug(f"Registered MCP tool: {gaia_name}")
 
-        # Summary message (always visible)
-        logger.info(
+        logger.debug(
             f"Registered {len(tools)} tools from MCP server '{client.name}'"
         )
 
@@ -170,7 +169,7 @@ class MCPClientMixin:
                 del _TOOL_REGISTRY[gaia_name]
                 logger.debug(f"Unregistered MCP tool: {gaia_name}")
 
-        logger.info(
+        logger.debug(
             f"Unregistered {len(tools)} tools from MCP server '{client.name}'"
         )
 
