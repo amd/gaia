@@ -30,11 +30,11 @@ MCP is an open protocol that standardizes how AI applications connect to externa
 
 ## Quick Start
 
-Build a working MCP-powered agent in 2 minutes.
+Build a working MCP-powered agent that actually calls tools.
 
 <Steps>
   <Step title="Create the Agent">
-    Create a file `time_agent.py` with this complete example:
+    Create a file `time_agent.py`. Copy this complete example:
 
     ```python time_agent.py
     from gaia.agents.base.agent import Agent
@@ -66,9 +66,28 @@ Use the get_current_time tool to answer time-related questions."""
             pass
 
         def _rebuild_system_prompt(self) -> None:
+            """Rebuild system prompt with MCP tools and response format."""
             self.system_prompt = self._get_system_prompt()
+
+            # Add tools section
             tools_description = self._format_tools_for_prompt()
-            self.system_prompt += f"\n\nAVAILABLE TOOLS:\n{tools_description}"
+            self.system_prompt += f"\n\n==== AVAILABLE TOOLS ====\n{tools_description}\n"
+
+            # Add response format instructions (required for tool calling)
+            self.system_prompt += """
+==== RESPONSE FORMAT ====
+You must respond ONLY in valid JSON. No text before { or after }.
+
+**To call a tool:**
+{"thought": "reasoning", "goal": "objective", "tool": "tool_name", "tool_args": {"arg1": "value1"}}
+
+**To provide a final answer:**
+{"thought": "reasoning", "goal": "achieved", "answer": "response to user"}
+
+**RULES:**
+1. ALWAYS use tools for real data - NEVER hallucinate
+2. After tool results, provide an "answer" summarizing them
+"""
 
     # Run the agent
     if __name__ == "__main__":
@@ -89,20 +108,24 @@ Use the get_current_time tool to answer time-related questions."""
     ```
     Connecting to MCP time server...
       time: ✓
+    🤖 Processing: 'What time is it in Tokyo?'
+    📝 Step 1: Thinking...
+    🔧 Step 2: Using tool 'mcp_time_get_current_time'
+    ✅ Final Answer
 
-    Result: The current time in Tokyo is [current time]
+    Result: The current time in Tokyo is 2026-01-29T02:15:30+09:00
     ```
   </Step>
 </Steps>
 
 **What just happened?**
 - The agent connected to the MCP time server via subprocess
-- The `get_current_time` tool was automatically discovered and registered
-- The LLM decided to call the tool based on your query
-- The tool result was formatted into a natural language response
+- The `mcp_time_get_current_time` tool was automatically discovered and registered
+- The LLM received proper JSON response format instructions
+- The tool was executed and the result returned
 
 <Tip>
-  For production use, configure servers once using `gaia mcp add` and load them from config. See [`examples/mcp_config_based_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_config_based_agent.py) for the recommended pattern.
+  **Production Pattern:** Use `gaia mcp add` to configure servers once, then load from config. See [`examples/mcp_config_based_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_config_based_agent.py) for team-friendly config-based loading.
 </Tip>
 
 ## Prerequisites
