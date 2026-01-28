@@ -17,10 +17,26 @@ Three-part installation system:
 | Command | Purpose | Status |
 |---------|---------|--------|
 | `install.ps1` / `install.sh` | Install GAIA + dependencies | Planned |
-| `gaia init` | Setup Lemonade + download models | ✅ Implemented |
+| `gaia init` | Setup Lemonade + download models | Implemented |
 | `gaia update` | Update GAIA + Lemonade packages | Planned |
 
 **Goal:** Zero to chatting in under 2 minutes.
+
+---
+
+## Technical Decisions
+
+Key architectural decisions for the installer system:
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| **Python bundling** | Require Python 3.10+ pre-installed | Keeps installer small (under 10KB), users manage Python |
+| **Package manager** | `uv` (install if missing) | Fast, modern, Astral-backed, reliable |
+| **Installation location** | `~/.gaia/venv/` | User-space, no admin required |
+| **Windows primary** | PowerShell script + winget | Quick-start + discoverable install |
+| **Linux primary** | Bash script + .deb | Developers + enterprise coverage |
+| **Update mechanism** | `uv pip install --upgrade` | Leverages existing infrastructure |
+| **winget priority** | High | Official, built-in to Windows 11, no user setup |
 
 ---
 
@@ -38,21 +54,124 @@ curl -fsSL https://amd-gaia.ai/install.sh | sh
 ```
 </CodeGroup>
 
-### What the Scripts Do
+### Windows: `install.ps1`
 
-1. Check Python version (3.10+)
-2. Install uv if not present
-3. Create virtual environment (`~/.gaia/venv`)
-4. Install GAIA package
+**Technical Flow:**
+
+```
+1. Check Prerequisites
+   ├── PowerShell version >= 5.1
+   ├── Python 3.10+ installed (py --version)
+   └── Internet connectivity
+
+2. Install uv (if not present)
+   └── irm https://astral.sh/uv/install.ps1 | iex
+
+3. Create GAIA Environment
+   ├── Create directory: $env:USERPROFILE\.gaia
+   ├── Create venv: uv venv $env:USERPROFILE\.gaia\venv
+   └── Activate venv
+
+4. Install GAIA Package
+   └── uv pip install amd-gaia
+
 5. Add to PATH
-6. Print next steps → `gaia init`
+   ├── Add $env:USERPROFILE\.gaia\venv\Scripts to PATH
+   └── Update registry (User environment)
+
+6. Print Next Steps
+   └── "Run: gaia init"
+```
+
+**Script Structure:**
+
+```text
+# scripts/install.ps1
+$ErrorActionPreference = "Stop"
+$GAIA_HOME = "$env:USERPROFILE\.gaia"
+$GAIA_VENV = "$GAIA_HOME\venv"
+$MIN_PYTHON_VERSION = [version]"3.10"
+
+function Test-PythonVersion  # Check Python >= 3.10
+function Install-Uv          # Install uv if missing
+function Install-Gaia        # Install GAIA package
+function Add-ToPath          # Update PATH registry
+function Main                # Orchestrate installation
+
+Main
+```
+
+**Key Implementation Details:**
+
+| Aspect | Implementation |
+|--------|----------------|
+| Python check | `py -3 --version` parsed for 3.10+ |
+| uv install | Astral's official script |
+| PATH update | User registry via `[Environment]::SetEnvironmentVariable` |
+| Error handling | Exit with clear message on each step failure |
+
+### Linux: `install.sh`
+
+**Technical Flow:**
+
+```
+1. Detect Environment
+   ├── OS: Linux (reject macOS if needed)
+   ├── Architecture: x86_64 (amd64)
+   └── Shell: bash/zsh
+
+2. Check Prerequisites
+   ├── Python 3.10+ (python3 --version)
+   ├── curl or wget available
+   └── Internet connectivity
+
+3. Install uv (if not present)
+   └── curl -LsSf https://astral.sh/uv/install.sh | sh
+
+4. Create GAIA Environment
+   ├── mkdir -p ~/.gaia
+   ├── uv venv ~/.gaia/venv
+   └── source ~/.gaia/venv/bin/activate
+
+5. Install GAIA Package
+   └── uv pip install amd-gaia
+
+6. Add to PATH
+   ├── Add ~/.gaia/venv/bin to ~/.bashrc
+   ├── Add to ~/.zshrc if exists
+   └── Export for current session
+
+7. Print Next Steps
+   └── "Run: source ~/.bashrc && gaia init"
+```
+
+**Script Structure:**
+
+```text
+#!/bin/bash
+set -euo pipefail
+
+GAIA_HOME="$HOME/.gaia"
+GAIA_VENV="$GAIA_HOME/venv"
+MIN_PYTHON_MAJOR=3
+MIN_PYTHON_MINOR=10
+
+check_python   # Check Python >= 3.10
+install_uv     # Install uv if missing
+create_venv    # Create virtual environment
+install_gaia   # Install GAIA package
+add_to_path    # Update shell rc files
+main           # Orchestrate installation
+
+main "$@"
+```
 
 ### Files to Create
 
 | File | Description |
 |------|-------------|
 | `scripts/install.ps1` | Windows PowerShell installer |
-| `scripts/install.sh` | Linux/macOS bash installer |
+| `scripts/install.sh` | Linux bash installer |
 
 ---
 
@@ -100,6 +219,7 @@ gaia update [OPTIONS]
 | `--lemonade-only` | Only update Lemonade Server |
 | `--version X.Y.Z` | Update to specific version |
 | `--yes` | Skip confirmation |
+| `--verbose` | Show detailed output |
 
 ### Example Output
 
@@ -109,23 +229,188 @@ $ gaia update --check
 Checking for updates...
 
 Package          Installed    Latest    Status
-─────────────────────────────────────────────────
+-----------------------------------------------------
 GAIA             1.2.0        1.3.0     Update available
 Lemonade Server  9.1.4        9.1.4     Up to date
 
 Run 'gaia update' to install updates.
 ```
 
+### Architecture
+
+```
+gaia update Flow
+================
+
+1. Check Current Versions
+   ├── GAIA: from gaia.version
+   └── Lemonade: from lemonade-server --version
+
+2. Fetch Latest Versions
+   ├── GAIA: PyPI API
+   └── Lemonade: GitHub Releases API
+
+3. Compare & Display
+   ├── Show version table
+   └── Indicate what needs update
+
+4. Update (if requested)
+   ├── GAIA: uv pip install --upgrade amd-gaia
+   └── Lemonade: Use existing LemonadeInstaller
+
+5. Verify
+   └── Check versions after update
+```
+
 ### Implementation
 
 | File | Description |
 |------|-------------|
-| `src/gaia/installer/update_command.py` | Update logic |
+| `src/gaia/installer/version_checker.py` | Shared version checking logic |
+| `src/gaia/installer/update_command.py` | Update command implementation |
 | `src/gaia/cli.py` | Add update subcommand |
 
-**Update sources:**
-- GAIA: PyPI API (`https://pypi.org/pypi/amd-gaia/json`)
-- Lemonade: GitHub releases API
+**Version Checking Sources:**
+
+| Package | Source | Endpoint |
+|---------|--------|----------|
+| GAIA | PyPI | `https://pypi.org/pypi/amd-gaia/json` (returns `.info.version`) |
+| Lemonade | GitHub | `https://api.github.com/repos/lemonade-sdk/lemonade/releases/latest` (returns `.tag_name`) |
+
+**Code Structure:**
+
+```python
+@dataclass
+class VersionInfo:
+    package: str
+    installed: str | None
+    latest: str | None
+    update_available: bool
+
+class UpdateCommand:
+    def __init__(self, check_only: bool, gaia_only: bool):
+        self.version_checker = VersionChecker()
+
+    def run(self) -> int:
+        versions = self._check_versions()
+        self._display_versions(versions)
+
+        if self.check_only:
+            return 0
+
+        return self._perform_update(versions)
+```
+
+---
+
+## Part 4: Distribution Channels
+
+### Channel Comparison
+
+| Channel | Platform | Effort | Discovery | Pros | Cons |
+|---------|----------|--------|-----------|------|------|
+| **PowerShell script** | Windows | Low | Poor | Fast, flexible | No discovery |
+| **winget** | Windows | Medium | Excellent | Official, built-in | Requires .exe wrapper |
+| **Bash script** | Linux | Low | Poor | Works everywhere | No discovery |
+| **apt/deb** | Debian/Ubuntu | Medium | Excellent | Enterprise-friendly | Distro-specific |
+| **Homebrew** | macOS/Linux | Medium | Good | Cross-platform | Smaller Linux adoption |
+| **Scoop** | Windows | Low | Good | Developer-focused | Smaller ecosystem |
+| **Chocolatey** | Windows | Medium | Good | Mature, flexible | Requires user setup |
+| **Snap** | All Linux | Medium | Good | Cross-distro | Slow startup, forced updates |
+| **PyPI + pipx** | All | Low | Good | Simplest | Requires Python installed |
+
+### Primary Channels
+
+<CardGroup cols={3}>
+  <Card title="One-Liner" icon="terminal">
+    PowerShell/bash script
+    Zero dependencies
+    ~30 second install
+  </Card>
+  <Card title="winget" icon="windows">
+    Native Windows package
+    `winget install AMD.GAIA`
+    Built into Windows 11
+  </Card>
+  <Card title="pip/uv" icon="python">
+    For developers
+    `uv pip install amd-gaia`
+    Works everywhere
+  </Card>
+</CardGroup>
+
+### winget Package
+
+**Why winget:**
+- Built into Windows 11, available for Windows 10
+- Official Microsoft package manager
+- Zero setup required for users
+- Clean uninstall support
+
+**Requirements:**
+1. Need `.exe` installer that supports silent installation (`/S` flag)
+2. Create NSIS or Inno Setup wrapper around install.ps1
+3. Submit manifest PR to microsoft/winget-pkgs
+
+**Manifest Structure:**
+
+```yaml
+# manifests/a/AMD/GAIA/1.0.0/AMD.GAIA.yaml
+PackageIdentifier: AMD.GAIA
+PackageVersion: 1.0.0
+PackageLocale: en-US
+Publisher: Advanced Micro Devices, Inc.
+PublisherUrl: https://www.amd.com
+PublisherSupportUrl: https://github.com/amd/gaia/issues
+PackageName: GAIA
+License: MIT
+LicenseUrl: https://github.com/amd/gaia/blob/main/LICENSE
+ShortDescription: AMD's open-source framework for running generative AI applications locally
+Description: |
+  GAIA enables developers to build and run AI agents locally on AMD hardware
+  with NPU optimization. Features include chat, code generation, voice interaction,
+  RAG, and integration with Lemonade Server.
+Homepage: https://amd-gaia.ai
+Tags:
+  - ai
+  - llm
+  - amd
+  - python
+  - cli
+  - machine-learning
+Installers:
+  - Architecture: x64
+    InstallerType: exe
+    InstallerUrl: https://github.com/amd/gaia/releases/download/v1.0.0/gaia-setup.exe
+    InstallerSha256: COMPUTED_AT_RELEASE
+    InstallerSwitches:
+      Silent: /S
+      SilentWithProgress: /S
+ReleaseDate: 2026-01-23
+ManifestType: singleton
+ManifestVersion: 1.6.0
+```
+
+### Debian Package
+
+**Package Structure:**
+
+```
+gaia_1.0.0-1_amd64.deb
+├── DEBIAN/
+│   ├── control         # Package metadata
+│   ├── postinst       # Post-install script (PATH setup)
+│   └── prerm          # Pre-removal script (cleanup)
+├── usr/
+│   └── local/
+│       └── gaia/
+│           ├── bin/
+│           │   └── gaia      # Wrapper script
+│           └── venv/         # Bundled virtualenv
+└── etc/
+    └── profile.d/
+        └── gaia.sh           # PATH setup
+```
 
 ---
 
@@ -153,39 +438,62 @@ All checks passed!
 
 ```bash
 gaia uninstall          # Remove GAIA (keep data)
-gaia uninstall --purge  # Remove everything
+gaia uninstall --purge  # Remove everything including models
 ```
-
----
-
-## Installation Channels
-
-<CardGroup cols={3}>
-  <Card title="One-Liner" icon="terminal">
-    PowerShell/bash script
-    Zero dependencies
-    ~30 second install
-  </Card>
-  <Card title="winget" icon="windows">
-    Native Windows package
-    Auto-updates
-    `winget install AMD.GAIA`
-  </Card>
-  <Card title="pip/uv" icon="python">
-    For developers
-    `uv pip install gaia`
-  </Card>
-</CardGroup>
 
 ---
 
 ## Implementation Order
 
-1. **Phase 1:** Install scripts (`install.ps1`, `install.sh`)
-2. **Phase 2:** `gaia update --check` (version checking)
-3. **Phase 3:** `gaia update` (actual updates)
-4. **Phase 4:** `gaia doctor` (diagnostics)
-5. **Phase 5:** winget package submission
+### Phase 1: Install Scripts (Priority: High)
+
+**Deliverables:**
+- `scripts/install.ps1` - Windows PowerShell installer
+- `scripts/install.sh` - Linux bash installer
+- Host scripts (GitHub raw initially, amd-gaia.ai later)
+- Update quickstart documentation
+
+**Dependencies:** None
+
+### Phase 2: Update Command (Priority: High)
+
+**Deliverables:**
+- `src/gaia/installer/version_checker.py`
+- `src/gaia/installer/update_command.py`
+- Add `gaia update` to CLI
+- Unit tests
+
+**Dependencies:** Phase 1 (for consistent install path assumptions)
+
+### Phase 3: winget Package (Priority: Medium)
+
+**Deliverables:**
+- `gaia-setup.exe` wrapper (NSIS or Inno Setup)
+- winget manifest YAML
+- Submit PR to microsoft/winget-pkgs
+- CI workflow for building .exe on release
+
+**Dependencies:** Phase 1, stable release versioning
+
+### Phase 4: Debian Package (Priority: Medium)
+
+**Deliverables:**
+- `.deb` build script
+- Package with bundled venv
+- Test on Ubuntu 22.04/24.04
+- Consider PPA for automatic updates
+
+**Dependencies:** Phase 1
+
+### Phase 5: Additional Commands (Priority: Low)
+
+**Deliverables:**
+- `gaia doctor` - System diagnostics
+- `gaia uninstall` - Clean removal
+- Homebrew formula (cross-platform)
+- Scoop manifest (Windows developers)
+
+**Dependencies:** Phases 1-4
 
 ---
 
@@ -193,7 +501,60 @@ gaia uninstall --purge  # Remove everything
 
 | Metric | Target |
 |--------|--------|
-| Install time (one-liner) | < 60 seconds |
-| Init time (minimal profile) | < 2 minutes |
-| Update time | < 30 seconds |
-| Install script size | < 10 KB |
+| Install time (one-liner) | Under 60 seconds |
+| Init time (minimal profile) | Under 2 minutes |
+| Update time | Under 30 seconds |
+| Install script size | Under 10 KB |
+| winget review turnaround | Under 48 hours |
+
+---
+
+## Open Questions
+
+<Warning>
+These questions should be resolved before implementation begins.
+</Warning>
+
+### 1. Script Hosting Location
+
+**Options:**
+- **A:** `https://amd-gaia.ai/install.ps1` - Requires DNS/hosting setup
+- **B:** `https://raw.githubusercontent.com/amd/gaia/main/scripts/install.ps1` - Works immediately
+
+**Recommendation:** Start with GitHub raw (B), migrate to amd-gaia.ai later.
+
+### 2. Python Bundling
+
+Should we bundle Python for users who don't have it installed?
+
+**Pros:** True zero-dependency install
+**Cons:** Adds ~50MB to installer, complexity, version management
+
+**Recommendation:** No bundling initially. Require Python 3.10+ with clear error message.
+
+### 3. Auto-Update Behavior
+
+Should `gaia update` run automatically on certain commands?
+
+**Options:**
+- Never auto-update (current recommendation)
+- Check on startup, notify user
+- Check weekly, notify user
+
+**Recommendation:** Never auto-update. Users control when updates happen.
+
+### 4. winget vs Direct Script Priority
+
+For Windows, should winget be the primary distribution or alongside direct script?
+
+**Recommendation:** Both. Script for quick-start/CI, winget for discoverability.
+
+### 5. macOS Support
+
+Current plan focuses on Windows and Linux. Should macOS be supported?
+
+**Options:**
+- Not supported (GAIA targets AMD hardware)
+- Partial support via Homebrew (for development/testing)
+
+**Recommendation:** Partial support via Homebrew for developers who want to test on Mac.
