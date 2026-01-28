@@ -125,6 +125,7 @@
                 "pages": [
                   "sdk/mixins/tool-mixins",
                   "sdk/mixins/code-mixins",
+                  "sdk/mixins/database-mixin",
                   "sdk/utils/file-watcher"
                 ]
               },

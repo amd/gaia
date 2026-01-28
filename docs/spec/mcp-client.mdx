@@ -1,5 +1,5 @@
 ---
-title: "MCP Client Specification"
+title: "MCP Client"
 description: "Technical specification for connecting GAIA agents to external MCP servers"
 icon: "plug"
 ---
@@ -59,7 +59,7 @@ The MCP Client enables GAIA agents to connect to and use tools from external MCP
 ### Non-Functional Requirements
 
 1. **Performance**
-   - Minimal overhead for tool calls (<50ms)
+   - Minimal overhead for tool calls (`<50ms`)
    - Efficient subprocess management
    - Tool schema caching
 
@@ -472,7 +472,3 @@ gaia mcp remove filesystem
 ```
 
 ---
-
-<Note>
-**License**: This specification is part of the GAIA project and is subject to the [project's license](https://github.com/amd/gaia/blob/main/LICENSE).
-</Note>
