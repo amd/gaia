@@ -305,6 +305,7 @@
           {
             "group": "Plans",
             "pages": [
+              "plans/agent-hub",
               "plans/installer",
               "plans/chat-ui",
               "plans/mcp-client",
