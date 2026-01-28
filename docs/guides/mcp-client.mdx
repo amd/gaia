@@ -4,7 +4,9 @@ description: "Connect GAIA agents to external MCP servers and use their tools"
 ---
 
 <Info>
-  **Examples:** [`examples/mcp_config_based_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_config_based_agent.py) · [`examples/mcp_multi_server_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_multi_server_agent.py)
+  **Examples:** 
+    - [`examples/mcp_config_based_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_config_based_agent.py)
+    - [`examples/mcp_multi_server_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_multi_server_agent.py)
 </Info>
 
 <Note>
@@ -65,11 +67,11 @@ The example demonstrates a clean, minimal MCP agent with:
   </Card>
 
   <Card title="Node.js (Optional)" icon="node-js">
-    Required only for npm-based MCP servers:
+    Required only for npm-based MCP servers, e.g.:
     ```bash
-    # Install Node.js 20+ for npx commands
-    # https://nodejs.org
+    npx -y @modelcontextprotocol/server-memory
     ```
+    See [Setup Guide](/setup) for NVM installation instructions.
   </Card>
 </CardGroup>
 
