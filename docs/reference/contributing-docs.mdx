@@ -1,0 +1,232 @@
+---
+title: "Documentation Contribution Guide"
+description: "How to contribute to GAIA documentation - types, structure, and when to use each"
+icon: "pen-to-square"
+---
+
+This guide clarifies what goes where in GAIA documentation and how to contribute.
+
+---
+
+## The Problem
+
+Section names can be confusing:
+- "SDK Reference" in Documentation tab vs "SDKs" in Specifications tab - what's the difference?
+- "User Guides" vs "Playbooks" - when to use which?
+- "Reference" vs "Specifications" - aren't they the same?
+
+This guide provides clear definitions and decision criteria.
+
+---
+
+## Documentation Tab
+
+### User Guides (`docs/guides/`)
+
+**Definition:** Task-oriented tutorials teaching users how to accomplish goals with GAIA features.
+
+**Contains:**
+- Step-by-step instructions
+- CLI commands users can run
+- Working Python code examples
+- Troubleshooting sections
+
+**When to use:** User asks "How do I chat with PDF documents?"
+
+**When NOT to use:** User asks "What parameters does ChatConfig accept?" → That's a Specification
+
+**Example:** [docs/guides/chat.mdx](https://github.com/amd/gaia/blob/main/docs/guides/chat.mdx)
+
+---
+
+### Playbooks (`docs/playbooks/`)
+
+**Definition:** Multi-part tutorials for building agents from scratch, with deep explanations of why things work.
+
+**Contains:**
+- 3+ part series
+- Architecture diagrams (Mermaid)
+- "Under the Hood" explanations
+- Complete working code at the end
+
+**When to use:** Teaching someone to BUILD a new agent type from scratch
+
+**When NOT to use:** Explaining how to USE an existing agent → That's a Guide
+
+**Example:** [docs/playbooks/chat-agent/](https://github.com/amd/gaia/tree/main/docs/playbooks/chat-agent)
+
+---
+
+### SDK Reference (`docs/sdk/sdks/`)
+
+**Definition:** Quick code snippets for rapid development - "cheat sheets" developers copy-paste.
+
+**Contains:**
+- Import statements
+- Common usage patterns (5-10 lines each)
+- No step-by-step tutorials
+- Links to full specifications
+
+**When to use:** Developer asks "What's the quick way to do streaming chat?"
+
+**When NOT to use:** Developer asks "What are ALL the methods on ChatSDK?" → That's a Specification
+
+**Example:** [docs/sdk/sdks/chat.mdx](https://github.com/amd/gaia/blob/main/docs/sdk/sdks/chat.mdx)
+
+---
+
+## Specifications Tab
+
+### SDK Specifications (`docs/spec/*-sdk.mdx`, `docs/spec/*-client.mdx`)
+
+**Definition:** Complete technical contracts for SDK modules - ALL methods, parameters, types, and internals.
+
+**Contains:**
+- Full API with every method signature
+- All parameters with types, defaults, descriptions
+- Implementation details and testing requirements
+- Extension points for contributors
+
+**When to use:** Developer needs to know ALL methods on a class, or wants to extend the SDK
+
+**When NOT to use:** Developer just wants to quickly use the SDK → That's SDK Reference or a Guide
+
+**Example:** [docs/spec/llm-client.mdx](https://github.com/amd/gaia/blob/main/docs/spec/llm-client.mdx)
+
+---
+
+### Infrastructure Specifications (`docs/spec/api-server.mdx`, `docs/spec/mcp-*.mdx`)
+
+**Definition:** Technical architecture of GAIA's backend systems - servers, bridges, registries.
+
+**Contains:**
+- Functional/Non-Functional Requirements
+- Complete Pydantic schemas
+- Request/response formats
+- Internal implementation logic
+
+**When to use:** Developer needs to understand or extend backend infrastructure
+
+**When NOT to use:** User just wants to start the API server → That's Reference
+
+---
+
+## Reference Tab
+
+### CLI Reference (`docs/reference/cli.mdx`)
+
+**Definition:** Complete documentation of all CLI commands, flags, and options.
+
+**When to use:** User asks "What flags does `gaia chat` accept?"
+
+### API Reference (`docs/reference/api.mdx`)
+
+**Definition:** User-facing guide for using the REST API server.
+
+**When to use:** User asks "How do I use the API server?" (not "How is it built?" - that's a Specification)
+
+---
+
+## Comparison Tables
+
+### SDK Reference vs SDK Specification
+
+| Aspect | SDK Reference (`docs/sdk/sdks/`) | SDK Specification (`docs/spec/`) |
+|--------|----------------------------------|----------------------------------|
+| **Purpose** | Quick usage examples | Complete technical contract |
+| **Length** | ~100-200 lines | ~800-1400 lines |
+| **Content** | Copy-paste snippets | Full API signatures, internals |
+| **Audience** | Developers USING the SDK | Developers EXTENDING the SDK |
+
+### Guides vs Playbooks
+
+| Aspect | User Guides (`docs/guides/`) | Playbooks (`docs/playbooks/`) |
+|--------|------------------------------|-------------------------------|
+| **Purpose** | USE pre-built features | BUILD agents from scratch |
+| **Format** | Single page tutorial | Multi-part series (3+ parts) |
+| **Output** | User accomplishes a task | User builds a complete agent |
+
+### Reference vs Specifications
+
+| Aspect | Reference (`docs/reference/`) | Specifications (`docs/spec/`) |
+|--------|-------------------------------|-------------------------------|
+| **Focus** | User-facing tools | Internal architecture |
+| **Audience** | Users and operators | SDK developers and contributors |
+
+---
+
+## Decision Tree
+
+**"I want to document..."**
+
+1. **How to USE a feature** → User Guide (`docs/guides/`)
+2. **How to BUILD an agent from scratch** → Playbook (`docs/playbooks/`)
+3. **Quick code snippets for developers** → SDK Reference (`docs/sdk/sdks/`)
+4. **Complete API contract (all methods)** → Specification (`docs/spec/`)
+5. **CLI commands and flags** → CLI Reference (`docs/reference/cli.mdx`)
+6. **Backend architecture** → Infrastructure Spec (`docs/spec/`)
+
+---
+
+## Contributing Process
+
+### Step 1: Identify the Right Location
+
+Use the decision tree above to determine where your content belongs.
+
+### Step 2: Create Your File
+
+Create a `.mdx` file in the appropriate directory with frontmatter:
+
+```yaml
+---
+title: "Your Page Title"
+description: "One-line description"
+icon: "icon-name"
+---
+```
+
+### Step 3: Update Navigation
+
+Add your page to `docs/docs.json` in the appropriate tab and group.
+
+### Step 4: Submit a Pull Request
+
+```bash
+git checkout -b docs/your-feature
+git add docs/
+git commit -m "docs: add [description]"
+git push origin docs/your-feature
+```
+
+---
+
+## Style Guidelines
+
+- Use active voice and second person ("you")
+- Include working code examples
+- Add source code links at the top
+- Include license footer at the bottom
+- Cross-link to related documentation
+
+---
+
+## Review Checklist
+
+- [ ] Content is in the correct section (use decision tree)
+- [ ] Frontmatter has `title` and `description`
+- [ ] Added to `docs/docs.json`
+- [ ] Code examples are complete and working
+- [ ] License footer included
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>
