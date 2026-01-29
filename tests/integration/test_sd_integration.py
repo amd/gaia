@@ -13,8 +13,6 @@ Prerequisites:
     lemonade-server serve --model SD-Turbo
 """
 
-import os
-import tempfile
 from pathlib import Path
 
 import pytest
