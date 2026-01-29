@@ -8,13 +8,10 @@
 name: GAIA CLI Tests (All Platforms)
 
 on:
+  # Only run via workflow_call or manual dispatch
+  # Individual child workflows (test_unit.yml, test_code_agent.yml, etc.) trigger
+  # on push/pull_request independently - this avoids duplicate/conflicting runs
   workflow_call:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-    types: [opened, synchronize, reopened, ready_for_review]
-  merge_group:
   workflow_dispatch:
 
 permissions:
