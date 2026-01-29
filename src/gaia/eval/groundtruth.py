@@ -166,7 +166,7 @@ class GroundTruthGenerator:
             'complexity_level': 'low/medium/high technical or content complexity'
         }},
         'summaries': {{
-            'executive_summary': 'high-level overview of document purpose and content',
+            'brief_summary': 'high-level overview of document purpose and content',
             'detailed_summary': 'comprehensive summary with key details and sections'
         }},
         'evaluation_criteria': {{

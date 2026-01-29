@@ -665,7 +665,7 @@ Examples:
         )
 
         # API tokens (input + output to Claude)
-        total_api_tokens = generation_info["total_claude_usage"]["total_tokens"]
+        total_llm_tokens = generation_info["total_claude_usage"]["total_tokens"]
         total_cost = generation_info["total_claude_cost"]["total_cost"]
         avg_cost = total_cost / len(summary["documents"]) if summary["documents"] else 0
 
@@ -677,7 +677,7 @@ Examples:
         print(f"  Total content tokens: {total_content_tokens:,}")
 
         print(f"\n💰 API Usage:")
-        print(f"  Total token count (input+output): {total_api_tokens:,}")
+        print(f"  Total token count (input+output): {total_llm_tokens:,}")
         print(f"  Total cost: ${total_cost:.4f}")
         print(f"  Average cost per file: ${avg_cost:.4f}")
 

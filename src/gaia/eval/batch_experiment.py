@@ -382,23 +382,19 @@ class BatchExperimentRunner:
 
             # Map experiment components to prompts.py styles
             style_mapping = {
-                "executive_summary": "brief",
+                ("brief_summary" if is_pdf else "executive_summary"): (
+                    "brief" if is_pdf else "executive"
+                ),
                 "detailed_summary": "detailed",
             }
 
             # For non-PDF files, detect content type and add appropriate styles
             if not is_pdf:
-                # Use the existing summarizer agent to detect content type
-                content_type = self.summarizer_agent.detect_content_type(
-                    transcript, input_type="auto"
-                )
-
-                # Add action_items for both email and transcript
+                # Add meeting-style summaries for both email and transcript
+                style_mapping["participants"] = "participants"
                 style_mapping["action_items"] = "action_items"
-
-                # Add participants only for emails
-                if content_type == "email":
-                    style_mapping["participants"] = "participants"
+                style_mapping["key_decisions"] = "key_decisions"
+                style_mapping["topics_discussed"] = "topics_discussed"
 
             # Get the styles to request from the agent (only from style_mapping keys to avoid duplicates)
             requested_styles = list(
@@ -524,7 +520,9 @@ class BatchExperimentRunner:
 
             # Map experiment components to prompts.py styles
             style_mapping = {
-                "executive_summary": "brief",
+                ("brief_summary" if is_pdf else "executive_summary"): (
+                    "brief" if is_pdf else "executive"
+                ),
                 "detailed_summary": "detailed",
             }
 
@@ -535,12 +533,11 @@ class BatchExperimentRunner:
                     transcript, input_type="auto"
                 )
 
-                # Add action_items for both email and transcript
+                # Add meeting-style summaries for both email and transcript
+                style_mapping["participants"] = "participants"
                 style_mapping["action_items"] = "action_items"
-
-                # Add participants only for emails
-                if content_type == "email":
-                    style_mapping["participants"] = "participants"
+                style_mapping["key_decisions"] = "key_decisions"
+                style_mapping["topics_discussed"] = "topics_discussed"
 
             # Get the styles to request from the agent (only unique styles)
             requested_styles = list(set(style_mapping.values()))

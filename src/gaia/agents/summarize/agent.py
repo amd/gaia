@@ -465,12 +465,7 @@ class SummarizerAgent(Agent):
         style_instruction = (self.summary_styles or {}).get(style)
         if not style_instruction:
             raise KeyError(f"Missing style '{style}' in prompts")
-        if style == "participants" and content_type == "email":
-            prompt = f"""Extract the sender and all recipients from this email.\n\nFormat your response as JSON:\n{{\n    \"sender\": \"sender email/name\",\n    \"recipients\": [\"recipient1\", \"recipient2\"],\n    \"cc\": [\"cc1\", \"cc2\"] (if any),\n    \"bcc\": [\"bcc1\"] (if any)\n}}\n\nEmail content:\n{content}"""
-        elif style == "action_items":
-            prompt = f"""Extract all action items from this {content_type}.\n\n{style_instruction}\n\nFormat each action item with:\n- The specific action required\n- Who is responsible (if mentioned)\n- Any deadline or timeline (if mentioned)\n\nIf no action items are found, respond with \"No specific action items identified.\"\n\nContent:\n{content}"""
-        else:
-            prompt = f"""Analyze this {content_type} and {style_instruction}\n\nContent:\n{content}"""
+        prompt = f"""Analyze this {content_type} and {style_instruction}\n\nContent:\n{content}"""
         return prompt
 
     def generate_combined_prompt(
