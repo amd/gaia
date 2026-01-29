@@ -62,6 +62,7 @@ class SDToolsMixin:
     sd_default_model: str
     sd_default_size: str
     sd_default_steps: int
+    sd_default_cfg: float
     sd_generations: List[Dict[str, Any]]
 
     def init_sd(
@@ -69,8 +70,9 @@ class SDToolsMixin:
         base_url: str = "http://localhost:8000",
         output_dir: Optional[str] = None,
         default_model: str = "SDXL-Turbo",
-        default_size: str = "1024x1024",
+        default_size: str = "512x512",
         default_steps: int = 4,
+        default_cfg: float = 1.0,
     ) -> None:
         """
         Initialize SD tools configuration. Must be called before using SD tools.
@@ -79,8 +81,9 @@ class SDToolsMixin:
             base_url: Lemonade Server base URL
             output_dir: Directory to save generated images (default: .gaia/cache/sd/images)
             default_model: Default SD model (SD-Turbo or SDXL-Turbo)
-            default_size: Default image size (512x512, 768x768, 1024x1024)
+            default_size: Default image size (512x512 recommended for Turbo models)
             default_steps: Default inference steps (4 for Turbo models)
+            default_cfg: Default CFG scale (1.0 for Lemonade, despite Turbo models being trained with 0.0)
 
         Example:
             self.init_sd(
@@ -98,6 +101,7 @@ class SDToolsMixin:
         self.sd_default_model = default_model
         self.sd_default_size = default_size
         self.sd_default_steps = default_steps
+        self.sd_default_cfg = default_cfg
         self.sd_generations = []  # Instance-level list for session history
 
         logger.info(f"SD tools initialized: endpoint={self.sd_client.base_url}/images/generations, output={self.sd_output_dir}")
@@ -207,6 +211,7 @@ class SDToolsMixin:
         model: Optional[str] = None,
         size: Optional[str] = None,
         steps: Optional[int] = None,
+        cfg_scale: Optional[float] = None,
         seed: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
@@ -217,6 +222,7 @@ class SDToolsMixin:
             model: SD model (defaults to sd_default_model)
             size: Image size (defaults to sd_default_size)
             steps: Inference steps (defaults to sd_default_steps)
+            cfg_scale: CFG scale (defaults to sd_default_cfg, 0.0 for Turbo models)
             seed: Random seed for reproducibility
 
         Returns:
@@ -228,6 +234,7 @@ class SDToolsMixin:
         model = model or self.sd_default_model
         size = size or self.sd_default_size
         steps = steps or self.sd_default_steps
+        cfg_scale = cfg_scale if cfg_scale is not None else self.sd_default_cfg
 
         # Validate parameters
         if model not in self.SD_MODELS:
@@ -261,6 +268,7 @@ class SDToolsMixin:
                 model=model,
                 size=size,
                 steps=steps,
+                cfg_scale=cfg_scale,
                 seed=seed,
                 timeout=120,
             )

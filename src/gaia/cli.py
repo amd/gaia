@@ -1014,8 +1014,15 @@ def main():
     sd_parser.add_argument(
         "--size",
         choices=["512x512", "768x768", "1024x1024"],
-        default="1024x1024",
-        help="Image size (default: 1024x1024)",
+        default="512x512",
+        help="Image size (default: 512x512, best for Turbo models)",
+    )
+    sd_parser.add_argument(
+        "--cfg-scale",
+        dest="cfg_scale",
+        type=float,
+        default=1.0,
+        help="CFG scale (default: 1.0, Lemonade requires this despite Turbo being trained with 0.0)",
     )
     sd_parser.add_argument(
         "--output-dir",
@@ -4964,6 +4971,7 @@ def handle_sd_command(args):
         output_dir=args.output_dir,
         default_model=args.sd_model,
         default_size=args.size,
+        default_cfg=args.cfg_scale,
     )
 
     # Check health

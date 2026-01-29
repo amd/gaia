@@ -1612,9 +1612,10 @@ class LemonadeClient:
     def generate_image(
         self,
         prompt: str,
-        model: str = "SD-Turbo",
+        model: str = "SDXL-Turbo",
         size: str = "512x512",
         steps: int = 4,
+        cfg_scale: float = 1.0,
         seed: Optional[int] = None,
         timeout: int = 120,
     ) -> Dict[str, Any]:
@@ -1626,6 +1627,7 @@ class LemonadeClient:
             model: SD model to use (SD-Turbo or SDXL-Turbo)
             size: Image dimensions (512x512, 768x768, or 1024x1024)
             steps: Number of inference steps (4 recommended for Turbo models)
+            cfg_scale: Classifier-free guidance scale (1.0 for Lemonade, despite Turbo being trained with 0.0)
             seed: Random seed for reproducibility (optional)
             timeout: Request timeout in seconds (default: 120)
 
@@ -1639,7 +1641,8 @@ class LemonadeClient:
             result = client.generate_image(
                 prompt="a sunset over mountains, golden hour, 4k",
                 model="SDXL-Turbo",
-                size="1024x1024",
+                size="512x512",
+                cfg_scale=1.0,
                 seed=42
             )
             image_b64 = result["data"][0]["b64_json"]
@@ -1661,11 +1664,12 @@ class LemonadeClient:
                 "size": size,
                 "n": 1,
                 "response_format": "b64_json",
+                "cfg_scale": cfg_scale,
             }
             if seed is not None:
                 payload["seed"] = seed
 
-            self.log.info(f"Generating image: prompt='{prompt[:50]}...', model={model}")
+            self.log.info(f"Generating image: prompt='{prompt[:50]}...', model={model}, cfg={cfg_scale}")
             url = f"{self.base_url}/images/generations"
             response = self._send_request("POST", url, data=payload, timeout=timeout)
 
