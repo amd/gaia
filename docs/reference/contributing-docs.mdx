@@ -55,86 +55,24 @@ GAIA uses four main documentation types, each serving a distinct purpose:
 - Configuration options and troubleshooting
 - Links to deeper Playbooks and Specifications
 
-<Accordion title="Guide Template">
-```mdx
----
-title: "Feature Name"
-description: "One-line description of what this guide covers"
----
+**Guide Template Structure:**
 
-<Note>
-📖 **You are viewing:** User Guide - Learn how to use [feature]
+| Section | Purpose |
+|---------|---------|
+| Frontmatter | `title` and `description` |
+| Navigation Note | "You are viewing" with links to SDK/Spec |
+| Source Code Info | Link to source file |
+| Introduction | Brief explanation of the feature |
+| Quick Start | Steps to get running quickly |
+| CLI Usage | Command-line examples |
+| Python SDK | Core classes and examples |
+| Configuration | Available options |
+| Troubleshooting | Common issues and solutions |
+| Next Steps | Links to related content |
 
-**See also:** [SDK Reference](/sdk/...) · [API Specification](/spec/...)
-</Note>
-
-<Info>
-  **Source Code:** [`src/gaia/path/to/source.py`](https://github.com/amd/gaia/blob/main/src/gaia/path/to/source.py)
-</Info>
-
-Brief introduction explaining what this feature does and why it's useful.
-
-<Info>
-  **First time here?** Complete the [Setup](/setup) guide first.
-</Info>
-
-## Quick Start
-
-<Steps>
-  <Step title="Install dependencies">
-    ```bash
-    uv pip install -e ".[extra]"
-    ```
-  </Step>
-
-  <Step title="Basic usage">
-    ```python title="example.py"
-    from gaia.module import Class
-
-    instance = Class()
-    result = instance.method("input")
-    print(result)
-    ```
-  </Step>
-</Steps>
-
-## CLI Usage
-
-```bash
-gaia command --option value
-```
-
-## Python SDK
-
-### Core Classes
-
-Explain main classes and their methods.
-
-### Examples
-
-Show progressively complex examples.
-
-## Configuration
-
-Document configuration options.
-
-## Troubleshooting
-
-<AccordionGroup>
-  <Accordion title="Common Issue 1">
-    Solution for issue 1.
-  </Accordion>
-</AccordionGroup>
-
-## Next Steps
-
-<CardGroup cols={2}>
-  <Card title="Related Feature" icon="icon" href="/path">
-    Description
-  </Card>
-</CardGroup>
-```
-</Accordion>
+<Tip>
+**See a real example:** View [`docs/guides/chat.mdx`](https://github.com/amd/gaia/blob/main/docs/guides/chat.mdx) for a complete guide implementation.
+</Tip>
 
 **Example Guides:**
 - [`docs/guides/chat.mdx`](https://github.com/amd/gaia/blob/main/docs/guides/chat.mdx) - Chat SDK usage
@@ -162,129 +100,23 @@ Document configuration options.
 - Often multi-part for complex topics
 - Include architecture diagrams (Mermaid)
 
-<Accordion title="Playbook Template">
-```mdx
----
-title: "Part N: Building [Feature]"
-description: "What you'll build in this part"
-icon: "icon-name"
----
+**Playbook Template Structure:**
 
-<Info>
-  **Source Code:** [`src/gaia/path/`](https://github.com/amd/gaia/blob/main/src/gaia/path/)
-</Info>
+| Section | Purpose |
+|---------|---------|
+| Frontmatter | `title`, `description`, and `icon` |
+| Source Code Info | Link to relevant source directory |
+| Metadata | Time to complete, what you'll build/learn, prerequisites |
+| Why Build This? | Problem context and key benefits |
+| Architecture | Mermaid diagram showing component relationships |
+| Quick Start (5 min) | Minimal working example |
+| Understanding Components | Deep dives with "Under the Hood" sections |
+| Building Step by Step | Incremental construction with checkpoints |
+| Next Steps | Link to next part or related content |
 
-<Badge text="development" color="orange" />
-
-- **Time to complete:** 15-20 minutes
-- **What you'll build:** Description of the end result
-- **What you'll learn:** Key concepts covered
-- **Prerequisites:** What users need before starting
-
----
-
-## Why Build This?
-
-Context setting - what problem does this solve?
-
-<Info>
-**Key Benefit:** Highlight the main value proposition.
-</Info>
-
----
-
-## The Architecture
-
-```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24'}}}%%
-graph TD
-    A([Component 1]) --> B([Component 2])
-    B --> C([Component 3])
-```
-
-Explain how the components work together.
-
----
-
-## Quick Start (5 Minutes)
-
-Minimal working example to verify setup.
-
-<Steps>
-  <Step title="Install">
-    ```bash
-    uv pip install -e ".[extra]"
-    ```
-  </Step>
-
-  <Step title="Create minimal implementation">
-    ```python title="minimal_example.py"
-    # Working code
-    ```
-  </Step>
-
-  <Step title="Run it">
-    ```bash
-    python minimal_example.py
-    ```
-  </Step>
-</Steps>
-
----
-
-## Understanding the Components
-
-### Component 1
-
-<Tabs>
-  <Tab title="Code">
-    ```python
-    from gaia.module import Component
-    ```
-  </Tab>
-
-  <Tab title="Purpose">
-    Explanation of what this component does.
-  </Tab>
-</Tabs>
-
-<Accordion title="Under the Hood">
-Deep technical explanation of how this works internally.
-</Accordion>
-
----
-
-## Building Step by Step
-
-### Step 1: The Foundation
-
-Explain and implement the first piece.
-
-```python title="step1.py"
-# Implementation
-```
-
-<Check>
-**What you have:** Summary of capabilities after this step.
-</Check>
-
-### Step 2: Adding Feature X
-
-Build on the previous step.
-
-```python title="step2.py"
-# Extended implementation
-```
-
----
-
-## Next Steps
-
-<Card title="Part N+1: Next Topic" icon="arrow-right" href="./part-n+1">
-  Continue to the next part.
-</Card>
-```
-</Accordion>
+<Tip>
+**See a real example:** View [`docs/playbooks/chat-agent/part-1-getting-started.mdx`](https://github.com/amd/gaia/blob/main/docs/playbooks/chat-agent/part-1-getting-started.mdx) for a complete playbook implementation.
+</Tip>
 
 **Playbook Structure:**
 1. **Context** - Why build this? What problem does it solve?
@@ -322,143 +154,24 @@ Build on the previous step.
 - Performance considerations
 - Migration notes
 
-<Accordion title="Specification Template">
-```mdx
----
-title: "Component Name"
-description: "One-line purpose of this component"
-icon: "icon-name"
----
+**Specification Template Structure:**
 
-<Note>
-🔧 **You are viewing:** API Specification - Complete technical reference
+| Section | Purpose |
+|---------|---------|
+| Frontmatter | `title`, `description`, and `icon` |
+| Navigation Note | "You are viewing: API Specification" with cross-links |
+| Component Info | Module path, import statement, source link |
+| Overview | What it does, why use it, when NOT to use it |
+| API Specification | Class definition, constructor, all methods with signatures |
+| Code Examples | Basic and advanced usage examples |
+| Testing Requirements | Required unit/integration tests with file paths |
+| Dependencies | Required imports and packages |
+| Performance Considerations | Memory, latency, token usage notes |
+| Status Footer | Implementation status, last updated, version |
 
-**See also:** [Conceptual Guide](/sdk/...) · [User Guide](/guides/...)
-</Note>
-
-<Note>
-- **Component:** Component Name
-- **Module:** `gaia.path.module`
-- **Import:** `from gaia.path.module import Class`
-- **Source:** [`src/gaia/path/module.py`](https://github.com/amd/gaia/blob/main/src/gaia/path/module.py)
-</Note>
-
----
-
-## Overview
-
-What this component does, why you'd use it, and when NOT to use it.
-
-**What it does:**
-- Capability 1
-- Capability 2
-
-**Why use it:**
-- Use case 1
-- Use case 2
-
----
-
-## API Specification
-
-### Class Definition
-
-```python
-class ComponentName:
-    """Class docstring."""
-    pass
-```
-
-### Constructor
-
-```python
-def __init__(
-    self,
-    param1: str,
-    param2: int = 10,
-) -> None:
-    """
-    Initialize the component.
-
-    Args:
-        param1: Description of param1
-        param2: Description of param2 (default: 10)
-    """
-```
-
-### Methods
-
-```python
-def method_name(self, arg: str) -> dict:
-    """
-    Method description.
-
-    Args:
-        arg: Description
-
-    Returns:
-        dict: Description of return value
-
-    Raises:
-        ValueError: When invalid input
-    """
-```
-
----
-
-## Code Examples
-
-### Example 1: Basic Usage
-
-```python
-from gaia.path import Component
-
-component = Component()
-result = component.method("input")
-```
-
-### Example 2: Advanced Usage
-
-```python
-# More complex example
-```
-
----
-
-## Testing Requirements
-
-### Unit Tests
-
-**File:** `tests/path/test_component.py`
-
-```python
-def test_basic_functionality():
-    """Test description."""
-    pass
-```
-
----
-
-## Dependencies
-
-```python
-# Required imports
-from typing import Any, Dict, List
-```
-
----
-
-## Performance Considerations
-
-Document memory usage, latency, token usage, etc.
-
----
-
-**Status:** ✅ Implemented and tested
-**Last Updated:** Month Day, Year
-**Specification Version:** 1.0.0
-```
-</Accordion>
+<Tip>
+**See a real example:** View [`docs/spec/agent-base.mdx`](https://github.com/amd/gaia/blob/main/docs/spec/agent-base.mdx) for a complete specification implementation.
+</Tip>
 
 **Example Specifications:**
 - [`docs/spec/agent-base.mdx`](https://github.com/amd/gaia/blob/main/docs/spec/agent-base.mdx) - Agent base class
@@ -485,79 +198,20 @@ Document memory usage, latency, token usage, etc.
 - Tables for quick scanning
 - Copy-paste commands
 
-<Accordion title="Reference Doc Template">
-```mdx
----
-title: "Feature Reference"
-description: "Complete reference for [feature]"
----
+**Reference Doc Template Structure:**
 
-<Info>
-  **Source Code:** [`src/gaia/path/`](https://github.com/amd/gaia/blob/main/src/gaia/path/)
-</Info>
+| Section | Purpose |
+|---------|---------|
+| Frontmatter | `title` and `description` |
+| Source Code Info | Link to relevant source directory |
+| Introduction | Brief description of what this reference covers |
+| Commands/Options/Endpoints | Each command with syntax, options table, examples |
+| Configuration | Config file format with settings table |
+| Troubleshooting | Common issues with symptoms and solutions |
 
-Brief description of what this reference covers.
-
----
-
-## Commands / Options / Endpoints
-
-### command-name
-
-Description of the command.
-
-```bash
-gaia command [options]
-```
-
-**Options:**
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--option` | What it does | `value` |
-| `-v, --verbose` | Enable verbose output | `false` |
-
-**Examples:**
-
-```bash
-# Basic usage
-gaia command
-
-# With options
-gaia command --option value
-```
-
----
-
-## Configuration
-
-### config-file.yaml
-
-```yaml
-setting: value
-nested:
-  option: value
-```
-
-| Setting | Type | Description |
-|---------|------|-------------|
-| `setting` | string | Description |
-
----
-
-## Troubleshooting
-
-### Common Issue
-
-**Symptom:** What the user sees
-
-**Solution:** How to fix it
-
-```bash
-# Fix command
-```
-```
-</Accordion>
+<Tip>
+**See a real example:** View [`docs/reference/cli.mdx`](https://github.com/amd/gaia/blob/main/docs/reference/cli.mdx) for a complete reference implementation.
+</Tip>
 
 **Example Reference docs:**
 - [`docs/reference/cli.mdx`](https://github.com/amd/gaia/blob/main/docs/reference/cli.mdx) - CLI reference
@@ -640,9 +294,11 @@ flowchart TD
 |-------------------|-------------|----------|
 | Show how to use a pre-built agent | User Guide | `docs/guides/` |
 | Teach how to build something from scratch | Playbook | `docs/playbooks/` |
+| Explain concepts and patterns | SDK Docs | `docs/sdk/` |
 | Document every method and parameter | Specification | `docs/spec/` |
 | List CLI commands or API endpoints | Reference | `docs/reference/` |
 | Document configuration options | Reference | `docs/reference/` |
+| Add third-party integration | Integration | `docs/integrations/` |
 
 ---
 
@@ -738,6 +394,49 @@ Always link to related documentation:
 </Note>
 ```
 
+### Images and Assets
+
+1. **Store images in `docs/assets/`**
+   ```
+   docs/assets/
+   ├── images/
+   │   ├── guides/
+   │   ├── playbooks/
+   │   └── diagrams/
+   └── ...
+   ```
+
+2. **Use descriptive file names**
+   - Good: `chat-agent-architecture.png`
+   - Avoid: `screenshot1.png`
+
+3. **Reference images with absolute paths**
+   ```mdx
+   ![Chat Architecture](/assets/images/diagrams/chat-architecture.png)
+   ```
+
+4. **Prefer Mermaid diagrams over static images** when possible - they're easier to maintain
+
+5. **Optimize images** before committing (compress PNGs, use appropriate resolution)
+
+### License Footer
+
+Every documentation page must end with the license footer:
+
+```mdx
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>
+```
+
 ---
 
 ## Contribution Process
@@ -819,12 +518,50 @@ Before submitting, verify:
 
 - [ ] File is in the correct directory
 - [ ] Frontmatter includes `title` and `description`
-- [ ] Page is added to `docs/docs.json`
+- [ ] Page is added to `docs/docs.json` (for new pages)
 - [ ] Code examples are complete and working
 - [ ] Links to related docs are included
 - [ ] No spelling or grammar errors
 - [ ] Follows the appropriate template structure
 - [ ] License footer is included
+- [ ] Images are optimized and in `docs/assets/`
+
+---
+
+## Updating Existing Documentation
+
+When updating existing docs (not creating new ones):
+
+### Minor Updates
+
+For typos, small fixes, or clarifications:
+
+1. Make your changes directly
+2. Commit with message: `docs: fix typo in [page]` or `docs: clarify [topic] in [page]`
+3. No need to update `docs.json`
+
+### Major Updates
+
+For significant content changes:
+
+1. **Review the current structure** - Understand why it's organized the way it is
+2. **Check related pages** - Updates may require changes to linked documentation
+3. **Update cross-references** - If you rename sections, update any links pointing to them
+4. **Consider backwards compatibility** - External links to anchors may break if you rename headings
+
+### Deprecating Content
+
+When removing or replacing documentation:
+
+1. Add a deprecation notice at the top:
+   ```mdx
+   <Warning>
+   **Deprecated:** This page is outdated. See [New Page](/path/to/new) for current documentation.
+   </Warning>
+   ```
+
+2. Keep the page for at least one release cycle before removing
+3. Update `docs.json` to move deprecated pages to the end of their section
 
 ---
 
