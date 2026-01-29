@@ -85,7 +85,9 @@ class StdioTransport(MCPTransport):
         finally:
             self._process = None
 
-    def send_request(self, method: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
+    def send_request(
+        self, method: str, params: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
         """Send a JSON-RPC request via stdin and read response from stdout.
 
         Args:

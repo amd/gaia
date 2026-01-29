@@ -1,11 +1,11 @@
 ---
-title: "MCP Client"
-description: "Technical specification for connecting GAIA agents to external MCP servers"
+title: "MCP Tool Mixin"
+description: "Mixin for connecting GAIA agents to external MCP servers"
 icon: "plug"
 ---
 
 <Info>
-**Source Code:** [`src/gaia/mcp/client/`](https://github.com/amd/gaia/tree/main/src/gaia/mcp/client)
+**Source Code:** [`src/gaia/mcp/mixin.py`](https://github.com/amd/gaia/tree/main/src/gaia/mcp/mixin.py) · [`src/gaia/mcp/client/`](https://github.com/amd/gaia/tree/main/src/gaia/mcp/client)
 </Info>
 
 <Note>
@@ -23,7 +23,7 @@ The MCP Client enables GAIA agents to connect to and use tools from external MCP
 - **Universal Tool Access**: Connect to any MCP server and use its tools
 - **Automatic Tool Registration**: MCP tools automatically appear in agent's tool registry
 - **Tool Namespacing**: Multiple servers with same tool names work without conflicts
-- **Stdio & HTTP Transports**: Support for subprocess and remote MCP servers
+- **Stdio Transport**: Support for subprocess-based MCP servers
 - **Configuration Management**: Persistent server configurations
 - **CLI Integration**: Simple command-line interface for managing connections
 
@@ -389,7 +389,7 @@ def test_multiple_servers_namespace_correctly():
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.mcp_client_mixin import MCPClientMixin
+from gaia.mcp import MCPClientMixin
 
 class MyAgent(Agent, MCPClientMixin):
     def __init__(self, **kwargs):

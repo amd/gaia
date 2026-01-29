@@ -153,44 +153,10 @@ class Agent(abc.ABC):
         else:
             self.console = self._create_console()
 
-        # Initialize LLM client for local model
-        self.system_prompt = self._get_system_prompt()
-
-        # Register tools for this agent
+        # Initialize system prompt
+        # Register tools first, then build system prompt with tools included
         self._register_tools()
-
-        # Update system prompt with available tools and response format
-        tools_description = self._format_tools_for_prompt()
-        self.system_prompt += f"\n\n==== AVAILABLE TOOLS ====\n{tools_description}\n"
-
-        # Add JSON response format instructions (shared across all agents)
-        self.system_prompt += """
-==== RESPONSE FORMAT ====
-You must respond ONLY in valid JSON. No text before { or after }.
-
-**To call a tool:**
-{"thought": "reasoning", "goal": "objective", "tool": "tool_name", "tool_args": {"arg1": "value1"}}
-
-**To create a multi-step plan:**
-{
-  "thought": "reasoning",
-  "goal": "objective",
-  "plan": [
-    {"tool": "tool1", "tool_args": {"arg": "val"}},
-    {"tool": "tool2", "tool_args": {"arg": "val"}}
-  ],
-  "tool": "tool1",
-  "tool_args": {"arg": "val"}
-}
-
-**To provide a final answer:**
-{"thought": "reasoning", "goal": "achieved", "answer": "response to user"}
-
-**RULES:**
-1. ALWAYS use tools for real data - NEVER hallucinate
-2. Plan steps MUST be objects like {"tool": "x", "tool_args": {}}, NOT strings
-3. After tool results, provide an "answer" summarizing them
-"""
+        self.rebuild_system_prompt()
 
         # Initialize ChatSDK with proper configuration
         # Note: We don't set system_prompt in config, we pass it per request
@@ -265,6 +231,58 @@ You must respond ONLY in valid JSON. No text before { or after }.
             tool_descriptions.append(f"- {name}({params_str}): {description}")
 
         return "\n".join(tool_descriptions)
+
+    def rebuild_system_prompt(self) -> None:
+        """Rebuild system prompt with current tools from _TOOL_REGISTRY.
+
+        This method regenerates the system prompt by:
+        1. Getting the base prompt from _get_system_prompt()
+        2. Appending the current tools from _TOOL_REGISTRY
+        3. Appending the JSON response format instructions
+
+        Call this after dynamically adding tools (e.g., via MCP servers or
+        after indexing documents) to ensure the LLM knows about them.
+
+        Example:
+            >>> agent = MyAgent()
+            >>> agent.connect_mcp_server("filesystem", "npx @modelcontextprotocol/server-filesystem /tmp")
+            >>> # rebuild_system_prompt() is called automatically
+        """
+        # Get base prompt from subclass
+        self.system_prompt = self._get_system_prompt()
+
+        # Append tools description
+        tools_description = self._format_tools_for_prompt()
+        self.system_prompt += f"\n\n==== AVAILABLE TOOLS ====\n{tools_description}\n"
+
+        # Add JSON response format instructions (shared across all agents)
+        self.system_prompt += """
+==== RESPONSE FORMAT ====
+You must respond ONLY in valid JSON. No text before { or after }.
+
+**To call a tool:**
+{"thought": "reasoning", "goal": "objective", "tool": "tool_name", "tool_args": {"arg1": "value1"}}
+
+**To create a multi-step plan:**
+{
+  "thought": "reasoning",
+  "goal": "objective",
+  "plan": [
+    {"tool": "tool1", "tool_args": {"arg": "val"}},
+    {"tool": "tool2", "tool_args": {"arg": "val"}}
+  ],
+  "tool": "tool1",
+  "tool_args": {"arg": "val"}
+}
+
+**To provide a final answer:**
+{"thought": "reasoning", "goal": "achieved", "answer": "response to user"}
+
+**RULES:**
+1. ALWAYS use tools for real data - NEVER hallucinate
+2. Plan steps MUST be objects like {"tool": "x", "tool_args": {}}, NOT strings
+3. After tool results, provide an "answer" summarizing them
+"""
 
     def list_tools(self, verbose: bool = True) -> None:
         """
@@ -774,7 +792,8 @@ You must respond ONLY in valid JSON. No text before { or after }.
             for name, param in sig.parameters.items()
             if param.default == inspect.Parameter.empty
             and name != "return"
-            and param.kind not in (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL)
+            and param.kind
+            not in (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL)
         }
 
         # Check for missing required arguments

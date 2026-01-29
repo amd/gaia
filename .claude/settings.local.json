@@ -76,7 +76,9 @@
       "WebFetch",
       "WebFetch(domain:code.claude.com)",
       "WebFetch(domain:lemonade-server.ai)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(uv run uvx pylint:*)",
+      "Bash(uv run uvx flake8:*)"
     ],
     "deny": []
   },

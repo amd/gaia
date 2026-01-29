@@ -147,7 +147,9 @@ class MCPClientManager:
                         self._clients[name] = client
                         logger.debug(f"Loaded MCP server: {name}")
                     else:
-                        logger.warning(f"Failed to connect to configured server: {name}")
+                        logger.warning(
+                            f"Failed to connect to configured server: {name}"
+                        )
                 else:
                     logger.warning(f"No command specified for server: {name}")
 

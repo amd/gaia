@@ -202,9 +202,7 @@ class MCPClient:
             Enhanced error message with schema and provided args
         """
         # Get the tool schema for reference
-        tool_def = next(
-            (t for t in self.list_tools() if t.name == tool_name), None
-        )
+        tool_def = next((t for t in self.list_tools() if t.name == tool_name), None)
 
         if not tool_def:
             return error_msg

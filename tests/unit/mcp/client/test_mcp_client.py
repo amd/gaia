@@ -324,7 +324,9 @@ class TestEnhancedErrorMessages:
             "entities": [{"name": "Test", "type": "timestamp"}]  # Wrong key "type"
         }
 
-        result = client._format_validation_error("create_entities", error_msg, arguments)
+        result = client._format_validation_error(
+            "create_entities", error_msg, arguments
+        )
 
         # Should include original error
         assert error_msg in result

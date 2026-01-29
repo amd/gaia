@@ -36,7 +36,7 @@ Troubleshooting:
 """
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.mcp_client_mixin import MCPClientMixin
+from gaia.mcp import MCPClientMixin
 
 MCP_SERVERS = {
     "memory": "npx -y @modelcontextprotocol/server-memory",
@@ -62,9 +62,7 @@ class MultiServerAgent(Agent, MCPClientMixin):
         for name, command in MCP_SERVERS.items():
             success = self.connect_mcp_server(name, command)
             print(f"  {name}: {'✓' if success else '✗'}")
-
-        # Rebuild system prompt to include MCP tools
-        self._rebuild_system_prompt()
+            # System prompt auto-updated with MCP tools after each connection
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the agent."""
@@ -91,44 +89,6 @@ reasoning, or storing/retrieving information."""
         # MCP tools are automatically registered by MCPClientMixin
         # when connect_mcp_server() is called
         pass
-
-    def _rebuild_system_prompt(self) -> None:
-        """Rebuild system prompt after MCP tools are registered."""
-        # Get base prompt
-        self.system_prompt = self._get_system_prompt()
-
-        # Add tools section
-        tools_description = self._format_tools_for_prompt()
-        self.system_prompt += f"\n\n==== AVAILABLE TOOLS ====\n{tools_description}\n"
-
-        # Add response format
-        self.system_prompt += """
-==== RESPONSE FORMAT ====
-You must respond ONLY in valid JSON. No text before { or after }.
-
-**To call a tool:**
-{"thought": "reasoning", "goal": "objective", "tool": "tool_name", "tool_args": {"arg1": "value1"}}
-
-**To create a multi-step plan:**
-{
-  "thought": "reasoning",
-  "goal": "objective",
-  "plan": [
-    {"tool": "tool1", "tool_args": {"arg": "val"}},
-    {"tool": "tool2", "tool_args": {"arg": "val"}}
-  ],
-  "tool": "tool1",
-  "tool_args": {"arg": "val"}
-}
-
-**To provide a final answer:**
-{"thought": "reasoning", "goal": "achieved", "answer": "response to user"}
-
-**RULES:**
-1. ALWAYS use tools for real data - NEVER hallucinate
-2. Plan steps MUST be objects like {"tool": "x", "tool_args": {}}, NOT strings
-3. After tool results, provide an "answer" summarizing them
-"""
 
 
 def main():

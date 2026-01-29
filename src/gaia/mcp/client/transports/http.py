@@ -41,11 +41,14 @@ class HTTPTransport(MCPTransport):
                 logger.debug(f"Testing connection to {self.url}")
 
             # Try a simple health check or initialize request
-            response = self.send_request("initialize", {
-                "protocolVersion": "1.0.0",
-                "clientInfo": {"name": "GAIA", "version": "1.0.0"},
-                "capabilities": {}
-            })
+            response = self.send_request(
+                "initialize",
+                {
+                    "protocolVersion": "1.0.0",
+                    "clientInfo": {"name": "GAIA", "version": "1.0.0"},
+                    "capabilities": {},
+                },
+            )
 
             self._connected = "result" in response
             if self._connected:
@@ -63,7 +66,9 @@ class HTTPTransport(MCPTransport):
         self._connected = False
         logger.debug(f"Disconnected from {self.url}")
 
-    def send_request(self, method: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
+    def send_request(
+        self, method: str, params: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
         """Send a JSON-RPC request via HTTP POST.
 
         Args:
@@ -105,7 +110,9 @@ class HTTPTransport(MCPTransport):
                 response_json = json.loads(response_data)
 
                 if self.debug:
-                    logger.debug(f"Received response: {json.dumps(response_json, indent=2)}")
+                    logger.debug(
+                        f"Received response: {json.dumps(response_json, indent=2)}"
+                    )
 
                 return response_json
 
