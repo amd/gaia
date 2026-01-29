@@ -78,7 +78,8 @@
       "WebFetch(domain:lemonade-server.ai)",
       "WebSearch",
       "Bash(uv run uvx pylint:*)",
-      "Bash(uv run uvx flake8:*)"
+      "Bash(uv run uvx flake8:*)",
+      "Bash(git push)"
     ],
     "deny": []
   },

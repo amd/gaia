@@ -126,6 +126,7 @@
                   "sdk/mixins/tool-mixins",
                   "sdk/mixins/code-mixins",
                   "sdk/mixins/database-mixin",
+                  "sdk/infrastructure/mcp-client",
                   "sdk/utils/file-watcher"
                 ]
               },
@@ -172,8 +173,7 @@
               "spec/agent-base",
               "spec/tool-decorator",
               "spec/console",
-              "spec/file-change-handler",
-              "spec/mcp-agent"
+              "spec/file-change-handler"
             ]
           },
           {
@@ -192,7 +192,6 @@
             "group": "Infrastructure",
             "pages": [
               "spec/plugin-registry",
-              "spec/routing-agent",
               "spec/test-utilities",
               "spec/api-agent",
               "spec/api-server"
@@ -239,6 +238,8 @@
           {
             "group": "Agents & Apps",
             "pages": [
+              "spec/mcp-agent",
+              "spec/routing-agent",
               "spec/chat-agent",
               "spec/docker-agent",
               "spec/jira-agent",
