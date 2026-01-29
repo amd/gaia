@@ -3,23 +3,28 @@ title: "MCP Client SDK"
 description: "SDK reference for connecting agents to MCP servers"
 ---
 
-## Overview
-
-The MCP Client SDK enables GAIA agents to connect to external MCP (Model Context Protocol) servers and use their tools. This provides universal tool integration with automatic discovery and registration.
-
 <Note>
-For detailed usage examples, see the [MCP Client Guide](/guides/mcp-client).
-For implementation details, see the [Technical Specification](/spec/mcp-client).
+⚡ **You are viewing:** Quick Reference - Connect agents to any MCP server
+
+**See also:** [User Guide](/guides/mcp-client) · [Technical Specification](/spec/mcp-client)
 </Note>
 
-## Installation
+<Info>
+  **Source Code:** [`src/gaia/mcp/mixin.py`](https://github.com/amd/gaia/blob/main/src/gaia/mcp/mixin.py) · [`src/gaia/mcp/client/`](https://github.com/amd/gaia/blob/main/src/gaia/mcp/client)
+</Info>
 
-```python
-from gaia.mcp import MCPClient, MCPClientManager
-from gaia.mcp import MCPClientMixin
-```
+<Note>
+**Import:** `from gaia.mcp import MCPClientMixin, MCPClient, MCPClientManager`
+</Note>
+---
 
-## Quick Example
+<Badge text="development" color="orange" />
+
+**Purpose:** Enable GAIA agents to connect to external MCP (Model Context Protocol) servers and use their tools. Provides universal tool integration with automatic discovery and registration.
+
+---
+
+## Quick Start (Agent with MCP)
 
 ```python
 from gaia.agents.base.agent import Agent
@@ -29,16 +34,81 @@ class MyAgent(Agent, MCPClientMixin):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        # Connect to MCP server
+        # Connect to filesystem MCP server
+        # System prompt automatically updated with MCP tools
         self.connect_mcp_server(
             "filesystem",
             "npx @modelcontextprotocol/server-filesystem /tmp"
         )
 
-# Create and use agent
+# Create and use agent - MCP tools available immediately
 agent = MyAgent()
 result = agent.run("List all files in /tmp")
+print(result)
+# LLM can now use: mcp_filesystem_read_file, mcp_filesystem_write_file, etc.
 ```
+
+---
+
+## Connect Multiple Servers
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.mcp import MCPClientMixin
+
+class MultiToolAgent(Agent, MCPClientMixin):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        # Connect to multiple MCP servers
+        self.connect_mcp_server(
+            "filesystem",
+            "npx @modelcontextprotocol/server-filesystem /tmp"
+        )
+
+        self.connect_mcp_server(
+            "github",
+            "npx @modelcontextprotocol/server-github"
+        )
+
+        # All tools from both servers are available!
+
+# Use agent with tools from multiple servers
+agent = MultiToolAgent()
+response = agent.run("List files in /tmp, then create a GitHub issue about them")
+```
+
+---
+
+## Load Servers from Config
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.mcp import MCPClientMixin
+
+class ConfigAgent(Agent, MCPClientMixin):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        # Load all servers from ~/.gaia/mcp_servers.json
+        # System prompt automatically updated with all tools
+        count = self.load_mcp_servers_from_config()
+        print(f"Loaded {count} MCP servers")
+
+# Agent automatically connects to all configured servers
+agent = ConfigAgent()
+
+# List connected servers
+servers = agent.list_mcp_servers()
+print(f"Connected to: {', '.join(servers)}")
+
+# Get specific client for direct tool access
+fs_client = agent.get_mcp_client("filesystem")
+tools = fs_client.list_tools()
+print(f"Filesystem tools: {len(tools)}")
+```
+
+---
 
 ## Core Methods
 
@@ -122,20 +192,106 @@ This ensures multiple servers with the same tool name work correctly:
 # - mcp_github_read_file → reads from GitHub
 ```
 
+## Direct Client Usage (Without Agent)
+
+```python
+from gaia.mcp.client import MCPClient
+
+# Create client from command
+client = MCPClient.from_command(
+    name="filesystem",
+    command="npx @modelcontextprotocol/server-filesystem /tmp",
+    timeout=30,
+    debug=False
+)
+
+# Connect to server
+if client.connect():
+    # List available tools
+    tools = client.list_tools()
+    for tool in tools:
+        print(f"- {tool.name}: {tool.description}")
+
+    # Call tool directly
+    result = client.call_tool("read_file", {"path": "/tmp/example.txt"})
+    if "content" in result:
+        print(result["content"][0]["text"])
+    elif "error" in result:
+        print(f"Error: {result['error']}")
+
+    # Disconnect when done
+    client.disconnect()
+```
+
+---
+
 ## Error Handling
 
 ```python
-# Connection errors
-success = agent.connect_mcp_server("server", "command")
-if not success:
-    print("Failed to connect")
+from gaia.agents.base.agent import Agent
+from gaia.mcp import MCPClientMixin
 
-# Tool execution errors
-try:
-    result = client.call_tool("tool", {"arg": "value"})
-except RuntimeError as e:
-    print(f"Tool failed: {e}")
+class SafeAgent(Agent, MCPClientMixin):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        # Check connection success
+        success = self.connect_mcp_server(
+            "filesystem",
+            "npx @modelcontextprotocol/server-filesystem /tmp"
+        )
+
+        if not success:
+            print("Warning: Failed to connect to MCP server")
+        else:
+            print("Successfully connected to MCP server")
+
+# Tool execution errors are returned in result
+client = agent.get_mcp_client("filesystem")
+result = client.call_tool("read_file", {"path": "/nonexistent"})
+
+if "error" in result:
+    print(f"Tool failed: {result['error']}")
+elif "content" in result:
+    print(f"Success: {result['content']}")
 ```
+
+---
+
+## Using MCPClientManager
+
+```python
+from gaia.mcp.client import MCPClientManager
+from gaia.mcp.client.config import MCPConfig
+
+# Create manager with config file
+config = MCPConfig("~/.gaia/mcp_servers.json")
+manager = MCPClientManager(config=config)
+
+# Add servers programmatically
+client = manager.add_server(
+    "filesystem",
+    command="npx @modelcontextprotocol/server-filesystem /tmp"
+)
+
+# List all connected servers
+servers = manager.list_servers()
+print(f"Servers: {servers}")
+
+# Get specific client
+fs_client = manager.get_client("filesystem")
+if fs_client and fs_client.is_connected():
+    tools = fs_client.list_tools()
+    print(f"Tools available: {len(tools)}")
+
+# Load servers from config file
+manager.load_from_config()
+
+# Cleanup all connections
+manager.disconnect_all()
+```
+
+---
 
 ## Debug Mode
 
@@ -145,9 +301,18 @@ Enable detailed logging:
 # Via MCPClient
 client = MCPClient.from_command("server", "command", debug=True)
 
-# Via manager
+# Via MCPClientManager
 manager = MCPClientManager(debug=True)
+
+# Via MCPClientMixin (in agent)
+class DebugAgent(Agent, MCPClientMixin):
+    def __init__(self, **kwargs):
+        kwargs["debug"] = True  # Enables MCP debug logging
+        super().__init__(**kwargs)
+        self.connect_mcp_server("server", "command")
 ```
+
+---
 
 ## Related Documentation
 
@@ -157,3 +322,11 @@ manager = MCPClientManager(debug=True)
 - [Agent System](/sdk/core/agent-system) - Agent framework
 
 ---
+
+<small style="color: #666;">
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>
