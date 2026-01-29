@@ -1606,30 +1606,38 @@ class LemonadeClient:
     # =========================================================================
 
     # Supported SD configurations
-    SD_MODELS = ["SD-Turbo", "SDXL-Turbo"]
+    SD_MODELS = ["SD-1.5", "SD-Turbo", "SDXL-Base-1.0", "SDXL-Turbo"]
     SD_SIZES = ["512x512", "768x768", "1024x1024"]
+
+    # Model-specific defaults
+    SD_MODEL_DEFAULTS = {
+        "SD-1.5": {"steps": 20, "cfg_scale": 7.5, "size": "512x512"},
+        "SD-Turbo": {"steps": 4, "cfg_scale": 1.0, "size": "512x512"},
+        "SDXL-Base-1.0": {"steps": 20, "cfg_scale": 7.5, "size": "1024x1024"},
+        "SDXL-Turbo": {"steps": 4, "cfg_scale": 1.0, "size": "512x512"},
+    }
 
     def generate_image(
         self,
         prompt: str,
-        model: str = "SDXL-Turbo",
-        size: str = "512x512",
-        steps: int = 4,
-        cfg_scale: float = 1.0,
+        model: str = "SDXL-Base-1.0",
+        size: Optional[str] = None,
+        steps: Optional[int] = None,
+        cfg_scale: Optional[float] = None,
         seed: Optional[int] = None,
-        timeout: int = 120,
+        timeout: int = 300,
     ) -> Dict[str, Any]:
         """
         Generate an image from a text prompt using Stable Diffusion.
 
         Args:
             prompt: Text description of the image to generate
-            model: SD model to use (SD-Turbo or SDXL-Turbo)
-            size: Image dimensions (512x512, 768x768, or 1024x1024)
-            steps: Number of inference steps (4 recommended for Turbo models)
-            cfg_scale: Classifier-free guidance scale (1.0 for Lemonade, despite Turbo being trained with 0.0)
+            model: SD model - SD-1.5, SD-Turbo, SDXL-Base-1.0 (photorealistic), SDXL-Turbo
+            size: Image dimensions (auto-selected if None, or 512x512, 768x768, 1024x1024)
+            steps: Inference steps (auto-selected if None: Turbo=4, Base=20)
+            cfg_scale: CFG scale (auto-selected if None: Turbo=1.0, Base=7.5)
             seed: Random seed for reproducibility (optional)
-            timeout: Request timeout in seconds (default: 120)
+            timeout: Request timeout in seconds (default: 300 for slower Base models)
 
         Returns:
             Dict with 'data' containing list of generated images in b64_json format
@@ -1638,20 +1646,31 @@ class LemonadeClient:
             LemonadeClientError: If generation fails or invalid parameters
 
         Example:
+            # Photorealistic with SDXL-Base-1.0 (auto-settings)
             result = client.generate_image(
-                prompt="a sunset over mountains, golden hour, 4k",
-                model="SDXL-Turbo",
-                size="512x512",
-                cfg_scale=1.0,
-                seed=42
+                prompt="a sunset over mountains, golden hour, photorealistic",
+                model="SDXL-Base-1.0"
             )
-            image_b64 = result["data"][0]["b64_json"]
+
+            # Fast stylized with SDXL-Turbo
+            result = client.generate_image(
+                prompt="cyberpunk city",
+                model="SDXL-Turbo"
+            )
         """
-        # Validate parameters
+        # Validate model
         if model not in self.SD_MODELS:
             raise LemonadeClientError(
                 f"Invalid model '{model}'. Choose from: {self.SD_MODELS}"
             )
+
+        # Apply model-specific defaults
+        defaults = self.SD_MODEL_DEFAULTS.get(model, {})
+        size = size or defaults.get("size", "512x512")
+        steps = steps if steps is not None else defaults.get("steps", 20)
+        cfg_scale = cfg_scale if cfg_scale is not None else defaults.get("cfg_scale", 7.5)
+
+        # Validate size
         if size not in self.SD_SIZES:
             raise LemonadeClientError(
                 f"Invalid size '{size}'. Choose from: {self.SD_SIZES}"
@@ -1665,11 +1684,12 @@ class LemonadeClient:
                 "n": 1,
                 "response_format": "b64_json",
                 "cfg_scale": cfg_scale,
+                "steps": steps,
             }
             if seed is not None:
                 payload["seed"] = seed
 
-            self.log.info(f"Generating image: prompt='{prompt[:50]}...', model={model}, cfg={cfg_scale}")
+            self.log.info(f"Generating image: model={model}, size={size}, steps={steps}, cfg={cfg_scale}")
             url = f"{self.base_url}/images/generations"
             response = self._send_request("POST", url, data=payload, timeout=timeout)
 

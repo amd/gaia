@@ -1007,22 +1007,25 @@ def main():
     sd_parser.add_argument(
         "--sd-model",
         dest="sd_model",
-        choices=["SD-Turbo", "SDXL-Turbo"],
-        default="SDXL-Turbo",
-        help="Stable Diffusion model to use (default: SDXL-Turbo)",
+        choices=["SD-1.5", "SD-Turbo", "SDXL-Base-1.0", "SDXL-Turbo"],
+        default="SDXL-Base-1.0",
+        help="SD model: SDXL-Base-1.0 (photorealistic, slow), SDXL-Turbo (fast, stylized) (default: SDXL-Base-1.0)",
     )
     sd_parser.add_argument(
         "--size",
         choices=["512x512", "768x768", "1024x1024"],
-        default="512x512",
-        help="Image size (default: 512x512, best for Turbo models)",
+        help="Image size (auto-selected if not specified: 512px for SD-1.5/Turbo, 1024px for SDXL)",
+    )
+    sd_parser.add_argument(
+        "--steps",
+        type=int,
+        help="Inference steps (auto-selected if not specified: 4 for Turbo, 20 for Base)",
     )
     sd_parser.add_argument(
         "--cfg-scale",
         dest="cfg_scale",
         type=float,
-        default=1.0,
-        help="CFG scale (default: 1.0, Lemonade requires this despite Turbo being trained with 0.0)",
+        help="CFG scale (auto-selected if not specified: 1.0 for Turbo, 7.5 for Base)",
     )
     sd_parser.add_argument(
         "--output-dir",
@@ -4970,8 +4973,9 @@ def handle_sd_command(args):
     sd.init_sd(
         output_dir=args.output_dir,
         default_model=args.sd_model,
-        default_size=args.size,
-        default_cfg=args.cfg_scale,
+        default_size=getattr(args, 'size', None),
+        default_steps=getattr(args, 'steps', None),
+        default_cfg=getattr(args, 'cfg_scale', None),
     )
 
     # Check health

@@ -53,26 +53,26 @@ class SDToolsMixin:
     """
 
     # Supported configurations (class constants)
-    SD_MODELS = ["SD-Turbo", "SDXL-Turbo"]
+    SD_MODELS = ["SD-1.5", "SD-Turbo", "SDXL-Base-1.0", "SDXL-Turbo"]
     SD_SIZES = ["512x512", "768x768", "1024x1024"]
 
     # Instance state (initialized by init_sd)
     sd_client: LemonadeClient
     sd_output_dir: Path
     sd_default_model: str
-    sd_default_size: str
-    sd_default_steps: int
-    sd_default_cfg: float
+    sd_default_size: Optional[str]
+    sd_default_steps: Optional[int]
+    sd_default_cfg: Optional[float]
     sd_generations: List[Dict[str, Any]]
 
     def init_sd(
         self,
         base_url: str = "http://localhost:8000",
         output_dir: Optional[str] = None,
-        default_model: str = "SDXL-Turbo",
-        default_size: str = "512x512",
-        default_steps: int = 4,
-        default_cfg: float = 1.0,
+        default_model: str = "SDXL-Base-1.0",
+        default_size: Optional[str] = None,
+        default_steps: Optional[int] = None,
+        default_cfg: Optional[float] = None,
     ) -> None:
         """
         Initialize SD tools configuration. Must be called before using SD tools.
@@ -80,17 +80,20 @@ class SDToolsMixin:
         Args:
             base_url: Lemonade Server base URL
             output_dir: Directory to save generated images (default: .gaia/cache/sd/images)
-            default_model: Default SD model (SD-Turbo or SDXL-Turbo)
-            default_size: Default image size (512x512 recommended for Turbo models)
-            default_steps: Default inference steps (4 for Turbo models)
-            default_cfg: Default CFG scale (1.0 for Lemonade, despite Turbo models being trained with 0.0)
+            default_model: Default SD model (SDXL-Base-1.0 for photorealistic, SDXL-Turbo for fast)
+            default_size: Default image size (None = auto: 512px for SD-1.5/Turbo, 1024px for SDXL)
+            default_steps: Default inference steps (None = auto: 4 for Turbo, 20 for Base)
+            default_cfg: Default CFG scale (None = auto: 1.0 for Turbo, 7.5 for Base)
 
         Example:
-            self.init_sd(
-                base_url="http://localhost:8000",
-                output_dir="./my_images",
-                default_model="SDXL-Turbo",
-            )
+            # Photorealistic with auto-settings
+            self.init_sd(default_model="SDXL-Base-1.0")
+
+            # Fast stylized
+            self.init_sd(default_model="SDXL-Turbo")
+
+            # Custom settings
+            self.init_sd(default_model="SDXL-Base-1.0", default_steps=30)
         """
         # Create LemonadeClient for API calls
         self.sd_client = LemonadeClient(base_url=base_url, verbose=False)
@@ -230,18 +233,27 @@ class SDToolsMixin:
         """
         import time
 
-        # Apply defaults
+        # Apply instance defaults first
         model = model or self.sd_default_model
         size = size or self.sd_default_size
-        steps = steps or self.sd_default_steps
+        steps = steps if steps is not None else self.sd_default_steps
         cfg_scale = cfg_scale if cfg_scale is not None else self.sd_default_cfg
 
-        # Validate parameters
+        # Validate model
         if model not in self.SD_MODELS:
             return {
                 "status": "error",
                 "error": f"Invalid model '{model}'. Choose from: {self.SD_MODELS}",
             }
+
+        # Apply model-specific defaults from LemonadeClient if still None
+        from gaia.llm.lemonade_client import LemonadeClient
+        model_defaults = LemonadeClient.SD_MODEL_DEFAULTS.get(model, {})
+        size = size or model_defaults.get("size", "512x512")
+        steps = steps if steps is not None else model_defaults.get("steps", 20)
+        cfg_scale = cfg_scale if cfg_scale is not None else model_defaults.get("cfg_scale", 7.5)
+
+        # Validate size
         if size not in self.SD_SIZES:
             return {
                 "status": "error",
