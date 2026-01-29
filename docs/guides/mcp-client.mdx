@@ -114,114 +114,23 @@ Most MCP servers use stdio (standard input/output) via subprocess:
 
 ## CLI Commands
 
-<Tabs>
-  <Tab title="Add Server">
-    Add an MCP server and save it to configuration:
+GAIA provides CLI commands for managing MCP server configurations without writing code.
 
-    ```bash
-    # Format: gaia mcp add <server-name> "<command>"
-    # The command must be quoted if it contains spaces or arguments
+<Card title="MCP CLI Reference" icon="terminal" href="/reference/cli#mcp-client">
+  Complete documentation of all MCP CLI commands: `add`, `list`, `tools`, `test-client`, `remove`
+</Card>
 
-    # Example: Add time server
-    gaia mcp add time "uvx mcp-server-time"
+**Quick reference:**
+```bash
+gaia mcp add <name> "<command>"     # Add server to config
+gaia mcp list                        # List configured servers
+gaia mcp tools <name>                # List tools from server
+gaia mcp test-client <name>          # Test connection
+gaia mcp remove <name>               # Remove server
+```
 
-    # Example: Add memory server
-    gaia mcp add memory "npx -y @modelcontextprotocol/server-memory"
+For detailed usage, parameters, and output examples, see the [CLI Reference](/reference/cli#mcp-client).
 
-    # Example: Use project-level config instead of user config
-    gaia mcp add time "uvx mcp-server-time" --config ./mcp_servers.json
-    ```
-
-    **Parameters:**
-    - `<server-name>`: Unique identifier for this server (e.g., "time", "memory")
-    - `"<command>"`: Shell command to start the MCP server (must be quoted)
-    - `--config`: Optional path to custom config file (default: `~/.gaia/mcp_servers.json`)
-  </Tab>
-
-  <Tab title="List Servers">
-    ```bash
-    # List all configured MCP servers (from user config)
-    gaia mcp list
-
-    # List from project config
-    gaia mcp list --config ./mcp_servers.json
-    ```
-
-    Output:
-    ```
-    📋 Configured MCP Servers (3):
-    ============================================================
-
-    🔹 memory
-       Command: npx -y @modelcontextprotocol/server-memory
-
-    🔹 thinking
-       Command: npx -y @modelcontextprotocol/server-sequential-thinking
-
-    🔹 time
-       Command: uvx mcp-server-time
-    ```
-  </Tab>
-
-  <Tab title="List Tools">
-    ```bash
-    # List tools from a specific server
-    gaia mcp tools <server-name>
-
-    # Example: List tools from time server
-    gaia mcp tools time
-
-    # Example: Use project config
-    gaia mcp tools memory --config ./mcp_servers.json
-    ```
-
-    Output:
-    ```
-    🔧 Tools from 'time' (2):
-    ============================================================
-
-    🔹 get_current_time
-       Description: Get current time in a specific timezone
-       Parameters: timezone
-
-    🔹 convert_time
-       Description: Convert time between timezones
-       Parameters: source_timezone, time, target_timezone
-    ```
-  </Tab>
-
-  <Tab title="Test Connection">
-    ```bash
-    # Test connection to an MCP server
-    gaia mcp test-client <server-name>
-
-    # Example
-    gaia mcp test-client filesystem
-    ```
-
-    Output:
-    ```
-    🧪 Testing MCP server 'filesystem'...
-    ✅ Connection: OK
-       Server: Filesystem MCP Server
-    ✅ Tools: 5 available
-    ✅ All tests passed!
-    ```
-  </Tab>
-
-  <Tab title="Remove Server">
-    ```bash
-    # Remove an MCP server from user config
-    gaia mcp remove <server-name>
-
-    # Example
-    gaia mcp remove time
-
-    # Remove from project config
-    gaia mcp remove memory --config ./mcp_servers.json
-    ```
-  </Tab>
-</Tabs>
 
 ## Troubleshooting
 
@@ -340,140 +249,19 @@ Most MCP servers use stdio (standard input/output) via subprocess:
 
 ## Complete Examples
 
-### Recommended: Configuration-Based Setup
+Working examples are available in the GAIA repository:
 
-See [`examples/mcp_config_based_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_config_based_agent.py) and [`examples/mcp_servers.json`](https://github.com/amd/gaia/blob/main/examples/mcp_servers.json).
+<CardGroup cols={2}>
+  <Card title="Config-Based Agent" icon="file-code" href="https://github.com/amd/gaia/blob/main/examples/mcp_config_based_agent.py">
+    Load servers from `mcp_servers.json` - recommended for production
+  </Card>
+  <Card title="Multi-Server Agent" icon="layer-group" href="https://github.com/amd/gaia/blob/main/examples/mcp_multi_server_agent.py">
+    Connect to multiple servers programmatically
+  </Card>
+</CardGroup>
 
-#### Example 1: Project-Level Config
+For detailed API usage and patterns, see the [SDK Reference](/sdk/infrastructure/mcp-client).
 
-**Step 1: Create project config** (commit to git)
-
-Create `mcp_servers.json` in your project root:
-
-```json
-{
-  "servers": {
-    "memory": {
-      "command": "npx -y @modelcontextprotocol/server-memory"
-    },
-    "thinking": {
-      "command": "npx -y @modelcontextprotocol/server-sequential-thinking"
-    },
-    "time": {
-      "command": "uvx mcp-server-time"
-    }
-  }
-}
-```
-
-Or use the CLI:
-
-```bash
-# Add servers to project config
-gaia mcp add memory "npx -y @modelcontextprotocol/server-memory" --config ./mcp_servers.json
-gaia mcp add thinking "npx -y @modelcontextprotocol/server-sequential-thinking" --config ./mcp_servers.json
-gaia mcp add time "uvx mcp-server-time" --config ./mcp_servers.json
-
-# Verify
-gaia mcp list --config ./mcp_servers.json
-
-# Commit to git - all team members get the same servers!
-git add mcp_servers.json
-git commit -m "Add MCP server configuration"
-```
-
-**Step 2: Agent code**
-
-```python
-from pathlib import Path
-from gaia.agents.base.agent import Agent
-from gaia.mcp import MCPClientMixin
-from gaia.mcp.client.config import MCPConfig
-
-class MyAgent(Agent, MCPClientMixin):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-        # Use project config (committed to git)
-        self._mcp_manager.config = MCPConfig("./mcp_servers.json")
-
-        # Load ALL servers (system prompt auto-updated with tools)
-        self.load_mcp_servers_from_config()
-```
-
-#### Example 2: User-Level Config
-
-Use the default user config (`~/.gaia/mcp_servers.json`):
-
-```bash
-# Add servers to user config (default)
-gaia mcp add memory "npx -y @modelcontextprotocol/server-memory"
-gaia mcp add thinking "npx -y @modelcontextprotocol/server-sequential-thinking"
-gaia mcp add time "uvx mcp-server-time"
-
-# Verify
-gaia mcp list
-```
-
-```python
-class MyAgent(Agent, MCPClientMixin):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-        # Uses default user config (~/.gaia/mcp_servers.json)
-        # System prompt auto-updated with tools
-        self.load_mcp_servers_from_config()
-```
-
-#### Benefits
-
-- ✅ **No hard-coding** - Servers configured externally
-- ✅ **Flexible** - Project-level OR user-level config
-- ✅ **CLI support** - Use `--config` flag for custom paths
-- ✅ **Persistent** - Configuration saved to disk
-
-### Alternative: Hard-Coded Servers
-
-See [`examples/mcp_multi_server_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_multi_server_agent.py).
-
-**Use this approach for:**
-- Demos and examples
-- Agent-specific servers that shouldn't be shared
-- Development and testing
-
-```python
-class DemoAgent(Agent, MCPClientMixin):
-    MCP_SERVERS = {
-        "memory": "npx -y @modelcontextprotocol/server-memory",
-        "thinking": "npx -y @modelcontextprotocol/server-sequential-thinking",
-        "time": "uvx mcp-server-time",
-    }
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-        # Connect to hard-coded servers
-        # System prompt auto-updated as each server connects
-        for name, command in self.MCP_SERVERS.items():
-            self.connect_mcp_server(name, command)
-```
-
-### What These Examples Demonstrate
-
-- **Multi-server coordination** - Three servers working together
-- **Cross-platform support** - Works on macOS, Linux, and Windows
-- **No credentials required** - All servers are local and free
-- **Automatic tool discovery** - Agent finds and uses all tools (12 total)
-- **Namespace safety** - Multiple servers without conflicts (`mcp_memory_*`, `mcp_time_*`)
-
-### Key Takeaways
-
-With just a few lines of code, your agent gains:
-- Complex reasoning capabilities (sequential thinking)
-- External service integration (time/timezone)
-- Persistent memory (knowledge graph)
-
-You can extend this pattern to connect to any MCP-compatible service (GitHub, databases, etc.).
 
 ## Best Practices
 
