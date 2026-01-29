@@ -498,13 +498,11 @@ gh_client = manager.get_client("github")
 
 ## Complete Examples
 
-### Recommended: Project-Level Config
+### Recommended: Configuration-Based Setup
 
 See [`examples/mcp_config_based_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_config_based_agent.py) and [`examples/mcp_servers.json`](https://github.com/amd/gaia/blob/main/examples/mcp_servers.json).
 
-**This is the recommended approach for team projects and production use.**
-
-#### For Team Projects (Recommended)
+#### Example 1: Project-Level Config
 
 **Step 1: Create project config** (commit to git)
 
@@ -557,12 +555,11 @@ class MyAgent(Agent, MCPClientMixin):
         # Use project config (committed to git)
         self._mcp_manager.config = MCPConfig("./mcp_servers.json")
 
-        # Load ALL servers and register tools
+        # Load ALL servers (system prompt auto-updated with tools)
         self.load_mcp_servers_from_config()
-        self._rebuild_system_prompt()
 ```
 
-#### For Personal Use
+#### Example 2: User-Level Config
 
 Use the default user config (`~/.gaia/mcp_servers.json`):
 
@@ -582,13 +579,12 @@ class MyAgent(Agent, MCPClientMixin):
         super().__init__(**kwargs)
 
         # Uses default user config (~/.gaia/mcp_servers.json)
+        # System prompt auto-updated with tools
         self.load_mcp_servers_from_config()
-        self._rebuild_system_prompt()
 ```
 
 #### Benefits
 
-- ✅ **Team-friendly** - Commit config to git, everyone gets same servers
 - ✅ **No hard-coding** - Servers configured externally
 - ✅ **Flexible** - Project-level OR user-level config
 - ✅ **CLI support** - Use `--config` flag for custom paths
@@ -615,10 +611,9 @@ class DemoAgent(Agent, MCPClientMixin):
         super().__init__(**kwargs)
 
         # Connect to hard-coded servers
+        # System prompt auto-updated as each server connects
         for name, command in self.MCP_SERVERS.items():
             self.connect_mcp_server(name, command)
-
-        self._rebuild_system_prompt()
 ```
 
 ### What These Examples Demonstrate
