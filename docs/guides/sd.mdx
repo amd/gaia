@@ -57,13 +57,17 @@ from gaia.agents.sd import SDToolsMixin
 mixin = SDToolsMixin()
 mixin.init_sd(output_dir="./images")
 
+# Photorealistic with auto-settings (uses SDXL-Base-1.0 defaults)
 result = mixin._generate_image(
-    prompt="a cyberpunk city at night, neon lights, rain, 4k",
-    model="SD-Turbo",
-    size="512x512"
+    prompt="a mountain landscape, photorealistic, natural lighting, 4k"
 )
-
 print(f"Image saved to: {result['image_path']}")
+
+# Fast generation with specific model
+result = mixin._generate_image(
+    prompt="a cyberpunk city at night, neon lights, stylized",
+    model="SDXL-Turbo"
+)
 ```
 
 ## Available Tools
@@ -79,11 +83,19 @@ The `SDToolsMixin` provides three tools:
 ### generate_image
 
 ```python
+# Photorealistic with auto-settings (recommended)
 result = agent._generate_image(
-    prompt="a dragon on a cliff at sunset",
-    model="SD-Turbo",      # or "SDXL-Turbo"
-    size="512x512",        # or "768x768", "1024x1024"
-    steps=4,               # inference steps
+    prompt="a dragon on a cliff at sunset, photorealistic, detailed",
+    model="SDXL-Base-1.0"  # Auto: 1024x1024, 20 steps, CFG 7.5
+)
+
+# Fast generation with custom settings
+result = agent._generate_image(
+    prompt="a dragon on a cliff at sunset, stylized",
+    model="SDXL-Turbo",    # or "SD-Turbo", "SD-1.5", "SDXL-Base-1.0"
+    size="512x512",        # or "768x768", "1024x1024", or None for auto
+    steps=4,               # or None for auto (4 for Turbo, 20 for Base)
+    cfg_scale=1.0,         # or None for auto (1.0 for Turbo, 7.5 for Base)
     seed=42                # for reproducibility
 )
 ```
@@ -102,10 +114,20 @@ result = agent._generate_image(
 
 ## Supported Models
 
-| Model | Best For | Recommended Size | Speed |
-|-------|----------|------------------|-------|
-| **SD-Turbo** | Fast iteration, testing | 512x512 | ~2-3 sec |
-| **SDXL-Turbo** | Higher quality | 1024x1024 | ~5-8 sec |
+| Model | Best For | Size | Steps | CFG | Speed |
+|-------|----------|------|-------|-----|-------|
+| **SDXL-Base-1.0** | **Photorealistic**, high quality | 1024x1024 | 20 | 7.5 | ~5-10 min |
+| **SDXL-Turbo** | Fast, stylized | 512x512 | 4 | 1.0 | ~15-60 sec |
+| **SD-1.5** | Legacy, general purpose | 512x512 | 20 | 7.5 | ~2-5 min |
+| **SD-Turbo** | Very fast, lower quality | 512x512 | 4 | 1.0 | ~10-15 sec |
+
+<Note>
+**Recommended:** Use `SDXL-Base-1.0` for photorealistic images (default). SDXL-Turbo produces stylized/artistic results.
+</Note>
+
+<Note>
+**Performance:** SDXL-Base-1.0 at 1024x1024 takes ~8-10 minutes per image (20 steps). Use SDXL-Turbo for faster results (~15-60 seconds).
+</Note>
 
 ## Prompt Tips
 
