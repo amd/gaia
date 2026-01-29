@@ -204,13 +204,14 @@ class OutputHandler(ABC):
 
 
 class ProgressIndicator:
-    """A simple progress indicator that shows a spinner or dots animation."""
+    """A simple progress indicator that shows a spinner or dots animation with elapsed time."""
 
-    def __init__(self, message="Processing"):
+    def __init__(self, message="Processing", show_timer=False):
         """Initialize the progress indicator.
 
         Args:
             message: The message to display before the animation
+            show_timer: If True, show elapsed time
         """
         self.message = message
         self.is_running = False
@@ -220,6 +221,8 @@ class ProgressIndicator:
         self.spinner_idx = 0
         self.dot_idx = 0
         self.rich_spinner = None
+        self.show_timer = show_timer
+        self.start_time = None
         if RICH_AVAILABLE:
             self.rich_spinner = Spinner("dots", text=message)
             self.live = None
@@ -259,19 +262,23 @@ class ProgressIndicator:
 
                 time.sleep(0.1)
 
-    def start(self, message=None):
+    def start(self, message=None, show_timer=None):
         """Start the progress indicator.
 
         Args:
             message: Optional new message to display
+            show_timer: Optional override for showing timer
         """
         if message:
             self.message = message
+        if show_timer is not None:
+            self.show_timer = show_timer
 
         if self.is_running:
             return
 
         self.is_running = True
+        self.start_time = time.time()
 
         if RICH_AVAILABLE:
             if self.rich_spinner:
@@ -281,10 +288,28 @@ class ProgressIndicator:
                     self.rich_spinner, refresh_per_second=10, transient=True
                 )
                 self.live.start()
+
+                # Update with timer if enabled
+                if self.show_timer:
+                    self._update_timer_thread = threading.Thread(target=self._update_timer)
+                    self._update_timer_thread.daemon = True
+                    self._update_timer_thread.start()
         else:
             self.thread = threading.Thread(target=self._animate)
             self.thread.daemon = True
             self.thread.start()
+
+    def _update_timer(self):
+        """Update spinner text with elapsed time."""
+        while self.is_running and self.live:
+            elapsed = time.time() - self.start_time
+            timer_text = f"{self.message} ({int(elapsed)}s)"
+            try:
+                self.rich_spinner.text = timer_text
+                self.live.update(self.rich_spinner)
+                time.sleep(1.0)  # Update every 1 second
+            except Exception:
+                break
 
     def stop(self):
         """Stop the progress indicator."""
@@ -292,6 +317,13 @@ class ProgressIndicator:
             return
 
         self.is_running = False
+
+        # Stop timer thread if running
+        if RICH_AVAILABLE and hasattr(self, '_update_timer_thread'):
+            try:
+                self._update_timer_thread.join(timeout=0.5)
+            except Exception:
+                pass
 
         if RICH_AVAILABLE and self.live:
             self.live.stop()
@@ -870,12 +902,14 @@ class AgentConsole(OutputHandler):
                     # Load image to check dimensions
                     pil_img = Image.open(path)
                     img_width, img_height = pil_img.size
+                    aspect_ratio = img_width / img_height
 
                     # Terminal characters are roughly 2:1 (height:width)
-                    # To display square image without distortion:
-                    # If we want 60 rows tall, we need ~30 columns wide
-                    target_height = 60
-                    target_width = int(target_height * (img_width / img_height) * 0.5)
+                    # A char is ~2x taller than wide, so to show square image as square:
+                    # need width_chars = height_chars * 2
+                    # For proper aspect: width_chars = height_chars * 2 * image_aspect_ratio
+                    target_height = 50  # rows
+                    target_width = int(target_height * 2.0 * aspect_ratio)  # columns
 
                     # Resize to these dimensions maintaining aspect
                     pixels = Pixels.from_image_path(str(path), resize=(target_width, target_height))
@@ -1110,12 +1144,13 @@ class AgentConsole(OutputHandler):
         # Print the table in a panel
         self.console.print(Panel(table, border_style="blue"))
 
-    def start_progress(self, message: str) -> None:
+    def start_progress(self, message: str, show_timer: bool = False) -> None:
         """
         Start the progress indicator.
 
         Args:
             message: Message to display with the indicator
+            show_timer: If True, show elapsed time in progress message
         """
         # If file preview is active, pause it temporarily
         self._paused_preview = False
@@ -1129,7 +1164,7 @@ class AgentConsole(OutputHandler):
             except Exception:
                 pass
 
-        self.progress.start(message)
+        self.progress.start(message, show_timer=show_timer)
 
     def stop_progress(self) -> None:
         """Stop the progress indicator."""

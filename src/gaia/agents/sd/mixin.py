@@ -69,7 +69,7 @@ class SDToolsMixin:
         self,
         base_url: str = "http://localhost:8000",
         output_dir: Optional[str] = None,
-        default_model: str = "SDXL-Base-1.0",
+        default_model: str = "SD-Turbo",
         default_size: Optional[str] = None,
         default_steps: Optional[int] = None,
         default_cfg: Optional[float] = None,
@@ -80,12 +80,15 @@ class SDToolsMixin:
         Args:
             base_url: Lemonade Server base URL
             output_dir: Directory to save generated images (default: .gaia/cache/sd/images)
-            default_model: Default SD model (SDXL-Base-1.0 for photorealistic, SDXL-Turbo for fast)
+            default_model: Default SD model (SD-Turbo for fast/default, SDXL-Base-1.0 for photorealistic)
             default_size: Default image size (None = auto: 512px for SD-1.5/Turbo, 1024px for SDXL)
             default_steps: Default inference steps (None = auto: 4 for Turbo, 20 for Base)
             default_cfg: Default CFG scale (None = auto: 1.0 for Turbo, 7.5 for Base)
 
         Example:
+            # Fast generation with defaults (SD-Turbo)
+            self.init_sd()
+
             # Photorealistic with auto-settings
             self.init_sd(default_model="SDXL-Base-1.0")
 
@@ -301,9 +304,9 @@ class SDToolsMixin:
                 if "already loaded" not in str(e).lower():
                     logger.warning(f"Model load warning: {e}")
 
-            # Start progress for generation
+            # Start progress for generation with timer
             if console and hasattr(console, "start_progress"):
-                console.start_progress(f"Generating image ({steps} steps)...")
+                console.start_progress(f"Generating image ({steps} steps)...", show_timer=True)
 
             start_time = time.time()
 

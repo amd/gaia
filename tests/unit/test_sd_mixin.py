@@ -40,7 +40,7 @@ class TestSDToolsMixinInit:
         mixin = SDToolsMixin()
         mixin.init_sd()
 
-        assert mixin.sd_default_model == "SDXL-Base-1.0"
+        assert mixin.sd_default_model == "SD-Turbo"
         assert mixin.sd_default_size is None  # Auto-selected per model
         assert mixin.sd_default_steps is None  # Auto-selected per model
 
@@ -129,8 +129,8 @@ class TestSDToolsMixinGeneration:
 
         assert result["status"] == "success"
         assert Path(result["image_path"]).exists()
-        assert result["model"] == "SDXL-Base-1.0"  # Default model
-        assert result["size"] == "1024x1024"  # Auto-selected for SDXL
+        assert result["model"] == "SD-Turbo"  # Default model
+        assert result["size"] == "512x512"  # Auto-selected for SD-Turbo
         assert "generation_time_ms" in result
 
     def test_generate_image_tracks_history(self, tmp_path, mock_lemonade_client):
@@ -204,7 +204,7 @@ class TestSDToolsMixinGeneration:
         # Verify load_model was called with the model name
         mock_lemonade_client.load_model.assert_called()
         call_args = mock_lemonade_client.load_model.call_args
-        assert call_args[0][0] == "SDXL-Base-1.0"  # Default model
+        assert call_args[0][0] == "SD-Turbo"  # Default model
 
 
 class TestSDToolsMixinHealthCheck:

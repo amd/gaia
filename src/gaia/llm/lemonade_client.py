@@ -1620,7 +1620,7 @@ class LemonadeClient:
     def generate_image(
         self,
         prompt: str,
-        model: str = "SDXL-Base-1.0",
+        model: str = "SD-Turbo",
         size: Optional[str] = None,
         steps: Optional[int] = None,
         cfg_scale: Optional[float] = None,
