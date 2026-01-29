@@ -1,745 +1,223 @@
 ---
 title: "Documentation Contribution Guide"
-description: "How to contribute to GAIA documentation: types, structure, style guidelines, and submission process"
+description: "How to contribute to GAIA documentation - types, structure, and when to use each"
 icon: "pen-to-square"
 ---
 
-<Info>
-  **Source Code:** [`docs/`](https://github.com/amd/gaia/tree/main/docs) | [`docs/docs.json`](https://github.com/amd/gaia/blob/main/docs/docs.json)
-</Info>
-
-This guide explains how to contribute documentation to GAIA. It covers the different documentation types, when to use each, style guidelines, and the submission process.
+This guide clarifies what goes where in GAIA documentation and how to contribute.
 
 ---
 
-## Documentation Types
+## The Problem
 
-GAIA uses four main documentation types, each serving a distinct purpose:
+Section names can be confusing:
+- "SDK Reference" in Documentation tab vs "SDKs" in Specifications tab - what's the difference?
+- "User Guides" vs "Playbooks" - when to use which?
+- "Reference" vs "Specifications" - aren't they the same?
 
-<CardGroup cols={2}>
-  <Card title="User Guides" icon="book" href="#user-guides">
-    How to **use** pre-built features
-  </Card>
-
-  <Card title="Playbooks" icon="book-atlas" href="#playbooks">
-    How to **build** from scratch
-  </Card>
-
-  <Card title="Specifications" icon="file-code" href="#specifications">
-    Complete **API reference**
-  </Card>
-
-  <Card title="Reference" icon="terminal" href="#reference-docs">
-    CLI, API, and configuration **details**
-  </Card>
-</CardGroup>
+This guide provides clear definitions and decision criteria.
 
 ---
 
-### User Guides
+## Documentation Tab
 
-**Location:** `docs/guides/`
+### User Guides (`docs/guides/`)
 
-**Purpose:** Teach users how to **use** pre-built GAIA agents and SDKs. Guides focus on getting users productive quickly with existing functionality.
+**Definition:** Task-oriented tutorials teaching users how to accomplish goals with GAIA features.
 
-**When to create a Guide:**
-- Documenting a new pre-built agent (ChatAgent, JiraAgent, etc.)
-- Explaining how to use an SDK (Chat SDK, RAG SDK, etc.)
-- Covering CLI usage for a feature
-- Adding configuration options and common patterns
+**Contains:**
+- Step-by-step instructions
+- CLI commands users can run
+- Working Python code examples
+- Troubleshooting sections
 
-**Characteristics:**
-- Task-oriented ("How do I chat with documents?")
-- Quick start sections to get users running in minutes
-- CLI examples alongside Python SDK usage
-- Configuration options and troubleshooting
-- Links to deeper Playbooks and Specifications
+**When to use:** User asks "How do I chat with PDF documents?"
 
-**Guide Template Structure:**
+**When NOT to use:** User asks "What parameters does ChatConfig accept?" → That's a Specification
 
-| Section | Purpose |
-|---------|---------|
-| Frontmatter | `title` and `description` |
-| Navigation Note | "You are viewing" with links to SDK/Spec |
-| Source Code Info | Link to source file |
-| Introduction | Brief explanation of the feature |
-| Quick Start | Steps to get running quickly |
-| CLI Usage | Command-line examples |
-| Python SDK | Core classes and examples |
-| Configuration | Available options |
-| Troubleshooting | Common issues and solutions |
-| Next Steps | Links to related content |
-
-<Tip>
-**See a real example:** View [`docs/guides/chat.mdx`](https://github.com/amd/gaia/blob/main/docs/guides/chat.mdx) for a complete guide implementation.
-</Tip>
-
-**Example Guides:**
-- [`docs/guides/chat.mdx`](https://github.com/amd/gaia/blob/main/docs/guides/chat.mdx) - Chat SDK usage
-- [`docs/guides/talk.mdx`](https://github.com/amd/gaia/blob/main/docs/guides/talk.mdx) - Voice interaction
+**Example:** [docs/guides/chat.mdx](https://github.com/amd/gaia/blob/main/docs/guides/chat.mdx)
 
 ---
 
-### Playbooks
+### Playbooks (`docs/playbooks/`)
 
-**Location:** `docs/playbooks/`
+**Definition:** Multi-part tutorials for building agents from scratch, with deep explanations of why things work.
 
-**Purpose:** Step-by-step tutorials that teach users how to **build** agents from scratch. Playbooks explain implementation details, architecture decisions, and provide working code users can extend.
+**Contains:**
+- 3+ part series
+- Architecture diagrams (Mermaid)
+- "Under the Hood" explanations
+- Complete working code at the end
 
-**When to create a Playbook:**
-- Teaching how to build a new type of agent
-- Explaining architectural patterns (mixins, tool registration, etc.)
-- Demonstrating integration of multiple GAIA components
-- Providing production-ready implementation patterns
+**When to use:** Teaching someone to BUILD a new agent type from scratch
 
-**Characteristics:**
-- Journey-based (follow a path from start to finish)
-- Build complexity incrementally (start simple, add features)
-- "Under the Hood" sections explaining internals
-- Working code that can be copy-pasted and extended
-- Often multi-part for complex topics
-- Include architecture diagrams (Mermaid)
+**When NOT to use:** Explaining how to USE an existing agent → That's a Guide
 
-**Playbook Template Structure:**
-
-| Section | Purpose |
-|---------|---------|
-| Frontmatter | `title`, `description`, and `icon` |
-| Source Code Info | Link to relevant source directory |
-| Metadata | Time to complete, what you'll build/learn, prerequisites |
-| Why Build This? | Problem context and key benefits |
-| Architecture | Mermaid diagram showing component relationships |
-| Quick Start (5 min) | Minimal working example |
-| Understanding Components | Deep dives with "Under the Hood" sections |
-| Building Step by Step | Incremental construction with checkpoints |
-| Next Steps | Link to next part or related content |
-
-<Tip>
-**See a real example:** View [`docs/playbooks/chat-agent/part-1-getting-started.mdx`](https://github.com/amd/gaia/blob/main/docs/playbooks/chat-agent/part-1-getting-started.mdx) for a complete playbook implementation.
-</Tip>
-
-**Playbook Structure:**
-1. **Context** - Why build this? What problem does it solve?
-2. **Quick Start** (5 min) - Minimal working example
-3. **Architecture** - Visual diagram of components
-4. **Understanding Components** - Deep dives with "Under the Hood" sections
-5. **Step-by-Step Build** - Incremental construction
-6. **Making It Your Own** - Customization patterns
-7. **Deployment** - Production patterns
-8. **Real-World Examples** - Complete, copy-paste ready code
-
-**Example Playbooks:**
-- [`docs/playbooks/chat-agent/`](https://github.com/amd/gaia/tree/main/docs/playbooks/chat-agent) - Document Q&A agent (3 parts)
-- [`docs/playbooks/emr-agent/`](https://github.com/amd/gaia/tree/main/docs/playbooks/emr-agent) - Medical intake agent (3 parts)
+**Example:** [docs/playbooks/chat-agent/](https://github.com/amd/gaia/tree/main/docs/playbooks/chat-agent)
 
 ---
 
-### Specifications
+### SDK Reference (`docs/sdk/sdks/`)
 
-**Location:** `docs/spec/`
+**Definition:** Quick code snippets for rapid development - "cheat sheets" developers copy-paste.
 
-**Purpose:** Complete API reference documentation for GAIA components. Specifications document every class, method, parameter, and return type.
+**Contains:**
+- Import statements
+- Common usage patterns (5-10 lines each)
+- No step-by-step tutorials
+- Links to full specifications
 
-**When to create a Specification:**
-- Documenting a new base class or mixin
-- Adding a new SDK or client
-- Creating new infrastructure components (servers, protocols)
-- Documenting tool mixins
+**When to use:** Developer asks "What's the quick way to do streaming chat?"
 
-**Characteristics:**
-- Complete API documentation (all methods, parameters, types)
-- Code examples for each major method
-- Testing requirements
-- Dependencies and imports
-- Performance considerations
-- Migration notes
+**When NOT to use:** Developer asks "What are ALL the methods on ChatSDK?" → That's a Specification
 
-**Specification Template Structure:**
-
-| Section | Purpose |
-|---------|---------|
-| Frontmatter | `title`, `description`, and `icon` |
-| Navigation Note | "You are viewing: API Specification" with cross-links |
-| Component Info | Module path, import statement, source link |
-| Overview | What it does, why use it, when NOT to use it |
-| API Specification | Class definition, constructor, all methods with signatures |
-| Code Examples | Basic and advanced usage examples |
-| Testing Requirements | Required unit/integration tests with file paths |
-| Dependencies | Required imports and packages |
-| Performance Considerations | Memory, latency, token usage notes |
-| Status Footer | Implementation status, last updated, version |
-
-<Tip>
-**See a real example:** View [`docs/spec/agent-base.mdx`](https://github.com/amd/gaia/blob/main/docs/spec/agent-base.mdx) for a complete specification implementation.
-</Tip>
-
-**Example Specifications:**
-- [`docs/spec/agent-base.mdx`](https://github.com/amd/gaia/blob/main/docs/spec/agent-base.mdx) - Agent base class
-- [`docs/spec/tool-decorator.mdx`](https://github.com/amd/gaia/blob/main/docs/spec/tool-decorator.mdx) - @tool decorator
+**Example:** [docs/sdk/sdks/chat.mdx](https://github.com/amd/gaia/blob/main/docs/sdk/sdks/chat.mdx)
 
 ---
 
-### Reference Docs
+## Specifications Tab
 
-**Location:** `docs/reference/`
+### SDK Specifications (`docs/spec/*-sdk.mdx`, `docs/spec/*-client.mdx`)
 
-**Purpose:** Factual reference information for CLI commands, API endpoints, configuration options, and development workflows.
+**Definition:** Complete technical contracts for SDK modules - ALL methods, parameters, types, and internals.
 
-**When to create Reference docs:**
-- Documenting CLI commands and options
-- API endpoint specifications
-- Configuration file formats
-- Development environment setup
-- Troubleshooting guides
+**Contains:**
+- Full API with every method signature
+- All parameters with types, defaults, descriptions
+- Implementation details and testing requirements
+- Extension points for contributors
 
-**Characteristics:**
-- Factual, not tutorial-based
-- Complete option/flag documentation
-- Tables for quick scanning
-- Copy-paste commands
+**When to use:** Developer needs to know ALL methods on a class, or wants to extend the SDK
 
-**Reference Doc Template Structure:**
+**When NOT to use:** Developer just wants to quickly use the SDK → That's SDK Reference or a Guide
 
-| Section | Purpose |
-|---------|---------|
-| Frontmatter | `title` and `description` |
-| Source Code Info | Link to relevant source directory |
-| Introduction | Brief description of what this reference covers |
-| Commands/Options/Endpoints | Each command with syntax, options table, examples |
-| Configuration | Config file format with settings table |
-| Troubleshooting | Common issues with symptoms and solutions |
-
-<Tip>
-**See a real example:** View [`docs/reference/cli.mdx`](https://github.com/amd/gaia/blob/main/docs/reference/cli.mdx) for a complete reference implementation.
-</Tip>
-
-**Example Reference docs:**
-- [`docs/reference/cli.mdx`](https://github.com/amd/gaia/blob/main/docs/reference/cli.mdx) - CLI reference
-- [`docs/reference/dev.mdx`](https://github.com/amd/gaia/blob/main/docs/reference/dev.mdx) - Development guide
-- [`docs/reference/api.mdx`](https://github.com/amd/gaia/blob/main/docs/reference/api.mdx) - API reference
+**Example:** [docs/spec/llm-client.mdx](https://github.com/amd/gaia/blob/main/docs/spec/llm-client.mdx)
 
 ---
 
-### SDK Documentation
+### Infrastructure Specifications (`docs/spec/api-server.mdx`, `docs/spec/mcp-*.mdx`)
 
-**Location:** `docs/sdk/`
+**Definition:** Technical architecture of GAIA's backend systems - servers, bridges, registries.
 
-**Purpose:** Conceptual documentation that bridges User Guides and Specifications. SDK docs explain how components work together, best practices, and architectural patterns.
+**Contains:**
+- Functional/Non-Functional Requirements
+- Complete Pydantic schemas
+- Request/response formats
+- Internal implementation logic
 
-**When to create SDK docs:**
-- Explaining core concepts (agent system, tool decorator, console)
-- Documenting SDK packages (Chat SDK, RAG SDK, LLM clients)
-- Covering infrastructure patterns (API server, MCP)
-- Writing best practices and advanced patterns
+**When to use:** Developer needs to understand or extend backend infrastructure
 
-**Characteristics:**
-- Conceptual explanations with code examples
-- Bridges "how to use" (Guides) and "API reference" (Specs)
-- Organized by topic (core, sdks, infrastructure, mixins)
-- Links to both Guides and Specifications
-
-**Example SDK docs:**
-- [`docs/sdk/core/agent-system.mdx`](https://github.com/amd/gaia/blob/main/docs/sdk/core/agent-system.mdx) - Agent system concepts
-- [`docs/sdk/sdks/chat.mdx`](https://github.com/amd/gaia/blob/main/docs/sdk/sdks/chat.mdx) - Chat SDK reference
-- [`docs/sdk/best-practices.mdx`](https://github.com/amd/gaia/blob/main/docs/sdk/best-practices.mdx) - Best practices guide
+**When NOT to use:** User just wants to start the API server → That's Reference
 
 ---
 
-### Other Documentation Types
+## Reference Tab
 
-GAIA also has specialized documentation sections:
+### CLI Reference (`docs/reference/cli.mdx`)
 
-| Section | Location | Purpose |
-|---------|----------|---------|
-| **Integrations** | `docs/integrations/` | Third-party integrations (VSCode, MCP, n8n) |
-| **Deployment** | `docs/deployment/` | Packaging and distribution |
-| **Releases** | `docs/releases/` | Version release notes |
-| **Plans** | `docs/plans/` | Future roadmap items |
+**Definition:** Complete documentation of all CLI commands, flags, and options.
 
-These follow similar patterns to Reference docs but are organized by their specific purpose.
+**When to use:** User asks "What flags does `gaia chat` accept?"
+
+### API Reference (`docs/reference/api.mdx`)
+
+**Definition:** User-facing guide for using the REST API server.
+
+**When to use:** User asks "How do I use the API server?" (not "How is it built?" - that's a Specification)
 
 ---
 
-## Choosing the Right Documentation Type
+## Comparison Tables
 
-Use this decision tree to determine which documentation type to create:
+### SDK Reference vs SDK Specification
 
-```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
-flowchart TD
-    A([What are you documenting?]) --> B{Feature usage<br/>or building new?}
-    A --> H{CLI, config, or<br/>dev workflow?}
+| Aspect | SDK Reference (`docs/sdk/sdks/`) | SDK Specification (`docs/spec/`) |
+|--------|----------------------------------|----------------------------------|
+| **Purpose** | Quick usage examples | Complete technical contract |
+| **Length** | ~100-200 lines | ~800-1400 lines |
+| **Content** | Copy-paste snippets | Full API signatures, internals |
+| **Audience** | Developers USING the SDK | Developers EXTENDING the SDK |
 
-    B -->|Using existing| C{Quick start or<br/>complete API?}
-    B -->|Building new| D{Tutorial or<br/>API reference?}
+### Guides vs Playbooks
 
-    C -->|Quick start| E([User Guide<br/>docs/guides/])
-    C -->|Complete API| F([Specification<br/>docs/spec/])
-    C -->|Conceptual| J([SDK Docs<br/>docs/sdk/])
+| Aspect | User Guides (`docs/guides/`) | Playbooks (`docs/playbooks/`) |
+|--------|------------------------------|-------------------------------|
+| **Purpose** | USE pre-built features | BUILD agents from scratch |
+| **Format** | Single page tutorial | Multi-part series (3+ parts) |
+| **Output** | User accomplishes a task | User builds a complete agent |
 
-    D -->|Step-by-step| G([Playbook<br/>docs/playbooks/])
-    D -->|API reference| F
+### Reference vs Specifications
 
-    H -->|Yes| I([Reference Doc<br/>docs/reference/])
+| Aspect | Reference (`docs/reference/`) | Specifications (`docs/spec/`) |
+|--------|-------------------------------|-------------------------------|
+| **Focus** | User-facing tools | Internal architecture |
+| **Audience** | Users and operators | SDK developers and contributors |
 
-    style A fill:#2d2d2d,stroke:#1a1a1a,color:#fff
-    style E fill:#ED1C24,stroke:#C8171E,color:#fff
-    style F fill:#F4484D,stroke:#ED1C24,color:#fff
-    style G fill:#C8171E,stroke:#C8171E,color:#fff
-    style I fill:#6c757d,stroke:#495057,color:#fff
-    style J fill:#28a745,stroke:#1e7e34,color:#fff
+---
+
+## Decision Tree
+
+**"I want to document..."**
+
+1. **How to USE a feature** → User Guide (`docs/guides/`)
+2. **How to BUILD an agent from scratch** → Playbook (`docs/playbooks/`)
+3. **Quick code snippets for developers** → SDK Reference (`docs/sdk/sdks/`)
+4. **Complete API contract (all methods)** → Specification (`docs/spec/`)
+5. **CLI commands and flags** → CLI Reference (`docs/reference/cli.mdx`)
+6. **Backend architecture** → Infrastructure Spec (`docs/spec/`)
+
+---
+
+## Contributing Process
+
+### Step 1: Identify the Right Location
+
+Use the decision tree above to determine where your content belongs.
+
+### Step 2: Create Your File
+
+Create a `.mdx` file in the appropriate directory with frontmatter:
+
+```yaml
+---
+title: "Your Page Title"
+description: "One-line description"
+icon: "icon-name"
+---
 ```
 
-| If you want to... | Create a... | Location |
-|-------------------|-------------|----------|
-| Show how to use a pre-built agent | User Guide | `docs/guides/` |
-| Teach how to build something from scratch | Playbook | `docs/playbooks/` |
-| Explain concepts and patterns | SDK Docs | `docs/sdk/` |
-| Document every method and parameter | Specification | `docs/spec/` |
-| List CLI commands or API endpoints | Reference | `docs/reference/` |
-| Document configuration options | Reference | `docs/reference/` |
-| Add third-party integration | Integration | `docs/integrations/` |
+### Step 3: Update Navigation
+
+Add your page to `docs/docs.json` in the appropriate tab and group.
+
+### Step 4: Submit a Pull Request
+
+```bash
+git checkout -b docs/your-feature
+git add docs/
+git commit -m "docs: add [description]"
+git push origin docs/your-feature
+```
 
 ---
 
 ## Style Guidelines
 
-### General Principles
-
-<CardGroup cols={3}>
-  <Card title="Be Concise" icon="compress">
-    Say more with less. Avoid unnecessary words.
-  </Card>
-
-  <Card title="Be Practical" icon="hammer">
-    Include working code examples that users can copy.
-  </Card>
-
-  <Card title="Be Consistent" icon="equals">
-    Follow existing patterns in similar docs.
-  </Card>
-</CardGroup>
-
-### Writing Style
-
-1. **Use active voice**
-   - Good: "The agent processes your query"
-   - Avoid: "Your query is processed by the agent"
-
-2. **Use second person ("you")**
-   - Good: "You can configure the agent..."
-   - Avoid: "Users can configure the agent..."
-
-3. **Use present tense**
-   - Good: "This method returns a dictionary"
-   - Avoid: "This method will return a dictionary"
-
-4. **Be direct**
-   - Good: "Run this command"
-   - Avoid: "You might want to consider running this command"
-
-### Code Examples
-
-1. **Always include working examples**
-   ```python title="example.py"
-   # Include a title for code blocks
-   from gaia.agents.chat.agent import ChatAgent
-
-   agent = ChatAgent()
-   result = agent.process_query("Hello")
-   ```
-
-2. **Use descriptive file names in titles**
-   - Good: `title="my_agent.py"`
-   - Avoid: `title="example.py"` (when not appropriate)
-
-3. **Show complete imports**
-   - Good: `from gaia.agents.base.agent import Agent`
-   - Avoid: `from gaia import Agent`
-
-4. **Include expected output when helpful**
-   ```python
-   print(result)  # {"answer": "Hello!", "steps": 1}
-   ```
-
-### Formatting
-
-1. **Use MDX components from Mintlify**
-   - `<Info>`, `<Note>`, `<Warning>`, `<Tip>` for callouts
-   - `<Steps>` for sequential instructions
-   - `<Tabs>` for alternative approaches
-   - `<Accordion>` for expandable details
-   - `<CardGroup>` for linked content
-   - `<CodeGroup>` for multiple code examples
-
-2. **Use tables for comparisons**
-   | Feature | Option A | Option B |
-   |---------|----------|----------|
-   | Speed   | Fast     | Slow     |
-
-3. **Use Mermaid for diagrams**
-   - Architecture diagrams
-   - Flow charts
-   - Sequence diagrams
-
-### Cross-Linking
-
-Always link to related documentation:
-
-```mdx
-<Note>
-📖 **You are viewing:** User Guide - Learn how to use Chat
-
-**See also:** [SDK Reference](/sdk/sdks/chat) · [API Specification](/spec/chat-sdk)
-</Note>
-```
-
-### Images and Assets
-
-1. **Store images in `docs/assets/`**
-   ```
-   docs/assets/
-   ├── images/
-   │   ├── guides/
-   │   ├── playbooks/
-   │   └── diagrams/
-   └── ...
-   ```
-
-2. **Use descriptive file names**
-   - Good: `chat-agent-architecture.png`
-   - Avoid: `screenshot1.png`
-
-3. **Reference images with absolute paths**
-   ```mdx
-   ![Chat Architecture](/assets/images/diagrams/chat-architecture.png)
-   ```
-
-4. **Prefer Mermaid diagrams over static images** when possible - they're easier to maintain
-
-5. **Optimize images** before committing (compress PNGs, use appropriate resolution)
-
-### License Footer
-
-Every documentation page must end with the license footer:
-
-```mdx
----
-
-<small style="color: #666;">
-
-**License**
-
-Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
-
-SPDX-License-Identifier: MIT
-
-</small>
-```
+- Use active voice and second person ("you")
+- Include working code examples
+- Add source code links at the top
+- Include license footer at the bottom
+- Cross-link to related documentation
 
 ---
 
-## Contribution Process
+## Review Checklist
 
-### Step 1: Identify the Need
-
-Before writing documentation:
-
-1. Check if documentation already exists
-2. Determine the appropriate documentation type
-3. Review similar existing docs for patterns
-
-### Step 2: Create Your Documentation
-
-<Steps>
-  <Step title="Fork and clone the repository">
-    ```bash
-    git clone https://github.com/YOUR_USERNAME/gaia.git
-    cd gaia
-    ```
-  </Step>
-
-  <Step title="Create a new branch">
-    ```bash
-    git checkout -b docs/your-documentation-name
-    ```
-  </Step>
-
-  <Step title="Create your documentation file">
-    Create a new `.mdx` file in the appropriate directory:
-    - `docs/guides/` for user guides
-    - `docs/playbooks/` for playbooks
-    - `docs/spec/` for specifications
-    - `docs/reference/` for reference docs
-  </Step>
-
-  <Step title="Update docs.json">
-    Add your new page to `docs/docs.json` in the appropriate navigation section.
-
-    ```json
-    {
-      "group": "User Guides",
-      "pages": [
-        "guides/existing-guide",
-        "guides/your-new-guide"  // Add here
-      ]
-    }
-    ```
-  </Step>
-
-  <Step title="Preview locally (optional)">
-    If you have the Mintlify CLI installed:
-    ```bash
-    mintlify dev
-    ```
-  </Step>
-</Steps>
-
-### Step 3: Submit a Pull Request
-
-1. **Commit your changes**
-   ```bash
-   git add docs/
-   git commit -m "docs: add guide for [feature]"
-   ```
-
-2. **Push to your fork**
-   ```bash
-   git push origin docs/your-documentation-name
-   ```
-
-3. **Open a Pull Request**
-   - Title: `docs: [type] description` (e.g., `docs: add Chat SDK guide`)
-   - Description: Explain what documentation you're adding and why
-
-### Review Checklist
-
-Before submitting, verify:
-
-- [ ] File is in the correct directory
-- [ ] Frontmatter includes `title` and `description`
-- [ ] Page is added to `docs/docs.json` (for new pages)
+- [ ] Content is in the correct section (use decision tree)
+- [ ] Frontmatter has `title` and `description`
+- [ ] Added to `docs/docs.json`
 - [ ] Code examples are complete and working
-- [ ] Links to related docs are included
-- [ ] No spelling or grammar errors
-- [ ] Follows the appropriate template structure
-- [ ] License footer is included
-- [ ] Images are optimized and in `docs/assets/`
-
----
-
-## Updating Existing Documentation
-
-When updating existing docs (not creating new ones):
-
-### Minor Updates
-
-For typos, small fixes, or clarifications:
-
-1. Make your changes directly
-2. Commit with message: `docs: fix typo in [page]` or `docs: clarify [topic] in [page]`
-3. No need to update `docs.json`
-
-### Major Updates
-
-For significant content changes:
-
-1. **Review the current structure** - Understand why it's organized the way it is
-2. **Check related pages** - Updates may require changes to linked documentation
-3. **Update cross-references** - If you rename sections, update any links pointing to them
-4. **Consider backwards compatibility** - External links to anchors may break if you rename headings
-
-### Deprecating Content
-
-When removing or replacing documentation:
-
-1. Add a deprecation notice at the top:
-   ```mdx
-   <Warning>
-   **Deprecated:** This page is outdated. See [New Page](/path/to/new) for current documentation.
-   </Warning>
-   ```
-
-2. Keep the page for at least one release cycle before removing
-3. Update `docs.json` to move deprecated pages to the end of their section
-
----
-
-## Documentation Structure
-
-### File Organization
-
-```
-docs/
-├── docs.json              # Navigation configuration
-├── index.mdx              # Home page
-├── setup.mdx              # Installation
-├── quickstart.mdx         # Getting started
-│
-├── guides/                # User guides
-│   ├── index.mdx          # Guide index
-│   ├── chat.mdx           # Chat SDK guide
-│   └── ...
-│
-├── playbooks/             # Step-by-step tutorials
-│   ├── index.mdx          # Playbook index
-│   └── chat-agent/        # Multi-part playbooks
-│       ├── part-1-getting-started.mdx
-│       ├── part-2-advanced-features.mdx
-│       └── part-3-deployment.mdx
-│
-├── spec/                  # API specifications
-│   ├── agent-base.mdx
-│   └── ...
-│
-├── reference/             # Reference documentation
-│   ├── cli.mdx
-│   ├── api.mdx
-│   └── dev.mdx
-│
-├── sdk/                   # SDK documentation
-│   ├── index.mdx
-│   ├── core/              # Core concepts
-│   └── sdks/              # Individual SDKs
-│
-└── deployment/            # Deployment guides
-    └── ...
-```
-
-### Navigation (docs.json)
-
-The `docs.json` file controls the site navigation:
-
-```json
-{
-  "navigation": {
-    "tabs": [
-      {
-        "tab": "Documentation",
-        "groups": [
-          {
-            "group": "Getting Started",
-            "pages": ["index", "setup", "quickstart"]
-          },
-          {
-            "group": "User Guides",
-            "pages": ["guides/index", "guides/chat", "guides/talk"]
-          }
-        ]
-      },
-      {
-        "tab": "Specifications",
-        "groups": [
-          {
-            "group": "Core Framework",
-            "pages": ["spec/agent-base", "spec/tool-decorator"]
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
----
-
-## Common MDX Components
-
-### Callouts
-
-```mdx
-<Info>Informational message</Info>
-<Note>Important note</Note>
-<Warning>Warning message</Warning>
-<Tip>Helpful tip</Tip>
-```
-
-### Steps
-
-```mdx
-<Steps>
-  <Step title="First step">
-    Content for step 1
-  </Step>
-  <Step title="Second step">
-    Content for step 2
-  </Step>
-</Steps>
-```
-
-### Tabs
-
-```mdx
-<Tabs>
-  <Tab title="Python">
-    ```python
-    print("Hello")
-    ```
-  </Tab>
-  <Tab title="CLI">
-    ```bash
-    echo "Hello"
-    ```
-  </Tab>
-</Tabs>
-```
-
-### Code Groups
-
-```mdx
-<CodeGroup>
-```python Basic
-from gaia import Agent
-agent = Agent()
-```
-
-```python Advanced
-from gaia import Agent, Config
-config = Config(debug=True)
-agent = Agent(config)
-```
-</CodeGroup>
-```
-
-### Cards
-
-```mdx
-<CardGroup cols={2}>
-  <Card title="Card 1" icon="icon-name" href="/path">
-    Description
-  </Card>
-  <Card title="Card 2" icon="icon-name" href="/path">
-    Description
-  </Card>
-</CardGroup>
-```
-
-### Accordions
-
-```mdx
-<AccordionGroup>
-  <Accordion title="Expandable Section 1">
-    Content that can be expanded
-  </Accordion>
-  <Accordion title="Expandable Section 2">
-    More expandable content
-  </Accordion>
-</AccordionGroup>
-```
-
----
-
-## Getting Help
-
-<CardGroup cols={2}>
-  <Card title="GitHub Issues" icon="github" href="https://github.com/amd/gaia/issues">
-    Report documentation issues or request new docs
-  </Card>
-
-  <Card title="Discord" icon="discord" href="https://discord.com/channels/1392562559122407535/1402013282495102997">
-    Ask questions and get help from the community
-  </Card>
-</CardGroup>
+- [ ] License footer included
 
 ---
 
