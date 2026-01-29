@@ -10,11 +10,15 @@ Prerequisites:
 Usage:
     python reproduce_sdxl_base_crash.py
 
-Expected behavior:
-    - Server should generate a 1024x1024 image with 20 steps
+Output (if successful):
+    - reproduction_SDXL-Base-1.0_1024x1024.png
 
-Actual behavior:
+Expected behavior:
+    - Server should generate a 1024x1024 image with 20 steps, CFG 7.5
+
+Actual behavior (as of 2026-01-28):
     - Server crashes or connection resets during generation
+    - Likely OOM with 6.6GB model
 """
 
 import requests
