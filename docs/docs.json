@@ -109,15 +109,15 @@
                   "sdk/sdks/rag",
                   "sdk/sdks/llm",
                   "sdk/sdks/vlm",
-                  "sdk/sdks/audio"
+                  "sdk/sdks/audio",
+                  "sdk/infrastructure/mcp-client"
                 ]
               },
               {
                 "group": "Infrastructure",
                 "pages": [
                   "sdk/infrastructure/api-server",
-                  "sdk/infrastructure/mcp",
-                  "sdk/infrastructure/mcp-client"
+                  "sdk/infrastructure/mcp"
                 ]
               },
               {
@@ -172,7 +172,8 @@
               "spec/agent-base",
               "spec/tool-decorator",
               "spec/console",
-              "spec/file-change-handler"
+              "spec/file-change-handler",
+              "spec/mcp-agent"
             ]
           },
           {
@@ -183,7 +184,8 @@
               "spec/talk-sdk",
               "spec/llm-client",
               "spec/vlm-client",
-              "spec/audio-client"
+              "spec/audio-client",
+              "spec/mcp-server"
             ]
           },
           {
@@ -193,10 +195,7 @@
               "spec/routing-agent",
               "spec/test-utilities",
               "spec/api-agent",
-              "spec/mcp-agent",
-              "spec/api-server",
-              "spec/mcp-server",
-              "spec/mcp-client"
+              "spec/api-server"
             ]
           },
           {
@@ -212,6 +211,7 @@
             "group": "Tool Mixins",
             "pages": [
               "spec/database-mixin",
+              "spec/mcp-client",
               "spec/cli-tools-mixin",
               "spec/code-tools-mixin",
               "spec/file-io-tools-mixin",

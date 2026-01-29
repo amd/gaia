@@ -1,6 +1,6 @@
 """Mixin for adding MCP client support to agents."""
 
-from typing import Any, Dict, List
+from typing import Dict, List
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.logger import get_logger
@@ -52,6 +52,10 @@ class MCPClientMixin:
                 # Register tools
                 self._register_mcp_tools(client)
 
+                # Update system prompt with new tools
+                if hasattr(self, "rebuild_system_prompt"):
+                    self.rebuild_system_prompt()
+
                 logger.debug(
                     f"Connected to '{name}' - {client.server_info.get('name', 'Unknown')}"
                 )
@@ -88,6 +92,10 @@ class MCPClientMixin:
             client = self._mcp_manager.get_client(server_name)
             self._register_mcp_tools(client)
             server_count += 1
+
+        # Update system prompt with all newly registered tools
+        if server_count > 0 and hasattr(self, "rebuild_system_prompt"):
+            self.rebuild_system_prompt()
 
         return server_count
 
@@ -151,9 +159,7 @@ class MCPClientMixin:
 
             logger.debug(f"Registered MCP tool: {gaia_name}")
 
-        logger.debug(
-            f"Registered {len(tools)} tools from MCP server '{client.name}'"
-        )
+        logger.debug(f"Registered {len(tools)} tools from MCP server '{client.name}'")
 
     def _unregister_mcp_tools(self, client: MCPClient) -> None:
         """Unregister all tools from an MCP server.
@@ -169,9 +175,7 @@ class MCPClientMixin:
                 del _TOOL_REGISTRY[gaia_name]
                 logger.debug(f"Unregistered MCP tool: {gaia_name}")
 
-        logger.debug(
-            f"Unregistered {len(tools)} tools from MCP server '{client.name}'"
-        )
+        logger.debug(f"Unregistered {len(tools)} tools from MCP server '{client.name}'")
 
     def __del__(self):
         """Cleanup: disconnect from all MCP servers."""

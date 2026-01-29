@@ -11,14 +11,11 @@ Run:
 """
 
 import json
-import subprocess
-import sys
-from pathlib import Path
 
 import pytest
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.mcp_client_mixin import MCPClientMixin
+from gaia.mcp import MCPClientMixin
 from gaia.mcp.client.config import MCPConfig
 
 # MCP server commands (same as in other tests)
@@ -29,13 +26,13 @@ MCP_SERVERS = {
 }
 
 
-class TestAgent(Agent, MCPClientMixin):
+class MCPTestAgent(Agent, MCPClientMixin):
     """Test agent that loads MCP servers from config."""
 
     def __init__(self, config_path: str, **kwargs):
         # Skip Lemonade to avoid subprocess issues
-        kwargs.setdefault('skip_lemonade', True)
-        kwargs.setdefault('max_steps', 10)
+        kwargs.setdefault("skip_lemonade", True)
+        kwargs.setdefault("max_steps", 10)
 
         Agent.__init__(self, **kwargs)
         MCPClientMixin.__init__(self)
@@ -43,11 +40,8 @@ class TestAgent(Agent, MCPClientMixin):
         # Override config path for testing
         self._mcp_manager.config = MCPConfig(config_path)
 
-        # Load servers from config and register tools
-        count = self.load_mcp_servers_from_config()
-
-        # Rebuild system prompt with MCP tools
-        self._rebuild_system_prompt()
+        # Load servers from config (system prompt auto-updated with MCP tools)
+        self.load_mcp_servers_from_config()
 
     def _get_system_prompt(self) -> str:
         """Simple system prompt for testing."""
@@ -56,22 +50,6 @@ class TestAgent(Agent, MCPClientMixin):
     def _register_tools(self) -> None:
         """No additional tools needed."""
         pass
-
-    def _rebuild_system_prompt(self) -> None:
-        """Rebuild system prompt after MCP tools are registered."""
-        self.system_prompt = self._get_system_prompt()
-        tools_description = self._format_tools_for_prompt()
-        self.system_prompt += f"\n\n==== AVAILABLE TOOLS ====\n{tools_description}\n"
-        self.system_prompt += """
-==== RESPONSE FORMAT ====
-You must respond ONLY in valid JSON. No text before { or after }.
-
-**To call a tool:**
-{"thought": "reasoning", "goal": "objective", "tool": "tool_name", "tool_args": {"arg1": "value1"}}
-
-**To provide a final answer:**
-{"thought": "reasoning", "goal": "achieved", "answer": "response to user"}
-"""
 
 
 @pytest.mark.integration
@@ -108,7 +86,7 @@ class TestMCPCLIToAgentWorkflow:
         assert "time" in loaded_config["servers"]
 
         # Step 3: Create agent that loads from config
-        agent = TestAgent(config_path=str(config_file))
+        agent = MCPTestAgent(config_path=str(config_file))
 
         # Step 4: Verify agent loaded all servers
         servers = agent.list_mcp_servers()
@@ -138,7 +116,9 @@ class TestMCPCLIToAgentWorkflow:
 
         # Check for namespaced MCP tools
         mcp_tools = [name for name in _TOOL_REGISTRY.keys() if name.startswith("mcp_")]
-        assert len(mcp_tools) >= 12, f"Should have at least 12 MCP tools, found {len(mcp_tools)}"
+        assert (
+            len(mcp_tools) >= 12
+        ), f"Should have at least 12 MCP tools, found {len(mcp_tools)}"
 
         # Check specific tools exist (note: server name from config)
         assert "mcp_memory_create_entities" in _TOOL_REGISTRY
@@ -213,7 +193,7 @@ class TestMCPCLIToAgentWorkflow:
         config_file.write_text(json.dumps(config_data, indent=2))
 
         # Create agent
-        agent = TestAgent(config_path=str(config_file))
+        agent = MCPTestAgent(config_path=str(config_file))
 
         try:
             # Verify time server loaded
@@ -262,9 +242,11 @@ class TestMCPCLIToAgentWorkflow:
             session1_manager.disconnect_all()
 
             # Session 2: New agent loads from config
-            agent = TestAgent(config_path=str(config_file))
+            agent = MCPTestAgent(config_path=str(config_file))
 
-            assert "time" in agent.list_mcp_servers(), "Time server should be loaded from config"
+            assert (
+                "time" in agent.list_mcp_servers()
+            ), "Time server should be loaded from config"
 
             # Verify tool is accessible
             time_client = agent.get_mcp_client("time")

@@ -21,7 +21,7 @@ The MCP (Model Context Protocol) Client enables any GAIA agent to connect to ext
 
 ### What is MCP?
 
-MCP is an open protocol that standardizes how AI applications connect to external tools and data sources. Many services provide MCP servers (filesystem, GitHub, Slack, databases, etc.), that GAIA can connect to.
+MCP is an open protocol that standardizes how AI applications connect to external tools and data sources. Many services provide MCP servers (filesystem, GitHub, databases, etc.) that GAIA can connect to.
 
 ### Key Benefits
 
@@ -86,7 +86,7 @@ Most MCP servers use stdio (standard input/output) via subprocess:
     ```python
     agent.connect_mcp_server(
         "filesystem",
-        "npx @modelcontextprotocol/server-filesystem /path/to/directory"
+        "npx -y @modelcontextprotocol/server-filesystem /path/to/directory"
     )
     ```
   </Tab>
@@ -96,46 +96,21 @@ Most MCP servers use stdio (standard input/output) via subprocess:
     # Requires GITHUB_TOKEN environment variable
     agent.connect_mcp_server(
         "github",
-        "npx @modelcontextprotocol/server-github"
-    )
-    ```
-  </Tab>
-
-  <Tab title="Slack">
-    ```python
-    # Requires SLACK_TOKEN environment variable
-    agent.connect_mcp_server(
-        "slack",
-        "npx @modelcontextprotocol/server-slack"
+        "npx -y @modelcontextprotocol/server-github"
     )
     ```
   </Tab>
 
   <Tab title="Python Servers">
     ```python
-    # Python-based MCP servers
+    # Python-based MCP servers (via uvx)
     agent.connect_mcp_server(
-        "custom",
-        "python -m my_mcp_server.main"
+        "time",
+        "uvx mcp-server-time"
     )
     ```
   </Tab>
 </Tabs>
-
-### Using HTTP Transport
-
-For remote MCP servers (coming soon):
-
-```python
-agent.connect_mcp_server(
-    "remote",
-    config={
-        "type": "http",
-        "url": "https://api.example.com/mcp",
-        "auth_token": "your-token"
-    }
-)
-```
 
 ## CLI Commands
 
@@ -254,7 +229,7 @@ agent.connect_mcp_server(
 
 ```python Basic Usage
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.mcp_client_mixin import MCPClientMixin
+from gaia.mcp import MCPClientMixin
 
 class FileAgent(Agent, MCPClientMixin):
     def __init__(self, **kwargs):
@@ -263,7 +238,7 @@ class FileAgent(Agent, MCPClientMixin):
         # Connect to filesystem MCP server
         self.connect_mcp_server(
             "filesystem",
-            "npx @modelcontextprotocol/server-filesystem /tmp"
+            "npx -y @modelcontextprotocol/server-filesystem /tmp"
         )
 
 # Create agent
@@ -281,9 +256,9 @@ class MultiToolAgent(Agent, MCPClientMixin):
 
         # Connect to multiple servers
         servers = {
-            "filesystem": "npx @modelcontextprotocol/server-filesystem /tmp",
-            "github": "npx @modelcontextprotocol/server-github",
-            "slack": "npx @modelcontextprotocol/server-slack"
+            "filesystem": "npx -y @modelcontextprotocol/server-filesystem /tmp",
+            "github": "npx -y @modelcontextprotocol/server-github",
+            "time": "uvx mcp-server-time"
         }
 
         for name, command in servers.items():
@@ -292,7 +267,7 @@ class MultiToolAgent(Agent, MCPClientMixin):
                 print(f"✅ Connected to {name}")
 
 agent = MultiToolAgent()
-result = agent.run("List files in /tmp, then post about them in #engineering Slack channel")
+result = agent.run("List files in /tmp, then tell me what time it is in Tokyo")
 ```
 
 ```python Manual Tool Discovery
@@ -337,8 +312,8 @@ class DynamicAgent(Agent, MCPClientMixin):
 agent = DynamicAgent()
 
 # Add capabilities on demand
-agent.add_capability("filesystem", "npx @modelcontextprotocol/server-filesystem /tmp")
-agent.add_capability("github", "npx @modelcontextprotocol/server-github")
+agent.add_capability("filesystem", "npx -y @modelcontextprotocol/server-filesystem /tmp")
+agent.add_capability("github", "npx -y @modelcontextprotocol/server-github")
 
 # Use tools...
 
@@ -358,11 +333,11 @@ Configure MCP servers directly in your agent:
 class ConfiguredAgent(Agent, MCPClientMixin):
     DEFAULT_SERVERS = {
         "filesystem": {
-            "command": "npx @modelcontextprotocol/server-filesystem /home/user",
+            "command": "npx -y @modelcontextprotocol/server-filesystem /home/user",
             "enabled": True
         },
         "github": {
-            "command": "npx @modelcontextprotocol/server-github",
+            "command": "npx -y @modelcontextprotocol/server-github",
             "enabled": True
         }
     }
@@ -384,10 +359,10 @@ MCP servers are saved to `~/.gaia/mcp_servers.json`:
 {
   "servers": {
     "filesystem": {
-      "command": "npx @modelcontextprotocol/server-filesystem /tmp"
+      "command": "npx -y @modelcontextprotocol/server-filesystem /tmp"
     },
     "github": {
-      "command": "npx @modelcontextprotocol/server-github"
+      "command": "npx -y @modelcontextprotocol/server-github"
     }
   }
 }
@@ -415,7 +390,7 @@ gh_client = manager.get_client("github")
     **Solutions:**
     1. Verify the command works in terminal:
        ```bash
-       echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | npx @modelcontextprotocol/server-filesystem /tmp
+       echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | npx -y @modelcontextprotocol/server-filesystem /tmp
        ```
 
     2. Check that Node.js/npx is installed:
@@ -572,7 +547,7 @@ git commit -m "Add MCP server configuration"
 ```python
 from pathlib import Path
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.mcp_client_mixin import MCPClientMixin
+from gaia.mcp import MCPClientMixin
 from gaia.mcp.client.config import MCPConfig
 
 class MyAgent(Agent, MCPClientMixin):
@@ -661,7 +636,7 @@ With just a few lines of code, your agent gains:
 - External service integration (time/timezone)
 - Persistent memory (knowledge graph)
 
-You can extend this pattern to connect to any MCP-compatible service (GitHub, Slack, databases, etc.).
+You can extend this pattern to connect to any MCP-compatible service (GitHub, databases, etc.).
 
 ## Best Practices
 

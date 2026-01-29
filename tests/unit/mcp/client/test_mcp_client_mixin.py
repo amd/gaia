@@ -2,10 +2,8 @@
 
 from unittest.mock import Mock, patch
 
-import pytest
-
-from gaia.agents.base.mcp_client_mixin import MCPClientMixin
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.mcp import MCPClientMixin
 from gaia.mcp.client.mcp_client import MCPTool
 
 
@@ -28,7 +26,7 @@ class TestMCPClientMixin:
         """Clear tool registry after each test."""
         _TOOL_REGISTRY.clear()
 
-    @patch("gaia.agents.base.mcp_client_mixin.MCPClientManager")
+    @patch("gaia.mcp.mixin.MCPClientManager")
     def test_connect_mcp_server_adds_server(self, mock_manager_class):
         """Test that connect_mcp_server adds server to manager."""
         mock_manager = Mock()
@@ -47,7 +45,7 @@ class TestMCPClientMixin:
             "test", command="echo test", config=None
         )
 
-    @patch("gaia.agents.base.mcp_client_mixin.MCPClientManager")
+    @patch("gaia.mcp.mixin.MCPClientManager")
     def test_connect_mcp_server_registers_tools(self, mock_manager_class):
         """Test that connect_mcp_server registers tools in _TOOL_REGISTRY."""
         mock_manager = Mock()
@@ -89,7 +87,7 @@ class TestMCPClientMixin:
         assert registered_tool["function"] == mock_wrapper
         assert registered_tool["parameters"]["param"]["required"] is True
 
-    @patch("gaia.agents.base.mcp_client_mixin.MCPClientManager")
+    @patch("gaia.mcp.mixin.MCPClientManager")
     def test_disconnect_mcp_server_unregisters_tools(self, mock_manager_class):
         """Test that disconnect_mcp_server removes tools from registry."""
         mock_manager = Mock()
@@ -125,7 +123,7 @@ class TestMCPClientMixin:
         assert tool_name not in _TOOL_REGISTRY
         mock_manager.remove_server.assert_called_once_with("testserver")
 
-    @patch("gaia.agents.base.mcp_client_mixin.MCPClientManager")
+    @patch("gaia.mcp.mixin.MCPClientManager")
     def test_list_mcp_servers_returns_server_names(self, mock_manager_class):
         """Test that list_mcp_servers returns server names."""
         mock_manager = Mock()
@@ -137,7 +135,7 @@ class TestMCPClientMixin:
 
         assert servers == ["server1", "server2"]
 
-    @patch("gaia.agents.base.mcp_client_mixin.MCPClientManager")
+    @patch("gaia.mcp.mixin.MCPClientManager")
     def test_get_mcp_client_returns_client(self, mock_manager_class):
         """Test that get_mcp_client returns the correct client."""
         mock_manager = Mock()
@@ -151,7 +149,7 @@ class TestMCPClientMixin:
         assert client == mock_client
         mock_manager.get_client.assert_called_once_with("test")
 
-    @patch("gaia.agents.base.mcp_client_mixin.MCPClientManager")
+    @patch("gaia.mcp.mixin.MCPClientManager")
     def test_connect_returns_false_on_error(self, mock_manager_class):
         """Test that connect_mcp_server returns False on error."""
         mock_manager = Mock()
@@ -163,7 +161,7 @@ class TestMCPClientMixin:
 
         assert result is False
 
-    @patch("gaia.agents.base.mcp_client_mixin.MCPClientManager")
+    @patch("gaia.mcp.mixin.MCPClientManager")
     def test_multiple_servers_namespace_tools_correctly(self, mock_manager_class):
         """Test that tools from multiple servers get correctly namespaced."""
         mock_manager = Mock()

@@ -2079,9 +2079,7 @@ Examples:
         help="Path to MCP servers config file (default: ~/.gaia/mcp_servers.json)",
     )
 
-    mcp_remove_parser = mcp_subparsers.add_parser(
-        "remove", help="Remove an MCP server"
-    )
+    mcp_remove_parser = mcp_subparsers.add_parser("remove", help="Remove an MCP server")
     mcp_remove_parser.add_argument("name", help="Name of the server to remove")
     mcp_remove_parser.add_argument(
         "--config",
@@ -5977,7 +5975,9 @@ def handle_mcp_list(args):
         print(f"   Config: {config_path}")
         print("\nAdd a server with: gaia mcp add <name> <command>")
         if args.config:
-            print(f"                or: gaia mcp add <name> <command> --config {args.config}")
+            print(
+                f"                or: gaia mcp add <name> <command> --config {args.config}"
+            )
         return
 
     print(f"📋 Configured MCP Servers ({len(servers)}):")

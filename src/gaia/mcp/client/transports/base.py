@@ -26,7 +26,9 @@ class MCPTransport(ABC):
         pass
 
     @abstractmethod
-    def send_request(self, method: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
+    def send_request(
+        self, method: str, params: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
         """Send a JSON-RPC request to the server.
 
         Args:

@@ -16,14 +16,14 @@ For implementation details, see the [Technical Specification](/spec/mcp-client).
 
 ```python
 from gaia.mcp import MCPClient, MCPClientManager
-from gaia.agents.base.mcp_client_mixin import MCPClientMixin
+from gaia.mcp import MCPClientMixin
 ```
 
 ## Quick Example
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.mcp_client_mixin import MCPClientMixin
+from gaia.mcp import MCPClientMixin
 
 class MyAgent(Agent, MCPClientMixin):
     def __init__(self, **kwargs):
@@ -157,7 +157,3 @@ manager = MCPClientManager(debug=True)
 - [Agent System](/sdk/core/agent-system) - Agent framework
 
 ---
-
-<Note>
-**License**: This SDK reference is part of the GAIA project and is subject to the [project's license](https://github.com/amd/gaia/blob/main/LICENSE).
-</Note>

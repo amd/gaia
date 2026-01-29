@@ -7,7 +7,7 @@ Run: python examples/mcp_config_based_agent.py
 from pathlib import Path
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.mcp_client_mixin import MCPClientMixin
+from gaia.mcp import MCPClientMixin
 from gaia.mcp.client.config import MCPConfig
 
 
@@ -27,8 +27,8 @@ class MCPAgent(Agent, MCPClientMixin):
         if config_path.exists():
             self._mcp_manager.config = MCPConfig(str(config_path))
 
+        # Load MCP servers (system prompt auto-updated with MCP tools)
         self.load_mcp_servers_from_config()
-        self._rebuild_system_prompt()
 
     def _get_system_prompt(self) -> str:
         return """You are a helpful assistant with MCP tools.
@@ -36,17 +36,6 @@ Use tools prefixed with 'mcp_<server>_<tool>' when needed."""
 
     def _register_tools(self) -> None:
         pass  # MCP tools auto-registered
-
-    def _rebuild_system_prompt(self) -> None:
-        self.system_prompt = self._get_system_prompt()
-        self.system_prompt += f"\n\nTools:\n{self._format_tools_for_prompt()}"
-        self.system_prompt += """
-
-Respond in JSON:
-{"thought": "...", "tool": "tool_name", "tool_args": {...}}
-or
-{"thought": "...", "answer": "final response"}
-"""
 
 
 def main():
