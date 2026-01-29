@@ -35,8 +35,7 @@ def lemonade_available():
 
 # Skip all tests if Lemonade is not available
 pytestmark = pytest.mark.skipif(
-    not lemonade_available(),
-    reason="Lemonade Server with SD model not available"
+    not lemonade_available(), reason="Lemonade Server with SD model not available"
 )
 
 
@@ -64,7 +63,9 @@ class TestSDIntegration:
         )
 
         # Verify success
-        assert result["status"] == "success", f"Generation failed: {result.get('error')}"
+        assert (
+            result["status"] == "success"
+        ), f"Generation failed: {result.get('error')}"
         assert "image_path" in result
 
         # Verify file was created
@@ -190,6 +191,7 @@ class TestLemonadeClientSDMethods:
 
         # Verify it's valid base64
         import base64
+
         image_bytes = base64.b64decode(response["data"][0]["b64_json"])
         assert len(image_bytes) > 1000
         assert image_bytes[:8] == b"\x89PNG\r\n\x1a\n"  # PNG magic bytes

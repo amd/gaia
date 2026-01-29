@@ -158,7 +158,9 @@ def main():
                 test_num += 1
                 print(f"\n[{test_num}/{total_tests}]", end="")
 
-                result = test_model_combination(client, model_id, size, prompt, output_dir)
+                result = test_model_combination(
+                    client, model_id, size, prompt, output_dir
+                )
                 if result:
                     results.append(result)
 
@@ -203,13 +205,15 @@ def main():
         )
         md_lines.append(row)
 
-    md_lines.extend([
-        "",
-        "## Summary by Model",
-        "",
-        "| Model | Images | Avg Time |",
-        "|-------|--------|----------|",
-    ])
+    md_lines.extend(
+        [
+            "",
+            "## Summary by Model",
+            "",
+            "| Model | Images | Avg Time |",
+            "|-------|--------|----------|",
+        ]
+    )
 
     for model_config in MODELS:
         model_id = model_config["id"]
@@ -218,23 +222,27 @@ def main():
             avg_time = sum(r["time"] for r in model_results) / len(model_results)
             md_lines.append(f"| {model_id} | {len(model_results)} | {avg_time:.1f}s |")
 
-    md_lines.extend([
-        "",
-        "## Test Configuration",
-        "",
-        "**Prompts:**",
-    ])
+    md_lines.extend(
+        [
+            "",
+            "## Test Configuration",
+            "",
+            "**Prompts:**",
+        ]
+    )
     for i, prompt in enumerate(TEST_PROMPTS, 1):
         md_lines.append(f"{i}. {prompt}")
 
-    md_lines.extend([
-        "",
-        "**Model Defaults:**",
-        "- SD-1.5: 512x512, 20 steps, CFG 7.5",
-        "- SD-Turbo: 512x512, 4 steps, CFG 1.0",
-        "- SDXL-Base-1.0: 1024x1024, 20 steps, CFG 7.5",
-        "- SDXL-Turbo: 512x512, 4 steps, CFG 1.0",
-    ])
+    md_lines.extend(
+        [
+            "",
+            "**Model Defaults:**",
+            "- SD-1.5: 512x512, 20 steps, CFG 7.5",
+            "- SD-Turbo: 512x512, 4 steps, CFG 1.0",
+            "- SDXL-Base-1.0: 1024x1024, 20 steps, CFG 7.5",
+            "- SDXL-Turbo: 512x512, 4 steps, CFG 1.0",
+        ]
+    )
 
     md_report_path = output_dir / "report.md"
     with open(md_report_path, "w") as f:
@@ -264,7 +272,9 @@ def main():
             model_results = [r for r in results if r["model"] == model_id]
             if model_results:
                 avg_time = sum(r["time"] for r in model_results) / len(model_results)
-                print(f"  {model_id:20s} {len(model_results)} images, avg {avg_time:.1f}s")
+                print(
+                    f"  {model_id:20s} {len(model_results)} images, avg {avg_time:.1f}s"
+                )
 
 
 if __name__ == "__main__":

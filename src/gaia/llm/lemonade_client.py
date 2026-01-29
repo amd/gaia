@@ -1668,7 +1668,9 @@ class LemonadeClient:
         defaults = self.SD_MODEL_DEFAULTS.get(model, {})
         size = size or defaults.get("size", "512x512")
         steps = steps if steps is not None else defaults.get("steps", 20)
-        cfg_scale = cfg_scale if cfg_scale is not None else defaults.get("cfg_scale", 7.5)
+        cfg_scale = (
+            cfg_scale if cfg_scale is not None else defaults.get("cfg_scale", 7.5)
+        )
 
         # Validate size
         if size not in self.SD_SIZES:
@@ -1689,7 +1691,9 @@ class LemonadeClient:
             if seed is not None:
                 payload["seed"] = seed
 
-            self.log.info(f"Generating image: model={model}, size={size}, steps={steps}, cfg={cfg_scale}")
+            self.log.info(
+                f"Generating image: model={model}, size={size}, steps={steps}, cfg={cfg_scale}"
+            )
             url = f"{self.base_url}/images/generations"
             response = self._send_request("POST", url, data=payload, timeout=timeout)
 
@@ -1716,7 +1720,8 @@ class LemonadeClient:
         try:
             models = self.list_models()
             sd_models = [
-                m for m in models.get("data", [])
+                m
+                for m in models.get("data", [])
                 if m.get("id") in self.SD_MODELS or "image" in m.get("labels", [])
             ]
             return sd_models

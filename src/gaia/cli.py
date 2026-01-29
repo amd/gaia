@@ -4966,23 +4966,27 @@ def handle_sd_command(args):
         print("  gaia sd -i")
         return
 
+    from gaia.agents.base.console import AgentConsole
     from gaia.agents.sd import SDToolsMixin
 
     # Create mixin instance for direct usage
     sd = SDToolsMixin()
+    sd.console = AgentConsole()  # Attach console for user-facing output
     sd.init_sd(
         output_dir=args.output_dir,
         default_model=args.sd_model,
-        default_size=getattr(args, 'size', None),
-        default_steps=getattr(args, 'steps', None),
-        default_cfg=getattr(args, 'cfg_scale', None),
+        default_size=getattr(args, "size", None),
+        default_steps=getattr(args, "steps", None),
+        default_cfg=getattr(args, "cfg_scale", None),
     )
 
     # Check health
     health = sd.sd_health_check()
     if health["status"] != "healthy":
         print(f"Error: {health.get('error', 'SD endpoint unavailable')}")
-        print("Make sure Lemonade Server is running: lemonade-server serve --model SD-Turbo")
+        print(
+            "Make sure Lemonade Server is running: lemonade-server serve --model SD-Turbo"
+        )
         sys.exit(1)
 
     # Interactive mode
@@ -5005,15 +5009,11 @@ def handle_sd_command(args):
                     print("Goodbye!")
                     break
 
-                print("Generating...")
                 result = sd._generate_image(prompt, seed=args.seed)
 
-                if result["status"] == "success":
-                    print(f"Saved: {result['image_path']}")
-                    print(f"Time: {result['generation_time_ms']}ms")
-                else:
-                    print(f"Error: {result['error']}")
-                print()
+                if result["status"] != "success":
+                    # Error already shown by console
+                    print()
 
             except KeyboardInterrupt:
                 print("\nGoodbye!")
@@ -5021,15 +5021,10 @@ def handle_sd_command(args):
 
     # Single prompt mode
     else:
-        print(f"Generating: {args.prompt}")
         result = sd._generate_image(args.prompt, seed=args.seed)
 
-        if result["status"] == "success":
-            print(f"Saved: {result['image_path']}")
-            print(f"Model: {result['model']} | Size: {result['size']}")
-            print(f"Time: {result['generation_time_ms']}ms")
-        else:
-            print(f"Error: {result['error']}")
+        if result["status"] != "success":
+            # Error already shown by console
             sys.exit(1)
 
 

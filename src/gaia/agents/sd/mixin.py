@@ -98,7 +98,9 @@ class SDToolsMixin:
         # Create LemonadeClient for API calls
         self.sd_client = LemonadeClient(base_url=base_url, verbose=False)
 
-        self.sd_output_dir = Path(output_dir) if output_dir else Path(".gaia/cache/sd/images")
+        self.sd_output_dir = (
+            Path(output_dir) if output_dir else Path(".gaia/cache/sd/images")
+        )
         self.sd_output_dir.mkdir(parents=True, exist_ok=True)
 
         self.sd_default_model = default_model
@@ -107,7 +109,9 @@ class SDToolsMixin:
         self.sd_default_cfg = default_cfg
         self.sd_generations = []  # Instance-level list for session history
 
-        logger.info(f"SD tools initialized: endpoint={self.sd_client.base_url}/images/generations, output={self.sd_output_dir}")
+        logger.debug(
+            f"SD tools initialized: endpoint={self.sd_client.base_url}/images/generations, output={self.sd_output_dir}"
+        )
 
     def register_sd_tools(self) -> None:
         """Register Stable Diffusion image generation tools."""
@@ -248,10 +252,13 @@ class SDToolsMixin:
 
         # Apply model-specific defaults from LemonadeClient if still None
         from gaia.llm.lemonade_client import LemonadeClient
+
         model_defaults = LemonadeClient.SD_MODEL_DEFAULTS.get(model, {})
         size = size or model_defaults.get("size", "512x512")
         steps = steps if steps is not None else model_defaults.get("steps", 20)
-        cfg_scale = cfg_scale if cfg_scale is not None else model_defaults.get("cfg_scale", 7.5)
+        cfg_scale = (
+            cfg_scale if cfg_scale is not None else model_defaults.get("cfg_scale", 7.5)
+        )
 
         # Validate size
         if size not in self.SD_SIZES:
@@ -260,21 +267,50 @@ class SDToolsMixin:
                 "error": f"Invalid size '{size}'. Choose from: {self.SD_SIZES}",
             }
 
-        logger.info(f"Generating image: prompt='{prompt[:50]}...', model={model}, size={size}")
+        # Use console for user-facing messages if available
+        console = getattr(self, "console", None)
+
+        # Show generation info to user
+        if console and hasattr(console, "print_info"):
+            console.print_info(
+                f"Generating {size} image with {model}\n"
+                f"Settings: {steps} steps, CFG {cfg_scale}\n"
+                f"Estimated time: {self._estimate_generation_time(model, size)}"
+            )
+
+        logger.debug(
+            f"Generating image: prompt='{prompt[:50]}...', model={model}, size={size}"
+        )
 
         try:
             # Ensure model is loaded before generation
-            logger.info(f"Loading SD model: {model}")
+            if console and hasattr(console, "start_progress"):
+                console.start_progress(f"Loading {model} model...")
+
+            logger.debug(f"Loading SD model: {model}")
             try:
-                self.sd_client.load_model(model, auto_download=True, prompt=False, timeout=600)
+                self.sd_client.load_model(
+                    model, auto_download=True, prompt=False, timeout=600
+                )
+                if console and hasattr(console, "stop_progress"):
+                    console.stop_progress()
             except LemonadeClientError as e:
                 # Model might already be loaded, continue
+                if console and hasattr(console, "stop_progress"):
+                    console.stop_progress()
                 if "already loaded" not in str(e).lower():
                     logger.warning(f"Model load warning: {e}")
 
+            # Start progress for generation
+            if console and hasattr(console, "start_progress"):
+                console.start_progress(f"Generating image ({steps} steps)...")
+
             start_time = time.time()
 
-            # Use LemonadeClient to generate image
+            # Use LemonadeClient to generate image with appropriate timeout
+            # SDXL-Base-1.0 at 1024px takes ~9 minutes, so use 15 min timeout
+            timeout = 900 if "Base" in model and size == "1024x1024" else 300
+
             response = self.sd_client.generate_image(
                 prompt=prompt,
                 model=model,
@@ -282,8 +318,11 @@ class SDToolsMixin:
                 steps=steps,
                 cfg_scale=cfg_scale,
                 seed=seed,
-                timeout=120,
+                timeout=timeout,
             )
+
+            if console and hasattr(console, "stop_progress"):
+                console.stop_progress()
 
             generation_time_ms = int((time.time() - start_time) * 1000)
 
@@ -318,20 +357,64 @@ class SDToolsMixin:
                 }
             )
 
-            logger.info(f"Image generated: {image_path} ({generation_time_ms}ms)")
+            # Show success to user
+            if console and hasattr(console, 'print_success'):
+                time_str = f"{generation_time_ms / 1000:.1f}s" if generation_time_ms < 60000 else f"{generation_time_ms / 60000:.1f}m"
+                console.print_success(
+                    f"Image generated in {time_str}\n"
+                    f"Saved: {image_path}"
+                )
+
+            logger.debug(f"Image generated: {image_path} ({generation_time_ms}ms)")
             return result
 
         except LemonadeClientError as e:
+            if console and hasattr(console, 'stop_progress'):
+                console.stop_progress()
+
             error_msg = str(e)
             if "Connection" in error_msg or "connect" in error_msg.lower():
                 error_msg = f"Cannot connect to Lemonade Server. Is it running?"
+
+            if console and hasattr(console, 'print_error'):
+                console.print_error(error_msg)
+
             logger.error(error_msg)
             return {"status": "error", "error": error_msg}
 
         except Exception as e:
+            if console and hasattr(console, 'stop_progress'):
+                console.stop_progress()
+
             error_msg = f"Image generation failed: {str(e)}"
+
+            if console and hasattr(console, 'print_error'):
+                console.print_error(error_msg)
+
             logger.error(error_msg, exc_info=True)
             return {"status": "error", "error": error_msg}
+
+    def _estimate_generation_time(self, model: str, size: str) -> str:
+        """
+        Estimate generation time based on model and size.
+
+        Args:
+            model: SD model name
+            size: Image size
+
+        Returns:
+            Human-readable time estimate
+        """
+        # Estimates based on actual measurements
+        estimates = {
+            ("SD-Turbo", "512x512"): "~15 seconds",
+            ("SDXL-Turbo", "512x512"): "~20 seconds",
+            ("SDXL-Turbo", "1024x1024"): "~1 minute",
+            ("SD-1.5", "512x512"): "~1.5 minutes",
+            ("SDXL-Base-1.0", "512x512"): "~2 minutes",
+            ("SDXL-Base-1.0", "1024x1024"): "~9 minutes",
+        }
+        return estimates.get((model, size), "~1-5 minutes")
 
     def _save_image(self, prompt: str, image_bytes: bytes, model: str) -> Path:
         """

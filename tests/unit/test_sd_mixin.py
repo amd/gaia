@@ -5,7 +5,7 @@
 
 import base64
 from pathlib import Path
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -277,7 +277,9 @@ class TestSDToolsMixinSaveImage:
         mixin.init_sd(output_dir=str(tmp_path))
 
         image_bytes = b"\x89PNG\r\n\x1a\n"
-        path = mixin._save_image("test/prompt:with<special>chars", image_bytes, "SD-Turbo")
+        path = mixin._save_image(
+            "test/prompt:with<special>chars", image_bytes, "SD-Turbo"
+        )
 
         assert path.exists()
         # Should not contain special characters
