@@ -35,7 +35,7 @@ class MCPConfig:
             return
 
         try:
-            with open(self.config_file, "r") as f:
+            with open(self.config_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 self._servers = data.get("servers", {})
             logger.debug(f"Loaded {len(self._servers)} servers from config")
@@ -46,7 +46,7 @@ class MCPConfig:
     def _save(self) -> None:
         """Save configuration to file."""
         try:
-            with open(self.config_file, "w") as f:
+            with open(self.config_file, "w", encoding="utf-8") as f:
                 json.dump({"servers": self._servers}, f, indent=2)
             logger.debug(f"Saved config to {self.config_file}")
         except Exception as e:
