@@ -11,7 +11,8 @@ Generate images from text descriptions using Stable Diffusion, powered by AMD NP
 
 1. **Lemonade Server** running with an SD model:
 ```bash
-lemonade-server serve --model SD-Turbo
+lemonade-server serve
+lemonade-server pull SD-Turbo
 ```
 
 2. **GAIA SDK** installed:
@@ -57,16 +58,16 @@ from gaia.agents.sd import SDToolsMixin
 mixin = SDToolsMixin()
 mixin.init_sd(output_dir="./images")
 
-# Photorealistic with auto-settings (uses SDXL-Base-1.0 defaults)
+# Fast generation with default (SD-Turbo)
 result = mixin._generate_image(
-    prompt="a mountain landscape, photorealistic, natural lighting, 4k"
+    prompt="a robot assistant, digital art"
 )
 print(f"Image saved to: {result['image_path']}")
 
-# Fast generation with specific model
+# Photorealistic with specific model (slow)
 result = mixin._generate_image(
-    prompt="a cyberpunk city at night, neon lights, stylized",
-    model="SDXL-Turbo"
+    prompt="a mountain landscape, photorealistic, natural lighting, 4k",
+    model="SDXL-Base-1.0"
 )
 ```
 
@@ -83,13 +84,12 @@ The `SDToolsMixin` provides three tools:
 ### generate_image
 
 ```python
-# Photorealistic with auto-settings (recommended)
+# Fast generation with defaults (SD-Turbo)
 result = agent._generate_image(
-    prompt="a dragon on a cliff at sunset, photorealistic, detailed",
-    model="SDXL-Base-1.0"  # Auto: 1024x1024, 20 steps, CFG 7.5
+    prompt="a dragon on a cliff at sunset"
 )
 
-# Fast generation with custom settings
+# Photorealistic (slow but high quality)
 result = agent._generate_image(
     prompt="a dragon on a cliff at sunset, stylized",
     model="SDXL-Turbo",    # or "SD-Turbo", "SD-1.5", "SDXL-Base-1.0"
@@ -122,11 +122,7 @@ result = agent._generate_image(
 | **SD-Turbo** | Very fast, lower quality | 512x512 | 4 | 1.0 | ~10-15 sec |
 
 <Note>
-**Recommended:** Use `SDXL-Base-1.0` for photorealistic images (default). SDXL-Turbo produces stylized/artistic results.
-</Note>
-
-<Note>
-**Performance:** SDXL-Base-1.0 at 1024x1024 takes ~8-10 minutes per image (20 steps). Use SDXL-Turbo for faster results (~15-60 seconds).
+**Default:** SD-Turbo (fast, 13s). For better quality, use SDXL-Turbo. For photorealistic, use SDXL-Base-1.0 (slow, ~9min).
 </Note>
 
 ## Prompt Tips

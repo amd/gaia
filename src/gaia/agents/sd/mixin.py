@@ -2,7 +2,8 @@
 SDToolsMixin - Stable Diffusion image generation tools for GAIA agents.
 
 Provides tools to generate images using the Lemonade Server SD endpoint.
-Supports SD-Turbo and SDXL-Turbo models with AMD NPU/GPU acceleration.
+Supports 4 SD models: SD-Turbo (fast, default), SDXL-Turbo, SD-1.5, and
+SDXL-Base-1.0 (photorealistic) with AMD NPU/GPU acceleration.
 
 Example:
     from gaia.agents.base import Agent
@@ -48,7 +49,7 @@ class SDToolsMixin:
     Attributes:
         sd_client: LemonadeClient instance for API calls
         sd_output_dir: Directory to save generated images
-        sd_default_model: Default model (SD-Turbo or SDXL-Turbo)
+        sd_default_model: Default SD model (SD-Turbo, SDXL-Turbo, SD-1.5, or SDXL-Base-1.0)
         sd_generations: List of generations from this session
     """
 
@@ -133,7 +134,7 @@ class SDToolsMixin:
                 },
                 "model": {
                     "type": "str",
-                    "description": "SD model to use: SD-Turbo (fast, 512px) or SDXL-Turbo (quality, 1024px)",
+                    "description": "SD model: SD-Turbo (fast, default), SDXL-Turbo (better), SDXL-Base-1.0 (photorealistic, slow), SD-1.5",
                     "required": False,
                 },
                 "size": {
@@ -174,15 +175,31 @@ class SDToolsMixin:
                 "models": [
                     {
                         "name": "SD-Turbo",
-                        "description": "Fast generation, optimized for 512x512",
+                        "description": "Very fast, 512x512, 4 steps (default)",
                         "recommended_steps": 4,
                         "recommended_size": "512x512",
+                        "speed": "~13s",
                     },
                     {
                         "name": "SDXL-Turbo",
-                        "description": "Higher quality, optimized for 1024x1024",
+                        "description": "Fast stylized, 512x512, 4 steps",
                         "recommended_steps": 4,
+                        "recommended_size": "512x512",
+                        "speed": "~17s",
+                    },
+                    {
+                        "name": "SD-1.5",
+                        "description": "Legacy general purpose, 512x512, 20 steps",
+                        "recommended_steps": 20,
+                        "recommended_size": "512x512",
+                        "speed": "~88s",
+                    },
+                    {
+                        "name": "SDXL-Base-1.0",
+                        "description": "Photorealistic, 1024x1024, 20 steps (slow)",
+                        "recommended_steps": 20,
                         "recommended_size": "1024x1024",
+                        "speed": "~9min",
                     },
                 ],
                 "default_model": self.sd_default_model,

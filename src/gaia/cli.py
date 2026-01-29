@@ -4988,9 +4988,9 @@ def handle_sd_command(args):
     health = sd.sd_health_check()
     if health["status"] != "healthy":
         print(f"Error: {health.get('error', 'SD endpoint unavailable')}")
-        print(
-            "Make sure Lemonade Server is running: lemonade-server serve --model SD-Turbo"
-        )
+        print("Make sure Lemonade Server is running and SD model is available:")
+        print("  lemonade-server serve")
+        print("  lemonade-server pull SD-Turbo")
         sys.exit(1)
 
     # Interactive mode

@@ -1,6 +1,6 @@
 # Add Stable Diffusion Image Generation Support
 
-Adds comprehensive SD image generation capabilities to GAIA with support for 4 models including photorealistic SDXL-Base-1.0.
+Adds comprehensive SD image generation capabilities to GAIA with support for 4 models, defaulting to fast SD-Turbo for quick iteration.
 
 ## Overview
 
@@ -11,10 +11,10 @@ This PR introduces `SDToolsMixin` following GAIA's mixin pattern (similar to `Da
 ### ✨ New Capabilities
 
 - **4 SD Models Supported:**
-  - `SDXL-Base-1.0` - Photorealistic, 1024px, 20 steps (default) ⭐⭐⭐⭐⭐
+  - `SD-Turbo` - Very fast, 512px, 4 steps (default) ⭐⭐
   - `SDXL-Turbo` - Fast stylized, 512px, 4 steps ⭐⭐⭐
   - `SD-1.5` - General purpose, 512px, 20 steps ⭐⭐⭐
-  - `SD-Turbo` - Very fast, 512px, 4 steps ⭐⭐
+  - `SDXL-Base-1.0` - Photorealistic, 1024px, 20 steps ⭐⭐⭐⭐⭐
 
 - **Auto-Settings:** Model-specific defaults automatically applied (size, steps, CFG scale)
 - **CLI Command:** `gaia sd` with interactive and single-prompt modes
@@ -24,8 +24,8 @@ This PR introduces `SDToolsMixin` following GAIA's mixin pattern (similar to `Da
 ### 🎯 Usage Examples
 
 ```bash
-# Photorealistic with auto-settings (uses SDXL-Base-1.0)
-gaia sd "a mountain landscape, photorealistic, detailed, 4k"
+# Fast with default (SD-Turbo, ~13s)
+gaia sd "a robot assistant"
 
 # Fast stylized generation
 gaia sd "cyberpunk city" --sd-model SDXL-Turbo
@@ -46,7 +46,7 @@ from gaia.agents.sd import SDToolsMixin
 class ImageAgent(Agent, SDToolsMixin):
     def __init__(self):
         super().__init__()
-        self.init_sd()  # Auto-settings for SDXL-Base-1.0
+        self.init_sd()  # Defaults to SD-Turbo (fast)
         self.register_sd_tools()
 
     def _get_system_prompt(self):

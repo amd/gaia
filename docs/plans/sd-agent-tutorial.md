@@ -105,7 +105,8 @@ Structure:
 
 ```bash
 # Ensure Lemonade Server is running with SD model
-lemonade-server serve --model SD-Turbo
+lemonade-server pull SD-Turbo
+lemonade-server serve
 
 # Verify SD endpoint is available
 curl http://localhost:8000/api/v1/images/generations \

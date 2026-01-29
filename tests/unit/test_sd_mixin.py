@@ -19,6 +19,15 @@ def mock_lemonade_client():
         mock_client = MagicMock()
         MockClient.return_value = mock_client
         mock_client.base_url = "http://localhost:8000/api/v1"
+
+        # Mock SD_MODEL_DEFAULTS class attribute
+        MockClient.SD_MODEL_DEFAULTS = {
+            "SD-1.5": {"steps": 20, "cfg_scale": 7.5, "size": "512x512"},
+            "SD-Turbo": {"steps": 4, "cfg_scale": 1.0, "size": "512x512"},
+            "SDXL-Base-1.0": {"steps": 20, "cfg_scale": 7.5, "size": "1024x1024"},
+            "SDXL-Turbo": {"steps": 4, "cfg_scale": 1.0, "size": "512x512"},
+        }
+
         yield mock_client
 
 

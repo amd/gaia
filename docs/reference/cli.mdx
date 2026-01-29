@@ -534,28 +534,34 @@ gaia sd <prompt> [OPTIONS]
 |--------|------|---------|-------------|
 | `prompt` | string | - | Text description of the image to generate |
 | `-i, --interactive` | flag | false | Run in interactive mode |
-| `--sd-model` | string | SDXL-Base-1.0 | Model: SDXL-Base-1.0 (photorealistic), SDXL-Turbo (fast), SD-1.5, SD-Turbo |
+| `--sd-model` | string | SD-Turbo | Model: SD-Turbo (fast, default), SDXL-Turbo, SDXL-Base-1.0 (photorealistic), SD-1.5 |
 | `--size` | string | auto | Image size: 512x512, 768x768, 1024x1024 (auto-selected per model) |
 | `--steps` | integer | auto | Inference steps (auto: 4 for Turbo, 20 for Base) |
 | `--cfg-scale` | float | auto | CFG scale (auto: 1.0 for Turbo, 7.5 for Base) |
 | `--output-dir` | path | .gaia/cache/sd/images | Directory to save images |
 | `--seed` | integer | random | Seed for reproducibility |
+| `--no-open` | flag | false | Skip prompt to open image in viewer |
 
 **Examples:**
 
-Photorealistic image (uses SDXL-Base-1.0 with auto-settings):
+Fast generation with default (SD-Turbo, ~13s):
 ```bash
-gaia sd "a sunset over mountains, photorealistic, detailed, 4k"
+gaia sd "a sunset over mountains"
 ```
 
-Fast stylized image with SDXL-Turbo:
+Better quality with SDXL-Turbo (~17s):
 ```bash
 gaia sd "cyberpunk city at night" --sd-model SDXL-Turbo
 ```
 
-Custom settings:
+Photorealistic with SDXL-Base-1.0 (slow, ~9min):
 ```bash
-gaia sd "portrait" --sd-model SDXL-Base-1.0 --steps 30 --cfg-scale 10.0
+gaia sd "portrait, photorealistic, detailed" --sd-model SDXL-Base-1.0
+```
+
+For automation (no prompts):
+```bash
+gaia sd "test image" --no-open
 ```
 
 Interactive mode:
