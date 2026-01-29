@@ -991,6 +991,7 @@ def main():
     sd_parser = subparsers.add_parser(
         "sd",
         help="Generate images using Stable Diffusion",
+        parents=[parent_parser],
     )
     sd_parser.add_argument(
         "prompt",
@@ -4944,6 +4945,17 @@ def handle_sd_command(args):
     Args:
         args: Parsed command line arguments for the sd command
     """
+    # No prompt and not interactive - show help (no server needed)
+    if not args.prompt and not args.interactive:
+        print("Usage: gaia sd <prompt> [options]")
+        print("       gaia sd -i  (interactive mode)")
+        print()
+        print("Examples:")
+        print('  gaia sd "a sunset over mountains"')
+        print('  gaia sd "cyberpunk city" --sd-model SDXL-Turbo --size 1024x1024')
+        print("  gaia sd -i")
+        return
+
     from gaia.agents.sd import SDToolsMixin
 
     # Create mixin instance for direct usage
@@ -4996,7 +5008,7 @@ def handle_sd_command(args):
                 break
 
     # Single prompt mode
-    elif args.prompt:
+    else:
         print(f"Generating: {args.prompt}")
         result = sd._generate_image(args.prompt, seed=args.seed)
 
@@ -5007,16 +5019,6 @@ def handle_sd_command(args):
         else:
             print(f"Error: {result['error']}")
             sys.exit(1)
-
-    # No prompt - show help
-    else:
-        print("Usage: gaia sd <prompt> [options]")
-        print("       gaia sd -i  (interactive mode)")
-        print()
-        print("Examples:")
-        print('  gaia sd "a sunset over mountains"')
-        print('  gaia sd "cyberpunk city" --model SDXL-Turbo --size 1024x1024')
-        print("  gaia sd -i")
 
 
 def handle_blender_command(args):

@@ -536,7 +536,7 @@ INPUT    "a dragon breathing fire"
 
 ```bash
 gaia sd submit "a futuristic city at night"
-gaia sd submit "a dragon in a cave" --model SDXL-Turbo
+gaia sd submit "a dragon in a cave" --sd-model SDXL-Turbo
 gaia sd submit "portrait of a wizard" --quality 8.5
 gaia sd queue
 ```
@@ -1735,7 +1735,7 @@ generate_parser.add_argument(
 )
 
 generate_parser.add_argument(
-    "--model",
+    "--sd-model",
     choices=["SD-Turbo", "SDXL-Turbo"],
     default="SD-Turbo",
     help="SD model (default: SD-Turbo)"
@@ -2269,7 +2269,7 @@ def test_image_command_basic(capsys):
 def test_image_command_with_options():
     """Test image generation with custom parameters."""
     result = subprocess.run(
-        ["gaia", "image", "test", "--model", "SDXL-Turbo", "--size", "1024x1024"],
+        ["gaia", "image", "test", "--sd-model", "SDXL-Turbo", "--size", "1024x1024"],
         capture_output=True
     )
     assert result.returncode == 0
