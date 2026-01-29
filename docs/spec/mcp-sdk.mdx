@@ -1,6 +1,7 @@
 ---
 title: "MCP SDK"
 description: "SDK for connecting GAIA agents to external MCP servers"
+icon: "sitemap"
 ---
 
 <Info>
@@ -19,7 +20,7 @@ The MCP Client enables GAIA agents to connect to and use tools from external MCP
 
 ### Key Features
 
-- **Universal Tool Access**: Connect to any MCP server and use its tools
+- **Universal Tool Access**: Connect to any (stdio) MCP server and use its tools
 - **Automatic Tool Registration**: MCP tools automatically appear in agent's tool registry
 - **Tool Namespacing**: Multiple servers with same tool names work without conflicts
 - **Stdio Transport**: Support for subprocess-based MCP servers
@@ -470,25 +471,6 @@ for tool in tools:
 # Call tool directly
 result = fs_client.call_tool("read_file", {"path": "/tmp/example.txt"})
 print(result)
-```
-
-### Example 4: CLI Usage
-
-```bash
-# Add an MCP server
-gaia mcp add filesystem "npx @modelcontextprotocol/server-filesystem /tmp"
-
-# List configured servers
-gaia mcp list
-
-# List tools from a server
-gaia mcp tools filesystem
-
-# Test connection
-gaia mcp test-client filesystem
-
-# Remove a server
-gaia mcp remove filesystem
 ```
 
 ---
