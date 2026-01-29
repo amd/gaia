@@ -1,0 +1,985 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Arena - GAIA Agents Hub</title>
+    <style>
+        :root {
+            /* Softer color palette */
+            --amd-red: #E63946;
+            --amd-red-light: #FF6B6B;
+            --amd-red-dark: #C1121F;
+            --amd-red-subtle: rgba(230, 57, 70, 0.1);
+
+            /* Softer backgrounds - not pure black */
+            --bg-page: #121418;
+            --bg-elevated: #1a1d24;
+            --bg-card: #22262f;
+            --bg-card-hover: #2a2f3a;
+            --bg-input: #2a2f3a;
+
+            /* Text with better hierarchy */
+            --text-primary: #f0f2f5;
+            --text-secondary: #9ca3b0;
+            --text-muted: #6b7280;
+            --text-accent: var(--amd-red-light);
+
+            /* Borders and shadows */
+            --border-subtle: rgba(255, 255, 255, 0.06);
+            --border-default: rgba(255, 255, 255, 0.1);
+            --border-hover: rgba(255, 255, 255, 0.15);
+            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+            --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.3);
+            --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4);
+            --shadow-glow: 0 0 20px rgba(230, 57, 70, 0.15);
+
+            /* Status colors - softer */
+            --success: #4ade80;
+            --warning: #fbbf24;
+            --gold: #fcd34d;
+            --silver: #cbd5e1;
+            --bronze: #f59e0b;
+            --blue: #60a5fa;
+            --purple: #a78bfa;
+
+            /* Spacing */
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 24px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--bg-page);
+            color: var(--text-primary);
+            line-height: 1.6;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Header */
+        .header {
+            background: var(--bg-elevated);
+            border-bottom: 1px solid var(--border-subtle);
+            padding: 0.75rem 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+            backdrop-filter: blur(12px);
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .back-btn {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.9rem;
+            padding: 0.5rem 0.75rem;
+            border-radius: var(--radius-sm);
+            transition: all 0.2s;
+        }
+
+        .back-btn:hover {
+            background: var(--bg-card);
+            color: var(--text-primary);
+        }
+
+        .competition-info {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .competition-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: var(--amd-red-subtle);
+            color: var(--amd-red-light);
+            padding: 0.4rem 0.85rem;
+            border-radius: var(--radius-xl);
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .competition-badge::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--amd-red-light);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .competition-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .match-counter {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 0.85rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .btn {
+            padding: 0.6rem 1.25rem;
+            border-radius: var(--radius-lg);
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            border: none;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--amd-red) 0%, var(--amd-red-dark) 100%);
+            color: white;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, var(--amd-red-light) 0%, var(--amd-red) 100%);
+            box-shadow: var(--shadow-glow);
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary {
+            background: var(--bg-card);
+            color: var(--text-primary);
+            border: 1px solid var(--border-default);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--border-hover);
+        }
+
+        /* Main Arena */
+        .arena-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Split View Container */
+        .split-container {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2px;
+            background: var(--border-subtle);
+            overflow: hidden;
+        }
+
+        /* Agent Panel */
+        .agent-panel {
+            background: var(--bg-elevated);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .agent-panel.left {
+            border-right: 1px solid var(--border-subtle);
+        }
+
+        .agent-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border-subtle);
+            background: var(--bg-card);
+        }
+
+        .agent-label {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .agent-letter {
+            width: 36px;
+            height: 36px;
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1.1rem;
+        }
+
+        .agent-panel.left .agent-letter {
+            background: linear-gradient(135deg, var(--blue) 0%, #3b82f6 100%);
+        }
+
+        .agent-panel.right .agent-letter {
+            background: linear-gradient(135deg, var(--purple) 0%, #8b5cf6 100%);
+        }
+
+        .agent-name {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .agent-name.hidden {
+            color: var(--text-muted);
+            font-style: italic;
+        }
+
+        .agent-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.8rem;
+            color: var(--success);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        /* Chat Area */
+        .chat-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .message {
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        .message.bot {
+            align-self: flex-start;
+            max-width: 90%;
+        }
+
+        .message.user {
+            align-self: flex-end;
+            flex-direction: row-reverse;
+            max-width: 90%;
+        }
+
+        .message-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            flex-shrink: 0;
+        }
+
+        .agent-panel.left .message.bot .message-avatar {
+            background: linear-gradient(135deg, var(--blue) 0%, #3b82f6 100%);
+        }
+
+        .agent-panel.right .message.bot .message-avatar {
+            background: linear-gradient(135deg, var(--purple) 0%, #8b5cf6 100%);
+        }
+
+        .message.user .message-avatar {
+            background: var(--bg-card);
+            border: 1px solid var(--border-default);
+        }
+
+        .message-content {
+            padding: 0.875rem 1.1rem;
+            border-radius: var(--radius-md);
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+
+        .message.bot .message-content {
+            background: var(--bg-card);
+            border: 1px solid var(--border-default);
+            border-bottom-left-radius: 4px;
+        }
+
+        .message.user .message-content {
+            background: var(--bg-input);
+            border: 1px solid var(--border-default);
+            border-bottom-right-radius: 4px;
+        }
+
+        .typing-indicator {
+            display: flex;
+            gap: 4px;
+            padding: 0.875rem 1rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-md);
+            width: fit-content;
+        }
+
+        .typing-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--text-muted);
+            border-radius: 50%;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-4px); }
+        }
+
+        /* Bottom Section */
+        .arena-bottom {
+            background: var(--bg-card);
+            border-top: 1px solid var(--border-subtle);
+            padding: 1.5rem 2rem;
+        }
+
+        /* Voting Section */
+        .voting-section {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .voting-prompt {
+            text-align: center;
+            margin-bottom: 1.25rem;
+        }
+
+        .voting-prompt h3 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .voting-prompt p {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .vote-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .vote-btn {
+            padding: 0.875rem 2rem;
+            border-radius: var(--radius-lg);
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: 2px solid var(--border-default);
+            background: var(--bg-elevated);
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .vote-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .vote-btn.a-better:hover {
+            border-color: var(--blue);
+            background: rgba(96, 165, 250, 0.1);
+        }
+
+        .vote-btn.b-better:hover {
+            border-color: var(--purple);
+            background: rgba(167, 139, 250, 0.1);
+        }
+
+        .vote-btn.tie:hover {
+            border-color: var(--gold);
+            background: rgba(252, 211, 77, 0.1);
+        }
+
+        .vote-btn.both-bad:hover {
+            border-color: var(--text-muted);
+            background: rgba(107, 114, 128, 0.1);
+        }
+
+        /* Input Section */
+        .input-section {
+            display: flex;
+            gap: 0.75rem;
+            align-items: flex-end;
+        }
+
+        .input-wrapper {
+            flex: 1;
+            background: var(--bg-input);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 0.75rem 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            transition: all 0.2s ease;
+        }
+
+        .input-wrapper:focus-within {
+            border-color: var(--amd-red);
+            box-shadow: 0 0 0 3px var(--amd-red-subtle);
+        }
+
+        .input-wrapper input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-primary);
+            font-size: 0.95rem;
+            outline: none;
+        }
+
+        .input-wrapper input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .send-btn {
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(135deg, var(--amd-red) 0%, var(--amd-red-dark) 100%);
+            border: none;
+            border-radius: var(--radius-lg);
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+            font-size: 1.2rem;
+        }
+
+        .send-btn:hover {
+            background: linear-gradient(135deg, var(--amd-red-light) 0%, var(--amd-red) 100%);
+            box-shadow: var(--shadow-glow);
+        }
+
+        /* Revealed State */
+        .revealed {
+            display: none;
+        }
+
+        .revealed.show {
+            display: block;
+        }
+
+        .reveal-banner {
+            background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-elevated) 100%);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem 2rem;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
+
+        .reveal-banner h3 {
+            font-size: 1.25rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .reveal-results {
+            display: flex;
+            justify-content: center;
+            gap: 3rem;
+            margin-top: 1rem;
+        }
+
+        .reveal-agent {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .reveal-agent-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+        }
+
+        .reveal-agent.a .reveal-agent-icon {
+            background: linear-gradient(135deg, var(--blue) 0%, #3b82f6 100%);
+        }
+
+        .reveal-agent.b .reveal-agent-icon {
+            background: linear-gradient(135deg, var(--purple) 0%, #8b5cf6 100%);
+        }
+
+        .reveal-agent-info h4 {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .reveal-agent-info p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .reveal-agent.winner {
+            position: relative;
+        }
+
+        .winner-badge {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            background: var(--gold);
+            color: #000;
+            padding: 0.2rem 0.5rem;
+            border-radius: var(--radius-sm);
+            font-size: 0.7rem;
+            font-weight: 700;
+        }
+
+        /* Skip Link */
+        .skip-link {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .skip-link:hover {
+            color: var(--amd-red-light);
+        }
+
+        /* Instructions Panel */
+        .instructions {
+            background: var(--amd-red-subtle);
+            border: 1px solid var(--amd-red);
+            border-radius: var(--radius-md);
+            padding: 1rem 1.25rem;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .instructions-icon {
+            font-size: 1.5rem;
+        }
+
+        .instructions-text h4 {
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .instructions-text p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        /* Suggested Queries */
+        .suggested-queries {
+            margin-bottom: 1.25rem;
+        }
+
+        .suggested-queries-label {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .suggested-queries-label span {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+
+        .query-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .query-chip {
+            padding: 0.5rem 1rem;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-xl);
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .query-chip:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--amd-red);
+            color: var(--text-primary);
+        }
+
+        .query-chip.selected {
+            background: var(--amd-red-subtle);
+            border-color: var(--amd-red);
+            color: var(--amd-red-light);
+        }
+
+        .query-divider {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin: 1rem 0;
+        }
+
+        .query-divider::before,
+        .query-divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--border-subtle);
+        }
+
+        .query-divider span {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* Responsive */
+        @media (max-width: 900px) {
+            .split-container {
+                grid-template-columns: 1fr;
+                grid-template-rows: 1fr 1fr;
+            }
+
+            .agent-panel.left {
+                border-right: none;
+                border-bottom: 1px solid var(--border-subtle);
+            }
+
+            .vote-buttons {
+                flex-wrap: wrap;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <a href="agents-hub.html" class="back-btn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="m15 18-6-6 6-6"/>
+                </svg>
+                Back to Hub
+            </a>
+            <div class="competition-info">
+                <span class="competition-badge">Live Competition</span>
+                <span class="competition-title">Best Code Review Agent</span>
+            </div>
+        </div>
+        <div class="header-right">
+            <div class="match-counter">
+                Match 4 of 10
+            </div>
+            <a href="#" class="skip-link">Skip this match</a>
+            <a href="#" class="btn btn-secondary">Leaderboard</a>
+        </div>
+    </header>
+
+    <!-- Main Arena -->
+    <main class="arena-main">
+        <!-- Instructions -->
+        <div style="padding: 1rem 2rem 0;">
+            <div class="instructions">
+                <span class="instructions-icon">VS</span>
+                <div class="instructions-text">
+                    <h4>Side-by-Side Agent Comparison</h4>
+                    <p>Send a prompt to both agents simultaneously. After reviewing their responses, vote for the better one. Agent names are hidden until you vote.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Split View -->
+        <div class="split-container">
+            <!-- Agent A Panel -->
+            <div class="agent-panel left">
+                <div class="agent-header">
+                    <div class="agent-label">
+                        <div class="agent-letter">A</div>
+                        <span class="agent-name hidden">Agent A (Hidden)</span>
+                    </div>
+                    <div class="agent-status">
+                        <span class="status-dot"></span>
+                        <span>Ready</span>
+                    </div>
+                </div>
+                <div class="chat-area">
+                    <!-- User Message -->
+                    <div class="message user">
+                        <div class="message-avatar">U</div>
+                        <div class="message-content">
+                            Review this Python function for bugs and security issues:
+                            <br><br>
+                            <code style="background: var(--bg-page); padding: 0.5rem; border-radius: 4px; display: block; margin-top: 0.5rem;">
+def get_user(user_id):<br>
+&nbsp;&nbsp;query = f"SELECT * FROM users WHERE id = {user_id}"<br>
+&nbsp;&nbsp;return db.execute(query)
+                            </code>
+                        </div>
+                    </div>
+
+                    <!-- Bot Response -->
+                    <div class="message bot">
+                        <div class="message-avatar">A</div>
+                        <div class="message-content">
+                            <strong>Critical Security Issue Found</strong>
+                            <br><br>
+                            This code has a <strong>SQL Injection vulnerability</strong>. The user_id is directly interpolated into the query string without sanitization.
+                            <br><br>
+                            <strong>Attack Example:</strong><br>
+                            If user_id = "1; DROP TABLE users;--", the entire users table could be deleted.
+                            <br><br>
+                            <strong>Fix:</strong> Use parameterized queries:
+                            <br>
+                            <code style="background: var(--bg-page); padding: 0.5rem; border-radius: 4px; display: block; margin-top: 0.5rem;">
+def get_user(user_id):<br>
+&nbsp;&nbsp;query = "SELECT * FROM users WHERE id = ?"<br>
+&nbsp;&nbsp;return db.execute(query, (user_id,))
+                            </code>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Agent B Panel -->
+            <div class="agent-panel right">
+                <div class="agent-header">
+                    <div class="agent-label">
+                        <div class="agent-letter">B</div>
+                        <span class="agent-name hidden">Agent B (Hidden)</span>
+                    </div>
+                    <div class="agent-status">
+                        <span class="status-dot"></span>
+                        <span>Ready</span>
+                    </div>
+                </div>
+                <div class="chat-area">
+                    <!-- User Message -->
+                    <div class="message user">
+                        <div class="message-avatar">U</div>
+                        <div class="message-content">
+                            Review this Python function for bugs and security issues:
+                            <br><br>
+                            <code style="background: var(--bg-page); padding: 0.5rem; border-radius: 4px; display: block; margin-top: 0.5rem;">
+def get_user(user_id):<br>
+&nbsp;&nbsp;query = f"SELECT * FROM users WHERE id = {user_id}"<br>
+&nbsp;&nbsp;return db.execute(query)
+                            </code>
+                        </div>
+                    </div>
+
+                    <!-- Bot Response -->
+                    <div class="message bot">
+                        <div class="message-avatar">B</div>
+                        <div class="message-content">
+                            I found one issue with this code.
+                            <br><br>
+                            The function uses string formatting for SQL which could be improved. Consider using parameterized queries for better security practices.
+                            <br><br>
+                            Here's a revised version:
+                            <br>
+                            <code style="background: var(--bg-page); padding: 0.5rem; border-radius: 4px; display: block; margin-top: 0.5rem;">
+def get_user(user_id):<br>
+&nbsp;&nbsp;return db.execute("SELECT * FROM users WHERE id = ?", [user_id])
+                            </code>
+                            <br>
+                            This is a better approach.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Section -->
+        <div class="arena-bottom">
+            <div class="voting-section">
+                <!-- Voting UI (shown before voting) -->
+                <div class="voting-ui">
+                    <div class="voting-prompt">
+                        <h3>Which response is better?</h3>
+                        <p>Consider accuracy, helpfulness, and clarity</p>
+                    </div>
+                    <div class="vote-buttons">
+                        <button class="vote-btn a-better">
+                            <span style="color: var(--blue);">A</span> is better
+                        </button>
+                        <button class="vote-btn b-better">
+                            <span style="color: var(--purple);">B</span> is better
+                        </button>
+                        <button class="vote-btn tie">
+                            Tie
+                        </button>
+                        <button class="vote-btn both-bad">
+                            Both are bad
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Reveal UI (shown after voting) - hidden by default -->
+                <div class="revealed" id="revealSection">
+                    <div class="reveal-banner">
+                        <h3>Your vote: Agent A is better</h3>
+                        <p style="color: var(--text-secondary);">Thank you for voting! The agent names are now revealed.</p>
+                        <div class="reveal-results">
+                            <div class="reveal-agent a winner">
+                                <div class="reveal-agent-icon">A</div>
+                                <div class="reveal-agent-info">
+                                    <h4>CodeSensei</h4>
+                                    <p>by @alice</p>
+                                </div>
+                                <span class="winner-badge">YOUR PICK</span>
+                            </div>
+                            <div class="reveal-agent b">
+                                <div class="reveal-agent-icon">B</div>
+                                <div class="reveal-agent-info">
+                                    <h4>ReviewBot</h4>
+                                    <p>by @bob</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display: flex; justify-content: center; gap: 1rem;">
+                        <a href="#" class="btn btn-primary">Next Match</a>
+                        <a href="competitions.html" class="btn btn-secondary">View Leaderboard</a>
+                    </div>
+                </div>
+
+                <!-- Suggested Queries -->
+                <div class="suggested-queries">
+                    <div class="suggested-queries-label">
+                        Try a suggested query <span>(click to use)</span>
+                    </div>
+                    <div class="query-chips">
+                        <button class="query-chip">Review this function for bugs</button>
+                        <button class="query-chip">Explain this code step by step</button>
+                        <button class="query-chip">Suggest performance improvements</button>
+                        <button class="query-chip">Find security vulnerabilities</button>
+                        <button class="query-chip">Add type annotations</button>
+                        <button class="query-chip">Write unit tests for this</button>
+                    </div>
+                </div>
+
+                <div class="query-divider">
+                    <span>or write your own</span>
+                </div>
+
+                <!-- Input for custom query -->
+                <div class="input-section">
+                    <div class="input-wrapper">
+                        <input type="text" placeholder="Send a custom prompt to both agents..." id="customQueryInput">
+                    </div>
+                    <button class="send-btn">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="m22 2-7 20-4-9-9-4 20-7z"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // Simple demo: clicking vote buttons shows the reveal section
+        document.querySelectorAll('.vote-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelector('.voting-ui').style.display = 'none';
+                document.getElementById('revealSection').classList.add('show');
+
+                // Update revealed agent names in headers
+                document.querySelectorAll('.agent-name').forEach(el => {
+                    el.classList.remove('hidden');
+                });
+                document.querySelector('.agent-panel.left .agent-name').textContent = 'CodeSensei';
+                document.querySelector('.agent-panel.right .agent-name').textContent = 'ReviewBot';
+            });
+        });
+
+        // Query chip selection - clicking a chip populates the input
+        document.querySelectorAll('.query-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                // Remove selected state from all chips
+                document.querySelectorAll('.query-chip').forEach(c => c.classList.remove('selected'));
+                // Add selected state to clicked chip
+                chip.classList.add('selected');
+                // Populate the input field
+                document.getElementById('customQueryInput').value = chip.textContent;
+                // Focus the input
+                document.getElementById('customQueryInput').focus();
+            });
+        });
+
+        // Clear chip selection when user types in the input
+        document.getElementById('customQueryInput').addEventListener('input', () => {
+            document.querySelectorAll('.query-chip').forEach(c => c.classList.remove('selected'));
+        });
+    </script>
+</body>
+</html>
