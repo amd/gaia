@@ -1,0 +1,125 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# SD (Stable Diffusion) integration tests with Lemonade server
+# Tests real image generation with SD-Turbo (fastest model)
+# Platform: Windows (self-hosted runner with AMD hardware)
+
+name: SD Integration Tests (Windows)
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "src/gaia/agents/sd/**"
+      - "src/gaia/llm/lemonade_client.py"
+      - "src/gaia/cli.py"
+      - "tests/integration/test_sd_integration.py"
+      - "tests/unit/test_sd_mixin.py"
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "src/gaia/agents/sd/**"
+      - "src/gaia/llm/lemonade_client.py"
+      - "src/gaia/cli.py"
+      - "tests/integration/test_sd_integration.py"
+      - "tests/unit/test_sd_mixin.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-sd-windows:
+    name: Test SD Image Generation (Lemonade Integration)
+    runs-on: [stx]
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Python Environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          install-package: '.[dev]'
+
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
+      - name: Start Lemonade Server and Pull SD-Turbo
+        timeout-minutes: 10
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        shell: pwsh
+        run: |
+          Write-Host "Starting Lemonade Server..."
+
+          # Start server in background
+          $serverProcess = Start-Process -FilePath "lemonade-server" -ArgumentList "serve","--log-level","info" -PassThru -NoNewWindow
+
+          # Wait for server to be ready
+          $maxWaitTime = 60
+          $waited = 0
+          $serverReady = $false
+
+          while ($waited -lt $maxWaitTime -and -not $serverReady) {
+              Start-Sleep -Seconds 2
+              $waited += 2
+              try {
+                  $response = Invoke-WebRequest -Uri "http://localhost:8000/api/v1/models" -TimeoutSec 2 -ErrorAction SilentlyContinue
+                  if ($response.StatusCode -eq 200) {
+                      $serverReady = $true
+                      Write-Host "Server ready after $waited seconds"
+                  }
+              } catch {
+                  # Continue waiting
+              }
+          }
+
+          if (-not $serverReady) {
+              Write-Host "Server failed to start"
+              exit 1
+          }
+
+          # Pull SD-Turbo (smallest, fastest SD model - 2.6GB)
+          Write-Host "Pulling SD-Turbo model (2.6GB, fastest SD model)..."
+          lemonade-server pull SD-Turbo
+
+          Write-Host "SD-Turbo ready for testing"
+
+      - name: Run SD Integration Tests (Fast - SD-Turbo only)
+        shell: cmd
+        run: |
+          call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
+
+          echo ================================================================
+          echo           SD INTEGRATION TESTS (SD-Turbo - Fast)
+          echo ================================================================
+          echo Testing real image generation with SD-Turbo (13s per image)
+          echo.
+
+          REM Run only the fast tests (SD-Turbo, 512x512)
+          REM Skip slow tests (SDXL-Base-1.0 takes 5+ minutes per image)
+          pytest tests/integration/test_sd_integration.py::TestSDIntegration::test_generate_small_image -v --tb=short
+          pytest tests/integration/test_sd_integration.py::TestSDIntegration::test_health_check_with_real_server -v --tb=short
+          pytest tests/integration/test_sd_integration.py::TestLemonadeClientSDMethods::test_list_sd_models -v --tb=short
+
+          echo.
+          echo ================================================================
+          echo           SD Integration Tests Completed
+          echo ================================================================
+
+      - name: Cleanup
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "Stopping Lemonade Server..."
+          try {
+              Stop-Process -Name "lemonade-server" -Force -ErrorAction SilentlyContinue
+              Write-Host "Server stopped"
+          } catch {
+              Write-Host "Server already stopped or not running"
+          }
