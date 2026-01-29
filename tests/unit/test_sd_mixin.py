@@ -5,17 +5,27 @@
 
 import base64
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, MagicMock, patch
 
 import pytest
 
 from gaia.agents.sd import SDToolsMixin
 
 
+@pytest.fixture
+def mock_lemonade_client():
+    """Create a mock LemonadeClient for testing."""
+    with patch("gaia.agents.sd.mixin.LemonadeClient") as MockClient:
+        mock_client = MagicMock()
+        MockClient.return_value = mock_client
+        mock_client.base_url = "http://localhost:8000/api/v1"
+        yield mock_client
+
+
 class TestSDToolsMixinInit:
     """Test SDToolsMixin initialization."""
 
-    def test_init_sd_creates_output_directory(self, tmp_path):
+    def test_init_sd_creates_output_directory(self, tmp_path, mock_lemonade_client):
         """Test that init_sd creates the output directory."""
         mixin = SDToolsMixin()
         output_dir = tmp_path / "sd_images"
@@ -25,33 +35,31 @@ class TestSDToolsMixinInit:
         assert output_dir.exists()
         assert mixin.sd_output_dir == output_dir
 
-    def test_init_sd_sets_defaults(self):
+    def test_init_sd_sets_defaults(self, mock_lemonade_client):
         """Test that init_sd sets default values correctly."""
         mixin = SDToolsMixin()
         mixin.init_sd()
 
-        assert mixin.sd_default_model == "SD-Turbo"
-        assert mixin.sd_default_size == "512x512"
+        assert mixin.sd_default_model == "SDXL-Turbo"
+        assert mixin.sd_default_size == "1024x1024"
         assert mixin.sd_default_steps == 4
-        assert mixin.sd_endpoint == "http://localhost:8000/api/v1/images/generations"
 
-    def test_init_sd_custom_config(self, tmp_path):
+    def test_init_sd_custom_config(self, tmp_path, mock_lemonade_client):
         """Test init_sd with custom configuration."""
         mixin = SDToolsMixin()
         mixin.init_sd(
             base_url="http://custom:9000",
             output_dir=str(tmp_path),
-            default_model="SDXL-Turbo",
-            default_size="1024x1024",
+            default_model="SD-Turbo",
+            default_size="512x512",
             default_steps=8,
         )
 
-        assert mixin.sd_endpoint == "http://custom:9000/api/v1/images/generations"
-        assert mixin.sd_default_model == "SDXL-Turbo"
-        assert mixin.sd_default_size == "1024x1024"
+        assert mixin.sd_default_model == "SD-Turbo"
+        assert mixin.sd_default_size == "512x512"
         assert mixin.sd_default_steps == 8
 
-    def test_generations_list_is_instance_level(self):
+    def test_generations_list_is_instance_level(self, mock_lemonade_client):
         """Test that sd_generations is instance-level, not shared."""
         mixin1 = SDToolsMixin()
         mixin2 = SDToolsMixin()
@@ -70,7 +78,7 @@ class TestSDToolsMixinInit:
 class TestSDToolsMixinValidation:
     """Test SDToolsMixin parameter validation."""
 
-    def test_validate_invalid_model(self):
+    def test_validate_invalid_model(self, mock_lemonade_client):
         """Test that invalid model returns error."""
         mixin = SDToolsMixin()
         mixin.init_sd()
@@ -80,7 +88,7 @@ class TestSDToolsMixinValidation:
         assert result["status"] == "error"
         assert "Invalid model" in result["error"]
 
-    def test_validate_invalid_size(self):
+    def test_validate_invalid_size(self, mock_lemonade_client):
         """Test that invalid size returns error."""
         mixin = SDToolsMixin()
         mixin.init_sd()
@@ -105,16 +113,14 @@ class TestSDToolsMixinValidation:
 class TestSDToolsMixinGeneration:
     """Test SDToolsMixin image generation."""
 
-    @patch("gaia.agents.sd.mixin.requests.post")
-    def test_generate_image_success(self, mock_post, tmp_path):
+    def test_generate_image_success(self, tmp_path, mock_lemonade_client):
         """Test successful image generation."""
-        # Mock response with base64 PNG (minimal valid PNG header)
+        # Mock response with base64 PNG
         fake_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100).decode()
-        mock_post.return_value = Mock(
-            status_code=200,
-            json=lambda: {"data": [{"b64_json": fake_png}]},
-        )
-        mock_post.return_value.raise_for_status = Mock()
+        mock_lemonade_client.generate_image.return_value = {
+            "data": [{"b64_json": fake_png}]
+        }
+        mock_lemonade_client.load_model.return_value = {"status": "success"}
 
         mixin = SDToolsMixin()
         mixin.init_sd(output_dir=str(tmp_path))
@@ -123,19 +129,17 @@ class TestSDToolsMixinGeneration:
 
         assert result["status"] == "success"
         assert Path(result["image_path"]).exists()
-        assert result["model"] == "SD-Turbo"
-        assert result["size"] == "512x512"
+        assert result["model"] == "SDXL-Turbo"
+        assert result["size"] == "1024x1024"
         assert "generation_time_ms" in result
 
-    @patch("gaia.agents.sd.mixin.requests.post")
-    def test_generate_image_tracks_history(self, mock_post, tmp_path):
+    def test_generate_image_tracks_history(self, tmp_path, mock_lemonade_client):
         """Test that successful generation is tracked in history."""
         fake_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100).decode()
-        mock_post.return_value = Mock(
-            status_code=200,
-            json=lambda: {"data": [{"b64_json": fake_png}]},
-        )
-        mock_post.return_value.raise_for_status = Mock()
+        mock_lemonade_client.generate_image.return_value = {
+            "data": [{"b64_json": fake_png}]
+        }
+        mock_lemonade_client.load_model.return_value = {"status": "success"}
 
         mixin = SDToolsMixin()
         mixin.init_sd(output_dir=str(tmp_path))
@@ -148,27 +152,13 @@ class TestSDToolsMixinGeneration:
         mixin._generate_image("second image")
         assert len(mixin.sd_generations) == 2
 
-    @patch("gaia.agents.sd.mixin.requests.post")
-    def test_generate_image_connection_error(self, mock_post):
+    def test_generate_image_connection_error(self, mock_lemonade_client):
         """Test handling of connection errors."""
-        import requests
+        from gaia.llm.lemonade_client import LemonadeClientError
 
-        mock_post.side_effect = requests.exceptions.ConnectionError()
-
-        mixin = SDToolsMixin()
-        mixin.init_sd()
-
-        result = mixin._generate_image("test prompt")
-
-        assert result["status"] == "error"
-        assert "Cannot connect" in result["error"]
-
-    @patch("gaia.agents.sd.mixin.requests.post")
-    def test_generate_image_timeout(self, mock_post):
-        """Test handling of timeout errors."""
-        import requests
-
-        mock_post.side_effect = requests.exceptions.Timeout()
+        mock_lemonade_client.load_model.side_effect = LemonadeClientError(
+            "Connection refused"
+        )
 
         mixin = SDToolsMixin()
         mixin.init_sd()
@@ -176,17 +166,15 @@ class TestSDToolsMixinGeneration:
         result = mixin._generate_image("test prompt")
 
         assert result["status"] == "error"
-        assert "timed out" in result["error"]
+        assert "Connection" in result["error"] or "connect" in result["error"].lower()
 
-    @patch("gaia.agents.sd.mixin.requests.post")
-    def test_generate_image_with_seed(self, mock_post, tmp_path):
+    def test_generate_image_with_seed(self, tmp_path, mock_lemonade_client):
         """Test generation with seed parameter."""
         fake_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100).decode()
-        mock_post.return_value = Mock(
-            status_code=200,
-            json=lambda: {"data": [{"b64_json": fake_png}]},
-        )
-        mock_post.return_value.raise_for_status = Mock()
+        mock_lemonade_client.generate_image.return_value = {
+            "data": [{"b64_json": fake_png}]
+        }
+        mock_lemonade_client.load_model.return_value = {"status": "success"}
 
         mixin = SDToolsMixin()
         mixin.init_sd(output_dir=str(tmp_path))
@@ -197,17 +185,37 @@ class TestSDToolsMixinGeneration:
         assert result["seed"] == 42
 
         # Verify seed was passed in request
-        call_args = mock_post.call_args
-        assert call_args[1]["json"]["seed"] == 42
+        call_kwargs = mock_lemonade_client.generate_image.call_args[1]
+        assert call_kwargs["seed"] == 42
+
+    def test_load_model_called_before_generation(self, tmp_path, mock_lemonade_client):
+        """Test that load_model is called before image generation."""
+        fake_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100).decode()
+        mock_lemonade_client.generate_image.return_value = {
+            "data": [{"b64_json": fake_png}]
+        }
+        mock_lemonade_client.load_model.return_value = {"status": "success"}
+
+        mixin = SDToolsMixin()
+        mixin.init_sd(output_dir=str(tmp_path))
+
+        mixin._generate_image("test prompt")
+
+        # Verify load_model was called with the model name
+        mock_lemonade_client.load_model.assert_called()
+        call_args = mock_lemonade_client.load_model.call_args
+        assert call_args[0][0] == "SDXL-Turbo"  # Default model
 
 
 class TestSDToolsMixinHealthCheck:
     """Test SDToolsMixin health check."""
 
-    @patch("gaia.agents.sd.mixin.requests.get")
-    def test_health_check_healthy(self, mock_get):
+    def test_health_check_healthy(self, mock_lemonade_client):
         """Test health check when server is healthy."""
-        mock_get.return_value = Mock(ok=True)
+        mock_lemonade_client.list_sd_models.return_value = [
+            {"id": "SD-Turbo", "labels": ["image"]},
+            {"id": "SDXL-Turbo", "labels": ["image"]},
+        ]
 
         mixin = SDToolsMixin()
         mixin.init_sd()
@@ -216,13 +224,15 @@ class TestSDToolsMixinHealthCheck:
 
         assert health["status"] == "healthy"
         assert "SD-Turbo" in health["models"]
+        assert "SDXL-Turbo" in health["models"]
 
-    @patch("gaia.agents.sd.mixin.requests.get")
-    def test_health_check_unavailable(self, mock_get):
+    def test_health_check_unavailable(self, mock_lemonade_client):
         """Test health check when server is unavailable."""
-        import requests
+        from gaia.llm.lemonade_client import LemonadeClientError
 
-        mock_get.side_effect = requests.exceptions.ConnectionError()
+        mock_lemonade_client.list_sd_models.side_effect = LemonadeClientError(
+            "Connection refused"
+        )
 
         mixin = SDToolsMixin()
         mixin.init_sd()
@@ -232,11 +242,23 @@ class TestSDToolsMixinHealthCheck:
         assert health["status"] == "unavailable"
         assert "error" in health
 
+    def test_health_check_no_models(self, mock_lemonade_client):
+        """Test health check when no SD models available."""
+        mock_lemonade_client.list_sd_models.return_value = []
+
+        mixin = SDToolsMixin()
+        mixin.init_sd()
+
+        health = mixin.sd_health_check()
+
+        assert health["status"] == "unavailable"
+        assert "No SD models" in health["error"]
+
 
 class TestSDToolsMixinSaveImage:
     """Test SDToolsMixin image saving."""
 
-    def test_save_image_creates_file(self, tmp_path):
+    def test_save_image_creates_file(self, tmp_path, mock_lemonade_client):
         """Test that _save_image creates a file."""
         mixin = SDToolsMixin()
         mixin.init_sd(output_dir=str(tmp_path))
@@ -249,7 +271,7 @@ class TestSDToolsMixinSaveImage:
         assert "test_prompt" in path.stem
         assert "SD-Turbo" in path.stem
 
-    def test_save_image_sanitizes_filename(self, tmp_path):
+    def test_save_image_sanitizes_filename(self, tmp_path, mock_lemonade_client):
         """Test that special characters are removed from filename."""
         mixin = SDToolsMixin()
         mixin.init_sd(output_dir=str(tmp_path))

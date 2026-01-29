@@ -1601,6 +1601,105 @@ class LemonadeClient:
             self.log.error(f"Error generating embeddings: {str(e)}")
             raise LemonadeClientError(f"Error generating embeddings: {str(e)}")
 
+    # =========================================================================
+    # Image Generation (Stable Diffusion)
+    # =========================================================================
+
+    # Supported SD configurations
+    SD_MODELS = ["SD-Turbo", "SDXL-Turbo"]
+    SD_SIZES = ["512x512", "768x768", "1024x1024"]
+
+    def generate_image(
+        self,
+        prompt: str,
+        model: str = "SD-Turbo",
+        size: str = "512x512",
+        steps: int = 4,
+        seed: Optional[int] = None,
+        timeout: int = 120,
+    ) -> Dict[str, Any]:
+        """
+        Generate an image from a text prompt using Stable Diffusion.
+
+        Args:
+            prompt: Text description of the image to generate
+            model: SD model to use (SD-Turbo or SDXL-Turbo)
+            size: Image dimensions (512x512, 768x768, or 1024x1024)
+            steps: Number of inference steps (4 recommended for Turbo models)
+            seed: Random seed for reproducibility (optional)
+            timeout: Request timeout in seconds (default: 120)
+
+        Returns:
+            Dict with 'data' containing list of generated images in b64_json format
+
+        Raises:
+            LemonadeClientError: If generation fails or invalid parameters
+
+        Example:
+            result = client.generate_image(
+                prompt="a sunset over mountains, golden hour, 4k",
+                model="SDXL-Turbo",
+                size="1024x1024",
+                seed=42
+            )
+            image_b64 = result["data"][0]["b64_json"]
+        """
+        # Validate parameters
+        if model not in self.SD_MODELS:
+            raise LemonadeClientError(
+                f"Invalid model '{model}'. Choose from: {self.SD_MODELS}"
+            )
+        if size not in self.SD_SIZES:
+            raise LemonadeClientError(
+                f"Invalid size '{size}'. Choose from: {self.SD_SIZES}"
+            )
+
+        try:
+            payload = {
+                "prompt": prompt,
+                "model": model,
+                "size": size,
+                "n": 1,
+                "response_format": "b64_json",
+            }
+            if seed is not None:
+                payload["seed"] = seed
+
+            self.log.info(f"Generating image: prompt='{prompt[:50]}...', model={model}")
+            url = f"{self.base_url}/images/generations"
+            response = self._send_request("POST", url, data=payload, timeout=timeout)
+
+            return response
+
+        except LemonadeClientError:
+            raise
+        except Exception as e:
+            self.log.error(f"Error generating image: {str(e)}")
+            raise LemonadeClientError(f"Error generating image: {str(e)}")
+
+    def list_sd_models(self) -> List[Dict[str, Any]]:
+        """
+        List available Stable Diffusion models from the server.
+
+        Returns:
+            List of SD model info dicts with id, labels, and image_defaults
+
+        Example:
+            sd_models = client.list_sd_models()
+            for m in sd_models:
+                print(f"{m['id']}: {m.get('image_defaults', {})}")
+        """
+        try:
+            models = self.list_models()
+            sd_models = [
+                m for m in models.get("data", [])
+                if m.get("id") in self.SD_MODELS or "image" in m.get("labels", [])
+            ]
+            return sd_models
+        except Exception as e:
+            self.log.error(f"Error listing SD models: {str(e)}")
+            raise LemonadeClientError(f"Error listing SD models: {str(e)}")
+
     def list_models(self, show_all: bool = False) -> Dict[str, Any]:
         """
         List available models from the server.

@@ -1008,14 +1008,14 @@ def main():
         "--sd-model",
         dest="sd_model",
         choices=["SD-Turbo", "SDXL-Turbo"],
-        default="SD-Turbo",
-        help="Stable Diffusion model to use (default: SD-Turbo)",
+        default="SDXL-Turbo",
+        help="Stable Diffusion model to use (default: SDXL-Turbo)",
     )
     sd_parser.add_argument(
         "--size",
         choices=["512x512", "768x768", "1024x1024"],
-        default="512x512",
-        help="Image size (default: 512x512)",
+        default="1024x1024",
+        help="Image size (default: 1024x1024)",
     )
     sd_parser.add_argument(
         "--output-dir",

@@ -25,15 +25,15 @@ Example:
 
 import base64
 import hashlib
-import logging
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import requests
+from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SDToolsMixin:
@@ -46,7 +46,7 @@ class SDToolsMixin:
     - get_generation_history: Get recent generations from this session
 
     Attributes:
-        sd_endpoint: URL to Lemonade Server SD API
+        sd_client: LemonadeClient instance for API calls
         sd_output_dir: Directory to save generated images
         sd_default_model: Default model (SD-Turbo or SDXL-Turbo)
         sd_generations: List of generations from this session
@@ -57,7 +57,7 @@ class SDToolsMixin:
     SD_SIZES = ["512x512", "768x768", "1024x1024"]
 
     # Instance state (initialized by init_sd)
-    sd_endpoint: str
+    sd_client: LemonadeClient
     sd_output_dir: Path
     sd_default_model: str
     sd_default_size: str
@@ -68,8 +68,8 @@ class SDToolsMixin:
         self,
         base_url: str = "http://localhost:8000",
         output_dir: Optional[str] = None,
-        default_model: str = "SD-Turbo",
-        default_size: str = "512x512",
+        default_model: str = "SDXL-Turbo",
+        default_size: str = "1024x1024",
         default_steps: int = 4,
     ) -> None:
         """
@@ -89,7 +89,9 @@ class SDToolsMixin:
                 default_model="SDXL-Turbo",
             )
         """
-        self.sd_endpoint = f"{base_url}/api/v1/images/generations"
+        # Create LemonadeClient for API calls
+        self.sd_client = LemonadeClient(base_url=base_url, verbose=False)
+
         self.sd_output_dir = Path(output_dir) if output_dir else Path(".gaia/cache/sd/images")
         self.sd_output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -98,7 +100,7 @@ class SDToolsMixin:
         self.sd_default_steps = default_steps
         self.sd_generations = []  # Instance-level list for session history
 
-        logger.info(f"SD tools initialized: endpoint={self.sd_endpoint}, output={self.sd_output_dir}")
+        logger.info(f"SD tools initialized: endpoint={self.sd_client.base_url}/images/generations, output={self.sd_output_dir}")
 
     def register_sd_tools(self) -> None:
         """Register Stable Diffusion image generation tools."""
@@ -220,6 +222,8 @@ class SDToolsMixin:
         Returns:
             Dict with image_path, prompt, model, size, seed, and generation_time_ms
         """
+        import time
+
         # Apply defaults
         model = model or self.sd_default_model
         size = size or self.sd_default_size
@@ -237,40 +241,37 @@ class SDToolsMixin:
                 "error": f"Invalid size '{size}'. Choose from: {self.SD_SIZES}",
             }
 
-        # Build request payload
-        payload = {
-            "prompt": prompt,
-            "model": model,
-            "size": size,
-            "n": 1,
-            "response_format": "b64_json",
-        }
-        if seed is not None:
-            payload["seed"] = seed
-
         logger.info(f"Generating image: prompt='{prompt[:50]}...', model={model}, size={size}")
 
         try:
-            import time
+            # Ensure model is loaded before generation
+            logger.info(f"Loading SD model: {model}")
+            try:
+                self.sd_client.load_model(model, auto_download=True, prompt=False, timeout=600)
+            except LemonadeClientError as e:
+                # Model might already be loaded, continue
+                if "already loaded" not in str(e).lower():
+                    logger.warning(f"Model load warning: {e}")
 
             start_time = time.time()
 
-            # Call Lemonade Server SD endpoint
-            response = requests.post(
-                self.sd_endpoint,
-                json=payload,
-                timeout=120,  # SD generation can take time
+            # Use LemonadeClient to generate image
+            response = self.sd_client.generate_image(
+                prompt=prompt,
+                model=model,
+                size=size,
+                steps=steps,
+                seed=seed,
+                timeout=120,
             )
-            response.raise_for_status()
 
             generation_time_ms = int((time.time() - start_time) * 1000)
 
             # Parse response
-            data = response.json()
-            image_b64 = data["data"][0]["b64_json"]
+            image_b64 = response["data"][0]["b64_json"]
             image_bytes = base64.b64decode(image_b64)
 
-            # Generate filename
+            # Generate filename and save
             image_path = self._save_image(prompt, image_bytes, model)
 
             # Compute hash for deduplication
@@ -300,18 +301,10 @@ class SDToolsMixin:
             logger.info(f"Image generated: {image_path} ({generation_time_ms}ms)")
             return result
 
-        except requests.exceptions.ConnectionError:
-            error_msg = f"Cannot connect to Lemonade Server at {self.sd_endpoint}. Is it running?"
-            logger.error(error_msg)
-            return {"status": "error", "error": error_msg}
-
-        except requests.exceptions.Timeout:
-            error_msg = "Image generation timed out after 120 seconds"
-            logger.error(error_msg)
-            return {"status": "error", "error": error_msg}
-
-        except requests.exceptions.HTTPError as e:
-            error_msg = f"SD endpoint error: {e.response.status_code} - {e.response.text}"
+        except LemonadeClientError as e:
+            error_msg = str(e)
+            if "Connection" in error_msg or "connect" in error_msg.lower():
+                error_msg = f"Cannot connect to Lemonade Server. Is it running?"
             logger.error(error_msg)
             return {"status": "error", "error": error_msg}
 
@@ -350,23 +343,30 @@ class SDToolsMixin:
             Dict with status, endpoint, and available models
         """
         try:
-            # Simple health check - try to reach the server
-            response = requests.get(
-                self.sd_endpoint.replace("/api/v1/images/generations", "/health"),
-                timeout=5,
-            )
-            if response.ok:
+            # Use LemonadeClient to list SD models
+            sd_models = self.sd_client.list_sd_models()
+            if sd_models:
                 return {
                     "status": "healthy",
-                    "endpoint": self.sd_endpoint,
-                    "models": self.SD_MODELS,
+                    "endpoint": f"{self.sd_client.base_url}/images/generations",
+                    "models": [m["id"] for m in sd_models],
                     "output_dir": str(self.sd_output_dir),
                 }
+            else:
+                return {
+                    "status": "unavailable",
+                    "endpoint": f"{self.sd_client.base_url}/images/generations",
+                    "error": "No SD models available. Download with: lemonade-server serve --model SD-Turbo",
+                }
+        except LemonadeClientError as e:
+            return {
+                "status": "unavailable",
+                "endpoint": f"{self.sd_client.base_url}/images/generations",
+                "error": str(e),
+            }
         except Exception:
-            pass
-
-        return {
-            "status": "unavailable",
-            "endpoint": self.sd_endpoint,
-            "error": "Cannot connect to Lemonade Server",
-        }
+            return {
+                "status": "unavailable",
+                "endpoint": f"{self.sd_client.base_url}/images/generations",
+                "error": "Cannot connect to Lemonade Server",
+            }
