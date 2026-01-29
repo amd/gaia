@@ -803,7 +803,7 @@ class AgentConsole(OutputHandler):
         else:
             print(f"\n✅ SUCCESS: {message}\n")
 
-    def print_image(self, image_path: str, caption: str = None, prompt_to_open: bool = True) -> None:
+    def print_image(self, image_path: str, caption: str = None, prompt_to_open: bool = False) -> None:
         """
         Display an image in terminal and optionally prompt to open in viewer.
 
@@ -837,8 +837,9 @@ class AgentConsole(OutputHandler):
                 except Exception:
                     pass
 
-                # Set size to fit terminal (80 columns = reasonable width)
-                img.set_size(columns=80)
+                # Set size maintaining aspect ratio
+                # Terminal characters are ~2:1 (height:width), so use fit_to_width
+                img.set_size(columns=60, fit_to_width=True)
 
                 # Render the image
                 if caption:
@@ -864,9 +865,20 @@ class AgentConsole(OutputHandler):
                 # Fallback to rich-pixels for broader compatibility
                 try:
                     from rich_pixels import Pixels
+                    from PIL import Image
 
-                    # Use larger size for better preview
-                    pixels = Pixels.from_image_path(str(path), resize=(120, 60))
+                    # Load image to check dimensions
+                    pil_img = Image.open(path)
+                    img_width, img_height = pil_img.size
+
+                    # Terminal characters are roughly 2:1 (height:width)
+                    # To display square image without distortion:
+                    # If we want 60 rows tall, we need ~30 columns wide
+                    target_height = 60
+                    target_width = int(target_height * (img_width / img_height) * 0.5)
+
+                    # Resize to these dimensions maintaining aspect
+                    pixels = Pixels.from_image_path(str(path), resize=(target_width, target_height))
 
                     if caption:
                         self.console.print(

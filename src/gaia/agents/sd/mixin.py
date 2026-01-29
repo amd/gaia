@@ -362,7 +362,7 @@ class SDToolsMixin:
                 console.print_image(
                     str(image_path),
                     caption=f"{model} • {size} • {steps} steps",
-                    prompt_to_open=True  # Prompt user to open in viewer
+                    prompt_to_open=False  # Don't prompt yet
                 )
 
             # Show success message after image
@@ -372,6 +372,19 @@ class SDToolsMixin:
                     f"Image generated in {time_str}\n"
                     f"Saved: {Path(image_path).absolute()}"
                 )
+
+            # Prompt to open in default viewer after success message
+            import sys
+            import os
+            if console and sys.platform == "win32":
+                try:
+                    response = input("\nOpen image in default viewer? [Y/n]: ").strip().lower()
+                    if response in ("", "y", "yes"):
+                        os.startfile(str(image_path))
+                        if console.rich_available:
+                            console.console.print("[dim]Image opened in default viewer[/dim]\n")
+                except (KeyboardInterrupt, EOFError):
+                    pass  # User cancelled
 
             logger.debug(f"Image generated: {image_path} ({generation_time_ms}ms)")
             return result
