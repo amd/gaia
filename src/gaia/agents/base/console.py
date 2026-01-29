@@ -223,6 +223,7 @@ class ProgressIndicator:
         self.rich_spinner = None
         self.show_timer = show_timer
         self.start_time = None
+        self._update_timer_thread = None  # Timer update thread
         if RICH_AVAILABLE:
             self.rich_spinner = Spinner("dots", text=message)
             self.live = None
@@ -291,7 +292,9 @@ class ProgressIndicator:
 
                 # Update with timer if enabled
                 if self.show_timer:
-                    self._update_timer_thread = threading.Thread(target=self._update_timer)
+                    self._update_timer_thread = threading.Thread(
+                        target=self._update_timer
+                    )
                     self._update_timer_thread.daemon = True
                     self._update_timer_thread.start()
         else:
@@ -319,7 +322,7 @@ class ProgressIndicator:
         self.is_running = False
 
         # Stop timer thread if running
-        if RICH_AVAILABLE and hasattr(self, '_update_timer_thread'):
+        if RICH_AVAILABLE and hasattr(self, "_update_timer_thread"):
             try:
                 self._update_timer_thread.join(timeout=0.5)
             except Exception:
@@ -835,7 +838,9 @@ class AgentConsole(OutputHandler):
         else:
             print(f"\n✅ SUCCESS: {message}\n")
 
-    def print_image(self, image_path: str, caption: str = None, prompt_to_open: bool = False) -> None:
+    def print_image(
+        self, image_path: str, caption: str = None, prompt_to_open: bool = False
+    ) -> None:
         """
         Display an image in terminal and optionally prompt to open in viewer.
 
@@ -856,14 +861,13 @@ class AgentConsole(OutputHandler):
             try:
                 # Try term-image with Sixel protocol for full resolution
                 # Sixel works in: Windows Terminal Preview, iTerm2, Kitty, WezTerm, etc.
-                from term_image.image import from_file, AutoImage
+                from term_image.image import from_file
 
                 # Load image with auto-detected best protocol
                 img = from_file(str(path))
 
                 # Try to enable Sixel if supported
                 try:
-                    from term_image.image import ImageIterator
                     # Set render method to auto-detect best available (Sixel, Kitty, iTerm2)
                     img.set_render_method("auto")
                 except Exception:
@@ -884,20 +888,22 @@ class AgentConsole(OutputHandler):
                             border_style="cyan",
                             padding=(0, 0),
                         ),
-                        justify="center"
+                        justify="center",
                     )
                 else:
                     # Print image directly with centering
                     # Note: term-image returns ANSI escape codes with actual image data
-                    print(str(img))  # Use plain print to avoid Rich interfering with image codes
+                    print(
+                        str(img)
+                    )  # Use plain print to avoid Rich interfering with image codes
 
                 self.console.print()
 
-            except (ImportError, Exception) as e:
+            except (ImportError, Exception):
                 # Fallback to rich-pixels for broader compatibility
                 try:
-                    from rich_pixels import Pixels
                     from PIL import Image
+                    from rich_pixels import Pixels
 
                     # Load image to check dimensions
                     pil_img = Image.open(path)
@@ -912,7 +918,9 @@ class AgentConsole(OutputHandler):
                     target_width = int(target_height * 2.0 * aspect_ratio)  # columns
 
                     # Resize to these dimensions maintaining aspect
-                    pixels = Pixels.from_image_path(str(path), resize=(target_width, target_height))
+                    pixels = Pixels.from_image_path(
+                        str(path), resize=(target_width, target_height)
+                    )
 
                     if caption:
                         self.console.print(
@@ -922,7 +930,7 @@ class AgentConsole(OutputHandler):
                                 border_style="cyan",
                                 padding=(0, 0),
                             ),
-                            justify="center"
+                            justify="center",
                         )
                     else:
                         self.console.print(pixels, justify="center")
@@ -939,19 +947,27 @@ class AgentConsole(OutputHandler):
 
                         if caption:
                             self.console.print(
-                                Panel(info, title=f"🖼️  {caption}", border_style="cyan"),
-                                justify="center"
+                                Panel(
+                                    info, title=f"🖼️  {caption}", border_style="cyan"
+                                ),
+                                justify="center",
                             )
                         else:
-                            self.console.print(Panel(info, border_style="cyan"), justify="center")
+                            self.console.print(
+                                Panel(info, border_style="cyan"), justify="center"
+                            )
                     except Exception:
                         # Fallback to just showing the path
-                        self.console.print(f"[cyan]🖼️  Image: {path}[/cyan]", justify="center")
+                        self.console.print(
+                            f"[cyan]🖼️  Image: {path}[/cyan]", justify="center"
+                        )
 
             # Prompt to open in default viewer
             if prompt_to_open and sys.platform == "win32":
                 try:
-                    response = input("\nOpen image in default viewer? [Y/n]: ").strip().lower()
+                    response = (
+                        input("\nOpen image in default viewer? [Y/n]: ").strip().lower()
+                    )
                     if response in ("", "y", "yes"):
                         os.startfile(str(path))
                 except (KeyboardInterrupt, EOFError):

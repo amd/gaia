@@ -223,6 +223,7 @@ class SDToolsMixin:
         steps: Optional[int] = None,
         cfg_scale: Optional[float] = None,
         seed: Optional[int] = None,
+        prompt_open: bool = True,
     ) -> Dict[str, Any]:
         """
         Internal method to generate an image via Lemonade Server SD endpoint.
@@ -234,6 +235,7 @@ class SDToolsMixin:
             steps: Inference steps (defaults to sd_default_steps)
             cfg_scale: CFG scale (defaults to sd_default_cfg, 0.0 for Turbo models)
             seed: Random seed for reproducibility
+            prompt_open: If True, prompt to open image in viewer (default: True)
 
         Returns:
             Dict with image_path, prompt, model, size, seed, and generation_time_ms
@@ -253,9 +255,7 @@ class SDToolsMixin:
                 "error": f"Invalid model '{model}'. Choose from: {self.SD_MODELS}",
             }
 
-        # Apply model-specific defaults from LemonadeClient if still None
-        from gaia.llm.lemonade_client import LemonadeClient
-
+        # Apply model-specific defaults if still None
         model_defaults = LemonadeClient.SD_MODEL_DEFAULTS.get(model, {})
         size = size or model_defaults.get("size", "512x512")
         steps = steps if steps is not None else model_defaults.get("steps", 20)
@@ -306,7 +306,9 @@ class SDToolsMixin:
 
             # Start progress for generation with timer
             if console and hasattr(console, "start_progress"):
-                console.start_progress(f"Generating image ({steps} steps)...", show_timer=True)
+                console.start_progress(
+                    f"Generating image ({steps} steps)...", show_timer=True
+                )
 
             start_time = time.time()
 
@@ -361,58 +363,70 @@ class SDToolsMixin:
             )
 
             # Display the image in terminal first if supported
-            if console and hasattr(console, 'print_image'):
+            if console and hasattr(console, "print_image"):
                 console.print_image(
                     str(image_path),
                     caption=f"{model} • {size} • {steps} steps",
-                    prompt_to_open=False  # Don't prompt yet
+                    prompt_to_open=False,  # Don't prompt yet
                 )
 
             # Show success message after image
-            if console and hasattr(console, 'print_success'):
-                time_str = f"{generation_time_ms / 1000:.1f}s" if generation_time_ms < 60000 else f"{generation_time_ms / 60000:.1f}m"
+            if console and hasattr(console, "print_success"):
+                time_str = (
+                    f"{generation_time_ms / 1000:.1f}s"
+                    if generation_time_ms < 60000
+                    else f"{generation_time_ms / 60000:.1f}m"
+                )
                 console.print_success(
                     f"Image generated in {time_str}\n"
                     f"Saved: {Path(image_path).absolute()}"
                 )
 
-            # Prompt to open in default viewer after success message
-            import sys
-            import os
-            if console and sys.platform == "win32":
-                try:
-                    response = input("\nOpen image in default viewer? [Y/n]: ").strip().lower()
-                    if response in ("", "y", "yes"):
-                        os.startfile(str(image_path))
-                        if console.rich_available:
-                            console.console.print("[dim]Image opened in default viewer[/dim]\n")
-                except (KeyboardInterrupt, EOFError):
-                    pass  # User cancelled
+            # Prompt to open in default viewer after success message (if not disabled)
+            if prompt_open:
+                import os
+                import sys
+
+                if console and sys.platform == "win32":
+                    try:
+                        response = (
+                            input("\nOpen image in default viewer? [Y/n]: ")
+                            .strip()
+                            .lower()
+                        )
+                        if response in ("", "y", "yes"):
+                            os.startfile(str(image_path))
+                            if console.rich_available:
+                                console.console.print(
+                                    "[dim]Image opened in default viewer[/dim]\n"
+                                )
+                    except (KeyboardInterrupt, EOFError):
+                        pass  # User cancelled
 
             logger.debug(f"Image generated: {image_path} ({generation_time_ms}ms)")
             return result
 
         except LemonadeClientError as e:
-            if console and hasattr(console, 'stop_progress'):
+            if console and hasattr(console, "stop_progress"):
                 console.stop_progress()
 
             error_msg = str(e)
             if "Connection" in error_msg or "connect" in error_msg.lower():
-                error_msg = f"Cannot connect to Lemonade Server. Is it running?"
+                error_msg = "Cannot connect to Lemonade Server. Is it running?"
 
-            if console and hasattr(console, 'print_error'):
+            if console and hasattr(console, "print_error"):
                 console.print_error(error_msg)
 
             logger.error(error_msg)
             return {"status": "error", "error": error_msg}
 
         except Exception as e:
-            if console and hasattr(console, 'stop_progress'):
+            if console and hasattr(console, "stop_progress"):
                 console.stop_progress()
 
             error_msg = f"Image generation failed: {str(e)}"
 
-            if console and hasattr(console, 'print_error'):
+            if console and hasattr(console, "print_error"):
                 console.print_error(error_msg)
 
             logger.error(error_msg, exc_info=True)
@@ -483,7 +497,7 @@ class SDToolsMixin:
                 return {
                     "status": "unavailable",
                     "endpoint": f"{self.sd_client.base_url}/images/generations",
-                    "error": "No SD models available. Download with: lemonade-server serve --model SD-Turbo",
+                    "error": "No SD models available. Download with: lemonade-server pull SD-Turbo",
                 }
         except LemonadeClientError as e:
             return {

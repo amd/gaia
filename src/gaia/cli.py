@@ -1037,6 +1037,11 @@ def main():
         type=int,
         help="Random seed for reproducibility",
     )
+    sd_parser.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Skip prompt to open image in viewer (for automation/scripting)",
+    )
 
     # Add Jira app command
     jira_parser = subparsers.add_parser(
@@ -4966,7 +4971,6 @@ def handle_sd_command(args):
         print("  gaia sd -i")
         return
 
-    from gaia.agents.base.console import AgentConsole
     from gaia.agents.sd import SDToolsMixin
 
     # Create mixin instance for direct usage
@@ -5009,7 +5013,9 @@ def handle_sd_command(args):
                     print("Goodbye!")
                     break
 
-                result = sd._generate_image(prompt, seed=args.seed)
+                result = sd._generate_image(  # pylint: disable=protected-access
+                    prompt, seed=args.seed, prompt_open=not args.no_open
+                )
 
                 if result["status"] != "success":
                     # Error already shown by console
@@ -5021,7 +5027,9 @@ def handle_sd_command(args):
 
     # Single prompt mode
     else:
-        result = sd._generate_image(args.prompt, seed=args.seed)
+        result = sd._generate_image(  # pylint: disable=protected-access
+            args.prompt, seed=args.seed, prompt_open=not args.no_open
+        )
 
         if result["status"] != "success":
             # Error already shown by console
