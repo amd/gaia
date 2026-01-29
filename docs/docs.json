@@ -310,10 +310,13 @@
           {
             "group": "Plans",
             "pages": [
+              "plans/agent-hub",
               "plans/installer",
               "plans/chat-ui",
               "plans/mcp-client",
               "plans/cua",
+              "plans/docker-containers",
+              "plans/image-agent",
               "plans/mcp-docs"
             ]
           }

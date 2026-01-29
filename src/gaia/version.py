@@ -9,7 +9,7 @@ from importlib.metadata import version as get_package_version_metadata
 __version__ = "0.15.2"
 
 # Lemonade version used across CI and installer
-LEMONADE_VERSION = "9.1.4"
+LEMONADE_VERSION = "9.2.0"
 
 
 def get_package_version() -> str:

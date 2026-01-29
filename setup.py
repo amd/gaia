@@ -44,6 +44,7 @@ setup(
         "gaia.mcp.servers",
         "gaia.agents",
         "gaia.agents.base",
+        "gaia.agents.tools",
         "gaia.agents.blender",
         "gaia.agents.blender.core",
         "gaia.agents.chat",
