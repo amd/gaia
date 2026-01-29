@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SD Agent - UI Mockup</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #0f0f0f;
+            color: #e5e5e5;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* AMD Color Palette */
+        :root {
+            --amd-red: #ED1C24;
+            --amd-red-light: #F4484D;
+            --amd-red-dark: #C8171E;
+            --bg-dark: #0f0f0f;
+            --bg-darker: #1a1a1a;
+            --bg-card: #2d2d2d;
+            --text-primary: #e5e5e5;
+            --text-secondary: #999;
+            --border: #333;
+        }
+
+        /* Layout */
+        .container {
+            display: grid;
+            grid-template-columns: 400px 1fr;
+            grid-template-rows: 60px 1fr;
+            height: 100vh;
+            gap: 0;
+        }
+
+        /* Header */
+        .header {
+            grid-column: 1 / -1;
+            background: var(--bg-darker);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: var(--amd-red);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 12px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+            color: var(--text-primary);
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .btn:hover {
+            background: #3a3a3a;
+            border-color: var(--amd-red);
+        }
+
+        .btn-primary {
+            background: var(--amd-red);
+            border-color: var(--amd-red);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--amd-red-dark);
+        }
+
+        /* Chat Sidebar */
+        .chat-sidebar {
+            background: var(--bg-darker);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .chat-header {
+            padding: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .chat-header h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .chat-status {
+            font-size: 12px;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #22c55e;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .message {
+            display: flex;
+            gap: 12px;
+        }
+
+        .message.user {
+            flex-direction: row-reverse;
+        }
+
+        .message-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: var(--amd-red);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .message.user .message-avatar {
+            background: #3b82f6;
+        }
+
+        .message-content {
+            background: var(--bg-card);
+            padding: 12px;
+            border-radius: 12px;
+            max-width: 80%;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .message.user .message-content {
+            background: #3b82f6;
+        }
+
+        .message-image {
+            margin-top: 8px;
+            border-radius: 8px;
+            overflow: hidden;
+            cursor: pointer;
+        }
+
+        .message-image img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .chat-input-container {
+            padding: 16px;
+            border-top: 1px solid var(--border);
+        }
+
+        .chat-input {
+            display: flex;
+            gap: 8px;
+            background: var(--bg-card);
+            border-radius: 8px;
+            padding: 8px;
+            border: 1px solid var(--border);
+        }
+
+        .chat-input:focus-within {
+            border-color: var(--amd-red);
+        }
+
+        .chat-input input {
+            flex: 1;
+            background: none;
+            border: none;
+            color: var(--text-primary);
+            font-size: 14px;
+            outline: none;
+        }
+
+        .chat-input button {
+            background: var(--amd-red);
+            border: none;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        /* Gallery */
+        .gallery {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .gallery-toolbar {
+            padding: 16px 24px;
+            background: var(--bg-darker);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .search-bar {
+            flex: 1;
+            max-width: 500px;
+            position: relative;
+        }
+
+        .search-bar input {
+            width: 100%;
+            padding: 10px 40px 10px 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+
+        .search-bar input:focus {
+            outline: none;
+            border-color: var(--amd-red);
+        }
+
+        .search-icon {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-secondary);
+        }
+
+        .filters {
+            display: flex;
+            gap: 8px;
+        }
+
+        .filter-btn {
+            padding: 8px 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .filter-btn:hover,
+        .filter-btn.active {
+            border-color: var(--amd-red);
+            background: rgba(237, 28, 36, 0.1);
+        }
+
+        .gallery-stats {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 12px 24px;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .gallery-grid {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 20px;
+            align-content: start;
+        }
+
+        .gallery-item {
+            background: var(--bg-card);
+            border-radius: 12px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 2px solid transparent;
+        }
+
+        .gallery-item:hover {
+            transform: translateY(-4px);
+            border-color: var(--amd-red);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+        }
+
+        .gallery-item-image {
+            width: 100%;
+            aspect-ratio: 1;
+            object-fit: cover;
+            background: #1a1a1a;
+        }
+
+        .gallery-item-info {
+            padding: 12px;
+        }
+
+        .gallery-item-prompt {
+            font-size: 13px;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .gallery-item-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .rating {
+            display: flex;
+            gap: 2px;
+        }
+
+        .star {
+            color: #666;
+        }
+
+        .star.filled {
+            color: #fbbf24;
+        }
+
+        .favorite {
+            color: #666;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .favorite.active {
+            color: var(--amd-red);
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--bg-darker);
+            border-radius: 16px;
+            max-width: 1200px;
+            width: 100%;
+            max-height: 90vh;
+            overflow: hidden;
+            display: grid;
+            grid-template-columns: 1fr 400px;
+        }
+
+        .modal-image-container {
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+        }
+
+        .modal-image {
+            max-width: 100%;
+            max-height: 100%;
+            border-radius: 8px;
+        }
+
+        .modal-sidebar {
+            background: var(--bg-darker);
+            border-left: 1px solid var(--border);
+            overflow-y: auto;
+            padding: 24px;
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 40px;
+            height: 40px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 24px;
+            color: var(--text-primary);
+            transition: all 0.2s;
+        }
+
+        .modal-close:hover {
+            background: var(--amd-red);
+            border-color: var(--amd-red);
+        }
+
+        .modal-section {
+            margin-bottom: 24px;
+        }
+
+        .modal-section h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .rating-interactive {
+            display: flex;
+            gap: 8px;
+            font-size: 24px;
+        }
+
+        .rating-interactive .star {
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .rating-interactive .star:hover,
+        .rating-interactive .star.filled {
+            color: #fbbf24;
+            transform: scale(1.1);
+        }
+
+        .param-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+
+        .param-item {
+            background: var(--bg-card);
+            padding: 12px;
+            border-radius: 8px;
+        }
+
+        .param-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+
+        .param-value {
+            font-size: 14px;
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+
+        .tags-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .tag {
+            padding: 6px 12px;
+            background: rgba(237, 28, 36, 0.2);
+            border: 1px solid var(--amd-red);
+            border-radius: 20px;
+            font-size: 12px;
+            color: var(--amd-red);
+        }
+
+        .notes-textarea {
+            width: 100%;
+            min-height: 100px;
+            padding: 12px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 14px;
+            font-family: inherit;
+            resize: vertical;
+        }
+
+        .notes-textarea:focus {
+            outline: none;
+            border-color: var(--amd-red);
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 8px;
+            margin-top: 16px;
+        }
+
+        .btn-block {
+            flex: 1;
+            text-align: center;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-darker);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--bg-card);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #3a3a3a;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="container">
+        <div class="header">
+            <div class="logo">
+                <div class="logo-icon">SD</div>
+                <span>SD Agent</span>
+            </div>
+            <div class="header-actions">
+                <button class="btn">Templates</button>
+                <button class="btn">History</button>
+                <button class="btn-primary btn">+ New Generation</button>
+            </div>
+        </div>
+
+        <!-- Chat Sidebar -->
+        <div class="chat-sidebar">
+            <div class="chat-header">
+                <h2>Chat with SD Agent</h2>
+                <div class="chat-status">
+                    <span class="status-dot"></span>
+                    <span>Ready to generate</span>
+                </div>
+            </div>
+
+            <div class="chat-messages">
+                <div class="message agent">
+                    <div class="message-avatar">SD</div>
+                    <div class="message-content">
+                        Hi! I'm your SD Agent. Describe what you'd like to create, and I'll optimize the prompt and parameters for the best results. 🎨
+                    </div>
+                </div>
+
+                <div class="message user">
+                    <div class="message-avatar">You</div>
+                    <div class="message-content">
+                        Create a cyberpunk city at night
+                    </div>
+                </div>
+
+                <div class="message agent">
+                    <div class="message-avatar">SD</div>
+                    <div class="message-content">
+                        Great idea! I'll enhance your prompt and optimize the parameters for a cyberpunk aesthetic.
+                        <br><br>
+                        <strong>Enhanced Prompt:</strong><br>
+                        "A cyberpunk city at night, neon lights, purple and blue glow, towering skyscrapers with holographic advertisements, rainy streets with reflections, flying cars, dense urban environment, cinematic lighting, detailed architecture, blade runner inspired, high quality, 4k"
+                        <br><br>
+                        <strong>Recommended Parameters:</strong><br>
+                        • Model: SDXL-Turbo<br>
+                        • Size: 1024x1024<br>
+                        • Steps: 8<br>
+                        • CFG Scale: 1.5<br>
+                        <br>
+                        Generating...
+                        <div class="message-image">
+                            <img src="https://via.placeholder.com/300x300/1a1a1a/ED1C24?text=Cyberpunk+City" alt="Generated">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chat-input-container">
+                <div class="chat-input">
+                    <input type="text" placeholder="Describe what you want to create...">
+                    <button>Send</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Gallery -->
+        <div class="gallery">
+            <div class="gallery-toolbar">
+                <div class="search-bar">
+                    <input type="text" placeholder="Search with natural language: 'show me all cyberpunk images'">
+                    <span class="search-icon">🔍</span>
+                </div>
+                <div class="filters">
+                    <button class="filter-btn active">All</button>
+                    <button class="filter-btn">Favorites</button>
+                    <button class="filter-btn">Top Rated</button>
+                    <button class="filter-btn">SD-Turbo</button>
+                    <button class="filter-btn">SDXL-Turbo</button>
+                </div>
+            </div>
+
+            <div class="gallery-stats">
+                <div class="stat-item">
+                    <span>📊</span>
+                    <span>248 total generations</span>
+                </div>
+                <div class="stat-item">
+                    <span>⭐</span>
+                    <span>42 favorites</span>
+                </div>
+                <div class="stat-item">
+                    <span>🎯</span>
+                    <span>Avg quality: 8.2/10</span>
+                </div>
+            </div>
+
+            <div class="gallery-grid">
+                <!-- Gallery Item 1 -->
+                <div class="gallery-item" onclick="openModal()">
+                    <img class="gallery-item-image" src="https://via.placeholder.com/280x280/1a1a1a/ED1C24?text=Cyberpunk+City" alt="Generated">
+                    <div class="gallery-item-info">
+                        <div class="gallery-item-prompt">
+                            A cyberpunk city at night, neon lights, purple and blue glow, detailed...
+                        </div>
+                        <div class="gallery-item-meta">
+                            <div class="rating">
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                            </div>
+                            <div>
+                                <span class="favorite active">❤️</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Gallery Item 2 -->
+                <div class="gallery-item">
+                    <img class="gallery-item-image" src="https://via.placeholder.com/280x280/2d2d2d/F4484D?text=Mountain+Landscape" alt="Generated">
+                    <div class="gallery-item-info">
+                        <div class="gallery-item-prompt">
+                            A serene mountain landscape at sunset, golden hour lighting...
+                        </div>
+                        <div class="gallery-item-meta">
+                            <div class="rating">
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                                <span class="star">★</span>
+                            </div>
+                            <div>
+                                <span class="favorite">🤍</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Gallery Item 3 -->
+                <div class="gallery-item">
+                    <img class="gallery-item-image" src="https://via.placeholder.com/280x280/1a1a1a/C8171E?text=Dragon" alt="Generated">
+                    <div class="gallery-item-info">
+                        <div class="gallery-item-prompt">
+                            A majestic dragon perched on a cliff, detailed scales, fantasy art...
+                        </div>
+                        <div class="gallery-item-meta">
+                            <div class="rating">
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                                <span class="star">★</span>
+                            </div>
+                            <div>
+                                <span class="favorite active">❤️</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Gallery Item 4 -->
+                <div class="gallery-item">
+                    <img class="gallery-item-image" src="https://via.placeholder.com/280x280/2d2d2d/ED1C24?text=Portrait" alt="Generated">
+                    <div class="gallery-item-info">
+                        <div class="gallery-item-prompt">
+                            Portrait of a woman, photorealistic, studio lighting, high detail...
+                        </div>
+                        <div class="gallery-item-meta">
+                            <div class="rating">
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                                <span class="star">★</span>
+                                <span class="star">★</span>
+                            </div>
+                            <div>
+                                <span class="favorite">🤍</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Gallery Item 5 -->
+                <div class="gallery-item">
+                    <img class="gallery-item-image" src="https://via.placeholder.com/280x280/1a1a1a/F4484D?text=Abstract+Art" alt="Generated">
+                    <div class="gallery-item-info">
+                        <div class="gallery-item-prompt">
+                            Abstract geometric shapes, vibrant colors, modern art style...
+                        </div>
+                        <div class="gallery-item-meta">
+                            <div class="rating">
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                            </div>
+                            <div>
+                                <span class="favorite">🤍</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Gallery Item 6 -->
+                <div class="gallery-item">
+                    <img class="gallery-item-image" src="https://via.placeholder.com/280x280/2d2d2d/C8171E?text=Cat+Astronaut" alt="Generated">
+                    <div class="gallery-item-info">
+                        <div class="gallery-item-prompt">
+                            A cat in an astronaut suit, space background, cute and detailed...
+                        </div>
+                        <div class="gallery-item-meta">
+                            <div class="rating">
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                                <span class="star filled">★</span>
+                                <span class="star">★</span>
+                            </div>
+                            <div>
+                                <span class="favorite active">❤️</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Image Detail Modal -->
+    <div class="modal" id="imageModal">
+        <div class="modal-close" onclick="closeModal()">×</div>
+        <div class="modal-content">
+            <div class="modal-image-container">
+                <img class="modal-image" src="https://via.placeholder.com/800x800/1a1a1a/ED1C24?text=Cyberpunk+City+Full+View" alt="Full image">
+            </div>
+            <div class="modal-sidebar">
+                <div class="modal-section">
+                    <h3>Rating</h3>
+                    <div class="rating-interactive">
+                        <span class="star filled">★</span>
+                        <span class="star filled">★</span>
+                        <span class="star filled">★</span>
+                        <span class="star filled">★</span>
+                        <span class="star filled">★</span>
+                    </div>
+                </div>
+
+                <div class="modal-section">
+                    <h3>Prompt</h3>
+                    <p style="font-size: 14px; line-height: 1.6; color: var(--text-primary);">
+                        A cyberpunk city at night, neon lights, purple and blue glow, towering skyscrapers with holographic advertisements, rainy streets with reflections, flying cars, dense urban environment, cinematic lighting, detailed architecture, blade runner inspired, high quality, 4k
+                    </p>
+                </div>
+
+                <div class="modal-section">
+                    <h3>Parameters</h3>
+                    <div class="param-grid">
+                        <div class="param-item">
+                            <div class="param-label">Model</div>
+                            <div class="param-value">SDXL-Turbo</div>
+                        </div>
+                        <div class="param-item">
+                            <div class="param-label">Size</div>
+                            <div class="param-value">1024×1024</div>
+                        </div>
+                        <div class="param-item">
+                            <div class="param-label">Steps</div>
+                            <div class="param-value">8</div>
+                        </div>
+                        <div class="param-item">
+                            <div class="param-label">CFG Scale</div>
+                            <div class="param-value">1.5</div>
+                        </div>
+                        <div class="param-item">
+                            <div class="param-label">Seed</div>
+                            <div class="param-value">42857</div>
+                        </div>
+                        <div class="param-item">
+                            <div class="param-label">Generation Time</div>
+                            <div class="param-value">3.2s</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-section">
+                    <h3>Tags</h3>
+                    <div class="tags-container">
+                        <span class="tag">cyberpunk</span>
+                        <span class="tag">city</span>
+                        <span class="tag">night</span>
+                        <span class="tag">neon</span>
+                    </div>
+                </div>
+
+                <div class="modal-section">
+                    <h3>Notes</h3>
+                    <textarea class="notes-textarea" placeholder="Add your notes about this generation...">Love the neon lighting! Perfect for my cyberpunk project.</textarea>
+                </div>
+
+                <div class="action-buttons">
+                    <button class="btn btn-block">Regenerate</button>
+                    <button class="btn btn-block">Similar</button>
+                    <button class="btn-primary btn btn-block">Save Template</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function openModal() {
+            document.getElementById('imageModal').classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('imageModal').classList.remove('active');
+        }
+
+        // Close modal on escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeModal();
+            }
+        });
+
+        // Interactive star rating
+        document.querySelectorAll('.rating-interactive .star').forEach((star, index) => {
+            star.addEventListener('click', function() {
+                document.querySelectorAll('.rating-interactive .star').forEach((s, i) => {
+                    if (i <= index) {
+                        s.classList.add('filled');
+                    } else {
+                        s.classList.remove('filled');
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>
