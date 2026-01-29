@@ -261,7 +261,8 @@
                   "reference/eval/fix-code-testbench"
                 ]
               },
-              "reference/dependency-management"
+              "reference/dependency-management",
+              "reference/contributing-docs"
             ]
           },
           {
