@@ -103,7 +103,7 @@
                   "sdk/sdks/llm",
                   "sdk/sdks/vlm",
                   "sdk/sdks/audio",
-                  "sdk/infrastructure/mcp-client"
+                  "sdk/sdks/mcp"
                 ]
               },
               {
@@ -119,7 +119,6 @@
                   "sdk/mixins/tool-mixins",
                   "sdk/mixins/code-mixins",
                   "sdk/mixins/database-mixin",
-                  "sdk/infrastructure/mcp-client",
                   "sdk/utils/file-watcher"
                 ]
               },
@@ -178,6 +177,7 @@
               "spec/llm-client",
               "spec/vlm-client",
               "spec/audio-client",
+              "spec/mcp-sdk",
               "spec/mcp-server"
             ]
           },
@@ -203,7 +203,6 @@
             "group": "Tool Mixins",
             "pages": [
               "spec/database-mixin",
-              "spec/mcp-client",
               "spec/cli-tools-mixin",
               "spec/code-tools-mixin",
               "spec/file-io-tools-mixin",
