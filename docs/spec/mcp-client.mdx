@@ -39,9 +39,10 @@ The MCP Client enables GAIA agents to connect to and use tools from external MCP
 ### Functional Requirements
 
 1. **Server Connection**
-   - Connect to MCP servers via stdio (subprocess) or HTTP
+   - Connect to MCP servers via stdio (subprocess)
    - Initialize MCP protocol handshake
    - Handle connection failures gracefully
+   - Note: HTTP transport exists but is not yet integrated
 
 2. **Tool Discovery**
    - List all available tools from connected servers
@@ -120,6 +121,15 @@ class MCPClientMixin:
 
     def get_mcp_client(self, name: str) -> MCPClient:
         """Get an MCP client by name."""
+
+    def load_mcp_servers_from_config(self) -> int:
+        """Load and register MCP servers from configuration file.
+
+        System prompt is automatically rebuilt with all loaded tools.
+
+        Returns:
+            int: Number of servers successfully loaded
+        """
 ```
 
 ### MCPClient
@@ -154,7 +164,11 @@ class MCPClient:
         """List all available tools from the server."""
 
     def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Call a tool on the MCP server."""
+        """Call a tool on the MCP server.
+
+        Returns:
+            Dict with {"content": [...]} on success or {"error": "msg"} on failure
+        """
 
     def create_tool_wrapper(self, tool: MCPTool) -> Callable:
         """Create a callable wrapper for an MCP tool."""
