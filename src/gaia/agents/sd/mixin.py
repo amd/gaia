@@ -357,12 +357,20 @@ class SDToolsMixin:
                 }
             )
 
-            # Show success to user
+            # Display the image in terminal first if supported
+            if console and hasattr(console, 'print_image'):
+                console.print_image(
+                    str(image_path),
+                    caption=f"{model} • {size} • {steps} steps",
+                    prompt_to_open=True  # Prompt user to open in viewer
+                )
+
+            # Show success message after image
             if console and hasattr(console, 'print_success'):
                 time_str = f"{generation_time_ms / 1000:.1f}s" if generation_time_ms < 60000 else f"{generation_time_ms / 60000:.1f}m"
                 console.print_success(
                     f"Image generated in {time_str}\n"
-                    f"Saved: {image_path}"
+                    f"Saved: {Path(image_path).absolute()}"
                 )
 
             logger.debug(f"Image generated: {image_path} ({generation_time_ms}ms)")

@@ -803,6 +803,130 @@ class AgentConsole(OutputHandler):
         else:
             print(f"\n✅ SUCCESS: {message}\n")
 
+    def print_image(self, image_path: str, caption: str = None, prompt_to_open: bool = True) -> None:
+        """
+        Display an image in terminal and optionally prompt to open in viewer.
+
+        Args:
+            image_path: Path to the image file
+            caption: Optional caption to display
+            prompt_to_open: If True, prompt user to open in default viewer after display
+        """
+        import os
+        import sys
+        from pathlib import Path
+
+        path = Path(image_path)
+        if not path.exists():
+            return
+
+        if self.rich_available:
+            try:
+                # Try term-image with Sixel protocol for full resolution
+                # Sixel works in: Windows Terminal Preview, iTerm2, Kitty, WezTerm, etc.
+                from term_image.image import from_file, AutoImage
+
+                # Load image with auto-detected best protocol
+                img = from_file(str(path))
+
+                # Try to enable Sixel if supported
+                try:
+                    from term_image.image import ImageIterator
+                    # Set render method to auto-detect best available (Sixel, Kitty, iTerm2)
+                    img.set_render_method("auto")
+                except Exception:
+                    pass
+
+                # Set size to fit terminal (80 columns = reasonable width)
+                img.set_size(columns=80)
+
+                # Render the image
+                if caption:
+                    # Create a panel around the rendered image
+                    rendered = str(img)
+                    self.console.print(
+                        Panel(
+                            rendered,
+                            title=f"🖼️  {caption}",
+                            border_style="cyan",
+                            padding=(0, 0),
+                        ),
+                        justify="center"
+                    )
+                else:
+                    # Print image directly with centering
+                    # Note: term-image returns ANSI escape codes with actual image data
+                    print(str(img))  # Use plain print to avoid Rich interfering with image codes
+
+                self.console.print()
+
+            except (ImportError, Exception) as e:
+                # Fallback to rich-pixels for broader compatibility
+                try:
+                    from rich_pixels import Pixels
+
+                    # Use larger size for better preview
+                    pixels = Pixels.from_image_path(str(path), resize=(120, 60))
+
+                    if caption:
+                        self.console.print(
+                            Panel(
+                                pixels,
+                                title=f"🖼️  {caption}",
+                                border_style="cyan",
+                                padding=(0, 0),
+                            ),
+                            justify="center"
+                        )
+                    else:
+                        self.console.print(pixels, justify="center")
+                    self.console.print()
+
+                except ImportError:
+                    # No image libraries, show file info only
+                    try:
+                        from PIL import Image
+
+                        img = Image.open(path)
+                        info = f"[cyan]{path.name}[/cyan]\n"
+                        info += f"[dim]Size: {img.width}x{img.height} | Format: {img.format} | File: {path.stat().st_size:,} bytes[/dim]"
+
+                        if caption:
+                            self.console.print(
+                                Panel(info, title=f"🖼️  {caption}", border_style="cyan"),
+                                justify="center"
+                            )
+                        else:
+                            self.console.print(Panel(info, border_style="cyan"), justify="center")
+                    except Exception:
+                        # Fallback to just showing the path
+                        self.console.print(f"[cyan]🖼️  Image: {path}[/cyan]", justify="center")
+
+            # Prompt to open in default viewer
+            if prompt_to_open and sys.platform == "win32":
+                try:
+                    response = input("\nOpen image in default viewer? [Y/n]: ").strip().lower()
+                    if response in ("", "y", "yes"):
+                        os.startfile(str(path))
+                except (KeyboardInterrupt, EOFError):
+                    pass  # User cancelled
+        else:
+            # Text-only terminal
+            print(f"\n🖼️  Image: {path}")
+            if caption:
+                print(f"   {caption}")
+
+            # Prompt to open in default viewer
+            if prompt_to_open and sys.platform == "win32":
+                try:
+                    response = input("\nOpen image? [Y/n]: ").strip().lower()
+                    if response in ("", "y", "yes"):
+                        os.startfile(str(path))
+                except (KeyboardInterrupt, EOFError):
+                    pass
+
+            print()
+
     def print_diff(self, diff: str, filename: str) -> None:
         """
         Print a code diff with syntax highlighting.
