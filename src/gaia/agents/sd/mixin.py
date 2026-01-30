@@ -3,7 +3,7 @@ SDToolsMixin - Stable Diffusion image generation tools for GAIA agents.
 
 Provides tools to generate images using the Lemonade Server SD endpoint.
 Supports 4 SD models: SD-Turbo (fast, default), SDXL-Turbo, SD-1.5, and
-SDXL-Base-1.0 (photorealistic) with AMD NPU/GPU acceleration.
+SDXL-Base-1.0 (photorealistic) running on Ryzen AI.
 
 Example:
     from gaia.agents.base import Agent
