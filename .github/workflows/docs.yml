@@ -13,6 +13,11 @@ on:
       - 'docs/**'
       - '.github/workflows/docs.yml'
 
+# Cancel in-progress runs when a new run is triggered
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
     runs-on: ubuntu-latest

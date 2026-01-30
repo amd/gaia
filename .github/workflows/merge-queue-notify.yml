@@ -1,0 +1,98 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Notifies PR authors when their PR fails in the merge queue
+# Watches for workflow completions triggered by merge_group events
+
+name: Merge Queue Failure Notification
+
+on:
+  workflow_run:
+    workflows:
+      - "GAIA CLI Tests (All Platforms)"
+      - "Code Quality (Lint)"
+      - "Unit Tests"
+    types:
+      - completed
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
+jobs:
+  notify-on-failure:
+    name: Notify on Merge Queue Failure
+    runs-on: ubuntu-latest
+    # Only run if the triggering workflow was from a merge_group and failed
+    if: >
+      github.event.workflow_run.event == 'merge_group' &&
+      github.event.workflow_run.conclusion == 'failure'
+    steps:
+      - name: Post failure comment to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Extract PR number from merge queue branch name (e.g., gh-readonly-queue/main/pr-254-...)
+            const headBranch = context.payload.workflow_run.head_branch || '';
+            const prMatch = headBranch.match(/pr-(\d+)/);
+
+            if (!prMatch) {
+              console.log('Could not extract PR number from branch:', headBranch);
+              console.log('This may not be a merge queue run');
+              return;
+            }
+
+            const prNumber = parseInt(prMatch[1], 10);
+            const workflowRun = context.payload.workflow_run;
+            const runUrl = workflowRun.html_url;
+            const workflowName = workflowRun.name;
+
+            // Get the failed jobs for more detail
+            const { data: jobs } = await github.rest.actions.listJobsForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: workflowRun.id,
+            });
+
+            const failedJobs = jobs.jobs.filter(job => job.conclusion === 'failure');
+            const failedJobsList = failedJobs.length > 0
+              ? failedJobs.map(job => `  - [${job.name}](${job.html_url})`).join('\n')
+              : '  - Check workflow run for details';
+
+            const body = `## Merge Queue Failure
+
+Your PR was removed from the merge queue due to test failures in **${workflowName}**.
+
+**Failed jobs:**
+${failedJobsList}
+
+**Full workflow run:** [View logs](${runUrl})
+
+<sub>This comment was automatically generated.</sub>`;
+
+            // Check if we already posted a comment for this run to avoid duplicates
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const existingComment = comments.find(c =>
+              c.body.includes('Merge Queue Failure') &&
+              c.body.includes(runUrl)
+            );
+
+            if (existingComment) {
+              console.log('Comment already exists for this run, skipping');
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: body,
+            });
+
+            console.log(`Posted failure notification to PR #${prNumber}`);

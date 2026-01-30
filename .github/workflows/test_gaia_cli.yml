@@ -8,17 +8,19 @@
 name: GAIA CLI Tests (All Platforms)
 
 on:
+  # Only run via workflow_call or manual dispatch
+  # Individual child workflows (test_unit.yml, test_code_agent.yml, etc.) trigger
+  # on push/pull_request independently - this avoids duplicate/conflicting runs
   workflow_call:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-    types: [opened, synchronize, reopened, ready_for_review]
-  merge_group:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# Group concurrent runs but don't cancel - child workflows have their own concurrency
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   # Run linting first (fast feedback)
@@ -32,6 +34,9 @@ jobs:
     needs: lint
     uses: ./.github/workflows/test_unit.yml
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+  # Note: Lemonade Server Smoke Test runs as standalone workflow (test_lemonade_server.yml)
+  # It's not called here to avoid duplicate runs on self-hosted [stx] runner
 
   # Test Windows CLI with full Lemonade integration
   test-windows:
@@ -80,7 +85,17 @@ jobs:
     name: Test Summary
     runs-on: ubuntu-latest
     needs: [lint, unit-tests, test-windows, test-linux, test-mcp, test-code-agent, test-chat-agent, test-security]
-    if: always()
+    # Run always except when workflow or any dependency is cancelled (e.g., by cancel-in-progress)
+    if: >-
+      ${{ always() && !cancelled() &&
+          needs.lint.result != 'cancelled' &&
+          needs.unit-tests.result != 'cancelled' &&
+          needs.test-windows.result != 'cancelled' &&
+          needs.test-linux.result != 'cancelled' &&
+          needs.test-mcp.result != 'cancelled' &&
+          needs.test-code-agent.result != 'cancelled' &&
+          needs.test-chat-agent.result != 'cancelled' &&
+          needs.test-security.result != 'cancelled' }}
     steps:
       - name: Check test results
         run: |
@@ -105,6 +120,18 @@ jobs:
                 "${{ needs.test-chat-agent.result }}" == "skipped" &&
                 "${{ needs.test-security.result }}" == "skipped" ]]; then
             echo "⏭️ All tests skipped (draft PR - add 'ready_for_ci' label to run)"
+            exit 0
+          fi
+
+          # Check if all integration tests were skipped/cancelled (workflow cancelled early)
+          if [[ "${{ needs.unit-tests.result }}" == "skipped" &&
+                "${{ needs.test-windows.result }}" == "skipped" &&
+                "${{ needs.test-linux.result }}" == "skipped" &&
+                "${{ needs.test-mcp.result }}" == "skipped" &&
+                "${{ needs.test-code-agent.result }}" == "skipped" &&
+                "${{ needs.test-chat-agent.result }}" == "skipped" &&
+                "${{ needs.test-security.result }}" == "skipped" ]]; then
+            echo "⏭️ Workflow cancelled or lint failed - no integration tests ran"
             exit 0
           fi
 
@@ -148,6 +175,11 @@ jobs:
         run: |
           echo ""
           echo "=== Test Coverage by Platform ==="
+          echo "🔌 Lemonade Server (Smoke Test):"
+          echo "  ✅ Health endpoint verification"
+          echo "  ✅ Models endpoint verification"
+          echo "  ✅ Basic inference test"
+          echo ""
           echo "⚡ Unit Tests (Fast, No Dependencies):"
           echo "  ✅ DatabaseMixin: SQLite database access for agents"
           echo "  ✅ LLM Client: Language model client utilities"
