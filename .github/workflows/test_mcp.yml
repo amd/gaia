@@ -17,6 +17,11 @@ on:
   merge_group:
   workflow_dispatch:
 
+# Cancel in-progress runs when a new run is triggered
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -222,7 +227,11 @@ jobs:
     name: MCP Test Summary
     runs-on: ubuntu-latest
     needs: [test-mcp-windows, test-mcp-linux]
-    if: always()
+    # Run always except when workflow or any dependency is cancelled
+    if: >-
+      ${{ always() && !cancelled() &&
+          needs.test-mcp-windows.result != 'cancelled' &&
+          needs.test-mcp-linux.result != 'cancelled' }}
     steps:
       - name: Check test results
         run: |

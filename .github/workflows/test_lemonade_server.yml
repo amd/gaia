@@ -1,0 +1,104 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: Lemonade Server Smoke Test
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-lemonade-server:
+    name: Lemonade Server Smoke Test
+    runs-on: [stx]
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          install-package: '.[lemonade]'
+
+      - name: Start Lemonade Server, Load Model, and Test
+        shell: powershell
+        timeout-minutes: 10
+        run: |
+          try {
+              # Start server and load model (all in one session)
+              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-Instruct-2507-GGUF" -Port 8000 -CtxSize 32768 -InitWaitTime 10
+
+              # Verify health endpoint returns context_size
+              Write-Host "=== Verifying Health Endpoint ==="
+              $health = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 10
+              Write-Host "Health response: $($health | ConvertTo-Json -Compress)"
+
+              if (-not $health.PSObject.Properties['context_size']) {
+                  Write-Host "[ERROR] context_size not found in health response"
+                  Write-Host "Available fields: $($health.PSObject.Properties.Name -join ', ')"
+                  throw "Health endpoint missing context_size field"
+              }
+
+              $contextSize = $health.context_size
+              Write-Host "[OK] context_size: $contextSize"
+
+              if ($contextSize -lt 32768) {
+                  Write-Host "[ERROR] context_size $contextSize is less than expected 32768"
+                  throw "Insufficient context size"
+              }
+              Write-Host ""
+
+              # Test completion (in same session while server is still alive)
+              Write-Host "=== Testing Completion ==="
+              $testBody = @{
+                  model = "Qwen3-4B-Instruct-2507-GGUF"
+                  prompt = "Say exactly: Hello World"
+                  max_tokens = 10
+              } | ConvertTo-Json
+
+              $completion = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/completions" `
+                  -Method POST -ContentType "application/json" -Body $testBody -TimeoutSec 30
+
+              Write-Host "[OK] Completion successful"
+              Write-Host "     Response: $($completion.choices[0].text)"
+              Write-Host ""
+              Write-Host "[SUCCESS] All lemonade server tests passed!"
+
+          } catch {
+              Write-Host "[ERROR] Test failed: $($_.Exception.Message)"
+              if ($_.ErrorDetails) {
+                  Write-Host "Error details: $($_.ErrorDetails.Message)"
+              }
+              throw "Lemonade server smoke test failed"
+          } finally {
+              # Cleanup
+              if ($env:LEMONADE_PROCESS_ID) {
+                  Write-Host "Stopping server process $env:LEMONADE_PROCESS_ID..."
+                  Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
+              }
+          }
+
+      - name: Upload Server Logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lemonade-server-logs
+          path: |
+            lemonade-server-stdout.log
+            lemonade-server-stderr.log
+            lemonade-server.log

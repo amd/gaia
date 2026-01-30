@@ -15,6 +15,11 @@ on:
   merge_group:
   workflow_dispatch:
 
+# Cancel in-progress runs when a new run is triggered
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-mcp-agent:
     name: Test MCPAgent (${{ matrix.os }})
@@ -106,7 +111,10 @@ jobs:
     name: Test Summary
     needs: test-mcp-agent
     runs-on: ubuntu-latest
-    if: always()
+    # Run always except when workflow or dependency is cancelled
+    if: >-
+      ${{ always() && !cancelled() &&
+          needs.test-mcp-agent.result != 'cancelled' }}
     permissions: {}
 
     steps:
