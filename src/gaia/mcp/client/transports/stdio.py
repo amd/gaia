@@ -51,7 +51,9 @@ class StdioTransport(MCPTransport):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                bufsize=1,  # Line buffered
+                bufsize=1,
+                encoding="utf-8",
+                errors="replace",
             )
 
             logger.debug(f"MCP server process started (PID: {self._process.pid})")
