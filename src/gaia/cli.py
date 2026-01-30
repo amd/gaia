@@ -4971,21 +4971,26 @@ def handle_sd_command(args):
         print("  gaia sd -i")
         return
 
-    from gaia.agents.sd import SDToolsMixin
+    from gaia.agents.sd import SDAgent, SDAgentConfig
 
-    # Create mixin instance for direct usage
-    sd = SDToolsMixin()
-    sd.console = AgentConsole()  # Attach console for user-facing output
-    sd.init_sd(
+    # Create config
+    config = SDAgentConfig(
+        sd_model=args.sd_model,
         output_dir=args.output_dir,
-        default_model=args.sd_model,
-        default_size=getattr(args, "size", None),
-        default_steps=getattr(args, "steps", None),
-        default_cfg=getattr(args, "cfg_scale", None),
+        prompt_to_open=not args.no_open,
+        max_steps=5,  # Limit steps for CLI (enhance + generate)
+        show_stats=getattr(args, "stats", False),
+        use_claude=getattr(args, "use_claude", False),
+        use_chatgpt=getattr(args, "use_chatgpt", False),
+        base_url=getattr(args, "base_url", "http://localhost:8000/api/v1"),
+        model_id=getattr(args, "model", None),
     )
 
+    # Create agent with LLM prompt enhancement
+    agent = SDAgent(config)
+
     # Check health
-    health = sd.sd_health_check()
+    health = agent.sd_health_check()
     if health["status"] != "healthy":
         print(f"Error: {health.get('error', 'SD endpoint unavailable')}")
         print("Make sure Lemonade Server is running and SD model is available:")
@@ -4993,33 +4998,37 @@ def handle_sd_command(args):
         print("  lemonade-server pull SD-Turbo")
         sys.exit(1)
 
+    print()
+    print("=" * 80)
+    print(f"🖼️  SD Image Generator - {args.sd_model}")
+    print("=" * 80)
+    print("LLM-powered prompt enhancement for better image quality")
+    print(f"Output: {args.output_dir}")
+    if not args.no_open:
+        print("You'll be prompted to open images after generation")
+    print("=" * 80)
+    print()
+
     # Interactive mode
     if args.interactive:
-        print("=" * 60)
-        print("SD Image Generator (Interactive Mode)")
-        print("=" * 60)
-        print(f"Model: {args.sd_model} | Size: {args.size}")
-        print(f"Output: {args.output_dir}")
         print("Type 'quit' to exit.")
-        print("=" * 60)
         print()
 
         while True:
             try:
-                prompt = input("Prompt: ").strip()
-                if not prompt:
+                user_prompt = input("You: ").strip()
+                if not user_prompt:
                     continue
-                if prompt.lower() in ("quit", "exit", "q"):
+                if user_prompt.lower() in ("quit", "exit", "q"):
                     print("Goodbye!")
                     break
 
-                result = sd._generate_image(  # pylint: disable=protected-access
-                    prompt, seed=args.seed, prompt_open=not args.no_open
-                )
-
-                if result["status"] != "success":
-                    # Error already shown by console
-                    print()
+                # Use agent.process_query() for LLM enhancement
+                result = agent.process_query(user_prompt)
+                if result.get("final_answer"):
+                    print(f"\nAgent: {result['final_answer']}\n")
+                else:
+                    print(f"\nAgent: Generation complete\n")
 
             except KeyboardInterrupt:
                 print("\nGoodbye!")
@@ -5027,13 +5036,10 @@ def handle_sd_command(args):
 
     # Single prompt mode
     else:
-        result = sd._generate_image(  # pylint: disable=protected-access
-            args.prompt, seed=args.seed, prompt_open=not args.no_open
-        )
-
-        if result["status"] != "success":
-            # Error already shown by console
-            sys.exit(1)
+        # Use agent.process_query() for LLM enhancement
+        result = agent.process_query(args.prompt)
+        if result.get("final_answer"):
+            print(f"\n{result['final_answer']}\n")
 
 
 def handle_blender_command(args):

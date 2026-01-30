@@ -62,6 +62,10 @@ class ImageAgent(Agent, SDToolsMixin):
         # Register the SD tools with this agent
         self.register_sd_tools()
 
+    def _register_tools(self):
+        """Required abstract method - SD tools already registered in __init__."""
+        pass
+
     def _get_system_prompt(self) -> str:
         """System prompt that guides the agent's behavior."""
         return """You are an image generation assistant powered by Stable Diffusion.
@@ -125,9 +129,12 @@ def main():
                 print("Goodbye!")
                 break
 
-            # Run the agent
-            response = agent.run(user_input)
-            print(f"\nAgent: {response}\n")
+            # Process query with agent
+            result = agent.process_query(user_input)
+            if result.get("final_answer"):
+                print(f"\nAgent: {result['final_answer']}\n")
+            else:
+                print("\nGeneration complete\n")
 
         except KeyboardInterrupt:
             print("\nGoodbye!")

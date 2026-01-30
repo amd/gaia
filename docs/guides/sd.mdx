@@ -147,19 +147,28 @@ Classifier-Free Guidance scale controls how closely the image follows the prompt
 
 ## Prompt Engineering Tips
 
-Enhance simple prompts for better results:
+<Note>
+**Using `gaia sd` with LLM enhancement:** The CLI now automatically enhances your prompts using an LLM. You can give simple descriptions and the agent will add quality/lighting/style keywords for better results.
+</Note>
 
-| Simple | Enhanced |
-|--------|----------|
-| "a cat" | "fluffy orange cat, soft natural lighting, detailed fur, photorealistic, 4k" |
-| "sunset" | "vibrant sunset over calm ocean, golden hour, dramatic clouds, wide angle, 4k" |
-| "robot" | "futuristic robot assistant, metallic chrome finish, studio lighting, sci-fi, detailed" |
+The agent enhances prompts based on research best practices:
 
-**Key elements to add:**
-- **Style:** photorealistic, anime, oil painting, digital art
-- **Lighting:** golden hour, dramatic, soft, studio
-- **Quality:** detailed, 4k, high quality
-- **Composition:** rule of thirds, centered, wide angle
+| Your Input | Agent Enhances To |
+|------------|-------------------|
+| "a cat" | "fluffy orange tabby cat, soft natural lighting, detailed fur texture, photorealistic, shallow depth of field, 8K" |
+| "sunset" | "vibrant sunset over calm ocean, golden hour lighting, dramatic clouds with orange hues, wide angle, highly detailed, 4K" |
+| "robot" | "futuristic robot assistant, metallic chrome finish, studio lighting with rim lights, sci-fi aesthetic, highly detailed, 8K" |
+
+**Key elements the agent adds:**
+- **Quality:** highly detailed, sharp focus, 8K, DSLR-quality, photorealistic
+- **Lighting:** golden hour, studio lighting, volumetric lighting, dramatic, soft diffused
+- **Style:** digital art, photorealistic, concept art, ArtStation, Unreal Engine
+- **Composition:** rule of thirds, wide angle, bokeh, shallow depth of field
+
+**Research Sources:**
+- [Stable Diffusion Art Prompt Guide](https://stable-diffusion-art.com/prompt-guide/)
+- [SDXL-Turbo HuggingFace Docs](https://huggingface.co/docs/diffusers/en/using-diffusers/sdxl_turbo)
+- [IBM Prompt Engineering Guide](https://www.ibm.com/think/prompt-engineering)
 
 ---
 

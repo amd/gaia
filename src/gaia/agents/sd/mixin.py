@@ -245,7 +245,7 @@ class SDToolsMixin:
         steps: Optional[int] = None,
         cfg_scale: Optional[float] = None,
         seed: Optional[int] = None,
-        prompt_open: bool = True,
+        prompt_open: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Internal method to generate an image via Lemonade Server SD endpoint.
@@ -407,8 +407,15 @@ class SDToolsMixin:
                     f"Saved: {Path(image_path).absolute()}"
                 )
 
-            # Prompt to open in default viewer after success message (if not disabled)
-            if prompt_open:
+            # Prompt to open in default viewer after success message
+            # Check instance attribute first, then parameter
+            should_prompt = (
+                prompt_open
+                if prompt_open is not None
+                else getattr(self, "sd_prompt_to_open", True)
+            )
+
+            if should_prompt:
                 import os
                 import sys
 
