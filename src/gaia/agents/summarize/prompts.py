@@ -47,21 +47,10 @@ STRICT RULES:
 - Exclude qualitative marketing descriptions unless no metrics exist
 - Maintain a formal, board-ready, outcome-focused tone.
 - Do not use bullet points.""",
-    "participants": """Extract ONLY meeting participants.
-STRICT RULES:
-- Produce a bullet list as the only output.
-- Format every line exactly as: "- Name — Role".
-- If the role is unclear, infer only when safe; otherwise use "Role not specified".
-- Do not add any narrative or summary.
-- Do not mention actions or outcomes.""",
-    "action_items": """Extract ONLY action items.
-STRICT RULES:
-- Output only a bullet list.
-- Use this exact format for each bullet:
-  "- Action: <description>; Owner: <person or team>; Deadline: <date or 'Not specified'>"
-- Do not include any additional text.
-- Include items that are explicitly stated or clearly implied.
-- Avoid any inference beyond what is safely justified.""",
+    "participants": "List the participants mentioned in this transcript or email. Include their roles or titles when available. Provide as a simple list.",
+    "action_items": "List the specific action items that were assigned during this meeting. Include who is responsible for each item when mentioned. Provide as a simple list.",
+    "key_decisions": "List the key decisions that were made during this meeting. Focus on concrete decisions and outcomes. Provide as a simple list.",
+    "topics_discussed": "List the main topics and subjects that were discussed in this meeting. Provide as a simple list.",
 }
 
 # System prompts for different input types

@@ -1343,9 +1343,9 @@ Examples:
         "-u",
         "--use-case",
         type=str,
-        choices=["rag", "summarization", "qa", "email"],
+        choices=["rag", "summarization", "qa", "email", "pdf"],
         default="summarization",
-        help="Use case for ground truth generation: 'rag' for document Q&A pairs, 'summarization' for transcript summaries, 'qa' for transcript Q&A pairs, 'email' for email processing analysis (default: summarization)",
+        help="Use case for ground truth generation: 'rag' for document Q&A pairs, 'summarization' for transcript summaries, 'qa' for transcript Q&A pairs, 'email' for email processing analysis, 'pdf' for PDF document summaries (default: summarization)",
     )
     gt_parser.add_argument(
         "--max-tokens",
@@ -1721,7 +1721,7 @@ Examples:
     # Add new subparser for generating synthetic test data
     generate_parser = subparsers.add_parser(
         "generate",
-        help="Generate synthetic test data for evaluation (meeting transcripts or business emails)",
+        help="Generate synthetic test data for evaluation (meeting transcripts, business emails or PDFs)",
         parents=[parent_parser],
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
@@ -1735,6 +1735,11 @@ Examples:
   gaia generate --email -o ./output/emails
   gaia generate --email -o ./output/emails --target-tokens 1500 --count-per-type 3
   gaia generate --email -o ./output/emails --email-types project_update sales_outreach
+
+  # Generate PDFs
+  gaia generate --pdf -o ./output/pdfs
+  gaia generate --pdf -o ./output/pdfs --target-tokens 2000 --count-per-type 2
+  gaia generate --pdf -o ./output/pdfs --pdf-types technical_spec white_paper
         """,
     )
 
@@ -1788,6 +1793,11 @@ Examples:
         action="store_true",
         help="Generate business emails for testing email processing and summarization",
     )
+    generate_type_group.add_argument(
+        "--pdf",
+        action="store_true",
+        help="Generate PDF documents for testing document summarization",
+    )
 
     # Add common arguments for generate command
     generate_parser.add_argument(
@@ -1840,6 +1850,21 @@ Examples:
             "performance_feedback",
         ],
         help="Specific email types to generate (only used with --email, default: all types)",
+    )
+    generate_parser.add_argument(
+        "--pdf-types",
+        nargs="+",
+        choices=[
+            "technical_spec",
+            "business_proposal",
+            "research_report",
+            "project_plan",
+            "policy_document",
+            "white_paper",
+            "user_manual",
+            "financial_report",
+        ],
+        help="Specific PDF types to generate (only used with --pdf, default: all types)",
     )
 
     # Add arguments for batch experiment command
@@ -3885,6 +3910,80 @@ Let me know your answer!
             except Exception as e:
                 log.error(f"Error generating emails: {e}")
                 print(f"❌ Error generating emails: {e}")
+                return
+
+        elif args.pdf:
+            log.info("Generating example PDF documents")
+            try:
+                from gaia.eval.pdf_document_generator import PDFDocumentGenerator
+            except ImportError as e:
+                log.error(f"Failed to import PDFDocumentGenerator: {e}")
+                print("❌ Error: Failed to import PDF document generator module.")
+                print("The evaluation dependencies are not installed.")
+                print("")
+                print("To fix this, install the evaluation dependencies:")
+                print('  uv pip install -e ".[eval]"')
+                print("")
+                print("This will install required packages including:")
+                print("  - anthropic (for Claude AI)")
+                print("  - reportlab (for PDF generation)")
+                print("  - python-dotenv (for environment variables)")
+                return
+
+            try:
+                generator = PDFDocumentGenerator(claude_model=args.claude_model)
+
+                # Filter PDF types if specified
+                original_templates = None
+                if args.pdf_types:
+                    original_templates = generator.document_templates.copy()
+                    generator.document_templates = {
+                        k: v
+                        for k, v in generator.document_templates.items()
+                        if k in args.pdf_types
+                    }
+
+                # Set default target tokens for PDFs if not specified
+                target_tokens = args.target_tokens if args.target_tokens else 2000
+
+                result = generator.generate_document_set(
+                    output_dir=args.output_dir,
+                    target_tokens=target_tokens,
+                    count_per_type=args.count_per_type,
+                )
+
+                print("✅ Successfully generated PDF documents")
+                print(f"  Output directory: {result['output_directory']}")
+                print(f"  Generated files: {len(result['generated_files'])}")
+                print(f"  Metadata file: {result['metadata_file']}")
+
+                # Show summary stats
+                summary = result["summary"]
+                generation_info = summary["generation_info"]
+                total_tokens = generation_info["total_claude_usage"]["total_tokens"]
+                total_cost = generation_info["total_claude_cost"]["total_cost"]
+                avg_tokens = (
+                    total_tokens / len(summary["documents"])
+                    if summary["documents"]
+                    else 0
+                )
+
+                print(f"  Total tokens used: {total_tokens:,}")
+                print(f"  Total cost: ${total_cost:.4f}")
+                print(f"  Average tokens per file: {avg_tokens:.0f}")
+                print(
+                    f"  Average cost per file: ${total_cost/len(summary['documents']):.4f}"
+                )
+                print(f"  PDF types: {', '.join(generation_info['document_types'])}")
+                print(f"  Claude model: {generation_info['claude_model']}")
+
+                # Restore original templates if they were filtered
+                if args.pdf_types and original_templates is not None:
+                    generator.document_templates = original_templates
+
+            except Exception as e:
+                log.error(f"Error generating PDFs: {e}")
+                print(f"❌ Error generating PDFs: {e}")
                 return
 
         return

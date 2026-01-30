@@ -273,6 +273,46 @@ gaia eval -d ./output/experiments -o ./output/evaluations
 ```
 
 ```bash
+gaia report -d ./output/evaluations -o ./reports/pdf_summarization_report.md
+```
+
+Step 5: View results interactively
+
+```bash
+gaia visualize --experiments-dir ./output/experiments --evaluations-dir ./output/evaluations
+```
+
+### Workflow 3: PDF document summarization
+
+**Complete example: Evaluate PDF document summarization capabilities**
+
+Step 1: Generate synthetic PDF documents
+
+```bash
+gaia generate --pdf -o ./output/test_data/pdfs --pdf-types technical_spec white_paper --count-per-type 2
+```
+
+Step 2: Create evaluation standards
+
+```bash
+gaia groundtruth -d ./output/test_data/pdfs -p "*.pdf" --use-case pdf -o ./output/groundtruth
+```
+
+Step 3: Run experiments
+
+Note: Edit `./src/gaia/eval/configs/pdf_summarization.json` to customize models or create your own config
+
+```bash
+gaia batch-experiment -c ./src/gaia/eval/configs/pdf_summarization.json -i ./output/groundtruth/consolidated_pdf_groundtruth.json -o ./output/experiments
+```
+
+Step 4: Evaluate and report
+
+```bash
+gaia eval -d ./output/experiments -o ./output/evaluations
+```
+
+```bash
 gaia report -d ./output/evaluations -o ./reports/email_summarization_report.md
 ```
 
@@ -282,7 +322,7 @@ Step 5: View results interactively
 gaia visualize --experiments-dir ./output/experiments --evaluations-dir ./output/evaluations
 ```
 
-### Workflow 3: Document Q&A
+### Workflow 4: Document Q&A
 
 **Complete example: Test question-answering capabilities on documents**
 
@@ -320,7 +360,7 @@ Note: Include `test-data-dir` and `groundtruth-dir` to view source PDFs and Q&A 
 gaia visualize --experiments-dir ./output/experiments --evaluations-dir ./output/evaluations --test-data-dir ./data/pdf --groundtruth-dir ./output/groundtruth
 ```
 
-### Workflow 4: Third-Party Model Testing
+### Workflow 5: Third-Party Model Testing
 
 **Complete example: Test external models (OpenAI, etc.) that can't be integrated directly**
 
@@ -555,6 +595,24 @@ gaia generate --email -o ./output/test_data/emails --email-types project_update 
 - `vendor_communication` - External vendor interactions
 - `performance_feedback` - Performance review communications
 
+#### PDF Documents
+
+Generate PDF documents with full options:
+
+```bash
+gaia generate --pdf -o ./output/test_data/pdfs --pdf-types technical_spec white_paper --count-per-type 1 --target-tokens 2000
+```
+
+**Available PDF types:**
+- `technical_spec` - Technical specification documents
+- `business_proposal` - Business proposals and investment pitches
+- `research_report` - Research findings and analysis reports
+- `project_plan` - Project scope, timeline, and deliverables
+- `policy_document` - Corporate policy and procedures manuals
+- `white_paper` - Industry white papers on emerging technology
+- `user_manual` - Product user manuals and documentation
+- `financial_report` - Quarterly financial reports and analysis
+
 ### Ground Truth Creation
 
 Transform synthetic data into evaluation standards.
@@ -573,6 +631,10 @@ gaia groundtruth -d ./output/test_data -p "*.pdf" --use-case qa -o ./output/grou
 gaia groundtruth -d ./output/test_data -p "*.txt" --use-case email -o ./output/groundtruth
 ```
 
+```bash
+gaia groundtruth -d ./output/test_data -p "*.pdf" --use-case pdf -o ./output/groundtruth
+```
+
 Default behavior: skip files that already have ground truth generated
 
 ```bash
@@ -589,6 +651,7 @@ gaia groundtruth -d ./output/test_data -o ./output/groundtruth --force
 - `qa` - Question-answer pair generation (requires groundtruth input for batch-experiment)
 - `summarization` - Summary generation tasks (supports both embedded and external groundtruth)
 - `email` - Email processing tasks (supports both embedded and external groundtruth)
+- `pdf` - PDF document summarization (supports embedded groundtruth workflow)
 
 #### Skip Existing Ground Truth Files
 

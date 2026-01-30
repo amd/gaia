@@ -1,0 +1,23 @@
+{
+  "description": "Batch experiment configuration for PDF documents summarization",
+  "experiments": [
+    {
+      "name": "Claude-Haiku-PDF-Analysis",
+      "llm_type": "claude",
+      "model": "claude-haiku-4.5",
+      "experiment_type": "summarization",
+      "max_tokens": 2048,
+      "max_ctx_size": 8192,
+      "parameters": {}
+    },
+    {
+      "name": "Qwen3-4B-Instruct-2507-GGUF",
+      "llm_type": "lemonade",
+      "model": "Qwen3-4B-Instruct-2507-GGUF",
+      "experiment_type": "summarization",
+      "max_tokens": 2048,
+      "max_ctx_size": 8192,
+      "parameters": {}
+    }
+  ]
+}
