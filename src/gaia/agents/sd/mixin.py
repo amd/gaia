@@ -51,11 +51,16 @@ class SDToolsMixin:
         sd_output_dir: Directory to save generated images
         sd_default_model: Default SD model (SD-Turbo, SDXL-Turbo, SD-1.5, or SDXL-Base-1.0)
         sd_generations: List of generations from this session
+
+    Note:
+        Constants SD_MODELS and SD_SIZES are duplicated from LemonadeClient for convenience.
+        Primary source of truth is LemonadeClient, but having them here allows direct access
+        via SDToolsMixin.SD_MODELS for better API ergonomics.
     """
 
-    # Supported configurations (class constants)
-    SD_MODELS = ["SD-1.5", "SD-Turbo", "SDXL-Base-1.0", "SDXL-Turbo"]
-    SD_SIZES = ["512x512", "768x768", "1024x1024"]
+    # Supported configurations (duplicated from LemonadeClient for API convenience)
+    SD_MODELS = LemonadeClient.SD_MODELS
+    SD_SIZES = LemonadeClient.SD_SIZES
 
     # Instance state (initialized by init_sd)
     sd_client: LemonadeClient

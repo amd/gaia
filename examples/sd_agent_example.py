@@ -6,7 +6,8 @@ images using Stable Diffusion via the Lemonade Server endpoint.
 
 Prerequisites:
     1. Lemonade Server running with SD model:
-       lemonade-server serve --model SD-Turbo
+       lemonade-server serve
+       lemonade-server pull SD-Turbo
 
     2. GAIA SDK installed:
        pip install amd-gaia
@@ -109,7 +110,9 @@ def main():
     health = agent.sd_health_check()
     if health["status"] != "healthy":
         print(f"Warning: {health.get('error', 'SD endpoint unavailable')}")
-        print("Make sure Lemonade Server is running: lemonade-server serve")
+        print("Make sure Lemonade Server is running:")
+        print("  lemonade-server serve")
+        print("  lemonade-server pull SD-Turbo")
         print()
 
     # Interactive loop

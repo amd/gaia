@@ -10,7 +10,8 @@ Run with:
     pytest tests/integration/test_sd_integration.py -v
 
 Prerequisites:
-    lemonade-server serve --model SD-Turbo
+    lemonade-server serve
+    lemonade-server pull SD-Turbo
 """
 
 from pathlib import Path
@@ -58,6 +59,7 @@ class TestSDIntegration:
             prompt="a red circle on white background, simple, minimal",
             model="SD-Turbo",
             size="512x512",
+            prompt_open=False,  # No interactive prompts in CI
         )
 
         # Verify success
@@ -111,6 +113,7 @@ class TestSDIntegration:
             prompt="blue square",
             model="SD-Turbo",
             size="512x512",
+            prompt_open=False,
         )
 
         if result["status"] == "success":
@@ -133,6 +136,7 @@ class TestSDIntegration:
             model="SD-Turbo",
             size="512x512",
             seed=12345,
+            prompt_open=False,
         )
 
         result2 = mixin._generate_image(
@@ -140,6 +144,7 @@ class TestSDIntegration:
             model="SD-Turbo",
             size="512x512",
             seed=12345,
+            prompt_open=False,
         )
 
         # Both should succeed
