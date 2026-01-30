@@ -1,26 +1,22 @@
 ---
 title: "Image Generation Agent"
-description: "Generate images with automatic prompt enhancement using gaia sd"
+description: "Generate images using gaia sd - an agent that enhances prompts with an LLM"
 ---
 
 <Info>
-  **CLI Command:** `gaia sd` - Image generation with built-in prompt enhancement on Ryzen AI
+  **CLI Command:** `gaia sd` - Demonstrates SDToolsMixin with LLM-powered prompt enhancement
 </Info>
 
-# Generate Images with AI-Enhanced Prompts
+# How It Works
 
-The `gaia sd` command demonstrates GAIA's new SDToolsMixin by using an LLM agent to automatically enhance prompts before image generation. This shows how easy it is to build agents with image creation capabilities.
+The `gaia sd` command shows GAIA's agent capabilities through a practical example: an LLM analyzes your simple prompt, adds helpful keywords (lighting, style, quality), then generates an image with Stable Diffusion.
 
-<Note>
-**100% Local & Easy:** Everything runs on your machine - the LLM enhancement and Stable Diffusion generation both happen locally on Ryzen AI. No cloud APIs, no data leaving your computer. Just type a simple description and the agent handles the technical details.
-</Note>
+**Key features:**
+- **100% Local** - Everything runs on Ryzen AI (LLM + Stable Diffusion)
+- **Easy to use** - Just type what you want, the agent adds technical details
+- **Demonstrates SDToolsMixin** - Shows how to build agents with image generation tools
 
-**What the agent does:**
-- Analyzes your input ("robot kitten")
-- Adds useful keywords (lighting, style, detail, quality)
-- Generates image with Stable Diffusion
-
-**Result:** Better images from simple prompts, without learning SD syntax.
+**Example:** Type "robot kitten" → Agent adds "glowing LED eyes, soft lighting, detailed metallic texture, 4K" → Better result
 
 ---
 
