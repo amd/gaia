@@ -1,23 +1,30 @@
 ---
-title: "AI-Enhanced Image Generation"
-description: "Transform simple prompts into professional images with LLM-powered enhancement"
+title: "Image Generation Agent"
+description: "Generate images with automatic prompt enhancement using gaia sd"
 ---
 
 <Info>
-  **CLI Command:** `gaia sd` - Your AI assistant for professional-quality images on Ryzen AI
+  **CLI Command:** `gaia sd` - Image generation with built-in prompt enhancement on Ryzen AI
 </Info>
 
-# From "a cute robot kitten" to Masterpiece in 17 Seconds
+# Generate Images with AI-Enhanced Prompts
 
-The `gaia sd` command is **not just another Stable Diffusion wrapper**. It's an AI-powered prompt enhancement engine that transforms casual descriptions into professional-quality images.
+The `gaia sd` command demonstrates GAIA's new SDToolsMixin by using an LLM agent to automatically enhance prompts before image generation. This shows how easy it is to build agents with image creation capabilities.
 
-<Warning>
-**The Secret:** An LLM analyzes your request, adds 15+ technical keywords (lighting, style, quality), and optimizes settings—all automatically. You get pro results without learning SD prompt engineering.
-</Warning>
+<Note>
+**100% Local & Easy:** Everything runs on your machine - the LLM enhancement and Stable Diffusion generation both happen locally on Ryzen AI. No cloud APIs, no data leaving your computer. Just type a simple description and the agent handles the technical details.
+</Note>
+
+**What the agent does:**
+- Analyzes your input ("robot kitten")
+- Adds useful keywords (lighting, style, detail, quality)
+- Generates image with Stable Diffusion
+
+**Result:** Better images from simple prompts, without learning SD syntax.
 
 ---
 
-## See It In Action
+## Demo: Watch the Agent Work
 
 <video
   autoPlay
@@ -28,268 +35,322 @@ The `gaia sd` command is **not just another Stable Diffusion wrapper**. It's an 
   src="https://assets.amd-gaia.ai/videos/gaia-sdxl-agent.webm"
 />
 
-Watch the LLM analyze "cute robot kitten", enhance the prompt with technical keywords, and generate an adorable image in ~17 seconds!
+See the agent enhance "cute robot kitten" with lighting and detail keywords, then generate the image—all running locally on your machine in ~17 seconds.
 
 ---
 
-## How It Works: The Enhancement Pipeline
+## How the Enhancement Works
 
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontSize':'16px', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 graph LR
-    A["You Type:<br/><b>'robot kitten'</b>"] --> B["🧠 LLM Brain<br/><small>Analyzes Intent</small>"]
+    A["You Type:<br/><b>'robot kitten'</b>"] --> B["🧠 Agent<br/><small>Analyzes</small>"]
 
-    B --> C["✨ Enhancer<br/><small>Adds Keywords</small>"]
+    B --> C["✨ Enhances<br/><small>Adds Keywords</small>"]
 
-    C --> D["Enhanced Prompt:<br/><i>'cute robotic kitten,<br/>glowing LED eyes,<br/>soft lighting,<br/>detailed, 4K'</i>"]
+    C --> D["Enhanced:<br/><i>'robotic kitten,<br/>LED eyes,<br/>soft lighting,<br/>detailed'</i>"]
 
-    D --> E["🖼️ Stable Diffusion<br/><small>on Ryzen AI</small>"]
+    D --> E["🖼️ SD<br/><small>Ryzen AI</small>"]
 
-    E --> F["🎯 Professional<br/><b>Image</b>"]
+    E --> F["Image"]
 
     style A fill:#2d2d2d,stroke:#1a1a1a,stroke-width:3px,color:#fff
     style B fill:#ED1C24,stroke:#C8171E,stroke-width:4px,color:#fff
     style C fill:#F4484D,stroke:#ED1C24,stroke-width:3px,color:#fff
     style D fill:#6c757d,stroke:#495057,stroke-width:2px,color:#fff
     style E fill:#C8171E,stroke:#C8171E,stroke-width:3px,color:#fff
-    style F fill:#ED1C24,stroke:#C8171E,stroke-width:4px,color:#fff
+    style F fill:#ED1C24,stroke:#C8171E,stroke-width:3px,color:#fff
 
     linkStyle 0,1,2,3,4 stroke:#ED1C24,stroke-width:3px
 ```
 
-**The 3-Second Story:**
-1. 🧠 LLM analyzes "robot kitten" → understands cute + robotic theme
-2. ✨ Adds keywords: glowing LED eyes, metallic fur texture, soft lighting, detailed
-3. 🖼️ SD generates professional-quality robot kitten
+**What happens:**
+1. **Agent analyzes** your input (locally on Ryzen AI)
+2. **Adds helpful keywords** for lighting, style, quality
+3. **Generates image** with Stable Diffusion (locally)
 
-**Result:** Simple idea → Enhanced prompt → Adorable high-quality image
-
----
-
-## See It In Action
-
-<CodeGroup>
-```bash Simple Input
-gaia sd "a cat"
-```
-
-```txt What You See
-🤖 Processing: 'a cat'
-
-🧠 Thought: Enhancing for quality and detail
-🎯 Goal: Generate professional cat image
-
-✨ Enhanced Prompt:
-"fluffy orange tabby cat sitting on windowsill,
-soft natural lighting, detailed fur texture,
-photorealistic, shallow depth of field, 8K"
-
-⠋ Generating image (4 steps)... (5s)
-
-✅ Image generated in 13.2s!
-   Saved: cat_SD-Turbo_20260129.png
-```
-</CodeGroup>
-
-**You type "robot kitten", the LLM adds lighting, materials, details!** No SD expertise needed.
+Everything runs on your machine - the LLM and Stable Diffusion both use Ryzen AI hardware. No cloud calls needed.
 
 ---
 
-## Quick Start (30 Seconds to First Image)
+## Quick Start
 
 <Steps>
-  <Step title="Start Lemonade">
+  <Step title="Start Lemonade Server">
     ```bash
     lemonade-server serve
-    lemonade-server pull SD-Turbo
     ```
   </Step>
 
-  <Step title="Generate!">
+  <Step title="Pull SD model (first time)">
+    ```bash
+    lemonade-server pull SDXL-Turbo
+    ```
+  </Step>
+
+  <Step title="Generate with prompt enhancement">
     ```bash
     gaia sd "cute robot kitten"
     ```
 
-    Watch the LLM enhance your prompt and SD generate an adorable robot animal!
+    The agent enhances your prompt and generates the image.
+
+    Output: `.gaia/cache/sd/images/`
   </Step>
 </Steps>
 
 ---
 
-## The Transformation (Before → After)
+## What You'll See
 
-| You Type | LLM Enhances To | Result |
-|----------|----------------|--------|
-| **"robot kitten"** | "adorable robotic kitten, glowing cyan LED eyes, metallic whiskers, soft lighting, playful, detailed, 4K" | Adorable robot animal |
-| **"robot puppy"** | "cute robotic puppy, glowing blue LED eyes, metallic fur, playful pose, detailed, 4K" | Playful robot companion |
-| **"robot owl"** | "mechanical owl, glowing amber eyes, bronze feathers, steampunk, detailed gears, 8K" | Majestic robot bird |
+The agent shows its work as it processes your request:
 
-**Pattern:** Simple → Professional in every case.
+```
+🤖 Processing: 'cute robot kitten'
+
+📝 Step 1: Thinking...
+🧠 Thought: Enhancing with lighting and detail keywords
+🎯 Goal: Generate robot kitten image
+
+📋 Plan: Call generate_image with enhanced prompt
+
+📝 Step 2: Executing...
+
+┌─── ℹ️  Info ───┐
+│ Prompt: adorable robotic kitten, glowing cyan LED eyes,        │
+│         metallic whiskers, soft lighting, detailed, 4K        │
+│ Model: SDXL-Turbo • Size: 512x512                            │
+│ Settings: 4 steps, CFG 1.0                                   │
+│ Estimated time: ~20 seconds                                  │
+└──────────────┘
+
+⠋ Generating image (4 steps)... (8s)
+
+[IMAGE PREVIEW IN TERMINAL]
+
+┌─── ✅ Success ───┐
+│ Image generated in 17.2s                                      │
+│ Enhanced prompt: "adorable robotic kitten..."                 │
+│ Saved: C:\Users\...\robot_kitten_SDXL-Turbo_20260129.png    │
+└──────────────────┘
+
+Open image in default viewer? [Y/n]:
+```
+
+You see the agent's reasoning and the enhanced prompt it created.
 
 ---
 
-## 4 Models, Each Optimized Differently
+## Enhancement Examples
 
-The LLM knows how each model works best:
+See what the agent adds to simple prompts:
 
-| Model | Speed | What LLM Does |
-|-------|-------|---------------|
-| **SDXL-Turbo** (default) | ~17s | Adds artistic style keywords, detailed lighting, best balance |
-| **SD-Turbo** | ~13s | Focuses on key elements only, concise enhancement |
-| **SD-1.5** | ~88s | Balanced traditional approach |
-| **SDXL-Base-1.0** | ~9min | Natural language, photorealistic focus, keyword weights |
+<CodeGroup>
+```txt You Type
+robot kitten
+```
+
+```txt Agent Enhances
+adorable robotic kitten with metallic silver body and glowing cyan LED eyes,
+playful pose with raised paw,
+soft studio lighting with rim lights,
+smooth brushed metal texture with cute details,
+whiskers made of fine metallic wires,
+mechanical joints visible but adorable,
+digital art style,
+highly detailed,
+warm color palette,
+4K quality
+```
+</CodeGroup>
+
+<CodeGroup>
+```txt You Type
+sunset
+```
+
+```txt Agent Enhances
+vibrant sunset over calm ocean,
+golden hour lighting with warm orange and purple hues,
+dramatic cumulus clouds,
+wide angle seascape composition,
+highly detailed atmospheric effects,
+volumetric lighting,
+4K cinematic quality
+```
+</CodeGroup>
+
+<CodeGroup>
+```txt You Type
+robot owl
+```
+
+```txt Agent Enhances
+futuristic robotic owl perched on branch,
+large mechanical eyes with glowing amber LED pupils,
+intricate metallic feather details,
+bronze and copper finish,
+soft dramatic lighting,
+steampunk aesthetic,
+highly detailed gears and mechanisms visible,
+digital concept art,
+8K render
+```
+</CodeGroup>
+
+The agent adds ~10-15 keywords automatically based on what works well with Stable Diffusion.
+
+---
+
+## Available Models
+
+The agent optimizes its enhancement strategy for each model:
+
+| Model | Speed | Quality | How Agent Enhances |
+|-------|-------|---------|-------------------|
+| **SDXL-Turbo** (default) | ~17s | ⭐⭐⭐ | Adds artistic style, detailed lighting scenarios |
+| **SD-Turbo** | ~13s | ⭐⭐ | Keeps it concise, focuses on key elements |
+| **SD-1.5** | ~88s | ⭐⭐⭐ | Balanced keyword approach |
+| **SDXL-Base-1.0** | ~9min | ⭐⭐⭐⭐⭐ | Adds camera settings, photorealistic focus |
 
 ```bash
-# Default (good quality, fast)
-gaia sd "robot puppy"
+# Default (good balance of speed/quality)
+gaia sd "robot kitten"
 
-# Even faster (lower quality)
-gaia sd "quick test" --sd-model SD-Turbo
+# Faster but simpler
+gaia sd "test concept" --sd-model SD-Turbo
 
-# Photorealistic (slow)
+# Photorealistic (much slower)
 gaia sd "robot kitten, photorealistic" --sd-model SDXL-Base-1.0
 ```
 
-**The LLM adjusts its strategy based on which model you pick!**
-
 ---
 
-## Interactive Mode: Chat with the AI
+## Examples
 
+### Interactive Mode
 ```bash
 gaia sd -i
 ```
 
-Have a conversation about your image:
+Have a conversation with the agent:
 
 ```
 You: robot kitten
 Agent: [enhances] → Generates adorable robotic kitten
 
 You: make it playful
-Agent: [enhances with "playful pose, paw raised"] → Playful robot kitten
+Agent: [enhances with "playful pose, paw raised"] → Playful version
 
 You: add glowing eyes
-Agent: [enhances with "bright cyan LED eyes, glowing"] → Glowing-eyed version
-
-You: more futuristic
-Agent: [enhances with "holographic elements, sleek"] → Futuristic design
+Agent: [enhances with "bright cyan LED eyes"] → Glowing eyes added
 ```
 
-The agent remembers context and refines based on feedback!
+The agent builds on context from previous exchanges.
 
----
+### Try Different Robot Animals
+```bash
+# Cute robot animals
+gaia sd "robot kitten"    # → adorable, glowing eyes, playful
+gaia sd "robot puppy"     # → friendly, metallic fur
+gaia sd "robot owl"       # → mechanical feathers, amber eyes
+gaia sd "robot bunny"     # → floppy ears, soft lighting
 
-## What You'll See
-
-Real terminal output:
-
-```
-🤖 Processing: 'cute robot'
-
-📝 Step 1: Thinking...
-🧠 Thought: User wants cute robot imagery. I'll enhance with...
-
-📋 Plan: Use generate_image with enhanced prompt
-
-📝 Step 2: Executing...
-┌─── ℹ️  Info ───┐
-│ Prompt: cute friendly robot assistant, chibi style...  │
-│ Model: SD-Turbo • Size: 512x512                       │
-└───────────────────┘
-
-⠋ Generating (4 steps)... (7s)
-
-[IMAGE PREVIEW]
-
-✅ Success! Image generated in 13.5s
-   Enhanced: "cute friendly robot assistant, chibi style..."
-   Saved: C:\...\robot_SD-Turbo_20260129.png
+# Different styles
+gaia sd "steampunk robot fox"       # → Victorian aesthetic, gears
+gaia sd "cyberpunk robot wolf"      # → neon, chrome, urban
+gaia sd "friendly robot hamster"    # → cute, small, detailed
 ```
 
-You see **exactly** what the LLM is thinking and doing. Learn from it!
+### Reproducible Results
+```bash
+gaia sd "robot kitten" --seed 42
+```
+
+Same seed = same enhancement + same random seed for SD = identical image (useful for iterations).
+
+### For Automation
+```bash
+gaia sd "product mockup" --no-open
+```
+
+Skips the interactive "Open in viewer?" prompt.
 
 ---
 
-## Why This Is Different
+## Options
 
-**Most SD tools:**
-- You type: "robot" → Get stick figure
-- You learn keywords → Type 50 words → Get decent image
-- **Learning curve:** Weeks of trial and error
-
-**With gaia sd:**
-- You type: "robot" → LLM adds keywords → Get professional image
-- **Learning curve:** Instant, watch what the LLM does
-
-**The agent teaches you** by showing its enhanced prompts. Copy successful patterns!
-
----
-
-## Research-Powered
-
-The LLM's enhancement strategies come from:
-
-- [Stable Diffusion Art Guide](https://stable-diffusion-art.com/prompt-guide/)
-- [SD Lighting Techniques 2026](https://filmora.wondershare.com/ai-prompt/stable-diffusion-lighting-prompts.html)
-- [SDXL Official Docs](https://huggingface.co/docs/diffusers/en/using-diffusers/sdxl_turbo)
-- [IBM Prompt Engineering](https://www.ibm.com/think/prompt-engineering)
-
-Peer-reviewed best practices, automatically applied to your prompts.
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--sd-model` | SDXL-Turbo | Model: SDXL-Turbo, SD-Turbo, SDXL-Base-1.0, SD-1.5 |
+| `--size` | auto | Image size (auto-selected per model) |
+| `--steps` | auto | Inference steps (auto-selected per model) |
+| `--cfg-scale` | auto | CFG scale (auto-selected per model) |
+| `--seed` | random | Fixed seed for reproducibility |
+| `--output-dir` | .gaia/cache/sd/images | Where to save images |
+| `-i, --interactive` | - | Run in interactive mode |
+| `--no-open` | - | Skip viewer prompt (for scripts) |
 
 ---
 
-## Common Questions
+## Troubleshooting
 
 <AccordionGroup>
-  <Accordion title="Is my prompt sent to the cloud?">
-    **No!** Everything runs locally on Ryzen AI:
-    - LLM enhancement on your machine
-    - SD generation on your machine
-    - Prompts never leave your computer
+  <Accordion title="Error: Cannot connect to Lemonade Server">
+    **Solution:**
+    ```bash
+    # Start the server
+    lemonade-server serve
 
-    Only if you use `--use-claude` or `--use-chatgpt` does data go to APIs.
+    # Pull an SD model
+    lemonade-server pull SDXL-Turbo
+    ```
+
+    Verify: `lemonade-server status`
   </Accordion>
 
-  <Accordion title="Can I turn off enhancement?">
-    The CLI is designed for enhancement (that's its value).
+  <Accordion title="Generation is slow">
+    **SDXL-Base-1.0 takes ~9 minutes** (20 steps for photorealistic quality).
 
-    For direct control, use [SDToolsMixin programmatically](/playbooks/sd-agent/index) and call `_generate_image()` directly.
+    For faster results:
+    - Use `--sd-model SDXL-Turbo` (~17s, default)
+    - Use `--sd-model SD-Turbo` (~13s, lower quality)
+
+    The LLM enhancement itself is very fast (under 1 second).
   </Accordion>
 
-  <Accordion title="Why is enhancement sometimes slow?">
-    LLM enhancement takes less than 1 second usually. If slow:
-    - First run loads the LLM model (~5-10s)
-    - After that, enhancement is nearly instant
-    - **Image generation** is the slow part (13s-9min depending on model)
+  <Accordion title="Can I see the original prompt?">
+    Yes! The enhanced prompt is shown in the info panel during generation and in the success message.
+
+    This helps you learn what keywords work well with SD.
   </Accordion>
 
-  <Accordion title="What if I disagree with the enhancement?">
-    Watch what the LLM adds (shown in info panel). You can:
-    - Override with more specific prompts
-    - Specify style: "anime style robot", "photorealistic robot"
-    - See the enhanced prompt and learn from it
-    - Build your own agent with custom enhancement rules ([playbook](/playbooks/sd-agent/index))
+  <Accordion title="Can I control the enhancement?">
+    The agent decides which keywords to add based on the model and your input.
+
+    For manual control:
+    - Be more specific in your prompt ("robot kitten, steampunk style")
+    - Or use SDToolsMixin directly in code ([see playbook](/playbooks/sd-agent/index))
   </Accordion>
 </AccordionGroup>
 
 ---
 
-## Next Steps
+## Learn More
 
 <CardGroup cols={2}>
-  <Card title="Build Your Own Agent" icon="rocket" href="/playbooks/sd-agent/index">
-    20-minute playbook: Create custom prompt enhancers, brand-specific agents, multi-model pipelines
+  <Card title="Build Your Own Agent" icon="robot" href="/playbooks/sd-agent/index">
+    20-minute tutorial on building image agents with SDToolsMixin
   </Card>
 
   <Card title="CLI Reference" icon="terminal" href="/reference/cli#sd-command">
-    Complete option reference for power users
+    Complete option reference
   </Card>
 </CardGroup>
 
-**Try it now:**
+**Try it:**
 ```bash
 gaia sd "cute robot kitten"
 ```
 
-Watch the LLM transform it into an adorable robotic companion! 🤖🐱✨
+See the agent enhance your prompt automatically! 🐱✨
