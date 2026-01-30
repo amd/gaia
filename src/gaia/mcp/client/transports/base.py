@@ -18,12 +18,12 @@ class MCPTransport(ABC):
         Returns:
             bool: True if connection successful, False otherwise
         """
-        pass
+        ...
 
     @abstractmethod
     def disconnect(self) -> None:
         """Close the connection to the MCP server."""
-        pass
+        ...
 
     @abstractmethod
     def send_request(
@@ -42,7 +42,7 @@ class MCPTransport(ABC):
             RuntimeError: If connection is not established
             TimeoutError: If request times out
         """
-        pass
+        ...
 
     @abstractmethod
     def is_connected(self) -> bool:
@@ -51,4 +51,4 @@ class MCPTransport(ABC):
         Returns:
             bool: True if connected, False otherwise
         """
-        pass
+        ...

@@ -78,7 +78,7 @@ class AgentMCPServer:
         for tool_def in tools:
             tool_name = tool_def["name"]
             tool_description = tool_def.get("description", "")
-            input_schema = tool_def.get("inputSchema", {})
+            _input_schema = tool_def.get("inputSchema", {})
 
             # Create a wrapper function for this tool
             # We need to capture tool_name in the closure properly
@@ -144,21 +144,21 @@ class AgentMCPServer:
                         if "app_dir" in kwargs and "appPath" not in kwargs:
                             kwargs["appPath"] = kwargs.pop("app_dir")
                             if verbose:
-                                logger.info(f"[MCP] Mapped app_dir to appPath")
+                                logger.info("[MCP] Mapped app_dir to appPath")
 
                         # Map other common variations
                         if "directory" in kwargs and "appPath" not in kwargs:
                             kwargs["appPath"] = kwargs.pop("directory")
                             if verbose:
-                                logger.info(f"[MCP] Mapped directory to appPath")
+                                logger.info("[MCP] Mapped directory to appPath")
 
                         if "project_path" in kwargs and "appPath" not in kwargs:
                             kwargs["appPath"] = kwargs.pop("project_path")
                             if verbose:
-                                logger.info(f"[MCP] Mapped project_path to appPath")
+                                logger.info("[MCP] Mapped project_path to appPath")
 
                         if verbose:
-                            logger.info(f"[MCP TOOL] Final args to agent:")
+                            logger.info("[MCP TOOL] Final args to agent:")
                             try:
                                 pretty_final = json.dumps(kwargs, indent=2)
                                 logger.info(f"{pretty_final}")
@@ -216,7 +216,6 @@ class AgentMCPServer:
         """Stop the MCP server"""
         # Note: With uvicorn, stopping is handled by KeyboardInterrupt
         # This method is kept for API compatibility
-        pass
 
     def _print_startup_info(self):
         """Print startup banner"""
@@ -235,7 +234,7 @@ class AgentMCPServer:
         for tool in tools:
             print(f"  - {tool['name']}: {tool.get('description', 'No description')}")
         if self.verbose:
-            print(f"\n🔍 Verbose Mode: ENABLED")
+            print("\n🔍 Verbose Mode: ENABLED")
         print("\n📍 MCP Endpoint:")
         print(f"  http://{self.host}:{self.port}/mcp")
         print("\n  Supports:")

@@ -126,6 +126,7 @@ class GAIAMCPBridge:
         self.tools = {}
         self.llm_client = None
         self.verbose = verbose
+        self.chat_sdk = None  # Lazy initialized in _execute_chat
         global VERBOSE
         VERBOSE = verbose
 
@@ -203,7 +204,7 @@ class GAIAMCPBridge:
         try:
             mcp_config_path = os.path.join(os.path.dirname(__file__), "mcp.json")
             if os.path.exists(mcp_config_path):
-                with open(mcp_config_path, "r") as f:
+                with open(mcp_config_path, "r", encoding="utf-8") as f:
                     config = json.load(f)
                     tools_config = config.get("tools", {})
                     # Convert tool config to proper MCP format with name field
@@ -330,7 +331,7 @@ class GAIAMCPBridge:
             from gaia.chat.sdk import ChatConfig, ChatSDK
 
             # Initialize chat SDK if not already done
-            if not hasattr(self, "chat_sdk"):
+            if self.chat_sdk is None:
                 # ChatSDK uses the global LLM configuration, not a base_url
                 config = ChatConfig()
                 self.chat_sdk = ChatSDK(config=config)
@@ -354,7 +355,7 @@ class GAIAMCPBridge:
             logger.error(f"Chat execution error: {e}")
             return {"success": False, "error": str(e)}
 
-    def _execute_blender(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _execute_blender(self, _args: Dict[str, Any]) -> Dict[str, Any]:
         """Execute Blender operations."""
         # Implementation would go here
         return {"success": True, "result": "Blender operation completed"}
@@ -721,8 +722,6 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
 
 def start_server(host="localhost", port=8765, base_url=None, verbose=False):
     """Start the HTTP MCP server."""
-    import io
-
     # Fix Windows Unicode
     if sys.platform == "win32":
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
@@ -762,8 +761,8 @@ def start_server(host="localhost", port=8765, base_url=None, verbose=False):
     print(f"Agents: {list(bridge.agents.keys())}")
     print(f"Tools: {list(bridge.tools.keys())}")
     if verbose:
-        print(f"\n🔍 Verbose Mode: ENABLED")
-        print(f"   All requests will be logged to console and gaia.log")
+        print("\n🔍 Verbose Mode: ENABLED")
+        print("   All requests will be logged to console and gaia.log")
         logger.info("MCP Bridge started in VERBOSE mode - all requests will be logged")
     print("\n📍 Endpoints:")
     print(f"  GET  http://{host}:{port}/health     - Health check")
