@@ -297,8 +297,11 @@ class SDToolsMixin:
 
         # Show generation info to user
         if console and hasattr(console, "print_info"):
+            # Truncate very long prompts for display
+            display_prompt = prompt if len(prompt) <= 80 else prompt[:77] + "..."
             console.print_info(
-                f"Generating {size} image with {model}\n"
+                f"Prompt: {display_prompt}\n"
+                f"Model: {model} • Size: {size}\n"
                 f"Settings: {steps} steps, CFG {cfg_scale}\n"
                 f"Estimated time: {self._estimate_generation_time(model, size)}"
             )

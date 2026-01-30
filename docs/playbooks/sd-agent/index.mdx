@@ -11,8 +11,8 @@ icon: "image"
 <Badge text="development" color="orange" />
 
 **Time to complete:** 20-30 minutes
-**What you'll build:** An interactive agent that generates images from natural language descriptions
-**What you'll learn:** SDToolsMixin pattern, Lemonade Server integration, tool registration
+**What you'll build:** An LLM-powered agent that enhances prompts and generates images
+**What you'll learn:** SDToolsMixin pattern, prompt enhancement with LLMs, tool registration
 **Platform:** Runs locally on AI PCs with Ryzen AI
 
 ---
@@ -23,24 +23,33 @@ icon: "image"
 **Privacy-First AI:** This agent runs entirely on your AI PC. Images are generated locally using Ryzen AI—prompts and images never leave your machine.
 </Info>
 
-When you need to generate images for presentations, prototypes, or creative projects, you typically use cloud services that require API keys, cost money per generation, and send your prompts to external servers.
+When you need to generate images for presentations, prototypes, or creative projects, you typically use cloud services that require API keys, cost money per generation, and send your prompts to external servers. Additionally, getting good results requires expertise in "prompt engineering"—knowing the right keywords, styles, and techniques.
 
-This agent solves that by:
+This agent solves both problems by:
 
-1. Running Stable Diffusion locally on Ryzen AI hardware
-2. Generating images from natural language descriptions
-3. Enhancing prompts automatically for better results
-4. Saving images to your local filesystem
-5. Operating completely offline with full privacy
+1. **LLM-powered prompt enhancement** - Automatically improves simple prompts ("a cat" → "fluffy orange cat, soft lighting, detailed fur, photorealistic, 4k")
+2. **Local SD generation** - Runs Stable Diffusion on Ryzen AI hardware
+3. **Natural language interface** - Just describe what you want in plain English
+4. **Automatic best practices** - Adds style, lighting, quality keywords
+5. **Complete privacy** - Everything runs offline on your machine
+
+<Note>
+**This is different from `gaia sd` CLI:** The CLI command sends your prompt directly to Stable Diffusion. This **agent-based approach** uses an LLM to enhance your prompt first, resulting in significantly better images from simple descriptions.
+</Note>
 
 **What you're building:**
 
-An image generation agent that combines:
-- **Agent reasoning** - LLM-based prompt enhancement
+A **prompt-enhancing image generation agent** that combines:
+- **LLM reasoning** - Analyzes user intent and enhances prompts with best practices
 - **SDToolsMixin** - Stable Diffusion image generation tools
 - **Lemonade Server** - Local SD inference on Ryzen AI
-- **Interactive CLI** - Natural language interface
+- **Natural language** - User describes in plain English, agent adds technical details
 - **Session tracking** - History of generated images
+
+**Example:**
+- **User says:** "a robot"
+- **Agent enhances:** "futuristic robot assistant, metallic chrome finish, studio lighting, sci-fi, detailed, 4k"
+- **Result:** Professional-quality image from simple input
 
 ---
 

@@ -9,6 +9,10 @@ description: "Generate images from text using the gaia sd command"
 
 The `gaia sd` command generates images from text descriptions using Stable Diffusion models running locally on Lemonade Server.
 
+<Note>
+**Direct generation (no LLM):** This CLI command sends your prompt directly to Stable Diffusion without enhancement. For **LLM-powered prompt enhancement**, see the [Image Generation Agent Playbook](/playbooks/sd-agent/index) which teaches you to build an agent that automatically improves prompts.
+</Note>
+
 ---
 
 ## Quick Start
@@ -37,6 +41,20 @@ The `gaia sd` command generates images from text descriptions using Stable Diffu
 
 ---
 
+## CLI vs Agent Approach
+
+**This CLI command (`gaia sd`):**
+- Sends your prompt **directly** to Stable Diffusion (no enhancement)
+- Fast and simple - just generates what you ask for
+- You write the detailed prompt yourself
+
+**Agent approach** ([see playbook](/playbooks/sd-agent/index)):
+- Uses an **LLM to enhance** your simple prompts automatically
+- "a cat" → "fluffy orange cat, soft lighting, detailed fur, photorealistic, 4k"
+- Better results from simple descriptions, but requires agent setup
+
+---
+
 ## Basic Usage
 
 Generate a single image:
@@ -44,8 +62,10 @@ Generate a single image:
 gaia sd "your prompt here"
 ```
 
+**Tip:** For best results with CLI, write detailed prompts. The command sends your prompt directly to SD without enhancement.
+
 The command will:
-1. Show generation settings (model, size, estimated time)
+1. Show generation settings (prompt, model, size, estimated time)
 2. Display a progress spinner with elapsed timer
 3. Show the image preview in terminal
 4. Prompt to open in default image viewer
