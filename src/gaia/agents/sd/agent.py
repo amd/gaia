@@ -27,12 +27,17 @@ class SDAgentConfig:
     output_dir: str = ".gaia/cache/sd/images"
     prompt_to_open: bool = True
 
-    # LLM settings
+    # LLM settings (for prompt enhancement)
     use_claude: bool = False
     use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
     base_url: str = "http://localhost:8000/api/v1"
-    model_id: Optional[str] = None  # None = use default
+    model_id: str = "Qwen3-4B-GGUF"  # 4B model for prompt enhancement
+
+    # Execution settings
+    max_steps: int = 5
+    streaming: bool = False
+    ctx_size: int = 8192  # 8K context (sufficient for prompt enhancement)
 
     # Execution settings
     max_steps: int = 5
@@ -72,7 +77,8 @@ class SDAgent(Agent, SDToolsMixin):
 
         self.config = config
 
-        # Initialize Agent base class
+        # Initialize Agent base class with reduced context requirement
+        # SD prompt enhancement doesn't need 32K context, 8K is sufficient
         super().__init__(
             use_claude=config.use_claude,
             use_chatgpt=config.use_chatgpt,
@@ -82,6 +88,7 @@ class SDAgent(Agent, SDToolsMixin):
             max_steps=config.max_steps,
             streaming=config.streaming,
             show_stats=config.show_stats,
+            min_context_size=config.ctx_size,  # 8K sufficient for prompt enhancement
         )
 
         # Initialize SD tools

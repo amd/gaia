@@ -4972,6 +4972,15 @@ def handle_sd_command(args):
         return
 
     from gaia.agents.sd import SDAgent, SDAgentConfig
+    from gaia.llm.lemonade_client import LemonadeClient
+
+    # Pre-load LLM for prompt enhancement to avoid context size warnings
+    # SD agent uses lightweight LLM for enhancement, doesn't need 32K context
+    llm_client = LemonadeClient(verbose=False)
+    try:
+        llm_client.load_model("Qwen2.5-0.5B-Instruct-CPU", auto_download=True, prompt=False, timeout=60)
+    except Exception:
+        pass  # Model might already be loaded
 
     # Create config
     config = SDAgentConfig(
@@ -4983,7 +4992,7 @@ def handle_sd_command(args):
         use_claude=getattr(args, "use_claude", False),
         use_chatgpt=getattr(args, "use_chatgpt", False),
         base_url=getattr(args, "base_url", "http://localhost:8000/api/v1"),
-        model_id=getattr(args, "model", None),
+        model_id=getattr(args, "model", "Qwen2.5-0.5B-Instruct-CPU"),
     )
 
     # Create agent with LLM prompt enhancement
