@@ -13,6 +13,7 @@ description: "Install prerequisites for GAIA"
 | **OS** | Windows 11, Ubuntu 24.04+ |
 | **RAM** | 16GB minimum, 64GB recommended |
 | **Python** | 3.10 - 3.12 (uv installs automatically) |
+| **Node.js** | 20.20.0 via NVM (optional, for MCP servers) |
 
 <Tip>
   **Recommended Configuration:** The SDK has been primarily tested on a GMKtec NucBox EVO-X2 with AMD Ryzen AI MAX+ 395 w/ Radeon 8060S (or comparable) with 128GB RAM, using the Qwen3-Coder-30B-A3B-Instruct-GGUF LLM running on the iGPU.
@@ -51,6 +52,42 @@ Follow the steps below to install uv, the prerequisite for running GAIA. Lemonad
     uv --version
     ```
 
+    ### Step 2: Install Node.js via NVM (Optional)
+
+    <Note>
+      **Only required if you plan to use:**
+      - MCP servers with `npx` commands (filesystem, GitHub, Slack, etc.)
+      - Electron desktop app development
+    </Note>
+
+    [NVM](https://github.com/coreybutler/nvm-windows) (Node Version Manager) manages Node.js versions, similar to how uv manages Python.
+
+    **Option A: Using winget (Recommended)**
+    ```powershell
+    winget install CoreyButler.NVMforWindows
+    ```
+
+    **Option B: Manual download**
+
+    Download and run the installer from [NVM for Windows](https://github.com/coreybutler/nvm-windows?tab=readme-ov-file#installation--upgrades).
+
+    After installing NVM, **restart PowerShell**, then install Node.js:
+    ```powershell
+    nvm install 20.20.0
+    nvm use 20.20.0
+    ```
+
+    Set as default version (optional):
+    ```powershell
+    nvm alias default 20.20.0
+    ```
+
+    Verify installation:
+    ```powershell
+    node --version
+    npm --version
+    ```
+
     <Success>
       You're ready to install GAIA! Continue to the [Quickstart](/quickstart).
     </Success>
@@ -72,6 +109,39 @@ Follow the steps below to install uv, the prerequisite for running GAIA. Lemonad
     Verify uv is installed (restart terminal if needed):
     ```bash
     uv --version
+    ```
+
+    ### Step 2: Install Node.js via NVM (Optional)
+
+    <Note>
+      **Only required if you plan to use:**
+      - MCP servers with `npx` commands (filesystem, GitHub, Slack, etc.)
+      - Electron desktop app development
+    </Note>
+
+    [NVM](https://github.com/nvm-sh/nvm) (Node Version Manager) manages Node.js versions, similar to how uv manages Python.
+
+    Install NVM:
+    ```bash
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+    ```
+
+    Restart your terminal or run:
+    ```bash
+    source ~/.bashrc  # or ~/.zshrc for Zsh
+    ```
+
+    Install Node.js:
+    ```bash
+    nvm install 20.20.0
+    nvm use 20.20.0
+    nvm alias default 20.20.0
+    ```
+
+    Verify installation:
+    ```bash
+    node --version
+    npm --version
     ```
 
     <Success>

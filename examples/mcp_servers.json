@@ -1,0 +1,13 @@
+{
+  "servers": {
+    "memory": {
+      "command": "npx -y @modelcontextprotocol/server-memory"
+    },
+    "thinking": {
+      "command": "npx -y @modelcontextprotocol/server-sequential-thinking"
+    },
+    "time": {
+      "command": "uvx mcp-server-time"
+    }
+  }
+}

@@ -43,7 +43,8 @@
               "guides/blender",
               "guides/jira",
               "guides/docker",
-              "guides/routing"
+              "guides/routing",
+              "guides/mcp-client"
             ]
           },
           {
@@ -101,7 +102,8 @@
                   "sdk/sdks/rag",
                   "sdk/sdks/llm",
                   "sdk/sdks/vlm",
-                  "sdk/sdks/audio"
+                  "sdk/sdks/audio",
+                  "sdk/sdks/mcp"
                 ]
               },
               {
@@ -116,6 +118,7 @@
                 "pages": [
                   "sdk/mixins/tool-mixins",
                   "sdk/mixins/code-mixins",
+                  "sdk/mixins/database-mixin",
                   "sdk/utils/file-watcher"
                 ]
               },
@@ -171,6 +174,8 @@
               "spec/chat-sdk",
               "spec/rag-sdk",
               "spec/talk-sdk",
+              "sdk/sdks/mcp",
+              "spec/mcp-server",
               "spec/llm-client",
               "spec/vlm-client",
               "spec/audio-client"
@@ -180,12 +185,9 @@
             "group": "Infrastructure",
             "pages": [
               "spec/plugin-registry",
-              "spec/routing-agent",
               "spec/test-utilities",
               "spec/api-agent",
-              "spec/mcp-agent",
-              "spec/api-server",
-              "spec/mcp-server"
+              "spec/api-server"
             ]
           },
           {
@@ -228,6 +230,8 @@
           {
             "group": "Agents & Apps",
             "pages": [
+              "spec/mcp-agent",
+              "spec/routing-agent",
               "spec/chat-agent",
               "spec/docker-agent",
               "spec/jira-agent",

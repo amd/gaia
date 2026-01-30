@@ -180,7 +180,7 @@ class SimpleBlenderMCPServer:
         """Execute a command in the main Blender thread"""
         try:
             cmd_type = command.get("type")
-            params = command.get("params", {})
+            _params = command.get("params", {})
 
             # Ensure we're in the right context
             if cmd_type in ["create_object", "modify_object", "delete_object"]:
@@ -218,7 +218,7 @@ class SimpleBlenderMCPServer:
             try:
                 print(f"Executing handler for {cmd_type}")
                 result = handler(**params)
-                print(f"Handler execution complete")
+                print("Handler execution complete")
                 return {"status": "success", "result": result}
             except Exception as e:
                 print(f"Error in handler: {str(e)}")
@@ -499,7 +499,7 @@ class SimpleBlenderMCPServer:
 
             # Execute the code and capture output and return value
             with redirect_stdout(stdout_tee), redirect_stderr(stderr_tee):
-                exec_result = exec(code, namespace)
+                exec(code, namespace)
                 if "result" in namespace:
                     result_value = namespace["result"]
 
@@ -522,8 +522,6 @@ class SimpleBlenderMCPServer:
                 "result": result_value,
             }
         except Exception as e:
-            import traceback
-
             tb_str = traceback.format_exc()
             # Print error to console
             print("----- CODE EXECUTION ERROR -----")

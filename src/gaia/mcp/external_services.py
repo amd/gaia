@@ -71,6 +71,7 @@ class ExternalMCPService:
                 text=True,
                 env=self.env,
                 timeout=self.timeout,
+                check=False,
             )
 
             if result.returncode != 0:
@@ -120,6 +121,7 @@ class ExternalMCPService:
                 text=True,
                 env=self.env,
                 timeout=self.timeout,
+                check=False,
             )
 
             if result.returncode == 0:

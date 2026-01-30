@@ -617,12 +617,9 @@ When user asks to "index my data folder" or similar:
 
     def update_system_prompt(self) -> None:
         """Update the system prompt with current indexed documents."""
-        # Regenerate the system prompt with updated document list
-        self.system_prompt = self._get_system_prompt()
-
-        # Add the tools description using the parent class method
-        tools_description = self._format_tools_for_prompt()
-        self.system_prompt += f"\n\n==== AVAILABLE TOOLS ====\n{tools_description}\n\n"
+        # Use base class method to regenerate prompt with tools and JSON format
+        # ChatAgent's _get_system_prompt() includes document list, so this works
+        self.rebuild_system_prompt()
 
         if self.rag:
             logger.debug(
