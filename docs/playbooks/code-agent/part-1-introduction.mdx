@@ -293,12 +293,42 @@ Everything is connected:
 Let's see GAIA Code in action:
 
 <Steps>
-  <Step title="Prerequisites">
-    ```bash
-    git clone https://github.com/amd/gaia.git
-    cd gaia
-    uv pip install -e ".[dev]"
-    ```
+  <Step title="Set up your project">
+    Choose your installation path:
+
+    <Tabs>
+      <Tab title="PyPI (Recommended)">
+        Create a new project folder and install from PyPI:
+
+        ```bash
+        mkdir my-code-agent
+        cd my-code-agent
+        uv venv .venv
+        source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
+        uv pip install "amd-gaia[dev]"
+        ```
+
+        <Info>
+        This is the recommended path for most users. The `gaia-code` command will be available after installation.
+        </Info>
+      </Tab>
+
+      <Tab title="Developer (Editable Install)">
+        Clone the repository for development or to access examples:
+
+        ```bash
+        git clone https://github.com/amd/gaia.git
+        cd gaia
+        uv venv .venv
+        source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
+        uv pip install -e ".[dev]"
+        ```
+
+        <Info>
+        Use this path if you want to modify GAIA source code or contribute to the project.
+        </Info>
+      </Tab>
+    </Tabs>
   </Step>
 
   <Step title="Start Lemonade Server">

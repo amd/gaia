@@ -87,10 +87,42 @@ graph TD
 Get a working agent running to understand the basic flow.
 
 <Steps>
-  <Step title="Install dependencies">
-    ```bash
-    uv pip install -e ".[rag]"
-    ```
+  <Step title="Set up your project">
+    Choose your installation path:
+
+    <Tabs>
+      <Tab title="PyPI (Recommended)">
+        Create a new project folder and install from PyPI:
+
+        ```bash
+        mkdir my-chat-agent
+        cd my-chat-agent
+        uv venv .venv
+        source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
+        uv pip install "amd-gaia[rag]"
+        ```
+
+        <Info>
+        This is the recommended path for most users. You'll create your agent scripts in this folder.
+        </Info>
+      </Tab>
+
+      <Tab title="Developer (Editable Install)">
+        Clone the repository for development or to access examples:
+
+        ```bash
+        git clone https://github.com/amd/gaia.git
+        cd gaia
+        uv venv .venv
+        source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
+        uv pip install -e ".[rag]"
+        ```
+
+        <Info>
+        Use this path if you want to modify GAIA source code or contribute to the project.
+        </Info>
+      </Tab>
+    </Tabs>
   </Step>
 
   <Step title="Start Lemonade Server">
@@ -105,7 +137,7 @@ Get a working agent running to understand the basic flow.
   </Step>
 
   <Step title="Create your first agent">
-    Create `my_chat_agent.py`:
+    Create `my_chat_agent.py` in your project folder:
 
     ```python title="my_chat_agent.py"
     import json
@@ -119,8 +151,6 @@ Get a working agent running to understand the basic flow.
 
     # Ask a question
     result = agent.process_query("What does the manual say about installation?")
-    import json
-
     print(json.dumps(result, indent=2))
     ```
   </Step>

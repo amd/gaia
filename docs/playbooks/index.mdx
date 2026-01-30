@@ -316,27 +316,36 @@ All playbooks assume you have:
 <Tabs>
   <Tab title="Python Environment">
     - Python 3.10 or higher
-    - Virtual environment (venv or conda)
-    - pip or uv for package management
+    - [uv](https://docs.astral.sh/uv/) package manager (recommended)
+    - A project folder for your agent code
   </Tab>
 
   <Tab title="GAIA Installed">
+    Create a project folder and install GAIA:
+
     ```bash
+    mkdir my-gaia-project
+    cd my-gaia-project
+    uv venv .venv
+    source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
     uv pip install amd-gaia
     ```
+
+    <Info>
+    Each playbook specifies additional extras you may need (e.g., `amd-gaia[rag]` for document processing).
+    </Info>
   </Tab>
 
   <Tab title="Lemonade Server">
-    ```bash
-    # Install Lemonade Server (AMD-optimized for Ryzen AI)
-    uv pip install lemonade-server
+    Lemonade Server is installed automatically with GAIA:
 
+    ```bash
     # Start with NPU/iGPU acceleration
     lemonade-server serve
     ```
 
     <Tip>
-    Lemonade Server provides AMD-optimized inference for AI PCs, utilizing NPU and iGPU acceleration.
+    Lemonade Server provides AMD-optimized inference for AI PCs, utilizing NPU and iGPU acceleration. GAIA will auto-start it if not running.
     </Tip>
   </Tab>
 
@@ -354,11 +363,11 @@ All playbooks assume you have:
 
 <Steps>
   <Step title="Start here" icon="rocket">
-    Begin with **[Document Q&A Agent](/playbooks/chat-agent-rag)** - it covers foundational concepts used in all other playbooks.
+    Begin with **[Document Q&A Agent](/playbooks/chat-agent/part-1-getting-started)** - it covers foundational concepts used in all other playbooks.
   </Step>
 
   <Step title="Add capabilities" icon="puzzle-piece">
-    Once comfortable, add voice with **[Voice-Enabled Assistant](/playbooks/voice-agent)** or code generation with **[Code Agent](/playbooks/code-agent)**.
+    Once comfortable, add voice with **[Voice-Enabled Assistant](/playbooks/voice-agent)** or code generation with **[Code Agent](/playbooks/code-agent/part-1-introduction)**.
   </Step>
 
   <Step title="Go advanced" icon="star">
