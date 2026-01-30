@@ -9,14 +9,21 @@ description: "Generate images using gaia sd - an agent that enhances prompts wit
 
 # How It Works
 
-The `gaia sd` command shows GAIA's agent capabilities through a practical example: an LLM analyzes your simple prompt, adds helpful keywords (lighting, style, quality), then generates an image with Stable Diffusion.
+The `gaia sd` command demonstrates GAIA's multi-modal agent capabilities: an LLM enhances your prompt, Stable Diffusion generates the image, then a vision model (VLM) analyzes it and creates a creative story.
 
 **Key features:**
-- **100% Local** - Everything runs on Ryzen AI (LLM + Stable Diffusion)
-- **Easy to use** - Just type what you want, the agent adds technical details
-- **Demonstrates SDToolsMixin** - Shows how to build agents with image generation tools
+- **100% Local** - LLM, SD, and VLM all run on Ryzen AI
+- **Multi-modal pipeline** - Text (LLM) → Image (SD) → Vision analysis (VLM) → Story (VLM)
+- **Easy to use** - Just type a simple description, get image + story
+- **Demonstrates SDToolsMixin** - Shows how to build multi-modal agents
 
-**Example:** Type "robot kitten" → Agent adds "glowing LED eyes, soft lighting, detailed metallic texture, 4K" → Better result
+**Example:**
+- You type: "robot kitten"
+- LLM adds: "glowing LED eyes, soft lighting, detailed metallic texture, 4K"
+- SD generates: Image
+- VLM analyzes: "A cute mechanical kitten with silver body..."
+- VLM creates: Story about Whiskers the robot kitten
+- Result: Image + creative narrative
 
 ---
 
@@ -31,7 +38,7 @@ The `gaia sd` command shows GAIA's agent capabilities through a practical exampl
   src="https://assets.amd-gaia.ai/videos/gaia-sdxl-agent.webm"
 />
 
-See the agent enhance "cute robot kitten" with lighting and detail keywords, then generate the image—all running locally on your machine in ~17 seconds.
+See the complete AI workflow: LLM enhances your prompt → SD generates the image → VLM analyzes it → VLM creates a creative story. All running locally on Ryzen AI in ~20 seconds total.
 
 ---
 
