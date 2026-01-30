@@ -73,18 +73,44 @@ graph TD
 Get a working intake agent running to understand the basic flow.
 
 <Steps>
-  <Step title="Clone and install">
-    <Warning>
-      **Developer Preview:** The Medical Intake Agent requires cloning the repository. PyPI package coming soon.
-    </Warning>
+  <Step title="Set up your project">
+    Choose your installation path:
 
-    ```bash
-    git clone https://github.com/amd/gaia.git
-    cd gaia
-    uv pip install -e ".[api,rag]"
-    ```
+    <Tabs>
+      <Tab title="PyPI (Recommended)">
+        Create a new project folder and install from PyPI:
 
-    The `api` extra provides FastAPI/uvicorn for the web dashboard. The `rag` extra provides PyMuPDF for PDF processing.
+        ```bash
+        mkdir my-emr-agent
+        cd my-emr-agent
+        uv venv .venv
+        source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
+        uv pip install "amd-gaia[api,rag]"
+        ```
+
+        The `api` extra provides FastAPI/uvicorn for the web dashboard. The `rag` extra provides PyMuPDF for PDF processing.
+
+        <Info>
+        This is the recommended path for most users. You'll create your agent scripts in this folder.
+        </Info>
+      </Tab>
+
+      <Tab title="Developer (Editable Install)">
+        Clone the repository for development or to access examples:
+
+        ```bash
+        git clone https://github.com/amd/gaia.git
+        cd gaia
+        uv venv .venv
+        source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
+        uv pip install -e ".[api,rag]"
+        ```
+
+        <Info>
+        Use this path if you want to modify GAIA source code or contribute to the project.
+        </Info>
+      </Tab>
+    </Tabs>
   </Step>
 
   <Step title="Start Lemonade Server">
@@ -99,7 +125,7 @@ Get a working intake agent running to understand the basic flow.
   </Step>
 
   <Step title="Create your first intake agent">
-    Create `intake_agent.py`:
+    Create `intake_agent.py` in your project folder:
 
     ```python title="intake_agent.py"
     from gaia.agents.emr import MedicalIntakeAgent
