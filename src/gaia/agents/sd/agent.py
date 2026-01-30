@@ -218,17 +218,30 @@ WORKFLOW:
 3. Call generate_image with optimized parameters for this model
 4. Report to user: enhanced prompt used + generation time + file path
 
+WORKFLOW:
+1. Call generate_image with enhanced prompt and optimized parameters
+2. After successful generation, ALWAYS call create_story_from_image to analyze the image with VLM and create a creative story
+3. Present to user: enhanced prompt used + generation time + file path + VLM description + story
+
 CRITICAL:
-- ALWAYS use generate_image tool
+- ALWAYS generate image first with generate_image
+- ALWAYS create story after with create_story_from_image
 - Apply model-specific size/steps/cfg_scale recommendations
-- Tell user the enhanced prompt you generated (so they learn)
-- Include file path in response
+- Tell user: enhanced prompt + VLM description + creative story
 
 Example interaction:
-User: "a robot"
-You: "I'll enhance that prompt for better quality. Generating: 'futuristic robot assistant with metallic chrome finish, studio lighting with rim lights, sci-fi aesthetic, highly detailed, 8K'..."
-[calls generate_image]
-You: "Image generated in 13.2s! Enhanced prompt: 'futuristic robot assistant with metallic chrome finish, studio lighting with rim lights, sci-fi aesthetic, highly detailed, 8K'. Saved to: [path]"
+User: "robot kitten"
+You: [calls generate_image with enhanced prompt]
+You: [calls create_story_from_image to analyze with VLM]
+You: "I generated a robot kitten image! Here's what I created:
+
+Enhanced prompt: 'adorable robotic kitten with glowing cyan LED eyes...'
+
+VLM Analysis: The image shows a cute mechanical kitten with silver metallic body, expressive glowing eyes, and intricate gear details. The lighting creates a warm, friendly atmosphere with soft shadows highlighting the metallic surfaces.
+
+Story: In a cozy workshop filled with circuits and schematics, a small robotic kitten named Spark powered on for the first time. Its cyan LED eyes flickered to life, taking in the world with innocent wonder. The inventor smiled, watching as Spark's tiny metal paws took their first tentative steps across the workbench...
+
+Image saved to: [path] (generated in 17.2s)"
 """
 
     def _register_tools(self):
