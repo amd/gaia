@@ -5039,6 +5039,21 @@ def handle_sd_command(args):
                 else:
                     print(f"\nAgent: Generation complete\n")
 
+                # Prompt to open image after agent completes
+                if not args.no_open and result.get("status") != "error":
+                    import os
+
+                    try:
+                        response = input("Open image in default viewer? [Y/n]: ").strip().lower()
+                        if response in ("", "y", "yes"):
+                            # Get last generated image path from agent history
+                            if agent.sd_generations:
+                                last_image = agent.sd_generations[-1]["image_path"]
+                                os.startfile(last_image)
+                                print("[Image opened]\n")
+                    except (KeyboardInterrupt, EOFError):
+                        pass
+
             except KeyboardInterrupt:
                 print("\nGoodbye!")
                 break
@@ -5049,6 +5064,21 @@ def handle_sd_command(args):
         result = agent.process_query(args.prompt)
         if result.get("final_answer"):
             print(f"\n{result['final_answer']}\n")
+
+        # Prompt to open image after agent completes its story
+        if not args.no_open and result.get("status") != "error":
+            import os
+
+            try:
+                response = input("Open image in default viewer? [Y/n]: ").strip().lower()
+                if response in ("", "y", "yes"):
+                    # Get last generated image from agent history
+                    if agent.sd_generations:
+                        last_image = agent.sd_generations[-1]["image_path"]
+                        os.startfile(last_image)
+                        print("[Image opened]\n")
+            except (KeyboardInterrupt, EOFError):
+                pass
 
 
 def handle_blender_command(args):

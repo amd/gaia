@@ -407,34 +407,7 @@ class SDToolsMixin:
                     f"Saved: {Path(image_path).absolute()}"
                 )
 
-            # Prompt to open in default viewer after success message
-            # Check instance attribute first, then parameter
-            should_prompt = (
-                prompt_open
-                if prompt_open is not None
-                else getattr(self, "sd_prompt_to_open", True)
-            )
-
-            if should_prompt:
-                import os
-                import sys
-
-                if console and sys.platform == "win32":
-                    try:
-                        response = (
-                            input("\nOpen image in default viewer? [Y/n]: ")
-                            .strip()
-                            .lower()
-                        )
-                        if response in ("", "y", "yes"):
-                            os.startfile(str(image_path))
-                            if console.rich_available:
-                                console.console.print(
-                                    "[dim]Image opened in default viewer[/dim]\n"
-                                )
-                    except (KeyboardInterrupt, EOFError):
-                        pass  # User cancelled
-
+            # Note: Open prompt handled by CLI after agent completes its story
             logger.debug(f"Image generated: {image_path} ({generation_time_ms}ms)")
             return result
 
