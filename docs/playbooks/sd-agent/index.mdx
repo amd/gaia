@@ -1,0 +1,604 @@
+---
+title: "Building an Image Generation Agent"
+description: "Build an agent that generates images using Stable Diffusion with the SDToolsMixin"
+icon: "image"
+---
+
+<Info>
+  **Source Code:** [`examples/sd_agent_example.py`](https://github.com/amd/gaia/blob/main/examples/sd_agent_example.py)
+</Info>
+
+<Badge text="development" color="orange" />
+
+**Time to complete:** 20-30 minutes
+**What you'll build:** An interactive agent that generates images from natural language descriptions
+**What you'll learn:** SDToolsMixin pattern, Lemonade Server integration, tool registration
+**Platform:** Runs locally on AI PCs with Ryzen AI
+
+---
+
+## Why Build This Agent?
+
+<Info>
+**Privacy-First AI:** This agent runs entirely on your AI PC. Images are generated locally using Ryzen AI—prompts and images never leave your machine.
+</Info>
+
+When you need to generate images for presentations, prototypes, or creative projects, you typically use cloud services that require API keys, cost money per generation, and send your prompts to external servers.
+
+This agent solves that by:
+
+1. Running Stable Diffusion locally on Ryzen AI hardware
+2. Generating images from natural language descriptions
+3. Enhancing prompts automatically for better results
+4. Saving images to your local filesystem
+5. Operating completely offline with full privacy
+
+**What you're building:**
+
+An image generation agent that combines:
+- **Agent reasoning** - LLM-based prompt enhancement
+- **SDToolsMixin** - Stable Diffusion image generation tools
+- **Lemonade Server** - Local SD inference on Ryzen AI
+- **Interactive CLI** - Natural language interface
+- **Session tracking** - History of generated images
+
+---
+
+## The Architecture (What You're Building)
+
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+graph TD
+    A(["ImageAgent"]) --> B(["Agent Base"])
+    A --> C(["SDToolsMixin"])
+
+    C --> D(["generate_image()"])
+    C --> E(["list_sd_models()"])
+    C --> F(["get_generation_history()"])
+
+    D --> G["LemonadeClient"]
+    G --> H["Lemonade Server<br/>SD Endpoint"]
+    H --> I["Stable Diffusion<br/>on Ryzen AI"]
+
+    style A fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style B fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    style C fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style D fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+    style E fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+    style F fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+    style G fill:#6c757d,stroke:#495057,stroke-width:2px,color:#fff
+    style H fill:#6c757d,stroke:#495057,stroke-width:2px,color:#fff
+    style I fill:#6c757d,stroke:#495057,stroke-width:2px,color:#fff
+
+    linkStyle 0,1,2,3,4,5,6,7,8 stroke:#ED1C24,stroke-width:2px
+```
+
+**Flow:**
+1. User query → ImageAgent (orchestrator)
+2. Agent selects tool → generate_image / list_sd_models / get_generation_history
+3. Tools call → SDToolsMixin → LemonadeClient → Lemonade Server
+4. Stable Diffusion generates image on Ryzen AI hardware
+5. Image saved locally → Agent responds with file path
+
+---
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install GAIA SDK">
+    ```bash
+    pip install amd-gaia
+    ```
+  </Step>
+
+  <Step title="Start Lemonade Server">
+    ```bash
+    lemonade-server serve
+    ```
+  </Step>
+
+  <Step title="Pull SD model">
+    ```bash
+    lemonade-server pull SD-Turbo
+    ```
+
+    This downloads the SD-Turbo model (~2.6GB). First time takes a few minutes.
+  </Step>
+
+  <Step title="Verify SD endpoint">
+    ```bash
+    curl http://localhost:8000/api/v1/models
+    ```
+
+    Should list "SD-Turbo" in the models array.
+  </Step>
+</Steps>
+
+---
+
+## Building the Agent
+
+### Step 1: Understanding the Mixin Pattern
+
+GAIA uses **mixins** to add capabilities to agents. Instead of implementing image generation from scratch, you inherit from `SDToolsMixin`:
+
+```python
+from gaia.agents.base import Agent
+from gaia.agents.sd import SDToolsMixin
+
+class ImageAgent(Agent, SDToolsMixin):  # Multiple inheritance
+    pass
+```
+
+**Why mixins?**
+- Reusable across multiple agents
+- Single responsibility (SDToolsMixin only handles SD)
+- Easy to combine (Agent + SDToolsMixin + DatabaseMixin + ...)
+- Follows GAIA architecture pattern
+
+---
+
+### Step 2: Initialize the Mixin
+
+The mixin needs configuration before use:
+
+```python
+class ImageAgent(Agent, SDToolsMixin):
+    def __init__(self, output_dir="./generated_images"):
+        # Initialize Agent base class
+        super().__init__()
+
+        # Initialize SD tools
+        self.init_sd(
+            base_url="http://localhost:8000",  # Lemonade Server
+            output_dir=output_dir,              # Where to save images
+            default_model="SD-Turbo",           # Fast by default
+            default_size="512x512",             # Optimal for SD-Turbo
+        )
+
+        # Register SD tools with this agent
+        self.register_sd_tools()
+```
+
+**What init_sd() does:**
+- Creates LemonadeClient for API calls
+- Sets up output directory
+- Configures model defaults
+- Initializes generation history list
+
+**What register_sd_tools() does:**
+- Registers `generate_image` tool
+- Registers `list_sd_models` tool
+- Registers `get_generation_history` tool
+- Makes them available to the LLM for orchestration
+
+---
+
+### Step 3: Define the System Prompt
+
+The system prompt teaches the agent how to use its tools:
+
+```python
+    def _get_system_prompt(self) -> str:
+        return """You are an image generation assistant powered by Stable Diffusion.
+
+When the user asks you to create, generate, or make an image, use the generate_image tool.
+
+PROMPT ENHANCEMENT:
+Before generating, enhance simple prompts for better results:
+- Add artistic style (photorealistic, anime, oil painting, digital art)
+- Add lighting (golden hour, dramatic lighting, soft light, studio)
+- Add quality keywords (high quality, detailed, 4k, masterpiece)
+- Add composition details (rule of thirds, centered, wide angle)
+
+EXAMPLES:
+- "a cat" → "a fluffy orange cat, soft natural lighting, detailed fur, photorealistic, 4k"
+- "sunset" → "vibrant sunset over calm ocean, golden hour, dramatic clouds, wide angle, 4k"
+- "robot" → "futuristic robot assistant, metallic finish, studio lighting, sci-fi, detailed, 4k"
+
+Always enhance the user's prompt before generating for better results.
+After generating, tell the user where the image was saved."""
+```
+
+**Why this matters:**
+- Teaches the agent to enhance prompts automatically
+- Provides examples of good vs. bad prompts
+- Ensures user gets high-quality images
+
+---
+
+### Step 4: Complete Implementation
+
+Here's the full agent (only ~40 lines of code):
+
+```python title="image_agent.py"
+from gaia.agents.base import Agent
+from gaia.agents.sd import SDToolsMixin
+
+
+class ImageAgent(Agent, SDToolsMixin):
+    """An agent that generates images from text descriptions."""
+
+    def __init__(self, output_dir="./generated_images"):
+        super().__init__()
+
+        # Initialize SD tools with configuration
+        self.init_sd(
+            base_url="http://localhost:8000",
+            output_dir=output_dir,
+            default_model="SD-Turbo",
+            default_size="512x512",
+        )
+
+        # Register the SD tools with this agent
+        self.register_sd_tools()
+
+    def _get_system_prompt(self) -> str:
+        return """You are an image generation assistant.
+
+When the user asks you to create, generate, or make an image, use the generate_image tool.
+
+Before generating, enhance simple prompts:
+- Add style keywords (photorealistic, anime, digital art)
+- Add lighting (golden hour, dramatic, soft, studio)
+- Add quality (detailed, 4k, high quality)
+
+Example: "a cat" → "fluffy orange cat, soft lighting, detailed fur, photorealistic, 4k"
+
+After generating, tell the user where the image was saved."""
+
+
+# Usage
+if __name__ == "__main__":
+    agent = ImageAgent()
+
+    # Check SD endpoint is available
+    health = agent.sd_health_check()
+    if health["status"] != "healthy":
+        print("Error: Lemonade Server SD endpoint unavailable")
+        print("Run: lemonade-server serve && lemonade-server pull SD-Turbo")
+        exit(1)
+
+    # Interactive loop
+    while True:
+        user_input = input("\nYou: ").strip()
+        if user_input.lower() in ("quit", "exit"):
+            break
+
+        response = agent.run(user_input)
+        print(f"\nAgent: {response}\n")
+```
+
+---
+
+## Running Your Agent
+
+Save the code above as `image_agent.py` and run:
+
+```bash
+python image_agent.py
+```
+
+**Try these prompts:**
+```
+You: Create an image of a sunset over mountains
+Agent: [Enhances prompt and generates image]
+        Image saved to: ./generated_images/sunset_over_mountains_SD-Turbo_20260129_150000.png
+
+You: Make a robot with AMD logo
+Agent: [Generates with enhanced prompt]
+        Image saved to: ./generated_images/robot_with_AMD_logo_SD-Turbo_20260129_150030.png
+```
+
+---
+
+## Understanding the Tools
+
+The SDToolsMixin provides 3 tools your agent can use:
+
+### generate_image
+
+```python
+result = agent._generate_image(
+    prompt="a dragon on a cliff at sunset",
+    model="SD-Turbo",     # or SDXL-Turbo, SD-1.5, SDXL-Base-1.0
+    size="512x512",       # or 768x768, 1024x1024
+    steps=4,              # inference steps
+    seed=42               # for reproducibility
+)
+```
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "image_path": "./generated_images/dragon_SD-Turbo_20260129.png",
+    "prompt": "a dragon on a cliff at sunset",
+    "model": "SD-Turbo",
+    "size": "512x512",
+    "generation_time_ms": 13200
+}
+```
+
+### list_sd_models
+
+Lists available models and their characteristics:
+
+```python
+result = agent.list_sd_models()
+# Returns info on SD-Turbo, SDXL-Turbo, SD-1.5, SDXL-Base-1.0
+```
+
+### get_generation_history
+
+Shows images generated in this session:
+
+```python
+result = agent.get_generation_history(limit=5)
+# Returns last 5 generations with paths, prompts, metadata
+```
+
+---
+
+## Customizing Your Agent
+
+### Change Default Model
+
+For better quality (but slower):
+
+```python
+self.init_sd(
+    default_model="SDXL-Turbo",    # Better quality
+    default_size="512x512",
+)
+```
+
+For photorealistic images:
+
+```python
+self.init_sd(
+    default_model="SDXL-Base-1.0", # Photorealistic (slow, ~9min)
+    default_size="1024x1024",
+)
+```
+
+### Add Custom Validation
+
+Validate prompts before generating:
+
+```python
+class ImageAgent(Agent, SDToolsMixin):
+    def _validate_prompt(self, prompt: str) -> bool:
+        # Reject empty or too-short prompts
+        if len(prompt.strip()) < 3:
+            return False
+
+        # Reject inappropriate content
+        banned_words = ["violent", "explicit"]
+        if any(word in prompt.lower() for word in banned_words):
+            return False
+
+        return True
+
+    def run(self, query: str) -> str:
+        # Check prompt before processing
+        if "generate" in query.lower() or "create" in query.lower():
+            if not self._validate_prompt(query):
+                return "Please provide a valid image description."
+
+        return super().run(query)
+```
+
+### Add Multiple Sizes
+
+Generate images at multiple resolutions:
+
+```python
+class MultiSizeImageAgent(Agent, SDToolsMixin):
+    def __init__(self):
+        super().__init__()
+        self.init_sd()
+        self.register_sd_tools()
+
+    def generate_multiple_sizes(self, prompt: str):
+        sizes = ["512x512", "768x768", "1024x1024"]
+        results = []
+
+        for size in sizes:
+            result = self._generate_image(prompt, size=size)
+            if result["status"] == "success":
+                results.append(result["image_path"])
+
+        return results
+```
+
+---
+
+## Supported Models
+
+| Model | Speed | Quality | Resolution | Use Case |
+|-------|-------|---------|------------|----------|
+| **SD-Turbo** | ~13s | ⭐⭐ | 512x512 | Fast iteration (default) |
+| **SDXL-Turbo** | ~17s | ⭐⭐⭐ | 512x512 | Better quality, still fast |
+| **SD-1.5** | ~88s | ⭐⭐⭐ | 512x512 | General purpose, legacy |
+| **SDXL-Base-1.0** | ~9min | ⭐⭐⭐⭐⭐ | 1024x1024 | Photorealistic, presentation-ready |
+
+**Auto-Settings:**
+Each model has optimal defaults (steps, CFG scale, size) that are automatically applied. You can override any setting.
+
+---
+
+## Prompt Engineering
+
+The agent can enhance prompts, but you can also teach it domain-specific patterns:
+
+### Example: Brand-Focused Agent
+
+```python
+class BrandImageAgent(Agent, SDToolsMixin):
+    def __init__(self, brand_name="AMD", brand_colors="red and black"):
+        super().__init__()
+        self.init_sd()
+        self.register_sd_tools()
+        self.brand_name = brand_name
+        self.brand_colors = brand_colors
+
+    def _get_system_prompt(self) -> str:
+        return f"""You are a brand image generator for {self.brand_name}.
+
+When generating images, automatically add brand elements:
+- Brand name: {self.brand_name}
+- Brand colors: {self.brand_colors}
+- Professional, clean aesthetic
+- High quality, detailed
+
+Example enhancement:
+"a robot" → "professional {self.brand_name} robot assistant, {self.brand_colors} color scheme, modern design, studio lighting, 4k"
+
+Use generate_image with these enhancements."""
+
+# Usage
+agent = BrandImageAgent(brand_name="AMD", brand_colors="red and black")
+agent.run("Create a product showcase image")
+# Automatically adds AMD branding
+```
+
+---
+
+## Error Handling
+
+The mixin returns structured errors:
+
+```python
+result = agent._generate_image("test")
+
+if result["status"] == "error":
+    print(f"Error: {result['error']}")
+    # Handle: model not loaded, server down, timeout, etc.
+else:
+    print(f"Success: {result['image_path']}")
+```
+
+**Common errors:**
+- `Cannot connect to Lemonade Server` - Server not running
+- `Invalid model` - Model name typo or not downloaded
+- `Image generation timed out` - Server overloaded (SDXL-Base-1.0 takes ~9min)
+
+---
+
+## Testing Your Agent
+
+Before deploying, test the agent:
+
+```python
+def test_image_agent():
+    agent = ImageAgent()
+
+    # Test 1: Simple generation
+    response = agent.run("Create a test image")
+    assert "saved to" in response.lower()
+
+    # Test 2: Prompt enhancement
+    response = agent.run("Make a simple circle")
+    # Agent should enhance "circle" → "red circle on white background, minimal, clean"
+
+    # Test 3: History tracking
+    result = agent.get_generation_history()
+    assert len(result["generations"]) > 0
+
+test_image_agent()
+print("All tests passed!")
+```
+
+---
+
+## Advanced: Combining Mixins
+
+SDToolsMixin works with other mixins:
+
+```python
+from gaia.agents.base import Agent
+from gaia.agents.sd import SDToolsMixin
+from gaia.database import DatabaseMixin
+
+class ImageDatabaseAgent(Agent, SDToolsMixin, DatabaseMixin):
+    """Agent that generates images AND stores metadata in SQLite."""
+
+    def __init__(self):
+        super().__init__()
+
+        # Initialize both mixins
+        self.init_sd()
+        self.init_database("image_catalog.db")
+
+        # Register tools from both
+        self.register_sd_tools()
+        self.register_database_tools()
+
+        # Create table for image metadata
+        self._execute_sql("""
+            CREATE TABLE IF NOT EXISTS images (
+                id INTEGER PRIMARY KEY,
+                prompt TEXT,
+                model TEXT,
+                filepath TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+    def _get_system_prompt(self) -> str:
+        return """You generate images and catalog them in a database.
+
+After generating an image with generate_image, save its metadata with execute_sql:
+INSERT INTO images (prompt, model, filepath) VALUES (?, ?, ?)
+
+To search past images, use query_sql."""
+```
+
+---
+
+## What You Learned
+
+<Steps>
+  <Step title="Mixin Pattern">
+    How to use SDToolsMixin to add image generation to any agent
+  </Step>
+
+  <Step title="Tool Registration">
+    How `register_sd_tools()` exposes tools to the LLM
+  </Step>
+
+  <Step title="Lemonade Integration">
+    How agents call Lemonade Server for local SD inference
+  </Step>
+
+  <Step title="Agent Orchestration">
+    How the LLM selects and calls tools based on user queries
+  </Step>
+
+  <Step title="Error Handling">
+    How to handle structured error responses from tools
+  </Step>
+</Steps>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="CLI Command" icon="terminal" href="/guides/sd">
+    Use `gaia sd` command for quick image generation without code
+  </Card>
+
+  <Card title="Full SD Agent Plan" icon="map" href="/plans/image-agent">
+    Advanced SD Agent with VLM evaluation and iterative refinement
+  </Card>
+
+  <Card title="Tool Mixins" icon="puzzle-piece" href="/sdk/mixins/tool-mixins">
+    Learn about other mixins: DatabaseMixin, RAGToolsMixin, etc.
+  </Card>
+
+  <Card title="Agent System" icon="robot" href="/sdk/core/agent-system">
+    Deep dive into GAIA's agent architecture and base classes
+  </Card>
+</CardGroup>
