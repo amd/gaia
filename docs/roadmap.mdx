@@ -31,24 +31,40 @@ graph LR
     Q1["Q1 2026<br/>Lightweight Installer<br/><small>One-command install</small>"]
     Q1B["Q1 2026<br/>Chat Desktop UI<br/><small>Privacy-first RAG</small>"]
     Q1C["Q1 2026<br/>MCP Client Mixin<br/><small>Computer Use Agents</small>"]
+    Q1D["Q1 2026<br/>CUA<br/><small>Desktop automation</small>"]
+    Q1E["Q1 2026<br/>Docker Containers<br/><small>Run & develop GAIA</small>"]
+    Q1F["Q1 2026<br/>SD Agent<br/><small>Stable Diffusion optimization</small>"]
     Q2["Q2 2026<br/>MCP Docs Server<br/><small>AI assistant context</small>"]
+    Q2B["Q2 2026<br/>AI PC Agents Hub<br/><small>Discover & compete</small>"]
     Q3["Q3 2026<br/>TBD<br/><small>Community-driven</small>"]
 
     Q1 -.-> Q1B
     Q1B --> Q1C
-    Q1C --> Q2
-    Q2 --> Q3
+    Q1C --> Q1D
+    Q1D --> Q1E
+    Q1E -.-> Q1F
+    Q1F --> Q2
+    Q2 -.-> Q2B
+    Q2B --> Q3
 
     style Q1 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style Q1B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style Q1C fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style Q1D fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style Q1E fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style Q1F fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style Q2 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style Q2B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style Q3 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
 
     linkStyle 0 stroke:#ED1C24,stroke-width:2px,stroke-dasharray: 5 5
     linkStyle 1 stroke:#ED1C24,stroke-width:2px
     linkStyle 2 stroke:#ED1C24,stroke-width:2px
     linkStyle 3 stroke:#ED1C24,stroke-width:2px
+    linkStyle 4 stroke:#ED1C24,stroke-width:2px,stroke-dasharray: 5 5
+    linkStyle 5 stroke:#ED1C24,stroke-width:2px
+    linkStyle 6 stroke:#ED1C24,stroke-width:2px,stroke-dasharray: 5 5
+    linkStyle 7 stroke:#ED1C24,stroke-width:2px
 ```
 
 ### Q1 2026: Lightweight Installer
@@ -134,6 +150,70 @@ CUA validates the MCP Client Mixin framework and serves as a template for buildi
 
 → [View detailed plan](/plans/cua) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/224)
 
+### Q1 2026: Docker Containers
+
+**Self-contained images for running and developing GAIA**
+
+Official Docker images for running GAIA in isolated environments. All images are self-contained—connect from your host terminal via `docker exec -it`.
+
+<CodeGroup>
+```bash Linux Runtime
+docker run -dit --name gaia -e LEMONADE_BASE_URL=<lemonade-url> amd/gaia:linux
+docker exec -it gaia zsh
+```
+
+```bash Windows Runtime
+docker run -dit --name gaia -e LEMONADE_BASE_URL=<lemonade-url> amd/gaia:windows
+docker exec -it gaia powershell
+```
+
+```bash Development (with Claude Code)
+docker run -dit --name gaia-dev -e LEMONADE_BASE_URL=<lemonade-url> -e GITHUB_TOKEN=<github-token> amd/gaia:dev
+docker exec -it gaia-dev zsh
+```
+</CodeGroup>
+
+Key capabilities:
+- **Linux image**: Run GAIA on any Docker-compatible host via pip-installed package
+- **Windows image**: Native Windows container for Windows Server environments
+- **Development image**: Full dev environment with UV, Node.js 20, GitHub CLI, and Claude Code with sandboxing
+- **Consistent ports**: All images expose the same ports (3000, 5173, 8000, 9229, 9222) for API, debugging, and frontend dev
+- **Environment config**: Set `LEMONADE_BASE_URL` at container creation to connect to a Lemonade Server
+
+→ [View detailed plan](/plans/docker-containers) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/270)
+
+### Q1 2026: SD Agent
+
+**Intelligent Stable Diffusion optimization assistant**
+
+An AI agent that optimizes both prompts and generation parameters for Stable Diffusion, producing professional-quality images from simple descriptions. Built with AMD NPU-accelerated LLMs.
+
+```bash
+# Analyze and enhance prompt, optimize parameters
+gaia sd generate "a mountain landscape"
+
+# Search your generation history
+gaia sd search "show me all cyberpunk images"
+
+# Browse gallery with ratings and annotations
+gaia sd gallery
+```
+
+Dual optimization approach: enhance text prompts AND recommend optimal SD parameters (model, size, steps, cfg_scale). Includes searchable database with gallery UI for managing your creations.
+
+Key capabilities:
+- LLM-powered prompt enhancement and parameter optimization
+- SQLite database with natural language search
+- Gallery UI with chat interface for image creation
+- Rating system that learns your preferences
+- Template library with proven prompt+parameter combinations
+- Terminal image display for immediate feedback
+- Reference-based generation using your top-rated images
+
+Transform "a cat" into professional SD images through intelligent optimization of all generation parameters, with a searchable gallery that learns your aesthetic preferences.
+
+→ [View detailed plan](/plans/image-agent) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/272)
+
 ### Q2 2026: MCP Docs Server
 
 **AI assistant context for GAIA development**
@@ -153,6 +233,33 @@ Key capabilities:
 Make AI assistants expert GAIA developers out of the box.
 
 → [View detailed plan](/plans/mcp-docs) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/201)
+
+### Q2 2026: AI PC Agents Hub
+
+**The App Store for AI PC agents—discover, try, compete, and run locally**
+
+A community platform where developers publish agents, users discover solutions, and the community decides what's best:
+
+<CardGroup cols={3}>
+  <Card title="Agents Hub" icon="grid">
+    Browse and install AI PC agents
+  </Card>
+  <Card title="Agent Arena" icon="play">
+    Try agents on AMD Strix Halo cloud
+  </Card>
+  <Card title="Competitions" icon="trophy">
+    Compete for prizes and recognition
+  </Card>
+</CardGroup>
+
+Key capabilities:
+- One-click "Try in Agent Arena" on AMD Strix Halo hardware
+- `gaia agent install <name>` for local deployment
+- Themed competitions with real prizes
+- Community voting and leaderboards
+- Developer profiles with badges and recognition
+
+→ [View detailed plan](/plans/agent-hub)
 
 ---
 
@@ -206,4 +313,4 @@ The more votes an issue gets, the higher priority it becomes. Your input directl
 
 ---
 
-*Updated: January 26, 2026*
+*Updated: January 27, 2026*

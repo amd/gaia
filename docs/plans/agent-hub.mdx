@@ -1,0 +1,681 @@
+---
+title: "GAIA AI PC Agents Hub"
+description: "The App Store for AI PC agents—discover, try, compete, and run locally on AMD hardware"
+icon: "trophy"
+---
+
+# GAIA AI PC Agents Hub
+
+<Note>
+**Target:** Q2 2026 | **Status:** Planning | **Priority:** High
+</Note>
+
+<Warning>
+**Work in Progress** - This roadmap is actively being refined. Feedback welcome.
+</Warning>
+
+---
+
+## Vision
+
+**Create the definitive ecosystem for AI PC agents—where developers build, users discover, and the community decides what's best.**
+
+The **GAIA AI PC Agents Hub** is AMD's platform for:
+- **Developers** to publish, showcase, and compete with their AI agents
+- **Users** to discover, try, and run agents locally on AMD hardware
+- **Community** to vote on and shape the future of AI PC applications
+
+<Tip>
+**View Mockups:** Open `docs/plans/mockups/` in your local checkout and open the HTML files in a browser.
+</Tip>
+
+<CardGroup cols={3}>
+  <Card title="Agents Hub" icon="grid">
+    `agents-hub.html` - Discover and browse AI PC agents
+  </Card>
+  <Card title="Agent Arena" icon="play">
+    `arena.html` - Try agents live on Strix Halo
+  </Card>
+  <Card title="Competitions" icon="trophy">
+    `competitions.html` - Compete and win prizes
+  </Card>
+</CardGroup>
+
+**Infrastructure:** AMD Strix Halo Developer Cloud + AMD AI Developer Program
+
+### The AI PC Agent App Store
+
+GAIA Agents Hub is the **App Store for AI PC agents**—purpose-built for discovery, community, and local deployment.
+
+**What makes it unique:**
+
+| Value | Description |
+|-------|-------------|
+| **Agent-First Design** | Every feature optimized for AI agents—not models, datasets, or general ML |
+| **Try Before You Install** | Arena lets anyone test agents on AMD Strix Halo hardware instantly |
+| **One-Command Local Run** | `gaia agent install <name>` — agents run locally on your AMD hardware |
+| **Competition-Driven** | Real prizes, leaderboards, and recognition drive quality and engagement |
+| **Verified Community** | AMD AI Developer Program members vote and contribute |
+| **GAIA SDK Native** | Built on the GAIA SDK for consistent quality and seamless integration |
+
+**The vision:** An ecosystem where developers build agents, users discover solutions, and the community decides what's best—all optimized for local AI on AMD hardware.
+
+---
+
+## Why This Matters
+
+### For AMD
+
+| Goal | How GAIA Agents Hub Helps |
+|------|---------------------|
+| Drive AI PC adoption | Showcase what's possible with local AI |
+| Build developer community | Recognition, prizes, and visibility |
+| Demonstrate hardware value | Agents run on Strix Halo in Arena |
+| Strengthen GAIA SDK | Real-world usage drives SDK improvements |
+
+### For Developers
+
+| Pain Point | Solution |
+|------------|----------|
+| "No one sees my work" | Instant publishing to Agents Hub |
+| "Hard to get feedback" | Community voting and ratings |
+| "No incentive to build" | Competitions with real prizes |
+| "Complex deployment" | One-command publish, auto-containerization |
+
+### For Users
+
+| Need | Solution |
+|------|----------|
+| "Find agents for my use case" | Searchable, categorized Hub |
+| "Try before installing" | Arena: test instantly on AMD hardware |
+| "Trust and quality" | Community ratings, AMD verification |
+| "Run locally and privately" | One-command local install via GAIA CLI |
+
+---
+
+## Strategic Goals
+
+Beyond community engagement, GAIA Agents Hub serves three strategic objectives:
+
+### 1. Grow the GAIA SDK Ecosystem
+
+GAIA Agents Hub is the **distribution channel** for GAIA SDK adoption:
+
+**Discover → Learn → Build → Publish → Adopt → *(cycle repeats)***
+
+Every agent in the Agents Hub is a GAIA SDK showcase. Every competition drives SDK learning.
+
+### 2. Build a Talent Pipeline
+
+Competitions surface **top AI developers** for potential hiring:
+
+| Stage | What Happens |
+|-------|--------------|
+| Competition | Developers demonstrate skills publicly |
+| Recognition | Top contributors get visibility, badges |
+| Engagement | AMD team identifies standout builders |
+| Opportunity | Potential hiring or partnership discussions |
+
+**Long-term:** Top community contributors could become official AMD agent developers.
+
+### 3. Seed Production-Ready Agents
+
+While out of scope for initial launch, the Agents Hub builds toward:
+- Agents that solve real enterprise use-cases
+- Production deployment patterns
+- Reference architectures for AI PC applications
+
+The competition model validates which agents are genuinely useful before broader investment.
+
+---
+
+## Seed Agents
+
+The Hub launches with **existing GAIA agents** as seed content:
+
+| Agent | Category | Use Case | Source |
+|-------|----------|----------|--------|
+| **ChatAgent** | Documents | Document Q&A with RAG | [`agents/chat/`](/guides/chat) |
+| **CodeAgent** | Code | Code generation and editing | [`agents/code/`](/guides/code) |
+| **ComputerUseAgent** | Desktop | Desktop automation via MCP | [`agents/cua/`](/plans/cua) |
+| **BlenderAgent** | Creative | 3D scene automation | [`agents/blender/`](/guides/blender) |
+| **JiraAgent** | Productivity | Issue management with NLP | [`agents/jira/`](/guides/jira) |
+| **DockerAgent** | DevOps | Container management | [`agents/docker/`](/guides/docker) |
+| **MedicalIntakeAgent** | Healthcare | Form processing with VLM | [`agents/emr/`](/guides/emr) |
+| **RoutingAgent** | Infrastructure | Intelligent agent selection | [`agents/routing/`](/guides/routing) |
+| **TalkAgent** | Voice | Speech-to-speech interaction | [`agents/talk/`](/guides/talk) |
+
+These agents:
+- Demonstrate what's possible with GAIA SDK
+- Provide starter templates for competition entries
+- Ensure the Agents Hub has quality content at launch
+- Show the breadth of AI PC use-cases
+
+---
+
+## Core Components
+
+### 1. Agents Hub
+
+**The central repository for AI PC agents.**
+
+Think "npm for AI agents" or "Hugging Face Spaces for AI PCs."
+
+<Card title="View Mockup" icon="browser">
+  Open `docs/plans/mockups/agents-hub.html` in browser
+</Card>
+
+**Key Features:**
+- Browse and search agents by category, tags, use-case
+- View ratings, reviews, download counts, competition history
+- One-click "Try in Arena" or `gaia agent install <name>`
+- AMD Official agents + Community submissions
+- Version history and changelogs
+
+**Agent Sources:**
+- Official AMD agents maintained in `github.com/amd/gaia`
+- Community agents submitted to `github.com/amd/gaia-agents`
+
+---
+
+### 2. Agent Arena
+
+**Try any agent instantly on AMD Strix Halo hardware—no install required.**
+
+This is the "aha moment" that converts visitors to community members.
+
+<Card title="View Mockup" icon="play">
+  Open `docs/plans/mockups/arena.html` in browser
+</Card>
+
+**Key Features:**
+- Instant access—no signup required to try
+- Runs on **AMD Strix Halo Developer Cloud** infrastructure
+- Custom prompts to test with your own use cases
+- Hardware/model info displayed for transparency
+- Seamless path to local install or voting
+
+**Access Model:**
+- Anyone can try agents (no account needed)
+- Voting requires AMD AI Developer Program membership
+
+**Why Agent Arena exists:** Not everyone owns Strix Halo hardware. Agent Arena makes AI PC agents accessible to everyone while showcasing AMD's NPU capabilities. It's the try-before-you-buy experience that drives local adoption.
+
+---
+
+### 3. Competitions
+
+**Themed challenges with real prizes that create urgency and engagement.**
+
+<Card title="View Mockup" icon="trophy">
+  Open `docs/plans/mockups/competitions.html` in browser
+</Card>
+
+**Competition Mechanics:**
+
+| Aspect | Design |
+|--------|--------|
+| **Cadence** | Programmable: monthly initially, weekly as community grows |
+| **Themes** | Specific use-cases (code review, document Q&A, desktop automation, data analysis) |
+| **Evaluation** | Phase 1: Automated gates (pass/fail) → Phase 2: Community voting |
+| **Voting** | 1 member = 1 vote, equal weight, requires AMD Dev Program membership |
+| **Prizes** | Top 3: Hardware (PCs, GPUs) and/or cash, plus Hub recognition |
+| **Dev Credits** | Free Strix Halo cloud access for all competition participants |
+
+**Developer Credits for Competitors:**
+
+When you sign up for a competition, you receive:
+- **Free access** to AMD Strix Halo Developer Cloud
+- **Compute credits** to develop and test your agent
+- **Duration:** Access for the competition period
+
+This levels the playing field—you don't need to own Strix Halo hardware to compete.
+
+**Automated Gates (Pass/Fail):**
+
+Before an agent can compete, it must pass:
+
+| Check | What It Tests |
+|-------|---------------|
+| **Responds** | Agent replies to 3 test prompts within timeout |
+| **Stays on task** | Responses are relevant to the competition theme |
+| **No crashes** | Completes test suite without errors |
+| **Safe** | No security violations in sandboxed environment |
+
+Agents that fail these don't appear in the competition.
+
+**Featured Agent Rotation:**
+
+Competition winners get prime Hub placement:
+
+| Placement | Duration | Location |
+|-----------|----------|----------|
+| 🥇 1st Place | Featured until next competition ends | Hub homepage hero |
+| 🥈 2nd Place | Featured until next competition ends | Hub homepage row |
+| 🥉 3rd Place | Featured until next competition ends | Hub homepage row |
+| Hall of Fame | Permanent | Dedicated winners page |
+
+Winners from the most recent competition are always visible on the Agents Hub homepage.
+
+---
+
+### 4. Developer Profiles & Recognition
+
+**Gamification that rewards contribution and builds reputation.**
+
+<Card title="View Mockup" icon="user">
+  Open `docs/plans/mockups/profile.html` in browser
+</Card>
+
+**Recognition Tiers:**
+
+| Tier | Criteria | Badge |
+|------|----------|-------|
+| **Member** | Joined AMD AI Developer Program | — |
+| **Contributor** | Published 1+ agent | 🔧 Contributor |
+| **Builder** | 3+ agents or 100+ total downloads | 🏗️ Builder |
+| **Champion** | Won a competition | 🏆 Champion |
+| **Legend** | 3+ competition wins | ⭐ Legend |
+
+**Profile Visibility:**
+- Developers choose public or private
+- Private: Only username shown on agents
+- Public: Full stats, badges, history visible
+
+---
+
+## User Journeys
+
+### Journey 1: Developer Builds and Competes
+
+**See Competition → Build Agent → Test Locally → Submit → Compete → Win → Recognition**
+
+| Step | User Action | Platform Response |
+|------|-------------|-------------------|
+| **Discover** | Sees "Best Code Review Agent" competition | Competition page with theme, prizes, deadline |
+| **Learn** | Clicks "How to build an agent" | Tutorial + starter template |
+| **Build** | Creates agent using GAIA SDK | Local development with `gaia agent test` |
+| **Submit** | Runs `gaia agent publish` | CI/CD validates, builds Docker, deploys |
+| **Monitor** | Checks dashboard | Sees gate results, vote count, leaderboard position |
+| **Engage** | Reads voter feedback | Comments and ratings on agent page |
+| **Win** | Competition ends, ranked #1 | Winner announcement, prize claim, profile badge |
+
+### Journey 2: Evaluator Discovers and Votes
+
+**Browse Competition → Try Agents → Compare → Vote → See Impact**
+
+| Step | User Action | Platform Response |
+|------|-------------|-------------------|
+| **Browse** | Opens active competition page | List of competing agents with descriptions |
+| **Filter** | Selects "Code" category | Filtered list of relevant agents |
+| **Try** | Clicks "Try in Arena" on CodeSensei | Arena opens with agent running on Strix Halo |
+| **Test** | Sends custom code for review | Agent responds with review feedback |
+| **Compare** | Tries 3 more agents | Each opens in Arena for testing |
+| **Vote** | Clicks ⭐⭐⭐⭐⭐ on favorite | Vote recorded, leaderboard updates |
+| **Return** | Competition ends | "You voted for the winner!" notification |
+
+### Journey 3: End User Finds and Runs Locally
+
+**Search → Evaluate → Try in Arena → Install → Run Locally**
+
+| Step | User Action | Platform Response |
+|------|-------------|-------------------|
+| **Search** | Searches "tax help agent" | Hub shows TaxBot and similar agents |
+| **Evaluate** | Reviews ratings, downloads, badges | TaxBot: ⭐4.9, 1.2K downloads, Competition Winner |
+| **Try** | Clicks "Try in Arena" | Tests TaxBot with real tax question |
+| **Decide** | Satisfied with responses | Clicks "Install Locally" |
+| **Install** | Runs `gaia agent install taxbot` | Agent downloaded, configured for local use |
+| **Run** | Runs `gaia agent run taxbot` | TaxBot runs locally on user's AMD hardware |
+
+---
+
+## Technical Architecture
+
+### Agent Submission Pipeline
+
+```
+Developer                          Platform                              Hub
+────────────────────────────────────────────────────────────────────────────
+
+1. Create agent
+   └── Python + agent.yaml
+
+2. gaia agent publish        ───►  3. CI/CD Pipeline
+                                      ├── Validate agent.yaml
+                                      ├── Run linter
+                                      ├── Execute test suite
+                                      ├── Build Docker image
+                                      └── Push to registry
+
+                                   4. Automated Gates         ───►  5. Hub Listing
+                                      ├── Health check                  ├── Version registered
+                                      ├── Response test                 ├── Searchable
+                                      └── Safety scan                   └── Arena-ready
+```
+
+### Agent Package Format
+
+```yaml
+# agent.yaml
+name: "taxbot"
+version: "2.1.0"
+author: "@janedoe"
+description: "AI assistant for tax preparation and filing"
+category: "productivity"
+
+# Discoverability
+tags: ["finance", "tax", "documents", "forms"]
+use_cases:
+  - "Prepare tax returns"
+  - "Find deductions"
+  - "Explain tax concepts"
+
+# Technical
+model: "Qwen3-Coder-30B"          # Preferred model
+min_gaia_version: "0.15.0"       # Compatibility
+requirements:                     # Python dependencies
+  - "pypdf>=3.0.0"
+
+# Optional
+homepage: "https://github.com/janedoe/taxbot"
+license: "MIT"
+```
+
+### Distribution Methods
+
+| Method | Command | Use Case |
+|--------|---------|----------|
+| **Arena (Remote)** | Click "Try in Arena" | Quick testing, no setup |
+| **CLI Install** | `gaia agent install taxbot` | Local installation |
+| **Desktop App** | Browse in GAIA Desktop | GUI-based discovery and testing |
+| **Direct Docker** | `docker pull ghcr.io/amd/gaia-agents/taxbot:2.1.0` | Advanced users |
+
+---
+
+## Access Model
+
+### Who Can Do What
+
+| Action | No Account | AMD Dev Program Member |
+|--------|------------|------------------------|
+| Browse Agents Hub | ✅ | ✅ |
+| Try agents in Arena | ✅ | ✅ |
+| Install agents locally | ✅ | ✅ |
+| Run agents via Desktop App | ✅ | ✅ |
+| Vote in competitions | ❌ | ✅ |
+| Submit agents | ❌ | ✅ |
+| Create profile | ❌ | ✅ |
+| Earn badges | ❌ | ✅ |
+
+### AMD AI Developer Program Integration
+
+The Agents Hub uses [AMD AI Developer Program](https://www.amd.com/en/developer/ai-dev-program.html) for identity:
+
+- **Single Sign-On** via AMD Developer account
+- **Free membership** (open to all)
+- **Existing benefits** apply: $100 cloud credits, Discord access, training
+- **New benefits**: Competition entry, voting rights, profile and badges
+
+**Conversion Path:**
+
+**Browse Hub → Try in Arena → Want to Vote → Join AMD Dev Program → Vote & Submit**
+
+---
+
+## Milestones
+
+### Phase 1: Foundation (Feb 2026)
+
+<Check>Target: End of February 2026</Check>
+
+**Objective:** Core infrastructure and MVP submission pipeline
+
+| Deliverable | Description |
+|-------------|-------------|
+| `github.com/amd/gaia-agents` repo | Community agent repository with CI/CD |
+| Agent submission pipeline | `gaia agent publish` command |
+| Auto Docker build | CI generates containers from GAIA SDK code |
+| Agent validation | Automated gates (lint, test, health check) |
+| Basic Hub UI | Browse, search, agent detail pages |
+
+**Exit Criteria:**
+- AMD team can publish 3+ seed agents
+- External contributor can submit PR and see agent published
+- Agents accessible via `gaia agent install <name>`
+
+---
+
+### Phase 2: Agent Arena (Mar 2026)
+
+<Check>Target: End of March 2026</Check>
+
+**Objective:** Live agent testing on AMD hardware
+
+| Deliverable | Description |
+|-------------|-------------|
+| Arena infrastructure | Strix Halo hosting with container orchestration |
+| Arena UI | Chat interface to test any Hub agent |
+| Session management | Isolated sessions, usage limits |
+| Hardware display | Show what hardware/model is running |
+| Desktop app integration | Try agents from GAIA Desktop |
+
+**Exit Criteria:**
+- Anyone can try 10+ agents in Arena without signup
+- Arena handles 50+ concurrent users
+- Average response time < 3 seconds
+
+---
+
+### Phase 3: Competitions (Apr 2026)
+
+<Check>Target: End of April 2026</Check>
+
+**Objective:** Competition infrastructure and first internal run
+
+| Deliverable | Description |
+|-------------|-------------|
+| Competition engine | Create, configure, manage competitions |
+| Voting system | AMD Dev Program members can vote |
+| Leaderboard | Real-time standings, historical results |
+| Admin dashboard | Create themes, set prizes, announce winners |
+| Notification system | Email/Discord alerts for key events |
+
+**Exit Criteria:**
+- Internal test competition completed successfully
+- Voting system handles 100+ votes per competition
+- Leaderboard updates within 1 minute of vote
+
+---
+
+### Phase 4: Launch (May-Jun 2026)
+
+<Check>Target: Q2 2026</Check>
+
+**Objective:** Public launch with first official competition
+
+| Deliverable | Description |
+|-------------|-------------|
+| Public beta launch | Agents Hub live at `hub.amd-gaia.ai` |
+| First competition | Monthly themed competition with prizes |
+| Profile system | Badges, stats, public/private profiles |
+| Documentation | Developer guide, submission tutorial, FAQ |
+| Marketing | AMD Developer blog, newsletter, social |
+
+**Exit Criteria:**
+- 20+ agents in Hub (AMD + community)
+- 100+ votes in first competition
+- 50+ AMD Dev Program signups attributed to Agents Hub
+
+---
+
+## Success Metrics
+
+### Engagement Metrics
+
+| Metric | Realistic (6mo) | Moonshot (6mo) |
+|--------|-----------------|----------------|
+| Agents in Agents Hub | 30 | 100 |
+| Monthly Arena sessions | 1,000 | 5,000 |
+| Competition entries per month | 10 | 30 |
+| Votes cast per competition | 100 | 500 |
+| AMD Dev Program signups (from Agents Hub) | 100 | 300 |
+
+**Realistic targets** are achievable with current resources and organic growth.
+**Moonshot targets** require strong marketing push and community activation.
+
+### Quality Metrics
+
+| Metric | Target |
+|--------|--------|
+| Arena uptime | 99.5% |
+| Average Arena response time | < 3 seconds |
+| Agent submission to publish time | < 10 minutes |
+| Agent gate pass rate | > 80% |
+
+### Community Health Metrics
+
+| Metric | Realistic | Moonshot |
+|--------|-----------|----------|
+| Returning developers (submit 2+ agents) | 20% | 40% |
+| Repeat voters (vote in 2+ competitions) | 30% | 60% |
+| Community agents vs AMD agents ratio | 50% | 80% |
+
+### Strategic Metrics
+
+| Metric | Description |
+|--------|-------------|
+| GAIA SDK downloads | Increase attributed to Agents Hub discovery |
+| Talent leads | Developers flagged for potential hiring |
+| Agent production-readiness | Agents suitable for enterprise use |
+
+---
+
+## Open Questions
+
+### Technical
+
+| Question | Options | Recommendation |
+|----------|---------|----------------|
+| Multi-model support | Single model vs user choice | Single default, user choice later |
+| Agent sandboxing | gVisor vs Firecracker vs Docker | Docker with strict limits for MVP |
+| Competition theme for launch | Code review, Document Q&A, Desktop automation, General | TBD based on seed agent strengths |
+
+### Product
+
+| Question | Options | Decision Needed |
+|----------|---------|-----------------|
+| Credit allocation per competition | Fixed hours vs duration-based | Duration-based (competition period) |
+| Featured agent rotation | Until next competition vs fixed time | Until next competition ends |
+| First competition prize pool | Budget amount | TBD with marketing |
+
+### Community
+
+| Question | Consideration |
+|----------|---------------|
+| Moderation | Community flagging + AMD review for takedown |
+| Disputes | Clear rules published upfront; AMD team final arbiter |
+
+---
+
+## Infrastructure
+
+### AMD Strix Halo Developer Cloud
+
+Arena and development credits run on **AMD Strix Halo Developer Cloud**—a separate infrastructure initiative.
+
+**Our integration points:**
+
+| Component | Responsibility |
+|-----------|----------------|
+| Cloud infrastructure | External team (AMD Strix Halo Developer Cloud) |
+| Container orchestration | External team |
+| Arena web UI | Agents Hub team |
+| Agent deployment | Agents Hub team (via CI/CD) |
+| Credit management | Integration with Dev Cloud billing |
+
+**Assumptions:**
+- Dev Cloud provides API for session management
+- Dev Cloud provides API for credit allocation
+- Dev Cloud supports Docker container execution
+- Dev Cloud exposes Strix Halo NPU to containers
+
+---
+
+## Risks & Mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| Dev Cloud integration delays | Medium | High | Early coordination, parallel workstreams |
+| Timeline slip | Medium | Medium | Prioritize MVP, defer profiles/badges if needed |
+| Low competition participation | Low | Medium | Seed with AMD agents, pre-launch outreach |
+| Quality variance in submissions | Medium | Low | Automated gates filter basics; community rates quality |
+
+---
+
+## Resources Required
+
+### Engineering
+
+| Role | Scope |
+|------|-------|
+| Backend | Hub API, competition engine, CI/CD pipeline |
+| Frontend | Hub UI, Arena interface, profile pages |
+| Infrastructure | Strix Halo hosting, container orchestration |
+| GAIA SDK | `gaia agent` CLI commands, packaging |
+
+### Design
+
+| Deliverable | Priority |
+|-------------|----------|
+| Hub wireframes | P0 |
+| Arena UX | P0 |
+| Competition flow | P0 |
+| Profile/badges | P1 |
+
+### Operations
+
+| Need | Description |
+|------|-------------|
+| AMD Dev Program liaison | SSO integration, member communications |
+| Prize fulfillment | Hardware/cash distribution process |
+| Community management | Discord moderation, support |
+
+---
+
+## UI Mockups
+
+Interactive HTML mockups are available in `docs/plans/mockups/`. Open the HTML files directly in a browser:
+
+| Mockup | File | Description |
+|--------|------|-------------|
+| **Agents Hub** | `agents-hub.html` | Main landing page with featured agents, categories, leaderboard |
+| **Agent Arena** | `arena.html` | Side-by-side agent comparison with suggested queries and voting |
+| **Competitions** | `competitions.html` | Active competitions, leaderboards, prizes, and submission |
+| **Developer Profile** | `profile.html` | User profile with badges, stats, agents, and competition history |
+
+---
+
+## Related Documents
+
+- [AMD AI Developer Program](https://www.amd.com/en/developer/ai-dev-program.html)
+- [GAIA SDK Documentation](https://amd-gaia.ai/sdk)
+- [Agent System Guide](/sdk/core/agent-system)
+- [Quickstart Tutorial](/quickstart)
+
+---
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| Jan 26, 2026 | Added: ComputerUseAgent (CUA) to seed agents and competition themes |
+| Jan 21, 2026 | Updated: Renamed Arena to "Agent Arena" throughout, added suggested queries feature |
+| Jan 21, 2026 | Updated: Replaced ASCII diagrams with mockup links, reframed as "App Store for AI PC agents" |
+| Jan 21, 2026 | Added: UI Mockups section with links to all 4 HTML mockups |
+| Jan 21, 2026 | Added: Strategic goals, seed agents, developer credits, infrastructure section |
+| Jan 21, 2026 | Updated: Success metrics (realistic vs moonshot) |
+| Jan 21, 2026 | Initial roadmap created |
+
+---
+
+*Last Updated: January 26, 2026*
