@@ -39,10 +39,6 @@ class SDAgentConfig:
     streaming: bool = False
     ctx_size: int = 8192  # 8K context (sufficient for prompt enhancement)
 
-    # Execution settings
-    max_steps: int = 5
-    streaming: bool = False
-
     # Debug/output settings
     debug: bool = False
     show_stats: bool = False
