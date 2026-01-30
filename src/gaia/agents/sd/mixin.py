@@ -75,7 +75,7 @@ class SDToolsMixin:
         self,
         base_url: str = "http://localhost:8000",
         output_dir: Optional[str] = None,
-        default_model: str = "SD-Turbo",
+        default_model: str = "SDXL-Turbo",
         default_size: Optional[str] = None,
         default_steps: Optional[int] = None,
         default_cfg: Optional[float] = None,

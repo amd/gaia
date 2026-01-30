@@ -7,7 +7,7 @@ description: "Transform simple prompts into professional images with LLM-powered
   **CLI Command:** `gaia sd` - Your AI assistant for professional-quality images on Ryzen AI
 </Info>
 
-# From "a robot" to Masterpiece in 15 Seconds
+# From "a robot puppy" to Masterpiece in 17 Seconds
 
 The `gaia sd` command is **not just another Stable Diffusion wrapper**. It's an AI-powered prompt enhancement engine that transforms casual descriptions into professional-quality images.
 
@@ -22,11 +22,11 @@ The `gaia sd` command is **not just another Stable Diffusion wrapper**. It's an 
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontSize':'16px', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 graph LR
-    A["You Type:<br/><b>'a robot'</b>"] --> B["🧠 LLM Brain<br/><small>Analyzes Intent</small>"]
+    A["You Type:<br/><b>'robot puppy'</b>"] --> B["🧠 LLM Brain<br/><small>Analyzes Intent</small>"]
 
     B --> C["✨ Enhancer<br/><small>Adds Keywords</small>"]
 
-    C --> D["Enhanced Prompt:<br/><i>'futuristic robot,<br/>studio lighting,<br/>metallic finish,<br/>highly detailed, 8K'</i>"]
+    C --> D["Enhanced Prompt:<br/><i>'cute robotic puppy,<br/>glowing LED eyes,<br/>soft lighting,<br/>detailed, 4K'</i>"]
 
     D --> E["🖼️ Stable Diffusion<br/><small>on Ryzen AI</small>"]
 
@@ -43,11 +43,11 @@ graph LR
 ```
 
 **The 3-Second Story:**
-1. 🧠 LLM analyzes what you want
-2. ✨ Adds pro keywords (lighting, style, quality, composition)
-3. 🖼️ SD generates with the enhanced prompt
+1. 🧠 LLM analyzes "robot puppy" → understands cute + robotic theme
+2. ✨ Adds keywords: glowing LED eyes, metallic fur texture, soft lighting, detailed
+3. 🖼️ SD generates professional-quality robot puppy
 
-**Result:** 2-word input → 20+ keyword professional prompt → High-quality image
+**Result:** Simple idea → Enhanced prompt → Adorable high-quality image
 
 ---
 
@@ -76,7 +76,7 @@ photorealistic, shallow depth of field, 8K"
 ```
 </CodeGroup>
 
-**You type 2 words, the LLM adds 15+ keywords!** No SD expertise needed.
+**You type "robot puppy", the LLM adds lighting, materials, details!** No SD expertise needed.
 
 ---
 
@@ -92,10 +92,10 @@ photorealistic, shallow depth of field, 8K"
 
   <Step title="Generate!">
     ```bash
-    gaia sd "sunset over mountains"
+    gaia sd "robot puppy"
     ```
 
-    Watch the LLM enhance your prompt and SD generate the image.
+    Watch the LLM enhance your prompt and SD generate an adorable robot animal!
   </Step>
 </Steps>
 
@@ -105,9 +105,9 @@ photorealistic, shallow depth of field, 8K"
 
 | You Type | LLM Enhances To | Result |
 |----------|----------------|--------|
-| **"robot"** | "futuristic robot, metallic chrome, studio lighting, sci-fi, detailed, 8K" | Professional render |
+| **"robot puppy"** | "cute robotic puppy, glowing LED eyes, metallic fur, soft lighting, playful, detailed, 4K" | Adorable robot animal |
+| **"robot owl"** | "mechanical owl, glowing amber eyes, bronze feathers, steampunk, detailed gears, 8K" | Majestic robot bird |
 | **"sunset"** | "vibrant sunset, golden hour, dramatic clouds, wide angle, volumetric lighting, 4K" | Cinematic scene |
-| **"cat"** | "fluffy orange cat, soft lighting, detailed fur, photorealistic, bokeh, 8K" | Photo-quality |
 
 **Pattern:** Simple → Professional in every case.
 
@@ -119,20 +119,20 @@ The LLM knows how each model works best:
 
 | Model | Speed | What LLM Does |
 |-------|-------|---------------|
-| **SD-Turbo** | ~13s | Focuses on key elements, concise enhancement |
-| **SDXL-Turbo** | ~17s | Adds artistic style keywords, detailed lighting |
-| **SD-1.5** | ~88s | Balanced approach, traditional keywords |
+| **SDXL-Turbo** (default) | ~17s | Adds artistic style keywords, detailed lighting, best balance |
+| **SD-Turbo** | ~13s | Focuses on key elements only, concise enhancement |
+| **SD-1.5** | ~88s | Balanced traditional approach |
 | **SDXL-Base-1.0** | ~9min | Natural language, photorealistic focus, keyword weights |
 
 ```bash
-# Fast iteration
-gaia sd "test concept" --sd-model SD-Turbo
+# Default (good quality, fast)
+gaia sd "robot puppy"
 
-# Better quality
-gaia sd "final design" --sd-model SDXL-Turbo
+# Even faster (lower quality)
+gaia sd "quick test" --sd-model SD-Turbo
 
-# Photorealistic
-gaia sd "product photo" --sd-model SDXL-Base-1.0
+# Photorealistic (slow)
+gaia sd "robot kitten, photorealistic" --sd-model SDXL-Base-1.0
 ```
 
 **The LLM adjusts its strategy based on which model you pick!**
@@ -148,17 +148,17 @@ gaia sd -i
 Have a conversation about your image:
 
 ```
-You: a dragon
-Agent: [enhances] → Generates epic dragon
+You: robot puppy
+Agent: [enhances] → Generates cute robotic puppy
 
-You: make it blue
-Agent: [enhances with "blue scales"] → Blue dragon
+You: make it playful
+Agent: [enhances with "playful pose, wagging tail"] → Playful robot puppy
 
-You: add fire
-Agent: [enhances with "breathing fire, flames"] → Dragon with fire
+You: add glowing eyes
+Agent: [enhances with "bright LED eyes, glowing"] → Glowing-eyed version
 
-You: more dramatic lighting
-Agent: [enhances lighting] → Cinematic version
+You: more futuristic
+Agent: [enhances with "holographic elements, sleek"] → Futuristic design
 ```
 
 The agent remembers context and refines based on feedback!
@@ -274,7 +274,7 @@ Peer-reviewed best practices, automatically applied to your prompts.
 
 **Try it now:**
 ```bash
-gaia sd "your idea here"
+gaia sd "robot puppy"
 ```
 
-Watch the LLM work its magic! ✨
+Watch the LLM transform it into an adorable robotic companion! 🤖🐶✨

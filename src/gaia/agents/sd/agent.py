@@ -23,7 +23,7 @@ class SDAgentConfig:
     """Configuration for SD Agent."""
 
     # SD settings
-    sd_model: str = "SD-Turbo"
+    sd_model: str = "SDXL-Turbo"
     output_dir: str = ".gaia/cache/sd/images"
     prompt_to_open: bool = True
 

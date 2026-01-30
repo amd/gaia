@@ -1008,8 +1008,8 @@ def main():
         "--sd-model",
         dest="sd_model",
         choices=["SD-1.5", "SD-Turbo", "SDXL-Base-1.0", "SDXL-Turbo"],
-        default="SD-Turbo",
-        help="SD model: SD-Turbo (fast, default), SDXL-Turbo (better quality), SDXL-Base-1.0 (photorealistic, slow)",
+        default="SDXL-Turbo",
+        help="SD model: SDXL-Turbo (fast, good quality, default), SD-Turbo (faster but lower quality), SDXL-Base-1.0 (photorealistic, slow)",
     )
     sd_parser.add_argument(
         "--size",
