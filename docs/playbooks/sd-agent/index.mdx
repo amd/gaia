@@ -369,22 +369,50 @@ result = agent.get_generation_history(limit=5)
 # Returns last 5 generations with paths, prompts, metadata
 ```
 
-### create_story_from_image
+### create_story_from_last_image
 
-Analyzes the last generated image with VLM and creates a creative story:
+SD-specific convenience tool - analyzes the last generated image and creates a story:
 
 ```python
-result = agent.create_story_from_image()
-# Returns:
-# {
-#   "status": "success",
-#   "image_path": "...",
-#   "description": "VLM's detailed analysis of the image",
-#   "story": "Creative 2-3 paragraph story about the image"
-# }
+# SD-specific tool (no parameters needed)
+result = agent.create_story_from_last_image()
+# Automatically finds last SD image from this session
 ```
 
-**Uses:** Qwen3-VL-4B vision model to analyze and narrate
+**This demonstrates tool composition!** The SD tool wraps generic VLM tools:
+
+```python
+# Under the hood:
+def create_story_from_last_image():
+    image_path = sd_generations[-1]["image_path"]  # Find last SD image
+    return _create_story_from_image(image_path, "whimsical")  # Call VLM tool
+```
+
+### Generic VLM Tools (from VLMToolsMixin)
+
+The SD Agent also inherits generic VLM tools:
+
+```python
+# Analyze any image
+result = agent.analyze_image(
+    image_path="/path/to/image.png",
+    focus="composition"  # or 'colors', 'mood', 'details', 'all'
+)
+
+# Create story from any image
+result = agent.create_story_from_image(
+    image_path="/path/to/image.png",
+    story_style="dramatic"  # or 'whimsical', 'educational', 'adventure'
+)
+
+# Answer questions about images
+result = agent.answer_question_about_image(
+    image_path="/path/to/image.png",
+    question="What color are the robot's eyes?"
+)
+```
+
+**These work with ANY image**, not just SD-generated ones.
 
 ---
 
