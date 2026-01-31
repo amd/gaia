@@ -851,11 +851,13 @@ class InitCommand:
                 # Use agent profile defaults
                 model_ids = client.get_required_models(agent)
 
-            # Always include the default CPU model (used by gaia llm)
-            from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+            # Include default CPU model for profiles that need gaia llm
+            # SD profile has its own LLM (Qwen3-4B) and doesn't need the 0.5B model
+            if self.profile != "sd":
+                from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
-            if DEFAULT_MODEL_NAME not in model_ids:
-                model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
+                if DEFAULT_MODEL_NAME not in model_ids:
+                    model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
 
             if not model_ids:
                 self._print_success("No models required for this profile")
@@ -1048,11 +1050,13 @@ class InitCommand:
             else:
                 model_ids = client.get_required_models(profile_config["agent"])
 
-            # Always include the default CPU model (used by gaia llm)
-            from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+            # Include default CPU model for profiles that need gaia llm
+            # SD profile has its own LLM and doesn't need the 0.5B model
+            if self.profile != "sd":
+                from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
-            if DEFAULT_MODEL_NAME not in model_ids:
-                model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
+                if DEFAULT_MODEL_NAME not in model_ids:
+                    model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
 
             if not model_ids or self.skip_models:
                 return True
