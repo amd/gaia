@@ -43,6 +43,16 @@ INIT_PROFILES = {
         "models": ["Qwen3-4B-Instruct-2507-GGUF"],  # Override default minimal model
         "approx_size": "~2.5 GB",
     },
+    "sd": {
+        "description": "Image generation with multi-modal AI (LLM + SD + VLM)",
+        "agent": "sd",
+        "models": [
+            "SDXL-Turbo",  # Image generation (~2.6GB)
+            "Qwen3-4B-Instruct-2507-GGUF",  # Prompt enhancement (~2.5GB)
+            "Qwen3-VL-4B-Instruct-GGUF",  # Vision analysis + stories (~3.3GB)
+        ],
+        "approx_size": "~8.4 GB",
+    },
     "chat": {
         "description": "Interactive chat with RAG and vision support",
         "agent": "chat",
@@ -839,11 +849,13 @@ class InitCommand:
                 # Use agent profile defaults
                 model_ids = client.get_required_models(agent)
 
-            # Always include the default CPU model (used by gaia llm)
-            from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+            # Include default CPU model for profiles that need gaia llm
+            # SD profile has its own LLM (Qwen3-4B) and doesn't need the 0.5B model
+            if self.profile != "sd":
+                from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
-            if DEFAULT_MODEL_NAME not in model_ids:
-                model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
+                if DEFAULT_MODEL_NAME not in model_ids:
+                    model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
 
             if not model_ids:
                 self._print_success("No models required for this profile")
@@ -1021,11 +1033,13 @@ class InitCommand:
             else:
                 model_ids = client.get_required_models(profile_config["agent"])
 
-            # Always include the default CPU model (used by gaia llm)
-            from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+            # Include default CPU model for profiles that need gaia llm
+            # SD profile has its own LLM and doesn't need the 0.5B model
+            if self.profile != "sd":
+                from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
-            if DEFAULT_MODEL_NAME not in model_ids:
-                model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
+                if DEFAULT_MODEL_NAME not in model_ids:
+                    model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
 
             if not model_ids or self.skip_models:
                 return True
