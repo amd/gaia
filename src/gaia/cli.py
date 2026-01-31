@@ -4978,21 +4978,26 @@ def handle_sd_command(args):
     # SD agent uses lightweight LLM for enhancement, doesn't need 32K context
     llm_client = LemonadeClient(verbose=False)
     try:
-        llm_client.load_model("Qwen2.5-0.5B-Instruct-CPU", auto_download=True, prompt=False, timeout=60)
+        llm_client.load_model(
+            "Qwen2.5-0.5B-Instruct-CPU", auto_download=True, prompt=False, timeout=60
+        )
     except Exception:
         pass  # Model might already be loaded
 
-    # Create config
+    # Create config - ensure LLM model is set
+    llm_model = getattr(args, "model", None)
+    if not llm_model:
+        llm_model = "Qwen3-4B-GGUF"  # Default LLM for prompt enhancement
+
     config = SDAgentConfig(
         sd_model=args.sd_model,
         output_dir=args.output_dir,
         prompt_to_open=not args.no_open,
-        max_steps=5,  # Limit steps for CLI (enhance + generate)
         show_stats=getattr(args, "stats", False),
         use_claude=getattr(args, "use_claude", False),
         use_chatgpt=getattr(args, "use_chatgpt", False),
         base_url=getattr(args, "base_url", "http://localhost:8000/api/v1"),
-        model_id=getattr(args, "model", "Qwen2.5-0.5B-Instruct-CPU"),
+        model_id=llm_model,
     )
 
     # Create agent with LLM prompt enhancement
@@ -5044,7 +5049,11 @@ def handle_sd_command(args):
                     import os
 
                     try:
-                        response = input("Open image in default viewer? [Y/n]: ").strip().lower()
+                        response = (
+                            input("Open image in default viewer? [Y/n]: ")
+                            .strip()
+                            .lower()
+                        )
                         if response in ("", "y", "yes"):
                             # Get last generated image path from agent history
                             if agent.sd_generations:
@@ -5070,7 +5079,9 @@ def handle_sd_command(args):
             import os
 
             try:
-                response = input("Open image in default viewer? [Y/n]: ").strip().lower()
+                response = (
+                    input("Open image in default viewer? [Y/n]: ").strip().lower()
+                )
                 if response in ("", "y", "yes"):
                     # Get last generated image from agent history
                     if agent.sd_generations:

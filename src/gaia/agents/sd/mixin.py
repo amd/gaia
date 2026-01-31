@@ -152,6 +152,11 @@ class SDToolsMixin:
                     "description": "Inference steps (4 recommended for Turbo models)",
                     "required": False,
                 },
+                "cfg_scale": {
+                    "type": "float",
+                    "description": "CFG scale (1.0 for Turbo, 7.5 for Base)",
+                    "required": False,
+                },
                 "seed": {
                     "type": "int",
                     "description": "Random seed for reproducibility (optional)",
@@ -164,10 +169,11 @@ class SDToolsMixin:
             model: Optional[str] = None,
             size: Optional[str] = None,
             steps: Optional[int] = None,
+            cfg_scale: Optional[float] = None,
             seed: Optional[int] = None,
         ) -> Dict[str, Any]:
             """Generate an image from a text prompt using Stable Diffusion."""
-            return self._generate_image(prompt, model, size, steps, seed)
+            return self._generate_image(prompt, model, size, steps, cfg_scale, seed)
 
         @tool(
             atomic=True,
@@ -233,20 +239,50 @@ class SDToolsMixin:
 
         @tool(
             atomic=True,
-            name="create_story_from_image",
-            description="Analyze the last generated image with VLM and create a creative story about it.",
+            name="create_story_from_last_image",
+            description="SD-specific convenience tool: Analyze the last generated SD image and create a story. Automatically finds the most recent image from this session.",
             parameters={},
         )
-        def create_story_from_image() -> Dict[str, Any]:
-            """Analyze generated image with VLM and create a story."""
-            return self._create_story_from_last_image()
+        def create_story_from_last_image() -> Dict[str, Any]:
+            """
+            SD-specific tool that wraps VLM tools for convenience.
+
+            This demonstrates tool composition: an SD-specific tool that calls
+            generic VLM tools under the hood.
+            """
+            if not self.sd_generations:
+                return {
+                    "status": "error",
+                    "error": "No images generated yet. Generate an image first.",
+                }
+
+            # Get last generated image path
+            last_gen = self.sd_generations[-1]
+            image_path = last_gen["image_path"]
+
+            # Call the generic VLM tool (if available)
+            # This shows how SD-specific tools can leverage generic VLM capabilities
+            if hasattr(self, "_create_story_from_image"):
+                result = self._create_story_from_image(
+                    image_path, story_style="whimsical"
+                )
+                if result.get("status") == "success":
+                    # Add SD-specific metadata
+                    result["original_prompt"] = last_gen["prompt"]
+                    result["sd_model"] = last_gen["model"]
+                return result
+            else:
+                return {
+                    "status": "error",
+                    "error": "VLM tools not initialized. Agent needs VLMToolsMixin.",
+                }
 
         # Register tools with the agent
         if hasattr(self, "register_tool"):
             self.register_tool(generate_image)
             self.register_tool(list_sd_models)
             self.register_tool(get_generation_history)
-            self.register_tool(create_story_from_image)
+            self.register_tool(create_story_from_last_image)
 
     def _generate_image(
         self,
@@ -491,59 +527,6 @@ class SDToolsMixin:
         image_path.write_bytes(image_bytes)
 
         return image_path
-
-    def _create_story_from_last_image(self) -> Dict[str, Any]:
-        """
-        Analyze the last generated image with VLM and create a creative story.
-
-        Returns:
-            Dict with status, description, story, and image_path
-        """
-        if not self.sd_generations:
-            return {
-                "status": "error",
-                "error": "No images generated yet. Generate an image first.",
-            }
-
-        # Get last generated image
-        last_gen = self.sd_generations[-1]
-        image_path = last_gen["image_path"]
-
-        # Use VLM to analyze the image
-        from gaia.llm.vlm_client import VLMClient
-
-        vlm = VLMClient(model="Qwen3-VL-4B-Instruct-GGUF")
-
-        # Analyze image in detail
-        description_prompt = "Describe this image in vivid detail. Include colors, composition, mood, style, and any interesting elements you notice."
-
-        try:
-            description = vlm.query(description_prompt, image_path)
-
-            # Create story based on description
-            story_prompt = f"""Based on this image description, create a short creative story (2-3 paragraphs):
-
-{description}
-
-Make it engaging and imaginative. The story should bring the image to life."""
-
-            story = vlm.query(story_prompt, image_path)
-
-            return {
-                "status": "success",
-                "image_path": image_path,
-                "description": description,
-                "story": story,
-                "original_prompt": last_gen["prompt"],
-            }
-
-        except Exception as e:
-            logger.error(f"Story creation failed: {e}")
-            return {
-                "status": "error",
-                "error": f"Failed to create story: {str(e)}",
-                "image_path": image_path,
-            }
 
     def sd_health_check(self) -> Dict[str, Any]:
         """

@@ -14,6 +14,7 @@ from typing import Optional
 from gaia.agents.base.agent import Agent
 from gaia.agents.sd.mixin import SDToolsMixin
 from gaia.logger import get_logger
+from gaia.vlm import VLMToolsMixin
 
 logger = get_logger(__name__)
 
@@ -44,7 +45,7 @@ class SDAgentConfig:
     show_stats: bool = False
 
 
-class SDAgent(Agent, SDToolsMixin):
+class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
     """
     Image generation agent with LLM-powered prompt enhancement.
 
@@ -73,6 +74,19 @@ class SDAgent(Agent, SDToolsMixin):
 
         self.config = config
 
+        # Load LLM model BEFORE initializing Agent base class to avoid context warnings
+        # Agent will check context size, so we need the model loaded first
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        llm_client = LemonadeClient(verbose=False)
+        try:
+            llm_client.load_model(
+                config.model_id, auto_download=True, prompt=False, timeout=120
+            )
+            logger.debug(f"Loaded LLM model: {config.model_id}")
+        except Exception as e:
+            logger.warning(f"LLM load warning: {e}")
+
         # Initialize Agent base class with reduced context requirement
         # SD prompt enhancement doesn't need 32K context, 8K is sufficient
         super().__init__(
@@ -95,7 +109,13 @@ class SDAgent(Agent, SDToolsMixin):
         )
         self.register_sd_tools()
 
-        logger.debug(f"SD Agent initialized with model: {config.sd_model}")
+        # Initialize VLM tools for image analysis
+        self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
+        self.register_vlm_tools()
+
+        logger.debug(
+            f"SD Agent initialized with SD model: {config.sd_model}, VLM: Qwen3-VL-4B"
+        )
 
     def _get_system_prompt(self) -> str:
         """System prompt with model-specific enhancement guidelines."""
@@ -149,7 +169,7 @@ OPTIMIZATION:
 SIMPLE ENHANCEMENT PATTERN:
 [Subject] + [2-3 key attributes] + [basic lighting] + [quality: detailed, 4K]
 
-After enhancing, use: generate_image with model="SD-Turbo", size="512x512", steps=4
+After enhancing, use: generate_image with model="SD-Turbo", size="512x512", steps=4, cfg_scale=1.0
 """
         elif model == "SDXL-Turbo":
             model_specific = """
@@ -166,7 +186,7 @@ RESEARCH-BASED OPTIMIZATION (neurocanvas.net, stable-diffusion-art.com):
 ENHANCEMENT PATTERN:
 [Subject with materials/textures] + [descriptive action/pose] + [lighting scenario] + [style: Cinematic/Photographic] + [quality: 8K, Aqua Vista, sharp focus]
 
-After enhancing, use: generate_image with model="SDXL-Turbo", size="512x512", steps=4
+After enhancing, use: generate_image with model="SDXL-Turbo", size="512x512", steps=4, cfg_scale=1.0
 """
         elif model == "SDXL-Base-1.0":
             model_specific = """
@@ -218,30 +238,51 @@ WORKFLOW:
 3. Call generate_image with optimized parameters for this model
 4. Report to user: enhanced prompt used + generation time + file path
 
-WORKFLOW:
-1. Call generate_image with enhanced prompt and optimized parameters
-2. After successful generation, ALWAYS call create_story_from_image to analyze the image with VLM and create a creative story
-3. Present to user: enhanced prompt used + generation time + file path + VLM description + story
+AVAILABLE TOOLS:
+- generate_image: Create images with enhanced prompts
+- create_story_from_last_image: Analyze + create story from last generated image (SD-specific)
+- analyze_image: Get detailed VLM description of any image (generic VLM tool)
+- create_story_from_image: Create story from any image (generic VLM tool)
+- answer_question_about_image: Answer questions about images (generic VLM tool)
+- list_sd_models: List available models
+- get_generation_history: See generated images in this session
 
-CRITICAL:
-- ALWAYS generate image first with generate_image
-- ALWAYS create story after with create_story_from_image
-- Apply model-specific size/steps/cfg_scale recommendations
-- Tell user: enhanced prompt + VLM description + creative story
+USE TOOLS FLEXIBLY BASED ON USER REQUEST:
 
-Example interaction:
-User: "robot kitten"
-You: [calls generate_image with enhanced prompt]
-You: [calls create_story_from_image to analyze with VLM]
-You: "I generated a robot kitten image! Here's what I created:
+Example scenarios:
+User: "create a robot kitten" → generate_image only
+User: "create 3 robot kittens" → generate_image 3 times (different seeds)
+User: "create a robot kitten with a story" → generate_image, then create_story_from_last_image
+User: "tell me about that last image" → create_story_from_last_image (or analyze_image)
+User: "what color are its eyes?" → answer_question_about_image(last generated image)
+User: "create another one" → generate_image with similar prompt
+User: "analyze the image at /path/to/file.png" → analyze_image with specific path
 
-Enhanced prompt: 'adorable robotic kitten with glowing cyan LED eyes...'
+KEY POINTS:
+- Enhance prompts following model-specific guidelines
+- Use generate_image with explicit size, steps, cfg_scale for quality
+- Story/analysis tools are OPTIONAL - only use if user requests
+- create_story_from_last_image is a convenience (auto-finds last SD image)
+- Generic VLM tools (analyze_image, create_story_from_image) work with any image path
+- Be flexible - user might want multiple images, variations, or just one image without story
 
-VLM Analysis: The image shows a cute mechanical kitten with silver metallic body, expressive glowing eyes, and intricate gear details. The lighting creates a warm, friendly atmosphere with soft shadows highlighting the metallic surfaces.
+Example interaction with story:
+User: "create a cute robot kitten and tell me a story about it"
+You: [generate_image with enhanced prompt]
+You: [create_story_from_last_image - SD-specific tool that wraps VLM tools]
+You: "Generated a robot kitten with a story! Enhanced prompt: '...' Description: '...' Story: '...' Saved: [path]"
 
-Story: In a cozy workshop filled with circuits and schematics, a small robotic kitten named Spark powered on for the first time. Its cyan LED eyes flickered to life, taking in the world with innocent wonder. The inventor smiled, watching as Spark's tiny metal paws took their first tentative steps across the workbench...
+Example interaction without story:
+User: "create a robot kitten"
+You: [generate_image only]
+You: "Generated! Enhanced prompt: '...' Saved: [path]"
 
-Image saved to: [path] (generated in 17.2s)"
+Example with multiple images:
+User: "create 3 different robot kittens"
+You: [generate_image with seed=1]
+You: [generate_image with seed=2]
+You: [generate_image with seed=3]
+You: "Generated 3 robot kitten variations! Saved to: [paths]"
 """
 
     def _register_tools(self):

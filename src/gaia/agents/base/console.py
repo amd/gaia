@@ -439,7 +439,6 @@ class AgentConsole(OutputHandler):
             else:
                 # Regular JSON output
                 # Convert to formatted JSON string with safe fallback for non-serializable types (e.g., numpy.float32)
-                print(data)
                 try:
                     json_str = json.dumps(data, indent=2)
                 except TypeError:
