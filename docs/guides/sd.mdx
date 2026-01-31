@@ -232,19 +232,22 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
 
 ### Tool Composition Example
 
-SD-specific convenience tool that wraps generic VLM tools:
+SD-specific convenience tool registered in the agent (not in the mixin):
 
 ```python
-# In SDToolsMixin
+# In SDAgent._register_tools()
+@tool(name="create_story_from_last_image")
 def create_story_from_last_image():
     """SD-specific wrapper - no need to specify image path."""
-    last_image = sd_generations[-1]["image_path"]
+    last_image = self.sd_generations[-1]["image_path"]
 
     # Calls generic VLM tool
-    return _create_story_from_image(last_image, style="whimsical")
+    return self._create_story_from_image(last_image, story_style="whimsical")
+
+self.register_tool(create_story_from_last_image)
 ```
 
-This demonstrates how domain-specific tools can leverage generic capabilities.
+This demonstrates how agents can add custom tools that compose mixin functionality.
 
 ### System Prompt Intelligence
 

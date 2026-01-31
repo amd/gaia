@@ -4982,9 +4982,7 @@ def handle_sd_command(args):
 
     llm_client = LemonadeClient(verbose=False)
     try:
-        llm_client.load_model(
-            llm_model, auto_download=True, prompt=False, timeout=60
-        )
+        llm_client.load_model(llm_model, auto_download=True, prompt=False, timeout=60)
     except Exception:
         pass  # Model might already be loaded
 

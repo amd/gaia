@@ -224,7 +224,11 @@ class LemonadeManager:
                         )
 
                         # Only warn if context_size is non-zero (0 means no model loaded or still loading)
-                        if cls._context_size > 0 and cls._context_size < min_context_size and llm_models_loaded:
+                        if (
+                            cls._context_size > 0
+                            and cls._context_size < min_context_size
+                            and llm_models_loaded
+                        ):
                             cls._log.warning(
                                 f"Lemonade running with {cls._context_size} tokens, "
                                 f"but {min_context_size} requested. "
@@ -232,7 +236,9 @@ class LemonadeManager:
                             )
                             if not quiet:
                                 cls.print_context_message(
-                                    cls._context_size, min_context_size, MessageType.WARNING
+                                    cls._context_size,
+                                    min_context_size,
+                                    MessageType.WARNING,
                                 )
                     except Exception as e:
                         cls._log.debug(f"Failed to re-check status: {e}")
@@ -281,7 +287,11 @@ class LemonadeManager:
                 # 1. Context size is non-zero (0 means no model loaded or model still loading)
                 # 2. Context size is less than required
                 # 3. LLM models are loaded (SD models don't have context size)
-                if cls._context_size > 0 and cls._context_size < min_context_size and llm_models_loaded:
+                if (
+                    cls._context_size > 0
+                    and cls._context_size < min_context_size
+                    and llm_models_loaded
+                ):
                     cls._log.warning(
                         f"Context size {cls._context_size} is less than "
                         f"requested {min_context_size}. Some features may not work correctly."

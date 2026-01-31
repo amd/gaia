@@ -286,5 +286,51 @@ You: "Generated 3 robot kitten variations! Saved to: [paths]"
 """
 
     def _register_tools(self):
-        """Register SD tools - already done in __init__ via register_sd_tools()."""
-        # Tools are registered in __init__ via register_sd_tools()
+        """Register SD tools and custom SD-specific tools."""
+        # SD tools and VLM tools are already registered in __init__
+        # via register_sd_tools() and register_vlm_tools()
+
+        # Register SD-specific custom tool that wraps VLM functionality
+        from gaia.agents.base.tools import tool
+
+        @tool(
+            atomic=True,
+            name="create_story_from_last_image",
+            description="SD-specific convenience: Analyze the last generated SD image and create a whimsical story. Automatically finds the most recent image from this session.",
+            parameters={},
+        )
+        def create_story_from_last_image() -> dict:
+            """
+            Custom SD-Agent tool that wraps generic VLM tools for convenience.
+
+            Demonstrates tool composition: an SD-specific wrapper that calls
+            generic VLM tools under the hood.
+            """
+            if not self.sd_generations:
+                return {
+                    "status": "error",
+                    "error": "No images generated yet. Generate an image first.",
+                }
+
+            # Get last generated image path
+            last_gen = self.sd_generations[-1]
+            image_path = last_gen["image_path"]
+
+            # Call the generic VLM tool (if available)
+            if hasattr(self, "_create_story_from_image"):
+                result = self._create_story_from_image(
+                    image_path, story_style="whimsical"
+                )
+                if result.get("status") == "success":
+                    # Add SD-specific metadata
+                    result["original_prompt"] = last_gen["prompt"]
+                    result["sd_model"] = last_gen["model"]
+                return result
+            else:
+                return {
+                    "status": "error",
+                    "error": "VLM tools not initialized. Agent needs VLMToolsMixin.",
+                }
+
+        # Register the custom tool
+        self.register_tool(create_story_from_last_image)
