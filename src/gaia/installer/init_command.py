@@ -928,8 +928,18 @@ class InitCommand:
 
                 except KeyboardInterrupt:
                     # Wait for subprocess to finish shutting down gracefully
-                    # The CLI handles SIGINT and cleans up, so we just wait for it
-                    process.wait()
+                    # The CLI handles SIGINT and cleans up, so we give it time
+                    try:
+                        process.wait(timeout=5)  # Wait up to 5 seconds
+                    except subprocess.TimeoutExpired:
+                        # If it doesn't exit cleanly, terminate it
+                        process.terminate()
+                        try:
+                            process.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            # Last resort: kill it
+                            process.kill()
+                            process.wait()
 
                     self.agent_console.print("")
                     self.agent_console.print("")
