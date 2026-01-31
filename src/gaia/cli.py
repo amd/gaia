@@ -4972,6 +4972,7 @@ def handle_sd_command(args):
         return
 
     from gaia.agents.sd import SDAgent, SDAgentConfig
+
     # Pre-load LLM for prompt enhancement to avoid context size warnings
     # SD agent uses lightweight LLM for enhancement, doesn't need 32K context
     llm_client = LemonadeClient(verbose=False)

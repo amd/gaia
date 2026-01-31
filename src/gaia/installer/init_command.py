@@ -963,7 +963,9 @@ class InitCommand:
 
             # Check model type
             is_embedding_model = "embed" in model_id.lower()
-            is_sd_model = any(sd in model_id.upper() for sd in ["SDXL", "SD-", "SD1", "SD2"])
+            is_sd_model = any(
+                sd in model_id.upper() for sd in ["SDXL", "SD-", "SD1", "SD2"]
+            )
 
             if is_sd_model:
                 # Test SD model with image generation
