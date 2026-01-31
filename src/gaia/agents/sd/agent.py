@@ -287,4 +287,4 @@ You: "Generated 3 robot kitten variations! Saved to: [paths]"
 
     def _register_tools(self):
         """Register SD tools - already done in __init__ via register_sd_tools()."""
-        pass
+        # Tools are registered in __init__ via register_sd_tools()

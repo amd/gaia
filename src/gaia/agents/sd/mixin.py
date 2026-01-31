@@ -292,7 +292,7 @@ class SDToolsMixin:
         steps: Optional[int] = None,
         cfg_scale: Optional[float] = None,
         seed: Optional[int] = None,
-        prompt_open: Optional[bool] = None,
+        _prompt_open: Optional[bool] = None,  # Unused, kept for API compatibility
     ) -> Dict[str, Any]:
         """
         Internal method to generate an image via Lemonade Server SD endpoint.

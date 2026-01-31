@@ -4972,8 +4972,6 @@ def handle_sd_command(args):
         return
 
     from gaia.agents.sd import SDAgent, SDAgentConfig
-    from gaia.llm.lemonade_client import LemonadeClient
-
     # Pre-load LLM for prompt enhancement to avoid context size warnings
     # SD agent uses lightweight LLM for enhancement, doesn't need 32K context
     llm_client = LemonadeClient(verbose=False)
@@ -5042,12 +5040,10 @@ def handle_sd_command(args):
                 if result.get("final_answer"):
                     print(f"\nAgent: {result['final_answer']}\n")
                 else:
-                    print(f"\nAgent: Generation complete\n")
+                    print("\nAgent: Generation complete\n")
 
                 # Prompt to open image after agent completes
                 if not args.no_open and result.get("status") != "error":
-                    import os
-
                     try:
                         response = (
                             input("Open image in default viewer? [Y/n]: ")
@@ -5076,8 +5072,6 @@ def handle_sd_command(args):
 
         # Prompt to open image after agent completes its story
         if not args.no_open and result.get("status") != "error":
-            import os
-
             try:
                 response = (
                     input("Open image in default viewer? [Y/n]: ").strip().lower()

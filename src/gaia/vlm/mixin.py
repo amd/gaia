@@ -28,7 +28,7 @@ Example:
 """
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from gaia.logger import get_logger
 

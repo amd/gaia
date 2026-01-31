@@ -961,10 +961,23 @@ class InitCommand:
             # Load the model first
             client.load_model(model_id, auto_download=False, prompt=False)
 
-            # Check if this is an embedding model
+            # Check model type
             is_embedding_model = "embed" in model_id.lower()
+            is_sd_model = any(sd in model_id.upper() for sd in ["SDXL", "SD-", "SD1", "SD2"])
 
-            if is_embedding_model:
+            if is_sd_model:
+                # Test SD model with image generation
+                response = client.generate_image(
+                    prompt="test",
+                    model=model_id,
+                    steps=1,  # Minimal steps for quick test
+                    size="512x512",
+                )
+                # Check if we got a valid image path
+                if response and response.get("image_path"):
+                    return (True, None)
+                return (False, "No image generated")
+            elif is_embedding_model:
                 # Test embedding model with a simple text
                 response = client.embeddings(
                     input_texts=["test"],
