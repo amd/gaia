@@ -975,8 +975,8 @@ class InitCommand:
                     steps=1,  # Minimal steps for quick test
                     size="512x512",
                 )
-                # Check if we got a valid image path
-                if response and response.get("image_path"):
+                # Check if we got a valid image in b64_json format
+                if response and response.get("data") and response["data"][0].get("b64_json"):
                     return (True, None)
                 return (False, "No image generated")
             elif is_embedding_model:
