@@ -203,12 +203,22 @@ from gaia.vlm import VLMToolsMixin
 
 class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
     def __init__(self, config):
-        super().__init__()  # Agent orchestration
+        # Initialize Agent base with LLM config
+        super().__init__(
+            model_id=config.model_id,  # Qwen3-4B for prompt enhancement
+            max_steps=config.max_steps,
+            min_context_size=8192,  # 8K sufficient for SD
+        )
 
-        self.init_sd()   # SD tools: generate_image, list_sd_models
+        # Initialize SD tools
+        self.init_sd(
+            output_dir=config.output_dir,
+            default_model=config.sd_model,  # SDXL-Turbo
+        )
         self.register_sd_tools()
 
-        self.init_vlm()  # VLM tools: analyze_image, create_story
+        # Initialize VLM tools
+        self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
         self.register_vlm_tools()
 ```
 
