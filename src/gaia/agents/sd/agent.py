@@ -33,7 +33,7 @@ class SDAgentConfig:
     use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
     base_url: str = "http://localhost:8000/api/v1"
-    model_id: str = "Qwen3-4B-GGUF"  # 4B model for prompt enhancement
+    model_id: str = "Qwen3-4B-Instruct-2507-GGUF"  # 4B model for prompt enhancement
 
     # Execution settings
     max_steps: int = 5

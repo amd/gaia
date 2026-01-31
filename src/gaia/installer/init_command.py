@@ -50,7 +50,7 @@ INIT_PROFILES = {
         "agent": "sd",
         "models": [
             "SDXL-Turbo",  # Image generation (~2.6GB)
-            "Qwen3-4B-GGUF",  # Prompt enhancement (~2.5GB)
+            "Qwen3-4B-Instruct-2507-GGUF",  # Prompt enhancement (~2.5GB)
             "Qwen3-VL-4B-Instruct-GGUF",  # Vision analysis + stories (~3.3GB)
         ],
         "approx_size": "~8.4 GB",
