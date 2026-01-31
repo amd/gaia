@@ -92,13 +92,12 @@ graph TB
 
     User --> Agent
     Agent --> Plan
-    Plan --> SDTools("SD Tools")
 
+    Plan --> SDTools("SD Tools")
     SDTools --> GenImg("generate_image()<br/>→ SDXL-Turbo")
     GenImg --> Output("🖼️ Image + metadata")
 
-    SDTools --> VLMTools("VLM Tools")
-
+    Plan --> VLMTools("VLM Tools")
     VLMTools --> Analyze("analyze_image()<br/>→ Qwen3-VL-4B")
     Analyze --> Output2("📝 VLM description")
 
