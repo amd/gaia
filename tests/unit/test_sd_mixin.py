@@ -140,7 +140,7 @@ class TestSDToolsMixinGeneration:
         assert Path(result["image_path"]).exists()
         assert result["model"] == "SDXL-Turbo"  # Default model
         assert result["size"] == "512x512"  # Auto-selected for SDXL-Turbo
-        assert "generation_time_ms" in result
+        assert "generation_time_s" in result
 
     def test_generate_image_tracks_history(self, tmp_path, mock_lemonade_client):
         """Test that successful generation is tracked in history."""

@@ -80,8 +80,8 @@ class TestSDIntegration:
         # Verify result metadata
         assert result["model"] == "SD-Turbo"
         assert result["size"] == "512x512"
-        assert "generation_time_ms" in result
-        assert result["generation_time_ms"] > 0
+        assert "generation_time_s" in result
+        assert result["generation_time_s"] > 0
 
     def test_health_check_with_real_server(self):
         """Test health check returns available SD models."""

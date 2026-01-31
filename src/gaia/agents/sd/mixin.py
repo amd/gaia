@@ -307,7 +307,7 @@ class SDToolsMixin:
             prompt_open: If True, prompt to open image in viewer (default: True)
 
         Returns:
-            Dict with image_path, prompt, model, size, seed, and generation_time_ms
+            Dict with image_path, prompt, model, size, seed, and generation_time_s
         """
         import time
 
@@ -401,7 +401,7 @@ class SDToolsMixin:
             if console and hasattr(console, "stop_progress"):
                 console.stop_progress()
 
-            generation_time_ms = int((time.time() - start_time) * 1000)
+            generation_time_s = round(time.time() - start_time, 1)
 
             # Parse response
             image_b64 = response["data"][0]["b64_json"]
@@ -423,7 +423,7 @@ class SDToolsMixin:
                 "steps": steps,
                 "seed": seed,
                 "image_hash": image_hash,
-                "generation_time_ms": generation_time_ms,
+                "generation_time_s": generation_time_s,
             }
 
             # Track in session history
@@ -445,9 +445,9 @@ class SDToolsMixin:
             # Show success message after image
             if console and hasattr(console, "print_success"):
                 time_str = (
-                    f"{generation_time_ms / 1000:.1f}s"
-                    if generation_time_ms < 60000
-                    else f"{generation_time_ms / 60000:.1f}m"
+                    f"{generation_time_s:.1f}s"
+                    if generation_time_s < 60
+                    else f"{generation_time_s / 60:.1f}m"
                 )
                 console.print_success(
                     f"Image generated in {time_str}\n"
@@ -455,7 +455,7 @@ class SDToolsMixin:
                 )
 
             # Note: Open prompt handled by CLI after agent completes its story
-            logger.debug(f"Image generated: {image_path} ({generation_time_ms}ms)")
+            logger.debug(f"Image generated: {image_path} ({generation_time_s:.1f}s)")
             return result
 
         except LemonadeClientError as e:
