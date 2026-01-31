@@ -905,12 +905,19 @@ class InitCommand:
                     f"   [bold cyan]Downloading:[/bold cyan] {model_id}"
                 )
 
-                # Use Popen instead of run() so we can wait for process on interrupt
+                # Use Popen instead of run() so we can handle interrupts properly
+                # On Windows, create new process group so child doesn't receive Ctrl+C
+                # This lets us cleanly terminate it when user presses Ctrl+C
+                creationflags = 0
+                if sys.platform == "win32":
+                    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+
                 process = subprocess.Popen(
                     [lemonade_path, "pull", model_id],
                     text=True,
                     encoding="utf-8",
                     errors="replace",
+                    creationflags=creationflags,
                 )
 
                 try:
@@ -927,19 +934,15 @@ class InitCommand:
                         success = False
 
                 except KeyboardInterrupt:
-                    # Wait for subprocess to finish shutting down gracefully
-                    # The CLI handles SIGINT and cleans up, so we give it time
+                    # User pressed Ctrl+C - terminate the subprocess
+                    # (It didn't receive the signal due to CREATE_NEW_PROCESS_GROUP)
+                    process.terminate()
                     try:
-                        process.wait(timeout=5)  # Wait up to 5 seconds
+                        process.wait(timeout=3)
                     except subprocess.TimeoutExpired:
-                        # If it doesn't exit cleanly, terminate it
-                        process.terminate()
-                        try:
-                            process.wait(timeout=2)
-                        except subprocess.TimeoutExpired:
-                            # Last resort: kill it
-                            process.kill()
-                            process.wait()
+                        # If it doesn't exit after terminate, force kill
+                        process.kill()
+                        process.wait()
 
                     self.agent_console.print("")
                     self.agent_console.print("")
