@@ -37,18 +37,22 @@ Complete multi-modal workflow: Prompt enhancement → Image generation → VLM a
 
 ## Quick Start
 
-<Steps>
-  <Step title="Start Lemonade Server">
-    ```bash
-    lemonade-server serve
-    ```
-  </Step>
+<Note>
+**First time?** See [Setup Guide](/setup) to install GAIA and Lemonade Server.
+</Note>
 
-  <Step title="Pull models (first time)">
+<Steps>
+  <Step title="Initialize GAIA (first time only)">
     ```bash
-    lemonade-server pull SDXL-Turbo  # Image generation
-    lemonade-server pull Qwen3-4B-GGUF  # Prompt enhancement
-    lemonade-server pull Qwen3-VL-4B-Instruct-GGUF  # Vision + stories
+    gaia init
+    ```
+
+    This installs Lemonade Server and downloads required models.
+
+    Or if you already have GAIA installed:
+    ```bash
+    # Pull SD model if not already downloaded
+    lemonade-server pull SDXL-Turbo
     ```
   </Step>
 
@@ -58,15 +62,26 @@ Complete multi-modal workflow: Prompt enhancement → Image generation → VLM a
     ```
 
     The agent will:
-    1. Enhance your prompt with quality keywords
-    2. Generate the image (~17s)
-    3. Analyze the image with VLM
-    4. Create a creative story (~17s)
-    5. Present everything together
+    1. Load models automatically (Qwen3-4B for enhancement, Qwen3-VL-4B for vision)
+    2. Enhance your prompt with quality keywords
+    3. Generate the image (~17s)
+    4. Analyze the image with VLM
+    5. Create a creative story (~17s)
 
     Output: `.gaia/cache/sd/images/`
   </Step>
 </Steps>
+
+<Accordion title="What models are needed?">
+The agent uses three models (auto-downloaded on first use):
+- **SDXL-Turbo** (~2.6GB) - Image generation
+- **Qwen3-4B-GGUF** (~2.5GB) - Prompt enhancement
+- **Qwen3-VL-4B-Instruct-GGUF** (~3.3GB) - Vision analysis and stories
+
+Total: ~8.4GB for the complete multi-modal experience.
+
+**Already have them?** The agent will use what's available.
+</Accordion>
 
 ---
 
