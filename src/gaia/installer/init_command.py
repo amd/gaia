@@ -14,12 +14,10 @@ Main entry point for `gaia init` command that:
 
 import logging
 import os
+import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from typing import Callable, Optional
-
-import requests
 
 # Rich imports for better CLI formatting
 try:
@@ -134,7 +132,7 @@ class InitCommand:
         # Initialize Rich console if available (before installer for console pass-through)
         self.console = Console() if RICH_AVAILABLE else None
 
-        # Initialize AgentConsole for download progress display
+        # Initialize AgentConsole for formatted output
         self.agent_console = AgentConsole()
 
         # Use minimal installer for minimal profile
@@ -868,6 +866,10 @@ class InitCommand:
                 self._print("   Skipping model downloads")
                 return True
 
+            # Show tip about cancelling
+            self._print("")
+            self.agent_console.print("   [dim]💡 Tip: Press Ctrl+C to cancel a download[/dim]")
+
             # Force re-download: delete models first
             if self.force_models:
                 for model_id in model_ids:
@@ -886,63 +888,77 @@ class InitCommand:
                         except Exception as e:
                             self._print_error(f"Failed to delete {model_id}: {e}")
 
-            # Download each model
-            success = True
-            for model_id in model_ids:
-                self._print("")
+            # Find lemonade-server executable
+            lemonade_path = self._find_lemonade_server()
+            if not lemonade_path:
+                self._print_error("Could not find lemonade-server executable")
+                self._print(
+                    "   Please ensure Lemonade Server is installed and in your PATH"
+                )
+                return False
 
-                # Use AgentConsole for nicely formatted download progress
-                self.agent_console.print_download_start(model_id)
+            # Download each model using CLI
+            success = True
+            for idx, model_id in enumerate(model_ids):
+                self._print("")
+                self.agent_console.print(
+                    f"   [bold cyan]Downloading:[/bold cyan] {model_id}"
+                )
 
                 try:
-                    event_count = 0
-                    last_bytes = 0
-                    last_time = time.time()
+                    # Use lemonade-server CLI pull command
+                    # The CLI handles all retry logic and progress display
+                    result = subprocess.run(
+                        [lemonade_path, "pull", model_id],
+                        check=False,  # Don't raise on non-zero exit
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                    )
 
-                    for event in client.pull_model_stream(model_name=model_id):
-                        event_count += 1
-                        event_type = event.get("event")
+                    self._print("")
+                    if result.returncode == 0:
+                        self._print_success(f"Downloaded {model_id}")
+                    else:
+                        self._print_error(
+                            f"Failed to download {model_id} (exit code: {result.returncode})"
+                        )
+                        success = False
 
-                        if event_type == "progress":
-                            # Skip first 2 spurious events from Lemonade
-                            if event_count <= 2:
-                                continue
+                except KeyboardInterrupt:
+                    self.agent_console.print("")
+                    self.agent_console.print("")
+                    self._print_warning(f"Download of {model_id} interrupted")
 
-                            # Calculate download speed
-                            current_bytes = event.get("bytes_downloaded", 0)
-                            current_time = time.time()
-                            time_delta = current_time - last_time
+                    # Check if there are more models to download
+                    remaining = len(model_ids) - idx - 1
+                    if remaining > 0:
+                        self.agent_console.print("")
+                        self.agent_console.print(
+                            f"   [dim]{remaining} model(s) remaining[/dim]"
+                        )
 
-                            speed_mbps = 0.0
-                            if time_delta > 0.1 and current_bytes > last_bytes:
-                                bytes_delta = current_bytes - last_bytes
-                                speed_mbps = (bytes_delta / time_delta) / (1024 * 1024)
-                                last_bytes = current_bytes
-                                last_time = current_time
+                        # Ask user if they want to continue with remaining models
+                        if self._prompt_yes_no(
+                            "Skip this model and continue with remaining models?",
+                            default=False
+                        ):
+                            self.agent_console.print("")
+                            continue
 
-                            self.agent_console.print_download_progress(
-                                percent=event.get("percent", 0),
-                                bytes_downloaded=current_bytes,
-                                bytes_total=event.get("bytes_total", 0),
-                                speed_mbps=speed_mbps,
-                            )
+                    # User chose to exit or no more models
+                    self.agent_console.print("")
+                    self.agent_console.print("   [yellow]Model downloads cancelled[/yellow]")
+                    return False
 
-                        elif event_type == "complete":
-                            self.agent_console.print_download_complete(model_id)
-
-                        elif event_type == "error":
-                            self.agent_console.print_download_error(
-                                event.get("error", "Unknown error"), model_id
-                            )
-                            success = False
-                            break
-
-                except requests.exceptions.ConnectionError as e:
-                    self.agent_console.print_download_error(f"Connection error: {e}")
-                    self._print("   Check your network connection and retry")
+                except FileNotFoundError:
+                    self._print("")
+                    self._print_error(f"lemonade-server not found at: {lemonade_path}")
                     success = False
+                    break
                 except Exception as e:
-                    self.agent_console.print_download_error(str(e), model_id)
+                    self._print("")
+                    self._print_error(f"Error downloading {model_id}: {e}")
                     success = False
 
             return success
