@@ -4974,19 +4974,19 @@ def handle_sd_command(args):
     from gaia.agents.sd import SDAgent, SDAgentConfig
 
     # Pre-load LLM for prompt enhancement to avoid context size warnings
-    # SD agent uses lightweight LLM for enhancement, doesn't need 32K context
-    llm_client = LemonadeClient(verbose=False)
-    try:
-        llm_client.load_model(
-            "Qwen2.5-0.5B-Instruct-CPU", auto_download=True, prompt=False, timeout=60
-        )
-    except Exception:
-        pass  # Model might already be loaded
-
+    # SD agent uses 4B LLM for better prompt enhancement quality
     # Create config - ensure LLM model is set
     llm_model = getattr(args, "model", None)
     if not llm_model:
         llm_model = "Qwen3-4B-Instruct-2507-GGUF"  # Default LLM for prompt enhancement
+
+    llm_client = LemonadeClient(verbose=False)
+    try:
+        llm_client.load_model(
+            llm_model, auto_download=True, prompt=False, timeout=60
+        )
+    except Exception:
+        pass  # Model might already be loaded
 
     config = SDAgentConfig(
         sd_model=args.sd_model,
