@@ -84,7 +84,7 @@ Total: ~8.4GB for the complete multi-modal experience.
 ### Multi-Modal Agent Architecture
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'18px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'20px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
 graph TB
     User("User: 'create robot kitten with story'")
     Agent("SDAgent<br/>(Agent + SDToolsMixin + VLMToolsMixin)")
@@ -92,18 +92,17 @@ graph TB
 
     User --> Agent
     Agent --> Plan
-
     Plan --> SDTools("SD Tools")
+
     SDTools --> GenImg("generate_image()<br/>→ SDXL-Turbo")
-    SDTools --> ListModels("list_sd_models()")
-    SDTools --> History("get_generation_history()")
     GenImg --> Output("🖼️ Image + metadata")
 
-    Plan --> VLMTools("VLM Tools")
+    SDTools --> VLMTools("VLM Tools")
+
     VLMTools --> Analyze("analyze_image()<br/>→ Qwen3-VL-4B")
-    VLMTools --> Story("create_story_from_image()<br/>→ Qwen3-VL-4B")
-    VLMTools --> StoryLast("create_story_from_last_image()<br/>(SD-specific wrapper)")
     Analyze --> Output2("📝 VLM description")
+
+    VLMTools --> Story("create_story_from_image()<br/>→ Qwen3-VL-4B")
     Story --> Output3("📖 Creative story")
 
     style User fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
@@ -114,6 +113,9 @@ graph TB
     style GenImg fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
     style Analyze fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
     style Story fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Output fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Output2 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Output3 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
 
     linkStyle default stroke:#ED1C24,stroke-width:2px
 ```
