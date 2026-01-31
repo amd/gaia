@@ -60,12 +60,7 @@ Complete multi-modal workflow: Prompt enhancement → Image generation → VLM a
     gaia sd "create a cute robot kitten and tell me a short story about it"
     ```
 
-    The agent will:
-    1. Load models automatically (Qwen3-4B for enhancement, Qwen3-VL-4B for vision)
-    2. Enhance your prompt with quality keywords
-    3. Generate the image (~17s)
-    4. Analyze the image with VLM
-    5. Create a creative story (~17s)
+    LLM enhances prompt → SD generates image (~17s) → VLM creates story (~17s)
 
     Output: `.gaia/cache/sd/images/`
   </Step>
