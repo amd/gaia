@@ -866,10 +866,6 @@ class InitCommand:
                 self._print("   Skipping model downloads")
                 return True
 
-            # Show tip about cancelling
-            self._print("")
-            self.agent_console.print("   [dim]💡 Tip: Press Ctrl+C to cancel a download[/dim]")
-
             # Force re-download: delete models first
             if self.force_models:
                 for model_id in model_ids:
@@ -899,75 +895,28 @@ class InitCommand:
 
             # Download each model using CLI
             success = True
-            for idx, model_id in enumerate(model_ids):
+            for model_id in model_ids:
                 self._print("")
                 self.agent_console.print(
                     f"   [bold cyan]Downloading:[/bold cyan] {model_id}"
                 )
 
-                # Use Popen instead of run() so we can handle interrupts properly
-                # On Windows, create new process group so child doesn't receive Ctrl+C
-                # This lets us cleanly terminate it when user presses Ctrl+C
-                creationflags = 0
-                if sys.platform == "win32":
-                    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
-
-                process = subprocess.Popen(
-                    [lemonade_path, "pull", model_id],
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    creationflags=creationflags,
-                )
-
                 try:
-                    # Wait for the process to complete
-                    returncode = process.wait()
+                    # Use lemonade-server CLI pull command
+                    # The CLI handles all retry logic and progress display
+                    result = subprocess.run(
+                        [lemonade_path, "pull", model_id],
+                        check=False,
+                    )
 
                     self._print("")
-                    if returncode == 0:
+                    if result.returncode == 0:
                         self._print_success(f"Downloaded {model_id}")
                     else:
                         self._print_error(
-                            f"Failed to download {model_id} (exit code: {returncode})"
+                            f"Failed to download {model_id} (exit code: {result.returncode})"
                         )
                         success = False
-
-                except KeyboardInterrupt:
-                    # User pressed Ctrl+C - terminate the subprocess
-                    # (It didn't receive the signal due to CREATE_NEW_PROCESS_GROUP)
-                    process.terminate()
-                    try:
-                        process.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        # If it doesn't exit after terminate, force kill
-                        process.kill()
-                        process.wait()
-
-                    self.agent_console.print("")
-                    self.agent_console.print("")
-                    self._print_warning(f"Download of {model_id} interrupted")
-
-                    # Check if there are more models to download
-                    remaining = len(model_ids) - idx - 1
-                    if remaining > 0:
-                        self.agent_console.print("")
-                        self.agent_console.print(
-                            f"   [dim]{remaining} model(s) remaining[/dim]"
-                        )
-
-                        # Ask user if they want to continue with remaining models
-                        if self._prompt_yes_no(
-                            "Skip this model and continue with remaining models?",
-                            default=False
-                        ):
-                            self.agent_console.print("")
-                            continue
-
-                    # User chose to exit or no more models
-                    self.agent_console.print("")
-                    self.agent_console.print("   [yellow]Model downloads cancelled[/yellow]")
-                    return False
 
                 except FileNotFoundError:
                     self._print("")
