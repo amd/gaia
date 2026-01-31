@@ -7,23 +7,34 @@ description: "Generate images using gaia sd - an agent that enhances prompts wit
   **CLI Command:** `gaia sd` - Demonstrates SDToolsMixin with LLM-powered prompt enhancement
 </Info>
 
-# How It Works
+# Multi-Modal Image Generation
 
-The `gaia sd` command demonstrates GAIA's multi-modal agent capabilities: an LLM enhances your prompt, Stable Diffusion generates the image, then a vision model (VLM) analyzes it and creates a creative story.
+The `gaia sd` command demonstrates GAIA's multi-modal capabilities by combining three AI models:
+
+1. **LLM** (Qwen3-4B) - Enhances your prompt with quality keywords
+2. **Stable Diffusion** - Generates the image locally on Ryzen AI
+3. **VLM** (Qwen3-VL-4B) - Analyzes the image and creates a creative story
 
 **Key features:**
-- **100% Local** - LLM, SD, and VLM all run on Ryzen AI
-- **Multi-modal pipeline** - Text (LLM) → Image (SD) → Vision analysis (VLM) → Story (VLM)
-- **Easy to use** - Just type a simple description, get image + story
-- **Demonstrates SDToolsMixin** - Shows how to build multi-modal agents
+- **100% Local** - All three models run on Ryzen AI (no cloud)
+- **Multi-modal** - Text → Image → Vision → Story
+- **Easy** - Type one sentence, get image + narrative
+- **Demonstrates mixins** - Shows SDToolsMixin + VLMToolsMixin integration
 
-**Example:**
-- You type: "robot kitten"
-- LLM adds: "glowing LED eyes, soft lighting, detailed metallic texture, 4K"
-- SD generates: Image
-- VLM analyzes: "A cute mechanical kitten with silver body..."
-- VLM creates: Story about Whiskers the robot kitten
-- Result: Image + creative narrative
+**Complete flow:**
+```
+You: "robot kitten"
+↓
+LLM: Adds "glowing LED eyes, soft lighting, detailed, 4K"
+↓
+SD: Generates image
+↓
+VLM: "A cute mechanical kitten with silver body and cyan glowing eyes..."
+↓
+VLM: Story about Whiskers the robot kitten's first adventure
+↓
+Result: Image + creative 2-3 paragraph story
+```
 
 ---
 
