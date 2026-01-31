@@ -73,44 +73,27 @@ Complete multi-modal workflow: Prompt enhancement → Image generation → VLM a
 ## How It Works
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontSize':'16px', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'16px'}}}%%
 graph LR
-    A["You Type:<br/><b>'robot kitten'</b>"] --> B["🧠 LLM<br/><small>Enhances</small>"]
+    A["'robot kitten'"] --> B["🧠 LLM"]
+    B --> C["🖼️ Image"]
+    C --> D["👁️ VLM"]
+    D --> E["📖 Story"]
 
-    B --> C["Enhanced:<br/><i>'glowing eyes,<br/>soft lighting,<br/>detailed, 4K'</i>"]
-
-    C --> D["🖼️ SD<br/><small>Generates</small>"]
-
-    D --> E["Image"]
-
-    E --> F["👁️ VLM<br/><small>Analyzes</small>"]
-
-    F --> G["📄 Description"]
-
-    G --> H["📖 VLM<br/><small>Creates</small>"]
-
-    H --> I["Story"]
-
-    style A fill:#2d2d2d,stroke:#1a1a1a,stroke-width:3px,color:#fff
-    style B fill:#ED1C24,stroke:#C8171E,stroke-width:4px,color:#fff
-    style C fill:#6c757d,stroke:#495057,stroke-width:2px,color:#fff
-    style D fill:#C8171E,stroke:#C8171E,stroke-width:3px,color:#fff
-    style E fill:#ED1C24,stroke:#C8171E,stroke-width:3px,color:#fff
-    style F fill:#F4484D,stroke:#ED1C24,stroke-width:3px,color:#fff
-    style G fill:#6c757d,stroke:#495057,stroke-width:2px,color:#fff
-    style H fill:#F4484D,stroke:#ED1C24,stroke-width:3px,color:#fff
-    style I fill:#ED1C24,stroke:#C8171E,stroke-width:3px,color:#fff
-
-    linkStyle 0,1,2,3,4,5,6,7 stroke:#ED1C24,stroke-width:3px
+    style A fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    style B fill:#ED1C24,stroke:#C8171E,stroke-width:3px,color:#fff
+    style C fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+    style D fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style E fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
 ```
 
-**The pipeline:**
-1. **LLM analyzes** input → adds lighting, style, quality keywords
-2. **SD generates** image with enhanced prompt
-3. **VLM analyzes** the generated image in detail
-4. **VLM creates** a creative 2-3 paragraph story
+**Simple flow:**
+1. **LLM** adds quality keywords
+2. **SD** generates image (~17s)
+3. **VLM** analyzes what's in the image
+4. **VLM** creates a creative story (~17s)
 
-Everything runs locally on Ryzen AI hardware.
+All running locally on Ryzen AI.
 
 ---
 
