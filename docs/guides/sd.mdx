@@ -44,16 +44,15 @@ Complete multi-modal workflow: Prompt enhancement → Image generation → VLM a
 <Steps>
   <Step title="Initialize GAIA (first time only)">
     ```bash
-    gaia init
+    gaia init --profile sd
     ```
 
-    This installs Lemonade Server and downloads required models.
+    This installs Lemonade Server and downloads all required models:
+    - SDXL-Turbo (image generation)
+    - Qwen3-4B-GGUF (prompt enhancement)
+    - Qwen3-VL-4B-Instruct-GGUF (vision + stories)
 
-    Or if you already have GAIA installed:
-    ```bash
-    # Pull SD model if not already downloaded
-    lemonade-server pull SDXL-Turbo
-    ```
+    **Already have GAIA?** Just run `gaia init --profile sd` to get the SD models.
   </Step>
 
   <Step title="Generate image with story">

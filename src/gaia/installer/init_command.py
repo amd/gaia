@@ -45,6 +45,16 @@ INIT_PROFILES = {
         "models": ["Qwen3-4B-Instruct-2507-GGUF"],  # Override default minimal model
         "approx_size": "~2.5 GB",
     },
+    "sd": {
+        "description": "Image generation with multi-modal AI (LLM + SD + VLM)",
+        "agent": "sd",
+        "models": [
+            "SDXL-Turbo",  # Image generation (~2.6GB)
+            "Qwen3-4B-GGUF",  # Prompt enhancement (~2.5GB)
+            "Qwen3-VL-4B-Instruct-GGUF",  # Vision analysis + stories (~3.3GB)
+        ],
+        "approx_size": "~8.4 GB",
+    },
     "chat": {
         "description": "Interactive chat with RAG and vision support",
         "agent": "chat",
