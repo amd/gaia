@@ -203,16 +203,38 @@ class LemonadeManager:
                     )
                     return True
                 else:
-                    # Context size insufficient - warn and continue
-                    cls._log.warning(
-                        f"Lemonade running with {cls._context_size} tokens, "
-                        f"but {min_context_size} requested. "
-                        f"Restart with: lemonade-server serve --ctx-size {min_context_size}"
-                    )
-                    if not quiet:
-                        cls.print_context_message(
-                            cls._context_size, min_context_size, MessageType.WARNING
+                    # Context size may be cached from before models were loaded
+                    # Re-check current status to see if models are loaded now
+                    try:
+                        client = LemonadeClient(
+                            host=host,
+                            port=port,
+                            keep_alive=True,
+                            verbose=not quiet,
                         )
+                        status = client.get_status()
+                        # Update cached context size
+                        cls._context_size = status.context_size or 0
+
+                        # Only warn if LLM models are loaded AND context is insufficient
+                        # SD models don't have context size, only LLM models do
+                        llm_models_loaded = any(
+                            "image" not in model.get("labels", [])
+                            for model in status.loaded_models
+                        )
+
+                        if cls._context_size < min_context_size and llm_models_loaded:
+                            cls._log.warning(
+                                f"Lemonade running with {cls._context_size} tokens, "
+                                f"but {min_context_size} requested. "
+                                f"Restart with: lemonade-server serve --ctx-size {min_context_size}"
+                            )
+                            if not quiet:
+                                cls.print_context_message(
+                                    cls._context_size, min_context_size, MessageType.WARNING
+                                )
+                    except Exception as e:
+                        cls._log.debug(f"Failed to re-check status: {e}")
                     return True
 
             cls._log.debug(f"Initializing Lemonade (min context: {min_context_size})")
@@ -246,8 +268,15 @@ class LemonadeManager:
                     f"(context: {cls._context_size} tokens)"
                 )
 
-                # Verify context size - warn if insufficient
-                if cls._context_size < min_context_size:
+                # Verify context size - only warn if insufficient AND LLM models are loaded
+                # SD models don't have context size, only LLM models do
+                # Check if any loaded models are LLMs (not SD models with "image" label)
+                llm_models_loaded = any(
+                    "image" not in model.get("labels", [])
+                    for model in status.loaded_models
+                )
+
+                if cls._context_size < min_context_size and llm_models_loaded:
                     cls._log.warning(
                         f"Context size {cls._context_size} is less than "
                         f"requested {min_context_size}. Some features may not work correctly."
