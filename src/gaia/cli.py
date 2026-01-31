@@ -2090,8 +2090,8 @@ Examples:
         "--profile",
         "-p",
         default="chat",
-        choices=["minimal", "chat", "code", "rag", "all"],
-        help="Profile to initialize: minimal, chat, code, rag, all (default: chat)",
+        choices=["minimal", "sd", "chat", "code", "rag", "all"],
+        help="Profile to initialize: minimal, sd (image gen), chat, code, rag, all (default: chat)",
     )
     init_parser.add_argument(
         "--minimal",
