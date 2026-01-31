@@ -1,44 +1,26 @@
 ---
 title: "Image Generation Agent"
-description: "Generate images using gaia sd - an agent that enhances prompts with an LLM"
+description: "Multi-modal image generation with LLM prompt enhancement and VLM story creation"
 ---
 
 <Info>
-  **CLI Command:** `gaia sd` - Demonstrates SDToolsMixin with LLM-powered prompt enhancement
+  **CLI Command:** `gaia sd` - Demonstrates multi-modal agents with SDToolsMixin + VLMToolsMixin
 </Info>
 
-# Multi-Modal Image Generation
+# What It Is
 
-The `gaia sd` command demonstrates GAIA's multi-modal capabilities by combining three AI models:
+The `gaia sd` command demonstrates GAIA's multi-modal agent architecture through a practical example: generating images with AI-enhanced prompts and automatic story creation.
 
-1. **LLM** (Qwen3-4B) - Enhances your prompt with quality keywords
-2. **Stable Diffusion** - Generates the image locally on Ryzen AI
-3. **VLM** (Qwen3-VL-4B) - Analyzes the image and creates a creative story
+**Three AI models working together (all local on Ryzen AI):**
+- 🧠 **LLM** (Qwen3-4B) - Analyzes your input and adds quality keywords
+- 🖼️ **Stable Diffusion** - Generates images from enhanced prompts
+- 👁️ **VLM** (Qwen3-VL-4B) - Analyzes images and creates creative stories
 
-**Key features:**
-- **100% Local** - All three models run on Ryzen AI (no cloud)
-- **Multi-modal** - Text → Image → Vision → Story
-- **Easy** - Type one sentence, get image + narrative
-- **Demonstrates mixins** - Shows SDToolsMixin + VLMToolsMixin integration
-
-**Complete flow:**
-```
-You: "robot kitten"
-↓
-LLM: Adds "glowing LED eyes, soft lighting, detailed, 4K"
-↓
-SD: Generates image
-↓
-VLM: "A cute mechanical kitten with silver body and cyan glowing eyes..."
-↓
-VLM: Story about Whiskers the robot kitten's first adventure
-↓
-Result: Image + creative 2-3 paragraph story
-```
+Type "robot kitten" → Get image + 2-3 paragraph story about the character
 
 ---
 
-## Demo: Watch the Agent Work
+## See It In Action
 
 <video
   autoPlay
@@ -49,41 +31,7 @@ Result: Image + creative 2-3 paragraph story
   src="https://assets.amd-gaia.ai/videos/gaia-sdxl-agent.webm"
 />
 
-See the complete AI workflow: LLM enhances your prompt → SD generates the image → VLM analyzes it → VLM creates a creative story. All running locally on Ryzen AI in ~20 seconds total.
-
----
-
-## How the Enhancement Works
-
-```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontSize':'16px', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
-graph LR
-    A["You Type:<br/><b>'robot kitten'</b>"] --> B["🧠 Agent<br/><small>Analyzes</small>"]
-
-    B --> C["✨ Enhances<br/><small>Adds Keywords</small>"]
-
-    C --> D["Enhanced:<br/><i>'robotic kitten,<br/>LED eyes,<br/>soft lighting,<br/>detailed'</i>"]
-
-    D --> E["🖼️ SD<br/><small>Ryzen AI</small>"]
-
-    E --> F["Image"]
-
-    style A fill:#2d2d2d,stroke:#1a1a1a,stroke-width:3px,color:#fff
-    style B fill:#ED1C24,stroke:#C8171E,stroke-width:4px,color:#fff
-    style C fill:#F4484D,stroke:#ED1C24,stroke-width:3px,color:#fff
-    style D fill:#6c757d,stroke:#495057,stroke-width:2px,color:#fff
-    style E fill:#C8171E,stroke:#C8171E,stroke-width:3px,color:#fff
-    style F fill:#ED1C24,stroke:#C8171E,stroke-width:3px,color:#fff
-
-    linkStyle 0,1,2,3,4 stroke:#ED1C24,stroke-width:3px
-```
-
-**What happens:**
-1. **Agent analyzes** your input (locally on Ryzen AI)
-2. **Adds helpful keywords** for lighting, style, quality
-3. **Generates image** with Stable Diffusion (locally)
-
-Everything runs on your machine - the LLM and Stable Diffusion both use Ryzen AI hardware. No cloud calls needed.
+Complete multi-modal workflow: Prompt enhancement → Image generation → VLM analysis → Story creation (all in ~35 seconds)
 
 ---
 
@@ -96,18 +44,25 @@ Everything runs on your machine - the LLM and Stable Diffusion both use Ryzen AI
     ```
   </Step>
 
-  <Step title="Pull SD model (first time)">
+  <Step title="Pull models (first time)">
     ```bash
-    lemonade-server pull SDXL-Turbo
+    lemonade-server pull SDXL-Turbo  # Image generation
+    lemonade-server pull Qwen3-4B-GGUF  # Prompt enhancement
+    lemonade-server pull Qwen3-VL-4B-Instruct-GGUF  # Vision + stories
     ```
   </Step>
 
-  <Step title="Generate with prompt enhancement">
+  <Step title="Generate image with story">
     ```bash
     gaia sd "cute robot kitten"
     ```
 
-    The agent enhances your prompt and generates the image.
+    The agent will:
+    1. Enhance your prompt with quality keywords
+    2. Generate the image (~17s)
+    3. Analyze the image with VLM
+    4. Create a creative story (~17s)
+    5. Present everything together
 
     Output: `.gaia/cache/sd/images/`
   </Step>
@@ -115,180 +70,170 @@ Everything runs on your machine - the LLM and Stable Diffusion both use Ryzen AI
 
 ---
 
-## What You'll See
+## How It Works
 
-The agent shows its work as it processes your request:
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontSize':'16px', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+graph LR
+    A["You Type:<br/><b>'robot kitten'</b>"] --> B["🧠 LLM<br/><small>Enhances</small>"]
+
+    B --> C["Enhanced:<br/><i>'glowing eyes,<br/>soft lighting,<br/>detailed, 4K'</i>"]
+
+    C --> D["🖼️ SD<br/><small>Generates</small>"]
+
+    D --> E["Image"]
+
+    E --> F["👁️ VLM<br/><small>Analyzes</small>"]
+
+    F --> G["📄 Description"]
+
+    G --> H["📖 VLM<br/><small>Creates</small>"]
+
+    H --> I["Story"]
+
+    style A fill:#2d2d2d,stroke:#1a1a1a,stroke-width:3px,color:#fff
+    style B fill:#ED1C24,stroke:#C8171E,stroke-width:4px,color:#fff
+    style C fill:#6c757d,stroke:#495057,stroke-width:2px,color:#fff
+    style D fill:#C8171E,stroke:#C8171E,stroke-width:3px,color:#fff
+    style E fill:#ED1C24,stroke:#C8171E,stroke-width:3px,color:#fff
+    style F fill:#F4484D,stroke:#ED1C24,stroke-width:3px,color:#fff
+    style G fill:#6c757d,stroke:#495057,stroke-width:2px,color:#fff
+    style H fill:#F4484D,stroke:#ED1C24,stroke-width:3px,color:#fff
+    style I fill:#ED1C24,stroke:#C8171E,stroke-width:3px,color:#fff
+
+    linkStyle 0,1,2,3,4,5,6,7 stroke:#ED1C24,stroke-width:3px
+```
+
+**The pipeline:**
+1. **LLM analyzes** input → adds lighting, style, quality keywords
+2. **SD generates** image with enhanced prompt
+3. **VLM analyzes** the generated image in detail
+4. **VLM creates** a creative 2-3 paragraph story
+
+Everything runs locally on Ryzen AI hardware.
+
+---
+
+## Example Output
+
+What you see when you run `gaia sd "cute robot kitten"`:
 
 ```
 🤖 Processing: 'cute robot kitten'
 
-📝 Step 1: Thinking...
-🧠 Thought: Enhancing with lighting and detail keywords
-🎯 Goal: Generate robot kitten image
+📝 Step 1: Generating image...
+🎨 Enhanced: "adorable robotic kitten, glowing LED eyes, soft lighting..."
+⠋ Generating (4 steps)... (17s)
 
-📋 Plan: Call generate_image with enhanced prompt
+[IMAGE PREVIEW]
 
-📝 Step 2: Executing...
+📝 Step 2: Analyzing with VLM...
+👁️ "A captivating robotic kitten with chrome body, amber eyes..."
 
-┌─── ℹ️  Info ───┐
-│ Prompt: adorable robotic kitten, glowing cyan LED eyes,        │
-│         metallic whiskers, soft lighting, detailed, 4K        │
-│ Model: SDXL-Turbo • Size: 512x512                            │
-│ Settings: 4 steps, CFG 1.0                                   │
-│ Estimated time: ~20 seconds                                  │
-└──────────────┘
+📝 Step 3: Creating story...
+📖 Story: "In Cyber-Cat City, Whiskers the robot kitten..."
 
-⠋ Generating image (4 steps)... (8s)
+✅ Complete! Image + Story created in 35 seconds
 
-[IMAGE PREVIEW IN TERMINAL]
-
-┌─── ✅ Success ───┐
-│ Image generated in 17.2s                                      │
-│ Enhanced prompt: "adorable robotic kitten..."                 │
-│ Saved: C:\Users\...\robot_kitten_SDXL-Turbo_20260129.png    │
-└──────────────────┘
-
-Open image in default viewer? [Y/n]:
+Open image? [Y/n]:
 ```
-
-You see the agent's reasoning and the enhanced prompt it created.
 
 ---
 
-## Enhancement Examples
+## Different Use Cases
 
-See what the agent adds to simple prompts:
-
-<CodeGroup>
-```txt You Type
-robot kitten
-```
-
-```txt Agent Enhances
-adorable robotic kitten with metallic silver body and glowing cyan LED eyes,
-playful pose with raised paw,
-soft studio lighting with rim lights,
-smooth brushed metal texture with cute details,
-whiskers made of fine metallic wires,
-mechanical joints visible but adorable,
-digital art style,
-highly detailed,
-warm color palette,
-4K quality
-```
-</CodeGroup>
-
-<CodeGroup>
-```txt You Type
-sunset
-```
-
-```txt Agent Enhances
-vibrant sunset over calm ocean,
-golden hour lighting with warm orange and purple hues,
-dramatic cumulus clouds,
-wide angle seascape composition,
-highly detailed atmospheric effects,
-volumetric lighting,
-4K cinematic quality
-```
-</CodeGroup>
-
-<CodeGroup>
-```txt You Type
-robot owl
-```
-
-```txt Agent Enhances
-futuristic robotic owl perched on branch,
-large mechanical eyes with glowing amber LED pupils,
-intricate metallic feather details,
-bronze and copper finish,
-soft dramatic lighting,
-steampunk aesthetic,
-highly detailed gears and mechanisms visible,
-digital concept art,
-8K render
-```
-</CodeGroup>
-
-The agent adds ~10-15 keywords automatically based on what works well with Stable Diffusion.
-
----
-
-## Available Models
-
-The agent optimizes its enhancement strategy for each model:
-
-| Model | Speed | Quality | How Agent Enhances |
-|-------|-------|---------|-------------------|
-| **SDXL-Turbo** (default) | ~17s | ⭐⭐⭐ | Adds artistic style, detailed lighting scenarios |
-| **SD-Turbo** | ~13s | ⭐⭐ | Keeps it concise, focuses on key elements |
-| **SD-1.5** | ~88s | ⭐⭐⭐ | Balanced keyword approach |
-| **SDXL-Base-1.0** | ~9min | ⭐⭐⭐⭐⭐ | Adds camera settings, photorealistic focus |
+The agent adapts to what you ask for:
 
 ```bash
-# Default (good balance of speed/quality)
+# Just an image (no story)
 gaia sd "robot kitten"
 
-# Faster but simpler
-gaia sd "test concept" --sd-model SD-Turbo
+# Image with story (automatic)
+gaia sd "cute robot kitten with a story"
 
-# Photorealistic (much slower)
-gaia sd "robot kitten, photorealistic" --sd-model SDXL-Base-1.0
+# Multiple images
+gaia sd "create 3 robot kittens"
+
+# Analyze existing image
+gaia sd "tell me about .gaia/cache/sd/images/robot.png"
 ```
+
+The agent plans flexibly based on your request.
 
 ---
 
-## Examples
+## Models
 
-### Interactive Mode
-```bash
-gaia sd -i
+| Model | Speed | Quality | What Agent Adds |
+|-------|-------|---------|----------------|
+| **SDXL-Turbo** (default) | ~17s | ⭐⭐⭐ | Artistic style, detailed lighting, Cinematic/Photographic keywords |
+| **SD-Turbo** | ~13s | ⭐⭐ | Concise enhancement, key elements only |
+| **SDXL-Base-1.0** | ~9min | ⭐⭐⭐⭐⭐ | Camera settings (f/2.8, ISO 500), photorealistic focus |
+| **SD-1.5** | ~88s | ⭐⭐⭐ | Balanced traditional keywords |
+
+**Plus VLM:** +17s for story creation (optional, based on request)
+
+---
+
+## Under the Hood: Architecture
+
+### Multi-Modal Agent Design
+
+The SD Agent combines three mixins:
+
+```python
+from gaia.agents.base import Agent
+from gaia.agents.sd import SDToolsMixin
+from gaia.vlm import VLMToolsMixin
+
+class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
+    def __init__(self, config):
+        super().__init__()  # Agent orchestration
+
+        self.init_sd()   # SD tools: generate_image, list_sd_models
+        self.register_sd_tools()
+
+        self.init_vlm()  # VLM tools: analyze_image, create_story
+        self.register_vlm_tools()
 ```
 
-Have a conversation with the agent:
+**Available tools:**
+- `generate_image(prompt, model, size, steps, cfg_scale)` - Generate with SD
+- `analyze_image(image_path, focus)` - VLM description
+- `create_story_from_image(image_path, story_style)` - VLM narrative
+- `create_story_from_last_image()` - SD-specific wrapper (finds last image)
+- `list_sd_models()` - Show available models
+- `get_generation_history()` - See generated images
 
-```
-You: robot kitten
-Agent: [enhances] → Generates adorable robotic kitten
+### Tool Composition Example
 
-You: make it playful
-Agent: [enhances with "playful pose, paw raised"] → Playful version
+SD-specific convenience tool that wraps generic VLM tools:
 
-You: add glowing eyes
-Agent: [enhances with "bright cyan LED eyes"] → Glowing eyes added
-```
+```python
+# In SDToolsMixin
+def create_story_from_last_image():
+    """SD-specific wrapper - no need to specify image path."""
+    last_image = sd_generations[-1]["image_path"]
 
-The agent builds on context from previous exchanges.
-
-### Try Different Robot Animals
-```bash
-# Cute robot animals
-gaia sd "robot kitten"    # → adorable, glowing eyes, playful
-gaia sd "robot puppy"     # → friendly, metallic fur
-gaia sd "robot owl"       # → mechanical feathers, amber eyes
-gaia sd "robot bunny"     # → floppy ears, soft lighting
-
-# Different styles
-gaia sd "steampunk robot fox"       # → Victorian aesthetic, gears
-gaia sd "cyberpunk robot wolf"      # → neon, chrome, urban
-gaia sd "friendly robot hamster"    # → cute, small, detailed
+    # Calls generic VLM tool
+    return _create_story_from_image(last_image, style="whimsical")
 ```
 
-### Reproducible Results
-```bash
-gaia sd "robot kitten" --seed 42
-```
+This demonstrates how domain-specific tools can leverage generic capabilities.
 
-Same seed = same enhancement + same random seed for SD = identical image (useful for iterations).
+### System Prompt Intelligence
 
-### For Automation
-```bash
-gaia sd "product mockup" --no-open
-```
+The agent uses research-backed enhancement strategies per model:
 
-Skips the interactive "Open in viewer?" prompt.
+**For SDXL-Turbo:**
+- Adds: "Cinematic aesthetic", "Aqua Vista depth", "8K quality"
+- Parameters: `size="512x512", steps=4, cfg_scale=1.0`
+
+**For SDXL-Base-1.0:**
+- Adds: "35mm lens f/2.8", "DSLR photograph", "Photographic style"
+- Parameters: `size="1024x1024", steps=20, cfg_scale=7.5`
+
+The LLM learns from [research sources](https://stable-diffusion-art.com/sdxl-prompts/) and applies best practices automatically.
 
 ---
 
@@ -296,65 +241,62 @@ Skips the interactive "Open in viewer?" prompt.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--sd-model` | SDXL-Turbo | Model: SDXL-Turbo, SD-Turbo, SDXL-Base-1.0, SD-1.5 |
-| `--size` | auto | Image size (auto-selected per model) |
-| `--steps` | auto | Inference steps (auto-selected per model) |
-| `--cfg-scale` | auto | CFG scale (auto-selected per model) |
-| `--seed` | random | Fixed seed for reproducibility |
-| `--output-dir` | .gaia/cache/sd/images | Where to save images |
-| `-i, --interactive` | - | Run in interactive mode |
-| `--no-open` | - | Skip viewer prompt (for scripts) |
+| `--sd-model` | SDXL-Turbo | SD model for generation |
+| `--size` | auto | Image size (auto per model) |
+| `--steps` | auto | Inference steps (auto per model) |
+| `--cfg-scale` | auto | CFG scale (auto per model) |
+| `--seed` | random | Reproducible results |
+| `--no-open` | - | Skip viewer prompt |
+| `-i, --interactive` | - | Chat mode |
+| `--max-steps` | 5 | Limit agent planning |
 
 ---
 
 ## Troubleshooting
 
 <AccordionGroup>
-  <Accordion title="Error: Cannot connect to Lemonade Server">
-    **Solution:**
-    ```bash
-    # Start the server
-    lemonade-server serve
+  <Accordion title="Missing VLM stories">
+    If you only see image generation without story, the agent chose not to create one based on your request.
 
-    # Pull an SD model
-    lemonade-server pull SDXL-Turbo
+    **To explicitly request story:**
+    ```bash
+    gaia sd "robot kitten with a story"
     ```
 
-    Verify: `lemonade-server status`
+    Or ask for it separately:
+    ```bash
+    gaia sd "analyze that image and create a story"
+    ```
   </Accordion>
 
-  <Accordion title="Generation is slow">
-    **SDXL-Base-1.0 takes ~9 minutes** (20 steps for photorealistic quality).
+  <Accordion title="Slow story creation">
+    VLM analysis + story creation takes ~17 seconds total (two VLM calls).
 
-    For faster results:
-    - Use `--sd-model SDXL-Turbo` (~17s, default)
-    - Use `--sd-model SD-Turbo` (~13s, lower quality)
+    **To skip stories** (faster):
+    ```bash
+    gaia sd "robot kitten"  # Agent may skip story if not requested
+    ```
 
-    The LLM enhancement itself is very fast (under 1 second).
+    The agent decides based on your phrasing.
   </Accordion>
 
-  <Accordion title="Can I see the original prompt?">
-    Yes! The enhanced prompt is shown in the info panel during generation and in the success message.
+  <Accordion title="Context size warnings">
+    Qwen3-4B-GGUF needs 8K context. Start Lemonade with:
+    ```bash
+    lemonade-server serve --ctx-size 8192
+    ```
 
-    This helps you learn what keywords work well with SD.
-  </Accordion>
-
-  <Accordion title="Can I control the enhancement?">
-    The agent decides which keywords to add based on the model and your input.
-
-    For manual control:
-    - Be more specific in your prompt ("robot kitten, steampunk style")
-    - Or use SDToolsMixin directly in code ([see playbook](/playbooks/sd-agent/index))
+    This is sufficient for prompt enhancement (doesn't need 32K).
   </Accordion>
 </AccordionGroup>
 
 ---
 
-## Learn More
+## Next Steps
 
 <CardGroup cols={2}>
   <Card title="Build Your Own Agent" icon="robot" href="/playbooks/sd-agent/index">
-    20-minute tutorial on building image agents with SDToolsMixin
+    Deep-dive tutorial on building multi-modal agents with SD + VLM capabilities
   </Card>
 
   <Card title="CLI Reference" icon="terminal" href="/reference/cli#sd-command">
@@ -362,9 +304,9 @@ Skips the interactive "Open in viewer?" prompt.
   </Card>
 </CardGroup>
 
-**Try it:**
+**Try the full experience:**
 ```bash
-gaia sd "cute robot kitten"
+gaia sd "create a cute robot kitten and tell me a story about it"
 ```
 
-See the agent enhance your prompt automatically! 🐱✨
+Get image + creative narrative in ~35 seconds! 🐱📖✨
