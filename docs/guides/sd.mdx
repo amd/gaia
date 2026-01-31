@@ -52,12 +52,12 @@ Complete multi-modal workflow: Prompt enhancement → Image generation → VLM a
     - Qwen3-4B-GGUF (prompt enhancement)
     - Qwen3-VL-4B-Instruct-GGUF (vision + stories)
 
-    **Already have GAIA?** Just run `gaia init --profile sd` to get the SD models.
+    **Already installed a different profile?** Run this to add the SD models to your existing setup.
   </Step>
 
   <Step title="Generate image with story">
     ```bash
-    gaia sd "cute robot kitten"
+    gaia sd "create a cute robot kitten and tell me a short story about it"
     ```
 
     The agent will:
@@ -113,10 +113,10 @@ All running locally on Ryzen AI.
 
 ## Example Output
 
-What you see when you run `gaia sd "cute robot kitten"`:
+What you see when you run `gaia sd "create a cute robot kitten and tell me a short story about it"`:
 
 ```
-🤖 Processing: 'cute robot kitten'
+🤖 Processing: 'create a cute robot kitten and tell me a short story about it'
 
 📝 Step 1: Generating image...
 🎨 Enhanced: "adorable robotic kitten, glowing LED eyes, soft lighting..."
@@ -146,7 +146,7 @@ The agent adapts to what you ask for:
 gaia sd "robot kitten"
 
 # Image with story (automatic)
-gaia sd "cute robot kitten with a story"
+gaia sd "create a cute robot kitten and tell me a short story about it"
 
 # Multiple images
 gaia sd "create 3 robot kittens"
@@ -303,7 +303,7 @@ The LLM learns from [research sources](https://stable-diffusion-art.com/sdxl-pro
 
 **Try the full experience:**
 ```bash
-gaia sd "create a cute robot kitten and tell me a story about it"
+gaia sd "create a cute robot kitten and tell me a short story about it"
 ```
 
 Get image + creative narrative in ~35 seconds! 🐱📖✨
