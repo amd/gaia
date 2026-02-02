@@ -48,41 +48,7 @@ jobs:
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
 
-      - name: Start Lemonade Server
-        timeout-minutes: 2
-        run: |
-          Write-Host "Starting Lemonade Server..."
-
-          # Start server in background as a process
-          $serverProcess = Start-Process -FilePath "lemonade-server" -ArgumentList "serve", "--no-tray" -PassThru -WindowStyle Hidden
-          Write-Host "Started lemonade-server process with ID: $($serverProcess.Id)"
-
-          # Wait for server to be ready
-          Write-Host "Waiting for server to start up..."
-          $maxWaitTime = 60
-          $waited = 0
-          $serverReady = $false
-
-          while ($waited -lt $maxWaitTime -and -not $serverReady) {
-              Start-Sleep -Seconds 2
-              $waited += 2
-              try {
-                  $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 2 -ErrorAction SilentlyContinue
-                  if ($response) {
-                      $serverReady = $true
-                      Write-Host "Server ready after $waited seconds"
-                  }
-              } catch {
-                  # Continue waiting
-              }
-          }
-
-          if (-not $serverReady) {
-              Write-Host "Server failed to start"
-              exit 1
-          }
-
-      - name: Initialize SD Profile (Download Models)
+      - name: Initialize SD Profile (Start Server + Download Models)
         timeout-minutes: 10
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}

@@ -518,8 +518,12 @@ class InitCommand:
             # In CI mode (--yes), skip upgrades unless force_reinstall is set
             # This prevents MSI conflicts and uses the runner's cached version
             if self.yes and not self.force_reinstall:
-                self._print_warning("Continuing with installed version (CI mode - skipping upgrade)")
-                self._print(f"   [dim]To force upgrade, use: gaia init --force-reinstall[/dim]")
+                self._print_warning(
+                    "Continuing with installed version (CI mode - skipping upgrade)"
+                )
+                self._print(
+                    "   [dim]To force upgrade, use: gaia init --force-reinstall[/dim]"
+                )
                 return True
 
             # Prompt user to upgrade
@@ -746,17 +750,56 @@ class InitCommand:
                 )
                 return False
 
-            # Server not running - ask user to start it manually
+            # Server not running - start it automatically in CI mode, or prompt user
             self._print_error("Lemonade Server is not running")
 
-            # In non-interactive mode (-y), fail immediately
+            # In non-interactive mode (--yes), auto-start the server
             if self.yes:
                 self.console.print()
-                self.console.print(
-                    "   [dim]Start Lemonade Server and run gaia init again.[/dim]"
-                )
-                return False
+                self.console.print("   [dim]Auto-starting Lemonade Server (CI mode)...[/dim]")
 
+                import subprocess
+                try:
+                    # Start server in background
+                    if sys.platform == "win32":
+                        # Windows: use subprocess.Popen with no window
+                        subprocess.Popen(
+                            ["lemonade-server", "serve", "--no-tray"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+                        )
+                    else:
+                        # Linux/Mac: background process
+                        subprocess.Popen(
+                            ["lemonade-server", "serve"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+
+                    # Wait for server to start
+                    import time
+                    max_wait = 30
+                    waited = 0
+                    while waited < max_wait:
+                        time.sleep(2)
+                        waited += 2
+                        try:
+                            health = client.health_check()
+                            if health and isinstance(health, dict) and health.get("status") == "ok":
+                                self._print_success(f"Server started and ready (waited {waited}s)")
+                                return True
+                        except Exception:
+                            pass
+
+                    self._print_error(f"Server failed to start after {max_wait}s")
+                    return False
+
+                except Exception as e:
+                    self._print_error(f"Failed to start server: {e}")
+                    return False
+
+            # Interactive mode - prompt user to start manually
             self.console.print()
             self.console.print("   [bold]Please start Lemonade Server:[/bold]")
             if sys.platform == "win32":
