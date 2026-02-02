@@ -1156,7 +1156,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
         steps_limit = max_steps if max_steps is not None else self.max_steps
 
         # Print initial message with max steps info
-        self.console.print_processing_start(user_input, steps_limit)
+        self.console.print_processing_start(user_input, steps_limit, self.model_id)
         logger.debug(f"Using max_steps: {steps_limit}")
 
         prompt = f"User request: {user_input}\n\n"

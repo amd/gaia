@@ -4974,11 +4974,11 @@ def handle_sd_command(args):
     from gaia.agents.sd import SDAgent, SDAgentConfig
 
     # Pre-load LLM for prompt enhancement to avoid context size warnings
-    # SD agent uses 4B LLM for better prompt enhancement quality
+    # SD agent uses 1.7B LLM for fast prompt enhancement
     # Create config - ensure LLM model is set
     llm_model = getattr(args, "model", None)
     if not llm_model:
-        llm_model = "Qwen3-4B-Instruct-2507-GGUF"  # Default LLM for prompt enhancement
+        llm_model = "Qwen3-1.7B-GGUF"  # Default LLM for prompt enhancement
 
     llm_client = LemonadeClient(verbose=False)
     try:

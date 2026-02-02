@@ -33,10 +33,10 @@ class SDAgentConfig:
     use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
     base_url: str = "http://localhost:8000/api/v1"
-    model_id: str = "Qwen3-4B-Instruct-2507-GGUF"  # 4B model for prompt enhancement
+    model_id: str = "Qwen3-1.7B-GGUF"  # 1.7B model for fast prompt enhancement
 
     # Execution settings
-    max_steps: int = 5
+    max_steps: int = 10
     streaming: bool = False
     ctx_size: int = 8192  # 8K context (sufficient for prompt enhancement)
 
@@ -240,22 +240,22 @@ WORKFLOW:
 4. Report to user: enhanced prompt used + generation time + file path
 
 AVAILABLE TOOLS:
-- generate_image: Create images with enhanced prompts
-- create_story_from_last_image: Analyze + create story from last generated image (SD-specific)
-- analyze_image: Get detailed VLM description of any image (generic VLM tool)
-- create_story_from_image: Create story from any image (generic VLM tool)
-- answer_question_about_image: Answer questions about images (generic VLM tool)
-- list_sd_models: List available models
-- get_generation_history: See generated images in this session
+- generate_image(prompt, size, steps, cfg_scale): Create images with enhanced prompts
+- create_story_from_last_image(): TAKES NO ARGUMENTS! Analyze + create story from last generated image
+- analyze_image(image_path, focus): Get detailed VLM description of any image
+- create_story_from_image(image_path, story_style): Create story from any image
+- answer_question_about_image(image_path, question): Answer questions about images
+- list_sd_models(): List available models
+- get_generation_history(limit): See generated images in this session
 
 USE TOOLS FLEXIBLY BASED ON USER REQUEST:
 
 Example scenarios:
 User: "create a robot kitten" → generate_image only
 User: "create 3 robot kittens" → generate_image 3 times (different seeds)
-User: "create a robot kitten with a story" → generate_image, then create_story_from_last_image
-User: "tell me about that last image" → create_story_from_last_image (or analyze_image)
-User: "what color are its eyes?" → answer_question_about_image(last generated image)
+User: "create a robot kitten with a story" → generate_image, then create_story_from_last_image() with NO args
+User: "tell me about that last image" → create_story_from_last_image()
+User: "what color are its eyes?" → answer_question_about_image(last generated image path, question)
 User: "create another one" → generate_image with similar prompt
 User: "analyze the image at /path/to/file.png" → analyze_image with specific path
 
@@ -263,14 +263,14 @@ KEY POINTS:
 - Enhance prompts following model-specific guidelines
 - Use generate_image with explicit size, steps, cfg_scale for quality
 - Story/analysis tools are OPTIONAL - only use if user requests
-- create_story_from_last_image is a convenience (auto-finds last SD image)
+- create_story_from_last_image() TAKES NO ARGUMENTS - auto-finds last SD image
 - Generic VLM tools (analyze_image, create_story_from_image) work with any image path
 - Be flexible - user might want multiple images, variations, or just one image without story
 
 Example interaction with story:
 User: "create a cute robot kitten and tell me a story about it"
 You: [generate_image with enhanced prompt]
-You: [create_story_from_last_image - SD-specific tool that wraps VLM tools]
+You: [create_story_from_last_image() with NO arguments]
 You: "Generated a robot kitten with a story! Enhanced prompt: '...' Description: '...' Story: '...' Saved: [path]"
 
 Example interaction without story:
@@ -298,33 +298,52 @@ You: "Generated 3 robot kitten variations! Saved to: [paths]"
         @tool(
             atomic=True,
             name="create_story_from_last_image",
-            description="SD-specific convenience: Analyze the last generated SD image and create a whimsical story. Automatically finds the most recent image from this session.",
-            parameters={},
+            description="SD-specific convenience: Analyze the last generated SD image and create a whimsical story. Automatically finds the most recent image from this session. Can optionally specify image_path.",
+            parameters={
+                "image_path": {
+                    "type": "string",
+                    "description": "Optional: path to specific image. If not provided, uses last generated image.",
+                    "required": False,
+                }
+            },
         )
-        def create_story_from_last_image() -> dict:
+        def create_story_from_last_image(image_path: str = None) -> dict:
             """
             Custom SD-Agent tool that wraps generic VLM tools for convenience.
 
             Demonstrates tool composition: an SD-specific wrapper that calls
             generic VLM tools under the hood.
-            """
-            if not self.sd_generations:
-                return {
-                    "status": "error",
-                    "error": "No images generated yet. Generate an image first.",
-                }
 
-            # Get last generated image path
-            last_gen = self.sd_generations[-1]
-            image_path = last_gen["image_path"]
+            Args:
+                image_path: Optional path to specific image. If None, uses last generated image.
+            """
+            if image_path is None:
+                # Auto-find last generated image
+                if not self.sd_generations:
+                    return {
+                        "status": "error",
+                        "error": "No images generated yet. Generate an image first.",
+                    }
+
+                # Get last generated image path
+                last_gen = self.sd_generations[-1]
+                image_path = last_gen["image_path"]
+            else:
+                # Use provided path, try to find it in generation history
+                last_gen = None
+                for gen in reversed(self.sd_generations):
+                    if gen["image_path"] == image_path or image_path in gen["image_path"]:
+                        last_gen = gen
+                        image_path = gen["image_path"]
+                        break
 
             # Call the generic VLM tool (if available)
             if hasattr(self, "_create_story_from_image"):
                 result = self._create_story_from_image(
                     image_path, story_style="whimsical"
                 )
-                if result.get("status") == "success":
-                    # Add SD-specific metadata
+                if result.get("status") == "success" and last_gen:
+                    # Add SD-specific metadata if available
                     result["original_prompt"] = last_gen["prompt"]
                     result["sd_model"] = last_gen["model"]
                 return result
