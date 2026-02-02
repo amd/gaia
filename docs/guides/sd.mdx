@@ -255,19 +255,206 @@ def create_story_from_last_image():
 
 This demonstrates how agents can add custom tools that compose mixin functionality.
 
+### Agent Orchestration & Planning
+
+The agent uses a **plan-execute-reflect** cycle powered by the LLM:
+
+1. **Planning Phase** - LLM analyzes user request and creates a plan
+   - Examines available tools in the registry
+   - Decides which tools to call and in what order
+   - Can create multi-step plans: `[generate_image, analyze_image, create_story_from_image]`
+
+2. **Execution Phase** - Agent executes tools sequentially
+   - Calls each tool with generated parameters
+   - Captures results and errors
+   - Maintains state in `self.sd_generations` list
+
+3. **Reflection Phase** - LLM examines results
+   - Checks if goal achieved
+   - Decides whether to continue or provide final answer
+   - Can replan if errors occur (max 5 steps by default)
+
+**Example Planning:**
+```
+User: "create a robot kitten and tell me a story"
+
+LLM Planning:
+{
+  "thought": "Need to generate image first, then create story",
+  "plan": [
+    {"tool": "generate_image", "tool_args": {"prompt": "enhanced..."}},
+    {"tool": "create_story_from_last_image", "tool_args": {}}
+  ]
+}
+```
+
+### Tool Discovery & Registration
+
+Tools are discovered through a global registry pattern:
+
+```python
+# 1. Mixin tools registered during init
+@tool(atomic=True, name="generate_image")
+def generate_image(prompt, model, size, steps, cfg_scale):
+    ...
+
+# 2. Agent-specific tools registered in _register_tools()
+@tool(atomic=True, name="create_story_from_last_image")
+def create_story_from_last_image():
+    ...
+
+# 3. LLM sees all registered tools in system prompt
+_TOOL_REGISTRY = {
+    "generate_image": {...},
+    "analyze_image": {...},
+    "create_story_from_image": {...},
+    "create_story_from_last_image": {...},  # Custom SD tool
+}
+```
+
+The LLM receives tool descriptions in its system prompt and decides which to call based on the user's request.
+
+### State Management
+
+The agent tracks generation history for session context:
+
+```python
+self.sd_generations = [
+    {
+        "image_path": ".gaia/cache/sd/images/robot_kitten_abc123.png",
+        "prompt": "enhanced prompt with quality keywords",
+        "model": "SDXL-Turbo",
+        "size": "512x512",
+        "steps": 4,
+        "seed": 42,
+        "generation_time_s": 17.0,
+        "image_hash": "a1b2c3d4...",  # For deduplication
+    },
+    # ... more generations
+]
+```
+
+This enables:
+- `create_story_from_last_image()` to find the most recent image
+- `get_generation_history()` to show what was created
+- Session continuity ("create another one" references previous)
+
+### Multi-Model Coordination
+
+Three models collaborate with different roles:
+
+| Model | Role | Context Size | When Used |
+|-------|------|--------------|-----------|
+| **Qwen3-4B** (LLM) | Orchestration & Enhancement | 8K | Every request - plans workflow, enhances prompts |
+| **SDXL-Turbo** (SD) | Image Generation | N/A | When `generate_image` tool called |
+| **Qwen3-VL-4B** (VLM) | Vision & Stories | 8K | When VLM tools called (analyze/story) |
+
+**Communication Flow:**
+```
+User Request
+    ↓
+Qwen3-4B (LLM) - Decides: "Need image + story"
+    ↓
+Calls: generate_image(enhanced_prompt)
+    ↓
+SDXL-Turbo - Generates image → Returns image_path
+    ↓
+Qwen3-4B (LLM) - Decides: "Now create story"
+    ↓
+Calls: create_story_from_last_image()
+    ↓
+Qwen3-VL-4B (VLM) - Analyzes image → Creates story
+    ↓
+Qwen3-4B (LLM) - Formats final response
+    ↓
+User receives: Enhanced prompt + Image + Story
+```
+
+Each model is loaded on-demand and cached by Lemonade Server.
+
 ### System Prompt Intelligence
 
-The agent uses research-backed enhancement strategies per model:
+The agent's system prompt encodes **research-backed prompt engineering** strategies tailored to each SD model. The LLM learns these patterns and applies them automatically.
 
-**For SDXL-Turbo:**
-- Adds: "Cinematic aesthetic", "Aqua Vista depth", "8K quality"
-- Parameters: `size="512x512", steps=4, cfg_scale=1.0`
+**Research Sources (2026):**
+- [SDXL Best Practices](https://neurocanvas.net/blog/sdxl-best-practices-guide/)
+- [Photorealistic Guide](https://blog.segmind.com/generating-photographic-images-with-stable-diffusion/)
+- [SDXL Prompts](https://stable-diffusion-art.com/sdxl-prompts/)
+- [HuggingFace SDXL](https://huggingface.co/docs/diffusers/en/using-diffusers/sdxl_turbo)
 
-**For SDXL-Base-1.0:**
-- Adds: "35mm lens f/2.8", "DSLR photograph", "Photographic style"
-- Parameters: `size="1024x1024", steps=20, cfg_scale=7.5`
+**Enhancement Strategy:**
 
-The LLM learns from [research sources](https://stable-diffusion-art.com/sdxl-prompts/) and applies best practices automatically.
+<Accordion title="SDXL-Turbo (fast, 4 steps, 512x512)">
+```python
+# Model-specific guidance in system prompt
+"""
+SDXL-Turbo prefers:
+- Sentence-style prompts over comma-separated tags
+- Proven modifiers: "8K", "Aqua Vista" (depth), "masterpiece"
+- Style keywords: "Photographic" (faces), "Cinematic" (texture)
+- Lighting specifics: volumetric fog, rim lights, soft diffused
+- Keyword weights: (subject: 1.1) for 10% emphasis
+
+ENHANCEMENT PATTERN:
+[Subject with materials] + [descriptive action/pose] +
+[lighting scenario] + [style: Cinematic/Photographic] +
+[quality: 8K, Aqua Vista, sharp focus]
+
+EXAMPLE:
+Input: "robot kitten"
+Output: "adorable robotic kitten with large expressive LED eyes
+        and metallic silver body, sitting in playful pose with
+        tilted head, soft studio lighting with rim lights
+        highlighting metallic surfaces, digital art style,
+        Cinematic aesthetic, highly detailed mechanical joints,
+        sharp focus, 8K quality"
+"""
+```
+**Parameters:** `size="512x512", steps=4, cfg_scale=1.0`
+</Accordion>
+
+<Accordion title="SDXL-Base-1.0 (photorealistic, 20 steps, 1024x1024)">
+```python
+# Model-specific guidance in system prompt
+"""
+SDXL-Base-1.0 excels at:
+- Full descriptive sentences (natural language)
+- Camera settings: "35mm lens", "f/2.8 aperture", "ISO 500"
+- Style: ALWAYS "Photographic" or "Cinematic" for realism
+- Lighting: "golden hour", "studio three-point", "soft box"
+- Materials: "brushed metal", "soft fabric", "rough stone"
+- Quality: "8K", "DSLR photograph", "professional photography"
+- Composition: "rule of thirds", "bokeh", "shallow depth of field"
+
+AVOID for photorealism:
+- "illustration", "anime", "CGI", "3D render"
+
+PHOTOREALISTIC PATTERN:
+[Subject with specific materials] + [natural language description] +
+[camera settings: lens, aperture, ISO] + [lighting scenario] +
+[style: Photographic] + [quality: 8K, DSLR photograph]
+
+EXAMPLE:
+Input: "portrait"
+Output: "portrait of person with expressive eyes, natural skin
+        texture and pores visible, captured with 50mm lens at
+        f/2.8 aperture and ISO 320, soft diffused studio lighting
+        from left, Photographic style, professional DSLR photograph,
+        highly detailed, 8K quality"
+"""
+```
+**Parameters:** `size="1024x1024", steps=20, cfg_scale=7.5`
+</Accordion>
+
+**Why This Works:**
+
+The LLM learns patterns from the system prompt's examples and applies them contextually:
+- Sees user input: "robot kitten"
+- Matches to enhancement pattern for current model
+- Generates: enhanced prompt with quality keywords
+- Calls: `generate_image(enhanced_prompt, size=512x512, steps=4, cfg_scale=1.0)`
+
+This approach is more flexible than hardcoded templates - the LLM can adapt enhancements based on user intent while following proven guidelines.
 
 ---
 
