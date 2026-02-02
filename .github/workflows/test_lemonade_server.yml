@@ -35,71 +35,40 @@ jobs:
           python-version: '3.12'
           install-package: '.[lemonade]'
 
-      - name: Start Lemonade Server, Load Model, and Test
-        shell: powershell
+      - name: Initialize Lemonade with Minimal Profile
+        shell: cmd
         timeout-minutes: 10
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         run: |
-          try {
-              # Start server and load model (all in one session)
-              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-Instruct-2507-GGUF" -Port 8000 -CtxSize 32768 -InitWaitTime 10
+          call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
 
-              # Verify health endpoint returns context_size
-              Write-Host "=== Verifying Health Endpoint ==="
-              $health = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 10
-              Write-Host "Health response: $($health | ConvertTo-Json -Compress)"
+          echo ================================================================
+          echo      Lemonade Smoke Test via gaia init --profile minimal
+          echo ================================================================
+          echo This validates:
+          echo   1. Lemonade Server installation and startup
+          echo   2. Model download (Qwen3-4B-Instruct-2507-GGUF - cached if available)
+          echo   3. Health endpoint
+          echo   4. Basic LLM inference
+          echo.
 
-              # context_size only present when a model is loaded
-              # If no model loaded, that's OK for smoke test - just verify server is running
-              if ($health.PSObject.Properties['context_size']) {
-                  $contextSize = $health.context_size
-                  Write-Host "[OK] context_size: $contextSize"
+          REM Use --yes to auto-confirm, --skip-lemonade since already installed
+          gaia init --profile minimal --yes --skip-lemonade
 
-                  if ($contextSize -lt 32768) {
-                      Write-Host "[WARN] context_size $contextSize is less than expected 32768"
-                      Write-Host "This is OK for smoke test - model will be loaded by next step"
-                  }
-              } else {
-                  Write-Host "[INFO] No context_size in health (no model loaded yet)"
-                  Write-Host "This is expected - model will be loaded by start-lemonade.ps1"
-              }
-              Write-Host ""
+          echo.
+          echo ================================================================
+          echo      Lemonade Smoke Test Complete
+          echo ================================================================
 
-              # Test completion (in same session while server is still alive)
-              Write-Host "=== Testing Completion ==="
-              $testBody = @{
-                  model = "Qwen3-4B-Instruct-2507-GGUF"
-                  prompt = "Say exactly: Hello World"
-                  max_tokens = 10
-              } | ConvertTo-Json
-
-              $completion = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/completions" `
-                  -Method POST -ContentType "application/json" -Body $testBody -TimeoutSec 30
-
-              Write-Host "[OK] Completion successful"
-              Write-Host "     Response: $($completion.choices[0].text)"
-              Write-Host ""
-              Write-Host "[SUCCESS] All lemonade server tests passed!"
-
-          } catch {
-              Write-Host "[ERROR] Test failed: $($_.Exception.Message)"
-              if ($_.ErrorDetails) {
-                  Write-Host "Error details: $($_.ErrorDetails.Message)"
-              }
-              throw "Lemonade server smoke test failed"
-          } finally {
-              # Cleanup
-              if ($env:LEMONADE_PROCESS_ID) {
-                  Write-Host "Stopping server process $env:LEMONADE_PROCESS_ID..."
-                  Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
-              }
-          }
-
-      - name: Upload Server Logs
+      - name: Cleanup
         if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: lemonade-server-logs
-          path: |
-            lemonade-server-stdout.log
-            lemonade-server-stderr.log
-            lemonade-server.log
+        run: |
+          Write-Host "Stopping Lemonade Server..."
+          try {
+              Stop-Process -Name "lemonade-server" -Force -ErrorAction SilentlyContinue
+              Write-Host "Server stopped"
+          } catch {
+              Write-Host "Server already stopped or not running"
+          }
