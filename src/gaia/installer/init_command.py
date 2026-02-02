@@ -760,8 +760,6 @@ class InitCommand:
                     "   [dim]Auto-starting Lemonade Server (CI mode)...[/dim]"
                 )
 
-                import subprocess
-
                 try:
                     # Start server in background
                     if sys.platform == "win32":
