@@ -53,42 +53,38 @@ jobs:
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
-        shell: pwsh
+        shell: bash
         run: |
-          Write-Host "Starting Lemonade Server..."
+          echo "Starting Lemonade Server..."
 
           # Start server in background
-          $serverProcess = Start-Process -FilePath "lemonade-server" -ArgumentList "serve","--log-level","info" -PassThru -NoNewWindow
+          lemonade-server serve --log-level info &
+          SERVER_PID=$!
 
           # Wait for server to be ready
-          $maxWaitTime = 60
-          $waited = 0
-          $serverReady = $false
+          max_wait_time=60
+          waited=0
+          server_ready=false
 
-          while ($waited -lt $maxWaitTime -and -not $serverReady) {
-              Start-Sleep -Seconds 2
-              $waited += 2
-              try {
-                  $response = Invoke-WebRequest -Uri "http://localhost:8000/api/v1/models" -TimeoutSec 2 -ErrorAction SilentlyContinue
-                  if ($response.StatusCode -eq 200) {
-                      $serverReady = $true
-                      Write-Host "Server ready after $waited seconds"
-                  }
-              } catch {
-                  # Continue waiting
-              }
-          }
+          while [ $waited -lt $max_wait_time ] && [ "$server_ready" = "false" ]; do
+              sleep 2
+              waited=$((waited + 2))
+              if curl -s http://localhost:8000/api/v1/models > /dev/null 2>&1; then
+                  server_ready=true
+                  echo "Server ready after $waited seconds"
+              fi
+          done
 
-          if (-not $serverReady) {
-              Write-Host "Server failed to start"
+          if [ "$server_ready" = "false" ]; then
+              echo "Server failed to start"
               exit 1
-          }
+          fi
 
-          # Pull SD-Turbo (smallest, fastest SD model - 2.6GB)
-          Write-Host "Pulling SD-Turbo model (2.6GB, fastest SD model)..."
+          # Pull SD-Turbo (smallest, fastest SD model - 6.5GB)
+          echo "Pulling SD-Turbo model (6.5GB, fastest SD model)..."
           lemonade-server pull SD-Turbo
 
-          Write-Host "SD-Turbo ready for testing"
+          echo "SD-Turbo ready for testing"
 
       - name: Run SD Integration Tests (Fast - SD-Turbo only)
         shell: cmd
@@ -114,12 +110,8 @@ jobs:
 
       - name: Cleanup
         if: always()
-        shell: pwsh
+        shell: bash
         run: |
-          Write-Host "Stopping Lemonade Server..."
-          try {
-              Stop-Process -Name "lemonade-server" -Force -ErrorAction SilentlyContinue
-              Write-Host "Server stopped"
-          } catch {
-              Write-Host "Server already stopped or not running"
-          }
+          echo "Stopping Lemonade Server..."
+          pkill -f "lemonade-server" || echo "Server already stopped or not running"
+          echo "Server stopped"
