@@ -8,6 +8,7 @@ This agent analyzes user requests, enhances prompts with quality/lighting/style 
 and optimizes generation parameters based on the selected SD model.
 """
 
+import os
 from dataclasses import dataclass
 from typing import Optional
 
@@ -33,7 +34,7 @@ class SDAgentConfig:
     use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
     base_url: str = "http://localhost:8000/api/v1"
-    model_id: str = "Qwen3-1.7B-GGUF"  # 1.7B model for fast prompt enhancement
+    model_id: str = "Qwen3-8B-GGUF"  # 8B model for robust agentic reasoning
 
     # Execution settings
     max_steps: int = 10
@@ -237,11 +238,12 @@ WORKFLOW:
 1. Analyze user's request for subject, mood, desired style
 2. Enhance prompt following guidelines above
 3. Call generate_image with optimized parameters for this model
-4. Report to user: enhanced prompt used + generation time + file path
+4. If user wants story: call create_story_from_last_image() - saves story to text file automatically
+5. Report to user: enhanced prompt used + generation time + file paths
 
 AVAILABLE TOOLS:
 - generate_image(prompt, size, steps, cfg_scale): Create images with enhanced prompts
-- create_story_from_last_image(): TAKES NO ARGUMENTS! Analyze + create story from last generated image
+- create_story_from_last_image(image_path=None): Analyze + create story, auto-saves to .txt file
 - analyze_image(image_path, focus): Get detailed VLM description of any image
 - create_story_from_image(image_path, story_style): Create story from any image
 - answer_question_about_image(image_path, question): Answer questions about images
@@ -253,9 +255,9 @@ USE TOOLS FLEXIBLY BASED ON USER REQUEST:
 Example scenarios:
 User: "create a robot kitten" → generate_image only
 User: "create 3 robot kittens" → generate_image 3 times (different seeds)
-User: "create a robot kitten with a story" → generate_image, then create_story_from_last_image() with NO args
-User: "tell me about that last image" → create_story_from_last_image()
-User: "what color are its eyes?" → answer_question_about_image(last generated image path, question)
+User: "create a robot kitten with a story" → generate_image, then create_story_from_last_image
+User: "tell me about that last image" → create_story_from_last_image (or analyze_image)
+User: "what color are its eyes?" → answer_question_about_image(last generated image)
 User: "create another one" → generate_image with similar prompt
 User: "analyze the image at /path/to/file.png" → analyze_image with specific path
 
@@ -263,15 +265,15 @@ KEY POINTS:
 - Enhance prompts following model-specific guidelines
 - Use generate_image with explicit size, steps, cfg_scale for quality
 - Story/analysis tools are OPTIONAL - only use if user requests
-- create_story_from_last_image() TAKES NO ARGUMENTS - auto-finds last SD image
+- create_story_from_last_image auto-finds last SD image and saves story to .txt file
 - Generic VLM tools (analyze_image, create_story_from_image) work with any image path
 - Be flexible - user might want multiple images, variations, or just one image without story
 
 Example interaction with story:
 User: "create a cute robot kitten and tell me a story about it"
 You: [generate_image with enhanced prompt]
-You: [create_story_from_last_image() with NO arguments]
-You: "Generated a robot kitten with a story! Enhanced prompt: '...' Description: '...' Story: '...' Saved: [path]"
+You: [create_story_from_last_image]
+You: "Generated a robot kitten with a story! Enhanced prompt: '...' Image: [path] Story file: [story_file path]"
 
 Example interaction without story:
 User: "create a robot kitten"
@@ -332,7 +334,10 @@ You: "Generated 3 robot kitten variations! Saved to: [paths]"
                 # Use provided path, try to find it in generation history
                 last_gen = None
                 for gen in reversed(self.sd_generations):
-                    if gen["image_path"] == image_path or image_path in gen["image_path"]:
+                    if (
+                        gen["image_path"] == image_path
+                        or image_path in gen["image_path"]
+                    ):
                         last_gen = gen
                         image_path = gen["image_path"]
                         break
@@ -342,10 +347,35 @@ You: "Generated 3 robot kitten variations! Saved to: [paths]"
                 result = self._create_story_from_image(
                     image_path, story_style="whimsical"
                 )
-                if result.get("status") == "success" and last_gen:
+                if result.get("status") == "success":
                     # Add SD-specific metadata if available
-                    result["original_prompt"] = last_gen["prompt"]
-                    result["sd_model"] = last_gen["model"]
+                    if last_gen:
+                        result["original_prompt"] = last_gen["prompt"]
+                        result["sd_model"] = last_gen["model"]
+
+                    # Save story to text file
+                    story_text = result.get("story", "")
+                    description = result.get("description", "")
+
+                    # Create story filename based on image filename
+                    img_path = result.get("image_path", image_path)
+                    base_path, _ = os.path.splitext(img_path)
+                    story_path = f"{base_path}_story.txt"
+
+                    # Write story and description to file
+                    with open(story_path, "w", encoding="utf-8") as f:
+                        f.write("=" * 80 + "\n")
+                        f.write("STORY\n")
+                        f.write("=" * 80 + "\n\n")
+                        f.write(story_text + "\n\n")
+                        f.write("=" * 80 + "\n")
+                        f.write("IMAGE DESCRIPTION\n")
+                        f.write("=" * 80 + "\n\n")
+                        f.write(description + "\n")
+
+                    result["story_file"] = story_path
+                    logger.debug(f"Story saved to: {story_path}")
+
                 return result
             else:
                 return {

@@ -497,7 +497,9 @@ class AgentConsole(OutputHandler):
             print(f"\n⏸️  Paused after step: {description}")
             print("Press Enter to continue, or 'n'/'q' to stop...")
 
-    def print_processing_start(self, query: str, max_steps: int, model_id: str = None) -> None:
+    def print_processing_start(
+        self, query: str, max_steps: int, model_id: str = None
+    ) -> None:
         """
         Print the initial processing message.
 

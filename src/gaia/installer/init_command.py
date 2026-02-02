@@ -47,11 +47,11 @@ INIT_PROFILES = {
         "description": "Image generation with multi-modal AI (LLM + SD + VLM)",
         "agent": "sd",
         "models": [
-            "SDXL-Turbo",  # Image generation (~2.6GB)
-            "Qwen3-4B-Instruct-2507-GGUF",  # Prompt enhancement (~2.5GB)
-            "Qwen3-VL-4B-Instruct-GGUF",  # Vision analysis + stories (~3.3GB)
+            "SDXL-Turbo",  # Image generation (6.5GB)
+            "Qwen3-8B-GGUF",  # Agentic reasoning + prompt enhancement (5.0GB)
+            "Qwen3-VL-4B-Instruct-GGUF",  # Vision analysis + stories (3.2GB)
         ],
-        "approx_size": "~8.4 GB",
+        "approx_size": "~15 GB",
     },
     "chat": {
         "description": "Interactive chat with RAG and vision support",
@@ -850,7 +850,7 @@ class InitCommand:
                 model_ids = client.get_required_models(agent)
 
             # Include default CPU model for profiles that need gaia llm
-            # SD profile has its own LLM (Qwen3-4B) and doesn't need the 0.5B model
+            # SD profile has its own LLM (Qwen3-8B) and doesn't need the 0.5B model
             if self.profile != "sd":
                 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
@@ -914,8 +914,7 @@ class InitCommand:
                 )
 
                 try:
-                    # Use lemonade-server CLI pull command
-                    # The CLI handles all retry logic and progress display
+                    # Use lemonade-server CLI pull command with visible progress
                     result = subprocess.run(
                         [lemonade_path, "pull", model_id],
                         check=False,
@@ -923,7 +922,56 @@ class InitCommand:
 
                     self._print("")
                     if result.returncode == 0:
-                        self._print_success(f"Downloaded {model_id}")
+                        # Verify the model was actually downloaded successfully
+                        # Check if model is now available (not just exit code)
+                        if client.check_model_available(model_id):
+                            self._print_success(f"Downloaded {model_id}")
+                        else:
+                            # Pull succeeded but model not available - likely validation error
+                            self._print_error(
+                                f"Download validation failed for {model_id}"
+                            )
+                            self.agent_console.print(
+                                "   [yellow]Corrupted download detected. Deleting and retrying...[/yellow]"
+                            )
+
+                            # Delete the corrupted model
+                            delete_result = subprocess.run(
+                                [lemonade_path, "delete", model_id],
+                                check=False,
+                                capture_output=True,
+                            )
+
+                            if delete_result.returncode == 0:
+                                self.agent_console.print(
+                                    f"   [dim]Deleted corrupted {model_id}[/dim]"
+                                )
+
+                                # Retry download
+                                self.agent_console.print(
+                                    f"   [bold cyan]Retrying download:[/bold cyan] {model_id}"
+                                )
+                                retry_result = subprocess.run(
+                                    [lemonade_path, "pull", model_id],
+                                    check=False,
+                                )
+
+                                self._print("")
+                                if (
+                                    retry_result.returncode == 0
+                                    and client.check_model_available(model_id)
+                                ):
+                                    self._print_success(
+                                        f"Downloaded {model_id} (retry successful)"
+                                    )
+                                else:
+                                    self._print_error(f"Retry failed for {model_id}")
+                                    success = False
+                            else:
+                                self._print_error(
+                                    f"Failed to delete corrupted model {model_id}"
+                                )
+                                success = False
                     else:
                         self._print_error(
                             f"Failed to download {model_id} (exit code: {result.returncode})"
@@ -1080,7 +1128,6 @@ class InitCommand:
             # Test each model with a small inference request
             self.console.print()
             self.console.print("   [bold]Testing models with inference:[/bold]")
-            self.console.print("   [yellow]⚠️  Press Ctrl+C to skip.[/yellow]")
 
             models_passed = 0
             models_failed = []
@@ -1205,24 +1252,43 @@ class InitCommand:
             )
             self.console.print()
             self.console.print("  [bold]Quick start commands:[/bold]")
-            self.console.print(
-                "    [cyan]gaia chat[/cyan]              Start interactive chat"
-            )
-            self.console.print(
-                "    [cyan]gaia llm 'Hello'[/cyan]       Quick LLM query"
-            )
-            self.console.print(
-                "    [cyan]gaia talk[/cyan]              Voice interaction"
-            )
-            self.console.print()
 
-            profile_config = INIT_PROFILES[self.profile]
-            if profile_config["agent"] == "minimal":
+            # Profile-specific quick start commands
+            if self.profile == "sd":
                 self.console.print(
-                    "  [dim]Note: Minimal profile installed. For full features, run:[/dim]"
+                    '    [cyan]gaia sd "create a cute robot kitten and tell me a story"[/cyan]'
+                )
+                self.console.print('    [cyan]gaia sd "sunset over mountains"[/cyan]')
+                self.console.print(
+                    "    [cyan]gaia sd -i[/cyan]                                        Interactive mode"
+                )
+            elif self.profile == "chat":
+                self.console.print(
+                    "    [cyan]gaia chat[/cyan]              Start interactive chat with RAG"
+                )
+                self.console.print(
+                    "    [cyan]gaia chat init[/cyan]         Setup document folder"
+                )
+            elif self.profile == "minimal":
+                self.console.print(
+                    "    [cyan]gaia llm 'Hello'[/cyan]       Quick LLM query"
+                )
+                self.console.print(
+                    "    [dim]Note: Minimal profile installed. For full features, run:[/dim]"
                 )
                 self.console.print("    [cyan]gaia init --profile chat[/cyan]")
-                self.console.print()
+            else:
+                # Default commands for other profiles
+                self.console.print(
+                    "    [cyan]gaia chat[/cyan]              Start interactive chat"
+                )
+                self.console.print(
+                    "    [cyan]gaia llm 'Hello'[/cyan]       Quick LLM query"
+                )
+                self.console.print(
+                    "    [cyan]gaia talk[/cyan]              Voice interaction"
+                )
+            self.console.print()
         else:
             self._print("")
             self._print("=" * 60)
@@ -1230,18 +1296,34 @@ class InitCommand:
             self._print("=" * 60)
             self._print("")
             self._print("  Quick start commands:")
-            self._print("    gaia chat              # Start interactive chat")
-            self._print("    gaia llm 'Hello'       # Quick LLM query")
-            self._print("    gaia talk              # Voice interaction")
-            self._print("")
 
-            profile_config = INIT_PROFILES[self.profile]
-            if profile_config["agent"] == "minimal":
+            # Profile-specific quick start commands
+            if self.profile == "sd":
+                self._print(
+                    '    gaia sd "create a cute robot kitten and tell me a story"'
+                )
+                self._print('    gaia sd "sunset over mountains"')
+                self._print(
+                    "    gaia sd -i                                        # Interactive mode"
+                )
+            elif self.profile == "chat":
+                self._print(
+                    "    gaia chat              # Start interactive chat with RAG"
+                )
+                self._print("    gaia chat init         # Setup document folder")
+            elif self.profile == "minimal":
+                self._print("    gaia llm 'Hello'       # Quick LLM query")
+                self._print("")
                 self._print(
                     "  Note: Minimal profile installed. For full features, run:"
                 )
                 self._print("    gaia init --profile chat")
-                self._print("")
+            else:
+                # Default commands for other profiles
+                self._print("    gaia chat              # Start interactive chat")
+                self._print("    gaia llm 'Hello'       # Quick LLM query")
+                self._print("    gaia talk              # Voice interaction")
+            self._print("")
 
 
 def run_init(
