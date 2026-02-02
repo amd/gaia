@@ -140,6 +140,10 @@ class MCPClientMixin:
     def _register_mcp_tools(self, client: MCPClient) -> None:
         """Register all tools from an MCP server into _TOOL_REGISTRY.
 
+        MCP tool responses are wrapped in GAIA-style format with
+        status/message/data/instruction fields to help the LLM
+        understand how to interpret and respond to the data.
+
         Args:
             client: MCPClient instance
         """
@@ -149,9 +153,39 @@ class MCPClientMixin:
             # Convert to GAIA format
             gaia_tool = tool.to_gaia_format(client.name)
 
-            # Create wrapper function
-            wrapper = client.create_tool_wrapper(tool)
-            gaia_tool["function"] = wrapper
+            # Create base wrapper function
+            base_wrapper = client.create_tool_wrapper(tool)
+            tool_name = tool.name
+
+            # Create enhanced wrapper that formats responses in GAIA style
+            def create_enhanced_wrapper(base_wrapper=base_wrapper, tool_name=tool_name):
+                def enhanced_wrapper(**kwargs):
+                    result = base_wrapper(**kwargs)
+
+                    # Wrap successful dict responses in GAIA-style format
+                    if isinstance(result, dict) and "error" not in result:
+                        return {
+                            "status": "success",
+                            "message": f"Tool '{tool_name}' returned data",
+                            "data": result,
+                            "instruction": (
+                                "Parse this JSON data and provide a human-readable summary. "
+                                "Your answer must be a plain text string, not a JSON object."
+                            ),
+                        }
+                    # Wrap error responses with error status
+                    elif isinstance(result, dict) and "error" in result:
+                        return {
+                            "status": "error",
+                            "error": result.get("error", "Unknown error"),
+                            "data": result,
+                        }
+                    # Pass through non-dict responses (strings, etc.) unchanged
+                    return result
+
+                return enhanced_wrapper
+
+            gaia_tool["function"] = create_enhanced_wrapper()
 
             # Register in global registry
             gaia_name = gaia_tool["name"]

@@ -84,7 +84,8 @@ class TestMCPClientMixin:
         registered_tool = _TOOL_REGISTRY[tool_name]
         assert registered_tool["name"] == tool_name
         assert "[MCP:testserver]" in registered_tool["description"]
-        assert registered_tool["function"] == mock_wrapper
+        # Function is wrapped, not the same as mock_wrapper
+        assert callable(registered_tool["function"])
         assert registered_tool["parameters"]["param"]["required"] is True
 
     @patch("gaia.mcp.mixin.MCPClientManager")
@@ -202,3 +203,155 @@ class TestMCPClientMixin:
         # Descriptions should include server names
         assert "[MCP:server1]" in _TOOL_REGISTRY["mcp_server1_read_file"]["description"]
         assert "[MCP:server2]" in _TOOL_REGISTRY["mcp_server2_read_file"]["description"]
+
+
+class TestMCPToolResponseWrapper:
+    """Test that MCP tool responses are wrapped in GAIA-style format."""
+
+    def setup_method(self):
+        """Clear tool registry before each test."""
+        _TOOL_REGISTRY.clear()
+
+    def teardown_method(self):
+        """Clear tool registry after each test."""
+        _TOOL_REGISTRY.clear()
+
+    @patch("gaia.mcp.mixin.MCPClientManager")
+    def test_json_response_wrapped_with_gaia_format(self, mock_manager_class):
+        """JSON dict responses should be wrapped with status/message/data/instruction."""
+        mock_manager = Mock()
+        mock_client = Mock()
+        mock_client.is_connected.return_value = True
+        mock_client.name = "testserver"
+        mock_client.server_info = {"name": "Test Server"}
+
+        # Mock tool
+        mock_tool = MCPTool(
+            name="get_stats",
+            description="Get stats",
+            input_schema={"type": "object", "properties": {}, "required": []},
+        )
+        mock_client.list_tools.return_value = [mock_tool]
+
+        # Mock wrapper returns raw JSON
+        mock_wrapper = Mock(return_value={"cpu": 45.2, "memory": 78.5})
+        mock_client.create_tool_wrapper.return_value = mock_wrapper
+
+        mock_manager.add_server.return_value = mock_client
+        mock_manager_class.return_value = mock_manager
+
+        agent = MockAgent()
+        agent.connect_mcp_server("testserver", command="echo test")
+
+        # Get the registered wrapper and call it
+        tool_name = "mcp_testserver_get_stats"
+        wrapper = _TOOL_REGISTRY[tool_name]["function"]
+        result = wrapper()
+
+        # Verify GAIA-style format
+        assert result["status"] == "success"
+        assert "message" in result
+        assert result["data"] == {"cpu": 45.2, "memory": 78.5}
+        assert "instruction" in result
+        assert "plain text string" in result["instruction"]
+
+    @patch("gaia.mcp.mixin.MCPClientManager")
+    def test_error_response_wrapped_with_error_status(self, mock_manager_class):
+        """Error responses should be wrapped with status='error'."""
+        mock_manager = Mock()
+        mock_client = Mock()
+        mock_client.is_connected.return_value = True
+        mock_client.name = "testserver"
+        mock_client.server_info = {"name": "Test Server"}
+
+        mock_tool = MCPTool(
+            name="failing_tool",
+            description="Failing tool",
+            input_schema={"type": "object", "properties": {}, "required": []},
+        )
+        mock_client.list_tools.return_value = [mock_tool]
+
+        # Mock wrapper returns error
+        mock_wrapper = Mock(return_value={"error": "Command failed: access denied"})
+        mock_client.create_tool_wrapper.return_value = mock_wrapper
+
+        mock_manager.add_server.return_value = mock_client
+        mock_manager_class.return_value = mock_manager
+
+        agent = MockAgent()
+        agent.connect_mcp_server("testserver", command="echo test")
+
+        # Get the registered wrapper and call it
+        wrapper = _TOOL_REGISTRY["mcp_testserver_failing_tool"]["function"]
+        result = wrapper()
+
+        # Verify error format
+        assert result["status"] == "error"
+        assert result["error"] == "Command failed: access denied"
+        assert "data" in result
+
+    @patch("gaia.mcp.mixin.MCPClientManager")
+    def test_string_response_passed_through(self, mock_manager_class):
+        """Non-dict responses (strings) should pass through unchanged."""
+        mock_manager = Mock()
+        mock_client = Mock()
+        mock_client.is_connected.return_value = True
+        mock_client.name = "testserver"
+        mock_client.server_info = {"name": "Test Server"}
+
+        mock_tool = MCPTool(
+            name="string_tool",
+            description="String tool",
+            input_schema={"type": "object", "properties": {}, "required": []},
+        )
+        mock_client.list_tools.return_value = [mock_tool]
+
+        # Mock wrapper returns plain string
+        mock_wrapper = Mock(return_value="Plain text output from tool")
+        mock_client.create_tool_wrapper.return_value = mock_wrapper
+
+        mock_manager.add_server.return_value = mock_client
+        mock_manager_class.return_value = mock_manager
+
+        agent = MockAgent()
+        agent.connect_mcp_server("testserver", command="echo test")
+
+        # Get the registered wrapper and call it
+        wrapper = _TOOL_REGISTRY["mcp_testserver_string_tool"]["function"]
+        result = wrapper()
+
+        # String should pass through unchanged
+        assert result == "Plain text output from tool"
+
+    @patch("gaia.mcp.mixin.MCPClientManager")
+    def test_list_response_passed_through(self, mock_manager_class):
+        """List responses should pass through unchanged (not a dict)."""
+        mock_manager = Mock()
+        mock_client = Mock()
+        mock_client.is_connected.return_value = True
+        mock_client.name = "testserver"
+        mock_client.server_info = {"name": "Test Server"}
+
+        mock_tool = MCPTool(
+            name="list_tool",
+            description="List tool",
+            input_schema={"type": "object", "properties": {}, "required": []},
+        )
+        mock_client.list_tools.return_value = [mock_tool]
+
+        # Mock wrapper returns list
+        mock_wrapper = Mock(return_value=["item1", "item2", "item3"])
+        mock_client.create_tool_wrapper.return_value = mock_wrapper
+
+        mock_manager.add_server.return_value = mock_client
+        mock_manager_class.return_value = mock_manager
+
+        agent = MockAgent()
+        agent.connect_mcp_server("testserver", command="echo test")
+
+        # Get the registered wrapper and call it
+        wrapper = _TOOL_REGISTRY["mcp_testserver_list_tool"]["function"]
+        result = wrapper()
+
+        # List should pass through unchanged
+        assert result == ["item1", "item2", "item3"]
