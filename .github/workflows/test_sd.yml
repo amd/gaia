@@ -48,7 +48,41 @@ jobs:
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
 
-      - name: Initialize SD Profile (Install + Start Server + Download Models)
+      - name: Start Lemonade Server
+        timeout-minutes: 2
+        run: |
+          Write-Host "Starting Lemonade Server..."
+
+          # Start server in background as a process
+          $serverProcess = Start-Process -FilePath "lemonade-server" -ArgumentList "serve", "--no-tray" -PassThru -WindowStyle Hidden
+          Write-Host "Started lemonade-server process with ID: $($serverProcess.Id)"
+
+          # Wait for server to be ready
+          Write-Host "Waiting for server to start up..."
+          $maxWaitTime = 60
+          $waited = 0
+          $serverReady = $false
+
+          while ($waited -lt $maxWaitTime -and -not $serverReady) {
+              Start-Sleep -Seconds 2
+              $waited += 2
+              try {
+                  $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 2 -ErrorAction SilentlyContinue
+                  if ($response) {
+                      $serverReady = $true
+                      Write-Host "Server ready after $waited seconds"
+                  }
+              } catch {
+                  # Continue waiting
+              }
+          }
+
+          if (-not $serverReady) {
+              Write-Host "Server failed to start"
+              exit 1
+          }
+
+      - name: Initialize SD Profile (Download Models)
         timeout-minutes: 10
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
@@ -60,20 +94,15 @@ jobs:
           echo ================================================================
           echo      Initializing GAIA SD Profile (gaia init --profile sd)
           echo ================================================================
-          echo This will:
-          echo   1. Start Lemonade Server (if not running)
-          echo   2. Download models (skips if already cached):
-          echo      - SDXL-Turbo (6.5GB)
-          echo      - Qwen3-8B-GGUF (5GB)
-          echo      - Qwen3-VL-4B-Instruct-GGUF (3.2GB)
-          echo   3. Verify setup
+          echo This will download models (skips if already cached):
+          echo   - SDXL-Turbo (6.5GB)
+          echo   - Qwen3-8B-GGUF (5GB)
+          echo   - Qwen3-VL-4B-Instruct-GGUF (3.2GB)
           echo.
-          echo Note: Models are cached in HuggingFace hub cache between CI runs
+          echo Note: Models are cached in HuggingFace hub between CI runs
           echo.
 
-          REM Use --yes to auto-confirm prompts, --skip-lemonade to skip version check
-          REM Lemonade already verified by install-lemonade action
-          REM Models are cached in HuggingFace hub, re-downloads only if missing/corrupted
+          REM Use --yes to auto-confirm, --skip-lemonade since server already started
           gaia init --profile sd --yes --skip-lemonade
 
           echo.
