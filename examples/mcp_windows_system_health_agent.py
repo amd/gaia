@@ -127,34 +127,35 @@ After gathering metrics, create a plain text health report with:
 - Key findings (2-3 bullet points)
 - Recommendations (2-3 items)
 
-## Step 3: Output to Notepad (Using Clipboard for Reliability)
+## Step 3: Output to Notepad (Using Direct Type Tool)
 
-IMPORTANT: The Type tool can lose focus during long text entry. Use the clipboard approach instead:
+Type the report directly into Notepad:
 
-1. **Copy report to clipboard using PowerShell:**
-   Use mcp_windows_Shell tool to set the clipboard. For multi-line text, construct the command like:
-   {"command": "powershell -c \\"Set-Clipboard -Value 'SYSTEM HEALTH REPORT\\n\\nOverall Health: Good\\n\\nKey Findings:\\n- Memory: XX GB free\\n- Disk: XX GB free\\n\\nRecommendations:\\n- Item 1\\""}
-
-   Note: Use \\n for newlines in the PowerShell string.
-
-2. **Open Notepad:**
+1. **Open Notepad:**
    Use mcp_windows_App tool: {"mode": "launch", "name": "notepad"}
 
-3. **Paste with Ctrl+V (DO NOT use Click - it can steal focus!):**
-   Use mcp_windows_Shortcut tool to send Ctrl+V: {"key": "ctrl+v"}
+2. **Wait for Notepad to initialize:**
+   Use mcp_windows_Wait tool: {"seconds": 2.0}
 
-   IMPORTANT: Do NOT use mcp_windows_Click before pasting - clicking can cause focus issues.
-   The Shortcut tool sends the keyboard shortcut to the active window (Notepad).
+3. **Switch focus to Notepad:**
+   Use mcp_windows_App tool: {"mode": "switch", "name": "notepad"}
+
+4. **Type the report directly into Notepad:**
+   Use mcp_windows_Type tool: {... "text": "YOUR REPORT TEXT"}
+
+   The loc parameter clicks at those coordinates before typing.
+
+   The Type tool types character-by-character. Newline characters become Enter key presses.
 
 ## Guidelines
 
-1. ALWAYS use the mcp_windows_Shell tool to get REAL data - NEVER make up metrics
-2. Format the report as plain text (no markdown, no special characters)
-3. Use the clipboard approach (Set-Clipboard + Shortcut Ctrl+V) - it's atomic and won't lose focus
-4. Do NOT use mcp_windows_Click or mcp_windows_App with mode "switch" - they cause focus issues!
-5. After pasting to Notepad, provide a brief confirmation as your final answer
+1. ALWAYS use mcp_windows_Shell to get REAL data - NEVER make up metrics
+2. Format the report as plain text with line breaks between sections
+3. Use Wait tool after launching Notepad (2 seconds)
+4. Use App switch to focus Notepad before typing (no coordinates needed)
+5. After typing to Notepad, provide a brief confirmation as your final answer
 
-**IMPORTANT:** Your final answer should confirm the report was pasted to Notepad, not repeat the entire report."""
+**IMPORTANT:** Your final answer should confirm the report was typed to Notepad, not repeat the entire report."""
 
     def _register_tools(self) -> None:
         """Register agent tools.
