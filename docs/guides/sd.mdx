@@ -236,7 +236,11 @@ SD-specific convenience tool registered in the agent (not in the mixin):
 
 ```python
 # In SDAgent._register_tools()
-@tool(name="create_story_from_last_image")
+@tool(
+    atomic=True,  # Single-step execution (no multi-step planning)
+    name="create_story_from_last_image",
+    description="Analyze last SD image and create story",
+)
 def create_story_from_last_image():
     """SD-specific wrapper - no need to specify image path."""
     last_image = self.sd_generations[-1]["image_path"]
@@ -244,8 +248,10 @@ def create_story_from_last_image():
     # Calls generic VLM tool
     return self._create_story_from_image(last_image, story_style="whimsical")
 
-self.register_tool(create_story_from_last_image)
+# The @tool decorator automatically registers it - no need to call register_tool()
 ```
+
+**Why `atomic=True`?** This tool wraps multiple VLM calls internally (analyze + story). Marking it atomic tells the agent to execute it as a single step without trying to break it down further. The agent can call this tool in one step instead of planning multiple sub-steps.
 
 This demonstrates how agents can add custom tools that compose mixin functionality.
 
