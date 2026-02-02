@@ -71,9 +71,10 @@ jobs:
           echo Note: Models are cached in HuggingFace hub cache between CI runs
           echo.
 
-          REM Use --yes to auto-confirm prompts in CI
+          REM Use --yes to auto-confirm prompts, --skip-lemonade to skip version check
+          REM Lemonade already verified by install-lemonade action
           REM Models are cached in HuggingFace hub, re-downloads only if missing/corrupted
-          gaia init --profile sd --yes
+          gaia init --profile sd --yes --skip-lemonade
 
           echo.
           echo ================================================================

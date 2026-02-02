@@ -2104,6 +2104,11 @@ Examples:
         help="Skip model downloads (only install Lemonade)",
     )
     init_parser.add_argument(
+        "--skip-lemonade",
+        action="store_true",
+        help="Skip Lemonade installation check (for CI with pre-installed Lemonade)",
+    )
+    init_parser.add_argument(
         "--force-reinstall",
         action="store_true",
         help="Force reinstall even if compatible version exists",
@@ -4098,6 +4103,7 @@ Let me know your answer!
         exit_code = run_init(
             profile=profile,
             skip_models=args.skip_models,
+            skip_lemonade=getattr(args, "skip_lemonade", False),
             force_reinstall=args.force_reinstall,
             force_models=args.force_models,
             yes=args.yes,

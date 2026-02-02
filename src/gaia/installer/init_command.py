@@ -105,6 +105,7 @@ class InitCommand:
         self,
         profile: str = "chat",
         skip_models: bool = False,
+        skip_lemonade: bool = False,
         force_reinstall: bool = False,
         force_models: bool = False,
         yes: bool = False,
@@ -118,6 +119,7 @@ class InitCommand:
         Args:
             profile: Profile to initialize (minimal, chat, code, rag, all)
             skip_models: Skip model downloads
+            skip_lemonade: Skip Lemonade installation check (for CI)
             force_reinstall: Force reinstall even if compatible version exists
             force_models: Force re-download models even if already available
             yes: Skip confirmation prompts
@@ -127,6 +129,7 @@ class InitCommand:
         """
         self.profile = profile.lower()
         self.skip_models = skip_models
+        self.skip_lemonade = skip_lemonade
         self.force_reinstall = force_reinstall
         self.force_models = force_models
         self.yes = yes
@@ -318,12 +321,17 @@ class InitCommand:
         total_steps = 4 if not self.skip_models else 3
 
         try:
-            # Step 1: Check/Install Lemonade (skip for remote servers)
+            # Step 1: Check/Install Lemonade (skip for remote servers or CI)
             if self.remote:
                 self._print_step(
                     1, total_steps, "Skipping local Lemonade check (remote mode)..."
                 )
                 self._print_success("Using remote Lemonade Server")
+            elif self.skip_lemonade:
+                self._print_step(
+                    1, total_steps, "Skipping Lemonade installation check..."
+                )
+                self._print_success("Using pre-installed Lemonade Server")
             else:
                 self._print_step(
                     1, total_steps, "Checking Lemonade Server installation..."
@@ -1337,6 +1345,7 @@ class InitCommand:
 def run_init(
     profile: str = "chat",
     skip_models: bool = False,
+    skip_lemonade: bool = False,
     force_reinstall: bool = False,
     force_models: bool = False,
     yes: bool = False,
@@ -1349,6 +1358,7 @@ def run_init(
     Args:
         profile: Profile to initialize (minimal, chat, code, rag, all)
         skip_models: Skip model downloads
+        skip_lemonade: Skip Lemonade installation check (for CI)
         force_reinstall: Force reinstall even if compatible version exists
         force_models: Force re-download models (deletes then re-downloads)
         yes: Skip confirmation prompts
@@ -1362,6 +1372,7 @@ def run_init(
         cmd = InitCommand(
             profile=profile,
             skip_models=skip_models,
+            skip_lemonade=skip_lemonade,
             force_reinstall=force_reinstall,
             force_models=force_models,
             yes=yes,
