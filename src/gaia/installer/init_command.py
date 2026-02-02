@@ -756,9 +756,12 @@ class InitCommand:
             # In non-interactive mode (--yes), auto-start the server
             if self.yes:
                 self.console.print()
-                self.console.print("   [dim]Auto-starting Lemonade Server (CI mode)...[/dim]")
+                self.console.print(
+                    "   [dim]Auto-starting Lemonade Server (CI mode)...[/dim]"
+                )
 
                 import subprocess
+
                 try:
                     # Start server in background
                     if sys.platform == "win32":
@@ -767,7 +770,11 @@ class InitCommand:
                             ["lemonade-server", "serve", "--no-tray"],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
-                            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+                            creationflags=(
+                                subprocess.CREATE_NO_WINDOW
+                                if hasattr(subprocess, "CREATE_NO_WINDOW")
+                                else 0
+                            ),
                         )
                     else:
                         # Linux/Mac: background process
@@ -779,6 +786,7 @@ class InitCommand:
 
                     # Wait for server to start
                     import time
+
                     max_wait = 30
                     waited = 0
                     while waited < max_wait:
@@ -786,8 +794,14 @@ class InitCommand:
                         waited += 2
                         try:
                             health = client.health_check()
-                            if health and isinstance(health, dict) and health.get("status") == "ok":
-                                self._print_success(f"Server started and ready (waited {waited}s)")
+                            if (
+                                health
+                                and isinstance(health, dict)
+                                and health.get("status") == "ok"
+                            ):
+                                self._print_success(
+                                    f"Server started and ready (waited {waited}s)"
+                                )
                                 return True
                         except Exception:
                             pass
