@@ -573,14 +573,15 @@ class InitCommand:
             self._print("")
             self._print_success("Download complete")
 
-            # Install (not silent so desktop icon is created)
+            # Install (silent in CI with --yes, interactive otherwise for desktop icon)
             self.console.print("   [bold]Installing...[/bold]")
-            self.console.print()
-            self.console.print(
-                "   [yellow]⚠️  The installer window will appear - please complete the installation[/yellow]"
-            )
-            self.console.print()
-            result = self.installer.install(installer_path, silent=False)
+            if not self.yes:
+                self.console.print()
+                self.console.print(
+                    "   [yellow]⚠️  The installer window will appear - please complete the installation[/yellow]"
+                )
+                self.console.print()
+            result = self.installer.install(installer_path, silent=self.yes)
 
             if result.success:
                 self._print_success(f"Installed Lemonade v{result.version}")

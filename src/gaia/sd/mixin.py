@@ -327,11 +327,18 @@ class SDToolsMixin:
                 if console and hasattr(console, "stop_progress"):
                     console.stop_progress()
             except LemonadeClientError as e:
-                # Model might already be loaded, continue
                 if console and hasattr(console, "stop_progress"):
                     console.stop_progress()
-                if "already loaded" not in str(e).lower():
-                    logger.warning(f"Model load warning: {e}")
+
+                # If already loaded, continue silently
+                if "already loaded" in str(e).lower():
+                    logger.debug(f"Model already loaded: {model}")
+                else:
+                    # Connection error or other failure - return error
+                    error_msg = str(e)
+                    if "Connection" in error_msg or "connect" in error_msg.lower():
+                        error_msg = "Cannot connect to Lemonade Server. Is it running?"
+                    return {"status": "error", "error": error_msg}
 
             # Start progress for generation with timer
             if console and hasattr(console, "start_progress"):

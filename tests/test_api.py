@@ -764,7 +764,9 @@ class TestStreamingContent:
             for line in response.iter_lines():
                 chunk_count += 1
                 if chunk_count > max_chunks:
-                    pytest.fail(f"Exceeded max chunks ({max_chunks}) - possible infinite stream")
+                    pytest.fail(
+                        f"Exceeded max chunks ({max_chunks}) - possible infinite stream"
+                    )
 
                 if line:
                     decoded = line.decode() if isinstance(line, bytes) else line
