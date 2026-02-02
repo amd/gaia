@@ -49,7 +49,9 @@ class TestSDToolsMixinInit:
         mixin = SDToolsMixin()
         mixin.init_sd()
 
-        assert mixin.sd_default_model == "SDXL-Turbo"  # Default is SDXL-Turbo (better quality)
+        assert (
+            mixin.sd_default_model == "SDXL-Turbo"
+        )  # Default is SDXL-Turbo (better quality)
         assert mixin.sd_default_size is None  # Auto-selected per model
         assert mixin.sd_default_steps is None  # Auto-selected per model
 

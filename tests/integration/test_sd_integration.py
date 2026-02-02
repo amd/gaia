@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from gaia.sd import SDToolsMixin
 from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+from gaia.sd import SDToolsMixin
 
 
 def lemonade_available():
