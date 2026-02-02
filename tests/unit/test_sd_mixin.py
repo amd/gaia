@@ -15,7 +15,7 @@ from gaia.agents.sd import SDToolsMixin
 @pytest.fixture
 def mock_lemonade_client():
     """Create a mock LemonadeClient for testing."""
-    with patch("gaia.agents.sd.mixin.LemonadeClient") as MockClient:
+    with patch("gaia.sd.mixin.LemonadeClient") as MockClient:
         mock_client = MagicMock()
         MockClient.return_value = mock_client
         mock_client.base_url = "http://localhost:8000/api/v1"
@@ -49,7 +49,7 @@ class TestSDToolsMixinInit:
         mixin = SDToolsMixin()
         mixin.init_sd()
 
-        assert mixin.sd_default_model == "SD-Turbo"
+        assert mixin.sd_default_model == "SDXL-Turbo"  # Default is SDXL-Turbo (better quality)
         assert mixin.sd_default_size is None  # Auto-selected per model
         assert mixin.sd_default_steps is None  # Auto-selected per model
 
@@ -64,7 +64,7 @@ class TestSDToolsMixinInit:
             default_steps=8,
         )
 
-        assert mixin.sd_default_model == "SDXL-Turbo"
+        assert mixin.sd_default_model == "SD-Turbo"  # Custom model we passed
         assert mixin.sd_default_size == "512x512"
         assert mixin.sd_default_steps == 8
 

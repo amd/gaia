@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.sd.mixin import SDToolsMixin
 from gaia.logger import get_logger
+from gaia.sd import SDToolsMixin
 from gaia.vlm import VLMToolsMixin
 
 logger = get_logger(__name__)
@@ -101,17 +101,15 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
             min_context_size=config.ctx_size,  # 8K sufficient for prompt enhancement
         )
 
-        # Initialize SD tools
+        # Initialize SD tools (auto-registers tools)
         self.sd_prompt_to_open = config.prompt_to_open
         self.init_sd(
             output_dir=config.output_dir,
             default_model=config.sd_model,
         )
-        self.register_sd_tools()
 
-        # Initialize VLM tools for image analysis
+        # Initialize VLM tools (auto-registers tools)
         self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
-        self.register_vlm_tools()
 
         logger.debug(
             f"SD Agent initialized with SD model: {config.sd_model}, VLM: Qwen3-VL-4B"
@@ -130,11 +128,12 @@ TASK: Enhance user prompts for optimal image quality using proven modifiers.
 
 PROMPT ENHANCEMENT STRATEGY (2026 Research):
 1. Identify subject, mood, and desired outcome
-2. Add quality modifiers: highly detailed, sharp focus, 8K, Aqua Vista (depth enhancer), masterpiece
-3. Add lighting: golden hour, volumetric lighting, studio setup, soft diffused, dramatic rim lights
-4. Add style: digital art, concept art, photorealistic, Cinematic, Photographic, ArtStation
-5. Add composition: rule of thirds, bokeh, shallow depth of field, wide angle, close-up
-6. Use sentence structure (SDXL prefers descriptive sentences over comma tags)
+2. **For robot/mechanical subjects**: Emphasize METALLIC materials (chrome, steel, aluminum, titanium), avoid soft/organic textures (fur, skin, fabric)
+3. Add quality modifiers: highly detailed, sharp focus, 8K, Aqua Vista (depth enhancer), masterpiece
+4. Add lighting: golden hour, volumetric lighting, studio setup, soft diffused, dramatic rim lights
+5. Add style: digital art, concept art, photorealistic, Cinematic, Photographic, ArtStation
+6. Add composition: rule of thirds, bokeh, shallow depth of field, wide angle, close-up
+7. Use sentence structure (SDXL prefers descriptive sentences over comma tags)
 
 PROVEN QUALITY BOOSTERS:
 - "8K" - proven quality enhancer
@@ -145,6 +144,8 @@ PROVEN QUALITY BOOSTERS:
 - "masterpiece", "trending on ArtStation" - quality signals
 
 ENHANCEMENT EXAMPLES:
+"robot kitten" → "adorable robotic kitten with glowing LED eyes and polished chrome metal body, articulated mechanical joints visible in legs and tail, sitting in playful pose with head tilted, soft studio lighting with rim lights highlighting reflective metallic surfaces, digital art style, Cinematic aesthetic, highly detailed mechanical components, sharp focus, 8K quality, no fur"
+
 "robot puppy" → "adorable robotic puppy with large expressive LED eyes and metallic silver body, sitting in playful pose with tilted head, soft studio lighting with rim lights highlighting metallic surfaces, digital art style, Cinematic aesthetic, highly detailed mechanical joints, sharp focus, 8K quality"
 
 "sunset" → "vibrant sunset over calm ocean with golden hour lighting casting warm orange and purple hues across dramatic cumulus clouds, sun on horizon with volumetric god rays, wide angle seascape composition in Cinematic style, landscape photography, highly detailed atmospheric effects, 8K quality"
@@ -286,9 +287,9 @@ You: "Generated 3 robot kitten variations! Saved to: [paths]"
 """
 
     def _register_tools(self):
-        """Register SD tools and custom SD-specific tools."""
+        """Register custom SD-specific tools."""
         # SD tools and VLM tools are already registered in __init__
-        # via register_sd_tools() and register_vlm_tools()
+        # via init_sd() and init_vlm() (they auto-register)
 
         # Define SD-specific custom tool that wraps VLM functionality
         # The @tool decorator automatically registers it in the global tool registry

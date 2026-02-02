@@ -21,11 +21,19 @@ icon: "image"
 
 <video
   controls
+  autoPlay
+  loop
+  muted
+  playsInline
   className="w-full rounded-lg"
   src="https://assets.amd-gaia.ai/videos/gaia-sdxl-agent.webm"
 />
 
 Complete pipeline: Prompt enhancement → Image generation → VLM analysis → Story creation
+
+```bash
+gaia sd "create a cute robot kitten and tell me a short story about it"
+```
 
 ---
 
@@ -86,7 +94,7 @@ GAIA uses mixins to add capabilities. This agent combines TWO mixins:
 
 ```python
 from gaia.agents.base import Agent
-from gaia.agents.sd import SDToolsMixin
+from gaia.sd import SDToolsMixin
 from gaia.vlm import VLMToolsMixin
 
 class MultiModalAgent(Agent, SDToolsMixin, VLMToolsMixin):
@@ -104,7 +112,7 @@ class MultiModalAgent(Agent, SDToolsMixin, VLMToolsMixin):
 
 ```python
 from gaia.agents.base import Agent
-from gaia.agents.sd import SDToolsMixin
+from gaia.sd import SDToolsMixin
 from gaia.vlm import VLMToolsMixin
 
 class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
@@ -112,15 +120,14 @@ class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
         super().__init__()
 
         # Initialize SD tools
+        # Initialize SD tools (auto-registers tools)
         self.init_sd(
             output_dir=output_dir,
             default_model="SDXL-Turbo",  # Good balance of speed/quality
         )
-        self.register_sd_tools()
 
-        # Initialize VLM tools
+        # Initialize VLM tools (auto-registers tools)
         self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
-        self.register_vlm_tools()
 
     def _register_tools(self):
         """Required abstract method - tools already registered above."""
@@ -151,16 +158,14 @@ Save as `image_story_agent.py`:
 
 ```python
 from gaia.agents.base import Agent
-from gaia.agents.sd import SDToolsMixin
+from gaia.sd import SDToolsMixin
 from gaia.vlm import VLMToolsMixin
 
 class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
     def __init__(self, output_dir="./generated_images"):
         super().__init__()
-        self.init_sd(output_dir=output_dir)
-        self.register_sd_tools()
-        self.init_vlm()
-        self.register_vlm_tools()
+        self.init_sd(output_dir=output_dir)  # Auto-registers SD tools
+        self.init_vlm()  # Auto-registers VLM tools
 
     def _register_tools(self):
         pass
@@ -257,8 +262,7 @@ def create_story_from_last_image():
 class FastImageAgent(Agent, SDToolsMixin):
     def __init__(self):
         super().__init__()
-        self.init_sd(default_model="SD-Turbo")  # Fastest
-        self.register_sd_tools()
+        self.init_sd(default_model="SD-Turbo")  # Fastest (auto-registers tools)
 
     def _register_tools(self):
         pass
@@ -275,8 +279,7 @@ from gaia.vlm import VLMToolsMixin
 class ImageAnalysisAgent(Agent, VLMToolsMixin):
     def __init__(self):
         super().__init__()
-        self.init_vlm()
-        self.register_vlm_tools()
+        self.init_vlm()  # Auto-registers VLM tools
 
     def _register_tools(self):
         pass
@@ -297,12 +300,11 @@ class ImageCatalogAgent(Agent, SDToolsMixin, VLMToolsMixin, DatabaseMixin):
         super().__init__()
 
         self.init_sd()
-        self.init_vlm()
+        self.init_vlm()  # Auto-registers VLM tools
         self.init_database("images.db")
 
-        self.register_sd_tools()
-        self.register_vlm_tools()
-        self.register_database_tools()
+        # SD and VLM tools auto-registered above
+        self.register_database_tools()  # Database mixin still needs explicit registration
 
     def _register_tools(self):
         pass

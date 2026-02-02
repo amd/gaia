@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from gaia.agents.sd import SDToolsMixin
+from gaia.sd import SDToolsMixin
 from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
 

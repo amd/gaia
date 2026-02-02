@@ -16,8 +16,7 @@ Example:
     class MyVisionAgent(Agent, VLMToolsMixin):
         def __init__(self):
             super().__init__()
-            self.init_vlm()  # Initialize with default VLM
-            self.register_vlm_tools()
+            self.init_vlm()  # Initialize and auto-register tools
 
         def _register_tools(self):
             '''Required abstract method - VLM tools already registered in __init__.'''
@@ -59,7 +58,10 @@ class VLMToolsMixin:
         base_url: str = "http://localhost:8000",
     ) -> None:
         """
-        Initialize VLM tools configuration.
+        Initialize VLM tools and register them with the agent.
+
+        This method both initializes VLM state AND registers the tools automatically.
+        No need to call register_vlm_tools() separately.
 
         Args:
             model: VLM model to use for image analysis
@@ -76,8 +78,7 @@ class VLMToolsMixin:
 
         logger.debug(f"VLM tools initialized: model={model}")
 
-    def register_vlm_tools(self) -> None:
-        """Register VLM image analysis tools."""
+        # Register VLM tools automatically during init
         from gaia.agents.base.tools import tool
 
         @tool(
@@ -147,11 +148,8 @@ class VLMToolsMixin:
             """Answer a question about an image."""
             return self._answer_question_about_image(image_path, question)
 
-        # Register tools with the agent
-        if hasattr(self, "register_tool"):
-            self.register_tool(analyze_image)
-            self.register_tool(create_story_from_image)
-            self.register_tool(answer_question_about_image)
+        # Tools are automatically registered by the @tool decorator above
+        # No need to call register_tool() - it doesn't exist anyway
 
     def _analyze_image(self, image_path: str, focus: str = "all") -> Dict[str, Any]:
         """

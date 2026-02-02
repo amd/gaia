@@ -5,6 +5,8 @@ description: "Multi-modal image generation with LLM prompt enhancement and VLM s
 
 <Info>
   **CLI Command:** `gaia sd` - Demonstrates multi-modal agents with SDToolsMixin + VLMToolsMixin
+
+  **SDK Reference:** [SDToolsMixin API](/sdk/mixins/tool-mixins#95-stable-diffusion-mixin) • [VLMToolsMixin API](/sdk/mixins/tool-mixins#96-vision-language-model-mixin)
 </Info>
 
 # What It Is
@@ -23,6 +25,7 @@ Type "robot kitten" → Get image + 2-3 paragraph story about the character
 ## See It In Action
 
 <video
+  controls
   autoPlay
   loop
   muted
@@ -32,6 +35,10 @@ Type "robot kitten" → Get image + 2-3 paragraph story about the character
 />
 
 Complete multi-modal workflow: Prompt enhancement → Image generation → VLM analysis → Story creation (all in ~35 seconds)
+
+```bash
+gaia sd "create a cute robot kitten and tell me a short story about it"
+```
 
 ---
 
@@ -198,7 +205,7 @@ The SD Agent combines three mixins:
 
 ```python
 from gaia.agents.base import Agent
-from gaia.agents.sd import SDToolsMixin
+from gaia.sd import SDToolsMixin
 from gaia.vlm import VLMToolsMixin
 
 class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
@@ -210,16 +217,14 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
             min_context_size=8192,  # 8K sufficient for SD
         )
 
-        # Initialize SD tools
+        # Initialize SD tools (auto-registers generate_image, list_sd_models, etc.)
         self.init_sd(
             output_dir=config.output_dir,
             default_model=config.sd_model,  # SDXL-Turbo
         )
-        self.register_sd_tools()
 
-        # Initialize VLM tools
+        # Initialize VLM tools (auto-registers analyze_image, create_story_from_image, etc.)
         self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
-        self.register_vlm_tools()
 ```
 
 **Available tools:**
@@ -524,10 +529,3 @@ This approach is more flexible than hardcoded templates - the LLM can adapt enha
     Complete option reference
   </Card>
 </CardGroup>
-
-**Try the full experience:**
-```bash
-gaia sd "create a cute robot kitten and tell me a short story about it"
-```
-
-Get image + creative narrative in ~35 seconds! 🐱📖✨

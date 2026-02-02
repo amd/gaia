@@ -24,7 +24,7 @@ Usage:
 """
 
 from gaia.agents.base import Agent
-from gaia.agents.sd import SDToolsMixin
+from gaia.sd import SDToolsMixin
 
 
 class ImageAgent(Agent, SDToolsMixin):
@@ -52,15 +52,13 @@ class ImageAgent(Agent, SDToolsMixin):
         super().__init__(**kwargs)
 
         # Initialize SD tools with configuration
+        # Initialize SD tools (auto-registers tools)
         self.init_sd(
             base_url=base_url,
             output_dir=output_dir,
             default_model="SD-Turbo",
             default_size="512x512",
         )
-
-        # Register the SD tools with this agent
-        self.register_sd_tools()
 
     def _register_tools(self):
         """Required abstract method - SD tools already registered in __init__."""
