@@ -290,7 +290,8 @@ You: "Generated 3 robot kitten variations! Saved to: [paths]"
         # SD tools and VLM tools are already registered in __init__
         # via register_sd_tools() and register_vlm_tools()
 
-        # Register SD-specific custom tool that wraps VLM functionality
+        # Define SD-specific custom tool that wraps VLM functionality
+        # The @tool decorator automatically registers it in the global tool registry
         from gaia.agents.base.tools import tool
 
         @tool(
@@ -332,5 +333,4 @@ You: "Generated 3 robot kitten variations! Saved to: [paths]"
                     "error": "VLM tools not initialized. Agent needs VLMToolsMixin.",
                 }
 
-        # Register the custom tool
-        self.register_tool(create_story_from_last_image)
+        # No need to call register_tool() - the @tool decorator does it automatically
