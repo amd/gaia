@@ -507,10 +507,17 @@ class InitCommand:
                     self._print("   This may cause compatibility issues.")
             self._print("")
 
+            # In CI mode (--yes), skip upgrades unless force_reinstall is set
+            # This prevents MSI conflicts and uses the runner's cached version
+            if self.yes and not self.force_reinstall:
+                self._print_warning("Continuing with installed version (CI mode - skipping upgrade)")
+                self._print(f"   [dim]To force upgrade, use: gaia init --force-reinstall[/dim]")
+                return True
+
             # Prompt user to upgrade
             if not self._prompt_yes_no(
                 f"Upgrade to v{target_ver}? (will uninstall current version)",
-                default=True,
+                default=False,  # Default to no for safety
             ):
                 self._print_warning("Continuing with current version")
                 return True
