@@ -5034,6 +5034,9 @@ def handle_sd_command(args):
                     print("Goodbye!")
                     break
 
+                # Track images before this query
+                initial_count = len(agent.sd_generations)
+
                 # Use agent.process_query() for LLM enhancement
                 result = agent.process_query(user_prompt)
                 if result.get("final_answer"):
@@ -5041,20 +5044,26 @@ def handle_sd_command(args):
                 else:
                     print("\nAgent: Generation complete\n")
 
-                # Prompt to open image after agent completes
+                # Prompt to open image(s) after agent completes
                 if not args.no_open and result.get("status") != "error":
                     try:
-                        response = (
-                            input("Open image in default viewer? [Y/n]: ")
-                            .strip()
-                            .lower()
-                        )
-                        if response in ("", "y", "yes"):
-                            # Get last generated image path from agent history
-                            if agent.sd_generations:
-                                last_image = agent.sd_generations[-1]["image_path"]
-                                os.startfile(last_image)
-                                print("[Image opened]\n")
+                        # Get all newly generated images from this query
+                        new_images = agent.sd_generations[initial_count:]
+
+                        if new_images:
+                            num_images = len(new_images)
+                            prompt_text = (
+                                f"Open {num_images} images in default viewer? [Y/n]: "
+                                if num_images > 1
+                                else "Open image in default viewer? [Y/n]: "
+                            )
+                            response = input(prompt_text).strip().lower()
+
+                            if response in ("", "y", "yes"):
+                                for img in new_images:
+                                    os.startfile(img["image_path"])
+                                plural = "s" if num_images > 1 else ""
+                                print(f"[{num_images} image{plural} opened]\n")
                     except (KeyboardInterrupt, EOFError):
                         pass
 
@@ -5064,23 +5073,34 @@ def handle_sd_command(args):
 
     # Single prompt mode
     else:
+        # Track images before this command
+        initial_count = len(agent.sd_generations)
+
         # Use agent.process_query() for LLM enhancement
         result = agent.process_query(args.prompt)
         if result.get("final_answer"):
             print(f"\n{result['final_answer']}\n")
 
-        # Prompt to open image after agent completes its story
+        # Prompt to open image(s) after agent completes
         if not args.no_open and result.get("status") != "error":
             try:
-                response = (
-                    input("Open image in default viewer? [Y/n]: ").strip().lower()
-                )
-                if response in ("", "y", "yes"):
-                    # Get last generated image from agent history
-                    if agent.sd_generations:
-                        last_image = agent.sd_generations[-1]["image_path"]
-                        os.startfile(last_image)
-                        print("[Image opened]\n")
+                # Get all newly generated images from this command
+                new_images = agent.sd_generations[initial_count:]
+
+                if new_images:
+                    num_images = len(new_images)
+                    prompt_text = (
+                        f"Open {num_images} images in default viewer? [Y/n]: "
+                        if num_images > 1
+                        else "Open image in default viewer? [Y/n]: "
+                    )
+                    response = input(prompt_text).strip().lower()
+
+                    if response in ("", "y", "yes"):
+                        for img in new_images:
+                            os.startfile(img["image_path"])
+                        plural = "s" if num_images > 1 else ""
+                        print(f"[{num_images} image{plural} opened]\n")
             except (KeyboardInterrupt, EOFError):
                 pass
 
