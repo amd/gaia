@@ -284,7 +284,8 @@ Your `ImageStoryAgent` has access to these tools automatically registered by the
 
 **`generate_image(prompt, model, size, steps, cfg_scale, seed)`**
 - Generates images with Stable Diffusion
-- Returns: `{"status": "success", "image_path": "...", "model": "...", "generation_time_s": 17.0}`
+- **Seed:** Randomized by default for variety. Specify a seed for reproducible results.
+- Returns: `{"status": "success", "image_path": "...", "model": "...", "seed": 123456, "generation_time_s": 17.0}`
 
 **`list_sd_models()`**
 - Shows available SD models and their characteristics

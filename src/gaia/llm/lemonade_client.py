@@ -1679,6 +1679,11 @@ class LemonadeClient:
             )
 
         try:
+            # Generate random seed if not provided for varied results
+            import random
+            if seed is None:
+                seed = random.randint(0, 2**32 - 1)
+
             payload = {
                 "prompt": prompt,
                 "model": model,
@@ -1687,9 +1692,8 @@ class LemonadeClient:
                 "response_format": "b64_json",
                 "cfg_scale": cfg_scale,
                 "steps": steps,
+                "seed": seed,
             }
-            if seed is not None:
-                payload["seed"] = seed
 
             self.log.info(
                 f"Generating image: model={model}, size={size}, steps={steps}, cfg={cfg_scale}"

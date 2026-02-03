@@ -110,6 +110,10 @@ Your agent can use different Stable Diffusion models depending on your needs:
 
 **Performance measured on AMD Ryzen AI MAX+ 395 with Radeon 8060S**
 
+<Note>
+**Random Seeds:** By default, each generation uses a random seed, producing unique images every time. Use `--seed 42` with the CLI or set `seed` parameter in code for reproducible results.
+</Note>
+
 Set your default model in `__init__`:
 
 Fast stylized:
@@ -405,6 +409,24 @@ sentient being to witness these ruins in over a thousand years.
     ```bash
     python -c "from gaia.sd import SDToolsMixin; print('OK')"
     ```
+  </Accordion>
+
+  <Accordion title="How to get reproducible results">
+    **Question:** How do I generate the same image twice?
+
+    **Solution:** Use a fixed seed:
+
+    CLI:
+    ```bash
+    gaia sd "robot kitten" --seed 42
+    ```
+
+    Python:
+    ```python
+    result = agent.process_query("generate robot kitten with seed 42")
+    ```
+
+    By default, images use random seeds for variety. Specify a seed for reproducibility.
   </Accordion>
 </AccordionGroup>
 
