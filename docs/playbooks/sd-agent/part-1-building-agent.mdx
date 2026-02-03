@@ -146,8 +146,10 @@ Plus all the `Agent` base class state (tool registry, conversation history, LLM 
 
   <Step title="Create virtual environment">
     ```bash
-    uv venv
+    uv venv .venv --python 3.12
     ```
+
+    <Note>uv will automatically download Python 3.12 if not already installed.</Note>
 
     Activate the environment:
 
