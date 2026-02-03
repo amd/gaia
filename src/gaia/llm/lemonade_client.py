@@ -1681,6 +1681,7 @@ class LemonadeClient:
         try:
             # Generate random seed if not provided for varied results
             import random
+
             if seed is None:
                 seed = random.randint(0, 2**32 - 1)
 
