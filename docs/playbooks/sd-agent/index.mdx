@@ -1,0 +1,369 @@
+---
+title: "Building a Multi-Modal Image Generation Agent"
+description: "Build an agent with SD + VLM: generates images and creates stories"
+icon: "image"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/sd/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/sd/agent.py)
+</Info>
+
+<Badge text="development" color="orange" />
+
+- **Time to complete:** 30-40 minutes
+- **What you'll build:** Multi-modal agent (LLM + SD + VLM) that generates images and creates stories
+- **What you'll learn:** SDToolsMixin + VLMToolsMixin, tool composition, multi-modal pipelines
+- **Platform:** Runs locally on Ryzen AI
+
+---
+
+## Demo: Watch the Multi-Modal Agent
+
+<video
+  controls
+  autoPlay
+  loop
+  muted
+  playsInline
+  className="w-full rounded-lg"
+  src="https://assets.amd-gaia.ai/videos/gaia-sdxl-agent.webm"
+/>
+
+Complete pipeline: Prompt enhancement → Image generation → VLM analysis → Story creation
+
+```bash
+gaia sd "create a cute robot kitten and tell me a short story about it"
+```
+
+---
+
+## Why Build This Agent?
+
+<Info>
+**100% Local AI:** LLM, Stable Diffusion, and Vision Model all run on Ryzen AI. Nothing leaves your machine.
+</Info>
+
+This agent demonstrates GAIA's multi-modal capabilities:
+- **LLM** enhances prompts with quality keywords
+- **SD** generates images locally
+- **VLM** analyzes images and creates creative stories
+
+**Result:** Type "robot kitten" → Get image + 2-3 paragraph story about the character
+
+---
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install GAIA">
+    ```bash
+    # Using uv (recommended)
+    uv pip install amd-gaia
+
+    # Or using pip
+    pip install amd-gaia
+    ```
+  </Step>
+
+  <Step title="Initialize SD profile">
+    ```bash
+    gaia init --profile sd
+    ```
+
+    Downloads all required models (~15GB):
+    - SDXL-Turbo (image generation - 6.5GB)
+    - Qwen3-8B-GGUF (agentic reasoning + prompt enhancement - 5GB)
+    - Qwen3-VL-4B-Instruct-GGUF (vision + stories - 3.2GB)
+  </Step>
+
+  <Step title="Create project folder">
+    ```bash
+    mkdir my-sd-agent
+    cd my-sd-agent
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Building the Agent
+
+### Step 1: Understanding Mixins
+
+GAIA uses mixins to add capabilities. This agent combines TWO mixins:
+
+```python
+from gaia.agents.base import Agent
+from gaia.sd import SDToolsMixin
+from gaia.vlm import VLMToolsMixin
+
+class MultiModalAgent(Agent, SDToolsMixin, VLMToolsMixin):
+    pass  # Gets image generation AND vision tools
+```
+
+**Why multiple mixins?**
+- Each mixin has one responsibility
+- Easy to combine capabilities
+- Reusable across agents
+
+---
+
+### Step 2: Initialize Both Mixins
+
+```python
+from gaia.agents.base import Agent
+from gaia.sd import SDToolsMixin
+from gaia.vlm import VLMToolsMixin
+
+class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
+    def __init__(self, output_dir="./generated_images"):
+        super().__init__()
+
+        # Initialize SD tools
+        # Initialize SD tools (auto-registers tools)
+        self.init_sd(
+            output_dir=output_dir,
+            default_model="SDXL-Turbo",  # Good balance of speed/quality
+        )
+
+        # Initialize VLM tools (auto-registers tools)
+        self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
+
+    def _register_tools(self):
+        """Required abstract method - tools already registered above."""
+        pass
+
+    def _get_system_prompt(self) -> str:
+        return """You generate images and create stories about them.
+
+When user requests an image with a story:
+1. Call generate_image with enhanced prompt
+2. Call create_story_from_last_image to analyze and narrate
+
+You have access to:
+- generate_image: Create images with SD
+- create_story_from_last_image: Analyze last SD image, create story
+- analyze_image: Describe any image
+- create_story_from_image: Create story from any image
+- answer_question_about_image: Answer questions about images
+
+Be flexible - use tools based on what user asks for."""
+```
+
+---
+
+### Step 3: Run Your Agent
+
+Save as `image_story_agent.py`:
+
+```python
+from gaia.agents.base import Agent
+from gaia.sd import SDToolsMixin
+from gaia.vlm import VLMToolsMixin
+
+class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
+    def __init__(self, output_dir="./generated_images"):
+        super().__init__()
+        self.init_sd(output_dir=output_dir)  # Auto-registers SD tools
+        self.init_vlm()  # Auto-registers VLM tools
+
+    def _register_tools(self):
+        pass
+
+    def _get_system_prompt(self) -> str:
+        return """You generate images and create stories.
+
+When user requests image with story:
+1. generate_image with enhanced prompt
+2. create_story_from_last_image for VLM analysis + narrative
+
+Be flexible based on user request."""
+
+if __name__ == "__main__":
+    import os
+    os.makedirs("./generated_images", exist_ok=True)
+
+    agent = ImageStoryAgent()
+
+    while True:
+        user_input = input("\nYou: ").strip()
+        if user_input.lower() in ("quit", "exit"):
+            break
+
+        result = agent.process_query(user_input)
+        if result.get("final_answer"):
+            print(f"\nAgent: {result['final_answer']}\n")
+```
+
+**Run it:**
+```bash
+python image_story_agent.py
+```
+
+**Try:**
+```
+You: create a cute robot kitten with a story
+Agent: [Generates image + VLM creates story about Whiskers]
+```
+
+---
+
+## Tool Composition Pattern
+
+**Key learning:** SD-specific tool wraps generic VLM tools
+
+```python
+# In SDToolsMixin
+@tool(name="create_story_from_last_image")
+def create_story_from_last_image():
+    """SD-specific convenience - auto-finds last image."""
+
+    # Get last SD image
+    last_image = sd_generations[-1]["image_path"]
+
+    # Call generic VLM tool
+    result = _create_story_from_image(last_image, "whimsical")
+
+    # Add SD metadata
+    result["original_prompt"] = sd_generations[-1]["prompt"]
+    result["sd_model"] = sd_generations[-1]["model"]
+
+    return result
+```
+
+**This shows how domain tools can wrap generic capabilities!**
+
+---
+
+## Available Tools
+
+### From SDToolsMixin
+
+- `generate_image(prompt, model, size, steps, cfg_scale, seed)` - Generate images
+- `list_sd_models()` - Show available SD models
+- `get_generation_history(limit)` - See generated images
+- `create_story_from_last_image()` - SD-specific wrapper
+
+### From VLMToolsMixin
+
+- `analyze_image(image_path, focus)` - Detailed image description
+- `create_story_from_image(image_path, story_style)` - Story from any image
+- `answer_question_about_image(image_path, question)` - Q&A about images
+
+**Total:** 7 tools across 2 mixins
+
+---
+
+## Customization Examples
+
+### Just Images (No VLM)
+
+```python
+class FastImageAgent(Agent, SDToolsMixin):
+    def __init__(self):
+        super().__init__()
+        self.init_sd(default_model="SD-Turbo")  # Fastest (auto-registers tools)
+
+    def _register_tools(self):
+        pass
+
+    def _get_system_prompt(self):
+        return "You generate images quickly. Use generate_image tool."
+```
+
+### VLM Analysis Only
+
+```python
+from gaia.vlm import VLMToolsMixin
+
+class ImageAnalysisAgent(Agent, VLMToolsMixin):
+    def __init__(self):
+        super().__init__()
+        self.init_vlm()  # Auto-registers VLM tools
+
+    def _register_tools(self):
+        pass
+
+    def _get_system_prompt(self):
+        return "You analyze images. Use analyze_image and answer_question_about_image tools."
+```
+
+### All Three Mixins
+
+```python
+from gaia.agents.sd import SDToolsMixin
+from gaia.vlm import VLMToolsMixin
+from gaia.database import DatabaseMixin
+
+class ImageCatalogAgent(Agent, SDToolsMixin, VLMToolsMixin, DatabaseMixin):
+    def __init__(self):
+        super().__init__()
+
+        self.init_sd()
+        self.init_vlm()  # Auto-registers VLM tools
+        self.init_database("images.db")
+
+        # SD and VLM tools auto-registered above
+        self.register_database_tools()  # Database mixin still needs explicit registration
+
+    def _register_tools(self):
+        pass
+
+    def _get_system_prompt(self):
+        return """You generate images, analyze them with VLM, and catalog everything in a database.
+
+Workflow:
+1. generate_image
+2. create_story_from_last_image (VLM)
+3. execute_sql to save metadata
+
+Tools: SD generation + VLM analysis + Database storage"""
+```
+
+---
+
+## What You Learned
+
+<Steps>
+  <Step title="Multi-modal agents">
+    Combining LLM + SD + VLM in a single agent
+  </Step>
+
+  <Step title="Tool composition">
+    Domain-specific tools wrapping generic capabilities
+  </Step>
+
+  <Step title="Mixin pattern">
+    Reusable capabilities (SDToolsMixin + VLMToolsMixin)
+  </Step>
+
+  <Step title="VLM integration">
+    Image analysis and creative story generation
+  </Step>
+
+  <Step title="Flexible planning">
+    Agent chooses tools based on user request
+  </Step>
+</Steps>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Try the CLI" icon="terminal" href="/guides/sd">
+    Use `gaia sd` for quick image generation with stories
+  </Card>
+
+  <Card title="VLM Tools Reference" icon="eye" href="/sdk/mixins/tool-mixins">
+    Learn more about VLMToolsMixin capabilities
+  </Card>
+
+  <Card title="Full SD Agent Plan" icon="map" href="/plans/image-agent">
+    Future: VLM evaluation, iterative refinement, quality scoring
+  </Card>
+
+  <Card title="Agent System" icon="robot" href="/sdk/core/agent-system">
+    Deep dive into GAIA architecture
+  </Card>
+</CardGroup>

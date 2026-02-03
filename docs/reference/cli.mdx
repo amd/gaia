@@ -64,6 +64,7 @@ GAIA provides a comprehensive command-line interface (CLI) for interacting with 
 Initialize GAIA with a single command: installs Lemonade Server and downloads required models.
 
 <video
+  controls
   autoPlay
   loop
   muted
@@ -83,6 +84,7 @@ gaia init [OPTIONS]
 | `--profile, -p` | string | chat | Profile to initialize (minimal, chat, code, rag, all) |
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
 | `--skip-models` | flag | false | Skip model downloads (only install Lemonade) |
+| `--skip-lemonade` | flag | false | Skip Lemonade installation check (for CI with pre-installed Lemonade) |
 | `--force-reinstall` | flag | false | Force reinstall even if compatible version exists |
 | `--force-models` | flag | false | Force re-download models (deletes then re-downloads each model) |
 | `--yes, -y` | flag | false | Skip confirmation prompts (non-interactive) |
@@ -515,6 +517,61 @@ gaia blender --example 2
 ```
 
 [→ Full Blender Agent Documentation](/guides/blender)
+
+---
+
+### SD Command
+
+<Card title="Image Generation" icon="image" href="/guides/sd">
+  Generate images using Stable Diffusion on Ryzen AI
+</Card>
+
+```bash
+gaia sd <prompt> [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `prompt` | string | - | Text description of the image to generate |
+| `-i, --interactive` | flag | false | Run in interactive mode |
+| `--sd-model` | string | SD-Turbo | Model: SD-Turbo (fast, default), SDXL-Turbo, SDXL-Base-1.0 (photorealistic), SD-1.5 |
+| `--size` | string | auto | Image size: 512x512, 768x768, 1024x1024 (auto-selected per model) |
+| `--steps` | integer | auto | Inference steps (auto: 4 for Turbo, 20 for Base) |
+| `--cfg-scale` | float | auto | CFG scale (auto: 1.0 for Turbo, 7.5 for Base) |
+| `--output-dir` | path | .gaia/cache/sd/images | Directory to save images |
+| `--seed` | integer | random | Seed for reproducibility |
+| `--no-open` | flag | false | Skip prompt to open image in viewer |
+
+**Examples:**
+
+Fast generation with default (SD-Turbo, ~13s):
+```bash
+gaia sd "a sunset over mountains"
+```
+
+Better quality with SDXL-Turbo (~17s):
+```bash
+gaia sd "cyberpunk city at night" --sd-model SDXL-Turbo
+```
+
+Photorealistic with SDXL-Base-1.0 (slow, ~9min):
+```bash
+gaia sd "portrait, photorealistic, detailed" --sd-model SDXL-Base-1.0
+```
+
+For automation (no prompts):
+```bash
+gaia sd "test image" --no-open
+```
+
+Interactive mode:
+```bash
+gaia sd -i
+```
+
+[→ Full Image Generation Documentation](/guides/sd)
 
 ---
 

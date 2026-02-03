@@ -338,9 +338,13 @@ def check_imports() -> CheckResult:
             False,
         ),
         ("from", "gaia.agents.routing", "RoutingAgent", "Routing agent", False),
+        ("from", "gaia.agents.sd", "SDAgent", "SD agent", False),
         # Database
         ("from", "gaia.database", "DatabaseAgent", "Database agent", False),
         ("from", "gaia.database", "DatabaseMixin", "Database mixin", False),
+        # SD and VLM Mixins
+        ("from", "gaia.sd", "SDToolsMixin", "SD tools mixin", False),
+        ("from", "gaia.vlm", "VLMToolsMixin", "VLM tools mixin", False),
         # Utilities
         ("from", "gaia.utils", "FileWatcher", "File watcher", False),
         ("from", "gaia.utils", "FileWatcherMixin", "File watcher mixin", False),
