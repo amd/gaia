@@ -274,10 +274,27 @@ Now add three methods to the class:
         pass
 
     def _get_system_prompt(self) -> str:
-        # Compose system prompt from mixin-provided fragments
-        # SDToolsMixin provides SD-specific prompt engineering guidelines
-        # Tool schemas are automatically injected by Agent base class
+        # Composable system prompts: mixins provide domain knowledge
+        # SDToolsMixin.get_sd_system_prompt() returns research-backed SD guidelines
+        # Agent base class auto-composes: mixin prompts + this return value
         return self.get_sd_system_prompt()
+```
+
+**What's happening with system prompts:**
+
+The Agent base class automatically composes the final system prompt:
+1. Calls `_get_mixin_prompts()` → Gets `[sd_prompt]` from SDToolsMixin
+2. Calls `_get_system_prompt()` → Your custom additions (we just return the SD prompt here)
+3. Combines them into the final prompt sent to the LLM
+
+You can also extend instead of replace:
+```python
+def _get_system_prompt(self) -> str:
+    return ""  # Use only SD mixin prompt (automatic)
+
+# OR add custom instructions:
+def _get_system_prompt(self) -> str:
+    return "Additional: Always save metadata to logs"  # Appended to SD prompt
 ```
 
 ---

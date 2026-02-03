@@ -150,6 +150,7 @@ When you call `super().__init__()`, Python follows this order to initialize each
 
 **`SDToolsMixin` (from `gaia.sd`)**
 - `init_sd()` - Initialize SD capabilities
+- `get_sd_system_prompt()` - Returns SD prompt engineering guidelines
 - `self.sd_client` - LemonadeClient for SD API calls
 - `self.sd_generations` - List tracking generated images
 - Auto-registered tools:
@@ -159,6 +160,7 @@ When you call `super().__init__()`, Python follows this order to initialize each
 
 **`VLMToolsMixin` (from `gaia.vlm`)**
 - `init_vlm()` - Initialize VLM capabilities
+- `get_vlm_system_prompt()` - Returns VLM usage guidelines
 - `self.vlm_client` - VLMClient for vision analysis
 - Auto-registered tools:
   - `analyze_image()`
@@ -345,6 +347,123 @@ The `@tool` decorator does the heavy lifting:
 1. Wraps the function
 2. Adds it to the global `_TOOL_REGISTRY`
 3. Makes it available to the LLM
+
+---
+
+## Composable System Prompts
+
+GAIA uses **composable system prompts** - mixins provide domain knowledge that automatically composes based on inheritance.
+
+### The Pattern
+
+**Mixins provide prompt fragments:**
+```python
+# In SDToolsMixin (src/gaia/sd/mixin.py)
+def get_sd_system_prompt(self) -> str:
+    """Return SD-specific prompt engineering guidelines."""
+    from gaia.sd.prompts import BASE_GUIDELINES, MODEL_SPECIFIC_PROMPTS, WORKFLOW_INSTRUCTIONS
+
+    model_specific = MODEL_SPECIFIC_PROMPTS.get(self.sd_default_model)
+    return BASE_GUIDELINES + model_specific + WORKFLOW_INSTRUCTIONS
+```
+
+**Agent base class auto-composes:**
+```python
+# In Agent base class (src/gaia/agents/base/agent.py)
+def _compose_system_prompt(self) -> str:
+    """Automatically compose from mixins + agent custom."""
+    parts = []
+
+    # Collect from mixins
+    parts.extend(self._get_mixin_prompts())  # Checks for get_*_system_prompt()
+
+    # Add agent custom
+    custom = self._get_system_prompt()
+    if custom:
+        parts.append(custom)
+
+    return "\n\n".join(p for p in parts if p)
+```
+
+### Usage Patterns
+
+**Pattern 1: Use mixin prompts as-is**
+```python
+class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
+    def _get_system_prompt(self) -> str:
+        return ""  # Empty = use only mixin prompts (fully automatic)
+```
+Result: `sd_prompt + vlm_prompt` (auto-composed)
+
+**Pattern 2: Return mixin prompt explicitly**
+```python
+def _get_system_prompt(self) -> str:
+    return self.get_sd_system_prompt()  # Explicit but same result
+```
+Result: Same as Pattern 1 (automatic composition still happens)
+
+**Pattern 3: Extend mixin prompts**
+```python
+def _get_system_prompt(self) -> str:
+    return "Additional: Save all images to database"  # Appended after mixin prompts
+```
+Result: `sd_prompt + vlm_prompt + custom`
+
+**Pattern 4: Modify mixin prompts**
+```python
+def _get_mixin_prompts(self) -> list[str]:
+    prompts = super()._get_mixin_prompts()  # Get [sd_prompt, vlm_prompt]
+
+    # Modify SD prompt to use serious tone
+    if prompts and len(prompts) > 0:
+        prompts[0] = prompts[0].replace("whimsical", "professional")
+
+    return prompts
+
+def _get_system_prompt(self) -> str:
+    return ""  # Use modified mixin prompts
+```
+Result: `modified_sd_prompt + vlm_prompt`
+
+**Pattern 5: Custom composition order**
+```python
+def _compose_system_prompt(self) -> str:
+    # Put custom instructions FIRST, then mixin prompts
+    parts = [
+        self._get_system_prompt(),   # Agent custom first
+        *self._get_mixin_prompts(),  # Mixins after
+    ]
+    return "\n\n".join(p for p in parts if p)
+```
+Result: `custom + sd_prompt + vlm_prompt`
+
+### Debugging System Prompts
+
+See what prompt the LLM receives:
+
+```python
+# View final composed prompt
+print(agent.system_prompt)
+
+# View mixin prompts separately
+print(agent._get_mixin_prompts())
+
+# View agent custom separately
+print(agent._get_system_prompt())
+
+# Enable prompt display on startup
+agent = ImageStoryAgent()
+agent.show_prompts = True  # Prints system prompt during initialization
+```
+
+### Why Composable Prompts Matter
+
+1. **Mixins own domain knowledge** - SD mixin knows SD prompt engineering
+2. **Agents inherit automatically** - No manual prompt assembly
+3. **Easy to extend** - Just return custom additions
+4. **Easy to modify** - Override `_get_mixin_prompts()` to tweak
+5. **Debuggable** - Call methods separately to inspect
+6. **Backwards compatible** - Old agents without mixins work unchanged
 
 ---
 
