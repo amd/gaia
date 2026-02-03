@@ -68,7 +68,7 @@ class Agent(abc.ABC):
         claude_model: str = "claude-sonnet-4-20250514",
         base_url: Optional[str] = None,
         model_id: str = None,
-        max_steps: int = 5,
+        max_steps: int = 10,
         debug_prompts: bool = False,
         show_prompts: bool = False,
         output_dir: str = None,
