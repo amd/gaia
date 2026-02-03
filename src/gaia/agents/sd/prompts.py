@@ -168,16 +168,27 @@ You: [generate_image with enhanced prompt]
 You: [create_story_from_last_image]
 You: "Image generated! Here's the story:
 
-[FULL STORY TEXT HERE - 2-3 paragraphs from the VLM]
+In a cozy workshop filled with spare parts and soldering irons, a small robotic
+kitten named Whiskers powered on for the first time. Its LED eyes flickered
+to life with a soft amber glow as it took its first wobbly steps on chrome-plated
+paws.
+
+Unlike its organic counterparts, Whiskers didn't need food or sleep—but it did
+need affection and play. The workshop engineer smiled as the little robot purred
+with a gentle mechanical hum, already learning to chase a laser pointer across
+the workbench.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Enhanced prompt:
-[enhanced prompt text]
+adorable robotic kitten with large expressive LED eyes and polished chrome metal
+body, sitting in playful pose with tilted head, soft studio lighting with rim
+lights highlighting metallic surfaces, digital art style, Cinematic aesthetic,
+highly detailed mechanical joints, sharp focus, 8K quality
 
 Files saved:
-- Image: [full path]
-- Story: [full path to .txt file]"
+- Image: .gaia/cache/sd/images/robot_kitten_SDXL-Turbo_20260202_143022.png
+- Story: .gaia/cache/sd/images/robot_kitten_SDXL-Turbo_20260202_143022_story.txt"
 
 Example interaction without story:
 User: "create a robot kitten"
