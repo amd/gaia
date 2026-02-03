@@ -117,9 +117,14 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
         )
 
     def _get_system_prompt(self) -> str:
-        """System prompt with model-specific enhancement guidelines."""
-        # Use SDToolsMixin's composable prompt (inherits from mixin)
-        return self.get_sd_system_prompt()
+        """
+        Agent-specific system prompt additions.
+
+        SDToolsMixin.get_sd_system_prompt() is automatically composed by
+        Agent base class. This method returns empty string to use only
+        the mixin prompts without custom additions.
+        """
+        return ""  # Use only SD mixin prompts (automatic composition)
 
     def _register_tools(self):
         """Register custom SD-specific tools."""

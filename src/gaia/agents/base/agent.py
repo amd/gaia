@@ -288,20 +288,31 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
         return "\n\n".join(p for p in parts if p)
 
-    @abc.abstractmethod
     def _get_system_prompt(self) -> str:
         """
         Return agent-specific system prompt additions.
 
-        When using mixins that provide prompts (e.g., SDToolsMixin), you can:
-        - Return "" to use only mixin prompts
+        Default implementation returns empty string (use only mixin prompts).
+        Override this method to add custom instructions.
+
+        When using mixins that provide prompts (e.g., SDToolsMixin):
+        - Return "" to use only mixin prompts (default behavior)
         - Return custom instructions to append to mixin prompts
-        - Override _compose_system_prompt() for full control
+        - Override _compose_system_prompt() for full control over composition
 
         Returns:
-            Agent-specific system prompt (can be empty string)
+            Agent-specific system prompt (empty string by default)
+
+        Example:
+            # Use only mixin prompts (default)
+            def _get_system_prompt(self) -> str:
+                return ""
+
+            # Add custom instructions
+            def _get_system_prompt(self) -> str:
+                return "Always save metadata to logs"
         """
-        raise NotImplementedError("Subclasses must implement _get_system_prompt")
+        return ""  # Default: use only mixin prompts
 
     def _create_console(self):
         """
