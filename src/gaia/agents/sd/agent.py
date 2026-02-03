@@ -13,11 +13,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.sd.prompts import (
-    BASE_GUIDELINES,
-    MODEL_SPECIFIC_PROMPTS,
-    WORKFLOW_INSTRUCTIONS,
-)
 from gaia.logger import get_logger
 from gaia.sd import SDToolsMixin
 from gaia.vlm import VLMToolsMixin
@@ -123,12 +118,8 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
 
     def _get_system_prompt(self) -> str:
         """System prompt with model-specific enhancement guidelines."""
-        # Get model-specific prompt from prompts.py
-        model_specific = MODEL_SPECIFIC_PROMPTS.get(
-            self.config.sd_model, MODEL_SPECIFIC_PROMPTS["SD-1.5"]
-        )
-
-        return BASE_GUIDELINES + model_specific + WORKFLOW_INSTRUCTIONS
+        # Use SDToolsMixin's composable prompt (inherits from mixin)
+        return self.get_sd_system_prompt()
 
     def _register_tools(self):
         """Register custom SD-specific tools."""

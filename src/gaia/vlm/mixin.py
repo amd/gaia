@@ -309,6 +309,30 @@ class VLMToolsMixin:
                 "question": question,
             }
 
+    def get_vlm_system_prompt(self) -> str:
+        """
+        Get VLM-specific system prompt fragment for composition.
+
+        Returns basic VLM usage guidelines that agents can compose into
+        their full system prompt. VLM tools are generic and self-documenting,
+        so this prompt is minimal.
+
+        Returns:
+            VLM usage guidelines (optional - tools are self-documenting)
+
+        Example:
+            def _get_system_prompt(self) -> str:
+                vlm_prompt = self.get_vlm_system_prompt()
+                return vlm_prompt  # Or compose with other prompts
+        """
+        return """Vision tools are available for image analysis. Use them when users ask about images:
+
+- analyze_image(): For detailed descriptions (composition, colors, mood, style)
+- create_story_from_image(): For creative narratives (2-3 paragraphs)
+- answer_question_about_image(): For specific questions about image content
+
+Tool schemas provide full parameter details. Be flexible based on user needs."""
+
     def cleanup_vlm(self) -> None:
         """
         Cleanup VLM resources.

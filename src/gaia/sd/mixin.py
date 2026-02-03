@@ -503,7 +503,7 @@ class SDToolsMixin:
                 custom = "Additional custom instructions..."
                 return sd_prompt + "\n\n" + custom
         """
-        from gaia.agents.sd.prompts import (
+        from gaia.sd.prompts import (
             BASE_GUIDELINES,
             MODEL_SPECIFIC_PROMPTS,
             WORKFLOW_INSTRUCTIONS,

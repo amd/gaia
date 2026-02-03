@@ -2,13 +2,6 @@
 # SPDX-License-Identifier: MIT
 
 """
-DEPRECATED: System prompts moved to src/gaia/sd/prompts.py
-
-This file is deprecated. Import from gaia.sd.prompts instead:
-    from gaia.sd.prompts import BASE_GUIDELINES, MODEL_SPECIFIC_PROMPTS, WORKFLOW_INSTRUCTIONS
-
-Or use SDToolsMixin.get_sd_system_prompt() for automatic composition.
-
 System prompts for SD Agent with research-backed prompt engineering strategies.
 
 Research Sources (2026):
