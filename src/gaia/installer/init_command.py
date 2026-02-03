@@ -534,7 +534,9 @@ class InitCommand:
             min_version_required = profile_config.get("min_lemonade_version", "9.0.0")
             from packaging import version as pkg_version
 
-            needs_upgrade = pkg_version.parse(current_ver) < pkg_version.parse(min_version_required)
+            needs_upgrade = pkg_version.parse(current_ver) < pkg_version.parse(
+                min_version_required
+            )
 
             # In CI mode (--yes), auto-upgrade if needed for this profile
             if self.yes and not self.force_reinstall:
@@ -551,7 +553,9 @@ class InitCommand:
                         self._print_warning(
                             f"Profile '{self.profile}' requires Lemonade v{min_version_required}+"
                         )
-                        self._print(f"   Upgrading from v{current_ver} to v{target_ver}...")
+                        self._print(
+                            f"   Upgrading from v{current_ver} to v{target_ver}..."
+                        )
                     return self._upgrade_lemonade(current_ver)
                 else:
                     self._print_success(
