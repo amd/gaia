@@ -295,16 +295,11 @@ Now add three methods to the class:
             return result
 
     def _get_system_prompt(self) -> str:
-        # Extend SD mixin prompts with custom instructions
-        # The base SD prompt teaches proper image generation
-        # We add instructions about our custom story tool
+        # Add custom instructions (mixin prompts are auto-composed)
+        # Only explain what's NEW/CUSTOM, not what mixins already provide
         return """
-Custom tool available:
-- create_story_about_image: Creates adventure-style stories with custom metadata
-
-Use generate_image from SD mixin for images.
-Use analyze_image from VLM mixin for descriptions.
-Use create_story_about_image (custom) for adventure stories."""
+When creating stories about images, prefer the custom create_story_about_image tool
+which automatically uses adventure style and tracks metadata."""
 ```
 
 **What's happening with system prompts:**
@@ -389,16 +384,11 @@ class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
             return result
 
     def _get_system_prompt(self) -> str:
-        # Extend SD mixin prompts with custom instructions
-        # The base SD prompt teaches proper image generation
-        # We add instructions about our custom story tool
+        # Add custom instructions (mixin prompts are auto-composed)
+        # Only explain what's NEW/CUSTOM, not what mixins already provide
         return """
-Custom tool available:
-- create_story_about_image: Creates adventure-style stories with custom metadata
-
-Use generate_image from SD mixin for images.
-Use analyze_image from VLM mixin for descriptions.
-Use create_story_about_image (custom) for adventure stories."""
+When creating stories about images, prefer the custom create_story_about_image tool
+which automatically uses adventure style and tracks metadata."""
 
 
 if __name__ == "__main__":
