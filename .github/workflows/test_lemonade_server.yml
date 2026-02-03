@@ -76,14 +76,16 @@ jobs:
           echo      Lemonade Smoke Test via gaia init --profile minimal
           echo ================================================================
           echo This validates:
-          echo   1. Lemonade Server installation and startup
+          echo   1. Lemonade Server startup (using existing version)
           echo   2. Model download (Qwen3-4B-Instruct-2507-GGUF - cached if available)
           echo   3. Health endpoint
           echo   4. Basic LLM inference
           echo.
+          echo Note: Using --skip-lemonade to avoid MSI upgrade (works with v9.0.4+)
+          echo.
 
-          REM Use --yes for silent install, --verbose for detailed output
-          gaia init --profile minimal --yes --verbose
+          REM Use --skip-lemonade to avoid MSI hang, --yes for auto-confirm
+          gaia init --profile minimal --yes --skip-lemonade --verbose
 
           echo.
           echo ================================================================
