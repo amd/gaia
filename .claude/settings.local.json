@@ -65,6 +65,7 @@
       "mcp__MCP_DOCKER__create_relations",
       "mcp__MCP_DOCKER__fetch",
       "mcp__MCP_DOCKER__get-library-docs",
+      "mcp__MCP_DOCKER__mcp-find",
       "mcp__MCP_DOCKER__perplexity_ask",
       "mcp__MCP_DOCKER__perplexity_research",
       "mcp__MCP_DOCKER__resolve-library-id",
