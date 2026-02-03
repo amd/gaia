@@ -154,7 +154,8 @@ class Agent(abc.ABC):
             self.console = self._create_console()
 
         # Initialize LLM client for local model
-        self.system_prompt = self._get_system_prompt()
+        # Compose system prompt from mixins + agent custom
+        self.system_prompt = self._compose_system_prompt()
 
         # Register tools for this agent
         self._register_tools()
@@ -220,11 +221,85 @@ You must respond ONLY in valid JSON. No text before { or after }.
         if self.show_prompts:
             self.console.print_prompt(self.system_prompt, "Initial System Prompt")
 
+    def _get_mixin_prompts(self) -> list[str]:
+        """
+        Auto-collect system prompt fragments from inherited mixins.
+
+        Checks for mixin methods following the pattern: get_*_system_prompt()
+        Override this method to modify, reorder, or filter mixin prompts.
+
+        Returns:
+            List of prompt fragments from mixins (empty list if no mixins provide prompts)
+
+        Example:
+            def _get_mixin_prompts(self) -> list[str]:
+                prompts = super()._get_mixin_prompts()
+                # Modify SD prompt
+                if prompts:
+                    prompts[0] = prompts[0].replace("whimsical", "serious")
+                return prompts
+        """
+        prompts = []
+
+        # Check for SD mixin prompts
+        if hasattr(self, "get_sd_system_prompt"):
+            fragment = self.get_sd_system_prompt()
+            if fragment:
+                prompts.append(fragment)
+
+        # Check for VLM mixin prompts
+        if hasattr(self, "get_vlm_system_prompt"):
+            fragment = self.get_vlm_system_prompt()
+            if fragment:
+                prompts.append(fragment)
+
+        # Add more mixin checks here as new prompt-providing mixins are created
+
+        return prompts
+
+    def _compose_system_prompt(self) -> str:
+        """
+        Compose final system prompt from mixin fragments + agent custom.
+
+        Override this method for complete control over prompt composition order.
+
+        Returns:
+            Composed system prompt string
+
+        Example:
+            def _compose_system_prompt(self) -> str:
+                # Custom composition order
+                parts = [
+                    "Base instructions first",
+                    *self._get_mixin_prompts(),
+                    self._get_system_prompt(),
+                ]
+                return "\n\n".join(p for p in parts if p)
+        """
+        parts = []
+
+        # Add mixin prompts first
+        parts.extend(self._get_mixin_prompts())
+
+        # Add agent-specific prompt
+        custom = self._get_system_prompt()
+        if custom:
+            parts.append(custom)
+
+        return "\n\n".join(p for p in parts if p)
+
     @abc.abstractmethod
     def _get_system_prompt(self) -> str:
         """
-        Generate the system prompt for the agent.
-        Subclasses must implement this to provide domain-specific prompts.
+        Return agent-specific system prompt additions.
+
+        When using mixins that provide prompts (e.g., SDToolsMixin), you can:
+        - Return "" to use only mixin prompts
+        - Return custom instructions to append to mixin prompts
+        - Override _compose_system_prompt() for full control
+
+        Returns:
+            Agent-specific system prompt (can be empty string)
         """
         raise NotImplementedError("Subclasses must implement _get_system_prompt")
 
