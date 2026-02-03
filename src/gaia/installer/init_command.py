@@ -42,6 +42,7 @@ INIT_PROFILES = {
         "agent": "minimal",
         "models": ["Qwen3-4B-Instruct-2507-GGUF"],  # Override default minimal model
         "approx_size": "~2.5 GB",
+        "min_lemonade_version": "9.0.4",
     },
     "sd": {
         "description": "Image generation with multi-modal AI (LLM + SD + VLM)",
@@ -52,30 +53,35 @@ INIT_PROFILES = {
             "Qwen3-VL-4B-Instruct-GGUF",  # Vision analysis + stories (3.2GB)
         ],
         "approx_size": "~15 GB",
+        "min_lemonade_version": "9.2.0",  # SDXL-Turbo requires v9.2.0+
     },
     "chat": {
         "description": "Interactive chat with RAG and vision support",
         "agent": "chat",
         "models": None,  # Use agent profile defaults
         "approx_size": "~25 GB",
+        "min_lemonade_version": "9.0.4",
     },
     "code": {
         "description": "Autonomous coding assistant",
         "agent": "code",
         "models": None,
         "approx_size": "~18 GB",
+        "min_lemonade_version": "9.0.4",
     },
     "rag": {
         "description": "Document Q&A with retrieval",
         "agent": "rag",
         "models": None,
         "approx_size": "~25 GB",
+        "min_lemonade_version": "9.0.4",
     },
     "all": {
         "description": "All models for all agents",
         "agent": "all",
         "models": None,
         "approx_size": "~26 GB",
+        "min_lemonade_version": "9.2.0",  # Includes SD, so needs v9.2.0+
     },
 }
 
@@ -523,25 +529,33 @@ class InitCommand:
                     self._print("   This may cause compatibility issues.")
             self._print("")
 
-            # Check if upgrade is required for this profile
-            # SD profile requires v9.2.0+ (for SDXL-Turbo model support)
-            # Other profiles can use v9.0.4+
-            min_version_for_profile = "9.2.0" if self.profile == "sd" else "9.0.0"
+            # Check if upgrade is required based on profile's minimum version
+            profile_config = INIT_PROFILES[self.profile]
+            min_version_required = profile_config.get("min_lemonade_version", "9.0.0")
             from packaging import version as pkg_version
 
-            needs_upgrade = pkg_version.parse(current_ver) < pkg_version.parse(min_version_for_profile)
+            needs_upgrade = pkg_version.parse(current_ver) < pkg_version.parse(min_version_required)
 
             # In CI mode (--yes), auto-upgrade if needed for this profile
             if self.yes and not self.force_reinstall:
                 if needs_upgrade:
-                    self._print_warning(
-                        f"Profile '{self.profile}' requires v{min_version_for_profile}+"
-                    )
-                    self._print(f"   [dim]Auto-upgrading from v{current_ver} to v{target_ver}...[/dim]")
+                    self._print("")
+                    if RICH_AVAILABLE and self.console:
+                        self.console.print(
+                            f"   [yellow]⚠️  Profile '{self.profile}' requires Lemonade v{min_version_required}+[/yellow]"
+                        )
+                        self.console.print(
+                            f"   [bold cyan]Upgrading:[/bold cyan] v{current_ver} → v{target_ver}"
+                        )
+                    else:
+                        self._print_warning(
+                            f"Profile '{self.profile}' requires Lemonade v{min_version_required}+"
+                        )
+                        self._print(f"   Upgrading from v{current_ver} to v{target_ver}...")
                     return self._upgrade_lemonade(current_ver)
                 else:
-                    self._print_warning(
-                        f"Continuing with installed version (v{current_ver} sufficient for profile '{self.profile}')"
+                    self._print_success(
+                        f"Version v{current_ver} is sufficient for profile '{self.profile}'"
                     )
                     return True
 
