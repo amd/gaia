@@ -273,16 +273,21 @@ Now add three methods to the class:
         from gaia.agents.base.tools import tool
 
         @tool(name="create_story_about_image")
-        def create_story_about_image(image_path: str) -> dict:
+        def create_story_about_image(image_path: str, story_style: str = None) -> dict:
             """
             Create an adventure story about an image with metadata tracking.
 
             Wraps VLMToolsMixin's generic create_story_from_image() to add:
-            - Fixed adventure style (specialized vs. parameterized)
-            - Custom metadata for tracking agent/style
+            - Always uses adventure style (story_style param accepted but ignored)
+            - Adds custom metadata for tracking
             - Could extend with: DB saving, markdown formatting, etc.
+
+            Args:
+                image_path: Path to the image file
+                story_style: Accepted for compatibility but ignored (always uses adventure)
             """
-            # Call VLM mixin's internal method (available via inheritance)
+            # Call VLM mixin's internal method with fixed adventure style
+            # (ignoring story_style parameter - always adventure)
             result = self._create_story_from_image(image_path, story_style="adventure")
 
             # Extend with custom metadata
@@ -362,16 +367,21 @@ class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
         from gaia.agents.base.tools import tool
 
         @tool(name="create_story_about_image")
-        def create_story_about_image(image_path: str) -> dict:
+        def create_story_about_image(image_path: str, story_style: str = None) -> dict:
             """
             Create an adventure story about an image with metadata tracking.
 
             Wraps VLMToolsMixin's generic create_story_from_image() to add:
-            - Fixed adventure style (specialized vs. parameterized)
-            - Custom metadata for tracking agent/style
+            - Always uses adventure style (story_style param accepted but ignored)
+            - Adds custom metadata for tracking
             - Could extend with: DB saving, markdown formatting, etc.
+
+            Args:
+                image_path: Path to the image file
+                story_style: Accepted for compatibility but ignored (always uses adventure)
             """
-            # Call VLM mixin's internal method (available via inheritance)
+            # Call VLM mixin's internal method with fixed adventure style
+            # (ignoring story_style parameter - always adventure)
             result = self._create_story_from_image(image_path, story_style="adventure")
 
             # Extend with custom metadata
