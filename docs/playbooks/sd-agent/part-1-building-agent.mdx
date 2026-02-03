@@ -34,9 +34,9 @@ Your agent orchestrates three different AI models through a unified interface:
 
 | Model | Role | Endpoint | Hardware | Context |
 |-------|------|----------|----------|---------|
-| **Qwen3-8B-GGUF** | Reasoning engine | `POST /v1/chat/completions` | NPU/GPU | 8K tokens |
-| **SDXL-Turbo** | Image generation | `POST /images/generations` | GPU | N/A |
-| **Qwen3-VL-4B-Instruct-GGUF** | Vision analysis | `POST /v1/chat/completions` (with images) | NPU/GPU | 8K tokens |
+| **Qwen3-8B-GGUF** | Reasoning engine | `POST /v1/chat/completions` | iGPU (Radeon) | 8K tokens |
+| **SDXL-Turbo** | Image generation | `POST /images/generations` | CPU | N/A |
+| **Qwen3-VL-4B-Instruct-GGUF** | Vision analysis | `POST /v1/chat/completions` (with images) | iGPU (Radeon) | 8K tokens |
 
 **How it works:**
 1. Your agent's `process_query()` method sends user input to the **LLM**
@@ -46,7 +46,11 @@ Your agent orchestrates three different AI models through a unified interface:
    - `create_story_from_image()` → HTTP POST to Lemonade `/v1/chat/completions` with image → Returns story text
 4. LLM synthesizes final answer combining all results
 
-**Model formats:** LLMs use GGUF quantization (Qwen3-8B, Qwen3-VL-4B), SD uses safetensors (SDXL-Turbo). All optimized for AMD hardware acceleration (NPU/GPU). Total memory: ~15GB loaded.
+**Model formats and acceleration:**
+- GGUF models (Qwen3-8B, Qwen3-VL-4B) → Run on **iGPU (Radeon)** via Vulkan
+- Safetensors model (SDXL-Turbo) → Currently runs on **CPU** (GPU acceleration planned)
+
+Total memory: ~15GB loaded.
 
 **What you'll be able to do:**
 
@@ -143,13 +147,22 @@ Plus all the `Agent` base class state (tool registry, conversation history, LLM 
   <Step title="Create virtual environment">
     ```bash
     uv venv
-    source .venv/bin/activate
     ```
 
-    On Windows:
-    ```bash
-    .venv\Scripts\activate
-    ```
+    Activate the environment:
+
+    <Tabs>
+      <Tab title="Linux / macOS">
+        ```bash
+        source .venv/bin/activate
+        ```
+      </Tab>
+      <Tab title="Windows">
+        ```bash
+        .venv\Scripts\activate
+        ```
+      </Tab>
+    </Tabs>
   </Step>
 
   <Step title="Install GAIA">
@@ -172,7 +185,9 @@ Plus all the `Agent` base class state (tool registry, conversation history, LLM 
        - **Qwen3-VL-4B-Instruct-GGUF** (3.2GB) - Vision LLM in quantized GGUF format
     4. Verifies the setup is working
 
-    All models are optimized for AMD hardware (NPU/GPU acceleration).
+    **Hardware acceleration:**
+    - GGUF models run on iGPU (Radeon integrated graphics) via Vulkan
+    - SDXL-Turbo currently runs on CPU (GPU acceleration planned)
 
     <video
       controls
