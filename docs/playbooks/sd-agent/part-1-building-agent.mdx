@@ -268,16 +268,40 @@ Now add three methods to the class:
         self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
 
     def _register_tools(self):
-        # Required abstract method from Agent base class
-        # Mixins already registered their tools in init_sd() and init_vlm()
-        # Only implement this if you need custom tools beyond what mixins provide
-        pass
+        # Add custom tools that build on mixin capabilities
+        # This demonstrates the wrapper pattern: custom tools using mixin tools
+        from gaia.agents.base.tools import tool
+
+        @tool(name="create_story_about_image")
+        def create_story_about_image(image_path: str) -> dict:
+            """
+            Create a story about an image with custom formatting.
+
+            This wraps VLMToolsMixin's create_story_from_image with custom behavior.
+            """
+            # Use VLM mixin's tool to get the story
+            result = self._create_story_from_image(image_path, story_style="adventure")
+
+            # Add custom formatting or metadata
+            if result.get("status") == "success":
+                result["custom_metadata"] = {
+                    "agent": "ImageStoryAgent",
+                    "style": "adventure",
+                }
+
+            return result
 
     def _get_system_prompt(self) -> str:
-        # Composable system prompts: mixins provide domain knowledge
-        # SDToolsMixin.get_sd_system_prompt() returns research-backed SD guidelines
-        # Agent base class auto-composes: mixin prompts + this return value
-        return self.get_sd_system_prompt()
+        # Extend SD mixin prompts with custom instructions
+        # The base SD prompt teaches proper image generation
+        # We add instructions about our custom story tool
+        return """
+Custom tool available:
+- create_story_about_image: Creates adventure-style stories with custom metadata
+
+Use generate_image from SD mixin for images.
+Use analyze_image from VLM mixin for descriptions.
+Use create_story_about_image (custom) for adventure stories."""
 ```
 
 **What's happening with system prompts:**
@@ -333,16 +357,40 @@ class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
         self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
 
     def _register_tools(self):
-        # Required abstract method from Agent base class
-        # Mixins already registered their tools in init_sd() and init_vlm()
-        # Only implement this if you need custom tools beyond what mixins provide
-        pass
+        # Add custom tools that build on mixin capabilities
+        # This demonstrates the wrapper pattern: custom tools using mixin tools
+        from gaia.agents.base.tools import tool
+
+        @tool(name="create_story_about_image")
+        def create_story_about_image(image_path: str) -> dict:
+            """
+            Create a story about an image with custom formatting.
+
+            This wraps VLMToolsMixin's create_story_from_image with custom behavior.
+            """
+            # Use VLM mixin's tool to get the story
+            result = self._create_story_from_image(image_path, story_style="adventure")
+
+            # Add custom formatting or metadata
+            if result.get("status") == "success":
+                result["custom_metadata"] = {
+                    "agent": "ImageStoryAgent",
+                    "style": "adventure",
+                }
+
+            return result
 
     def _get_system_prompt(self) -> str:
-        # Compose system prompt from mixin-provided fragments
-        # SDToolsMixin provides SD-specific prompt engineering guidelines
-        # Tool schemas are automatically injected by Agent base class
-        return self.get_sd_system_prompt()
+        # Extend SD mixin prompts with custom instructions
+        # The base SD prompt teaches proper image generation
+        # We add instructions about our custom story tool
+        return """
+Custom tool available:
+- create_story_about_image: Creates adventure-style stories with custom metadata
+
+Use generate_image from SD mixin for images.
+Use analyze_image from VLM mixin for descriptions.
+Use create_story_about_image (custom) for adventure stories."""
 
 
 if __name__ == "__main__":
@@ -385,10 +433,15 @@ python image_story_agent.py
 
 Try these prompts:
 ```
-You: generate an image of a robot exploring ancient ruins and tell me the story of what it discovers
-You: create a sunset over mountains and write a short story about the scene
-You: make a cyberpunk street scene and describe what's happening there
+You: generate an image of a robot exploring ancient ruins and create a story about it
+You: create a sunset over mountains and tell me an adventure story
+You: make a cyberpunk street scene and describe what you see
 ```
+
+The agent will:
+- Use `generate_image()` for image creation (from SDToolsMixin)
+- Use `analyze_image()` for descriptions (from VLMToolsMixin)
+- Use `create_story_about_image()` for stories (your custom tool)
 
 ---
 
