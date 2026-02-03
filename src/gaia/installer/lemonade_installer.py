@@ -444,7 +444,30 @@ class LemonadeInstaller:
                 )
 
         except subprocess.TimeoutExpired:
-            return InstallResult(success=False, error="Installation timed out")
+            # Print MSI log to help diagnose the hang
+            error_msg = "Installation timed out (expected ~10s, hung for 60s)"
+            try:
+                if msi_log.exists():
+                    self._print_status(f"MSI log file: {msi_log}")
+                    log_content = msi_log.read_text(encoding="utf-16", errors="ignore")
+                    # Print last 100 lines of log
+                    log_lines = log_content.split("\n")
+                    relevant_lines = log_lines[-100:]
+                    log.error("=== MSI Install Log (last 100 lines) ===")
+                    for line in relevant_lines:
+                        log.error(line)
+                    log.error("=== End MSI Install Log ===")
+
+                    # Also print to console
+                    if self.console:
+                        self.console.print("\n   [red]MSI Install Log (last 50 lines):[/red]")
+                        for line in relevant_lines[-50:]:
+                            if line.strip():
+                                self.console.print(f"   [dim]{line}[/dim]")
+            except Exception as e:
+                log.debug(f"Could not read MSI log: {e}")
+
+            return InstallResult(success=False, error=error_msg)
         except FileNotFoundError:
             return InstallResult(success=False, error="msiexec not found")
         except Exception as e:

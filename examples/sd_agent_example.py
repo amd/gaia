@@ -61,7 +61,7 @@ class ImageAgent(Agent, SDToolsMixin):
         )
 
     def _register_tools(self):
-        """Required abstract method - SD tools already registered in __init__."""
+        """SD tools registered by init_sd()."""
         pass
 
     def _get_system_prompt(self) -> str:
