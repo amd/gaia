@@ -75,8 +75,8 @@ jobs:
           Write-Host ""
 
           # Let gaia init handle everything (installation, upgrade, server start, models)
-          # Use --yes for silent install and --force-reinstall to upgrade v9.0.4 -> v9.2.0
-          & gaia init --profile sd --yes --force-reinstall
+          # SD profile auto-detects v9.0.4 and upgrades to v9.2.0 for SDXL-Turbo support
+          & gaia init --profile sd --yes
 
           Write-Host ""
           Write-Host "================================================================"

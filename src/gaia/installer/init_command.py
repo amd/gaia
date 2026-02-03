@@ -523,16 +523,27 @@ class InitCommand:
                     self._print("   This may cause compatibility issues.")
             self._print("")
 
-            # In CI mode (--yes), skip upgrades unless force_reinstall is set
-            # This prevents MSI conflicts and uses the runner's cached version
+            # Check if upgrade is required for this profile
+            # SD profile requires v9.2.0+ (for SDXL-Turbo model support)
+            # Other profiles can use v9.0.4+
+            min_version_for_profile = "9.2.0" if self.profile == "sd" else "9.0.0"
+            from packaging import version as pkg_version
+
+            needs_upgrade = pkg_version.parse(current_ver) < pkg_version.parse(min_version_for_profile)
+
+            # In CI mode (--yes), auto-upgrade if needed for this profile
             if self.yes and not self.force_reinstall:
-                self._print_warning(
-                    "Continuing with installed version (CI mode - skipping upgrade)"
-                )
-                self._print(
-                    "   [dim]To force upgrade, use: gaia init --force-reinstall[/dim]"
-                )
-                return True
+                if needs_upgrade:
+                    self._print_warning(
+                        f"Profile '{self.profile}' requires v{min_version_for_profile}+"
+                    )
+                    self._print(f"   [dim]Auto-upgrading from v{current_ver} to v{target_ver}...[/dim]")
+                    return self._upgrade_lemonade(current_ver)
+                else:
+                    self._print_warning(
+                        f"Continuing with installed version (v{current_ver} sufficient for profile '{self.profile}')"
+                    )
+                    return True
 
             # Prompt user to upgrade
             if not self._prompt_yes_no(
