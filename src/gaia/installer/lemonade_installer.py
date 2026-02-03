@@ -400,16 +400,23 @@ class LemonadeInstaller:
                     capture_output=True,
                     text=True,
                     timeout=5,
-                    check=False
+                    check=False,
                 )
-                if check_result.returncode == 0 and "msiexec.exe" in check_result.stdout:
+                if (
+                    check_result.returncode == 0
+                    and "msiexec.exe" in check_result.stdout
+                ):
                     msi_count = check_result.stdout.count("msiexec.exe")
-                    log.warning(f"Found {msi_count} existing msiexec process(es) - installation may be blocked")
+                    log.warning(
+                        f"Found {msi_count} existing msiexec process(es) - installation may be blocked"
+                    )
             except Exception:
                 pass  # Skip check if tasklist fails
 
             if silent:
-                self._print_status("Running silent MSI installer (should complete in ~10 seconds)...")
+                self._print_status(
+                    "Running silent MSI installer (should complete in ~10 seconds)..."
+                )
             else:
                 self._print_status("Running MSI installer...")
 
@@ -460,7 +467,9 @@ class LemonadeInstaller:
 
                     # Also print to console
                     if self.console:
-                        self.console.print("\n   [red]MSI Install Log (last 50 lines):[/red]")
+                        self.console.print(
+                            "\n   [red]MSI Install Log (last 50 lines):[/red]"
+                        )
                         for line in relevant_lines[-50:]:
                             if line.strip():
                                 self.console.print(f"   [dim]{line}[/dim]")
