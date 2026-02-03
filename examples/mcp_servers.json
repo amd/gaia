@@ -1,13 +1,16 @@
 {
-  "servers": {
+  "mcpServers": {
     "memory": {
-      "command": "npx -y @modelcontextprotocol/server-memory"
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
     },
     "thinking": {
-      "command": "npx -y @modelcontextprotocol/server-sequential-thinking"
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
     },
     "time": {
-      "command": "uvx mcp-server-time"
+      "command": "uvx",
+      "args": ["mcp-server-time"]
     }
   }
 }

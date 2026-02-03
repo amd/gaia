@@ -1,3 +1,5 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 """Base transport interface for MCP protocol communication."""
 
 from abc import ABC, abstractmethod

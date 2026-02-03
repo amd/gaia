@@ -5938,6 +5938,8 @@ def handle_mcp_docker(args):
 
 def handle_mcp_add(args):
     """Add an MCP server connection."""
+    import shlex
+
     from gaia.mcp import MCPClientManager
     from gaia.mcp.client.config import MCPConfig
 
@@ -5946,7 +5948,14 @@ def handle_mcp_add(args):
 
     try:
         print(f"📡 Connecting to MCP server '{args.name}'...")
-        client = manager.add_server(args.name, command=args.command)
+
+        # Parse command string into config dict (Anthropic format)
+        parts = shlex.split(args.command)
+        server_config = {"command": parts[0]}
+        if len(parts) > 1:
+            server_config["args"] = parts[1:]
+
+        client = manager.add_server(args.name, server_config)
 
         tools = client.list_tools()
         print(f"✅ Successfully connected to '{args.name}'")

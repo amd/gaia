@@ -4,14 +4,13 @@ description: "Connect GAIA agents to external MCP servers and use their tools"
 ---
 
 <Info>
-  **Examples:** 
-    - [`examples/mcp_config_based_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_config_based_agent.py)
-    - [`examples/mcp_multi_server_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_multi_server_agent.py)
+  **Example:** [`examples/mcp_config_based_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_config_based_agent.py)
 </Info>
 
 <Note>
 **See Also:**
-- [SDK Reference](/sdk/sdks/mcp) - Complete API documentation and implementation details
+- [SDK Reference](/sdk/sdks/mcp) - Quick code snippets
+- [Full Specification](/spec/mcp-client) - Complete API documentation and implementation details
 </Note>
 
 ## Overview
@@ -83,33 +82,116 @@ Most MCP servers use stdio (standard input/output) via subprocess:
 <Tabs>
   <Tab title="Filesystem">
     ```python
-    agent.connect_mcp_server(
-        "filesystem",
-        "npx -y @modelcontextprotocol/server-filesystem /path/to/directory"
-    )
+    agent.connect_mcp_server("filesystem", {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/directory"]
+    })
     ```
   </Tab>
 
   <Tab title="GitHub">
     ```python
-    # Requires GITHUB_TOKEN environment variable
-    agent.connect_mcp_server(
-        "github",
-        "npx -y @modelcontextprotocol/server-github"
-    )
+        agent.connect_mcp_server("github", {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": {"GITHUB_TOKEN": "ghp_your_token_here"}
+    })
     ```
   </Tab>
 
   <Tab title="Python Servers">
     ```python
     # Python-based MCP servers (via uvx)
-    agent.connect_mcp_server(
-        "time",
-        "uvx mcp-server-time"
-    )
+    agent.connect_mcp_server("time", {
+        "command": "uvx",
+        "args": ["mcp-server-time"]
+    })
     ```
   </Tab>
 </Tabs>
+
+### Setting Up GitHub Token
+
+The GitHub MCP server requires a personal access token.
+
+**Step 1:** Create a GitHub token
+
+1. Go to GitHub → Settings → Developer settings → Personal access tokens
+2. Generate a new token with `repo` scope (or fine-grained permissions as needed)
+
+**Step 2:** Pass the token via the `env` field
+
+The new config format supports environment variables natively:
+
+```python
+agent.connect_mcp_server("github", {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": {"GITHUB_TOKEN": "ghp_your_token_here"}
+})
+```
+
+Or in a config file:
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_TOKEN": "ghp_your_token_here"
+      }
+    }
+  }
+}
+```
+
+<Note>
+The `env` field passes environment variables directly to the subprocess without shell expansion, making it secure and portable across platforms.
+</Note>
+
+## Using Configuration Files
+
+Instead of hardcoding server configs, store them in `~/.gaia/mcp_servers.json`:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/documents"]
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_TOKEN": "ghp_xxx"
+      }
+    }
+  }
+}
+```
+
+<Note>
+This format is compatible with Claude Desktop and other Anthropic tools. The `mcpServers` key, separate `command`/`args` fields, and `env` support are standard across the ecosystem.
+</Note>
+
+Load all configured servers in your agent:
+```python
+count = agent.load_mcp_servers_from_config()
+print(f"Loaded {count} servers")
+```
+
+You can also manage servers via CLI:
+```bash
+gaia mcp add filesystem '{"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]}'
+gaia mcp list
+```
 
 ## CLI Commands
 
@@ -131,133 +213,13 @@ gaia mcp remove <name>               # Remove server
 For detailed usage, parameters, and output examples, see the [CLI Reference](/reference/cli#mcp-client).
 
 
-## Troubleshooting
-
-<AccordionGroup>
-  <Accordion title="Server won't connect">
-    **Problem:** Connection fails with timeout or process error.
-
-    **Solutions:**
-    1. Verify the command works in terminal:
-       ```bash
-       echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | npx -y @modelcontextprotocol/server-filesystem /tmp
-       ```
-
-    2. Check that Node.js/npx is installed:
-       ```bash
-       node --version  # Should be 18+
-       npx --version
-       ```
-
-    3. Enable debug mode:
-       ```python
-       agent.connect_mcp_server("server", "command", debug=True)
-       ```
-  </Accordion>
-
-  <Accordion title="Tools not appearing">
-    **Problem:** MCP server connects but tools don't show up.
-
-    **Solutions:**
-    1. Check if tools were registered:
-       ```python
-       from gaia.agents.base.tools import _TOOL_REGISTRY
-       print([t for t in _TOOL_REGISTRY.keys() if t.startswith("mcp_")])
-       ```
-
-    2. Verify server has tools:
-       ```python
-       client = agent.get_mcp_client("server")
-       tools = client.list_tools()
-       print(f"Found {len(tools)} tools")
-       ```
-
-    3. Check server's capabilities:
-       ```python
-       client = agent.get_mcp_client("server")
-       print(client.server_info)
-       ```
-  </Accordion>
-
-  <Accordion title="Tool execution fails">
-    **Problem:** MCP tool raises an error when called.
-
-    **Solutions:**
-    1. Validate tool arguments:
-       ```python
-       tool = client.list_tools()[0]
-       print(f"Required params: {tool.input_schema.get('required', [])}")
-       ```
-
-    2. Test tool directly:
-       ```python
-       result = client.call_tool("tool_name", {"arg": "value"})
-       print(result)
-       ```
-
-    3. Check for errors in response:
-       ```python
-       if "error" in result:
-           print(f"Error: {result['error']}")
-       ```
-  </Accordion>
-
-  <Accordion title="Name collisions">
-    **Problem:** Two servers have tools with the same name.
-
-    **Solution:** This is handled automatically via namespacing. Tools are named `mcp_{server}_{tool}`:
-
-    ```python
-    # Two servers with "read_file" tool
-    agent.connect_mcp_server("fs1", "...")
-    agent.connect_mcp_server("fs2", "...")
-
-    # Tools are automatically namespaced:
-    # - mcp_fs1_read_file
-    # - mcp_fs2_read_file
-
-    # Descriptions include server name for LLM context:
-    # - "[MCP:fs1] Read file contents from disk"
-    # - "[MCP:fs2] Read file contents from repository"
-    ```
-  </Accordion>
-
-  <Accordion title="Process cleanup">
-    **Problem:** MCP server processes not terminating properly.
-
-    **Solution:** Ensure proper cleanup:
-
-    ```python
-    try:
-        agent = MyAgent()
-        agent.run("...")
-    finally:
-        # Disconnect all servers
-        for server in agent.list_mcp_servers():
-            agent.disconnect_mcp_server(server)
-    ```
-
-    Or use context manager:
-    ```python
-    with MyAgent() as agent:
-        agent.run("...")
-    # Automatic cleanup on exit
-    ```
-  </Accordion>
-</AccordionGroup>
-
 ## Complete Examples
 
 Working examples are available in the GAIA repository:
 
-<CardGroup cols={2}>
-  <Card title="Config-Based Agent" icon="file-code" href="https://github.com/amd/gaia/blob/main/examples/mcp_config_based_agent.py">
-    Load servers from `mcp_servers.json` - recommended for production
-  </Card>
-  <Card title="Multi-Server Agent" icon="layer-group" href="https://github.com/amd/gaia/blob/main/examples/mcp_multi_server_agent.py">
-    Connect to multiple servers programmatically
-  </Card>
-</CardGroup>
+<Card title="Config-Based Agent" icon="file-code" href="https://github.com/amd/gaia/blob/main/examples/mcp_config_based_agent.py">
+  Load servers from `mcp_servers.json` - recommended for production
+</Card>
 
 For detailed API usage and patterns, see the [SDK Reference](/sdk/sdks/mcp).
 
@@ -269,7 +231,10 @@ For detailed API usage and patterns, see the [SDK Reference](/sdk/sdks/mcp).
     Always handle connection failures gracefully:
 
     ```python
-    success = agent.connect_mcp_server("server", "command")
+    success = agent.connect_mcp_server("server", {
+        "command": "npx",
+        "args": ["-y", "@mcp/server"]
+    })
     if not success:
         print("Failed to connect, using fallback tools")
     ```
@@ -298,9 +263,9 @@ For detailed API usage and patterns, see the [SDK Reference](/sdk/sdks/mcp).
     Enable debug logging during development:
 
     ```python
-    client = MCPClient.from_command(
+    client = MCPClient.from_config(
         "server",
-        "command",
+        {"command": "npx", "args": ["-y", "@mcp/server"]},
         debug=True  # Shows detailed logs
     )
     ```

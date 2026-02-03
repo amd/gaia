@@ -1,3 +1,5 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 """MCP Client for interacting with MCP servers."""
 
 import json
@@ -78,7 +80,7 @@ class MCPClient:
     def from_command(
         cls, name: str, command: str, timeout: int = 30, debug: bool = False
     ) -> "MCPClient":
-        """Create an MCP client using stdio transport.
+        """Create an MCP client using stdio transport (legacy method).
 
         Args:
             name: Friendly name for this server
@@ -90,6 +92,39 @@ class MCPClient:
             MCPClient: Configured client instance
         """
         transport = StdioTransport(command, timeout=timeout, debug=debug)
+        return cls(name, transport, debug=debug)
+
+    @classmethod
+    def from_config(
+        cls, name: str, config: Dict[str, Any], timeout: int = 30, debug: bool = False
+    ) -> "MCPClient":
+        """Create an MCP client from a config dict (Anthropic format).
+
+        Args:
+            name: Friendly name for this server
+            config: Server configuration dict with:
+                - command (required): Base command to run
+                - args (optional): List of arguments
+                - env (optional): Environment variables dict
+            timeout: Request timeout in seconds
+            debug: Enable debug logging
+
+        Returns:
+            MCPClient: Configured client instance
+
+        Raises:
+            ValueError: If config is missing required 'command' field
+        """
+        if "command" not in config:
+            raise ValueError("Config must include 'command' field")
+
+        transport = StdioTransport(
+            command=config["command"],
+            args=config.get("args"),
+            env=config.get("env"),
+            timeout=timeout,
+            debug=debug,
+        )
         return cls(name, transport, debug=debug)
 
     def connect(self) -> bool:

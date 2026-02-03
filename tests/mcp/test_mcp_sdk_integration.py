@@ -1,3 +1,5 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 """SDK Integration tests for MCPClientManager.
 
 Tests MCPClientManager against real MCP servers - mocks nothing.
@@ -11,11 +13,20 @@ import pytest
 from gaia.mcp import MCPClientManager
 from gaia.mcp.client.config import MCPConfig
 
-# MCP server commands (no API keys required)
+# MCP server configs (Anthropic format - no API keys required)
 MCP_SERVERS = {
-    "memory": "npx -y @modelcontextprotocol/server-memory",
-    "sequential-thinking": "npx -y @modelcontextprotocol/server-sequential-thinking",
-    "time": "uvx mcp-server-time",
+    "memory": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-memory"],
+    },
+    "sequential-thinking": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+    },
+    "time": {
+        "command": "uvx",
+        "args": ["mcp-server-time"],
+    },
 }
 
 # Tool to call for each server (simple tools that verify server works)
@@ -56,8 +67,8 @@ class TestMCPSDKIntegration:
         connected = []
 
         try:
-            for name, command in MCP_SERVERS.items():
-                client = manager.add_server(name, command=command)
+            for name, server_config in MCP_SERVERS.items():
+                client = manager.add_server(name, server_config)
                 assert client is not None, f"Failed to create client for {name}"
                 assert client.is_connected(), f"{name} not connected"
                 connected.append(name)
@@ -76,8 +87,8 @@ class TestMCPSDKIntegration:
         results = {}
 
         try:
-            for name, command in MCP_SERVERS.items():
-                manager.add_server(name, command=command)
+            for name, server_config in MCP_SERVERS.items():
+                manager.add_server(name, server_config)
 
             for name, (tool_name, tool_args) in MCP_TEST_TOOLS.items():
                 client = manager.get_client(name)
@@ -99,8 +110,8 @@ class TestMCPSDKIntegration:
         manager = MCPClientManager(config=config)
 
         try:
-            for name, command in MCP_SERVERS.items():
-                client = manager.add_server(name, command=command)
+            for name, server_config in MCP_SERVERS.items():
+                client = manager.add_server(name, server_config)
                 tools = client.list_tools()
 
                 assert len(tools) > 0, f"No tools from {name}"
@@ -121,8 +132,8 @@ class TestMCPSDKIntegration:
 
         try:
             # Add all servers (config auto-saves on add)
-            for name, command in MCP_SERVERS.items():
-                manager.add_server(name, command=command)
+            for name, server_config in MCP_SERVERS.items():
+                manager.add_server(name, server_config)
 
             manager.disconnect_all()
 

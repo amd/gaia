@@ -1,3 +1,5 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 """Unit tests for MCPClient."""
 
 from unittest.mock import Mock
@@ -109,11 +111,62 @@ class TestMCPClient:
     """Test MCPClient functionality."""
 
     def test_from_command_creates_stdio_transport(self):
-        """Test that from_command factory creates stdio transport."""
+        """Test that from_command factory creates stdio transport (legacy)."""
         client = MCPClient.from_command("test", "echo test")
 
         assert client.name == "test"
         assert client.transport is not None
+
+    def test_from_config_accepts_command_and_args(self):
+        """Test that from_config accepts config dict with command and args."""
+        config = {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-github"],
+        }
+        client = MCPClient.from_config("github", config)
+
+        assert client.name == "github"
+        assert client.transport is not None
+        # Verify transport got the args
+        assert client.transport.command == "npx"
+        assert client.transport.args == ["-y", "@modelcontextprotocol/server-github"]
+
+    def test_from_config_accepts_env(self):
+        """Test that from_config passes env to transport."""
+        config = {
+            "command": "npx",
+            "args": ["-y", "server"],
+            "env": {"GITHUB_TOKEN": "ghp_xxx", "DEBUG": "1"},
+        }
+        client = MCPClient.from_config("github", config)
+
+        assert client.transport.env == {"GITHUB_TOKEN": "ghp_xxx", "DEBUG": "1"}
+
+    def test_from_config_raises_without_command(self):
+        """Test that from_config raises ValueError if command missing."""
+        config = {
+            "args": ["-y", "server"],  # Missing 'command'
+        }
+        with pytest.raises(ValueError, match="command"):
+            MCPClient.from_config("test", config)
+
+    def test_from_config_works_without_args(self):
+        """Test that from_config works with just command (no args)."""
+        config = {"command": "my-server"}
+        client = MCPClient.from_config("test", config)
+
+        assert client.transport.command == "my-server"
+        assert client.transport.args is None
+
+    def test_from_config_works_without_env(self):
+        """Test that from_config works without env field."""
+        config = {
+            "command": "npx",
+            "args": ["-y", "server"],
+        }
+        client = MCPClient.from_config("test", config)
+
+        assert client.transport.env is None
 
     def test_connect_sends_initialize_request(self):
         """Test that connect sends initialize request."""

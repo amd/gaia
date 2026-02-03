@@ -1,3 +1,5 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 """Mixin for adding MCP client support to agents."""
 
 from typing import Dict, List
@@ -20,33 +22,58 @@ class MCPClientMixin:
         class MyAgent(Agent, MCPClientMixin):
             def __init__(self, ...):
                 super().__init__(...)
-                self.connect_mcp_server("filesystem", "npx @modelcontextprotocol/server-filesystem")
+                self.connect_mcp_server("github", {
+                    "command": "npx",
+                    "args": ["-y", "@modelcontextprotocol/server-github"],
+                    "env": {"GITHUB_TOKEN": "ghp_xxx"}
+                })
     """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._mcp_manager = MCPClientManager(debug=getattr(self, "debug", False))
 
-    def connect_mcp_server(
-        self, name: str, command: str = None, config: Dict = None
-    ) -> bool:
+    def connect_mcp_server(self, name: str, config: Dict) -> bool:
         """Connect to an MCP server and register its tools.
 
         Args:
             name: Friendly name for the server
-            command: Shell command to start server (for stdio transport)
-            config: Optional server configuration dict
+            config: Server configuration dict with:
+                - command (required): Base command to run
+                - args (optional): List of arguments
+                - env (optional): Environment variables dict
 
         Returns:
             bool: True if connection and tool registration successful
+
+        Raises:
+            ValueError: If config is not a dict or missing 'command' field
         """
+        # Validate config format
+        if not isinstance(config, dict):
+            raise ValueError(
+                "connect_mcp_server requires a config dict, not a command string. "
+                "Use format: {'command': 'npx', 'args': ['-y', 'server']}"
+            )
+
+        # Check transport type - only stdio is supported
+        transport_type = config.get("type", "stdio")
+        if transport_type != "stdio":
+            raise ValueError(
+                f"GAIA MCP client only supports stdio transport at this time. "
+                f"Server uses '{transport_type}' transport which is not supported."
+            )
+
+        if "command" not in config:
+            raise ValueError("Config must include 'command' field")
+
         logger.debug(f"Connecting to MCP server '{name}'...")
 
         if getattr(self, "debug", False):
-            print(f"[DEBUG] Command: {command}")
+            print(f"[DEBUG] Config: {config}")
 
         try:
-            client = self._mcp_manager.add_server(name, command=command, config=config)
+            client = self._mcp_manager.add_server(name, config)
 
             if client.is_connected():
                 # Register tools

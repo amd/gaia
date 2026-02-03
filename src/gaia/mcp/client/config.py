@@ -1,3 +1,5 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 """Configuration management for MCP clients."""
 
 import json
@@ -37,17 +39,18 @@ class MCPConfig:
         try:
             with open(self.config_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                self._servers = data.get("servers", {})
+                # Support both new 'mcpServers' and legacy 'servers' key
+                self._servers = data.get("mcpServers", data.get("servers", {}))
             logger.debug(f"Loaded {len(self._servers)} servers from config")
         except Exception as e:
             logger.error(f"Error loading config: {e}")
             self._servers = {}
 
     def _save(self) -> None:
-        """Save configuration to file."""
+        """Save configuration to file (always uses 'mcpServers' key)."""
         try:
             with open(self.config_file, "w", encoding="utf-8") as f:
-                json.dump({"servers": self._servers}, f, indent=2)
+                json.dump({"mcpServers": self._servers}, f, indent=2)
             logger.debug(f"Saved config to {self.config_file}")
         except Exception as e:
             logger.error(f"Error saving config: {e}")

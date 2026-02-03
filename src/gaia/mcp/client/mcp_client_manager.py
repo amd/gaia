@@ -1,3 +1,5 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 """Manager for multiple MCP client connections."""
 
 from typing import Dict, List, Optional
@@ -26,36 +28,46 @@ class MCPClientManager:
         self.debug = debug
         self._clients: Dict[str, MCPClient] = {}
 
-    def add_server(
-        self, name: str, command: str = None, config: Dict = None
-    ) -> MCPClient:
+    def add_server(self, name: str, config: Dict) -> MCPClient:
         """Add and connect to an MCP server.
 
         Args:
             name: Friendly name for the server
-            command: Shell command to start server (for stdio transport)
-            config: Optional server configuration dict
+            config: Server configuration dict with:
+                - command (required): Base command to run
+                - args (optional): List of arguments
+                - env (optional): Environment variables dict
+                - type (optional): Transport type, defaults to "stdio"
 
         Returns:
             MCPClient: Connected client instance
 
         Raises:
-            ValueError: If server with this name already exists
+            ValueError: If server with this name already exists or config is invalid
             RuntimeError: If connection fails
         """
+        # Validate config is a dict, not a string
+        if not isinstance(config, dict):
+            raise ValueError(
+                "add_server requires a config dict, not a command string. "
+                "Use format: {'command': 'npx', 'args': ['-y', 'server']}"
+            )
+
+        # Check transport type - only stdio is supported
+        transport_type = config.get("type", "stdio")
+        if transport_type != "stdio":
+            raise ValueError(
+                f"GAIA MCP client only supports stdio transport at this time. "
+                f"Server '{name}' uses '{transport_type}' transport which is not supported."
+            )
+
         if name in self._clients:
             raise ValueError(f"MCP server '{name}' already exists")
 
         logger.debug(f"Adding MCP server: {name}")
 
-        # Create client
-        if command:
-            client = MCPClient.from_command(name, command, debug=self.debug)
-        elif config:
-            # Future: support HTTP and other transports
-            raise NotImplementedError("Config-based initialization not yet supported")
-        else:
-            raise ValueError("Must provide either 'command' or 'config'")
+        # Create client from config
+        client = MCPClient.from_config(name, config, debug=self.debug)
 
         # Connect
         if not client.connect():
@@ -65,7 +77,7 @@ class MCPClientManager:
         self._clients[name] = client
 
         # Save to config
-        self.config.add_server(name, {"command": command} if command else config)
+        self.config.add_server(name, config)
 
         logger.debug(f"Successfully added MCP server: {name}")
         return client
@@ -125,6 +137,7 @@ class MCPClientManager:
         """Load and connect to all servers from configuration.
 
         Skips servers that fail to connect but logs errors.
+        Only stdio transport is supported - other types are skipped with a warning.
         """
         servers = self.config.get_servers()
 
@@ -140,18 +153,25 @@ class MCPClientManager:
                 continue
 
             try:
-                command = server_config.get("command")
-                if command:
-                    client = MCPClient.from_command(name, command, debug=self.debug)
-                    if client.connect():
-                        self._clients[name] = client
-                        logger.debug(f"Loaded MCP server: {name}")
-                    else:
-                        logger.warning(
-                            f"Failed to connect to configured server: {name}"
-                        )
-                else:
+                # Check transport type - only stdio is supported
+                transport_type = server_config.get("type", "stdio")
+                if transport_type != "stdio":
+                    logger.warning(
+                        f"Skipping server '{name}': GAIA MCP client only supports stdio "
+                        f"transport at this time (found '{transport_type}')"
+                    )
+                    continue
+
+                if "command" not in server_config:
                     logger.warning(f"No command specified for server: {name}")
+                    continue
+
+                client = MCPClient.from_config(name, server_config, debug=self.debug)
+                if client.connect():
+                    self._clients[name] = client
+                    logger.debug(f"Loaded MCP server: {name}")
+                else:
+                    logger.warning(f"Failed to connect to configured server: {name}")
 
             except Exception as e:
                 logger.error(f"Error loading server '{name}': {e}")

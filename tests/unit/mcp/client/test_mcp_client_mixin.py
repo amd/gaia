@@ -1,6 +1,10 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 """Unit tests for MCPClientMixin."""
 
 from unittest.mock import Mock, patch
+
+import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.mcp import MCPClientMixin
@@ -28,7 +32,7 @@ class TestMCPClientMixin:
 
     @patch("gaia.mcp.mixin.MCPClientManager")
     def test_connect_mcp_server_adds_server(self, mock_manager_class):
-        """Test that connect_mcp_server adds server to manager."""
+        """Test that connect_mcp_server adds server to manager using config dict."""
         mock_manager = Mock()
         mock_client = Mock()
         mock_client.is_connected.return_value = True
@@ -38,12 +42,11 @@ class TestMCPClientMixin:
         mock_manager_class.return_value = mock_manager
 
         agent = MockAgent()
-        result = agent.connect_mcp_server("test", command="echo test")
+        config = {"command": "npx", "args": ["-y", "server"]}
+        result = agent.connect_mcp_server("test", config)
 
         assert result is True
-        mock_manager.add_server.assert_called_once_with(
-            "test", command="echo test", config=None
-        )
+        mock_manager.add_server.assert_called_once_with("test", config)
 
     @patch("gaia.mcp.mixin.MCPClientManager")
     def test_connect_mcp_server_registers_tools(self, mock_manager_class):
@@ -74,7 +77,8 @@ class TestMCPClientMixin:
         mock_manager_class.return_value = mock_manager
 
         agent = MockAgent()
-        agent.connect_mcp_server("testserver", command="echo test")
+        config = {"command": "npx", "args": ["-y", "server"]}
+        agent.connect_mcp_server("testserver", config)
 
         # Check tool was registered
         tool_name = "mcp_testserver_test_tool"
@@ -111,7 +115,8 @@ class TestMCPClientMixin:
         mock_manager_class.return_value = mock_manager
 
         agent = MockAgent()
-        agent.connect_mcp_server("testserver", command="echo test")
+        config = {"command": "npx", "args": ["-y", "server"]}
+        agent.connect_mcp_server("testserver", config)
 
         # Tool should be registered
         tool_name = "mcp_testserver_test_tool"
@@ -158,7 +163,8 @@ class TestMCPClientMixin:
         mock_manager_class.return_value = mock_manager
 
         agent = MockAgent()
-        result = agent.connect_mcp_server("test", command="echo test")
+        config = {"command": "npx", "args": ["-y", "server"]}
+        result = agent.connect_mcp_server("test", config)
 
         assert result is False
 
@@ -193,8 +199,10 @@ class TestMCPClientMixin:
         mock_manager_class.return_value = mock_manager
 
         agent = MockAgent()
-        agent.connect_mcp_server("server1", command="echo 1")
-        agent.connect_mcp_server("server2", command="echo 2")
+        config1 = {"command": "npx", "args": ["-y", "s1"]}
+        config2 = {"command": "npx", "args": ["-y", "s2"]}
+        agent.connect_mcp_server("server1", config1)
+        agent.connect_mcp_server("server2", config2)
 
         # Both tools should be registered with different names
         assert "mcp_server1_read_file" in _TOOL_REGISTRY
@@ -203,6 +211,67 @@ class TestMCPClientMixin:
         # Descriptions should include server names
         assert "[MCP:server1]" in _TOOL_REGISTRY["mcp_server1_read_file"]["description"]
         assert "[MCP:server2]" in _TOOL_REGISTRY["mcp_server2_read_file"]["description"]
+
+    @patch("gaia.mcp.mixin.MCPClientManager")
+    def test_connect_mcp_server_requires_config_dict(self, mock_manager_class):
+        """Test that connect_mcp_server requires a config dict."""
+        mock_manager = Mock()
+        mock_manager_class.return_value = mock_manager
+
+        agent = MockAgent()
+
+        # Should raise when passing a string instead of dict
+        with pytest.raises(ValueError, match="config dict"):
+            agent.connect_mcp_server("test", "echo test")
+
+    @patch("gaia.mcp.mixin.MCPClientManager")
+    def test_connect_mcp_server_raises_without_command(self, mock_manager_class):
+        """Test that connect_mcp_server raises if config missing command."""
+        mock_manager = Mock()
+        mock_manager_class.return_value = mock_manager
+
+        agent = MockAgent()
+        config = {"args": ["-y", "server"]}  # Missing 'command'
+
+        with pytest.raises(ValueError, match="command"):
+            agent.connect_mcp_server("test", config)
+
+    @patch("gaia.mcp.mixin.MCPClientManager")
+    def test_connect_mcp_server_passes_env(self, mock_manager_class):
+        """Test that connect_mcp_server passes env to manager."""
+        mock_manager = Mock()
+        mock_client = Mock()
+        mock_client.is_connected.return_value = True
+        mock_client.server_info = {"name": "Test Server"}
+        mock_client.list_tools.return_value = []
+        mock_manager.add_server.return_value = mock_client
+        mock_manager_class.return_value = mock_manager
+
+        agent = MockAgent()
+        config = {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-github"],
+            "env": {"GITHUB_TOKEN": "ghp_xxx"},
+        }
+        agent.connect_mcp_server("github", config)
+
+        # Verify the full config was passed
+        mock_manager.add_server.assert_called_once_with("github", config)
+
+    @patch("gaia.mcp.mixin.MCPClientManager")
+    def test_connect_mcp_server_rejects_http_type(self, mock_manager_class):
+        """Test that connect_mcp_server raises for non-stdio types."""
+        mock_manager = Mock()
+        mock_manager_class.return_value = mock_manager
+
+        agent = MockAgent()
+        config = {
+            "type": "sse",
+            "url": "http://localhost:8080/sse",
+        }
+
+        with pytest.raises(ValueError, match="only supports stdio"):
+            agent.connect_mcp_server("http_server", config)
 
 
 class TestMCPToolResponseWrapper:
@@ -241,7 +310,8 @@ class TestMCPToolResponseWrapper:
         mock_manager_class.return_value = mock_manager
 
         agent = MockAgent()
-        agent.connect_mcp_server("testserver", command="echo test")
+        config = {"command": "npx", "args": ["-y", "server"]}
+        agent.connect_mcp_server("testserver", config)
 
         # Get the registered wrapper and call it
         tool_name = "mcp_testserver_get_stats"
@@ -279,7 +349,8 @@ class TestMCPToolResponseWrapper:
         mock_manager_class.return_value = mock_manager
 
         agent = MockAgent()
-        agent.connect_mcp_server("testserver", command="echo test")
+        config = {"command": "npx", "args": ["-y", "server"]}
+        agent.connect_mcp_server("testserver", config)
 
         # Get the registered wrapper and call it
         wrapper = _TOOL_REGISTRY["mcp_testserver_failing_tool"]["function"]
@@ -314,7 +385,8 @@ class TestMCPToolResponseWrapper:
         mock_manager_class.return_value = mock_manager
 
         agent = MockAgent()
-        agent.connect_mcp_server("testserver", command="echo test")
+        config = {"command": "npx", "args": ["-y", "server"]}
+        agent.connect_mcp_server("testserver", config)
 
         # Get the registered wrapper and call it
         wrapper = _TOOL_REGISTRY["mcp_testserver_string_tool"]["function"]
@@ -347,7 +419,8 @@ class TestMCPToolResponseWrapper:
         mock_manager_class.return_value = mock_manager
 
         agent = MockAgent()
-        agent.connect_mcp_server("testserver", command="echo test")
+        config = {"command": "npx", "args": ["-y", "server"]}
+        agent.connect_mcp_server("testserver", config)
 
         # Get the registered wrapper and call it
         wrapper = _TOOL_REGISTRY["mcp_testserver_list_tool"]["function"]

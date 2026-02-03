@@ -181,7 +181,7 @@
               "spec/chat-sdk",
               "spec/rag-sdk",
               "spec/talk-sdk",
-              "sdk/sdks/mcp",
+              "spec/mcp-client",
               "spec/mcp-server",
               "spec/llm-client",
               "spec/vlm-client",

@@ -1,8 +1,11 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 """Stdio transport for MCP protocol communication via subprocess."""
 
 import json
+import os
 import subprocess
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from gaia.logger import get_logger
 
@@ -17,14 +20,29 @@ class StdioTransport(MCPTransport):
     This transport launches MCP servers as subprocesses and communicates
     via stdin/stdout using JSON-RPC messages.
 
+    Supports two modes:
+    1. Legacy: command string with shell=True (e.g., "npx -y server")
+    2. Modern: command + args list with shell=False (more secure, matches Anthropic format)
+
     Args:
-        command: Shell command to start the MCP server (e.g., "npx server" or "python -m server")
+        command: Base command to start the MCP server (e.g., "npx" or "python")
+        args: Optional list of arguments (e.g., ["-y", "@modelcontextprotocol/server-github"])
+        env: Optional environment variables to merge with system env
         timeout: Request timeout in seconds (default: 30)
         debug: Enable debug logging (default: False)
     """
 
-    def __init__(self, command: str, timeout: int = 30, debug: bool = False):
+    def __init__(
+        self,
+        command: str,
+        args: Optional[List[str]] = None,
+        env: Optional[Dict[str, str]] = None,
+        timeout: int = 30,
+        debug: bool = False,
+    ):
         self.command = command
+        self.args = args
+        self.env = env
         self.timeout = timeout
         self.debug = debug
         self._process: Optional[subprocess.Popen] = None
@@ -41,12 +59,25 @@ class StdioTransport(MCPTransport):
             return True
 
         try:
+            # Determine if we use shell mode (legacy) or args mode (modern)
+            use_shell = not self.args  # Use shell if no args provided
+            if use_shell:
+                cmd = self.command
+            else:
+                cmd = [self.command] + self.args
+
             if self.debug:
-                logger.debug(f"Starting MCP server with command: {self.command}")
+                logger.debug(f"Starting MCP server with command: {cmd}")
+
+            # Merge environment if provided
+            merged_env = None
+            if self.env:
+                merged_env = os.environ.copy()
+                merged_env.update(self.env)
 
             self._process = subprocess.Popen(
-                self.command,
-                shell=True,
+                cmd,
+                shell=use_shell,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -54,6 +85,7 @@ class StdioTransport(MCPTransport):
                 bufsize=1,
                 encoding="utf-8",
                 errors="replace",
+                env=merged_env,
             )
 
             logger.debug(f"MCP server process started (PID: {self._process.pid})")

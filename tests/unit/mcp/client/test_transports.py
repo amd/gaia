@@ -1,3 +1,5 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 """Unit tests for MCP transport implementations."""
 
 import json
@@ -135,3 +137,111 @@ class TestStdioTransport:
             transport.send_request("test_method")
             # Verify debug was called at least once
             assert mock_logger.debug.called
+
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_accepts_args_list(self, mock_popen):
+        """Test that StdioTransport accepts separate args list."""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        transport = StdioTransport(
+            "npx", args=["-y", "@modelcontextprotocol/server-github"]
+        )
+        result = transport.connect()
+
+        assert result is True
+        # Verify command was built from command + args
+        call_args = mock_popen.call_args
+        assert call_args[0][0] == ["npx", "-y", "@modelcontextprotocol/server-github"]
+        # Should not use shell=True when using args list
+        assert call_args[1]["shell"] is False
+
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_builds_command_from_args(self, mock_popen):
+        """Test that command is built correctly from command + args."""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        transport = StdioTransport("python", args=["-m", "mcp_server", "--debug"])
+        transport.connect()
+
+        call_args = mock_popen.call_args
+        assert call_args[0][0] == ["python", "-m", "mcp_server", "--debug"]
+
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    @patch(
+        "gaia.mcp.client.transports.stdio.os.environ",
+        {"PATH": "/usr/bin", "HOME": "/home/user"},
+    )
+    def test_stdio_transport_passes_env_to_popen(self, mock_popen):
+        """Test that env vars are passed to subprocess."""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        transport = StdioTransport(
+            "npx",
+            args=["-y", "server"],
+            env={"GITHUB_TOKEN": "ghp_xxx", "DEBUG": "true"},
+        )
+        transport.connect()
+
+        call_args = mock_popen.call_args
+        passed_env = call_args[1]["env"]
+        assert passed_env["GITHUB_TOKEN"] == "ghp_xxx"
+        assert passed_env["DEBUG"] == "true"
+
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    @patch(
+        "gaia.mcp.client.transports.stdio.os.environ",
+        {"PATH": "/usr/bin", "HOME": "/home/user"},
+    )
+    def test_stdio_transport_merges_env_with_system(self, mock_popen):
+        """Test that config env merges with system environment."""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        transport = StdioTransport(
+            "npx", args=["-y", "server"], env={"API_KEY": "secret123"}
+        )
+        transport.connect()
+
+        call_args = mock_popen.call_args
+        passed_env = call_args[1]["env"]
+        # System env should be preserved
+        assert passed_env["PATH"] == "/usr/bin"
+        assert passed_env["HOME"] == "/home/user"
+        # Config env should be merged
+        assert passed_env["API_KEY"] == "secret123"
+
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_legacy_command_string_still_works(self, mock_popen):
+        """Test backward compat: command string without args uses shell=True."""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        transport = StdioTransport("npx -y @modelcontextprotocol/server-github")
+        transport.connect()
+
+        call_args = mock_popen.call_args
+        # Legacy string command uses shell=True
+        assert call_args[0][0] == "npx -y @modelcontextprotocol/server-github"
+        assert call_args[1]["shell"] is True
+
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_empty_args_treated_as_none(self, mock_popen):
+        """Test that empty args list is treated same as None."""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        transport = StdioTransport("echo test", args=[])
+        transport.connect()
+
+        call_args = mock_popen.call_args
+        # Empty args should use shell mode like legacy
+        assert call_args[1]["shell"] is True

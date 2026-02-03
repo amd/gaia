@@ -1,3 +1,5 @@
+# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 """Integration test for the complete MCP workflow: CLI → Config → Agent.
 
 This tests the ACTUAL user workflow:
@@ -18,11 +20,20 @@ from gaia.agents.base.agent import Agent
 from gaia.mcp import MCPClientMixin
 from gaia.mcp.client.config import MCPConfig
 
-# MCP server commands (same as in other tests)
+# MCP server configs (Anthropic format - same as in other tests)
 MCP_SERVERS = {
-    "memory": "npx -y @modelcontextprotocol/server-memory",
-    "sequential-thinking": "npx -y @modelcontextprotocol/server-sequential-thinking",
-    "time": "uvx mcp-server-time",
+    "memory": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-memory"],
+    },
+    "sequential-thinking": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+    },
+    "time": {
+        "command": "uvx",
+        "args": ["mcp-server-time"],
+    },
 }
 
 
@@ -70,20 +81,18 @@ class TestMCPCLIToAgentWorkflow:
         # Step 1: Simulate CLI commands (gaia mcp add)
         # In real usage: gaia mcp add memory "npx -y @modelcontextprotocol/server-memory"
         # For testing, we'll directly write to config to simulate this
-        config_data = {"servers": {}}
-        for name, command in MCP_SERVERS.items():
-            config_data["servers"][name] = {"command": command}
+        config_data = {"mcpServers": MCP_SERVERS}
 
         config_file.write_text(json.dumps(config_data, indent=2))
 
         # Step 2: Verify config file was created correctly
         assert config_file.exists(), "Config file should exist"
         loaded_config = json.loads(config_file.read_text())
-        assert "servers" in loaded_config
-        assert len(loaded_config["servers"]) == 3
-        assert "memory" in loaded_config["servers"]
-        assert "sequential-thinking" in loaded_config["servers"]
-        assert "time" in loaded_config["servers"]
+        assert "mcpServers" in loaded_config
+        assert len(loaded_config["mcpServers"]) == 3
+        assert "memory" in loaded_config["mcpServers"]
+        assert "sequential-thinking" in loaded_config["mcpServers"]
+        assert "time" in loaded_config["mcpServers"]
 
         # Step 3: Create agent that loads from config
         agent = MCPTestAgent(config_path=str(config_file))
@@ -150,18 +159,18 @@ class TestMCPCLIToAgentWorkflow:
         manager = MCPClientManager(config=config)
 
         try:
-            # This is what 'gaia mcp add' does internally
-            for name, command in MCP_SERVERS.items():
-                client = manager.add_server(name, command=command)
+            # This is what 'gaia mcp add' does internally (with config dicts)
+            for name, server_config in MCP_SERVERS.items():
+                client = manager.add_server(name, server_config)
                 assert client is not None, f"Failed to add {name}"
                 assert client.is_connected(), f"{name} not connected"
 
             # Verify config file was created
             assert config_file.exists(), "Config file should exist after adding servers"
 
-            # Verify config contents
+            # Verify config contents (uses mcpServers key)
             config_data = json.loads(config_file.read_text())
-            assert len(config_data["servers"]) == 3
+            assert len(config_data["mcpServers"]) == 3
 
             # Now test that a NEW manager can load from this config
             manager2 = MCPClientManager(config=MCPConfig(str(config_file)))
@@ -184,10 +193,10 @@ class TestMCPCLIToAgentWorkflow:
         """
         config_file = tmp_path / "mcp_servers.json"
 
-        # Setup config
+        # Setup config (using mcpServers format)
         config_data = {
-            "servers": {
-                "time": {"command": MCP_SERVERS["time"]},
+            "mcpServers": {
+                "time": MCP_SERVERS["time"],
             }
         }
         config_file.write_text(json.dumps(config_data, indent=2))
@@ -235,7 +244,7 @@ class TestMCPCLIToAgentWorkflow:
 
         try:
             # Add just one server in session 1
-            client = session1_manager.add_server("time", command=MCP_SERVERS["time"])
+            client = session1_manager.add_server("time", MCP_SERVERS["time"])
             assert client is not None
 
             # Disconnect session 1
