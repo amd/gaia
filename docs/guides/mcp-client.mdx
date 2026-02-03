@@ -89,7 +89,7 @@ availability. Always test servers before production use.
   <Step title="Add an MCP server">
     Add the official [MCP Time Server](https://github.com/modelcontextprotocol/servers/tree/main/src/time):
     ```bash
-    gaia mcp add time '{"command": "uvx", "args": ["mcp-server-time"]}'
+    gaia mcp add time "uvx mcp-server-time"
     ```
     Or edit `~/.gaia/mcp_servers.json` directly:
     ```json
@@ -106,11 +106,26 @@ availability. Always test servers before production use.
 
   <Step title="Use in your agent">
     ```python
-    from gaia.agents.chat import ChatAgent
+    from gaia.agents.base import Agent
+    from gaia.mcp import MCPClientMixin
 
-    agent = ChatAgent()
+    class MCPAgent(Agent, MCPClientMixin):
+        """Agent with MCP server support."""
+
+        def __init__(self, **kwargs):
+            Agent.__init__(self, **kwargs)
+            MCPClientMixin.__init__(self)
+
+        def _get_system_prompt(self) -> str:
+            return "You are a helpful assistant with access to MCP tools."
+
+        def _register_tools(self) -> None:
+            pass  # MCP tools are auto-registered by the mixin
+
+    agent = MCPAgent(skip_lemonade=True)
     agent.load_mcp_servers_from_config()
-    response = agent.prompt("What time is it in Tokyo?")
+    result = agent.process_query("What time is it in Tokyo?")
+    print(result.get("result", "No response"))
     ```
   </Step>
 </Steps>
@@ -229,7 +244,7 @@ This format is compatible with Claude Desktop and other Anthropic tools. The `mc
   <Tab title="Via CLI">
     ```bash
     # Add server to config
-    gaia mcp add filesystem '{"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]}'
+    gaia mcp add filesystem "npx -y @modelcontextprotocol/server-filesystem /tmp"
 
     # List configured servers
     gaia mcp list

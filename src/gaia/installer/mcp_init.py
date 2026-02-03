@@ -148,7 +148,7 @@ class MCPInitCommand:
             self.console.print()
             self.console.print("  1. Add MCP servers to your config:")
             self.console.print(
-                f'     [cyan]gaia mcp add time \'{{"command": "uvx", "args": ["mcp-server-time"]}}\'[/cyan]'
+                '     [cyan]gaia mcp add time "uvx mcp-server-time"[/cyan]'
             )
             self.console.print()
             self.console.print("  2. Or edit the config file directly:")
@@ -173,9 +173,7 @@ class MCPInitCommand:
             self._print("  Next steps:")
             self._print("")
             self._print("  1. Add MCP servers to your config:")
-            self._print(
-                '     gaia mcp add time \'{"command": "uvx", "args": ["mcp-server-time"]}\''
-            )
+            self._print('     gaia mcp add time "uvx mcp-server-time"')
             self._print("")
             self._print("  2. Or edit the config file directly:")
             self._print(f"     {config_path}")
