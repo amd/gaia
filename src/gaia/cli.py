@@ -987,6 +987,62 @@ def main():
         help="Port for the Blender MCP server (default: 9876)",
     )
 
+    # Add SD (Stable Diffusion) image generation command
+    sd_parser = subparsers.add_parser(
+        "sd",
+        help="Generate images using Stable Diffusion",
+        parents=[parent_parser],
+    )
+    sd_parser.add_argument(
+        "prompt",
+        nargs="?",
+        help="Text description of the image to generate",
+    )
+    sd_parser.add_argument(
+        "-i",
+        "--interactive",
+        action="store_true",
+        help="Run in interactive mode",
+    )
+    sd_parser.add_argument(
+        "--sd-model",
+        dest="sd_model",
+        choices=["SD-1.5", "SD-Turbo", "SDXL-Base-1.0", "SDXL-Turbo"],
+        default="SDXL-Turbo",
+        help="SD model: SDXL-Turbo (fast, good quality, default), SD-Turbo (faster but lower quality), SDXL-Base-1.0 (photorealistic, slow)",
+    )
+    sd_parser.add_argument(
+        "--size",
+        choices=["512x512", "768x768", "1024x1024"],
+        help="Image size (auto-selected if not specified: 512px for SD-1.5/Turbo, 1024px for SDXL)",
+    )
+    sd_parser.add_argument(
+        "--steps",
+        type=int,
+        help="Inference steps (auto-selected if not specified: 4 for Turbo, 20 for Base)",
+    )
+    sd_parser.add_argument(
+        "--cfg-scale",
+        dest="cfg_scale",
+        type=float,
+        help="CFG scale (auto-selected if not specified: 1.0 for Turbo, 7.5 for Base)",
+    )
+    sd_parser.add_argument(
+        "--output-dir",
+        default=".gaia/cache/sd/images",
+        help="Directory to save generated images",
+    )
+    sd_parser.add_argument(
+        "--seed",
+        type=int,
+        help="Random seed for reproducibility",
+    )
+    sd_parser.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Skip prompt to open image in viewer (for automation/scripting)",
+    )
+
     # Add Jira app command
     jira_parser = subparsers.add_parser(
         "jira",
@@ -2059,8 +2115,8 @@ Examples:
         "--profile",
         "-p",
         default="chat",
-        choices=["minimal", "chat", "code", "rag", "all"],
-        help="Profile to initialize: minimal, chat, code, rag, all (default: chat)",
+        choices=["minimal", "sd", "chat", "code", "rag", "all"],
+        help="Profile to initialize: minimal, sd (image gen), chat, code, rag, all (default: chat)",
     )
     init_parser.add_argument(
         "--minimal",
@@ -2071,6 +2127,11 @@ Examples:
         "--skip-models",
         action="store_true",
         help="Skip model downloads (only install Lemonade)",
+    )
+    init_parser.add_argument(
+        "--skip-lemonade",
+        action="store_true",
+        help="Skip Lemonade installation check (for CI with pre-installed Lemonade)",
     )
     init_parser.add_argument(
         "--force-reinstall",
@@ -4102,6 +4163,11 @@ Let me know your answer!
         handle_blender_command(args)
         return
 
+    # Handle SD (image generation) command
+    if args.action == "sd":
+        handle_sd_command(args)
+        return
+
     # Handle Jira command
     if args.action == "jira":
         handle_jira_command(args)
@@ -4136,6 +4202,7 @@ Let me know your answer!
         exit_code = run_init(
             profile=profile,
             skip_models=args.skip_models,
+            skip_lemonade=getattr(args, "skip_lemonade", False),
             force_reinstall=args.force_reinstall,
             force_models=args.force_models,
             yes=args.yes,
@@ -4989,6 +5056,170 @@ def handle_visualize_command(args):
             print("⚠️  Server force-killed")
         except Exception as e:
             print(f"⚠️  Error stopping server: {e}")
+
+
+def handle_sd_command(args):
+    """
+    Handle the SD (Stable Diffusion) image generation command.
+
+    Args:
+        args: Parsed command line arguments for the sd command
+    """
+    # No prompt and not interactive - show help (no server needed)
+    if not args.prompt and not args.interactive:
+        print("Usage: gaia sd <prompt> [options]")
+        print("       gaia sd -i  (interactive mode)")
+        print()
+        print("Examples:")
+        print('  gaia sd "a sunset over mountains"')
+        print('  gaia sd "cyberpunk city" --sd-model SDXL-Turbo --size 1024x1024')
+        print("  gaia sd -i")
+        return
+
+    from gaia.agents.sd import SDAgent, SDAgentConfig
+
+    # Pre-load LLM for prompt enhancement to avoid context size warnings
+    # SD agent uses 8B LLM for robust agentic reasoning and instruction following
+    # Create config - ensure LLM model is set
+    llm_model = getattr(args, "model", None)
+    if not llm_model:
+        llm_model = "Qwen3-8B-GGUF"  # Default LLM for prompt enhancement
+
+    llm_client = LemonadeClient(verbose=False)
+    try:
+        llm_client.load_model(llm_model, auto_download=True, prompt=False, timeout=60)
+    except Exception:
+        pass  # Model might already be loaded
+
+    config = SDAgentConfig(
+        sd_model=args.sd_model,
+        output_dir=args.output_dir,
+        prompt_to_open=not args.no_open,
+        show_stats=getattr(args, "stats", False),
+        use_claude=getattr(args, "use_claude", False),
+        use_chatgpt=getattr(args, "use_chatgpt", False),
+        base_url=getattr(args, "base_url", "http://localhost:8000/api/v1"),
+        model_id=llm_model,
+    )
+
+    # Create agent with LLM prompt enhancement
+    agent = SDAgent(config)
+
+    # Check health
+    health = agent.sd_health_check()
+    if health["status"] != "healthy":
+        print(f"Error: {health.get('error', 'SD endpoint unavailable')}")
+        print("Make sure Lemonade Server is running and SD model is available:")
+        print("  lemonade-server serve")
+        print("  lemonade-server pull SD-Turbo")
+        sys.exit(1)
+
+    print()
+    print("=" * 80)
+    print(f"🖼️  SD Image Generator - {args.sd_model}")
+    print("=" * 80)
+    print("LLM-powered prompt enhancement for better image quality")
+    print(f"Output: {args.output_dir}")
+    if not args.no_open:
+        print("You'll be prompted to open images after generation")
+    print("=" * 80)
+    print()
+
+    # Interactive mode
+    if args.interactive:
+        print("Type 'quit' to exit.")
+        print()
+
+        while True:
+            try:
+                user_prompt = input("You: ").strip()
+                if not user_prompt:
+                    continue
+                if user_prompt.lower() in ("quit", "exit", "q"):
+                    print("Goodbye!")
+                    break
+
+                # Track images before this query
+                initial_count = len(agent.sd_generations)
+
+                # Use agent.process_query() for LLM enhancement
+                result = agent.process_query(user_prompt)
+                if result.get("final_answer"):
+                    print(f"\nAgent: {result['final_answer']}\n")
+                else:
+                    print("\nAgent: Generation complete\n")
+
+                # Prompt to open image(s) after agent completes
+                if not args.no_open and result.get("status") != "error":
+                    try:
+                        # Get all newly generated images from this query
+                        new_images = agent.sd_generations[initial_count:]
+
+                        if new_images:
+                            num_images = len(new_images)
+                            prompt_text = (
+                                f"Open {num_images} images in default viewer? [Y/n]: "
+                                if num_images > 1
+                                else "Open image in default viewer? [Y/n]: "
+                            )
+                            response = input(prompt_text).strip().lower()
+
+                            if response in ("", "y", "yes"):
+                                for img in new_images:
+                                    path = img["image_path"]
+                                    if sys.platform == "win32":
+                                        os.startfile(path)  # pylint: disable=no-member
+                                    elif sys.platform == "darwin":
+                                        subprocess.run(["open", path], check=False)
+                                    else:
+                                        subprocess.run(["xdg-open", path], check=False)
+                                plural = "s" if num_images > 1 else ""
+                                print(f"[{num_images} image{plural} opened]\n")
+                    except (KeyboardInterrupt, EOFError):
+                        pass
+
+            except KeyboardInterrupt:
+                print("\nGoodbye!")
+                break
+
+    # Single prompt mode
+    else:
+        # Track images before this command
+        initial_count = len(agent.sd_generations)
+
+        # Use agent.process_query() for LLM enhancement
+        result = agent.process_query(args.prompt)
+        if result.get("final_answer"):
+            print(f"\n{result['final_answer']}\n")
+
+        # Prompt to open image(s) after agent completes
+        if not args.no_open and result.get("status") != "error":
+            try:
+                # Get all newly generated images from this command
+                new_images = agent.sd_generations[initial_count:]
+
+                if new_images:
+                    num_images = len(new_images)
+                    prompt_text = (
+                        f"Open {num_images} images in default viewer? [Y/n]: "
+                        if num_images > 1
+                        else "Open image in default viewer? [Y/n]: "
+                    )
+                    response = input(prompt_text).strip().lower()
+
+                    if response in ("", "y", "yes"):
+                        for img in new_images:
+                            path = img["image_path"]
+                            if sys.platform == "win32":
+                                os.startfile(path)  # pylint: disable=no-member
+                            elif sys.platform == "darwin":
+                                subprocess.run(["open", path], check=False)
+                            else:
+                                subprocess.run(["xdg-open", path], check=False)
+                        plural = "s" if num_images > 1 else ""
+                        print(f"[{num_images} image{plural} opened]\n")
+            except (KeyboardInterrupt, EOFError):
+                pass
 
 
 def handle_blender_command(args):

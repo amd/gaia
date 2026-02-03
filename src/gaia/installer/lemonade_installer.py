@@ -386,13 +386,46 @@ class LemonadeInstaller:
             if silent:
                 cmd.extend(["/qn", "/norestart"])
 
+            log_dir = Path.home() / ".cache" / "gaia" / "installer"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            msi_log = log_dir / "msi_install.log"
+            cmd.extend(["/l*v", str(msi_log)])  # Verbose logging to file
+
             log.debug(f"Running: {' '.join(cmd)}")
 
+            # Check for other msiexec processes before starting (helps diagnose hangs)
+            try:
+                check_result = subprocess.run(
+                    ["tasklist", "/FI", "IMAGENAME eq msiexec.exe", "/NH"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                if (
+                    check_result.returncode == 0
+                    and "msiexec.exe" in check_result.stdout
+                ):
+                    msi_count = check_result.stdout.count("msiexec.exe")
+                    log.warning(
+                        f"Found {msi_count} existing msiexec process(es) - installation may be blocked"
+                    )
+            except Exception:
+                pass  # Skip check if tasklist fails
+
+            if silent:
+                self._print_status(
+                    "Running silent MSI installer (should complete in ~10 seconds)..."
+                )
+            else:
+                self._print_status("Running MSI installer...")
+
+            # MSI should install in 10-15 seconds, timeout after 60 seconds (indicates stuck process)
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=300,  # 5 minute timeout
+                timeout=60,  # 60 second timeout (should complete in ~10s)
                 check=False,
             )
 
@@ -418,7 +451,32 @@ class LemonadeInstaller:
                 )
 
         except subprocess.TimeoutExpired:
-            return InstallResult(success=False, error="Installation timed out")
+            # Print MSI log to help diagnose the hang
+            error_msg = "Installation timed out (expected ~10s, hung for 60s)"
+            try:
+                if msi_log.exists():
+                    self._print_status(f"MSI log file: {msi_log}")
+                    log_content = msi_log.read_text(encoding="utf-16", errors="ignore")
+                    # Print last 100 lines of log
+                    log_lines = log_content.split("\n")
+                    relevant_lines = log_lines[-100:]
+                    log.error("=== MSI Install Log (last 100 lines) ===")
+                    for line in relevant_lines:
+                        log.error(line)
+                    log.error("=== End MSI Install Log ===")
+
+                    # Also print to console
+                    if self.console:
+                        self.console.print(
+                            "\n   [red]MSI Install Log (last 50 lines):[/red]"
+                        )
+                        for line in relevant_lines[-50:]:
+                            if line.strip():
+                                self.console.print(f"   [dim]{line}[/dim]")
+            except Exception as e:
+                log.debug(f"Could not read MSI log: {e}")
+
+            return InstallResult(success=False, error=error_msg)
         except FileNotFoundError:
             return InstallResult(success=False, error="msiexec not found")
         except Exception as e:
@@ -533,9 +591,10 @@ class LemonadeInstaller:
             installed_version = info.version.lstrip("v")
 
             # Create installer for the installed version (not target version)
+            # Use minimal=True (lemonade-server-minimal.msi exists for all versions)
             # Pass console to child installer for consistent output
             uninstall_installer = LemonadeInstaller(
-                target_version=installed_version, console=self.console
+                target_version=installed_version, minimal=True, console=self.console
             )
 
             # Download the MSI matching the installed version

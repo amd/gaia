@@ -149,7 +149,7 @@ See [R2-SETUP.md](R2-SETUP.md) for detailed setup instructions.
 **Quick upload (after setup):**
 
 ```bash
-rclone copy gaia-init-demo.mp4 r2:amd-gaia/videos/ --s3-no-check-bucket --progress
+rclone copy gaia-init-demo.mp4 gaia:amd-gaia/videos/ --s3-no-check-bucket --progress
 ```
 
 ## Checklist

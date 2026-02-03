@@ -1601,6 +1601,134 @@ class LemonadeClient:
             self.log.error(f"Error generating embeddings: {str(e)}")
             raise LemonadeClientError(f"Error generating embeddings: {str(e)}")
 
+    # =========================================================================
+    # Image Generation (Stable Diffusion)
+    # =========================================================================
+
+    # Supported SD configurations
+    SD_MODELS = ["SD-1.5", "SD-Turbo", "SDXL-Base-1.0", "SDXL-Turbo"]
+    SD_SIZES = ["512x512", "768x768", "1024x1024"]
+
+    # Model-specific defaults
+    SD_MODEL_DEFAULTS = {
+        "SD-1.5": {"steps": 20, "cfg_scale": 7.5, "size": "512x512"},
+        "SD-Turbo": {"steps": 4, "cfg_scale": 1.0, "size": "512x512"},
+        "SDXL-Base-1.0": {"steps": 20, "cfg_scale": 7.5, "size": "1024x1024"},
+        "SDXL-Turbo": {"steps": 4, "cfg_scale": 1.0, "size": "512x512"},
+    }
+
+    def generate_image(
+        self,
+        prompt: str,
+        model: str = "SDXL-Turbo",
+        size: Optional[str] = None,
+        steps: Optional[int] = None,
+        cfg_scale: Optional[float] = None,
+        seed: Optional[int] = None,
+        timeout: int = 300,
+    ) -> Dict[str, Any]:
+        """
+        Generate an image from a text prompt using Stable Diffusion.
+
+        Args:
+            prompt: Text description of the image to generate
+            model: SD model - SD-1.5, SD-Turbo, SDXL-Base-1.0 (photorealistic), SDXL-Turbo
+            size: Image dimensions (auto-selected if None, or 512x512, 768x768, 1024x1024)
+            steps: Inference steps (auto-selected if None: Turbo=4, Base=20)
+            cfg_scale: CFG scale (auto-selected if None: Turbo=1.0, Base=7.5)
+            seed: Random seed for reproducibility (optional)
+            timeout: Request timeout in seconds (default: 300 for slower Base models)
+
+        Returns:
+            Dict with 'data' containing list of generated images in b64_json format
+
+        Raises:
+            LemonadeClientError: If generation fails or invalid parameters
+
+        Example:
+            # Photorealistic with SDXL-Base-1.0 (auto-settings)
+            result = client.generate_image(
+                prompt="a sunset over mountains, golden hour, photorealistic",
+                model="SDXL-Base-1.0"
+            )
+
+            # Fast stylized with SDXL-Turbo
+            result = client.generate_image(
+                prompt="cyberpunk city",
+                model="SDXL-Turbo"
+            )
+        """
+        # Validate model
+        if model not in self.SD_MODELS:
+            raise LemonadeClientError(
+                f"Invalid model '{model}'. Choose from: {self.SD_MODELS}"
+            )
+
+        # Apply model-specific defaults
+        defaults = self.SD_MODEL_DEFAULTS.get(model, {})
+        size = size or defaults.get("size", "512x512")
+        steps = steps if steps is not None else defaults.get("steps", 20)
+        cfg_scale = (
+            cfg_scale if cfg_scale is not None else defaults.get("cfg_scale", 7.5)
+        )
+
+        # Validate size
+        if size not in self.SD_SIZES:
+            raise LemonadeClientError(
+                f"Invalid size '{size}'. Choose from: {self.SD_SIZES}"
+            )
+
+        try:
+            payload = {
+                "prompt": prompt,
+                "model": model,
+                "size": size,
+                "n": 1,
+                "response_format": "b64_json",
+                "cfg_scale": cfg_scale,
+                "steps": steps,
+            }
+            if seed is not None:
+                payload["seed"] = seed
+
+            self.log.info(
+                f"Generating image: model={model}, size={size}, steps={steps}, cfg={cfg_scale}"
+            )
+            url = f"{self.base_url}/images/generations"
+            response = self._send_request("POST", url, data=payload, timeout=timeout)
+
+            return response
+
+        except LemonadeClientError:
+            raise
+        except Exception as e:
+            self.log.error(f"Error generating image: {str(e)}")
+            raise LemonadeClientError(f"Error generating image: {str(e)}")
+
+    def list_sd_models(self) -> List[Dict[str, Any]]:
+        """
+        List available Stable Diffusion models from the server.
+
+        Returns:
+            List of SD model info dicts with id, labels, and image_defaults
+
+        Example:
+            sd_models = client.list_sd_models()
+            for m in sd_models:
+                print(f"{m['id']}: {m.get('image_defaults', {})}")
+        """
+        try:
+            models = self.list_models()
+            sd_models = [
+                m
+                for m in models.get("data", [])
+                if m.get("id") in self.SD_MODELS or "image" in m.get("labels", [])
+            ]
+            return sd_models
+        except Exception as e:
+            self.log.error(f"Error listing SD models: {str(e)}")
+            raise LemonadeClientError(f"Error listing SD models: {str(e)}")
+
     def list_models(self, show_all: bool = False) -> Dict[str, Any]:
         """
         List available models from the server.
