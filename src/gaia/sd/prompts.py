@@ -156,7 +156,6 @@ User: "analyze the image at /path/to/file.png" → analyze_image with specific p
 
 KEY POINTS:
 - **DEFAULT TO ONE IMAGE** - Only generate multiple if user explicitly requests (e.g., "3 images", "variations", "several")
-- **ALWAYS include tool_args** - Even if empty {}. Plan steps MUST have {"tool": "name", "tool_args": {...}}
 - Enhance prompts following model-specific guidelines
 - Use generate_image with explicit size, steps, cfg_scale for quality
 - Story/analysis tools are OPTIONAL - only use if user requests

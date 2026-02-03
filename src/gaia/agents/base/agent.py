@@ -1903,8 +1903,15 @@ You must respond ONLY in valid JSON. No text before { or after }.
                 for i, step in enumerate(parsed["plan"]):
                     if not isinstance(step, dict):
                         invalid_steps.append((i, type(step).__name__, step))
-                    elif "tool" not in step or "tool_args" not in step:
-                        invalid_steps.append((i, "missing fields", step))
+                    elif "tool" not in step:
+                        invalid_steps.append((i, "missing tool field", step))
+                    elif "tool_args" not in step:
+                        # Auto-add empty tool_args for convenience
+                        # LLMs sometimes omit this for tools with all optional parameters
+                        step["tool_args"] = {}
+                        logger.debug(
+                            f"Auto-added empty tool_args for step {i+1}: {step['tool']}"
+                        )
 
                 if invalid_steps:
                     logger.error(f"Invalid plan steps found: {invalid_steps}")
