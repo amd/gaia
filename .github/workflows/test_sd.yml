@@ -49,7 +49,19 @@ jobs:
           $processes = Get-Process msiexec -ErrorAction SilentlyContinue
           if ($processes) {
               $processes | Stop-Process -Force
-              Write-Host "Killed stuck msiexec processes"
+              Write-Host "Killed $($processes.Count) stuck msiexec process(es)"
+
+              # Wait for Windows Installer service to finish cleanup
+              Write-Host "Waiting 5 seconds for Windows Installer service to reset..."
+              Start-Sleep -Seconds 5
+          }
+
+          # Verify no msiexec processes remain
+          $remaining = Get-Process msiexec -ErrorAction SilentlyContinue
+          if ($remaining) {
+              Write-Host "WARNING: $($remaining.Count) msiexec process(es) still running after cleanup"
+          } else {
+              Write-Host "MSI cleanup complete - no msiexec processes running"
           }
 
       - name: Setup Python Environment

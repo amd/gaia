@@ -392,16 +392,33 @@ class LemonadeInstaller:
             cmd.extend(["/l*v", str(msi_log)])  # Verbose logging to file
 
             log.debug(f"Running: {' '.join(cmd)}")
+
+            # Check for other msiexec processes before starting (helps diagnose hangs)
+            try:
+                check_result = subprocess.run(
+                    ["tasklist", "/FI", "IMAGENAME eq msiexec.exe", "/NH"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False
+                )
+                if check_result.returncode == 0 and "msiexec.exe" in check_result.stdout:
+                    msi_count = check_result.stdout.count("msiexec.exe")
+                    log.warning(f"Found {msi_count} existing msiexec process(es) - installation may be blocked")
+            except Exception:
+                pass  # Skip check if tasklist fails
+
             if silent:
-                self._print_status("Running silent MSI installer...")
+                self._print_status("Running silent MSI installer (should complete in ~10 seconds)...")
             else:
                 self._print_status("Running MSI installer...")
 
+            # MSI should install in 10-15 seconds, timeout after 60 seconds (indicates stuck process)
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=300,  # 5 minute timeout
+                timeout=60,  # 60 second timeout (should complete in ~10s)
                 check=False,
             )
 
