@@ -20,7 +20,15 @@ icon: "image"
   src="https://assets.amd-gaia.ai/videos/gaia-sdxl-agent.webm"
 />
 
-Build a multi-modal agent that generates images and creates stories. Type "robot exploring ancient ruins" → Get image + story in ~35 seconds. Three AI models working together, all running locally on AMD hardware.
+## Introduction
+
+This playbook demonstrates building a multi-modal agent by composing image generation and vision capabilities into a single agent class. You'll use Python's multiple inheritance to combine `SDToolsMixin` (Stable Diffusion image generation) and `VLMToolsMixin` (Vision Language Model analysis) with GAIA's base `Agent` class.
+
+The architecture is straightforward: your agent runs an LLM as its reasoning engine, which has access to tools from both mixins. When a user asks to generate an image and create a story, the LLM decides the sequence—call `generate_image()`, then call `create_story_from_image()` to analyze the result. Behind the scenes, [Lemonade Server](https://lemonade-server.ai) hosts the model endpoints locally, providing LLM inference for the agent's reasoning, VLM inference for image analysis, and Stable Diffusion for image generation. Everything runs on your machine with no external API calls.
+
+The key pattern you'll learn is **tool composition through mixins**. Each mixin registers its tools via the `@tool` decorator during initialization. You'll see how domain-specific tools can wrap generic capabilities, creating specialized workflows while keeping the underlying components reusable.
+
+By the end, you'll have a working multi-modal agent and understand how to compose tool capabilities using GAIA's mixin architecture.
 
 ---
 
