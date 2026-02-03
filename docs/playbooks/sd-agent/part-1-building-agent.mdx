@@ -273,28 +273,27 @@ Now add three methods to the class:
         from gaia.agents.base.tools import tool
 
         @tool(name="create_story_about_image")
-        def create_story_about_image(image_path: str, story_style: str = None) -> dict:
+        def create_story_about_image(image_path: str, story_style: str = "adventure") -> dict:
             """
-            Create an adventure story about an image with metadata tracking.
+            Create a story about an image with metadata tracking.
 
             Wraps VLMToolsMixin's generic create_story_from_image() to add:
-            - Always uses adventure style (story_style param accepted but ignored)
+            - Defaults to adventure style (but accepts other styles)
             - Adds custom metadata for tracking
             - Could extend with: DB saving, markdown formatting, etc.
 
             Args:
                 image_path: Path to the image file
-                story_style: Accepted for compatibility but ignored (always uses adventure)
+                story_style: Story style (default: adventure). Options: whimsical, dramatic, adventure, educational
             """
-            # Call VLM mixin's internal method with fixed adventure style
-            # (ignoring story_style parameter - always adventure)
-            result = self._create_story_from_image(image_path, story_style="adventure")
+            # Call VLM mixin's internal method with specified or default style
+            result = self._create_story_from_image(image_path, story_style=story_style)
 
             # Extend with custom metadata
             if result.get("status") == "success":
                 result["custom_metadata"] = {
                     "agent": "ImageStoryAgent",
-                    "style": "adventure",
+                    "style": story_style,
                 }
 
             return result
@@ -367,28 +366,27 @@ class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
         from gaia.agents.base.tools import tool
 
         @tool(name="create_story_about_image")
-        def create_story_about_image(image_path: str, story_style: str = None) -> dict:
+        def create_story_about_image(image_path: str, story_style: str = "adventure") -> dict:
             """
-            Create an adventure story about an image with metadata tracking.
+            Create a story about an image with metadata tracking.
 
             Wraps VLMToolsMixin's generic create_story_from_image() to add:
-            - Always uses adventure style (story_style param accepted but ignored)
+            - Defaults to adventure style (but accepts other styles)
             - Adds custom metadata for tracking
             - Could extend with: DB saving, markdown formatting, etc.
 
             Args:
                 image_path: Path to the image file
-                story_style: Accepted for compatibility but ignored (always uses adventure)
+                story_style: Story style (default: adventure). Options: whimsical, dramatic, adventure, educational
             """
-            # Call VLM mixin's internal method with fixed adventure style
-            # (ignoring story_style parameter - always adventure)
-            result = self._create_story_from_image(image_path, story_style="adventure")
+            # Call VLM mixin's internal method with specified or default style
+            result = self._create_story_from_image(image_path, story_style=story_style)
 
             # Extend with custom metadata
             if result.get("status") == "success":
                 result["custom_metadata"] = {
                     "agent": "ImageStoryAgent",
-                    "style": "adventure",
+                    "style": story_style,
                 }
 
             return result
