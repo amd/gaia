@@ -53,6 +53,24 @@ jobs:
                   throw "Health endpoint returned non-ok status"
               }
               Write-Host "[OK] Health check passed"
+
+              # Print Lemonade version
+              if ($health.PSObject.Properties['version']) {
+                  Write-Host "[INFO] Lemonade Server version: $($health.version)"
+              } else {
+                  Write-Host "[WARN] Lemonade Server version not found in health response"
+              }
+
+              # Print context_size (informational - for tracking future fixes)
+              if ($health.PSObject.Properties['context_size']) {
+                  Write-Host "[INFO] context_size: $($health.context_size)"
+              } elseif ($health.PSObject.Properties['all_models_loaded'] -and $health.all_models_loaded.Count -gt 0) {
+                  $ctxSize = $health.all_models_loaded[0].recipe_options.ctx_size
+                  Write-Host "[INFO] context_size: $ctxSize (from all_models_loaded)"
+              } else {
+                  Write-Host "[WARN] context_size not found in health response"
+                  Write-Host "       TODO: Update CI runner to Lemonade Server 9.1.4+ for context_size support"
+              }
               Write-Host ""
 
               # Test completion (in same session while server is still alive)
