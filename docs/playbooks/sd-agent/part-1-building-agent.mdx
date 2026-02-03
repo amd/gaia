@@ -274,23 +274,20 @@ Now add three methods to the class:
         pass
 
     def _get_system_prompt(self) -> str:
-        # This prompt is sent to the LLM with every query
-        # The LLM uses it to understand its capabilities and decide which tools to call
-        return """You are a multi-modal image generation and storytelling agent.
+        # Use the real SDAgent prompts with research-backed prompt engineering
+        # Tool schemas (parameters, models, descriptions) are automatically injected by Agent
+        from gaia.agents.sd.prompts import (
+            BASE_GUIDELINES,
+            MODEL_SPECIFIC_PROMPTS,
+            WORKFLOW_INSTRUCTIONS,
+        )
 
-When user requests an image with a story:
-1. Call generate_image with a detailed, enhanced prompt
-2. Call create_story_from_image with the generated image path to create narrative
+        # Get model-specific enhancement guidelines for the default model
+        model_specific = MODEL_SPECIFIC_PROMPTS.get(
+            self.sd_default_model, MODEL_SPECIFIC_PROMPTS["SDXL-Turbo"]
+        )
 
-Available tools (auto-registered by mixins):
-- generate_image(prompt, model, size, steps, cfg_scale, seed): Generate images with Stable Diffusion
-- create_story_from_image(image_path, story_style): Generate creative narrative from any image
-- analyze_image(image_path, focus): Get detailed image description
-- answer_question_about_image(image_path, question): Answer specific questions about images
-- list_sd_models(): Show available SD models
-- get_generation_history(limit): See recent generations
-
-Be flexible - adapt tool usage based on user request."""
+        return BASE_GUIDELINES + model_specific + WORKFLOW_INSTRUCTIONS
 ```
 
 ---
@@ -335,23 +332,20 @@ class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
         pass
 
     def _get_system_prompt(self) -> str:
-        # This prompt is sent to the LLM with every query
-        # The LLM uses it to understand its capabilities and decide which tools to call
-        return """You are a multi-modal image generation and storytelling agent.
+        # Use the real SDAgent prompts with research-backed prompt engineering
+        # Tool schemas (parameters, models, descriptions) are automatically injected by Agent
+        from gaia.agents.sd.prompts import (
+            BASE_GUIDELINES,
+            MODEL_SPECIFIC_PROMPTS,
+            WORKFLOW_INSTRUCTIONS,
+        )
 
-When user requests an image with a story:
-1. Call generate_image with a detailed, enhanced prompt
-2. Call create_story_from_image with the generated image path to create narrative
+        # Get model-specific enhancement guidelines for the default model
+        model_specific = MODEL_SPECIFIC_PROMPTS.get(
+            self.sd_default_model, MODEL_SPECIFIC_PROMPTS["SDXL-Turbo"]
+        )
 
-Available tools (auto-registered by mixins):
-- generate_image(prompt, model, size, steps, cfg_scale, seed): Generate images with Stable Diffusion
-- create_story_from_image(image_path, story_style): Generate creative narrative from any image
-- analyze_image(image_path, focus): Get detailed image description
-- answer_question_about_image(image_path, question): Answer specific questions about images
-- list_sd_models(): Show available SD models
-- get_generation_history(limit): See recent generations
-
-Be flexible - adapt tool usage based on user request."""
+        return BASE_GUIDELINES + model_specific + WORKFLOW_INSTRUCTIONS
 
 
 if __name__ == "__main__":
