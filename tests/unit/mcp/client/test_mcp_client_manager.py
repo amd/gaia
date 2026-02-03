@@ -378,3 +378,74 @@ class TestMCPConfig:
 
         assert server["env"]["GITHUB_TOKEN"] == "ghp_xxx"
         assert server["env"]["DEBUG"] == "true"
+
+    def test_config_prefers_local_over_global(self, tmp_path, monkeypatch):
+        """Test that local config is preferred over global config."""
+        import json
+
+        # Create both local and global configs with different servers
+        local_dir = tmp_path / "local"
+        global_dir = tmp_path / "global"
+        local_config = local_dir / "mcp_servers.json"
+        global_config = global_dir / ".gaia" / "mcp_servers.json"
+
+        local_dir.mkdir(parents=True)
+        global_config.parent.mkdir(parents=True)
+
+        local_config.write_text(
+            json.dumps(
+                {"mcpServers": {"local_server": {"command": "echo", "args": ["local"]}}}
+            )
+        )
+        global_config.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "global_server": {"command": "echo", "args": ["global"]}
+                    }
+                }
+            )
+        )
+
+        # Set CWD to local dir and HOME to global parent
+        monkeypatch.chdir(local_dir)
+        monkeypatch.setenv("HOME", str(global_dir))
+
+        config = MCPConfig()
+
+        # Should load local config (has local_server, not global_server)
+        assert config.server_exists("local_server")
+        assert not config.server_exists("global_server")
+        assert config.config_file == local_config
+
+    def test_config_falls_back_to_global_when_no_local(self, tmp_path, monkeypatch):
+        """Test that global config is used when no local config exists."""
+        import json
+
+        # Create only global config (no local)
+        local_dir = tmp_path / "local"
+        global_dir = tmp_path / "global"
+        global_config = global_dir / ".gaia" / "mcp_servers.json"
+
+        local_dir.mkdir(parents=True)
+        global_config.parent.mkdir(parents=True)
+
+        global_config.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "global_server": {"command": "echo", "args": ["global"]}
+                    }
+                }
+            )
+        )
+
+        # Set CWD to local dir (no config) and HOME to global parent
+        monkeypatch.chdir(local_dir)
+        monkeypatch.setenv("HOME", str(global_dir))
+
+        config = MCPConfig()
+
+        # Should fall back to global config
+        assert config.server_exists("global_server")
+        assert config.config_file == global_config

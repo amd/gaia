@@ -2130,8 +2130,8 @@ Examples:
         "--profile",
         "-p",
         default="chat",
-        choices=["minimal", "sd", "chat", "code", "rag", "all"],
-        help="Profile to initialize: minimal, sd (image gen), chat, code, rag, all (default: chat)",
+        choices=["minimal", "sd", "chat", "code", "rag", "mcp", "all"],
+        help="Profile to initialize: minimal, sd (image gen), chat, code, rag, mcp, all (default: chat)",
     )
     init_parser.add_argument(
         "--minimal",
@@ -4135,10 +4135,20 @@ Let me know your answer!
 
     # Handle init command
     if args.action == "init":
-        from gaia.installer.init_command import run_init
-
         # --minimal flag overrides --profile
         profile = "minimal" if args.minimal else args.profile
+
+        # MCP profile has its own init flow (no Lemonade/models)
+        if profile == "mcp":
+            from gaia.installer.mcp_init import run_mcp_init
+
+            exit_code = run_mcp_init(
+                yes=args.yes,
+                verbose=getattr(args, "verbose", False),
+            )
+            sys.exit(exit_code)
+
+        from gaia.installer.init_command import run_init
 
         exit_code = run_init(
             profile=profile,

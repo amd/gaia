@@ -16,15 +16,28 @@ class MCPConfig:
 
     Stores server configurations in a JSON file for persistence.
 
+    Config file lookup order (when config_file is not specified):
+    1. ./mcp_servers.json (current working directory - project-local config)
+    2. ~/.gaia/mcp_servers.json (user home directory - global config)
+
     Args:
-        config_file: Path to configuration file (default: ~/.gaia/mcp_servers.json)
+        config_file: Path to configuration file (default: two-stage lookup)
     """
 
     def __init__(self, config_file: str = None):
         if config_file is None:
-            config_dir = Path.home() / ".gaia"
-            config_dir.mkdir(parents=True, exist_ok=True)
-            config_file = config_dir / "mcp_servers.json"
+            # Two-stage lookup:
+            # 1. Check current working directory first (project-local config)
+            local_config = Path.cwd() / "mcp_servers.json"
+            if local_config.exists():
+                config_file = local_config
+                logger.debug(f"Using local config: {config_file}")
+            else:
+                # 2. Fall back to user's home directory (global config)
+                config_dir = Path.home() / ".gaia"
+                config_dir.mkdir(parents=True, exist_ok=True)
+                config_file = config_dir / "mcp_servers.json"
+                logger.debug(f"Using global config: {config_file}")
 
         self.config_file = Path(config_file)
         self._servers: Dict[str, Dict[str, Any]] = {}
