@@ -160,12 +160,14 @@ When you call `super().__init__()`, Python follows this order to initialize each
 
 **`VLMToolsMixin` (from `gaia.vlm`)**
 - `init_vlm()` - Initialize VLM capabilities
-- `get_vlm_system_prompt()` - Returns VLM usage guidelines
+- `get_vlm_system_prompt()` - Returns VLM usage guidelines (minimal - tools are self-documenting)
 - `self.vlm_client` - VLMClient for vision analysis
 - Auto-registered tools:
-  - `analyze_image()`
-  - `create_story_from_image()`
-  - `answer_question_about_image()`
+  - `analyze_image()` - Detailed image descriptions
+  - `create_story_from_image()` - Creative narratives (generic)
+  - `answer_question_about_image()` - Image Q&A
+
+VLM prompts are minimal since the tools are self-documenting via their schemas.
 
 ---
 
@@ -414,9 +416,11 @@ Result: `sd_prompt + vlm_prompt + custom`
 def _get_mixin_prompts(self) -> list[str]:
     prompts = super()._get_mixin_prompts()  # Get [sd_prompt, vlm_prompt]
 
-    # Modify SD prompt to use serious tone
+    # Modify SD prompt for professional use case
     if prompts and len(prompts) > 0:
+        # Change story style from whimsical to professional
         prompts[0] = prompts[0].replace("whimsical", "professional")
+        prompts[0] = prompts[0].replace("adventure", "technical documentation")
 
     return prompts
 
@@ -424,6 +428,36 @@ def _get_system_prompt(self) -> str:
     return ""  # Use modified mixin prompts
 ```
 Result: `modified_sd_prompt + vlm_prompt`
+
+**Real-world example:**
+```python
+class TechnicalDocAgent(Agent, SDToolsMixin, VLMToolsMixin):
+    """Generates technical diagrams with professional documentation."""
+
+    def __init__(self):
+        super().__init__(model_id="Qwen3-8B-GGUF")
+        self.init_sd(default_model="SDXL-Base-1.0")  # Photorealistic
+        self.init_vlm()
+
+    def _get_mixin_prompts(self) -> list[str]:
+        prompts = super()._get_mixin_prompts()
+
+        # Customize for technical documentation
+        if prompts:
+            # Change SD prompt to emphasize technical accuracy
+            prompts[0] = prompts[0].replace(
+                "creative story",
+                "technical description with specifications"
+            )
+
+        return prompts
+
+    def _register_tools(self):
+        pass
+
+    def _get_system_prompt(self) -> str:
+        return "Focus on technical accuracy and professional tone."
+```
 
 **Pattern 5: Custom composition order**
 ```python
@@ -437,23 +471,65 @@ def _compose_system_prompt(self) -> str:
 ```
 Result: `custom + sd_prompt + vlm_prompt`
 
-### Debugging System Prompts
+### Debugging and Observing System Prompts
 
-See what prompt the LLM receives:
-
+**Method 1: Print final composed prompt**
 ```python
-# View final composed prompt
-print(agent.system_prompt)
-
-# View mixin prompts separately
-print(agent._get_mixin_prompts())
-
-# View agent custom separately
-print(agent._get_system_prompt())
-
-# Enable prompt display on startup
 agent = ImageStoryAgent()
-agent.show_prompts = True  # Prints system prompt during initialization
+print(agent.system_prompt)  # Full prompt sent to LLM
+print(f"Length: {len(agent.system_prompt)} chars")
+```
+
+**Method 2: View prompt components separately**
+```python
+# View base SD guidelines (static)
+print(SDToolsMixin.get_base_sd_guidelines())
+
+# View full SD prompt (base + model-specific)
+print(agent.get_sd_system_prompt())
+
+# View VLM guidelines
+print(agent.get_vlm_system_prompt())
+
+# View mixin prompts as list
+print(agent._get_mixin_prompts())  # [sd_prompt, vlm_prompt]
+
+# View agent custom additions
+print(agent._get_system_prompt())
+```
+
+**Method 3: Enable automatic prompt display**
+```python
+# Show prompt during initialization
+agent = ImageStoryAgent()
+agent.show_prompts = True
+# Restart agent to see prompt printed to console
+
+# Or pass in config (if agent supports)
+config = SDAgentConfig()
+config.show_prompts = True
+agent = SDAgent(config)
+```
+
+**Method 4: Save prompt to file for review**
+```python
+with open("system_prompt_debug.txt", "w") as f:
+    f.write(agent.system_prompt)
+
+# Review in editor to see:
+# - Mixin prompts
+# - Custom instructions
+# - Tool schemas
+# - Response format
+```
+
+**Method 5: Use logging**
+```python
+import logging
+logging.basicConfig(level=logging.DEBUG)
+
+agent = ImageStoryAgent()
+# Logs will show prompt composition details
 ```
 
 ### Why Composable Prompts Matter

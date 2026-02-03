@@ -309,21 +309,16 @@ class VLMToolsMixin:
                 "question": question,
             }
 
-    def get_vlm_system_prompt(self) -> str:
+    @staticmethod
+    def get_base_vlm_guidelines() -> str:
         """
-        Get VLM-specific system prompt fragment for composition.
+        Get static VLM usage guidelines (no instance state required).
 
-        Returns basic VLM usage guidelines that agents can compose into
-        their full system prompt. VLM tools are generic and self-documenting,
-        so this prompt is minimal.
+        Returns basic VLM tool usage guidelines. VLM tools are self-documenting
+        via their schemas, so these guidelines are minimal.
 
         Returns:
-            VLM usage guidelines (optional - tools are self-documenting)
-
-        Example:
-            def _get_system_prompt(self) -> str:
-                vlm_prompt = self.get_vlm_system_prompt()
-                return vlm_prompt  # Or compose with other prompts
+            Static VLM usage guidelines
         """
         return """Vision tools are available for image analysis. Use them when users ask about images:
 
@@ -332,6 +327,22 @@ class VLMToolsMixin:
 - answer_question_about_image(): For specific questions about image content
 
 Tool schemas provide full parameter details. Be flexible based on user needs."""
+
+    def get_vlm_system_prompt(self) -> str:
+        """
+        Get VLM system prompt.
+
+        VLM prompts are static (no model-specific variations), so this just
+        returns the base guidelines. Safe to call before init_vlm().
+
+        Returns:
+            VLM usage guidelines
+
+        Example:
+            def _get_system_prompt(self) -> str:
+                return self.get_vlm_system_prompt()
+        """
+        return self.get_base_vlm_guidelines()
 
     def cleanup_vlm(self) -> None:
         """

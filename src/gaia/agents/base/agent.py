@@ -154,18 +154,17 @@ class Agent(abc.ABC):
             self.console = self._create_console()
 
         # Initialize LLM client for local model
-        # Compose system prompt from mixins + agent custom
-        self.system_prompt = self._compose_system_prompt()
+        # Note: System prompt will be composed after _register_tools()
+        # This allows mixins to be initialized first (in subclass __init__)
 
         # Register tools for this agent
         self._register_tools()
 
-        # Update system prompt with available tools and response format
-        tools_description = self._format_tools_for_prompt()
-        self.system_prompt += f"\n\n==== AVAILABLE TOOLS ====\n{tools_description}\n"
+        # Note: system_prompt is now a lazy @property that composes on first access
+        # Tool descriptions and response format are added in _compose_system_prompt()
 
-        # Add JSON response format instructions (shared across all agents)
-        self.system_prompt += """
+        # Store response format template for use in composition
+        self._response_format_template = """
 ==== RESPONSE FORMAT ====
 You must respond ONLY in valid JSON. No text before { or after }.
 
@@ -259,7 +258,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
     def _compose_system_prompt(self) -> str:
         """
-        Compose final system prompt from mixin fragments + agent custom.
+        Compose final system prompt from mixin fragments + agent custom + tools + format.
 
         Override this method for complete control over prompt composition order.
 
@@ -286,7 +285,36 @@ You must respond ONLY in valid JSON. No text before { or after }.
         if custom:
             parts.append(custom)
 
+        # Add tool descriptions (if tools registered)
+        if hasattr(self, "_format_tools_for_prompt"):
+            tools_description = self._format_tools_for_prompt()
+            if tools_description:
+                parts.append(f"==== AVAILABLE TOOLS ====\n{tools_description}")
+
+        # Add response format (if template set)
+        if hasattr(self, "_response_format_template"):
+            parts.append(self._response_format_template)
+
         return "\n\n".join(p for p in parts if p)
+
+    @property
+    def system_prompt(self) -> str:
+        """
+        Lazy-loaded system prompt composed from mixins + agent custom.
+
+        Computed on first access to allow mixins to initialize in subclass __init__.
+
+        To see the prompt for debugging:
+            print(agent.system_prompt)
+        """
+        if not hasattr(self, "_system_prompt_cache"):
+            self._system_prompt_cache = self._compose_system_prompt()
+        return self._system_prompt_cache
+
+    @system_prompt.setter
+    def system_prompt(self, value: str):
+        """Allow setting system prompt (used when appending tool descriptions)."""
+        self._system_prompt_cache = value
 
     def _get_system_prompt(self) -> str:
         """
