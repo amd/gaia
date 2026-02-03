@@ -34,12 +34,10 @@ jobs:
         continue-on-error: true
         run: |
           Write-Host "Cleaning up any stuck MSI installer processes..."
-          try {
-              # Kill msiexec processes (MSI installer)
-              Get-Process msiexec -ErrorAction SilentlyContinue | Stop-Process -Force
+          $processes = Get-Process msiexec -ErrorAction SilentlyContinue
+          if ($processes) {
+              $processes | Stop-Process -Force
               Write-Host "Killed stuck msiexec processes"
-          } catch {
-              Write-Host "No stuck msiexec processes found"
           }
 
       - name: Setup Python environment
