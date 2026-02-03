@@ -247,9 +247,12 @@ Now add three methods to the class:
 
 ```python
     def __init__(self, output_dir="./generated_images"):
-        # Initialize Agent base class first
-        # This sets up the reasoning loop, tool registry, and LLM client
-        super().__init__()
+        # Initialize Agent base class with Qwen3-8B model
+        # (SD profile downloads this model, not the default Qwen3-Coder-30B)
+        super().__init__(
+            model_id="Qwen3-8B-GGUF",
+            min_context_size=8192,  # 8K context sufficient for image workflows
+        )
 
         # Initialize SD tools
         # Under the hood: Creates LemonadeClient, sets output directory,
@@ -305,9 +308,12 @@ class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
     """Multi-modal agent that generates images and creates stories."""
 
     def __init__(self, output_dir="./generated_images"):
-        # Step 1: Initialize Agent base class
-        # This sets up the reasoning loop, tool registry, and LLM client
-        super().__init__()
+        # Initialize Agent base class with Qwen3-8B model
+        # (SD profile downloads this model, not the default Qwen3-Coder-30B)
+        super().__init__(
+            model_id="Qwen3-8B-GGUF",
+            min_context_size=8192,  # 8K context sufficient for image workflows
+        )
 
         # Step 2: Initialize SD tools
         # Under the hood: Creates LemonadeClient, sets output directory,
