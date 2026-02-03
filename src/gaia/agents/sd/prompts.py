@@ -120,9 +120,16 @@ WORKFLOW_INSTRUCTIONS = """
 WORKFLOW:
 1. Analyze user's request for subject, mood, desired style
 2. Enhance prompt following guidelines above
-3. Call generate_image with optimized parameters for this model
+3. Call generate_image with optimized parameters for this model **ONCE** (do not generate variations unless explicitly requested)
 4. If user wants story: call create_story_from_last_image() - saves story to text file automatically
-5. Report to user: enhanced prompt used + generation time + file paths
+5. Provide final answer that includes:
+   - The generated image path
+   - The enhanced prompt used
+   - **The full story text** (if story was created) - include the complete story in your response so user can read it immediately
+   - Story file path (for reference)
+   - DO NOT continue generating more variations
+
+**CRITICAL: After generating the image (and story if requested), STOP and provide final answer with the story text included. Do not generate additional variations unless the user explicitly asks for them.**
 
 AVAILABLE TOOLS:
 - generate_image(prompt, size, steps, cfg_scale): Create images with enhanced prompts
@@ -135,28 +142,37 @@ AVAILABLE TOOLS:
 
 USE TOOLS FLEXIBLY BASED ON USER REQUEST:
 
+**DEFAULT BEHAVIOR: Generate ONE image unless explicitly specified otherwise.**
+
 Example scenarios:
-User: "create a robot kitten" → generate_image only
+User: "create a robot kitten" → generate_image ONCE only (single image)
 User: "create 3 robot kittens" → generate_image 3 times (different seeds)
-User: "create a robot kitten with a story" → generate_image, then create_story_from_last_image
+User: "create a robot kitten with a story" → generate_image ONCE, then create_story_from_last_image
+User: "generate variations of a robot" → generate_image multiple times (different seeds)
 User: "tell me about that last image" → create_story_from_last_image (or analyze_image)
 User: "what color are its eyes?" → answer_question_about_image(last generated image)
-User: "create another one" → generate_image with similar prompt
+User: "create another one" → generate_image ONCE with similar prompt
 User: "analyze the image at /path/to/file.png" → analyze_image with specific path
 
 KEY POINTS:
+- **DEFAULT TO ONE IMAGE** - Only generate multiple if user explicitly requests (e.g., "3 images", "variations", "several")
 - Enhance prompts following model-specific guidelines
 - Use generate_image with explicit size, steps, cfg_scale for quality
 - Story/analysis tools are OPTIONAL - only use if user requests
 - create_story_from_last_image auto-finds last SD image and saves story to .txt file
 - Generic VLM tools (analyze_image, create_story_from_image) work with any image path
-- Be flexible - user might want multiple images, variations, or just one image without story
 
 Example interaction with story:
 User: "create a cute robot kitten and tell me a story about it"
 You: [generate_image with enhanced prompt]
 You: [create_story_from_last_image]
-You: "Generated a robot kitten with a story! Enhanced prompt: '...' Image: [path] Story file: [story_file path]"
+You: "Generated an image of a robot kitten! Here's the story:
+
+[FULL STORY TEXT HERE - 2-3 paragraphs]
+
+Enhanced prompt used: '...'
+Image saved: [path]
+Story saved: [story_file path]"
 
 Example interaction without story:
 User: "create a robot kitten"

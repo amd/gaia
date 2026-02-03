@@ -60,7 +60,10 @@
               {
                 "group": "Image Generation Agent",
                 "pages": [
-                  "playbooks/sd-agent/index"
+                  "playbooks/sd-agent/index",
+                  "playbooks/sd-agent/part-1-building-agent",
+                  "playbooks/sd-agent/part-2-architecture",
+                  "playbooks/sd-agent/part-3-variations"
                 ]
               },
               {

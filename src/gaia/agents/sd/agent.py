@@ -159,9 +159,10 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
             generic VLM tools under the hood.
 
             Args:
-                image_path: Optional path to specific image. If None, uses last generated image.
+                image_path: Optional path to specific image. If None or empty, uses last generated image.
             """
-            if image_path is None:
+            # Treat empty string same as None for auto-find
+            if not image_path:
                 # Auto-find last generated image
                 if not self.sd_generations:
                     return {

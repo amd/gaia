@@ -1,0 +1,388 @@
+---
+title: "Part 3: Advanced Patterns & Variations"
+description: "Apply multi-modal patterns to real-world use cases"
+icon: "wand-magic-sparkles"
+---
+
+<Info>
+  **Time to complete:** 20 minutes
+  **Part 3 of 3** - [Overview](/playbooks/sd-agent) • [← Part 2](/playbooks/sd-agent/part-2-architecture)
+</Info>
+
+## Introduction
+
+In Parts 1 and 2, you built a multi-modal agent and learned how it works. Now let's explore real-world variations that show the flexibility of GAIA's mixin architecture.
+
+Each variation solves a specific use case by composing different capabilities.
+
+---
+
+## Variation 1: Fast Image Generation Only
+
+**Use case:** Rapid prototyping tool for game assets
+
+```python
+class RapidPrototypeAgent(Agent, SDToolsMixin):
+    """Generate images quickly without analysis."""
+
+    def __init__(self):
+        super().__init__()
+        self.init_sd(default_model="SD-Turbo")
+
+    def _register_tools(self):
+        pass
+
+    def _get_system_prompt(self):
+        return """You generate images for rapid prototyping.
+Focus on speed. Use SD-Turbo model. No analysis needed."""
+```
+
+Fastest model: ~13s per image
+
+**Why no VLM?** If you just need images fast, VLM adds unnecessary overhead.
+
+<video
+  controls
+  className="w-full rounded-lg"
+  src="https://assets.amd-gaia.ai/videos/rapid-prototype-agent-demo.webm"
+/>
+<Note>Video: Rapid image generation without story creation for fast iteration</Note>
+
+---
+
+## Variation 2: Image Analysis Without Generation
+
+**Use case:** Content moderation or accessibility tool
+
+```python
+class ImageAnalysisAgent(Agent, VLMToolsMixin):
+    """Analyze existing images, no generation."""
+
+    def __init__(self):
+        super().__init__()
+        self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
+
+    def _register_tools(self):
+        pass
+
+    def _get_system_prompt(self):
+        return """You analyze images for content and accessibility.
+Use analyze_image for descriptions, answer_question_about_image for specific queries."""
+```
+
+**Why no SD?** Content moderation doesn't need image generation.
+
+### Example Use Case: Alt Text Generation
+
+```python
+# Extend the agent with a custom tool for alt text
+class AltTextAgent(Agent, VLMToolsMixin):
+    def __init__(self):
+        super().__init__()
+        self.init_vlm()
+
+    def _register_tools(self):
+        from gaia.agents.base.tools import tool
+
+        @tool(name="generate_alt_text")
+        def generate_alt_text(image_path: str) -> dict:
+            """Generate accessibility alt text for an image."""
+            # Use VLM to analyze the image
+            result = self._analyze_image(image_path, focus="all")
+
+            if result.get("status") == "success":
+                # Format as concise alt text
+                description = result["description"]
+                alt_text = f"Image: {description[:150]}..."  # Truncate to 150 chars
+
+                return {
+                    "status": "success",
+                    "alt_text": alt_text,
+                    "full_description": description,
+                }
+            return result
+
+    def _get_system_prompt(self):
+        return """You generate accessibility alt text for images.
+Use generate_alt_text tool to create concise, descriptive alt text."""
+```
+
+---
+
+## Variation 3: Multi-Modal with Database
+
+**Use case:** Image asset management system
+
+```python
+from gaia.database import DatabaseMixin
+
+class ImageCatalogAgent(Agent, SDToolsMixin, VLMToolsMixin, DatabaseMixin):
+    """Generate, analyze, and catalog images in SQLite."""
+
+    def __init__(self):
+        super().__init__()
+
+        # Initialize all three capabilities
+        self.init_sd(output_dir=".gaia/catalog/images")
+        self.init_vlm()
+        self.init_database("image_catalog.db")
+
+        # Create catalog schema
+        self._create_catalog_schema()
+
+    def _register_tools(self):
+        pass  # All tools auto-registered by mixins
+
+    def _create_catalog_schema(self):
+        """Create database schema for image catalog."""
+        # Use DatabaseMixin's execute_sql to ensure proper connection handling
+        try:
+            result = self.execute_sql("""
+                CREATE TABLE IF NOT EXISTS images (
+                    id INTEGER PRIMARY KEY,
+                    prompt TEXT,
+                    image_path TEXT,
+                    model TEXT,
+                    story TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            print(f"Schema created: {result}")
+        except Exception as e:
+            print(f"Schema already exists or error: {e}")
+
+    def _get_system_prompt(self):
+        return """You manage an image catalog: generate, analyze, and store.
+
+Workflow:
+1. generate_image to create the image
+2. create_story_from_image to analyze it
+3. execute_sql to save metadata to images table
+
+Always save generated images to the database."""
+```
+
+**Why all three?** Asset management needs generation (SD), analysis (VLM), and persistence (Database).
+
+<video
+  controls
+  className="w-full rounded-lg"
+  src="https://assets.amd-gaia.ai/videos/image-catalog-agent-demo.webm"
+/>
+<Note>Video: Multi-modal agent with database integration - generating, analyzing, and cataloging images</Note>
+
+### Example Workflow
+
+```python
+agent = ImageCatalogAgent()
+
+# User request
+result = agent.process_query("Create a sunset image and catalog it")
+
+# Under the hood:
+# 1. LLM calls generate_image("sunset over mountains")
+#    → Returns: "./generated_images/sunset_123.png"
+#
+# 2. LLM calls create_story_from_image("./generated_images/sunset_123.png")
+#    → Returns: "As the day draws to a close, golden light..."
+#
+# 3. LLM calls execute_sql with INSERT query
+#    → Saves: prompt, image_path, model, story to database
+```
+
+---
+
+## Variation 4: Custom Tools with Mixins
+
+**Use case:** Add watermarking to generated images
+
+```python
+from PIL import Image, ImageDraw
+
+class WatermarkedImageAgent(Agent, SDToolsMixin):
+    """Generate images with automatic watermarking."""
+
+    def __init__(self):
+        super().__init__()
+        self.init_sd()
+
+    def _register_tools(self):
+        """Add custom watermarking tool."""
+        from gaia.agents.base.tools import tool
+
+        @tool(name="generate_watermarked_image")
+        def generate_watermarked_image(prompt: str) -> dict:
+            """Generate image and add watermark."""
+
+            # Use SD mixin's generate method
+            result = self._generate_image(prompt)
+
+            if result.get("status") == "success":
+                # Add watermark using PIL
+                img_path = result["image_path"]
+                img = Image.open(img_path)
+                draw = ImageDraw.Draw(img)
+
+                # Add text watermark
+                draw.text((10, 10), "© 2025", fill=(255, 255, 255, 128))
+
+                img.save(img_path)
+                result["watermarked"] = True
+
+            return result
+
+    def _get_system_prompt(self):
+        return "You generate watermarked images. Use generate_watermarked_image tool."
+```
+
+**Pattern:** Custom tools can build on top of mixin methods (`self._generate_image()`).
+
+<video
+  controls
+  className="w-full rounded-lg"
+  src="https://assets.amd-gaia.ai/videos/watermarked-image-agent-demo.webm"
+/>
+<Note>Video: Custom tool extending mixin functionality with automatic watermarking</Note>
+
+---
+
+## Advanced Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Image generation is slow">
+    **Issue:** SDXL-Turbo taking longer than 17s
+
+    **Cause:** Model might be running on CPU instead of NPU/GPU
+
+    **Check:** Verify AMD hardware acceleration:
+    ```bash
+    lemonade-server info
+    ```
+
+    Look for "device: NPU" or "device: GPU". If it says "CPU", check your AMD drivers.
+  </Accordion>
+
+  <Accordion title="No story generated, only image">
+    **Issue:** Agent generates image but skips story
+
+    **Cause:** The agent decides based on your prompt whether to create a story
+
+    **Solution:** Be explicit in your prompt:
+    ```python
+    "create a robot kitten AND tell me a story about it"
+    ```
+
+    Or update system prompt to always create stories.
+  </Accordion>
+
+  <Accordion title="Agent repeats same action multiple times">
+    **Issue:** Agent calls generate_image multiple times for same prompt
+
+    **Cause:** Agent planning loop retry behavior
+
+    **Solution:** Set `max_steps` lower in Agent init:
+    ```python
+    super().__init__(max_steps=5)  # Default is 10
+    ```
+
+    Or improve system prompt to be more directive.
+  </Accordion>
+
+  <Accordion title="VLM analysis quality issues">
+    **Issue:** Vision analysis lacks detail or is inaccurate
+
+    **Solutions:**
+
+    1. Use a larger VLM model:
+    ```python
+    self.init_vlm(model="Qwen2.5-VL-7B-Instruct-GGUF")  # Larger, more capable
+    ```
+
+    2. Specify focus in analyze_image:
+    ```python
+    analyze_image(image_path, focus="composition")  # More targeted
+    ```
+
+    3. Provide better prompts in system prompt:
+    ```python
+    "When analyzing images, focus on: 1) Main subjects, 2) Colors and lighting, 3) Composition"
+    ```
+  </Accordion>
+
+  <Accordion title="Mixing different model providers">
+    **Question:** Can I use Claude for LLM reasoning with local SD/VLM?
+
+    **Answer:** Yes! Override the LLM provider in `__init__`:
+
+    ```python
+    class HybridAgent(Agent, SDToolsMixin, VLMToolsMixin):
+        def __init__(self):
+            # Use Claude for reasoning
+            super().__init__(use_claude=True, claude_model="claude-sonnet-4-20250514")
+
+            # But keep SD and VLM local
+            self.init_sd()
+            self.init_vlm()
+    ```
+
+    This uses Claude's stronger reasoning while keeping image operations local.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## What You Learned
+
+Across all 3 parts, you've mastered:
+
+<Steps>
+  <Step title="Python multiple inheritance for composition">
+    How to use `class MyAgent(Agent, Mixin1, Mixin2)` to compose capabilities. Understanding MRO (Method Resolution Order) and cooperative `super().__init__()` calls.
+  </Step>
+
+  <Step title="Mixin initialization pattern">
+    Each mixin's `init_*()` method sets up state and auto-registers tools. No manual registration needed—the `@tool` decorator handles it.
+  </Step>
+
+  <Step title="LLM as reasoning engine, not one of three models">
+    The agent has ONE LLM that decides which tools to call. SD and VLM are tools, not peers. The LLM orchestrates everything.
+  </Step>
+
+  <Step title="Tool composition through wrappers">
+    How to write domain-specific convenience tools (like `create_story_from_last_image`) that wrap generic capabilities (like `create_story_from_image`). This keeps mixins reusable.
+  </Step>
+
+  <Step title="Lemonade Server as local inference backend">
+    All models run through Lemonade Server endpoints: `/v1/chat/completions` (LLM), `/images/generations` (SD), `/v1/chat/completions` with images (VLM). Everything is local.
+  </Step>
+
+  <Step title="Agent system abstractions">
+    The `Agent` base class handles the reasoning loop, tool registry, and conversation state. You just define `_get_system_prompt()` and optionally `_register_tools()`.
+  </Step>
+
+  <Step title="Real-world patterns">
+    How to adapt the multi-modal pattern for specific use cases: rapid prototyping, content moderation, asset management, and custom workflows.
+  </Step>
+</Steps>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Try the CLI" icon="terminal" href="/guides/sd">
+    Use `gaia sd` for quick image generation with stories
+  </Card>
+
+  <Card title="VLM Tools Reference" icon="eye" href="/sdk/mixins/tool-mixins">
+    Learn more about VLMToolsMixin capabilities
+  </Card>
+
+  <Card title="Agent System Deep Dive" icon="robot" href="/sdk/core/agent-system">
+    Complete guide to GAIA's Agent architecture
+  </Card>
+
+  <Card title="Other Playbooks" icon="book" href="/playbooks">
+    Build Chat agents, Code agents, Jira agents, and more
+  </Card>
+</CardGroup>
