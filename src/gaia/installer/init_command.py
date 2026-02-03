@@ -334,7 +334,9 @@ class InitCommand:
                 # Still show version info for transparency
                 info = self.installer.check_installation()
                 if info.installed and info.version:
-                    self._print_success(f"Using pre-installed Lemonade Server v{info.version}")
+                    self._print_success(
+                        f"Using pre-installed Lemonade Server v{info.version}"
+                    )
                 else:
                     self._print_success("Using pre-installed Lemonade Server")
             else:
