@@ -533,9 +533,10 @@ class LemonadeInstaller:
             installed_version = info.version.lstrip("v")
 
             # Create installer for the installed version (not target version)
+            # Use minimal=True (lemonade-server-minimal.msi exists for all versions)
             # Pass console to child installer for consistent output
             uninstall_installer = LemonadeInstaller(
-                target_version=installed_version, console=self.console
+                target_version=installed_version, minimal=True, console=self.console
             )
 
             # Download the MSI matching the installed version

@@ -148,8 +148,9 @@ class InitCommand:
         # Initialize AgentConsole for formatted output
         self.agent_console = AgentConsole()
 
-        # Use minimal installer for minimal profile
-        use_minimal = self.profile == "minimal"
+        # Use minimal installer for minimal profile OR when using --yes (silent mode)
+        # Minimal installer is faster and more reliable for CI
+        use_minimal = self.profile == "minimal" or yes
 
         self.installer = LemonadeInstaller(
             target_version=LEMONADE_VERSION,

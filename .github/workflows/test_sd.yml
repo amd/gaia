@@ -56,10 +56,7 @@ jobs:
           python-version: '3.12'
           install-package: '.[dev]'
 
-      - name: Install Lemonade Server
-        uses: ./.github/actions/install-lemonade
-
-      - name: Initialize SD Profile (Start Server + Download Models)
+      - name: Initialize SD Profile (Install/Upgrade Lemonade + Start Server + Download Models)
         timeout-minutes: 10
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
@@ -68,31 +65,23 @@ jobs:
           Write-Host "================================================================"
           Write-Host "     Initializing GAIA SD Profile (gaia init --profile sd)"
           Write-Host "================================================================"
-          Write-Host "SD models require Lemonade v9.2.0+"
+          Write-Host "This handles:"
+          Write-Host "  - Lemonade installation/upgrade (silent mode)"
+          Write-Host "  - Server startup (if not running)"
+          Write-Host "  - Model downloads (cached if available)"
+          Write-Host ""
+          Write-Host "Note: SD models require Lemonade v9.2.0+"
+          Write-Host "      gaia init will auto-upgrade from v9.0.4 if needed"
           Write-Host ""
 
-          # Check if we need to upgrade Lemonade for SD model support
-          $version = & lemonade-server --version 2>&1
-          if ($version -match "(\d+\.\d+\.\d+)") {
-              $installedVersion = $matches[1]
-              Write-Host "Installed Lemonade version: $installedVersion"
+          # Let gaia init handle everything (installation, upgrade, server start, models)
+          # Use --yes for silent install and auto-confirm prompts
+          & gaia init --profile sd --yes
 
-              if ($installedVersion -eq "9.0.4") {
-                  Write-Host "Upgrading to v9.2.0 for SDXL-Turbo support..."
-                  & gaia init --profile sd --yes --force-reinstall
-              } else {
-                  Write-Host "Using existing version (v$installedVersion >= v9.2.0)"
-                  & gaia init --profile sd --yes --skip-lemonade
-              }
-          } else {
-              Write-Host "Could not detect version, using --skip-lemonade"
-              & gaia init --profile sd --yes --skip-lemonade
-          }
-
-          echo.
-          echo ================================================================
-          echo      SD Profile Initialization Complete
-          echo ================================================================
+          Write-Host ""
+          Write-Host "================================================================"
+          Write-Host "     SD Profile Initialization Complete"
+          Write-Host "================================================================"
 
       - name: Run SD Integration Tests (Fast - SD-Turbo only)
         shell: cmd
