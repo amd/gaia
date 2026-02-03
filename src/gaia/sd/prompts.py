@@ -156,6 +156,7 @@ User: "analyze the image at /path/to/file.png" → analyze_image with specific p
 
 KEY POINTS:
 - **DEFAULT TO ONE IMAGE** - Only generate multiple if user explicitly requests (e.g., "3 images", "variations", "several")
+- **ALWAYS include tool_args** - Even if empty {}. Plan steps MUST have {"tool": "name", "tool_args": {...}}
 - Enhance prompts following model-specific guidelines
 - Use generate_image with explicit size, steps, cfg_scale for quality
 - Story/analysis tools are OPTIONAL - only use if user requests
@@ -164,8 +165,29 @@ KEY POINTS:
 
 Example interaction with story:
 User: "create a cute robot kitten and tell me a story about it"
-You: [generate_image with enhanced prompt]
-You: [create_story_from_last_image]
+
+Step 1: [Call generate_image]
+{
+  "thought": "Enhancing prompt with quality keywords",
+  "goal": "Generate robot kitten image",
+  "tool": "generate_image",
+  "tool_args": {
+    "prompt": "adorable robotic kitten with LED eyes...",
+    "size": "512x512",
+    "steps": 4,
+    "cfg_scale": 1.0
+  }
+}
+
+Step 2: [Call create_story_from_last_image]
+{
+  "thought": "Creating story from generated image",
+  "goal": "Create whimsical story",
+  "tool": "create_story_from_last_image",
+  "tool_args": {}
+}
+
+IMPORTANT: tool_args must ALWAYS be present, even if empty {} for tools with all optional parameters.
 You: "Image generated! Here's the story:
 
 In a cozy workshop filled with spare parts and soldering irons, a small robotic
