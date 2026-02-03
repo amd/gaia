@@ -490,6 +490,32 @@ class SDToolsMixin:
 
         return image_path
 
+    def get_sd_system_prompt(self) -> str:
+        """
+        Get SD-specific system prompt fragment for composition.
+
+        Returns model-specific prompt engineering guidelines that agents
+        can compose into their full system prompt.
+
+        Example:
+            def _get_system_prompt(self) -> str:
+                sd_prompt = self.get_sd_system_prompt()
+                custom = "Additional custom instructions..."
+                return sd_prompt + "\n\n" + custom
+        """
+        from gaia.agents.sd.prompts import (
+            BASE_GUIDELINES,
+            MODEL_SPECIFIC_PROMPTS,
+            WORKFLOW_INSTRUCTIONS,
+        )
+
+        # Get model-specific enhancement guidelines
+        model_specific = MODEL_SPECIFIC_PROMPTS.get(
+            self.sd_default_model, MODEL_SPECIFIC_PROMPTS["SDXL-Turbo"]
+        )
+
+        return BASE_GUIDELINES + model_specific + WORKFLOW_INSTRUCTIONS
+
     def sd_health_check(self) -> Dict[str, Any]:
         """
         Check if Lemonade Server SD endpoint is available.

@@ -274,20 +274,10 @@ Now add three methods to the class:
         pass
 
     def _get_system_prompt(self) -> str:
-        # Use the real SDAgent prompts with research-backed prompt engineering
-        # Tool schemas (parameters, models, descriptions) are automatically injected by Agent
-        from gaia.agents.sd.prompts import (
-            BASE_GUIDELINES,
-            MODEL_SPECIFIC_PROMPTS,
-            WORKFLOW_INSTRUCTIONS,
-        )
-
-        # Get model-specific enhancement guidelines for the default model
-        model_specific = MODEL_SPECIFIC_PROMPTS.get(
-            self.sd_default_model, MODEL_SPECIFIC_PROMPTS["SDXL-Turbo"]
-        )
-
-        return BASE_GUIDELINES + model_specific + WORKFLOW_INSTRUCTIONS
+        # Compose system prompt from mixin-provided fragments
+        # SDToolsMixin provides SD-specific prompt engineering guidelines
+        # Tool schemas are automatically injected by Agent base class
+        return self.get_sd_system_prompt()
 ```
 
 ---
@@ -332,20 +322,10 @@ class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
         pass
 
     def _get_system_prompt(self) -> str:
-        # Use the real SDAgent prompts with research-backed prompt engineering
-        # Tool schemas (parameters, models, descriptions) are automatically injected by Agent
-        from gaia.agents.sd.prompts import (
-            BASE_GUIDELINES,
-            MODEL_SPECIFIC_PROMPTS,
-            WORKFLOW_INSTRUCTIONS,
-        )
-
-        # Get model-specific enhancement guidelines for the default model
-        model_specific = MODEL_SPECIFIC_PROMPTS.get(
-            self.sd_default_model, MODEL_SPECIFIC_PROMPTS["SDXL-Turbo"]
-        )
-
-        return BASE_GUIDELINES + model_specific + WORKFLOW_INSTRUCTIONS
+        # Compose system prompt from mixin-provided fragments
+        # SDToolsMixin provides SD-specific prompt engineering guidelines
+        # Tool schemas are automatically injected by Agent base class
+        return self.get_sd_system_prompt()
 
 
 if __name__ == "__main__":
