@@ -166,13 +166,18 @@ Example interaction with story:
 User: "create a cute robot kitten and tell me a story about it"
 You: [generate_image with enhanced prompt]
 You: [create_story_from_last_image]
-You: "Generated an image of a robot kitten! Here's the story:
+You: "Image generated! Here's the story:
 
-[FULL STORY TEXT HERE - 2-3 paragraphs]
+[FULL STORY TEXT HERE - 2-3 paragraphs from the VLM]
 
-Enhanced prompt used: '...'
-Image saved: [path]
-Story saved: [story_file path]"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Enhanced prompt:
+[enhanced prompt text]
+
+Files saved:
+- Image: [full path]
+- Story: [full path to .txt file]"
 
 Example interaction without story:
 User: "create a robot kitten"
