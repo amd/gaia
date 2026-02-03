@@ -4,7 +4,9 @@ description: "Connect GAIA agents to external MCP servers and use their tools"
 ---
 
 <Info>
-  **Example:** [`examples/mcp_config_based_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_config_based_agent.py)
+  **Examples:**
+  - [`examples/mcp_time_server_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_time_server_agent.py) - Simple Python server example
+  - [`examples/mcp_config_based_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_config_based_agent.py) - Config file-based loading
 </Info>
 
 <Note>
@@ -110,47 +112,6 @@ Most MCP servers use stdio (standard input/output) via subprocess:
   </Tab>
 </Tabs>
 
-### Setting Up GitHub Token
-
-The GitHub MCP server requires a personal access token.
-
-**Step 1:** Create a GitHub token
-
-1. Go to GitHub → Settings → Developer settings → Personal access tokens
-2. Generate a new token with `repo` scope (or fine-grained permissions as needed)
-
-**Step 2:** Pass the token via the `env` field
-
-The new config format supports environment variables natively:
-
-```python
-agent.connect_mcp_server("github", {
-    "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-github"],
-    "env": {"GITHUB_TOKEN": "ghp_your_token_here"}
-})
-```
-
-Or in a config file:
-
-```json
-{
-  "mcpServers": {
-    "github": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": {
-        "GITHUB_TOKEN": "ghp_your_token_here"
-      }
-    }
-  }
-}
-```
-
-<Note>
-The `env` field passes environment variables directly to the subprocess without shell expansion, making it secure and portable across platforms.
-</Note>
-
 ## Using Configuration Files
 
 Instead of hardcoding server configs, store them in `~/.gaia/mcp_servers.json`:
@@ -217,9 +178,15 @@ For detailed usage, parameters, and output examples, see the [CLI Reference](/re
 
 Working examples are available in the GAIA repository:
 
-<Card title="Config-Based Agent" icon="file-code" href="https://github.com/amd/gaia/blob/main/examples/mcp_config_based_agent.py">
-  Load servers from `mcp_servers.json` - recommended for production
-</Card>
+<CardGroup cols={2}>
+  <Card title="Time Server Agent" icon="clock" href="https://github.com/amd/gaia/blob/main/examples/mcp_time_server_agent.py">
+    Simple example connecting to a Python MCP server via `uvx`
+  </Card>
+
+  <Card title="Config-Based Agent" icon="file-code" href="https://github.com/amd/gaia/blob/main/examples/mcp_config_based_agent.py">
+    Load servers from `mcp_servers.json` - recommended for production
+  </Card>
+</CardGroup>
 
 For detailed API usage and patterns, see the [SDK Reference](/sdk/sdks/mcp).
 
