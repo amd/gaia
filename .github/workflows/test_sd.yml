@@ -11,7 +11,8 @@ on:
   push:
     branches: ["main"]
     paths:
-      - "src/gaia/agents/sd/**"
+      - "src/gaia/sd/**"  # SD mixin and tools
+      - "src/gaia/agents/sd/**"  # SD agent
       - "src/gaia/llm/lemonade_client.py"
       - "src/gaia/cli.py"
       - "tests/integration/test_sd_integration.py"
@@ -20,7 +21,8 @@ on:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - "src/gaia/agents/sd/**"
+      - "src/gaia/sd/**"  # SD mixin and tools
+      - "src/gaia/agents/sd/**"  # SD agent
       - "src/gaia/llm/lemonade_client.py"
       - "src/gaia/cli.py"
       - "tests/integration/test_sd_integration.py"
@@ -75,8 +77,8 @@ jobs:
           Write-Host ""
 
           # Let gaia init handle everything (installation, upgrade, server start, models)
-          # SD profile auto-detects v9.0.4 and upgrades to v9.2.0 for SDXL-Turbo support
-          & gaia init --profile sd --yes
+          # Use --verbose for detailed troubleshooting output
+          & gaia init --profile sd --yes --verbose
 
           Write-Host ""
           Write-Host "================================================================"

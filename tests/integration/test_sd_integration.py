@@ -59,7 +59,6 @@ class TestSDIntegration:
             prompt="a red circle on white background, simple, minimal",
             model="SD-Turbo",
             size="512x512",
-            prompt_open=False,  # No interactive prompts in CI
         )
 
         # Verify success
@@ -113,7 +112,6 @@ class TestSDIntegration:
             prompt="blue square",
             model="SD-Turbo",
             size="512x512",
-            prompt_open=False,
         )
 
         if result["status"] == "success":
@@ -136,7 +134,6 @@ class TestSDIntegration:
             model="SD-Turbo",
             size="512x512",
             seed=12345,
-            prompt_open=False,
         )
 
         result2 = mixin._generate_image(
@@ -144,7 +141,6 @@ class TestSDIntegration:
             model="SD-Turbo",
             size="512x512",
             seed=12345,
-            prompt_open=False,
         )
 
         # Both should succeed

@@ -386,7 +386,16 @@ class LemonadeInstaller:
             if silent:
                 cmd.extend(["/qn", "/norestart"])
 
+            log_dir = Path.home() / ".cache" / "gaia" / "installer"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            msi_log = log_dir / "msi_install.log"
+            cmd.extend(["/l*v", str(msi_log)])  # Verbose logging to file
+
             log.debug(f"Running: {' '.join(cmd)}")
+            if silent:
+                self._print_status("Running silent MSI installer...")
+            else:
+                self._print_status("Running MSI installer...")
 
             result = subprocess.run(
                 cmd,

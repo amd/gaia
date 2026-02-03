@@ -249,7 +249,6 @@ class SDToolsMixin:
         steps: Optional[int] = None,
         cfg_scale: Optional[float] = None,
         seed: Optional[int] = None,
-        _prompt_open: Optional[bool] = None,  # Unused, kept for API compatibility
     ) -> Dict[str, Any]:
         """
         Internal method to generate an image via Lemonade Server SD endpoint.
@@ -261,7 +260,6 @@ class SDToolsMixin:
             steps: Inference steps (defaults to sd_default_steps)
             cfg_scale: CFG scale (defaults to sd_default_cfg, 0.0 for Turbo models)
             seed: Random seed for reproducibility
-            prompt_open: If True, prompt to open image in viewer (default: True)
 
         Returns:
             Dict with image_path, prompt, model, size, seed, and generation_time_s

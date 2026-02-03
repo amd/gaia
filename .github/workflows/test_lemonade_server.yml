@@ -65,8 +65,8 @@ jobs:
           echo   4. Basic LLM inference
           echo.
 
-          REM Use --yes for silent install (auto-upgrades if v9.0.4 detected)
-          gaia init --profile minimal --yes
+          REM Use --yes for silent install, --verbose for detailed output
+          gaia init --profile minimal --yes --verbose
 
           echo.
           echo ================================================================

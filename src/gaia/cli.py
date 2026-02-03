@@ -5067,9 +5067,13 @@ def handle_sd_command(args):
 
                             if response in ("", "y", "yes"):
                                 for img in new_images:
-                                    os.startfile(
-                                        img["image_path"]
-                                    )  # pylint: disable=no-member
+                                    path = img["image_path"]
+                                    if sys.platform == "win32":
+                                        os.startfile(path)  # pylint: disable=no-member
+                                    elif sys.platform == "darwin":
+                                        subprocess.run(["open", path], check=False)
+                                    else:
+                                        subprocess.run(["xdg-open", path], check=False)
                                 plural = "s" if num_images > 1 else ""
                                 print(f"[{num_images} image{plural} opened]\n")
                     except (KeyboardInterrupt, EOFError):
@@ -5106,7 +5110,13 @@ def handle_sd_command(args):
 
                     if response in ("", "y", "yes"):
                         for img in new_images:
-                            os.startfile(img["image_path"])  # pylint: disable=no-member
+                            path = img["image_path"]
+                            if sys.platform == "win32":
+                                os.startfile(path)  # pylint: disable=no-member
+                            elif sys.platform == "darwin":
+                                subprocess.run(["open", path], check=False)
+                            else:
+                                subprocess.run(["xdg-open", path], check=False)
                         plural = "s" if num_images > 1 else ""
                         print(f"[{num_images} image{plural} opened]\n")
             except (KeyboardInterrupt, EOFError):

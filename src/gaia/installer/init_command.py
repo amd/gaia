@@ -788,14 +788,16 @@ class InitCommand:
                 return False
 
             # Server not running - start it automatically in CI mode, or prompt user
-            self._print_error("Lemonade Server is not running")
-
-            # In non-interactive mode (--yes), auto-start the server
             if self.yes:
+                # In CI mode, just inform and auto-start (not an error)
+                self._print("   Lemonade Server is not running")
                 self.console.print()
                 self.console.print(
                     "   [dim]Auto-starting Lemonade Server (CI mode)...[/dim]"
                 )
+            else:
+                # Interactive mode - treat as error that needs user action
+                self._print_error("Lemonade Server is not running")
 
                 try:
                     # Start server in background
