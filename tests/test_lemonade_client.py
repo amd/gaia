@@ -1461,12 +1461,16 @@ class TestLemonadeClientIntegration(unittest.TestCase):
 
         # Step 5: Verify validate_context_size() works
         print("\nStep 3: Testing validate_context_size()...")
-        # Use a small required size that should pass
-        valid, error = self.client.validate_context_size(
-            required_tokens=1024, quiet=True
-        )
-        self.assertTrue(valid, f"validate_context_size(1024) should pass: {error}")
-        print("✅ validate_context_size(1024) passed")
+        # Only test validation if an LLM model is loaded (context_size > 0)
+        if status.context_size > 0:
+            # Use a small required size that should pass
+            valid, error = self.client.validate_context_size(
+                required_tokens=1024, quiet=True
+            )
+            self.assertTrue(valid, f"validate_context_size(1024) should pass: {error}")
+            print("✅ validate_context_size(1024) passed")
+        else:
+            print("⏭️  Skipping validate_context_size() - no LLM model loaded (context_size is 0)")
 
         # Test with current context size (should pass)
         if status.context_size > 0:
