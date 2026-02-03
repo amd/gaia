@@ -65,8 +65,8 @@ jobs:
           echo   4. Basic LLM inference
           echo.
 
-          REM Use --yes to auto-confirm, --skip-lemonade since already installed
-          gaia init --profile minimal --yes --skip-lemonade
+          REM Use --yes for silent install and --force-reinstall to ensure latest version
+          gaia init --profile minimal --yes --force-reinstall
 
           echo.
           echo ================================================================
