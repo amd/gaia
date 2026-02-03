@@ -268,21 +268,24 @@ Now add three methods to the class:
         self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
 
     def _register_tools(self):
-        # Add custom tools that build on mixin capabilities
-        # This demonstrates the wrapper pattern: custom tools using mixin tools
+        # Demonstrate creating custom tools that extend mixin capabilities
+        # Pattern: Wrap generic mixin tools with specialized behavior
         from gaia.agents.base.tools import tool
 
         @tool(name="create_story_about_image")
         def create_story_about_image(image_path: str) -> dict:
             """
-            Create a story about an image with custom formatting.
+            Create an adventure story about an image with metadata tracking.
 
-            This wraps VLMToolsMixin's create_story_from_image with custom behavior.
+            Wraps VLMToolsMixin's generic create_story_from_image() to add:
+            - Fixed adventure style (specialized vs. parameterized)
+            - Custom metadata for tracking agent/style
+            - Could extend with: DB saving, markdown formatting, etc.
             """
-            # Use VLM mixin's tool to get the story
+            # Call VLM mixin's internal method (available via inheritance)
             result = self._create_story_from_image(image_path, story_style="adventure")
 
-            # Add custom formatting or metadata
+            # Extend with custom metadata
             if result.get("status") == "success":
                 result["custom_metadata"] = {
                     "agent": "ImageStoryAgent",
@@ -307,18 +310,20 @@ Use create_story_about_image (custom) for adventure stories."""
 **What's happening with system prompts:**
 
 The Agent base class automatically composes the final system prompt:
-1. Calls `_get_mixin_prompts()` → Gets `[sd_prompt]` from SDToolsMixin
-2. Calls `_get_system_prompt()` → Your custom additions (we just return the SD prompt here)
-3. Combines them into the final prompt sent to the LLM
+1. Calls `_get_mixin_prompts()` → Gets `[sd_prompt, vlm_prompt]` from mixins (automatic)
+2. Calls `_get_system_prompt()` → Gets your custom instructions about the custom tool
+3. Composes final prompt: `sd_prompt + "\n\n" + vlm_prompt + "\n\n" + custom`
 
-You can also extend instead of replace:
+The LLM receives:
+- SD prompt engineering guidelines (from SDToolsMixin)
+- VLM usage guidelines (from VLMToolsMixin)
+- Your custom tool instructions (from _get_system_prompt)
+- Tool schemas for all 7 tools (6 from mixins + 1 custom)
+
+Simpler option - use only mixin prompts:
 ```python
 def _get_system_prompt(self) -> str:
-    return ""  # Use only SD mixin prompt (automatic)
-
-# OR add custom instructions:
-def _get_system_prompt(self) -> str:
-    return "Additional: Always save metadata to logs"  # Appended to SD prompt
+    return ""  # No custom additions, just use mixin prompts
 ```
 
 ---
@@ -357,21 +362,24 @@ class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
         self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
 
     def _register_tools(self):
-        # Add custom tools that build on mixin capabilities
-        # This demonstrates the wrapper pattern: custom tools using mixin tools
+        # Demonstrate creating custom tools that extend mixin capabilities
+        # Pattern: Wrap generic mixin tools with specialized behavior
         from gaia.agents.base.tools import tool
 
         @tool(name="create_story_about_image")
         def create_story_about_image(image_path: str) -> dict:
             """
-            Create a story about an image with custom formatting.
+            Create an adventure story about an image with metadata tracking.
 
-            This wraps VLMToolsMixin's create_story_from_image with custom behavior.
+            Wraps VLMToolsMixin's generic create_story_from_image() to add:
+            - Fixed adventure style (specialized vs. parameterized)
+            - Custom metadata for tracking agent/style
+            - Could extend with: DB saving, markdown formatting, etc.
             """
-            # Use VLM mixin's tool to get the story
+            # Call VLM mixin's internal method (available via inheritance)
             result = self._create_story_from_image(image_path, story_style="adventure")
 
-            # Add custom formatting or metadata
+            # Extend with custom metadata
             if result.get("status") == "success":
                 result["custom_metadata"] = {
                     "agent": "ImageStoryAgent",
