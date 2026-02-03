@@ -1470,7 +1470,9 @@ class TestLemonadeClientIntegration(unittest.TestCase):
             self.assertTrue(valid, f"validate_context_size(1024) should pass: {error}")
             print("✅ validate_context_size(1024) passed")
         else:
-            print("⏭️  Skipping validate_context_size() - no LLM model loaded (context_size is 0)")
+            print(
+                "⏭️  Skipping validate_context_size() - no LLM model loaded (context_size is 0)"
+            )
 
         # Test with current context size (should pass)
         if status.context_size > 0:
