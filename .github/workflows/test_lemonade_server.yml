@@ -29,6 +29,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Kill Stuck Installer Processes
+        if: always()
+        continue-on-error: true
+        run: |
+          Write-Host "Cleaning up any stuck MSI installer processes..."
+          try {
+              # Kill msiexec processes (MSI installer)
+              Get-Process msiexec -ErrorAction SilentlyContinue | Stop-Process -Force
+              Write-Host "Killed stuck msiexec processes"
+          } catch {
+              Write-Host "No stuck msiexec processes found"
+          }
+
       - name: Setup Python environment
         uses: ./.github/actions/setup-venv
         with:
