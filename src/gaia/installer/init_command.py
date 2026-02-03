@@ -797,11 +797,23 @@ class InitCommand:
                 )
 
                 try:
+                    # Find lemonade-server executable
+                    import shutil
+
+                    # Check env var first (set by install-lemonade action in CI)
+                    lemonade_path = os.environ.get("LEMONADE_SERVER_PATH")
+                    if not lemonade_path:
+                        # Fall back to PATH search
+                        lemonade_path = shutil.which("lemonade-server")
+
+                    if not lemonade_path:
+                        raise FileNotFoundError("lemonade-server not found in PATH")
+
                     # Start server in background
                     if sys.platform == "win32":
                         # Windows: use subprocess.Popen with no window
                         subprocess.Popen(
-                            ["lemonade-server", "serve", "--no-tray"],
+                            [lemonade_path, "serve", "--no-tray"],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                             creationflags=(
@@ -813,7 +825,7 @@ class InitCommand:
                     else:
                         # Linux/Mac: background process
                         subprocess.Popen(
-                            ["lemonade-server", "serve"],
+                            [lemonade_path, "serve"],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
