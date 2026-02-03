@@ -795,9 +795,6 @@ class InitCommand:
                 self.console.print(
                     "   [dim]Auto-starting Lemonade Server (CI mode)...[/dim]"
                 )
-            else:
-                # Interactive mode - treat as error that needs user action
-                self._print_error("Lemonade Server is not running")
 
                 try:
                     # Start server in background
@@ -849,9 +846,10 @@ class InitCommand:
                 except Exception as e:
                     self._print_error(f"Failed to start server: {e}")
                     return False
-
-            # Interactive mode - prompt user to start manually
-            self.console.print()
+            else:
+                # Interactive mode - prompt user to start manually
+                self._print_error("Lemonade Server is not running")
+                self.console.print()
             self.console.print("   [bold]Please start Lemonade Server:[/bold]")
             if sys.platform == "win32":
                 self.console.print(

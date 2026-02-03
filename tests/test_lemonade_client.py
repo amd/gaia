@@ -1441,7 +1441,8 @@ class TestLemonadeClientIntegration(unittest.TestCase):
             if status.loaded_models:
                 # If all loaded models are image/embedding models, context_size can be 0
                 is_llm_model = any(
-                    "image" not in model.get("labels", []) and "embed" not in model.get("labels", [])
+                    "image" not in model.get("labels", [])
+                    and "embed" not in model.get("labels", [])
                     for model in status.loaded_models
                 )
 

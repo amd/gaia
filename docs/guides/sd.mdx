@@ -69,7 +69,11 @@ gaia sd "create a cute robot kitten and tell me a short story about it"
 
     LLM enhances prompt → SD generates image (~17s) → VLM creates story (~17s)
 
-    Output: `.gaia/cache/sd/images/`
+    Output:
+    - Images: `.gaia/cache/sd/images/robot_kitten.png`
+    - Stories: `.gaia/cache/sd/images/robot_kitten_story.txt` (auto-generated)
+
+    The story file includes both the VLM-generated narrative and image description.
   </Step>
 </Steps>
 
