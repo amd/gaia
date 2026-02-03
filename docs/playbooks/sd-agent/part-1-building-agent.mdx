@@ -453,6 +453,84 @@ The agent will:
 
 ---
 
+## Understanding Custom Tools
+
+The example above demonstrates an important pattern: **creating custom tools that extend mixin capabilities**.
+
+### Why Create Custom Tools?
+
+**Mixin tools are generic** - they work for any use case:
+- `create_story_from_image(image_path, story_style)` - Flexible, parameterized
+
+**Custom tools are specialized** - tailored to your specific needs:
+- `create_story_about_image(image_path)` - Fixed style, custom metadata, specialized behavior
+
+### The Wrapper Pattern
+
+```python
+@tool(name="create_story_about_image")
+def create_story_about_image(image_path: str) -> dict:
+    # 1. Call mixin's internal method (available via inheritance)
+    result = self._create_story_from_image(image_path, story_style="adventure")
+
+    # 2. Extend the result with custom behavior
+    if result.get("status") == "success":
+        result["custom_metadata"] = {
+            "agent": "ImageStoryAgent",
+            "style": "adventure",
+        }
+
+    return result
+```
+
+**What this demonstrates:**
+1. **Access internal methods** - `self._create_story_from_image()` is a private method from VLMToolsMixin, accessible via inheritance
+2. **Wrap, don't replace** - Use mixin functionality, add custom behavior on top
+3. **Specialized interface** - Simpler for your use case (no style parameter needed)
+4. **Extensible** - Could add: DB saving, markdown formatting, logging, etc.
+
+### When to Create Custom Tools
+
+**Use mixin tools directly when:**
+- Generic functionality is sufficient
+- You need parameterization (different styles, options)
+- No custom pre/post processing needed
+
+**Create custom tools when:**
+- You want fixed, specialized behavior (always adventure style)
+- You need to track metadata or logging
+- You want to compose multiple operations (analyze + story + save to DB)
+- You're building a domain-specific interface
+
+### Real-World Example: Asset Management
+
+```python
+@tool(name="create_and_catalog_image")
+def create_and_catalog_image(prompt: str, tags: list[str]) -> dict:
+    """Generate image and save metadata to database."""
+
+    # 1. Use SD mixin to generate
+    img_result = self._generate_image(prompt)
+
+    if img_result.get("status") == "success":
+        # 2. Use VLM mixin to analyze
+        analysis = self._analyze_image(img_result["image_path"])
+
+        # 3. Custom: Save to database
+        self.execute_sql(
+            "INSERT INTO images (path, prompt, tags, description) VALUES (?, ?, ?, ?)",
+            (img_result["image_path"], prompt, ",".join(tags), analysis["description"])
+        )
+
+        img_result["cataloged"] = True
+
+    return img_result
+```
+
+This pattern shows the power of composition: mixin tools + custom orchestration.
+
+---
+
 ## Example Output
 
 Here's what you'll see when you run the agent:
