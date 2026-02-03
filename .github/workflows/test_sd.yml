@@ -41,28 +41,33 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Kill Stuck Installer Processes
+      - name: Kill Stuck Processes (MSI and Lemonade Server)
         if: always()
         continue-on-error: true
         run: |
-          Write-Host "Cleaning up any stuck MSI installer processes..."
-          $processes = Get-Process msiexec -ErrorAction SilentlyContinue
-          if ($processes) {
-              $processes | Stop-Process -Force
-              Write-Host "Killed $($processes.Count) stuck msiexec process(es)"
+          Write-Host "Cleaning up any stuck processes that block MSI install..."
 
-              # Wait for Windows Installer service to finish cleanup
-              Write-Host "Waiting 5 seconds for Windows Installer service to reset..."
+          # Kill stuck msiexec processes
+          $msiProcesses = Get-Process msiexec -ErrorAction SilentlyContinue
+          if ($msiProcesses) {
+              $msiProcesses | Stop-Process -Force
+              Write-Host "Killed $($msiProcesses.Count) stuck msiexec process(es)"
+          }
+
+          # Kill any running lemonade-server processes (prevents StopLegacyPythonServer hang)
+          $lemonadeProcesses = Get-Process lemonade-server -ErrorAction SilentlyContinue
+          if ($lemonadeProcesses) {
+              $lemonadeProcesses | Stop-Process -Force
+              Write-Host "Killed $($lemonadeProcesses.Count) lemonade-server process(es)"
+          }
+
+          # Wait for Windows Installer service to finish cleanup
+          if ($msiProcesses -or $lemonadeProcesses) {
+              Write-Host "Waiting 5 seconds for cleanup to complete..."
               Start-Sleep -Seconds 5
           }
 
-          # Verify no msiexec processes remain
-          $remaining = Get-Process msiexec -ErrorAction SilentlyContinue
-          if ($remaining) {
-              Write-Host "WARNING: $($remaining.Count) msiexec process(es) still running after cleanup"
-          } else {
-              Write-Host "MSI cleanup complete - no msiexec processes running"
-          }
+          Write-Host "Cleanup complete - ready for fresh install"
 
       - name: Setup Python Environment
         uses: ./.github/actions/setup-venv

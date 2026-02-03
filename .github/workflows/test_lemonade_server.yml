@@ -29,16 +29,33 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Kill Stuck Installer Processes
+      - name: Kill Stuck Processes (MSI and Lemonade Server)
         if: always()
         continue-on-error: true
         run: |
-          Write-Host "Cleaning up any stuck MSI installer processes..."
-          $processes = Get-Process msiexec -ErrorAction SilentlyContinue
-          if ($processes) {
-              $processes | Stop-Process -Force
-              Write-Host "Killed stuck msiexec processes"
+          Write-Host "Cleaning up any stuck processes that block MSI install..."
+
+          # Kill stuck msiexec processes
+          $msiProcesses = Get-Process msiexec -ErrorAction SilentlyContinue
+          if ($msiProcesses) {
+              $msiProcesses | Stop-Process -Force
+              Write-Host "Killed $($msiProcesses.Count) stuck msiexec process(es)"
           }
+
+          # Kill any running lemonade-server processes (prevents StopLegacyPythonServer hang)
+          $lemonadeProcesses = Get-Process lemonade-server -ErrorAction SilentlyContinue
+          if ($lemonadeProcesses) {
+              $lemonadeProcesses | Stop-Process -Force
+              Write-Host "Killed $($lemonadeProcesses.Count) lemonade-server process(es)"
+          }
+
+          # Wait for cleanup
+          if ($msiProcesses -or $lemonadeProcesses) {
+              Write-Host "Waiting 5 seconds for cleanup to complete..."
+              Start-Sleep -Seconds 5
+          }
+
+          Write-Host "Cleanup complete - ready for fresh install"
 
       - name: Setup Python environment
         uses: ./.github/actions/setup-venv
