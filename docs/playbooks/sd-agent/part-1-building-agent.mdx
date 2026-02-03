@@ -11,43 +11,118 @@ icon: "rocket"
 
 ## What You'll Build
 
-A working multi-modal agent that:
-- Generates images using Stable Diffusion
-- Analyzes images using a Vision-Language Model
-- Creates creative stories about the images
-- All running locally on your AMD hardware
+By the end of this part, you'll have a fully functional `ImageStoryAgent` class that demonstrates multi-modal AI composition.
 
-By the end of this part, you'll have a fully functional `ImageStoryAgent` running on your machine.
+**Technically, you're building:**
 
----
-
-## Quick Concepts
-
-Before diving in, here's the minimal theory you need:
-
-### What is "Multi-Modal"?
-
-Your agent can work with different data types (modalities):
-- **Text** - LLM reads/writes naturally
-- **Images (generation)** - Stable Diffusion creates images
-- **Images (vision)** - VLM analyzes images
-
-The LLM acts as the "brain" that decides when to generate images and when to analyze them.
-
-### What are Mixins?
-
-Python mixins are classes that add capabilities through multiple inheritance:
-
+An agent class that inherits from three parent classes using Python's multiple inheritance:
 ```python
 class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
-    pass  # Gets tools from all three parent classes
+    pass  # ~62 lines of code total including CLI loop
 ```
 
-- `Agent` - Base class with reasoning loop
-- `SDToolsMixin` - Adds image generation tools
-- `VLMToolsMixin` - Adds vision analysis tools
+**Inheritance chain (MRO):**
+```
+ImageStoryAgent → Agent → SDToolsMixin → VLMToolsMixin → object
+```
 
-That's it! You'll understand the details in Part 2. For now, let's build.
+When you call `super().__init__()`, Python walks this chain to initialize each parent cooperatively.
+
+**What "multi-modal" means here:**
+
+Your agent orchestrates three different AI models through a unified interface:
+
+| Model | Role | Endpoint | Hardware | Context |
+|-------|------|----------|----------|---------|
+| **Qwen3-8B-GGUF** | Reasoning engine | `POST /v1/chat/completions` | NPU/GPU | 8K tokens |
+| **SDXL-Turbo** | Image generation | `POST /images/generations` | GPU | N/A |
+| **Qwen3-VL-4B-Instruct-GGUF** | Vision analysis | `POST /v1/chat/completions` (with images) | NPU/GPU | 8K tokens |
+
+**How it works:**
+1. Your agent's `process_query()` method sends user input to the **LLM**
+2. LLM returns a plan: `[{tool: "generate_image", tool_args: {...}}, {tool: "create_story_from_image", tool_args: {...}}]`
+3. Agent executes each tool in sequence:
+   - `generate_image()` → HTTP POST to Lemonade `/images/generations` → Returns image bytes → Saved to disk
+   - `create_story_from_image()` → HTTP POST to Lemonade `/v1/chat/completions` with image → Returns story text
+4. LLM synthesizes final answer combining all results
+
+**Model formats:** LLMs use GGUF quantization (Qwen3-8B, Qwen3-VL-4B), SD uses safetensors (SDXL-Turbo). All optimized for AMD hardware acceleration (NPU/GPU). Total memory: ~15GB loaded.
+
+**What you'll be able to do:**
+
+```python
+agent = ImageStoryAgent()
+result = agent.process_query("create a cyberpunk street scene with a story")
+
+# Agent automatically:
+# 1. Calls generate_image() → creates image in ~17s
+# 2. Calls create_story_from_image() → generates 2-3 paragraph narrative in ~15s
+# 3. Returns both image path and story text in final answer
+```
+
+**The 6 tools your agent will have:**
+
+From `SDToolsMixin` (registered in `init_sd()`):
+
+- **`generate_image(prompt: str, model: Optional[str], size: Optional[str], steps: Optional[int], cfg_scale: Optional[float], seed: Optional[int]) -> Dict[str, Any]`**
+  - Calls: `LemonadeClient.generate_image()` → `POST /images/generations`
+  - Returns: `{"status": "success", "image_path": "...", "model": "SDXL-Turbo", "generation_time_s": 17.2, "seed": 123456}`
+  - Saves: PNG file to `output_dir`, adds to `self.sd_generations` list
+
+- **`list_sd_models() -> Dict[str, Any]`**
+  - Returns: Available models with speed/quality characteristics
+
+- **`get_generation_history(limit: int = 10) -> Dict[str, Any]`**
+  - Returns: Recent generations from `self.sd_generations` session state
+
+From `VLMToolsMixin` (registered in `init_vlm()`):
+
+- **`analyze_image(image_path: str, focus: str = "all") -> Dict[str, Any]`**
+  - Calls: `VLMClient.analyze()` → `POST /v1/chat/completions` with image
+  - Returns: `{"status": "success", "description": "...", "focus_analysis": "..."}`
+
+- **`create_story_from_image(image_path: str, story_style: str = "any") -> Dict[str, Any]`**
+  - Calls: `VLMClient.create_story()` → `POST /v1/chat/completions` with image
+  - Returns: `{"status": "success", "story": "2-3 paragraph narrative", "description": "..."}`
+
+- **`answer_question_about_image(image_path: str, question: str) -> Dict[str, Any]`**
+  - Calls: `VLMClient.answer_question()` → `POST /v1/chat/completions` with image
+  - Returns: `{"status": "success", "answer": "...", "confidence": "high"}`
+
+**How tools get registered (under the hood):**
+
+When you call `self.init_sd()` and `self.init_vlm()`:
+
+1. **`init_sd()` creates closure functions** with `@tool` decorator:
+   ```python
+   @tool(atomic=True, name="generate_image", description="...", parameters={...})
+   def generate_image(prompt, model=None, ...):
+       return self._generate_image(prompt, model, ...)  # Calls instance method
+   ```
+
+2. **The `@tool` decorator** (defined in `gaia.agents.base.tools`):
+   - Wraps the function with metadata
+   - Adds it to global `_TOOL_REGISTRY` dict: `{tool_name: {function, schema, ...}}`
+   - Returns the wrapped function
+
+3. **At runtime**, when LLM calls a tool:
+   - Agent looks up tool in `_TOOL_REGISTRY` by name
+   - Calls the function with LLM-provided arguments
+   - Returns result to LLM for next reasoning step
+
+**Instance state created:**
+
+After initialization, your agent instance has:
+```python
+self.sd_client          # LemonadeClient(base_url="http://localhost:8000")
+self.sd_output_dir      # Path("./generated_images")
+self.sd_default_model   # "SDXL-Turbo"
+self.sd_generations     # [] - List of dicts tracking generated images
+self.vlm_client         # VLMClient(vlm_model="Qwen3-VL-4B-Instruct-GGUF")
+self.vlm_model          # "Qwen3-VL-4B-Instruct-GGUF"
+```
+
+Plus all the `Agent` base class state (tool registry, conversation history, LLM client).
 
 ---
 
@@ -62,6 +137,18 @@ That's it! You'll understand the details in Part 2. For now, let's build.
     ```bash
     mkdir my-sd-agent
     cd my-sd-agent
+    ```
+  </Step>
+
+  <Step title="Create virtual environment">
+    ```bash
+    uv venv
+    source .venv/bin/activate
+    ```
+
+    On Windows:
+    ```bash
+    .venv\Scripts\activate
     ```
   </Step>
 
@@ -80,12 +167,12 @@ That's it! You'll understand the details in Part 2. For now, let's build.
     1. Installs Lemonade Server (if not already installed)
     2. **Starts Lemonade Server automatically**
     3. Downloads three models (~15GB):
-       - **SDXL-Turbo** (6.5GB) - Image generation, optimized for speed
-       - **Qwen3-8B-GGUF** (5GB) - Agent reasoning engine
-       - **Qwen3-VL-4B-Instruct-GGUF** (3.2GB) - Vision analysis
+       - **SDXL-Turbo** (6.5GB) - Diffusion model in safetensors format
+       - **Qwen3-8B-GGUF** (5GB) - Agent LLM in quantized GGUF format
+       - **Qwen3-VL-4B-Instruct-GGUF** (3.2GB) - Vision LLM in quantized GGUF format
     4. Verifies the setup is working
 
-    All models are quantized GGUF format optimized for AMD hardware.
+    All models are optimized for AMD hardware (NPU/GPU acceleration).
 
     <video
       controls
@@ -95,41 +182,6 @@ That's it! You'll understand the details in Part 2. For now, let's build.
     <Note>Video: Running `gaia init --profile sd` and watching models download</Note>
   </Step>
 </Steps>
-
----
-
-## Choosing SD Models
-
-Your agent can use different Stable Diffusion models depending on your needs:
-
-| Model | Speed | Quality | Best For |
-|-------|-------|---------|----------|
-| **SDXL-Turbo** (default) | ~17s | ⭐⭐⭐ | Balanced speed/quality |
-| **SD-Turbo** | ~13s | ⭐⭐ | Rapid prototyping |
-| **SDXL-Base-1.0** | ~9min | ⭐⭐⭐⭐⭐ | Photorealistic images |
-
-**Performance measured on AMD Ryzen AI MAX+ 395 with Radeon 8060S**
-
-<Note>
-**Random Seeds:** By default, each generation uses a random seed, producing unique images every time. Use `--seed 42` with the CLI or set `seed` parameter in code for reproducible results.
-</Note>
-
-Set your default model in `__init__`:
-
-Fast stylized:
-```python
-self.init_sd(default_model="SDXL-Turbo")
-```
-
-Fastest:
-```python
-self.init_sd(default_model="SD-Turbo")
-```
-
-Photorealistic:
-```python
-self.init_sd(default_model="SDXL-Base-1.0")
-```
 
 ---
 
@@ -158,42 +210,53 @@ class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
 
 ---
 
-### Step 2: Initialize the Mixins
+### Step 2: Implement `__init__` and System Prompt
 
-Add the `__init__` method to initialize both mixins:
+Add the `__init__` method to initialize both mixins, plus the required abstract methods:
+
+<Accordion title="Model Selection Reference">
+Available SD models (set in `default_model` parameter):
+
+| Model | Speed | Quality | Best For |
+|-------|-------|---------|----------|
+| **SDXL-Turbo** (default) | ~17s | ⭐⭐⭐ | Balanced speed/quality |
+| **SD-Turbo** | ~13s | ⭐⭐ | Rapid prototyping |
+| **SDXL-Base-1.0** | ~9min | ⭐⭐⭐⭐⭐ | Photorealistic images |
+
+Performance measured on AMD Ryzen AI MAX+ 395 with Radeon 8060S
+</Accordion>
+
+Now add three methods to the class:
 
 ```python
-class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
-    """Multi-modal agent that generates images and creates stories."""
+def __init__(self, output_dir="./generated_images"):
+    # Initialize Agent base class first
+    # This sets up the reasoning loop, tool registry, and LLM client
+    super().__init__()
 
-    def __init__(self, output_dir="./generated_images"):
-        # Step 1: Initialize Agent base class
-        # This sets up the reasoning loop, tool registry, and LLM client
-        super().__init__()
+    # Initialize SD tools
+    # Under the hood: Creates LemonadeClient, sets output directory,
+    # and registers tools via @tool decorator (generate_image, list_sd_models, etc.)
+    self.init_sd(
+        output_dir=output_dir,
+        default_model="SDXL-Turbo",  # Fast stylized model (4 steps, ~17s)
+    )
 
-        # Step 2: Initialize SD tools
-        # Under the hood: Creates LemonadeClient, sets output directory,
-        # and registers tools via @tool decorator (generate_image, list_sd_models, etc.)
-        self.init_sd(
-            output_dir=output_dir,
-            default_model="SDXL-Turbo",  # Fast stylized model (4 steps, ~17s)
-        )
+    # Initialize VLM tools
+    # Under the hood: Creates VLMClient for vision analysis,
+    # and registers tools (analyze_image, create_story_from_image, etc.)
+    self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
 
-        # Step 3: Initialize VLM tools
-        # Under the hood: Creates VLMClient for vision analysis,
-        # and registers tools (analyze_image, create_story_from_image, etc.)
-        self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
+def _register_tools(self):
+    # Required abstract method from Agent base class
+    # Mixins already registered their tools in init_sd() and init_vlm()
+    # Only implement this if you need custom tools beyond what mixins provide
+    pass
 
-    def _register_tools(self):
-        # Required abstract method from Agent base class
-        # Mixins already registered their tools in init_sd() and init_vlm()
-        # Only implement this if you need custom tools beyond what mixins provide
-        pass
-
-    def _get_system_prompt(self) -> str:
-        # This prompt is sent to the LLM with every query
-        # The LLM uses it to understand its capabilities and decide which tools to call
-        return """You are a multi-modal image generation and storytelling agent.
+def _get_system_prompt(self) -> str:
+    # This prompt is sent to the LLM with every query
+    # The LLM uses it to understand its capabilities and decide which tools to call
+    return """You are a multi-modal image generation and storytelling agent.
 
 When user requests an image with a story:
 1. Call generate_image with a detailed, enhanced prompt
@@ -212,9 +275,9 @@ Be flexible - adapt tool usage based on user request."""
 
 ---
 
-### Step 3: Add CLI Loop
+### Step 3: Add CLI Loop and Run
 
-Complete the agent with an interactive command-line interface:
+Complete the agent by adding a CLI loop. Here's the full `image_story_agent.py` file:
 
 ```python
 from gaia.agents.base import Agent
@@ -301,12 +364,7 @@ if __name__ == "__main__":
             print("\nAgent: (no response)\n")
 ```
 
----
-
-## Run Your Agent
-
-Save the complete code as `image_story_agent.py` and run it:
-
+Run it:
 ```bash
 python image_story_agent.py
 ```
