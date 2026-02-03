@@ -331,7 +331,12 @@ class InitCommand:
                 self._print_step(
                     1, total_steps, "Skipping Lemonade installation check..."
                 )
-                self._print_success("Using pre-installed Lemonade Server")
+                # Still show version info for transparency
+                info = self.installer.check_installation()
+                if info.installed and info.version:
+                    self._print_success(f"Using pre-installed Lemonade Server v{info.version}")
+                else:
+                    self._print_success("Using pre-installed Lemonade Server")
             else:
                 self._print_step(
                     1, total_steps, "Checking Lemonade Server installation..."

@@ -5067,7 +5067,7 @@ def handle_sd_command(args):
 
                             if response in ("", "y", "yes"):
                                 for img in new_images:
-                                    os.startfile(img["image_path"])
+                                    os.startfile(img["image_path"])  # pylint: disable=no-member
                                 plural = "s" if num_images > 1 else ""
                                 print(f"[{num_images} image{plural} opened]\n")
                     except (KeyboardInterrupt, EOFError):
@@ -5104,7 +5104,7 @@ def handle_sd_command(args):
 
                     if response in ("", "y", "yes"):
                         for img in new_images:
-                            os.startfile(img["image_path"])
+                            os.startfile(img["image_path"])  # pylint: disable=no-member
                         plural = "s" if num_images > 1 else ""
                         print(f"[{num_images} image{plural} opened]\n")
             except (KeyboardInterrupt, EOFError):

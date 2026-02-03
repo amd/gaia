@@ -53,23 +53,30 @@ jobs:
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
-        shell: cmd
         run: |
-          call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
+          Write-Host "================================================================"
+          Write-Host "     Initializing GAIA SD Profile (gaia init --profile sd)"
+          Write-Host "================================================================"
+          Write-Host "SD models require Lemonade v9.2.0+"
+          Write-Host ""
 
-          echo ================================================================
-          echo      Initializing GAIA SD Profile (gaia init --profile sd)
-          echo ================================================================
-          echo This will download models (skips if already cached):
-          echo   - SDXL-Turbo (6.5GB)
-          echo   - Qwen3-8B-GGUF (5GB)
-          echo   - Qwen3-VL-4B-Instruct-GGUF (3.2GB)
-          echo.
-          echo Note: Models are cached in HuggingFace hub between CI runs
-          echo.
+          # Check if we need to upgrade Lemonade for SD model support
+          $version = & lemonade-server --version 2>&1
+          if ($version -match "(\d+\.\d+\.\d+)") {
+              $installedVersion = $matches[1]
+              Write-Host "Installed Lemonade version: $installedVersion"
 
-          REM Use --yes to auto-confirm, --skip-lemonade since server already started
-          gaia init --profile sd --yes --skip-lemonade
+              if ($installedVersion -eq "9.0.4") {
+                  Write-Host "Upgrading to v9.2.0 for SDXL-Turbo support..."
+                  & gaia init --profile sd --yes --force-reinstall
+              } else {
+                  Write-Host "Using existing version (v$installedVersion >= v9.2.0)"
+                  & gaia init --profile sd --yes --skip-lemonade
+              }
+          } else {
+              Write-Host "Could not detect version, using --skip-lemonade"
+              & gaia init --profile sd --yes --skip-lemonade
+          }
 
           echo.
           echo ================================================================

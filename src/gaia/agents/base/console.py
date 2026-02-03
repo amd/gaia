@@ -975,7 +975,7 @@ class AgentConsole(OutputHandler):
                         input("\nOpen image in default viewer? [Y/n]: ").strip().lower()
                     )
                     if response in ("", "y", "yes"):
-                        os.startfile(str(path))
+                        os.startfile(str(path))  # pylint: disable=no-member
                 except (KeyboardInterrupt, EOFError):
                     pass  # User cancelled
         else:
@@ -989,7 +989,7 @@ class AgentConsole(OutputHandler):
                 try:
                     response = input("\nOpen image? [Y/n]: ").strip().lower()
                     if response in ("", "y", "yes"):
-                        os.startfile(str(path))
+                        os.startfile(str(path))  # pylint: disable=no-member
                 except (KeyboardInterrupt, EOFError):
                     pass
 
