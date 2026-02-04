@@ -487,51 +487,34 @@ class LemonadeInstaller:
         """
         Check if the Linux version meets minimum requirements.
 
-        Lemonade Server .deb packages require Ubuntu 24.04+ (or equivalent)
-        due to dependencies like libasound2t64 that don't exist on older releases.
+        Lemonade Server .deb requires Ubuntu 24.04+ or Debian 13+ due to
+        dependencies like libasound2t64 that don't exist on older releases.
 
         Returns:
             None if compatible, or an error message string if not.
         """
         try:
-            # Try /etc/os-release first (works on most distros)
-            os_info = {}
-            if os.path.isfile("/etc/os-release"):
-                with open("/etc/os-release", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if "=" in line:
-                            key, _, value = line.partition("=")
-                            os_info[key] = value.strip('"')
+            # Parse /etc/os-release (systemd standard, present on all modern distros)
+            with open("/etc/os-release", encoding="utf-8") as f:
+                os_info = dict(
+                    line.strip().split("=", 1) for line in f if "=" in line
+                )
+            # Strip quotes from values
+            os_info = {k: v.strip('"') for k, v in os_info.items()}
 
             distro = os_info.get("ID", "").lower()
-            version_id = os_info.get("VERSION_ID", "")
+            version = os_info.get("VERSION_ID", "")
             pretty_name = os_info.get("PRETTY_NAME", "Unknown Linux")
 
-            # Check Ubuntu version (need 24.04+)
-            if distro == "ubuntu" and version_id:
-                try:
-                    major, _ = version_id.split(".")[:2]
-                    if int(major) < 24:
-                        return (
-                            f"Lemonade Server requires Ubuntu 24.04 or later. "
-                            f"Detected: {pretty_name}. "
-                            f"The .deb package has dependencies (e.g. libasound2t64) "
-                            f"that are not available on Ubuntu {version_id}."
-                        )
-                except (ValueError, IndexError):
-                    pass
+            # Check Ubuntu 24.04+
+            if distro == "ubuntu" and version:
+                if int(version.split(".")[0]) < 24:
+                    return f"Requires Ubuntu 24.04+. Detected: {pretty_name}"
 
-            # Check Debian version (need 13/trixie+, roughly equivalent)
-            elif distro == "debian" and version_id:
-                try:
-                    if int(version_id) < 13:
-                        return (
-                            f"Lemonade Server requires Debian 13 (trixie) or later. "
-                            f"Detected: {pretty_name}."
-                        )
-                except ValueError:
-                    pass
+            # Check Debian 13+
+            elif distro == "debian" and version:
+                if int(version) < 13:
+                    return f"Requires Debian 13+. Detected: {pretty_name}"
 
         except Exception as e:
             log.debug(f"Could not check Linux version: {e}")
