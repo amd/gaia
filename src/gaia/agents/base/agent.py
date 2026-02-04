@@ -1351,7 +1351,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
         steps_taken = 0
         final_answer = None
         error_count = 0
-        last_tool_call = None  # Track the last tool call to prevent loops
+        tool_call_history = []  # Track recent tool calls to detect loops (last 5 calls)
         last_error = None  # Track the last error to handle it properly
         previous_outputs = []  # Track previous tool outputs (truncated for context)
         step_results = []  # Track full tool results for parameter substitution
@@ -1647,9 +1647,12 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     )
 
                     # Create a specific error recovery prompt
+                    last_tool = (
+                        tool_call_history[-1][0] if tool_call_history else "unknown tool"
+                    )
                     prompt = (
                         "TOOL EXECUTION FAILED!\n\n"
-                        f"You were trying to execute: {last_tool_call[0] if last_tool_call else 'unknown tool'}\n"
+                        f"You were trying to execute: {last_tool}\n"
                         f"Error: {last_error}\n\n"
                         f"Original task: {user_input}\n\n"
                         f"Current plan step {self.current_step + 1}/{self.total_plan_steps} failed.\n"
@@ -2094,12 +2097,30 @@ You must respond ONLY in valid JSON. No text before { or after }.
                 # Start progress indicator for tool execution
                 self.console.start_progress(f"Executing {tool_name}")
 
-                # Check for repeated tool calls
-                if last_tool_call == (tool_name, str(tool_args)):
+                # Check for repeated tool calls (allow up to 3 identical calls)
+                current_call = (tool_name, str(tool_args))
+                tool_call_history.append(current_call)
+
+                # Keep only last 5 calls for loop detection
+                if len(tool_call_history) > 5:
+                    tool_call_history.pop(0)
+
+                # Count consecutive identical calls
+                consecutive_count = 0
+                for call in reversed(tool_call_history):
+                    if call == current_call:
+                        consecutive_count += 1
+                    else:
+                        break
+
+                # Stop after 3 consecutive identical calls
+                if consecutive_count >= 3:
                     # Stop progress indicator
                     self.console.stop_progress()
 
-                    logger.warning(f"Detected repeated tool call: {tool_name}")
+                    logger.warning(
+                        f"Detected {consecutive_count} consecutive identical calls to {tool_name}, stopping to prevent loop"
+                    )
                     # Force a final answer if the same tool is called repeatedly
                     final_answer = (
                         f"Task completed with {tool_name}. No further action needed."
@@ -2134,9 +2155,6 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
                 # Share tool output with subsequent LLM calls
                 messages.append(self._create_tool_message(tool_name, truncated_result))
-
-                # Update last tool call
-                last_tool_call = (tool_name, str(tool_args))
 
                 # For single-step plans, we still need to let the LLM process the result
                 # This is especially important for RAG queries where the LLM needs to
