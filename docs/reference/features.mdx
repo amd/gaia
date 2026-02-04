@@ -33,7 +33,7 @@ The `gaia llm` command provides direct access to language models without requiri
 gaia llm "What is 1+1?"
 
 # Specify model and token limit
-gaia llm "Explain quantum computing" --model Qwen2.5-0.5B-Instruct-CPU --max-tokens 200
+gaia llm "Explain quantum computing" --model Qwen3-0.6B-GGUF --max-tokens 200
 
 # Disable streaming for batch processing
 gaia llm "Write a short poem" --no-stream
@@ -207,7 +207,7 @@ gaia talk
 gaia talk --index manual.pdf
 
 # Use specific model with voice and document
-gaia talk --model Qwen2.5-0.5B-Instruct-CPU --index report.pdf
+gaia talk --model Qwen3-0.6B-GGUF --index report.pdf
 
 # Disable text-to-speech (ASR only) with document
 gaia talk --no-tts --index technical_manual.pdf

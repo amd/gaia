@@ -79,7 +79,7 @@ def _get_lemonade_config() -> tuple:
 # Model Configuration Defaults
 # =========================================================================
 # Default model for text generation - lightweight CPU model for testing
-DEFAULT_MODEL_NAME = "Qwen2.5-0.5B-Instruct-CPU"
+DEFAULT_MODEL_NAME = "Qwen3-0.6B-GGUF"
 # DEFAULT_MODEL_NAME = "Llama-3.2-3B-Instruct-Hybrid"
 
 # =========================================================================
@@ -155,7 +155,7 @@ MODELS = {
     ),
     "qwen2.5-0.5b": ModelRequirement(
         model_type=ModelType.LLM,
-        model_id="Qwen2.5-0.5B-Instruct-CPU",
+        model_id="Qwen3-0.6B-GGUF",
         display_name="Qwen2.5 0.5B (Fast)",
         min_ctx_size=4096,
     ),
