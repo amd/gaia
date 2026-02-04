@@ -895,8 +895,6 @@ You must respond ONLY in valid JSON. No text before { or after }.
             - Maximum nesting depth of 50 levels to prevent stack overflow
             - No type checking - resolved values are used as-is (tools should validate inputs)
         """
-        import re
-
         # Prevent stack overflow from deeply nested structures
         MAX_DEPTH = 50
         if _depth > MAX_DEPTH:
