@@ -78,6 +78,7 @@ class Agent(abc.ABC):
         debug: bool = False,
         output_handler=None,
         max_plan_iterations: int = 3,
+        max_consecutive_repeats: int = 4,
         min_context_size: int = 32768,
         skip_lemonade: bool = False,
     ):
@@ -100,6 +101,7 @@ class Agent(abc.ABC):
             debug: If True, enables debug output for troubleshooting (default: False)
             output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
             max_plan_iterations: Maximum number of plan-execute-replan cycles (default: 3, 0 = unlimited)
+            max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4)
             min_context_size: Minimum context size required for this agent (default: 32768).
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
@@ -120,6 +122,7 @@ class Agent(abc.ABC):
         self.debug = debug
         self.last_result = None  # Store the most recent result
         self.max_plan_iterations = max_plan_iterations
+        self.max_consecutive_repeats = max_consecutive_repeats
         self._current_query: Optional[str] = (
             None  # Store current query for error context
         )
@@ -2113,13 +2116,13 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     else:
                         break
 
-                # Stop after 3 consecutive identical calls
-                if consecutive_count >= 3:
+                # Stop after max_consecutive_repeats identical calls
+                if consecutive_count >= self.max_consecutive_repeats:
                     # Stop progress indicator
                     self.console.stop_progress()
 
                     logger.warning(
-                        f"Detected {consecutive_count} consecutive identical calls to {tool_name}, stopping to prevent loop"
+                        f"Detected {consecutive_count} consecutive identical calls to {tool_name} (max: {self.max_consecutive_repeats}), stopping to prevent loop"
                     )
                     # Force a final answer if the same tool is called repeatedly
                     final_answer = (
