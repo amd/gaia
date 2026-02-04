@@ -1151,7 +1151,16 @@ class InitCommand:
 
                 # Verify context size was set correctly by reading it back
                 try:
-                    model_info = client.get_model_info(model_id)
+                    # Get full model list with recipe_options
+                    models_list = client.list_models()
+                    model_info = next(
+                        (m for m in models_list.get("data", []) if m.get("id") == model_id),
+                        None
+                    )
+
+                    if not model_info:
+                        return (False, "Model info not found")
+
                     actual_ctx = model_info.get("recipe_options", {}).get("ctx_size")
 
                     if actual_ctx and actual_ctx >= min_ctx:
@@ -1164,10 +1173,10 @@ class InitCommand:
                         # Context was set but is too small
                         return (False, f"Context {actual_ctx} < {min_ctx} required")
                     else:
-                        # Context not readable (shouldn't happen with save_options=true)
-                        return (False, f"Could not verify {min_ctx} token context")
+                        # Context not in recipe_options (shouldn't happen with save_options=true)
+                        return (False, f"Context not saved (recipe_options: {model_info.get('recipe_options')})")
                 except Exception as e:
-                    return (False, f"Context verification failed: {str(e)[:50]}")
+                    return (False, f"Context check failed: {str(e)[:50]}")
             else:
                 # Load without context size (SD models, embedding models, or no requirement)
                 client.load_model(model_id, auto_download=False, prompt=False)
