@@ -1679,6 +1679,12 @@ class LemonadeClient:
             )
 
         try:
+            # Generate random seed if not provided for varied results
+            import random
+
+            if seed is None:
+                seed = random.randint(0, 2**32 - 1)
+
             payload = {
                 "prompt": prompt,
                 "model": model,
@@ -1687,9 +1693,8 @@ class LemonadeClient:
                 "response_format": "b64_json",
                 "cfg_scale": cfg_scale,
                 "steps": steps,
+                "seed": seed,
             }
-            if seed is not None:
-                payload["seed"] = seed
 
             self.log.info(
                 f"Generating image: model={model}, size={size}, steps={steps}, cfg={cfg_scale}"
@@ -2312,6 +2317,8 @@ class LemonadeClient:
         auto_download: bool = False,
         _download_timeout: int = 7200,  # Reserved for future use
         llamacpp_args: Optional[str] = None,
+        ctx_size: Optional[int] = None,
+        save_options: bool = False,
         prompt: bool = True,
     ) -> Dict[str, Any]:
         """
@@ -2331,6 +2338,10 @@ class LemonadeClient:
                              Large models can be 100GB+ and take hours to download
             llamacpp_args: Optional llama.cpp arguments (e.g., "--ubatch-size 2048").
                           Used to configure model loading parameters like batch sizes.
+            ctx_size: Context size for the model in tokens (e.g., 8192, 32768).
+                     Overrides the default value for this model.
+            save_options: If True, persists ctx_size and llamacpp_args to config file.
+                         Model will use these settings on future loads.
             prompt: If True, prompt user before downloading (default: True).
                    Set to False to download automatically without user confirmation.
 
@@ -2347,6 +2358,10 @@ class LemonadeClient:
         request_data = {"model_name": model_name}
         if llamacpp_args:
             request_data["llamacpp_args"] = llamacpp_args
+        if ctx_size is not None:
+            request_data["ctx_size"] = ctx_size
+        if save_options:
+            request_data["save_options"] = save_options
         url = f"{self.base_url}/load"
 
         try:

@@ -201,3 +201,4 @@ quick_test_results/
 test_*.png
 diffusers_*.png
 sdxl_base_*.png
+docs/playbooks/sd-agent/index-backup.mdx

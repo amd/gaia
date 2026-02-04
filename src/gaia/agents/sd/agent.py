@@ -13,11 +13,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.sd.prompts import (
-    BASE_GUIDELINES,
-    MODEL_SPECIFIC_PROMPTS,
-    WORKFLOW_INSTRUCTIONS,
-)
 from gaia.logger import get_logger
 from gaia.sd import SDToolsMixin
 from gaia.vlm import VLMToolsMixin
@@ -44,7 +39,7 @@ class SDAgentConfig:
     # Execution settings
     max_steps: int = 10
     streaming: bool = False
-    ctx_size: int = 8192  # 8K context (sufficient for prompt enhancement)
+    ctx_size: int = 16384  # 16K context for multi-step planning with dynamic parameters
 
     # Debug/output settings
     debug: bool = False
@@ -87,14 +82,21 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
         llm_client = LemonadeClient(verbose=False)
         try:
             llm_client.load_model(
-                config.model_id, auto_download=True, prompt=False, timeout=120
+                config.model_id,
+                auto_download=True,
+                prompt=False,
+                timeout=120,
+                ctx_size=config.ctx_size,  # Ensure 16K context for SD workflow
+                save_options=True,  # Persist context setting
             )
-            logger.debug(f"Loaded LLM model: {config.model_id}")
+            logger.debug(
+                f"Loaded LLM model: {config.model_id} with {config.ctx_size} token context"
+            )
         except Exception as e:
             logger.warning(f"LLM load warning: {e}")
 
-        # Initialize Agent base class with reduced context requirement
-        # SD prompt enhancement doesn't need 32K context, 8K is sufficient
+        # Initialize Agent base class with 16K context requirement
+        # SD multi-step planning requires 16K context for dynamic parameters
         super().__init__(
             use_claude=config.use_claude,
             use_chatgpt=config.use_chatgpt,
@@ -104,7 +106,7 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
             max_steps=config.max_steps,
             streaming=config.streaming,
             show_stats=config.show_stats,
-            min_context_size=config.ctx_size,  # 8K sufficient for prompt enhancement
+            min_context_size=config.ctx_size,  # 16K for multi-step planning
         )
 
         # Initialize SD tools (auto-registers tools)
@@ -122,107 +124,101 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
         )
 
     def _get_system_prompt(self) -> str:
-        """System prompt with model-specific enhancement guidelines."""
-        # Get model-specific prompt from prompts.py
-        model_specific = MODEL_SPECIFIC_PROMPTS.get(
-            self.config.sd_model, MODEL_SPECIFIC_PROMPTS["SD-1.5"]
-        )
+        """
+        Agent-specific system prompt additions.
 
-        return BASE_GUIDELINES + model_specific + WORKFLOW_INSTRUCTIONS
+        Documents the custom create_story_from_image tool and workflow.
+        """
+        return """You are an image generation and storytelling agent.
+
+WORKFLOW for image + story requests:
+1. Create a 2-step plan using dynamic parameter placeholders
+2. The plan executes automatically - you'll see results after completion
+3. Provide final answer with the complete story text
+
+DYNAMIC PARAMETER PLACEHOLDERS:
+Use these in multi-step plans to reference previous results:
+- $PREV.field - Get field from previous step result
+- $STEP_0.field - Get field from specific step (0-indexed)
+
+CORRECT multi-step plan:
+{
+  "thought": "Creating plan to generate image and story",
+  "plan": [
+    {
+      "tool": "generate_image",
+      "tool_args": {
+        "prompt": "adorable robot kitten with glowing LED eyes...",
+        "model": "SDXL-Turbo",
+        "size": "512x512",
+        "steps": 4
+      }
+    },
+    {
+      "tool": "create_story_from_image",
+      "tool_args": {
+        "image_path": "$PREV.image_path",
+        "story_style": "whimsical"
+      }
+    }
+  ]
+}
+
+How it works:
+- Step 1 returns: {"image_path": ".gaia/cache/sd/images/robot_kitten_SDXL_20260203.png", ...}
+- Step 2 receives: {"image_path": ".gaia/cache/sd/images/robot_kitten_SDXL_20260203.png", "story_style": "whimsical"}
+- The system automatically substitutes $PREV.image_path with the actual path
+
+OTHER RULES:
+- Generate ONE image by default (multiple only if explicitly requested: "3 images", "variations")
+- Match story_style to user's request: "whimsical" (cute/playful), "adventure" (action), "dramatic" (intense), "any" (default)
+- Include full story text in answer - users want to read it immediately
+- After both tools complete (image + story), provide final answer immediately - DO NOT call tools again"""
 
     def _register_tools(self):
         """Register custom SD-specific tools."""
-        # SD tools and VLM tools are already registered in __init__
-        # via init_sd() and init_vlm() (they auto-register)
+        from pathlib import Path
 
-        # Define SD-specific custom tool that wraps VLM functionality
-        # The @tool decorator automatically registers it in the global tool registry
         from gaia.agents.base.tools import tool
 
-        @tool(
-            atomic=True,
-            name="create_story_from_last_image",
-            description="SD-specific convenience: Analyze the last generated SD image and create a whimsical story. Automatically finds the most recent image from this session. Can optionally specify image_path.",
-            parameters={
-                "image_path": {
-                    "type": "string",
-                    "description": "Optional: path to specific image. If not provided, uses last generated image.",
-                    "required": False,
-                }
-            },
-        )
-        def create_story_from_last_image(image_path: str = None) -> dict:
-            """
-            Custom SD-Agent tool that wraps generic VLM tools for convenience.
+        @tool(atomic=True)
+        def create_story_from_image(image_path: str, story_style: str = "any") -> dict:
+            """Generate a creative short story (2-3 paragraphs) based on an image."""
+            path = Path(image_path)
+            if not path.exists():
+                return {"status": "error", "error": f"Image not found: {image_path}"}
 
-            Demonstrates tool composition: an SD-specific wrapper that calls
-            generic VLM tools under the hood.
+            # Read image bytes
+            image_bytes = path.read_bytes()
 
-            Args:
-                image_path: Optional path to specific image. If None, uses last generated image.
-            """
-            if image_path is None:
-                # Auto-find last generated image
-                if not self.sd_generations:
-                    return {
-                        "status": "error",
-                        "error": "No images generated yet. Generate an image first.",
-                    }
+            # Build story prompt based on style
+            style_map = {
+                "whimsical": "playful and lighthearted",
+                "dramatic": "intense and emotionally charged",
+                "adventure": "exciting with action and discovery",
+                "educational": "informative and teaches something",
+                "any": "engaging and imaginative",
+            }
+            style_desc = style_map.get(story_style, "engaging and imaginative")
 
-                # Get last generated image path
-                last_gen = self.sd_generations[-1]
-                image_path = last_gen["image_path"]
-            else:
-                # Use provided path, try to find it in generation history
-                last_gen = None
-                for gen in reversed(self.sd_generations):
-                    if (
-                        gen["image_path"] == image_path
-                        or image_path in gen["image_path"]
-                    ):
-                        last_gen = gen
-                        image_path = gen["image_path"]
-                        break
+            # Call VLM to generate story
+            prompt = f"Create a short creative story (2-3 paragraphs) that is {style_desc}. Bring the image to life with narrative. Include sensory details and character."
+            story = self.vlm_client.extract_from_image(image_bytes, prompt=prompt)
 
-            # Call the generic VLM tool (if available)
-            if hasattr(self, "_create_story_from_image"):
-                result = self._create_story_from_image(
-                    image_path, story_style="whimsical"
-                )
-                if result.get("status") == "success":
-                    # Add SD-specific metadata if available
-                    if last_gen:
-                        result["original_prompt"] = last_gen["prompt"]
-                        result["sd_model"] = last_gen["model"]
+            # Save story to text file
+            base_path, _ = os.path.splitext(str(path))
+            story_path = f"{base_path}_story.txt"
 
-                    # Save story to text file
-                    story_text = result.get("story", "")
-                    description = result.get("description", "")
+            with open(story_path, "w", encoding="utf-8") as f:
+                f.write("=" * 80 + "\n")
+                f.write("STORY\n")
+                f.write("=" * 80 + "\n\n")
+                f.write(story + "\n")
 
-                    # Create story filename based on image filename
-                    img_path = result.get("image_path", image_path)
-                    base_path, _ = os.path.splitext(img_path)
-                    story_path = f"{base_path}_story.txt"
-
-                    # Write story and description to file
-                    with open(story_path, "w", encoding="utf-8") as f:
-                        f.write("=" * 80 + "\n")
-                        f.write("STORY\n")
-                        f.write("=" * 80 + "\n\n")
-                        f.write(story_text + "\n\n")
-                        f.write("=" * 80 + "\n")
-                        f.write("IMAGE DESCRIPTION\n")
-                        f.write("=" * 80 + "\n\n")
-                        f.write(description + "\n")
-
-                    result["story_file"] = story_path
-                    logger.debug(f"Story saved to: {story_path}")
-
-                return result
-            else:
-                return {
-                    "status": "error",
-                    "error": "VLM tools not initialized. Agent needs VLMToolsMixin.",
-                }
-
-        # No need to call register_tool() - the @tool decorator does it automatically
+            return {
+                "status": "success",
+                "story": story,
+                "story_style": story_style,
+                "image_path": str(path),
+                "story_file": story_path,
+            }

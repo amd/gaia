@@ -68,7 +68,7 @@ class Agent(abc.ABC):
         claude_model: str = "claude-sonnet-4-20250514",
         base_url: Optional[str] = None,
         model_id: str = None,
-        max_steps: int = 5,
+        max_steps: int = 20,
         debug_prompts: bool = False,
         show_prompts: bool = False,
         output_dir: str = None,
@@ -78,6 +78,7 @@ class Agent(abc.ABC):
         debug: bool = False,
         output_handler=None,
         max_plan_iterations: int = 3,
+        max_consecutive_repeats: int = 4,
         min_context_size: int = 32768,
         skip_lemonade: bool = False,
     ):
@@ -100,6 +101,7 @@ class Agent(abc.ABC):
             debug: If True, enables debug output for troubleshooting (default: False)
             output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
             max_plan_iterations: Maximum number of plan-execute-replan cycles (default: 3, 0 = unlimited)
+            max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4)
             min_context_size: Minimum context size required for this agent (default: 32768).
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
@@ -120,6 +122,7 @@ class Agent(abc.ABC):
         self.debug = debug
         self.last_result = None  # Store the most recent result
         self.max_plan_iterations = max_plan_iterations
+        self.max_consecutive_repeats = max_consecutive_repeats
         self._current_query: Optional[str] = (
             None  # Store current query for error context
         )
@@ -153,10 +156,44 @@ class Agent(abc.ABC):
         else:
             self.console = self._create_console()
 
-        # Initialize system prompt
-        # Register tools first, then build system prompt with tools included
+        # Initialize LLM client for local model
+        # Note: System prompt will be composed after _register_tools()
+        # This allows mixins to be initialized first (in subclass __init__)
+
+        # Register tools for this agent
         self._register_tools()
-        self.rebuild_system_prompt()
+
+        # Note: system_prompt is now a lazy @property that composes on first access
+        # Tool descriptions and response format are added in _compose_system_prompt()
+
+        # Store response format template for use in composition
+        self._response_format_template = """
+==== RESPONSE FORMAT ====
+You must respond ONLY in valid JSON. No text before { or after }.
+
+**To call a tool:**
+{"thought": "reasoning", "goal": "objective", "tool": "tool_name", "tool_args": {"arg1": "value1"}}
+
+**To create a multi-step plan:**
+{
+  "thought": "reasoning",
+  "goal": "objective",
+  "plan": [
+    {"tool": "tool1", "tool_args": {"arg": "val"}},
+    {"tool": "tool2", "tool_args": {"arg": "val"}}
+  ],
+  "tool": "tool1",
+  "tool_args": {"arg": "val"}
+}
+
+**To provide a final answer:**
+{"thought": "reasoning", "goal": "achieved", "answer": "response to user"}
+
+**RULES:**
+1. ALWAYS use tools for real data - NEVER hallucinate
+2. Plan steps MUST be objects like {"tool": "x", "tool_args": {}}, NOT strings
+3. After tool results, provide an "answer" summarizing them
+"""
 
         # Initialize ChatSDK with proper configuration
         # Note: We don't set system_prompt in config, we pass it per request
@@ -186,13 +223,127 @@ class Agent(abc.ABC):
         if self.show_prompts:
             self.console.print_prompt(self.system_prompt, "Initial System Prompt")
 
-    @abc.abstractmethod
+    def _get_mixin_prompts(self) -> list[str]:
+        """
+        Auto-collect system prompt fragments from inherited mixins.
+
+        Checks for mixin methods following the pattern: get_*_system_prompt()
+        Override this method to modify, reorder, or filter mixin prompts.
+
+        Returns:
+            List of prompt fragments from mixins (empty list if no mixins provide prompts)
+
+        Example:
+            def _get_mixin_prompts(self) -> list[str]:
+                prompts = super()._get_mixin_prompts()
+                # Modify SD prompt
+                if prompts:
+                    prompts[0] = prompts[0].replace("whimsical", "serious")
+                return prompts
+        """
+        prompts = []
+
+        # Check for SD mixin prompts
+        if hasattr(self, "get_sd_system_prompt"):
+            fragment = self.get_sd_system_prompt()
+            if fragment:
+                prompts.append(fragment)
+
+        # Check for VLM mixin prompts
+        if hasattr(self, "get_vlm_system_prompt"):
+            fragment = self.get_vlm_system_prompt()
+            if fragment:
+                prompts.append(fragment)
+
+        # Add more mixin checks here as new prompt-providing mixins are created
+
+        return prompts
+
+    def _compose_system_prompt(self) -> str:
+        """
+        Compose final system prompt from mixin fragments + agent custom + tools + format.
+
+        Override this method for complete control over prompt composition order.
+
+        Returns:
+            Composed system prompt string
+
+        Example:
+            def _compose_system_prompt(self) -> str:
+                # Custom composition order
+                parts = [
+                    "Base instructions first",
+                    *self._get_mixin_prompts(),
+                    self._get_system_prompt(),
+                ]
+                return "\n\n".join(p for p in parts if p)
+        """
+        parts = []
+
+        # Add mixin prompts first
+        parts.extend(self._get_mixin_prompts())
+
+        # Add agent-specific prompt
+        custom = self._get_system_prompt()
+        if custom:
+            parts.append(custom)
+
+        # Add tool descriptions (if tools registered)
+        if hasattr(self, "_format_tools_for_prompt"):
+            tools_description = self._format_tools_for_prompt()
+            if tools_description:
+                parts.append(f"==== AVAILABLE TOOLS ====\n{tools_description}")
+
+        # Add response format (if template set)
+        if hasattr(self, "_response_format_template"):
+            parts.append(self._response_format_template)
+
+        return "\n\n".join(p for p in parts if p)
+
+    @property
+    def system_prompt(self) -> str:
+        """
+        Lazy-loaded system prompt composed from mixins + agent custom.
+
+        Computed on first access to allow mixins to initialize in subclass __init__.
+
+        To see the prompt for debugging:
+            print(agent.system_prompt)
+        """
+        if not hasattr(self, "_system_prompt_cache"):
+            self._system_prompt_cache = self._compose_system_prompt()
+        return self._system_prompt_cache
+
+    @system_prompt.setter
+    def system_prompt(self, value: str):
+        """Allow setting system prompt (used when appending tool descriptions)."""
+        self._system_prompt_cache = value
+
     def _get_system_prompt(self) -> str:
         """
-        Generate the system prompt for the agent.
-        Subclasses must implement this to provide domain-specific prompts.
+        Return agent-specific system prompt additions.
+
+        Default implementation returns empty string (use only mixin prompts).
+        Override this method to add custom instructions.
+
+        When using mixins that provide prompts (e.g., SDToolsMixin):
+        - Return "" to use only mixin prompts (default behavior)
+        - Return custom instructions to append to mixin prompts
+        - Override _compose_system_prompt() for full control over composition
+
+        Returns:
+            Agent-specific system prompt (empty string by default)
+
+        Example:
+            # Use only mixin prompts (default)
+            def _get_system_prompt(self) -> str:
+                return ""
+
+            # Add custom instructions
+            def _get_system_prompt(self) -> str:
+                return "Always save metadata to logs"
         """
-        raise NotImplementedError("Subclasses must implement _get_system_prompt")
+        return ""  # Default: use only mixin prompts
 
     def _create_console(self):
         """
@@ -765,6 +916,106 @@ You must respond ONLY in valid JSON. No text before { or after }.
         # Valid conversational response - wrap it in expected format
         return {"thought": "", "goal": "", "answer": response.strip()}
 
+    def _resolve_plan_parameters(
+        self, tool_args: Any, step_results: List[Dict[str, Any]], _depth: int = 0
+    ) -> Any:
+        """
+        Recursively resolve placeholder references in tool arguments from previous step results.
+
+        Supports dynamic parameter substitution in multi-step plans:
+        - $PREV.field - Get field from previous step result
+        - $STEP_0.field - Get field from specific step result (0-indexed)
+
+        Args:
+            tool_args: Tool arguments that may contain placeholders
+            step_results: List of results from previously executed steps
+            _depth: Internal recursion depth counter (max 50 levels)
+
+        Returns:
+            Tool arguments with placeholders resolved to actual values
+
+        Examples:
+            >>> step_results = [{"image_path": "/path/to/img.png", "status": "success"}]
+            >>> tool_args = {"image_path": "$PREV.image_path", "style": "dramatic"}
+            >>> resolved = agent._resolve_plan_parameters(tool_args, step_results)
+            >>> resolved
+            {"image_path": "/path/to/img.png", "style": "dramatic"}
+
+        Backward Compatibility:
+            - If no placeholders exist, returns original tool_args unchanged
+            - If placeholder references invalid step/field, returns placeholder string unchanged
+
+        Limitations:
+            - Field names cannot contain dots (e.g., $PREV.user.name not supported - use $PREV.user_name)
+            - Maximum nesting depth of 50 levels to prevent stack overflow
+            - No type checking - resolved values are used as-is (tools should validate inputs)
+        """
+        # Prevent stack overflow from deeply nested structures
+        MAX_DEPTH = 50
+        if _depth > MAX_DEPTH:
+            logger.warning(
+                f"Maximum recursion depth ({MAX_DEPTH}) exceeded in parameter resolution, returning unchanged"
+            )
+            return tool_args
+
+        # Handle dict: recursively resolve each value
+        if isinstance(tool_args, dict):
+            return {
+                k: self._resolve_plan_parameters(v, step_results, _depth + 1)
+                for k, v in tool_args.items()
+            }
+
+        # Handle list: recursively resolve each item
+        elif isinstance(tool_args, list):
+            return [
+                self._resolve_plan_parameters(item, step_results, _depth + 1)
+                for item in tool_args
+            ]
+
+        # Handle string: check for placeholder patterns
+        elif isinstance(tool_args, str):
+            # Handle $PREV.field - get field from previous step
+            if tool_args.startswith("$PREV.") and step_results:
+                field = tool_args[6:]  # Strip "$PREV."
+                prev_result = step_results[-1]
+                if isinstance(prev_result, dict) and field in prev_result:
+                    resolved = prev_result[field]
+                    logger.debug(
+                        f"Resolved {tool_args} -> {resolved} from previous step result"
+                    )
+                    return resolved
+                else:
+                    logger.warning(
+                        f"Could not resolve {tool_args}: field '{field}' not found in previous result"
+                    )
+                    return tool_args  # Return unchanged if field not found
+
+            # Handle $STEP_N.field - get field from specific step
+            match = re.match(r"\$STEP_(\d+)\.(.+)", tool_args)
+            if match and step_results:
+                step_idx = int(match.group(1))
+                field = match.group(2)
+                if 0 <= step_idx < len(step_results):
+                    step_result = step_results[step_idx]
+                    if isinstance(step_result, dict) and field in step_result:
+                        resolved = step_result[field]
+                        logger.debug(
+                            f"Resolved {tool_args} -> {resolved} from step {step_idx} result"
+                        )
+                        return resolved
+                    else:
+                        logger.warning(
+                            f"Could not resolve {tool_args}: field '{field}' not found in step {step_idx} result"
+                        )
+                else:
+                    logger.warning(
+                        f"Could not resolve {tool_args}: step {step_idx} out of range (0-{len(step_results)-1})"
+                    )
+                return tool_args  # Return unchanged if reference invalid
+
+        # For all other types (int, float, bool, None), return unchanged
+        return tool_args
+
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
         Execute a tool by name with the provided arguments.
@@ -1159,9 +1410,10 @@ You must respond ONLY in valid JSON. No text before { or after }.
         steps_taken = 0
         final_answer = None
         error_count = 0
-        last_tool_call = None  # Track the last tool call to prevent loops
+        tool_call_history = []  # Track recent tool calls to detect loops (last 5 calls)
         last_error = None  # Track the last error to handle it properly
-        previous_outputs = []  # Track previous tool outputs
+        previous_outputs = []  # Track previous tool outputs (truncated for context)
+        step_results = []  # Track full tool results for parameter substitution
 
         # Reset state management
         self.execution_state = self.STATE_PLANNING
@@ -1236,6 +1488,9 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     tool_name = next_step["tool"]
                     tool_args = next_step["tool_args"]
 
+                    # Resolve dynamic parameters from previous step results
+                    tool_args = self._resolve_plan_parameters(tool_args, step_results)
+
                     # Create a parsed response structure as if it came from the LLM
                     parsed = {
                         "thought": f"Executing step {self.current_step + 1} of the plan",
@@ -1286,6 +1541,9 @@ You must respond ONLY in valid JSON. No text before { or after }.
                             "result": truncated_result,
                         }
                     )
+
+                    # Store full result for parameter substitution in subsequent plan steps
+                    step_results.append(tool_result)
 
                     # Share tool output with subsequent LLM calls
                     messages.append(
@@ -1448,9 +1706,14 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     )
 
                     # Create a specific error recovery prompt
+                    last_tool = (
+                        tool_call_history[-1][0]
+                        if tool_call_history
+                        else "unknown tool"
+                    )
                     prompt = (
                         "TOOL EXECUTION FAILED!\n\n"
-                        f"You were trying to execute: {last_tool_call[0] if last_tool_call else 'unknown tool'}\n"
+                        f"You were trying to execute: {last_tool}\n"
                         f"Error: {last_error}\n\n"
                         f"Original task: {user_input}\n\n"
                         f"Current plan step {self.current_step + 1}/{self.total_plan_steps} failed.\n"
@@ -1472,6 +1735,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     self.current_plan = None
                     self.current_step = 0
                     self.total_plan_steps = 0
+                    step_results.clear()  # Clear stale results from failed plan
 
                 elif self.execution_state == self.STATE_COMPLETION:
                     self.console.print_state_info("COMPLETION: Finalizing response")
@@ -1811,8 +2075,15 @@ You must respond ONLY in valid JSON. No text before { or after }.
                 for i, step in enumerate(parsed["plan"]):
                     if not isinstance(step, dict):
                         invalid_steps.append((i, type(step).__name__, step))
-                    elif "tool" not in step or "tool_args" not in step:
-                        invalid_steps.append((i, "missing fields", step))
+                    elif "tool" not in step:
+                        invalid_steps.append((i, "missing tool field", step))
+                    elif "tool_args" not in step:
+                        # Auto-add empty tool_args for convenience
+                        # LLMs sometimes omit this for tools with all optional parameters
+                        step["tool_args"] = {}
+                        logger.debug(
+                            f"Auto-added empty tool_args for step {i+1}: {step['tool']}"
+                        )
 
                 if invalid_steps:
                     logger.error(f"Invalid plan steps found: {invalid_steps}")
@@ -1887,12 +2158,27 @@ You must respond ONLY in valid JSON. No text before { or after }.
                 # Start progress indicator for tool execution
                 self.console.start_progress(f"Executing {tool_name}")
 
-                # Check for repeated tool calls
-                if last_tool_call == (tool_name, str(tool_args)):
+                # Check for repeated tool calls (allow up to 3 identical calls)
+                current_call = (tool_name, str(tool_args))
+                tool_call_history.append(current_call)
+
+                # Keep only last 5 calls for loop detection
+                if len(tool_call_history) > 5:
+                    tool_call_history.pop(0)
+
+                # Count consecutive identical calls
+                consecutive_count = 0
+                for call in reversed(tool_call_history):
+                    if call == current_call:
+                        consecutive_count += 1
+                    else:
+                        break
+
+                # Stop after max_consecutive_repeats identical calls
+                if consecutive_count >= self.max_consecutive_repeats:
                     # Stop progress indicator
                     self.console.stop_progress()
 
-                    logger.warning(f"Detected repeated tool call: {tool_name}")
                     # Force a final answer if the same tool is called repeatedly
                     final_answer = (
                         f"Task completed with {tool_name}. No further action needed."
@@ -1927,9 +2213,6 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
                 # Share tool output with subsequent LLM calls
                 messages.append(self._create_tool_message(tool_name, truncated_result))
-
-                # Update last tool call
-                last_tool_call = (tool_name, str(tool_args))
 
                 # For single-step plans, we still need to let the LLM process the result
                 # This is especially important for RAG queries where the LLM needs to
