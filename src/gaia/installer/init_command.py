@@ -43,6 +43,7 @@ INIT_PROFILES = {
         "models": ["Qwen3-4B-Instruct-2507-GGUF"],  # Override default minimal model
         "approx_size": "~2.5 GB",
         "min_lemonade_version": "9.0.4",
+        "min_context_size": 4096,
     },
     "sd": {
         "description": "Image generation with multi-modal AI (LLM + SD + VLM)",
@@ -54,6 +55,7 @@ INIT_PROFILES = {
         ],
         "approx_size": "~15 GB",
         "min_lemonade_version": "9.2.0",  # SDXL-Turbo requires v9.2.0+
+        "min_context_size": 8192,  # SD agent needs 8K for image + story workflow
     },
     "chat": {
         "description": "Interactive chat with RAG and vision support",
@@ -61,6 +63,7 @@ INIT_PROFILES = {
         "models": None,  # Use agent profile defaults
         "approx_size": "~25 GB",
         "min_lemonade_version": "9.0.4",
+        "min_context_size": 32768,
     },
     "code": {
         "description": "Autonomous coding assistant",
@@ -68,6 +71,7 @@ INIT_PROFILES = {
         "models": None,
         "approx_size": "~18 GB",
         "min_lemonade_version": "9.0.4",
+        "min_context_size": 32768,
     },
     "rag": {
         "description": "Document Q&A with retrieval",
@@ -75,6 +79,7 @@ INIT_PROFILES = {
         "models": None,
         "approx_size": "~25 GB",
         "min_lemonade_version": "9.0.4",
+        "min_context_size": 32768,
     },
     "all": {
         "description": "All models for all agents",
@@ -82,6 +87,7 @@ INIT_PROFILES = {
         "models": None,
         "approx_size": "~26 GB",
         "min_lemonade_version": "9.2.0",  # Includes SD, so needs v9.2.0+
+        "min_context_size": 32768,  # Max requirement across all agents
     },
 }
 
@@ -1126,8 +1132,45 @@ class InitCommand:
             Tuple of (success: bool, error_message: str or None)
         """
         try:
-            # Load the model first
-            client.load_model(model_id, auto_download=False, prompt=False)
+            # Check if profile requires specific context size for this model
+            profile_config = INIT_PROFILES.get(self.profile, {})
+            min_ctx = profile_config.get("min_context_size")
+
+            # Load the model (with context size if required)
+            is_llm = not ("embed" in model_id.lower() or any(sd in model_id.upper() for sd in ["SDXL", "SD-", "SD1", "SD2"]))
+
+            if is_llm and min_ctx:
+                # Load with explicit context size and save it
+                client.load_model(
+                    model_id,
+                    auto_download=False,
+                    prompt=False,
+                    ctx_size=min_ctx,
+                    save_options=True
+                )
+
+                # Verify context size was set correctly by reading it back
+                try:
+                    model_info = client.get_model_info(model_id)
+                    actual_ctx = model_info.get("recipe_options", {}).get("ctx_size")
+
+                    if actual_ctx and actual_ctx >= min_ctx:
+                        # Success - context verified
+                        # Store for success message, and flag if larger than expected
+                        self._ctx_verified = actual_ctx
+                        if actual_ctx > min_ctx:
+                            self._ctx_warning = f"(configured: {actual_ctx}, required: {min_ctx})"
+                    elif actual_ctx:
+                        # Context was set but is too small
+                        return (False, f"Context {actual_ctx} < {min_ctx} required")
+                    else:
+                        # Context not readable (shouldn't happen with save_options=true)
+                        return (False, f"Could not verify {min_ctx} token context")
+                except Exception as e:
+                    return (False, f"Context verification failed: {str(e)[:50]}")
+            else:
+                # Load without context size (SD models, embedding models, or no requirement)
+                client.load_model(model_id, auto_download=False, prompt=False)
 
             # Check model type
             is_embedding_model = "embed" in model_id.lower()
@@ -1213,6 +1256,24 @@ class InitCommand:
                 self._print_error("Server not responding")
                 return False
 
+            # Ensure proper context size for this profile
+            profile_config = INIT_PROFILES[self.profile]
+            min_ctx = profile_config.get("min_context_size")
+            if min_ctx:
+                from gaia.llm.lemonade_manager import LemonadeManager
+
+                self.console.print()
+                self.console.print(
+                    f"   [dim]Ensuring {min_ctx} token context for {self.profile} profile...[/dim]"
+                )
+                success = LemonadeManager.ensure_ready(min_context_size=min_ctx, quiet=True)
+                if success:
+                    self._print_success(f"Context size verified: {min_ctx} tokens")
+                else:
+                    self._print_error(f"Failed to configure {min_ctx} token context")
+                    self._print_error(f"Try: lemonade-server serve --ctx-size {min_ctx}")
+                    return False
+
             # Get models to verify
             profile_config = INIT_PROFILES[self.profile]
             if profile_config["models"]:
@@ -1274,8 +1335,20 @@ class InitCommand:
                     # Clear the line and show result
                     print("\r" + " " * 80 + "\r", end="")
                     if success:
+                        # Check if context was verified
+                        ctx_msg = ""
+                        if hasattr(self, "_ctx_verified") and self._ctx_verified:
+                            ctx_msg = f" [dim](ctx: {self._ctx_verified})[/dim]"
+
+                            # Warn if context is larger than required
+                            if hasattr(self, "_ctx_warning"):
+                                ctx_msg = f" [yellow]{self._ctx_warning}[/yellow]"
+                                delattr(self, "_ctx_warning")
+
+                            delattr(self, "_ctx_verified")  # Reset for next model
+
                         self.console.print(
-                            f"   [green]✓[/green]  [cyan]{model_id}[/cyan] [dim]- OK[/dim]"
+                            f"   [green]✓[/green]  [cyan]{model_id}[/cyan] [dim]- OK[/dim]{ctx_msg}"
                         )
                         models_passed += 1
                     else:

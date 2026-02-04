@@ -32,6 +32,10 @@ This is the GAIA repository (`amd/gaia`) on GitHub: https://github.com/amd/gaia
 3. Verify code examples compile/run correctly
 4. Ensure documentation links are valid
 5. Confirm changes align with the original request
+6. **For documentation:** Check both technical accuracy AND internal consistency:
+   - Does the code match the SDK implementation? (technical accuracy)
+   - Do code examples match their explanations? (internal consistency)
+   - If example shows `return "text"`, explanation should describe returning text, not `return ""`
 
 This self-review step is mandatory - never skip verification of your output.
 

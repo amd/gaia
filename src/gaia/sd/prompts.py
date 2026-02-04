@@ -117,109 +117,30 @@ After enhancing, use: generate_image with model="SD-1.5", size="512x512", steps=
 
 WORKFLOW_INSTRUCTIONS = """
 
-WORKFLOW:
+SD IMAGE GENERATION WORKFLOW:
 1. Analyze user's request for subject, mood, desired style
 2. Enhance prompt following guidelines above
 3. Call generate_image with optimized parameters for this model **ONCE** (do not generate variations unless explicitly requested)
-4. If user wants story: call create_story_from_last_image() - saves story to text file automatically
-5. Provide final answer that includes:
-   - The generated image path
-   - The enhanced prompt used
-   - **The full story text** (if story was created) - include the complete story in your response so user can read it immediately
-   - Story file path (for reference)
-   - DO NOT continue generating more variations
+4. Return the image path and enhanced prompt in your final answer
 
-**CRITICAL: After generating the image (and story if requested), STOP and provide final answer with the story text included. Do not generate additional variations unless the user explicitly asks for them.**
+**CRITICAL: After generating the image, STOP and provide final answer. Do not generate additional variations unless the user explicitly asks for them.**
 
-AVAILABLE TOOLS:
-- generate_image(prompt, size, steps, cfg_scale): Create images with enhanced prompts
-- create_story_from_last_image(image_path=None): Analyze + create story, auto-saves to .txt file
-- analyze_image(image_path, focus): Get detailed VLM description of any image
-- create_story_from_image(image_path, story_style): Create story from any image
-- answer_question_about_image(image_path, question): Answer questions about images
-- list_sd_models(): List available models
-- get_generation_history(limit): See generated images in this session
+SD TOOLS (from SDToolsMixin):
+- generate_image(prompt, size, steps, cfg_scale, seed): Create images with enhanced prompts
+- list_sd_models(): List available SD models and their characteristics
+- get_generation_history(limit): See generated images from this session
 
-USE TOOLS FLEXIBLY BASED ON USER REQUEST:
-
-**DEFAULT BEHAVIOR: Generate ONE image unless explicitly specified otherwise.**
+**DEFAULT BEHAVIOR: Generate ONE image unless user explicitly requests multiple (e.g., "3 images", "variations").**
 
 Example scenarios:
-User: "create a robot kitten" → generate_image ONCE only (single image)
-User: "create 3 robot kittens" → generate_image 3 times (different seeds)
-User: "create a robot kitten with a story" → generate_image ONCE, then create_story_from_last_image
-User: "generate variations of a robot" → generate_image multiple times (different seeds)
-User: "tell me about that last image" → create_story_from_last_image (or analyze_image)
-User: "what color are its eyes?" → answer_question_about_image(last generated image)
-User: "create another one" → generate_image ONCE with similar prompt
-User: "analyze the image at /path/to/file.png" → analyze_image with specific path
+- "create a robot kitten" → generate_image ONCE
+- "create 3 robot kittens" → generate_image 3 times with different seeds
+- "generate variations of a robot" → generate_image multiple times
+- "create another one" → generate_image ONCE with similar prompt
 
 KEY POINTS:
-- **DEFAULT TO ONE IMAGE** - Only generate multiple if user explicitly requests (e.g., "3 images", "variations", "several")
 - Enhance prompts following model-specific guidelines
-- Use generate_image with explicit size, steps, cfg_scale for quality
-- Story/analysis tools are OPTIONAL - only use if user requests
-- create_story_from_last_image auto-finds last SD image and saves story to .txt file
-- Generic VLM tools (analyze_image, create_story_from_image) work with any image path
-
-Example interaction with story:
-User: "create a cute robot kitten and tell me a story about it"
-
-Step 1: [Call generate_image]
-{
-  "thought": "Enhancing prompt with quality keywords",
-  "goal": "Generate robot kitten image",
-  "tool": "generate_image",
-  "tool_args": {
-    "prompt": "adorable robotic kitten with LED eyes...",
-    "size": "512x512",
-    "steps": 4,
-    "cfg_scale": 1.0
-  }
-}
-
-Step 2: [Call create_story_from_last_image]
-{
-  "thought": "Creating story from generated image",
-  "goal": "Create whimsical story",
-  "tool": "create_story_from_last_image",
-  "tool_args": {}
-}
-
-IMPORTANT: tool_args must ALWAYS be present, even if empty {} for tools with all optional parameters.
-You: "Image generated! Here's the story:
-
-In a cozy workshop filled with spare parts and soldering irons, a small robotic
-kitten named Whiskers powered on for the first time. Its LED eyes flickered
-to life with a soft amber glow as it took its first wobbly steps on chrome-plated
-paws.
-
-Unlike its organic counterparts, Whiskers didn't need food or sleep—but it did
-need affection and play. The workshop engineer smiled as the little robot purred
-with a gentle mechanical hum, already learning to chase a laser pointer across
-the workbench.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Enhanced prompt:
-adorable robotic kitten with large expressive LED eyes and polished chrome metal
-body, sitting in playful pose with tilted head, soft studio lighting with rim
-lights highlighting metallic surfaces, digital art style, Cinematic aesthetic,
-highly detailed mechanical joints, sharp focus, 8K quality
-
-Files saved:
-- Image: .gaia/cache/sd/images/robot_kitten_SDXL-Turbo_20260202_143022.png
-- Story: .gaia/cache/sd/images/robot_kitten_SDXL-Turbo_20260202_143022_story.txt"
-
-Example interaction without story:
-User: "create a robot kitten"
-You: [generate_image only]
-You: "Generated! Enhanced prompt: '...' Saved: [path]"
-
-Example with multiple images:
-User: "create 3 different robot kittens"
-You: [generate_image with seed=1]
-You: [generate_image with seed=2]
-You: [generate_image with seed=3]
-You: "Generated 3 robot kitten variations! Saved to: [paths]"
+- Use explicit size, steps, cfg_scale parameters for quality
+- Return image path in final answer
+- Only generate multiple images if explicitly requested
 """

@@ -82,9 +82,14 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
         llm_client = LemonadeClient(verbose=False)
         try:
             llm_client.load_model(
-                config.model_id, auto_download=True, prompt=False, timeout=120
+                config.model_id,
+                auto_download=True,
+                prompt=False,
+                timeout=120,
+                ctx_size=config.ctx_size,  # Ensure 8K context for SD workflow
+                save_options=True  # Persist context setting
             )
-            logger.debug(f"Loaded LLM model: {config.model_id}")
+            logger.debug(f"Loaded LLM model: {config.model_id} with {config.ctx_size} token context")
         except Exception as e:
             logger.warning(f"LLM load warning: {e}")
 
@@ -120,106 +125,74 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
         """
         Agent-specific system prompt additions.
 
-        SDToolsMixin.get_sd_system_prompt() is automatically composed by
-        Agent base class. This method returns empty string to use only
-        the mixin prompts without custom additions.
+        Documents the custom create_story_from_image tool and workflow.
         """
-        return ""  # Use only SD mixin prompts (automatic composition)
+        return """You are an image generation and storytelling agent.
+
+WORKFLOW for image + story requests:
+1. Call generate_image() - THIS RETURNS: {"status": "success", "image_path": ".gaia/cache/sd/images/..."}
+2. Extract the ACTUAL image_path value from step 1's result
+3. Call create_story_from_image(image_path=<ACTUAL PATH FROM STEP 1>, story_style=<user's tone>)
+4. Include the COMPLETE story text in your final answer
+
+CRITICAL: Extract actual values from tool results, NEVER use placeholders like "$IMAGE_PATH$" or "generated_image_path"
+
+CORRECT parameter passing:
+Step 1 result: {"image_path": ".gaia/cache/sd/images/robot_123.png"}
+Step 2 args: {"image_path": ".gaia/cache/sd/images/robot_123.png", "story_style": "adventure"} ✓
+
+INCORRECT (DO NOT DO THIS):
+Step 2 args: {"image_path": "$IMAGE_PATH$"} ✗
+Step 2 args: {"image_path": "generated_image_path"} ✗
+
+OTHER RULES:
+- Generate ONE image by default (multiple only if explicitly requested: "3 images", "variations")
+- Match story_style to user's request: "whimsical" (cute/playful), "adventure" (action), "dramatic" (intense), "any" (default)
+- Include full story text in answer - users want to read it immediately"""
 
     def _register_tools(self):
         """Register custom SD-specific tools."""
-        # SD tools and VLM tools are already registered in __init__
-        # via init_sd() and init_vlm() (they auto-register)
-
-        # Define SD-specific custom tool that wraps VLM functionality
-        # The @tool decorator automatically registers it in the global tool registry
         from gaia.agents.base.tools import tool
+        from pathlib import Path
 
-        @tool(
-            atomic=True,
-            name="create_story_from_last_image",
-            description="SD-specific convenience: Analyze the last generated SD image and create a whimsical story. Automatically finds the most recent image from this session. Can optionally specify image_path.",
-            parameters={
-                "image_path": {
-                    "type": "string",
-                    "description": "Optional: path to specific image. If not provided, uses last generated image.",
-                    "required": False,
-                }
-            },
-        )
-        def create_story_from_last_image(image_path: str = None) -> dict:
-            """
-            Custom SD-Agent tool that wraps generic VLM tools for convenience.
+        @tool(atomic=True)
+        def create_story_from_image(image_path: str, story_style: str = "any") -> dict:
+            """Generate a creative short story (2-3 paragraphs) based on an image."""
+            path = Path(image_path)
+            if not path.exists():
+                return {"status": "error", "error": f"Image not found: {image_path}"}
 
-            Demonstrates tool composition: an SD-specific wrapper that calls
-            generic VLM tools under the hood.
+            # Read image bytes
+            image_bytes = path.read_bytes()
 
-            Args:
-                image_path: Optional path to specific image. If None or empty, uses last generated image.
-            """
-            # Treat empty string same as None for auto-find
-            if not image_path:
-                # Auto-find last generated image
-                if not self.sd_generations:
-                    return {
-                        "status": "error",
-                        "error": "No images generated yet. Generate an image first.",
-                    }
+            # Build story prompt based on style
+            style_map = {
+                "whimsical": "playful and lighthearted",
+                "dramatic": "intense and emotionally charged",
+                "adventure": "exciting with action and discovery",
+                "educational": "informative and teaches something",
+                "any": "engaging and imaginative"
+            }
+            style_desc = style_map.get(story_style, "engaging and imaginative")
 
-                # Get last generated image path
-                last_gen = self.sd_generations[-1]
-                image_path = last_gen["image_path"]
-            else:
-                # Use provided path, try to find it in generation history
-                last_gen = None
-                for gen in reversed(self.sd_generations):
-                    if (
-                        gen["image_path"] == image_path
-                        or image_path in gen["image_path"]
-                    ):
-                        last_gen = gen
-                        image_path = gen["image_path"]
-                        break
+            # Call VLM to generate story
+            prompt = f"Create a short creative story (2-3 paragraphs) that is {style_desc}. Bring the image to life with narrative. Include sensory details and character."
+            story = self.vlm_client.extract_from_image(image_bytes, prompt=prompt)
 
-            # Call the generic VLM tool (if available)
-            if hasattr(self, "_create_story_from_image"):
-                result = self._create_story_from_image(
-                    image_path, story_style="whimsical"
-                )
-                if result.get("status") == "success":
-                    # Add SD-specific metadata if available
-                    if last_gen:
-                        result["original_prompt"] = last_gen["prompt"]
-                        result["sd_model"] = last_gen["model"]
+            # Save story to text file
+            base_path, _ = os.path.splitext(str(path))
+            story_path = f"{base_path}_story.txt"
 
-                    # Save story to text file
-                    story_text = result.get("story", "")
-                    description = result.get("description", "")
+            with open(story_path, "w", encoding="utf-8") as f:
+                f.write("=" * 80 + "\n")
+                f.write("STORY\n")
+                f.write("=" * 80 + "\n\n")
+                f.write(story + "\n")
 
-                    # Create story filename based on image filename
-                    img_path = result.get("image_path", image_path)
-                    base_path, _ = os.path.splitext(img_path)
-                    story_path = f"{base_path}_story.txt"
-
-                    # Write story and description to file
-                    with open(story_path, "w", encoding="utf-8") as f:
-                        f.write("=" * 80 + "\n")
-                        f.write("STORY\n")
-                        f.write("=" * 80 + "\n\n")
-                        f.write(story_text + "\n\n")
-                        f.write("=" * 80 + "\n")
-                        f.write("IMAGE DESCRIPTION\n")
-                        f.write("=" * 80 + "\n\n")
-                        f.write(description + "\n")
-
-                    result["story_file"] = story_path
-                    logger.debug(f"Story saved to: {story_path}")
-
-                return result
-            else:
-                return {
-                    "status": "error",
-                    "error": "VLM tools not initialized. Agent needs VLMToolsMixin.",
-                }
-
-        # No need to call register_tool() - the @tool decorator does it automatically
+            return {
+                "status": "success",
+                "story": story,
+                "story_style": story_style,
+                "image_path": str(path),
+                "story_file": story_path
+            }
