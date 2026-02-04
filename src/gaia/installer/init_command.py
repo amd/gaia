@@ -273,15 +273,7 @@ class InitCommand:
         that were just installed by MSI, without requiring a terminal restart.
         """
         if sys.platform != "win32":
-            # On Linux, dpkg installs to /usr/local/bin or /usr/bin
-            # which should be on PATH already. Ensure common install
-            # paths are in the current process PATH just in case.
-            linux_paths = ["/usr/local/bin", "/usr/bin", "/snap/bin"]
-            current_path = os.environ.get("PATH", "")
-            for p in linux_paths:
-                if p not in current_path:
-                    os.environ["PATH"] = f"{p}:{current_path}"
-                    current_path = os.environ["PATH"]
+            # On Linux, standard paths (/usr/bin, /usr/local/bin) are already in PATH
             return
 
         try:
