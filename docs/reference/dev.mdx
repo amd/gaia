@@ -106,9 +106,9 @@ You should see `(.venv)` in your terminal prompt when activated.
 uv pip install -e ".[dev]"
 ```
 
-Or install with all extras:
+Or install with all extras (use `--extra-index-url` to avoid pulling CUDA dependencies):
 ```bash
-uv pip install -e ".[dev,talk,rag]"
+uv pip install -e ".[dev,talk,rag]" --extra-index-url https://download.pytorch.org/whl/cpu
 ```
 
 ### Deactivating
