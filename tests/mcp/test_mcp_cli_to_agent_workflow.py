@@ -46,7 +46,7 @@ class MCPTestAgent(Agent, MCPClientMixin):
         kwargs.setdefault("max_steps", 10)
 
         Agent.__init__(self, **kwargs)
-        MCPClientMixin.__init__(self)
+        MCPClientMixin.__init__(self, auto_load_config=False)
 
         # Override config path for testing
         self._mcp_manager.config = MCPConfig(config_path)
