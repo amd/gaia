@@ -1651,7 +1651,9 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
                     # Create a specific error recovery prompt
                     last_tool = (
-                        tool_call_history[-1][0] if tool_call_history else "unknown tool"
+                        tool_call_history[-1][0]
+                        if tool_call_history
+                        else "unknown tool"
                     )
                     prompt = (
                         "TOOL EXECUTION FAILED!\n\n"
