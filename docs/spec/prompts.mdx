@@ -94,7 +94,7 @@ class Prompts:
         Match a model path/name to its corresponding prompt type.
 
         Args:
-            model: Model name or path (e.g., "Qwen2.5-0.5B-Instruct")
+            model: Model name or path (e.g., "Qwen3-0.6B-GGUF")
 
         Returns:
             Matched model type (e.g., "qwen")
@@ -176,7 +176,7 @@ formatted = Prompts.format_chat_history(
 
 ```python
 # Automatic model detection
-model_path = "amd/Qwen2.5-0.5B-Instruct-GGUF-INT4"
+model_path = "amd/Qwen3-0.6B-GGUF"
 matched = Prompts.match_model_name(model_path)
 print(matched)  # Output: "qwen"
 
@@ -228,7 +228,7 @@ Prompts.match_model_name("mistral-7b-v0.3")  # -> "mistral"
 ```python
 def test_model_name_matching():
     """Test model name detection."""
-    assert Prompts.match_model_name("Qwen2.5-0.5B") == "qwen"
+    assert Prompts.match_model_name("Qwen3-0.6B") == "qwen"
     assert Prompts.match_model_name("Llama-3-8B") == "llama3"
     assert Prompts.match_model_name("Phi-3-mini") == "phi3"
     assert Prompts.match_model_name("unknown-model") == "default"

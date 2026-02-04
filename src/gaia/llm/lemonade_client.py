@@ -153,10 +153,10 @@ MODELS = {
         display_name="Qwen3 Coder 30B",
         min_ctx_size=32768,
     ),
-    "qwen2.5-0.5b": ModelRequirement(
+    "qwen3-0.6b": ModelRequirement(
         model_type=ModelType.LLM,
         model_id="Qwen3-0.6B-GGUF",
-        display_name="Qwen2.5 0.5B (Fast)",
+        display_name="Qwen3 0.6B (Fast)",
         min_ctx_size=4096,
     ),
     # Embedding Models
@@ -236,7 +236,7 @@ AGENT_PROFILES = {
     "minimal": AgentProfile(
         name="minimal",
         display_name="Minimal (Fast)",
-        models=["qwen2.5-0.5b"],
+        models=["qwen3-0.6b"],
         min_ctx_size=4096,
         description="Fast responses with smaller model",
     ),

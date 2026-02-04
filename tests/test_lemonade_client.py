@@ -996,7 +996,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         """Test get_required_models returns correct models for minimal agent."""
         model_ids = self.client.get_required_models("minimal")
 
-        # Minimal agent only requires qwen2.5-0.5b
+        # Minimal agent only requires qwen3-0.6b
         self.assertIn("Qwen3-0.6B-GGUF", model_ids)
         self.assertEqual(len(model_ids), 1)
 
