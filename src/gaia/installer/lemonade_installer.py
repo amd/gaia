@@ -483,7 +483,7 @@ class LemonadeInstaller:
             return InstallResult(success=False, error=str(e))
 
     def _install_linux(self, installer_path: Path) -> InstallResult:
-        """Install on Linux using dpkg."""
+        """Install on Linux using dpkg (legacy fallback)."""
         try:
             # Check if we have root access (geteuid only available on Unix)
             is_root = False
@@ -541,6 +541,138 @@ class LemonadeInstaller:
         except Exception as e:
             return InstallResult(success=False, error=str(e))
 
+    def install_snap(self) -> InstallResult:
+        """
+        Install Lemonade Server on Linux using snap.
+
+        Uses `sudo snap install lemonade-server` with the target version channel.
+        No download step is needed as snap handles it internally.
+
+        Returns:
+            InstallResult with success status
+        """
+        if self.system != "linux":
+            return InstallResult(
+                success=False,
+                error="Snap installation is only supported on Linux",
+            )
+
+        self._print_status("Installing Lemonade Server via snap...")
+
+        try:
+            # Check if snap is available
+            snap_path = shutil.which("snap")
+            if not snap_path:
+                return InstallResult(
+                    success=False,
+                    error="snap is not installed. Install snapd first: sudo apt install snapd",
+                )
+
+            # Check if we have root access
+            is_root = False
+            if hasattr(os, "geteuid"):
+                is_root = os.geteuid() == 0
+
+            # Build snap install command with version channel
+            if not is_root:
+                cmd = [
+                    "sudo",
+                    "snap",
+                    "install",
+                    "lemonade-server",
+                    "--channel",
+                    f"{self.target_version}/stable",
+                ]
+            else:
+                cmd = [
+                    "snap",
+                    "install",
+                    "lemonade-server",
+                    "--channel",
+                    f"{self.target_version}/stable",
+                ]
+
+            log.debug(f"Running: {' '.join(cmd)}")
+            self._print_status(f"Running: {' '.join(cmd)}")
+
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=300, check=False
+            )
+
+            if result.returncode == 0:
+                return InstallResult(
+                    success=True,
+                    version=self.target_version,
+                    message=f"Installed Lemonade v{self.target_version} via snap",
+                )
+            else:
+                error_msg = result.stderr.strip() or result.stdout.strip()
+                return InstallResult(
+                    success=False,
+                    error=f"snap install failed: {error_msg}",
+                )
+
+        except subprocess.TimeoutExpired:
+            return InstallResult(success=False, error="Snap installation timed out")
+        except FileNotFoundError as e:
+            return InstallResult(
+                success=False, error=f"Required command not found: {e}"
+            )
+        except Exception as e:
+            return InstallResult(success=False, error=str(e))
+
+    def uninstall_snap(self) -> InstallResult:
+        """
+        Uninstall Lemonade Server on Linux using snap.
+
+        Returns:
+            InstallResult with success status
+        """
+        if self.system != "linux":
+            return InstallResult(
+                success=False,
+                error="Snap uninstallation is only supported on Linux",
+            )
+
+        self._print_status("Uninstalling Lemonade Server via snap...")
+
+        try:
+            is_root = False
+            if hasattr(os, "geteuid"):
+                is_root = os.geteuid() == 0
+
+            if not is_root:
+                cmd = ["sudo", "snap", "remove", "lemonade-server"]
+            else:
+                cmd = ["snap", "remove", "lemonade-server"]
+
+            log.debug(f"Running: {' '.join(cmd)}")
+
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=300, check=False
+            )
+
+            if result.returncode == 0:
+                return InstallResult(
+                    success=True,
+                    message="Lemonade Server uninstalled via snap",
+                )
+            else:
+                error_msg = result.stderr.strip() or result.stdout.strip()
+                return InstallResult(
+                    success=False,
+                    error=f"snap remove failed: {error_msg}",
+                )
+
+        except subprocess.TimeoutExpired:
+            return InstallResult(success=False, error="Snap uninstall timed out")
+        except FileNotFoundError as e:
+            return InstallResult(
+                success=False, error=f"Required command not found: {e}"
+            )
+        except Exception as e:
+            return InstallResult(success=False, error=str(e))
+
     def is_platform_supported(self) -> bool:
         """Check if the current platform is supported for installation."""
         return self.system in ("windows", "linux")
@@ -570,7 +702,7 @@ class LemonadeInstaller:
             if self.system == "windows":
                 return self._uninstall_windows(silent)
             elif self.system == "linux":
-                return self._uninstall_linux()
+                return self.uninstall_snap()
             else:
                 return InstallResult(
                     success=False, error=f"Platform '{self.system}' is not supported"

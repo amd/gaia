@@ -622,32 +622,50 @@ class InitCommand:
         """
         Download and install Lemonade Server.
 
+        On Linux, uses snap (no download needed).
+        On Windows, downloads MSI installer then runs it.
+
         Returns:
             True on success, False on failure
         """
         self._print("")
-        if RICH_AVAILABLE and self.console:
-            self.console.print(
-                f"   [bold]Downloading[/bold] Lemonade [cyan]v{LEMONADE_VERSION}[/cyan]..."
-            )
-        else:
-            self._print(f"   Downloading Lemonade v{LEMONADE_VERSION}...")
 
         try:
-            # Download installer
-            installer_path = self.installer.download_installer()
-            self._print("")
-            self._print_success("Download complete")
+            # Linux: use snap install (no download step needed)
+            if sys.platform.startswith("linux"):
+                if RICH_AVAILABLE and self.console:
+                    self.console.print(
+                        f"   [bold]Installing[/bold] Lemonade [cyan]v{LEMONADE_VERSION}[/cyan] via snap..."
+                    )
+                else:
+                    self._print(
+                        f"   Installing Lemonade v{LEMONADE_VERSION} via snap..."
+                    )
 
-            # Install (silent in CI with --yes, interactive otherwise for desktop icon)
-            self.console.print("   [bold]Installing...[/bold]")
-            if not self.yes:
-                self.console.print()
-                self.console.print(
-                    "   [yellow]⚠️  The installer window will appear - please complete the installation[/yellow]"
-                )
-                self.console.print()
-            result = self.installer.install(installer_path, silent=self.yes)
+                result = self.installer.install_snap()
+            else:
+                # Windows: download MSI then install
+                if RICH_AVAILABLE and self.console:
+                    self.console.print(
+                        f"   [bold]Downloading[/bold] Lemonade [cyan]v{LEMONADE_VERSION}[/cyan]..."
+                    )
+                else:
+                    self._print(f"   Downloading Lemonade v{LEMONADE_VERSION}...")
+
+                # Download installer
+                installer_path = self.installer.download_installer()
+                self._print("")
+                self._print_success("Download complete")
+
+                # Install (silent in CI with --yes, interactive otherwise for desktop icon)
+                self.console.print("   [bold]Installing...[/bold]")
+                if not self.yes:
+                    self.console.print()
+                    self.console.print(
+                        "   [yellow]⚠️  The installer window will appear - please complete the installation[/yellow]"
+                    )
+                    self.console.print()
+                result = self.installer.install(installer_path, silent=self.yes)
 
             if result.success:
                 self._print_success(f"Installed Lemonade v{result.version}")
@@ -682,6 +700,17 @@ class InitCommand:
                     else:
                         self._print(
                             "   Try running as Administrator (Windows) or with sudo (Linux)"
+                        )
+
+                if "snap" in str(result.error).lower():
+                    self._print("")
+                    if RICH_AVAILABLE and self.console:
+                        self.console.print(
+                            "   [yellow]Ensure snapd is installed: sudo apt install snapd[/yellow]"
+                        )
+                    else:
+                        self._print(
+                            "   Ensure snapd is installed: sudo apt install snapd"
                         )
 
                 return False
@@ -738,6 +767,7 @@ class InitCommand:
         # Fallback: check common installation paths (Linux)
         elif sys.platform.startswith("linux"):
             common_paths = [
+                "/snap/bin/lemonade-server",
                 "/usr/local/bin/lemonade-server",
                 "/usr/bin/lemonade-server",
                 os.path.expanduser("~/.local/bin/lemonade-server"),
