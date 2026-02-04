@@ -482,55 +482,106 @@ class LemonadeInstaller:
         except Exception as e:
             return InstallResult(success=False, error=str(e))
 
-    def _install_linux(self, installer_path: Path) -> InstallResult:
-        """Install on Linux using dpkg (legacy fallback)."""
+    @staticmethod
+    def _check_linux_version() -> Optional[str]:
+        """
+        Check if the Linux version meets minimum requirements.
+
+        Lemonade Server .deb packages require Ubuntu 24.04+ (or equivalent)
+        due to dependencies like libasound2t64 that don't exist on older releases.
+
+        Returns:
+            None if compatible, or an error message string if not.
+        """
         try:
+            # Try /etc/os-release first (works on most distros)
+            os_info = {}
+            if os.path.isfile("/etc/os-release"):
+                with open("/etc/os-release") as f:
+                    for line in f:
+                        line = line.strip()
+                        if "=" in line:
+                            key, _, value = line.partition("=")
+                            os_info[key] = value.strip('"')
+
+            distro = os_info.get("ID", "").lower()
+            version_id = os_info.get("VERSION_ID", "")
+            pretty_name = os_info.get("PRETTY_NAME", "Unknown Linux")
+
+            # Check Ubuntu version (need 24.04+)
+            if distro == "ubuntu" and version_id:
+                try:
+                    major, minor = version_id.split(".")[:2]
+                    if int(major) < 24:
+                        return (
+                            f"Lemonade Server requires Ubuntu 24.04 or later. "
+                            f"Detected: {pretty_name}. "
+                            f"The .deb package has dependencies (e.g. libasound2t64) "
+                            f"that are not available on Ubuntu {version_id}."
+                        )
+                except (ValueError, IndexError):
+                    pass
+
+            # Check Debian version (need 13/trixie+, roughly equivalent)
+            elif distro == "debian" and version_id:
+                try:
+                    if int(version_id) < 13:
+                        return (
+                            f"Lemonade Server requires Debian 13 (trixie) or later. "
+                            f"Detected: {pretty_name}."
+                        )
+                except ValueError:
+                    pass
+
+        except Exception as e:
+            log.debug(f"Could not check Linux version: {e}")
+
+        return None
+
+    def _install_linux(self, installer_path: Path) -> InstallResult:
+        """Install on Linux using apt (handles dependencies automatically)."""
+        try:
+            # Check Linux version compatibility before attempting install
+            version_error = self._check_linux_version()
+            if version_error:
+                return InstallResult(success=False, error=version_error)
+
             # Check if we have root access (geteuid only available on Unix)
             is_root = False
             if hasattr(os, "geteuid"):
                 is_root = os.geteuid() == 0
 
-            if not is_root:
-                # Try with sudo
-                cmd = ["sudo", "dpkg", "-i", str(installer_path)]
-            else:
-                cmd = ["dpkg", "-i", str(installer_path)]
+            sudo_prefix = [] if is_root else ["sudo"]
 
+            # Use 'apt install' instead of 'dpkg -i' so dependencies are
+            # automatically resolved from the system repositories.
+            # The ./ prefix is required for apt to treat it as a local file.
+            deb_path = str(installer_path)
+            if not deb_path.startswith("/"):
+                deb_path = f"./{deb_path}"
+
+            cmd = sudo_prefix + ["apt", "install", "-y", deb_path]
             log.debug(f"Running: {' '.join(cmd)}")
+            self._print_status("Installing package and dependencies...")
 
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=300, check=False
             )
 
-            if result.returncode == 0:
-                return InstallResult(
-                    success=True,
-                    version=self.target_version,
-                    message=f"Installed Lemonade v{self.target_version}",
-                )
-            else:
-                # dpkg might fail due to missing dependencies
-                # Try to fix with apt
-                if "dependency" in result.stderr.lower():
-                    fix_cmd = ["sudo", "apt-get", "install", "-f", "-y"]
-                    fix_result = subprocess.run(
-                        fix_cmd,
-                        capture_output=True,
-                        text=True,
-                        timeout=300,
-                        check=False,
-                    )
-                    if fix_result.returncode == 0:
-                        return InstallResult(
-                            success=True,
-                            version=self.target_version,
-                            message=f"Installed Lemonade v{self.target_version} (fixed dependencies)",
-                        )
-
+            if result.returncode != 0:
                 return InstallResult(
                     success=False,
-                    error=f"dpkg failed: {result.stderr}",
+                    error=f"apt install failed: {result.stderr}",
                 )
+
+            # Discover where the binary was installed and add to PATH
+            self._add_dpkg_binary_to_path()
+
+            return InstallResult(
+                success=True,
+                version=self.target_version,
+                message=f"Installed Lemonade v{self.target_version}",
+            )
 
         except subprocess.TimeoutExpired:
             return InstallResult(success=False, error="Installation timed out")
@@ -541,137 +592,29 @@ class LemonadeInstaller:
         except Exception as e:
             return InstallResult(success=False, error=str(e))
 
-    def install_snap(self) -> InstallResult:
-        """
-        Install Lemonade Server on Linux using snap.
-
-        Uses `sudo snap install lemonade-server` with the target version channel.
-        No download step is needed as snap handles it internally.
-
-        Returns:
-            InstallResult with success status
-        """
-        if self.system != "linux":
-            return InstallResult(
-                success=False,
-                error="Snap installation is only supported on Linux",
-            )
-
-        self._print_status("Installing Lemonade Server via snap...")
-
+    def _add_dpkg_binary_to_path(self):
+        """Discover where dpkg installed the binary and add its directory to PATH."""
         try:
-            # Check if snap is available
-            snap_path = shutil.which("snap")
-            if not snap_path:
-                return InstallResult(
-                    success=False,
-                    error="snap is not installed. Install snapd first: sudo apt install snapd",
-                )
-
-            # Check if we have root access
-            is_root = False
-            if hasattr(os, "geteuid"):
-                is_root = os.geteuid() == 0
-
-            # Build snap install command with version channel
-            if not is_root:
-                cmd = [
-                    "sudo",
-                    "snap",
-                    "install",
-                    "lemonade-server",
-                    "--channel",
-                    f"{self.target_version}/stable",
-                ]
-            else:
-                cmd = [
-                    "snap",
-                    "install",
-                    "lemonade-server",
-                    "--channel",
-                    f"{self.target_version}/stable",
-                ]
-
-            log.debug(f"Running: {' '.join(cmd)}")
-            self._print_status(f"Running: {' '.join(cmd)}")
-
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=300, check=False
+                ["dpkg", "-L", "lemonade"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
             )
-
             if result.returncode == 0:
-                return InstallResult(
-                    success=True,
-                    version=self.target_version,
-                    message=f"Installed Lemonade v{self.target_version} via snap",
-                )
-            else:
-                error_msg = result.stderr.strip() or result.stdout.strip()
-                return InstallResult(
-                    success=False,
-                    error=f"snap install failed: {error_msg}",
-                )
-
-        except subprocess.TimeoutExpired:
-            return InstallResult(success=False, error="Snap installation timed out")
-        except FileNotFoundError as e:
-            return InstallResult(
-                success=False, error=f"Required command not found: {e}"
-            )
+                for line in result.stdout.strip().split("\n"):
+                    if "lemonade-server" in line and os.path.isfile(line):
+                        bin_dir = os.path.dirname(line)
+                        current_path = os.environ.get("PATH", "")
+                        if bin_dir not in current_path:
+                            os.environ["PATH"] = f"{bin_dir}:{current_path}"
+                            self._print_status(f"Added {bin_dir} to PATH")
+                        log.debug(f"Found lemonade-server at: {line}")
+                        return
+            log.debug("Could not find lemonade-server in dpkg file list")
         except Exception as e:
-            return InstallResult(success=False, error=str(e))
-
-    def uninstall_snap(self) -> InstallResult:
-        """
-        Uninstall Lemonade Server on Linux using snap.
-
-        Returns:
-            InstallResult with success status
-        """
-        if self.system != "linux":
-            return InstallResult(
-                success=False,
-                error="Snap uninstallation is only supported on Linux",
-            )
-
-        self._print_status("Uninstalling Lemonade Server via snap...")
-
-        try:
-            is_root = False
-            if hasattr(os, "geteuid"):
-                is_root = os.geteuid() == 0
-
-            if not is_root:
-                cmd = ["sudo", "snap", "remove", "lemonade-server"]
-            else:
-                cmd = ["snap", "remove", "lemonade-server"]
-
-            log.debug(f"Running: {' '.join(cmd)}")
-
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=300, check=False
-            )
-
-            if result.returncode == 0:
-                return InstallResult(
-                    success=True,
-                    message="Lemonade Server uninstalled via snap",
-                )
-            else:
-                error_msg = result.stderr.strip() or result.stdout.strip()
-                return InstallResult(
-                    success=False,
-                    error=f"snap remove failed: {error_msg}",
-                )
-
-        except subprocess.TimeoutExpired:
-            return InstallResult(success=False, error="Snap uninstall timed out")
-        except FileNotFoundError as e:
-            return InstallResult(
-                success=False, error=f"Required command not found: {e}"
-            )
-        except Exception as e:
-            return InstallResult(success=False, error=str(e))
+            log.debug(f"Failed to query dpkg: {e}")
 
     def is_platform_supported(self) -> bool:
         """Check if the current platform is supported for installation."""
@@ -702,7 +645,7 @@ class LemonadeInstaller:
             if self.system == "windows":
                 return self._uninstall_windows(silent)
             elif self.system == "linux":
-                return self.uninstall_snap()
+                return self._uninstall_linux()
             else:
                 return InstallResult(
                     success=False, error=f"Platform '{self.system}' is not supported"
@@ -771,17 +714,15 @@ class LemonadeInstaller:
             return InstallResult(success=False, error=str(e))
 
     def _uninstall_linux(self) -> InstallResult:
-        """Uninstall on Linux using dpkg."""
+        """Uninstall on Linux using apt."""
         try:
             # Check if we have root access
             is_root = False
             if hasattr(os, "geteuid"):
                 is_root = os.geteuid() == 0
 
-            if not is_root:
-                cmd = ["sudo", "dpkg", "-r", "lemonade"]
-            else:
-                cmd = ["dpkg", "-r", "lemonade"]
+            sudo_prefix = [] if is_root else ["sudo"]
+            cmd = sudo_prefix + ["apt", "remove", "-y", "lemonade"]
 
             log.debug(f"Running: {' '.join(cmd)}")
 
@@ -797,7 +738,7 @@ class LemonadeInstaller:
             else:
                 return InstallResult(
                     success=False,
-                    error=f"dpkg failed: {result.stderr}",
+                    error=f"apt remove failed: {result.stderr}",
                 )
 
         except subprocess.TimeoutExpired:

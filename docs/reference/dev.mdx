@@ -102,13 +102,28 @@ You should see `(.venv)` in your terminal prompt when activated.
 
 ### Step 5: Install Dependencies
 
+<Warning>
+  **Linux/WSL users:** GAIA's base dependencies (`transformers`, `accelerate`) require PyTorch. Always use `--extra-index-url` to install CPU-only PyTorch and avoid large CUDA packages (~2GB → ~200MB).
+</Warning>
+
 ```bash
+# Linux/WSL - CPU-only PyTorch (required for all installs)
+uv pip install -e ".[dev]" --extra-index-url https://download.pytorch.org/whl/cpu
+```
+
+**Windows:**
+```bash
+# Windows - default PyTorch
 uv pip install -e ".[dev]"
 ```
 
-Or install with all extras (use `--extra-index-url` to avoid pulling CUDA dependencies):
+**With all extras:**
 ```bash
+# Linux/WSL
 uv pip install -e ".[dev,talk,rag]" --extra-index-url https://download.pytorch.org/whl/cpu
+
+# Windows
+uv pip install -e ".[dev,talk,rag]"
 ```
 
 ### Deactivating

@@ -59,7 +59,7 @@ Choose your platform and installation type, then follow the steps below.
     ```
 
     <Tip>
-      **Optional extras:** `uv pip install "amd-gaia[talk,rag]" --extra-index-url https://download.pytorch.org/whl/cpu` for voice and document Q&A features.
+      **Optional extras:** `uv pip install "amd-gaia[talk,rag]"` for voice and document Q&A features.
     </Tip>
 
     ### Step 5: Verify Installation
@@ -113,12 +113,19 @@ Choose your platform and installation type, then follow the steps below.
 
     ### Step 4: Install GAIA
 
+    <Warning>
+      **Linux users:** GAIA depends on PyTorch (via `transformers` package). Always use `--extra-index-url` to install CPU-only PyTorch and avoid large CUDA packages (~2GB → ~200MB).
+    </Warning>
+
     ```bash
-    uv pip install amd-gaia
+    uv pip install amd-gaia --extra-index-url https://download.pytorch.org/whl/cpu
     ```
 
     <Tip>
-      **Optional extras:** `uv pip install "amd-gaia[talk,rag]" --extra-index-url https://download.pytorch.org/whl/cpu` for voice and document Q&A features.
+      **Optional extras:** Add `[talk,rag]` for voice and document Q&A features:
+      ```bash
+      uv pip install "amd-gaia[talk,rag]" --extra-index-url https://download.pytorch.org/whl/cpu
+      ```
     </Tip>
 
     ### Step 5: Verify Installation
@@ -192,7 +199,7 @@ Choose your platform and installation type, then follow the steps below.
     ```
 
     <Tip>
-      **With all extras:** `uv pip install -e ".[dev,talk,rag]" --extra-index-url https://download.pytorch.org/whl/cpu` for voice and document Q&A features.
+      **With all extras:** `uv pip install -e ".[dev,talk,rag]"` for voice and document Q&A features.
     </Tip>
 
     ### Step 5: Verify Installation
@@ -254,12 +261,19 @@ Choose your platform and installation type, then follow the steps below.
 
     ### Step 4: Install in Editable Mode
 
+    <Warning>
+      **Linux users:** GAIA depends on PyTorch (via `transformers` package). Always use `--extra-index-url` to install CPU-only PyTorch and avoid large CUDA packages (~2GB → ~200MB).
+    </Warning>
+
     ```bash
-    uv pip install -e ".[dev]"
+    uv pip install -e ".[dev]" --extra-index-url https://download.pytorch.org/whl/cpu
     ```
 
     <Tip>
-      **With all extras:** `uv pip install -e ".[dev,talk,rag]" --extra-index-url https://download.pytorch.org/whl/cpu` for voice and document Q&A features.
+      **With all extras:** Add `[talk,rag]` for voice and document Q&A features:
+      ```bash
+      uv pip install -e ".[dev,talk,rag]" --extra-index-url https://download.pytorch.org/whl/cpu
+      ```
     </Tip>
 
     ### Step 5: Verify Installation

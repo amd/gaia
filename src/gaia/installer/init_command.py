@@ -273,6 +273,15 @@ class InitCommand:
         that were just installed by MSI, without requiring a terminal restart.
         """
         if sys.platform != "win32":
+            # On Linux, dpkg installs to /usr/local/bin or /usr/bin
+            # which should be on PATH already. Ensure common install
+            # paths are in the current process PATH just in case.
+            linux_paths = ["/usr/local/bin", "/usr/bin", "/snap/bin"]
+            current_path = os.environ.get("PATH", "")
+            for p in linux_paths:
+                if p not in current_path:
+                    os.environ["PATH"] = f"{p}:{current_path}"
+                    current_path = os.environ["PATH"]
             return
 
         try:
@@ -622,55 +631,37 @@ class InitCommand:
         """
         Download and install Lemonade Server.
 
-        On Linux, uses snap (no download needed).
-        On Windows, downloads MSI installer then runs it.
-
         Returns:
             True on success, False on failure
         """
         self._print("")
+        if RICH_AVAILABLE and self.console:
+            self.console.print(
+                f"   [bold]Downloading[/bold] Lemonade [cyan]v{LEMONADE_VERSION}[/cyan]..."
+            )
+        else:
+            self._print(f"   Downloading Lemonade v{LEMONADE_VERSION}...")
 
         try:
-            # Linux: use snap install (no download step needed)
-            if sys.platform.startswith("linux"):
-                if RICH_AVAILABLE and self.console:
-                    self.console.print(
-                        f"   [bold]Installing[/bold] Lemonade [cyan]v{LEMONADE_VERSION}[/cyan] via snap..."
-                    )
-                else:
-                    self._print(
-                        f"   Installing Lemonade v{LEMONADE_VERSION} via snap..."
-                    )
+            # Download installer
+            installer_path = self.installer.download_installer()
+            self._print("")
+            self._print_success("Download complete")
 
-                result = self.installer.install_snap()
-            else:
-                # Windows: download MSI then install
-                if RICH_AVAILABLE and self.console:
-                    self.console.print(
-                        f"   [bold]Downloading[/bold] Lemonade [cyan]v{LEMONADE_VERSION}[/cyan]..."
-                    )
-                else:
-                    self._print(f"   Downloading Lemonade v{LEMONADE_VERSION}...")
-
-                # Download installer
-                installer_path = self.installer.download_installer()
-                self._print("")
-                self._print_success("Download complete")
-
-                # Install (silent in CI with --yes, interactive otherwise for desktop icon)
-                self.console.print("   [bold]Installing...[/bold]")
-                if not self.yes:
-                    self.console.print()
-                    self.console.print(
-                        "   [yellow]⚠️  The installer window will appear - please complete the installation[/yellow]"
-                    )
-                    self.console.print()
-                result = self.installer.install(installer_path, silent=self.yes)
+            # Install (silent in CI with --yes, interactive otherwise for desktop icon)
+            self.console.print("   [bold]Installing...[/bold]")
+            if not self.yes:
+                self.console.print()
+                self.console.print(
+                    "   [yellow]⚠️  The installer window will appear - please complete the installation[/yellow]"
+                )
+                self.console.print()
+            result = self.installer.install(installer_path, silent=self.yes)
 
             if result.success:
                 self._print_success(f"Installed Lemonade v{result.version}")
 
-                # Refresh PATH from Windows registry so current session can find lemonade-server
+                # Refresh PATH so current session can find lemonade-server
                 if self.verbose:
                     self.console.print("   [dim]Refreshing PATH environment...[/dim]")
                 self._refresh_path_environment()
@@ -700,17 +691,6 @@ class InitCommand:
                     else:
                         self._print(
                             "   Try running as Administrator (Windows) or with sudo (Linux)"
-                        )
-
-                if "snap" in str(result.error).lower():
-                    self._print("")
-                    if RICH_AVAILABLE and self.console:
-                        self.console.print(
-                            "   [yellow]Ensure snapd is installed: sudo apt install snapd[/yellow]"
-                        )
-                    else:
-                        self._print(
-                            "   Ensure snapd is installed: sudo apt install snapd"
                         )
 
                 return False
@@ -838,13 +818,11 @@ class InitCommand:
 
                 try:
                     # Find lemonade-server executable
-                    import shutil
-
                     # Check env var first (set by install-lemonade action in CI)
                     lemonade_path = os.environ.get("LEMONADE_SERVER_PATH")
                     if not lemonade_path:
-                        # Fall back to PATH search
-                        lemonade_path = shutil.which("lemonade-server")
+                        # Use our enhanced finder (checks PATH + fallback locations)
+                        lemonade_path = self._find_lemonade_server()
 
                     if not lemonade_path:
                         raise FileNotFoundError("lemonade-server not found in PATH")
@@ -911,8 +889,18 @@ class InitCommand:
                     "   [dim]• Search for 'Lemonade' in Start Menu and launch it[/dim]"
                 )
             else:
+                # Find the actual binary path to give the user a working command
+                lemonade_path = self._find_lemonade_server()
+                if lemonade_path:
+                    self.console.print(
+                        f"   [dim]• Run:[/dim] [cyan]{lemonade_path} serve &[/cyan]"
+                    )
+                else:
+                    self.console.print(
+                        "   [dim]• Run:[/dim] [cyan]lemonade-server serve &[/cyan]"
+                    )
                 self.console.print(
-                    "   [dim]• Run:[/dim] [cyan]lemonade-server serve &[/cyan]"
+                    "   [dim]• If command not found, open a new terminal or run:[/dim] [cyan]hash -r[/cyan]"
                 )
             self.console.print()
 
