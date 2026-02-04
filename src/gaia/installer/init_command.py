@@ -1147,6 +1147,10 @@ class InitCommand:
             )
 
             if is_llm and min_ctx:
+                # Force unload if already loaded to ensure recipe_options are saved
+                if client.check_model_loaded(model_id):
+                    client.unload_model()
+
                 # Load with explicit context size and save it
                 client.load_model(
                     model_id,
@@ -1186,11 +1190,8 @@ class InitCommand:
                         # Context was set but is too small
                         return (False, f"Context {actual_ctx} < {min_ctx} required")
                     else:
-                        # Context not in recipe_options - warn but don't fail
-                        # (Model might be loaded from a previous session without recipe_options)
-                        logger.warning(
-                            f"Could not verify context for {model_id} - recipe_options missing"
-                        )
+                        # Context not in recipe_options - should not happen after forced unload/reload
+                        # Mark as unverified but don't fail the test
                         self._ctx_verified = None  # Explicitly mark as unverified
                 except Exception as e:
                     return (False, f"Context check failed: {str(e)[:50]}")
@@ -1367,13 +1368,18 @@ class InitCommand:
                     if success:
                         # Check if context was verified
                         ctx_msg = ""
-                        if hasattr(self, "_ctx_verified") and self._ctx_verified:
-                            ctx_msg = f" [dim](ctx: {self._ctx_verified})[/dim]"
+                        if hasattr(self, "_ctx_verified"):
+                            if self._ctx_verified:
+                                # Context successfully verified
+                                ctx_msg = f" [dim](ctx: {self._ctx_verified})[/dim]"
 
-                            # Warn if context is larger than required
-                            if hasattr(self, "_ctx_warning"):
-                                ctx_msg = f" [yellow]{self._ctx_warning}[/yellow]"
-                                delattr(self, "_ctx_warning")
+                                # Warn if context is larger than required
+                                if hasattr(self, "_ctx_warning"):
+                                    ctx_msg = f" [yellow]{self._ctx_warning}[/yellow]"
+                                    delattr(self, "_ctx_warning")
+                            elif self._ctx_verified is None:
+                                # Context could not be verified
+                                ctx_msg = " [yellow]⚠️ Context unverified![/yellow]"
 
                             delattr(self, "_ctx_verified")  # Reset for next model
 
