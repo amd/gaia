@@ -490,6 +490,50 @@ class SDToolsMixin:
 
         return image_path
 
+    @staticmethod
+    def get_base_sd_guidelines() -> str:
+        """
+        Get static SD prompt engineering guidelines (no instance state required).
+
+        Returns research-backed SD guidelines and workflow instructions that work
+        for all SD models. Call this if you need base guidelines before init_sd().
+
+        Returns:
+            Static SD guidelines + workflow instructions
+        """
+        from gaia.sd.prompts import BASE_GUIDELINES, WORKFLOW_INSTRUCTIONS
+
+        return BASE_GUIDELINES + WORKFLOW_INSTRUCTIONS
+
+    def get_sd_system_prompt(self) -> str:
+        """
+        Get complete SD system prompt (base + model-specific).
+
+        Composes base SD guidelines with model-specific prompt engineering.
+        Safe to call before init_sd() - returns base guidelines as fallback.
+
+        Returns:
+            Complete SD prompt (base + model-specific if available)
+
+        Example:
+            def _get_system_prompt(self) -> str:
+                return self.get_sd_system_prompt()  # Gets full SD prompt
+        """
+        # Start with static base guidelines
+        base = self.get_base_sd_guidelines()
+
+        # Add model-specific enhancements if mixin initialized
+        if hasattr(self, "sd_default_model"):
+            from gaia.sd.prompts import MODEL_SPECIFIC_PROMPTS
+
+            model_specific = MODEL_SPECIFIC_PROMPTS.get(
+                self.sd_default_model, MODEL_SPECIFIC_PROMPTS.get("SDXL-Turbo", "")
+            )
+            if model_specific:
+                return base + model_specific
+
+        return base  # Fallback: just base guidelines
+
     def sd_health_check(self) -> Dict[str, Any]:
         """
         Check if Lemonade Server SD endpoint is available.
