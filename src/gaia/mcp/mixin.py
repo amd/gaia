@@ -29,9 +29,12 @@ class MCPClientMixin:
                 })
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, auto_load_config: bool = True, **kwargs):
         super().__init__(*args, **kwargs)
         self._mcp_manager = MCPClientManager(debug=getattr(self, "debug", False))
+
+        if auto_load_config:
+            self.load_mcp_servers_from_config()
 
     def connect_mcp_server(self, name: str, config: Dict) -> bool:
         """Connect to an MCP server and register its tools.

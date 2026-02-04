@@ -14,9 +14,9 @@ from gaia.mcp.client.mcp_client import MCPTool
 class MockAgent(MCPClientMixin):
     """Mock agent for testing the mixin."""
 
-    def __init__(self, debug=False):
+    def __init__(self, debug=False, auto_load_config=False):
         self.debug = debug
-        super().__init__()
+        super().__init__(auto_load_config=auto_load_config)
 
 
 class TestMCPClientMixin:
