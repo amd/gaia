@@ -553,6 +553,19 @@ class LemonadeInstaller:
 
             sudo_prefix = [] if is_root else ["sudo"]
 
+            # Update apt cache first to avoid 404 errors from stale package lists
+            self._print_status("Updating package cache...")
+            update_cmd = sudo_prefix + ["apt", "update"]
+            log.debug(f"Running: {' '.join(update_cmd)}")
+
+            update_result = subprocess.run(
+                update_cmd, capture_output=True, text=True, timeout=120, check=False
+            )
+
+            if update_result.returncode != 0:
+                log.warning(f"apt update failed: {update_result.stderr}")
+                # Continue anyway - update failure shouldn't block install
+
             # Use 'apt install' instead of 'dpkg -i' so dependencies are
             # automatically resolved from the system repositories.
             # The ./ prefix is required for apt to treat it as a local file.
