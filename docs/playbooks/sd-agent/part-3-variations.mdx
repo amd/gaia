@@ -282,7 +282,7 @@ class WatermarkedImageAgent(Agent, SDToolsMixin):
 
     **Solution:** Set `max_steps` lower in Agent init:
     ```python
-    super().__init__(max_steps=5)  # Default is 10
+    super().__init__(max_steps=5)  # Default is 20 for base Agent, 10 for SDAgent
     ```
 
     Or improve system prompt to be more directive.
@@ -348,8 +348,8 @@ Across all 3 parts, you've mastered:
     The agent has ONE LLM that decides which tools to call. SD and VLM are tools, not peers. The LLM orchestrates everything.
   </Step>
 
-  <Step title="Tool composition through wrappers">
-    How to write domain-specific convenience tools (like `create_story_from_last_image`) that wrap generic capabilities (like `create_story_from_image`). This keeps mixins reusable.
+  <Step title="Tool composition through custom tools">
+    How to write domain-specific tools that use mixin clients directly (`self.vlm_client`, `self.sd_client`) to build specialized features. This keeps mixins reusable while enabling custom workflows.
   </Step>
 
   <Step title="Lemonade Server as local inference backend">

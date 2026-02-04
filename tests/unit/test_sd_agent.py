@@ -83,20 +83,28 @@ class TestSDAgent(unittest.TestCase):
                         self.assertIn("chrome body", content)
 
     def test_system_prompt_extraction(self):
-        """Test that system prompt is loaded from prompts.py."""
+        """Test that SD system prompt is loaded from prompts.py."""
         from gaia.agents.sd import SDAgent, SDAgentConfig
 
         with patch("gaia.agents.sd.agent.Agent.__init__"):
             with patch("gaia.llm.lemonade_client.LemonadeClient"):
                 config = SDAgentConfig(sd_model="SDXL-Turbo")
                 agent = SDAgent(config)
+                # Initialize SD to set up the mixin
+                agent.sd_default_model = "SDXL-Turbo"
 
-                prompt = agent._get_system_prompt()
+                # Get SD-specific prompt from mixin
+                sd_prompt = agent.get_sd_system_prompt()
 
-                # Verify prompt contains expected components
-                self.assertIn("TASK: Enhance user prompts", prompt)
-                self.assertIn("WORKFLOW:", prompt)
-                self.assertIn("SDXL-Turbo", prompt)
+                # Verify SD prompt contains expected components from prompts.py
+                self.assertIn("TASK: Enhance user prompts", sd_prompt)
+                self.assertIn("SDXL-Turbo", sd_prompt)
+
+                # Get agent-specific prompt
+                agent_prompt = agent._get_system_prompt()
+
+                # Verify agent prompt contains workflow instructions
+                self.assertIn("WORKFLOW:", agent_prompt)
 
     def test_model_specific_prompts(self):
         """Test that each SD model gets the correct prompt."""
@@ -109,12 +117,16 @@ class TestSDAgent(unittest.TestCase):
                 with patch("gaia.llm.lemonade_client.LemonadeClient"):
                     config = SDAgentConfig(sd_model=model)
                     agent = SDAgent(config)
-                    prompt = agent._get_system_prompt()
+                    # Initialize SD to set up the mixin
+                    agent.sd_default_model = model
+
+                    # Get SD-specific prompt from mixin
+                    sd_prompt = agent.get_sd_system_prompt()
 
                     # Verify model-specific content is included
                     self.assertIn(
                         f"MODEL: {model}",
-                        prompt,
+                        sd_prompt,
                         f"Prompt should include {model} guidance",
                     )
 

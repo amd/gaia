@@ -82,11 +82,12 @@ All run locally via Lemonade Server. GGUF models use AMD Radeon iGPU (Vulkan), S
     This command:
     1. Installs Lemonade Server (if not already installed)
     2. **Starts Lemonade Server automatically**
-    3. Downloads three models (~15GB):
+    3. **Configures Lemonade Server with 8K context** (required for SD agent image + story workflow)
+    4. Downloads three models (~15GB):
        - **SDXL-Turbo** (6.5GB) - Diffusion model in safetensors format
-       - **Qwen3-8B-GGUF** (5GB) - Agent LLM in quantized GGUF format
+       - **Qwen3-8B-GGUF** (5GB) - Agent LLM in quantized GGUF format (loaded with 8K context)
        - **Qwen3-VL-4B-Instruct-GGUF** (3.2GB) - Vision LLM in quantized GGUF format
-    4. Verifies the setup is working
+    5. Verifies models and context size
 
     **Hardware acceleration:**
     - GGUF models run on iGPU (Radeon integrated graphics) via Vulkan
@@ -211,6 +212,7 @@ Add `_register_tools()` to create `create_story_from_image`:
                 "whimsical": "playful and lighthearted",
                 "dramatic": "intense and emotionally charged",
                 "adventure": "exciting with action and discovery",
+                "educational": "informative and teaches something",
                 "any": "engaging and imaginative"
             }
             style_desc = style_map.get(story_style, "engaging and imaginative")
@@ -401,31 +403,43 @@ The example above demonstrates an important pattern: **creating custom tools tha
 **Custom tools are specialized** - tailored to your specific needs:
 - `create_story_about_image(image_path)` - Fixed style, custom metadata, specialized behavior
 
-### The Wrapper Pattern
+### The Composition Pattern
 
 ```python
 @tool
 def create_story_about_image(image_path: str) -> dict:
     """Create a story about an image with metadata tracking."""
-    # 1. Call the mixin method
-    result = self._create_story_from_image(image_path, story_style="adventure")
+    from pathlib import Path
+
+    # 1. Use mixin client directly
+    path = Path(image_path)
+    if not path.exists():
+        return {"status": "error", "error": f"Image not found: {image_path}"}
+
+    image_bytes = path.read_bytes()
+    prompt = "Create a short adventure story (2-3 paragraphs) that is exciting with action and discovery. Bring the image to life with narrative."
+    story = self.vlm_client.extract_from_image(image_bytes, prompt=prompt)
 
     # 2. Add custom behavior
-    if result.get("status") == "success":
-        result["custom_metadata"] = {
+    result = {
+        "status": "success",
+        "story": story,
+        "custom_metadata": {
             "agent": "ImageStoryAgent",
             "style": "adventure",
-        }
+        },
+        "image_path": str(path)
+    }
 
     return result
 ```
 
 **Pattern:**
-1. Call mixin methods (like `self._create_story_from_image()`) - these are the implementation methods mixins use internally
+1. Use mixin clients directly (`self.vlm_client`, `self.sd_client`) to access core capabilities
 2. Add custom behavior: metadata, logging, database operations, formatting
 3. Return the modified result
 
-**Why underscore methods?** Mixins register public tools (`create_story_from_image`) and keep implementation methods private (`_create_story_from_image`). You inherit both - use the underscore methods in custom tools to avoid double-registration.
+**Why use clients?** Mixins provide clients (`self.vlm_client`) that expose the underlying APIs. This lets you build custom tools without duplicating mixin tool logic.
 
 ### When to Create Custom Tools
 
@@ -446,26 +460,36 @@ def create_story_about_image(image_path: str) -> dict:
 @tool
 def create_and_catalog_image(prompt: str, tags: list[str]) -> dict:
     """Generate image and save metadata to database."""
+    from pathlib import Path
 
-    # 1. Use SD mixin to generate
-    img_result = self._generate_image(prompt)
+    # 1. Use SD client to generate
+    img_data = self.sd_client.generate_image(prompt=prompt, model=self.sd_default_model)
+    if not img_data or "image" not in img_data:
+        return {"status": "error", "error": "Image generation failed"}
 
-    if img_result.get("status") == "success":
-        # 2. Use VLM mixin to analyze
-        analysis = self._analyze_image(img_result["image_path"])
+    # Save image
+    image_path = self.sd_output_dir / f"{prompt[:30].replace(' ', '_')}.png"
+    image_path.write_bytes(img_data["image"])
 
-        # 3. Custom: Save to database
-        self.execute_sql(
-            "INSERT INTO images (path, prompt, tags, description) VALUES (?, ?, ?, ?)",
-            (img_result["image_path"], prompt, ",".join(tags), analysis["description"])
-        )
+    # 2. Use VLM client to analyze
+    analysis_prompt = "Describe this image in detail, focusing on composition, subjects, and visual elements."
+    description = self.vlm_client.extract_from_image(img_data["image"], prompt=analysis_prompt)
 
-        img_result["cataloged"] = True
+    # 3. Custom: Save to database
+    self.execute_sql(
+        "INSERT INTO images (path, prompt, tags, description) VALUES (?, ?, ?, ?)",
+        (str(image_path), prompt, ",".join(tags), description)
+    )
 
-    return img_result
+    return {
+        "status": "success",
+        "image_path": str(image_path),
+        "description": description,
+        "cataloged": True
+    }
 ```
 
-This pattern shows the power of composition: mixin tools + custom orchestration.
+This pattern shows the power of composition: mixin clients + custom orchestration.
 
 ---
 

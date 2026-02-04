@@ -61,7 +61,7 @@ User: "create a robot exploring ancient ruins"
 → User receives final answer
 ```
 
-This loop can run up to `max_steps` times (default: 10) before stopping.
+This loop can run up to `max_steps` times (default: 20 for base Agent, 10 for SDAgent) before stopping.
 
 ---
 
@@ -164,7 +164,6 @@ When you call `super().__init__()`, Python follows this order to initialize each
 - `self.vlm_client` - VLMClient for vision analysis
 - Auto-registered tools:
   - `analyze_image()` - Detailed image descriptions
-  - `create_story_from_image()` - Creative narratives (generic)
   - `answer_question_about_image()` - Image Q&A
 
 VLM prompts are minimal since the tools are self-documenting via their schemas.
@@ -177,51 +176,63 @@ One of GAIA's key patterns is **domain-specific tools wrapping generic ones**. T
 
 ### Example: The Real SD Agent
 
-The actual `SDAgent` in GAIA (see `src/gaia/agents/sd/agent.py`) demonstrates this pattern. It defines a custom `create_story_from_last_image()` tool in `_register_tools()`:
+The actual `SDAgent` in GAIA (see `src/gaia/agents/sd/agent.py`) demonstrates this pattern. It defines a custom `create_story_from_image()` tool in `_register_tools()`:
 
 ```python
 class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
     def _register_tools(self):
-        """Register SD-specific convenience tools."""
+        """Register custom SD-specific tools."""
         from gaia.agents.base.tools import tool
+        from pathlib import Path
+        import os
 
-        @tool(
-            name="create_story_from_last_image",
-            description="Analyze the last generated SD image and create a whimsical story.",
-            parameters={
-                "image_path": {
-                    "type": "string",
-                    "description": "Optional: path to specific image. If not provided, uses last generated image.",
-                    "required": False,
-                }
-            },
-        )
-        def create_story_from_last_image(image_path: str = None) -> dict:
-            """SD-specific wrapper around VLM's create_story_from_image."""
+        @tool(atomic=True)
+        def create_story_from_image(image_path: str, story_style: str = "any") -> dict:
+            """Generate a creative short story (2-3 paragraphs) based on an image."""
+            path = Path(image_path)
+            if not path.exists():
+                return {"status": "error", "error": f"Image not found: {image_path}"}
 
-            if image_path is None:
-                # Auto-find last generated image from SD session history
-                if not self.sd_generations:
-                    return {"status": "error", "error": "No images generated yet"}
+            # Read image bytes
+            image_bytes = path.read_bytes()
 
-                last_gen = self.sd_generations[-1]
-                image_path = last_gen["image_path"]
+            # Build story prompt based on style
+            style_map = {
+                "whimsical": "playful and lighthearted",
+                "dramatic": "intense and emotionally charged",
+                "adventure": "exciting with action and discovery",
+                "educational": "informative and teaches something",
+                "any": "engaging and imaginative"
+            }
+            style_desc = style_map.get(story_style, "engaging and imaginative")
 
-            # Call the generic VLM tool (provided by VLMToolsMixin)
-            result = self._create_story_from_image(image_path, story_style="whimsical")
+            # Call VLM to generate story
+            prompt = f"Create a short creative story (2-3 paragraphs) that is {style_desc}. Bring the image to life with narrative. Include sensory details and character."
+            story = self.vlm_client.extract_from_image(image_bytes, prompt=prompt)
 
-            # Enhance with SD metadata
-            if result.get("status") == "success":
-                result["original_prompt"] = last_gen["prompt"]
-                result["sd_model"] = last_gen["model"]
+            # Save story to text file alongside image (SD-specific enhancement)
+            base_path, _ = os.path.splitext(str(path))
+            story_path = f"{base_path}_story.txt"
 
-            return result
+            with open(story_path, "w", encoding="utf-8") as f:
+                f.write("=" * 80 + "\n")
+                f.write("STORY\n")
+                f.write("=" * 80 + "\n\n")
+                f.write(story + "\n")
+
+            return {
+                "status": "success",
+                "story": story,
+                "story_style": story_style,
+                "image_path": str(path),
+                "story_file": story_path  # SD-specific: saves to file
+            }
 ```
 
 ### Why This Pattern Matters
 
-1. **Separation of concerns:** `VLMToolsMixin` provides generic image analysis. `SDAgent` adds SD-specific convenience.
-2. **Reusability:** Other agents can use `VLMToolsMixin` without SD-specific assumptions.
+1. **Custom enhancement:** The SDAgent takes the generic VLM capabilities and adds SD-specific features like saving stories to files alongside generated images.
+2. **Reusability:** The VLMToolsMixin provides basic vision analysis. Each agent can build custom tools on top using `self.vlm_client`.
 3. **Composability:** You can mix and match mixins, adding custom tools as needed.
 4. **Pythonic:** Uses decorators, inheritance, and closures naturally.
 
@@ -245,12 +256,11 @@ init_sd() (SDToolsMixin)
 init_vlm() (VLMToolsMixin)
 ├── Creates VLMClient
 ├── Defines analyze_image() with @tool decorator
-├── Defines create_story_from_image() with @tool decorator
 ├── Defines answer_question_about_image() with @tool decorator
 └── Tools auto-registered via @tool decorator
 
 _register_tools() (Your agent)
-└── Define custom tools with @tool (optional)
+└── Define custom tools with @tool (e.g., create_story_from_image)
 
 Agent.process_query()
 └── LLM sees all registered tools and calls them as needed
@@ -258,7 +268,7 @@ Agent.process_query()
 
 ### Tool Registry State
 
-After initialization, your agent has this tool registry:
+After initialization (with mixins only), your agent has 5 tools registered:
 
 ```python
 _TOOL_REGISTRY = {
@@ -271,8 +281,9 @@ _TOOL_REGISTRY = {
     "list_sd_models": {...},
     "get_generation_history": {...},
     "analyze_image": {...},
-    "create_story_from_image": {...},
     "answer_question_about_image": {...},
+    # Custom tools added by _register_tools() would appear here
+    # e.g., "create_story_from_image": {...}
 }
 ```
 
@@ -282,9 +293,9 @@ The LLM receives this schema in its system prompt and decides which tools to cal
 
 ## Available Tools Reference
 
-Your `ImageStoryAgent` has access to these tools automatically registered by the mixins:
+Your `ImageStoryAgent` has access to these tools:
 
-### From SDToolsMixin
+### From SDToolsMixin (3 tools)
 
 **`generate_image(prompt, model, size, steps, cfg_scale, seed)`**
 - Generates images with Stable Diffusion
@@ -299,21 +310,23 @@ Your `ImageStoryAgent` has access to these tools automatically registered by the
 - Gets recent image generations from this session
 - Returns: `{"total_generations": 5, "showing": 5, "generations": [...]}`
 
-### From VLMToolsMixin
+### From VLMToolsMixin (2 tools)
 
 **`analyze_image(image_path, focus)`**
 - Gets detailed image description (composition, colors, mood, etc.)
 - Returns: `{"status": "success", "description": "...", "focus_analysis": "..."}`
 
-**`create_story_from_image(image_path, story_style)`**
-- Generates creative narrative from any image
-- Returns: `{"status": "success", "story": "...", "description": "..."}`
-
 **`answer_question_about_image(image_path, question)`**
 - Answers specific questions about images
 - Returns: `{"status": "success", "answer": "...", "confidence": "high"}`
 
-**Total:** 6 tools automatically available
+### Custom Tools (1 tool)
+
+**`create_story_from_image(image_path, story_style)`**
+- Generates creative narrative from an image (defined in your `_register_tools()`)
+- Returns: `{"status": "success", "story": "...", "story_style": "...", "image_path": "..."}`
+
+**Total:** 6 tools (5 from mixins + 1 custom)
 
 ---
 
@@ -554,8 +567,8 @@ agent = ImageStoryAgent()
     Each mixin's `init_*()` method sets up state and auto-registers tools via the `@tool` decorator.
   </Step>
 
-  <Step title="Tool composition through wrappers">
-    Domain-specific tools (like `create_story_from_last_image`) can wrap generic tools (like `create_story_from_image`) to add specialized behavior.
+  <Step title="Tool composition through custom tools">
+    Domain-specific tools use mixin clients directly (`self.vlm_client`) to build specialized features on top of generic capabilities.
   </Step>
 
   <Step title="Python MRO enables cooperative inheritance">
