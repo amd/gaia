@@ -834,20 +834,10 @@ class InitCommand:
                         )
                     else:
                         # Linux/Mac: background process
-                        # Set environment to disable Vulkan on Linux (WSL GPU support is limited)
-                        env = os.environ.copy()
-                        if sys.platform.startswith("linux"):
-                            env["GGML_VULKAN_DISABLE"] = "1"
-                            if self.verbose:
-                                log.debug(
-                                    "Disabling Vulkan (GGML_VULKAN_DISABLE=1) for Linux/WSL compatibility"
-                                )
-
                         subprocess.Popen(
                             [lemonade_path, "serve"],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
-                            env=env,
                         )
 
                     # Wait for server to start
@@ -894,24 +884,13 @@ class InitCommand:
                 # Find the actual binary path to give the user a working command
                 lemonade_path = self._find_lemonade_server()
                 if lemonade_path:
-                    # For Linux/WSL, disable Vulkan to avoid GPU driver issues
-                    if sys.platform.startswith("linux"):
-                        self.console.print(
-                            f"   [dim]• Run:[/dim] [cyan]GGML_VULKAN_DISABLE=1 {lemonade_path} serve &[/cyan]"
-                        )
-                    else:
-                        self.console.print(
-                            f"   [dim]• Run:[/dim] [cyan]{lemonade_path} serve &[/cyan]"
-                        )
+                    self.console.print(
+                        f"   [dim]• Run:[/dim] [cyan]{lemonade_path} serve &[/cyan]"
+                    )
                 else:
-                    if sys.platform.startswith("linux"):
-                        self.console.print(
-                            "   [dim]• Run:[/dim] [cyan]GGML_VULKAN_DISABLE=1 lemonade-server serve &[/cyan]"
-                        )
-                    else:
-                        self.console.print(
-                            "   [dim]• Run:[/dim] [cyan]lemonade-server serve &[/cyan]"
-                        )
+                    self.console.print(
+                        "   [dim]• Run:[/dim] [cyan]lemonade-server serve &[/cyan]"
+                    )
                 self.console.print(
                     "   [dim]• If command not found, open a new terminal or run:[/dim] [cyan]hash -r[/cyan]"
                 )
