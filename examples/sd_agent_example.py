@@ -116,7 +116,8 @@ How it works:
 OTHER RULES:
 - Generate ONE image by default (multiple only if explicitly requested: "3 images", "variations")
 - Match story_style to user's request: "whimsical" (cute/playful), "adventure" (action), "dramatic" (intense), "any" (default)
-- Include full story text in answer - users want to read it immediately"""
+- Include full story text in answer - users want to read it immediately
+- After both tools complete (image + story), provide final answer immediately - DO NOT call tools again"""
 
 
 if __name__ == "__main__":
