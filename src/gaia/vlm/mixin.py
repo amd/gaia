@@ -6,7 +6,6 @@ VLMToolsMixin - Vision Language Model tools for image analysis.
 
 Provides generic VLM capabilities that can be used across any GAIA agent:
 - Image description and analysis
-- Story generation from images
 - Question answering about images
 
 Example:
@@ -23,7 +22,7 @@ Example:
             pass
 
         def _get_system_prompt(self):
-            return "You analyze images. Use analyze_image, create_story_from_image, or answer_question_about_image tools."
+            return "You analyze images. Use analyze_image or answer_question_about_image tools."
 """
 
 from pathlib import Path
@@ -40,7 +39,6 @@ class VLMToolsMixin:
 
     Tools provided:
     - analyze_image: Get detailed description of an image
-    - create_story_from_image: Generate creative narrative about an image
     - answer_question_about_image: Answer specific questions about an image
 
     Attributes:
@@ -101,29 +99,6 @@ class VLMToolsMixin:
         def analyze_image(image_path: str, focus: str = "all") -> Dict[str, Any]:
             """Analyze an image with VLM."""
             return self._analyze_image(image_path, focus)
-
-        @tool(
-            atomic=True,
-            name="create_story_from_image",
-            description="Generate a creative short story (2-3 paragraphs) based on an image. Brings the image to life with narrative.",
-            parameters={
-                "image_path": {
-                    "type": "str",
-                    "description": "Path to the image file",
-                    "required": True,
-                },
-                "story_style": {
-                    "type": "str",
-                    "description": "Story style: 'whimsical', 'dramatic', 'educational', 'adventure', or 'any' (default)",
-                    "required": False,
-                },
-            },
-        )
-        def create_story_from_image(
-            image_path: str, story_style: str = "any"
-        ) -> Dict[str, Any]:
-            """Create a creative story from an image."""
-            return self._create_story_from_image(image_path, story_style)
 
         @tool(
             atomic=True,
@@ -203,68 +178,6 @@ class VLMToolsMixin:
                 "image_path": str(path),
             }
 
-    def _create_story_from_image(
-        self, image_path: str, story_style: str = "any"
-    ) -> Dict[str, Any]:
-        """
-        Create a creative story based on an image.
-
-        Args:
-            image_path: Path to image file
-            story_style: Style of story to create
-
-        Returns:
-            Dict with status, description, story, and metadata
-        """
-        path = Path(image_path)
-        if not path.exists():
-            return {
-                "status": "error",
-                "error": f"Image not found: {image_path}",
-            }
-
-        try:
-            # Read image as bytes
-            image_bytes = path.read_bytes()
-
-            # First analyze the image
-            description_prompt = "Describe this image in vivid detail. Include colors, composition, mood, style, and any interesting elements you notice."
-            description = self.vlm_client.extract_from_image(
-                image_bytes, prompt=description_prompt
-            )
-
-            # Build story prompt based on style
-            style_instructions = {
-                "whimsical": "playful and lighthearted with imagination",
-                "dramatic": "intense and emotionally charged",
-                "educational": "informative and teaches something",
-                "adventure": "exciting with action and discovery",
-                "any": "engaging and imaginative",
-            }
-
-            style_desc = style_instructions.get(story_style, "engaging and imaginative")
-
-            story_prompt = f"""Based on this image, create a short creative story (2-3 paragraphs) that is {style_desc}. Make it engaging and bring the image to life with narrative. Include sensory details and character."""
-
-            story = self.vlm_client.extract_from_image(image_bytes, prompt=story_prompt)
-
-            return {
-                "status": "success",
-                "image_path": str(path),
-                "description": description,
-                "story": story,
-                "story_style": story_style,
-                "model": self.vlm_model,
-            }
-
-        except Exception as e:
-            logger.error(f"Story creation failed: {e}", exc_info=True)
-            return {
-                "status": "error",
-                "error": f"Story creation failed: {str(e)}",
-                "image_path": str(path),
-            }
-
     def _answer_question_about_image(
         self, image_path: str, question: str
     ) -> Dict[str, Any]:
@@ -308,6 +221,40 @@ class VLMToolsMixin:
                 "image_path": str(path),
                 "question": question,
             }
+
+    @staticmethod
+    def get_base_vlm_guidelines() -> str:
+        """
+        Get static VLM usage guidelines (no instance state required).
+
+        Returns basic VLM tool usage guidelines. VLM tools are self-documenting
+        via their schemas, so these guidelines are minimal.
+
+        Returns:
+            Static VLM usage guidelines
+        """
+        return """Vision tools are available for image analysis. Use them when users ask about images:
+
+- analyze_image(): For detailed descriptions (composition, colors, mood, style)
+- answer_question_about_image(): For specific questions about image content
+
+Tool schemas provide full parameter details. Be flexible based on user needs."""
+
+    def get_vlm_system_prompt(self) -> str:
+        """
+        Get VLM system prompt.
+
+        VLM prompts are static (no model-specific variations), so this just
+        returns the base guidelines. Safe to call before init_vlm().
+
+        Returns:
+            VLM usage guidelines
+
+        Example:
+            def _get_system_prompt(self) -> str:
+                return self.get_vlm_system_prompt()
+        """
+        return self.get_base_vlm_guidelines()
 
     def cleanup_vlm(self) -> None:
         """

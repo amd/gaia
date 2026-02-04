@@ -144,6 +144,7 @@ def initialize_lemonade_for_agent(
         "docker": 32768,
         "talk": 32768,
         "rag": 32768,
+        "sd": 8192,  # SD agent needs 8K for image + story workflow
         "mcp": 4096,
         "minimal": 4096,
         "vlm": 8192,
@@ -5078,18 +5079,26 @@ def handle_sd_command(args):
 
     from gaia.agents.sd import SDAgent, SDAgentConfig
 
-    # Pre-load LLM for prompt enhancement to avoid context size warnings
-    # SD agent uses 8B LLM for robust agentic reasoning and instruction following
+    # Ensure Lemonade is ready with proper context size for SD agent
+    # SD agent needs 8K context for image + story workflow
+    success, _ = initialize_lemonade_for_agent(
+        agent="sd",
+        use_claude=getattr(args, "use_claude", False),
+        use_chatgpt=getattr(args, "use_chatgpt", False),
+        quiet=False,
+    )
+
+    if not success and not (
+        getattr(args, "use_claude", False) or getattr(args, "use_chatgpt", False)
+    ):
+        print("Failed to initialize Lemonade Server with required 8K context.")
+        print("Try: lemonade-server serve --ctx-size 8192")
+        sys.exit(1)
+
     # Create config - ensure LLM model is set
     llm_model = getattr(args, "model", None)
     if not llm_model:
         llm_model = "Qwen3-8B-GGUF"  # Default LLM for prompt enhancement
-
-    llm_client = LemonadeClient(verbose=False)
-    try:
-        llm_client.load_model(llm_model, auto_download=True, prompt=False, timeout=60)
-    except Exception:
-        pass  # Model might already be loaded
 
     config = SDAgentConfig(
         sd_model=args.sd_model,

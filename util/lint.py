@@ -56,7 +56,13 @@ def run_command(cmd: list[str], check: bool = False) -> tuple[int, str]:
 
 def uvx(tool: str, *args: str) -> list[str]:
     """Build a uvx command for a tool (auto-downloads if not installed)."""
-    return ["uvx", tool, *args]
+    # Check if uvx is available
+    import shutil
+    if shutil.which("uvx"):
+        return ["uvx", tool, *args]
+    else:
+        # Fall back to direct tool execution (assumes tools are installed)
+        return [tool, *args]
 
 
 def check_black(fix: bool = False) -> CheckResult:
