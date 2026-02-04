@@ -224,7 +224,7 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
         super().__init__(
             model_id=config.model_id,  # Qwen3-8B for agentic reasoning
             max_steps=config.max_steps,
-            min_context_size=8192,  # 8K sufficient for SD
+            min_context_size=16384,  # 16K for multi-step planning
         )
 
         # Initialize SD tools (auto-registers generate_image, list_sd_models, etc.)
@@ -360,9 +360,9 @@ Three models collaborate with different roles:
 
 | Model | Role | Context Size | When Used |
 |-------|------|--------------|-----------|
-| **Qwen3-8B** (LLM) | Orchestration & Enhancement | 8K | Every request - plans workflow, enhances prompts |
+| **Qwen3-8B** (LLM) | Orchestration & Enhancement | 16K | Every request - plans workflow, enhances prompts |
 | **SDXL-Turbo** (SD) | Image Generation | N/A | When `generate_image` tool called |
-| **Qwen3-VL-4B** (VLM) | Vision & Stories | 8K | When VLM tools called (analyze/story) |
+| **Qwen3-VL-4B** (VLM) | Vision & Stories | 16K | When VLM tools called (analyze/story) |
 
 **Communication Flow:**
 ```
@@ -517,12 +517,12 @@ This approach is more flexible than hardcoded templates - the LLM can adapt enha
   </Accordion>
 
   <Accordion title="Context size warnings">
-    Qwen3-8B-GGUF needs 8K context. Start Lemonade with:
+    Qwen3-8B-GGUF needs 16K context for multi-step planning. Start Lemonade with:
     ```bash
-    lemonade-server serve --ctx-size 8192
+    lemonade-server serve --ctx-size 16384
     ```
 
-    This is sufficient for prompt enhancement (doesn't need 32K).
+    Or use `gaia init --profile sd` to configure automatically.
   </Accordion>
 </AccordionGroup>
 
@@ -567,7 +567,7 @@ python -c "from gaia.agents.sd import SDAgent; agent = SDAgent(); print(agent.sy
 python -c "from gaia.sd import SDToolsMixin; print(SDToolsMixin.get_base_sd_guidelines())"
 ```
 
-See the [playbook Part 2](/playbooks/sd-agent/part-2-architecture#debugging-and-observing-system-prompts) for 5 debugging methods.
+See the [Agent System Deep Dive](/sdk/core/agent-system) for more debugging methods.
 
 ---
 
@@ -607,7 +607,7 @@ GGUF models run on integrated GPU via Vulkan. SD currently runs on CPU (GPU acce
 
 <CardGroup cols={2}>
   <Card title="Build Your Own Agent" icon="robot" href="/playbooks/sd-agent/index">
-    3-part playbook: Build (25min) → Architecture (20min) → Variations (20min)
+    Complete playbook: Build a multi-modal image generation agent in ~60 lines of code
   </Card>
 
   <Card title="CLI Reference" icon="terminal" href="/reference/cli#sd-command">
