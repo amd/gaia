@@ -570,9 +570,6 @@ class LemonadeInstaller:
                     error=f"apt install failed: {result.stderr}",
                 )
 
-            # Discover where the binary was installed and add to PATH
-            self._add_dpkg_binary_to_path()
-
             return InstallResult(
                 success=True,
                 version=self.target_version,
@@ -587,30 +584,6 @@ class LemonadeInstaller:
             )
         except Exception as e:
             return InstallResult(success=False, error=str(e))
-
-    def _add_dpkg_binary_to_path(self):
-        """Discover where dpkg installed the binary and add its directory to PATH."""
-        try:
-            result = subprocess.run(
-                ["dpkg", "-L", "lemonade"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-            if result.returncode == 0:
-                for line in result.stdout.strip().split("\n"):
-                    if "lemonade-server" in line and os.path.isfile(line):
-                        bin_dir = os.path.dirname(line)
-                        current_path = os.environ.get("PATH", "")
-                        if bin_dir not in current_path:
-                            os.environ["PATH"] = f"{bin_dir}:{current_path}"
-                            self._print_status(f"Added {bin_dir} to PATH")
-                        log.debug(f"Found lemonade-server at: {line}")
-                        return
-            log.debug("Could not find lemonade-server in dpkg file list")
-        except Exception as e:
-            log.debug(f"Failed to query dpkg: {e}")
 
     def is_platform_supported(self) -> bool:
         """Check if the current platform is supported for installation."""
