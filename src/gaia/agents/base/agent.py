@@ -2121,9 +2121,6 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     # Stop progress indicator
                     self.console.stop_progress()
 
-                    logger.warning(
-                        f"Detected {consecutive_count} consecutive identical calls to {tool_name} (max: {self.max_consecutive_repeats}), stopping to prevent loop"
-                    )
                     # Force a final answer if the same tool is called repeatedly
                     final_answer = (
                         f"Task completed with {tool_name}. No further action needed."
