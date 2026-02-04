@@ -106,7 +106,7 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
             max_steps=config.max_steps,
             streaming=config.streaming,
             show_stats=config.show_stats,
-            min_context_size=config.ctx_size,  # 8K sufficient for prompt enhancement
+            min_context_size=config.ctx_size,  # 16K for multi-step planning
         )
 
         # Initialize SD tools (auto-registers tools)
