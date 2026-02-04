@@ -26,9 +26,12 @@ sys.path.insert(
     0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
 
+# pylint: disable=wrong-import-position
 from gaia.agents.blender.agent import BlenderAgent
 from gaia.llm import create_client
 from gaia.logger import get_logger
+
+# pylint: enable=wrong-import-position
 
 logger = get_logger(__name__)
 

@@ -499,7 +499,7 @@ class SimpleBlenderMCPServer:
 
             # Execute the code and capture output and return value
             with redirect_stdout(stdout_tee), redirect_stderr(stderr_tee):
-                exec(code, namespace)
+                exec(code, namespace)  # pylint: disable=exec-used
                 if "result" in namespace:
                     result_value = namespace["result"]
 
