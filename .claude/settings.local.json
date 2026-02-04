@@ -50,6 +50,8 @@
       "Bash(uv run uvx flake8:*)",
       "Bash(uv run uvx pylint:*)",
       "Bash(uv run pytest:*)",
+      "Bash(uvx pylint:*)",
+      "Bash(uvx flake8:*)",
       "Bash(while read file)",
       "mcp__context7__get-library-docs",
       "mcp__context7__resolve-library-id",
