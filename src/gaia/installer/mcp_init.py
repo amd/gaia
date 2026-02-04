@@ -110,7 +110,7 @@ class MCPInitCommand:
             config_path = gaia_dir / "mcp_servers.json"
             if not config_path.exists():
                 config_data = {"mcpServers": {}}
-                with open(config_path, "w") as f:
+                with open(config_path, "w", encoding="utf-8") as f:
                     json.dump(config_data, f, indent=2)
                 self._print_success(f"Created config: {config_path}")
             else:

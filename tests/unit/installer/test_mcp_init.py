@@ -6,8 +6,6 @@
 import json
 from pathlib import Path
 
-import pytest
-
 
 class TestMCPInitCommand:
     """Tests for MCPInitCommand class."""
