@@ -1,3 +1,6 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """pytest fixtures for MCP integration tests.
 
 Tests real MCP servers via npx - no mocks or test servers.

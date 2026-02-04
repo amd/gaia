@@ -1,3 +1,6 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """Model Context Protocol (MCP) integration for GAIA.
 
 This module provides both server and client implementations for MCP:
