@@ -39,7 +39,7 @@ class SDAgentConfig:
     # Execution settings
     max_steps: int = 10
     streaming: bool = False
-    ctx_size: int = 8192  # 8K context (sufficient for prompt enhancement)
+    ctx_size: int = 16384  # 16K context for multi-step planning with dynamic parameters
 
     # Debug/output settings
     debug: bool = False
@@ -86,15 +86,17 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
                 auto_download=True,
                 prompt=False,
                 timeout=120,
-                ctx_size=config.ctx_size,  # Ensure 8K context for SD workflow
-                save_options=True  # Persist context setting
+                ctx_size=config.ctx_size,  # Ensure 16K context for SD workflow
+                save_options=True,  # Persist context setting
             )
-            logger.debug(f"Loaded LLM model: {config.model_id} with {config.ctx_size} token context")
+            logger.debug(
+                f"Loaded LLM model: {config.model_id} with {config.ctx_size} token context"
+            )
         except Exception as e:
             logger.warning(f"LLM load warning: {e}")
 
-        # Initialize Agent base class with reduced context requirement
-        # SD prompt enhancement doesn't need 32K context, 8K is sufficient
+        # Initialize Agent base class with 16K context requirement
+        # SD multi-step planning requires 16K context for dynamic parameters
         super().__init__(
             use_claude=config.use_claude,
             use_chatgpt=config.use_chatgpt,
@@ -174,8 +176,9 @@ OTHER RULES:
 
     def _register_tools(self):
         """Register custom SD-specific tools."""
-        from gaia.agents.base.tools import tool
         from pathlib import Path
+
+        from gaia.agents.base.tools import tool
 
         @tool(atomic=True)
         def create_story_from_image(image_path: str, story_style: str = "any") -> dict:
@@ -193,7 +196,7 @@ OTHER RULES:
                 "dramatic": "intense and emotionally charged",
                 "adventure": "exciting with action and discovery",
                 "educational": "informative and teaches something",
-                "any": "engaging and imaginative"
+                "any": "engaging and imaginative",
             }
             style_desc = style_map.get(story_style, "engaging and imaginative")
 
@@ -216,5 +219,5 @@ OTHER RULES:
                 "story": story,
                 "story_style": story_style,
                 "image_path": str(path),
-                "story_file": story_path
+                "story_file": story_path,
             }

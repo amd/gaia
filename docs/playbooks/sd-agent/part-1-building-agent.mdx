@@ -82,10 +82,10 @@ All run locally via Lemonade Server. GGUF models use AMD Radeon iGPU (Vulkan), S
     This command:
     1. Installs Lemonade Server (if not already installed)
     2. **Starts Lemonade Server automatically**
-    3. **Configures Lemonade Server with 8K context** (required for SD agent image + story workflow)
+    3. **Configures Lemonade Server with 16K context** (required for SD agent multi-step planning)
     4. Downloads three models (~15GB):
        - **SDXL-Turbo** (6.5GB) - Diffusion model in safetensors format
-       - **Qwen3-8B-GGUF** (5GB) - Agent LLM in quantized GGUF format (loaded with 8K context)
+       - **Qwen3-8B-GGUF** (5GB) - Agent LLM in quantized GGUF format (loaded with 16K context)
        - **Qwen3-VL-4B-Instruct-GGUF** (3.2GB) - Vision LLM in quantized GGUF format
     5. Verifies models and context size
 

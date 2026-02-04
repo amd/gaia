@@ -55,7 +55,7 @@ INIT_PROFILES = {
         ],
         "approx_size": "~15 GB",
         "min_lemonade_version": "9.2.0",  # SDXL-Turbo requires v9.2.0+
-        "min_context_size": 8192,  # SD agent needs 8K for image + story workflow
+        "min_context_size": 16384,  # SD agent needs 16K for multi-step planning
     },
     "chat": {
         "description": "Interactive chat with RAG and vision support",
@@ -170,6 +170,10 @@ class InitCommand:
             minimal=use_minimal,
             console=self.console,
         )
+
+        # Context verification state (set during model loading)
+        self._ctx_verified = None
+        self._ctx_warning = None
 
     def _print(self, message: str, end: str = "\n"):
         """Print message to stdout."""
@@ -1137,7 +1141,10 @@ class InitCommand:
             min_ctx = profile_config.get("min_context_size")
 
             # Load the model (with context size if required)
-            is_llm = not ("embed" in model_id.lower() or any(sd in model_id.upper() for sd in ["SDXL", "SD-", "SD1", "SD2"]))
+            is_llm = not (
+                "embed" in model_id.lower()
+                or any(sd in model_id.upper() for sd in ["SDXL", "SD-", "SD1", "SD2"])
+            )
 
             if is_llm and min_ctx:
                 # Load with explicit context size and save it
@@ -1146,7 +1153,7 @@ class InitCommand:
                     auto_download=False,
                     prompt=False,
                     ctx_size=min_ctx,
-                    save_options=True
+                    save_options=True,
                 )
 
                 # Verify context size was set correctly by reading it back
@@ -1154,8 +1161,12 @@ class InitCommand:
                     # Get full model list with recipe_options
                     models_list = client.list_models()
                     model_info = next(
-                        (m for m in models_list.get("data", []) if m.get("id") == model_id),
-                        None
+                        (
+                            m
+                            for m in models_list.get("data", [])
+                            if m.get("id") == model_id
+                        ),
+                        None,
                     )
 
                     if not model_info:
@@ -1168,13 +1179,19 @@ class InitCommand:
                         # Store for success message, and flag if larger than expected
                         self._ctx_verified = actual_ctx
                         if actual_ctx > min_ctx:
-                            self._ctx_warning = f"(configured: {actual_ctx}, required: {min_ctx})"
+                            self._ctx_warning = (
+                                f"(configured: {actual_ctx}, required: {min_ctx})"
+                            )
                     elif actual_ctx:
                         # Context was set but is too small
                         return (False, f"Context {actual_ctx} < {min_ctx} required")
                     else:
-                        # Context not in recipe_options (shouldn't happen with save_options=true)
-                        return (False, f"Context not saved (recipe_options: {model_info.get('recipe_options')})")
+                        # Context not in recipe_options - warn but don't fail
+                        # (Model might be loaded from a previous session without recipe_options)
+                        logger.warning(
+                            f"Could not verify context for {model_id} - recipe_options missing"
+                        )
+                        self._ctx_verified = None  # Explicitly mark as unverified
                 except Exception as e:
                     return (False, f"Context check failed: {str(e)[:50]}")
             else:
@@ -1275,12 +1292,16 @@ class InitCommand:
                 self.console.print(
                     f"   [dim]Ensuring {min_ctx} token context for {self.profile} profile...[/dim]"
                 )
-                success = LemonadeManager.ensure_ready(min_context_size=min_ctx, quiet=True)
+                success = LemonadeManager.ensure_ready(
+                    min_context_size=min_ctx, quiet=True
+                )
                 if success:
                     self._print_success(f"Context size verified: {min_ctx} tokens")
                 else:
                     self._print_error(f"Failed to configure {min_ctx} token context")
-                    self._print_error(f"Try: lemonade-server serve --ctx-size {min_ctx}")
+                    self._print_error(
+                        f"Try: lemonade-server serve --ctx-size {min_ctx}"
+                    )
                     return False
 
             # Get models to verify

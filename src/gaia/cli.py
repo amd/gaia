@@ -4989,7 +4989,9 @@ def handle_sd_command(args):
         quiet=False,
     )
 
-    if not success and not (getattr(args, "use_claude", False) or getattr(args, "use_chatgpt", False)):
+    if not success and not (
+        getattr(args, "use_claude", False) or getattr(args, "use_chatgpt", False)
+    ):
         print("Failed to initialize Lemonade Server with required 8K context.")
         print("Try: lemonade-server serve --ctx-size 8192")
         sys.exit(1)

@@ -130,7 +130,6 @@ class TestSDAgent(unittest.TestCase):
                         f"Prompt should include {model} guidance",
                     )
 
-
     def test_parameter_substitution(self):
         """Test dynamic parameter substitution in multi-step plans."""
         from gaia.agents.base import Agent
@@ -232,8 +231,10 @@ class TestSDAgent(unittest.TestCase):
                 return "Test agent"
 
         # Mock both LemonadeClient and LemonadeManager
-        with patch("gaia.llm.lemonade_client.LemonadeClient"), \
-             patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"):
+        with (
+            patch("gaia.llm.lemonade_client.LemonadeClient"),
+            patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
+        ):
             agent = TestAgent()
 
             # Test 1: Empty step_results
