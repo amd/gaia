@@ -497,7 +497,7 @@ class LemonadeInstaller:
             # Try /etc/os-release first (works on most distros)
             os_info = {}
             if os.path.isfile("/etc/os-release"):
-                with open("/etc/os-release") as f:
+                with open("/etc/os-release", encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
                         if "=" in line:
@@ -511,7 +511,7 @@ class LemonadeInstaller:
             # Check Ubuntu version (need 24.04+)
             if distro == "ubuntu" and version_id:
                 try:
-                    major, minor = version_id.split(".")[:2]
+                    major, _ = version_id.split(".")[:2]
                     if int(major) < 24:
                         return (
                             f"Lemonade Server requires Ubuntu 24.04 or later. "
