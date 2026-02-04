@@ -861,6 +861,108 @@ You must respond ONLY in valid JSON. No text before { or after }.
         # Valid conversational response - wrap it in expected format
         return {"thought": "", "goal": "", "answer": response.strip()}
 
+    def _resolve_plan_parameters(
+        self, tool_args: Any, step_results: List[Dict[str, Any]], _depth: int = 0
+    ) -> Any:
+        """
+        Recursively resolve placeholder references in tool arguments from previous step results.
+
+        Supports dynamic parameter substitution in multi-step plans:
+        - $PREV.field - Get field from previous step result
+        - $STEP_0.field - Get field from specific step result (0-indexed)
+
+        Args:
+            tool_args: Tool arguments that may contain placeholders
+            step_results: List of results from previously executed steps
+            _depth: Internal recursion depth counter (max 50 levels)
+
+        Returns:
+            Tool arguments with placeholders resolved to actual values
+
+        Examples:
+            >>> step_results = [{"image_path": "/path/to/img.png", "status": "success"}]
+            >>> tool_args = {"image_path": "$PREV.image_path", "style": "dramatic"}
+            >>> resolved = agent._resolve_plan_parameters(tool_args, step_results)
+            >>> resolved
+            {"image_path": "/path/to/img.png", "style": "dramatic"}
+
+        Backward Compatibility:
+            - If no placeholders exist, returns original tool_args unchanged
+            - If placeholder references invalid step/field, returns placeholder string unchanged
+
+        Limitations:
+            - Field names cannot contain dots (e.g., $PREV.user.name not supported - use $PREV.user_name)
+            - Maximum nesting depth of 50 levels to prevent stack overflow
+            - No type checking - resolved values are used as-is (tools should validate inputs)
+        """
+        import re
+
+        # Prevent stack overflow from deeply nested structures
+        MAX_DEPTH = 50
+        if _depth > MAX_DEPTH:
+            logger.warning(
+                f"Maximum recursion depth ({MAX_DEPTH}) exceeded in parameter resolution, returning unchanged"
+            )
+            return tool_args
+
+        # Handle dict: recursively resolve each value
+        if isinstance(tool_args, dict):
+            return {
+                k: self._resolve_plan_parameters(v, step_results, _depth + 1)
+                for k, v in tool_args.items()
+            }
+
+        # Handle list: recursively resolve each item
+        elif isinstance(tool_args, list):
+            return [
+                self._resolve_plan_parameters(item, step_results, _depth + 1)
+                for item in tool_args
+            ]
+
+        # Handle string: check for placeholder patterns
+        elif isinstance(tool_args, str):
+            # Handle $PREV.field - get field from previous step
+            if tool_args.startswith("$PREV.") and step_results:
+                field = tool_args[6:]  # Strip "$PREV."
+                prev_result = step_results[-1]
+                if isinstance(prev_result, dict) and field in prev_result:
+                    resolved = prev_result[field]
+                    logger.debug(
+                        f"Resolved {tool_args} -> {resolved} from previous step result"
+                    )
+                    return resolved
+                else:
+                    logger.warning(
+                        f"Could not resolve {tool_args}: field '{field}' not found in previous result"
+                    )
+                    return tool_args  # Return unchanged if field not found
+
+            # Handle $STEP_N.field - get field from specific step
+            match = re.match(r"\$STEP_(\d+)\.(.+)", tool_args)
+            if match and step_results:
+                step_idx = int(match.group(1))
+                field = match.group(2)
+                if 0 <= step_idx < len(step_results):
+                    step_result = step_results[step_idx]
+                    if isinstance(step_result, dict) and field in step_result:
+                        resolved = step_result[field]
+                        logger.debug(
+                            f"Resolved {tool_args} -> {resolved} from step {step_idx} result"
+                        )
+                        return resolved
+                    else:
+                        logger.warning(
+                            f"Could not resolve {tool_args}: field '{field}' not found in step {step_idx} result"
+                        )
+                else:
+                    logger.warning(
+                        f"Could not resolve {tool_args}: step {step_idx} out of range (0-{len(step_results)-1})"
+                    )
+                return tool_args  # Return unchanged if reference invalid
+
+        # For all other types (int, float, bool, None), return unchanged
+        return tool_args
+
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
         Execute a tool by name with the provided arguments.
@@ -1253,7 +1355,8 @@ You must respond ONLY in valid JSON. No text before { or after }.
         error_count = 0
         last_tool_call = None  # Track the last tool call to prevent loops
         last_error = None  # Track the last error to handle it properly
-        previous_outputs = []  # Track previous tool outputs
+        previous_outputs = []  # Track previous tool outputs (truncated for context)
+        step_results = []  # Track full tool results for parameter substitution
 
         # Reset state management
         self.execution_state = self.STATE_PLANNING
@@ -1328,6 +1431,9 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     tool_name = next_step["tool"]
                     tool_args = next_step["tool_args"]
 
+                    # Resolve dynamic parameters from previous step results
+                    tool_args = self._resolve_plan_parameters(tool_args, step_results)
+
                     # Create a parsed response structure as if it came from the LLM
                     parsed = {
                         "thought": f"Executing step {self.current_step + 1} of the plan",
@@ -1378,6 +1484,9 @@ You must respond ONLY in valid JSON. No text before { or after }.
                             "result": truncated_result,
                         }
                     )
+
+                    # Store full result for parameter substitution in subsequent plan steps
+                    step_results.append(tool_result)
 
                     # Share tool output with subsequent LLM calls
                     messages.append(
@@ -1564,6 +1673,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     self.current_plan = None
                     self.current_step = 0
                     self.total_plan_steps = 0
+                    step_results.clear()  # Clear stale results from failed plan
 
                 elif self.execution_state == self.STATE_COMPLETION:
                     self.console.print_state_info("COMPLETION: Finalizing response")

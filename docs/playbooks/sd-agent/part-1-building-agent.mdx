@@ -389,152 +389,12 @@ You: generate a sunset over mountains and describe the colors
 You: make a cyberpunk street scene and tell me a story
 ```
 
----
+🎉 **Congratulations!** You've built a fully functional multi-modal agent in ~60 lines of code. The agent can generate images with Stable Diffusion, analyze them with vision models, and create stories—all running locally on AMD hardware.
 
-## Understanding Custom Tools
-
-The example above demonstrates an important pattern: **creating custom tools that extend mixin capabilities**.
-
-### Why Create Custom Tools?
-
-**Mixin tools are generic** - they work for any use case:
-- `create_story_from_image(image_path, story_style)` - Flexible, parameterized
-
-**Custom tools are specialized** - tailored to your specific needs:
-- `create_story_about_image(image_path)` - Fixed style, custom metadata, specialized behavior
-
-### The Composition Pattern
-
-```python
-@tool
-def create_story_about_image(image_path: str) -> dict:
-    """Create a story about an image with metadata tracking."""
-    from pathlib import Path
-
-    # 1. Use mixin client directly
-    path = Path(image_path)
-    if not path.exists():
-        return {"status": "error", "error": f"Image not found: {image_path}"}
-
-    image_bytes = path.read_bytes()
-    prompt = "Create a short adventure story (2-3 paragraphs) that is exciting with action and discovery. Bring the image to life with narrative."
-    story = self.vlm_client.extract_from_image(image_bytes, prompt=prompt)
-
-    # 2. Add custom behavior
-    result = {
-        "status": "success",
-        "story": story,
-        "custom_metadata": {
-            "agent": "ImageStoryAgent",
-            "style": "adventure",
-        },
-        "image_path": str(path)
-    }
-
-    return result
-```
-
-**Pattern:**
-1. Use mixin clients directly (`self.vlm_client`, `self.sd_client`) to access core capabilities
-2. Add custom behavior: metadata, logging, database operations, formatting
-3. Return the modified result
-
-**Why use clients?** Mixins provide clients (`self.vlm_client`) that expose the underlying APIs. This lets you build custom tools without duplicating mixin tool logic.
-
-### When to Create Custom Tools
-
-**Use mixin tools directly when:**
-- Generic functionality is sufficient
-- You need parameterization (different styles, options)
-- No custom pre/post processing needed
-
-**Create custom tools when:**
-- You want fixed, specialized behavior (always adventure style)
-- You need to track metadata or logging
-- You want to compose multiple operations (analyze + story + save to DB)
-- You're building a domain-specific interface
-
-### Real-World Example: Asset Management
-
-```python
-@tool
-def create_and_catalog_image(prompt: str, tags: list[str]) -> dict:
-    """Generate image and save metadata to database."""
-    from pathlib import Path
-
-    # 1. Use SD client to generate
-    img_data = self.sd_client.generate_image(prompt=prompt, model=self.sd_default_model)
-    if not img_data or "image" not in img_data:
-        return {"status": "error", "error": "Image generation failed"}
-
-    # Save image
-    image_path = self.sd_output_dir / f"{prompt[:30].replace(' ', '_')}.png"
-    image_path.write_bytes(img_data["image"])
-
-    # 2. Use VLM client to analyze
-    analysis_prompt = "Describe this image in detail, focusing on composition, subjects, and visual elements."
-    description = self.vlm_client.extract_from_image(img_data["image"], prompt=analysis_prompt)
-
-    # 3. Custom: Save to database
-    self.execute_sql(
-        "INSERT INTO images (path, prompt, tags, description) VALUES (?, ?, ?, ?)",
-        (str(image_path), prompt, ",".join(tags), description)
-    )
-
-    return {
-        "status": "success",
-        "image_path": str(image_path),
-        "description": description,
-        "cataloged": True
-    }
-```
-
-This pattern shows the power of composition: mixin clients + custom orchestration.
-
----
-
-## Example Output
-
-Here's what you'll see when you run the agent:
-
-```
-You: create a robot exploring ancient ruins
-
-Agent: I'll generate that image for you.
-
-[Generating image with SDXL-Turbo (4 steps, 512x512)...]
-✓ Image saved to ./generated_images/robot_exploring_ancient_ruins_SDXL-Turbo_20250202_143022.png
-
-[Analyzing image and creating story...]
-
-Here's a story about your image:
-
-In the heart of a forgotten civilization, a small reconnaissance robot named
-Unit-7 carefully navigates through towering stone pillars covered in mysterious
-glyphs. Its optical sensors scan the intricate carvings, attempting to decode
-the ancient language that has been silent for millennia.
-
-The robot's metallic frame gleams in the filtered sunlight that breaks through
-the overgrown canopy above. Each step is calculated, avoiding the treacherous
-gaps between fallen columns and the thick vines that have claimed this place
-as their own.
-
-As Unit-7's processors work to piece together the historical puzzle, it transmits
-its findings back to the research station, unaware that it may be the first
-sentient being to witness these ruins in over a thousand years.
-```
-
-**Performance (AMD Ryzen AI MAX+ 395):**
-- Image generation: ~17s (SDXL-Turbo, 512x512)
-- VLM story creation: ~15-20s (Qwen3-VL-4B)
-- **Total time: ~35-40s** for image + story
-
-<video
-  controls
-  className="w-full rounded-lg"
-  src="https://assets.amd-gaia.ai/videos/image-story-agent-demo.webm"
-/>
-<Note>Video: Running the ImageStoryAgent and generating image + story</Note>
+**What's Next?**
+- Having issues? Check the Troubleshooting section below
+- Want to understand how it works under the hood? Continue to [Part 2: Understanding Multi-Modal Architecture](/playbooks/sd-agent/part-2-architecture)
+- Ready to build variations? Jump to [Part 3: Advanced Patterns & Variations](/playbooks/sd-agent/part-3-variations)
 
 ---
 
@@ -603,54 +463,27 @@ sentient being to witness these ruins in over a thousand years.
   </Accordion>
 </AccordionGroup>
 
----
+### Still Having Issues?
 
-## Extending Your Agent
+If you're experiencing a problem not listed above, we're here to help:
 
-### Adding More Capabilities
+**Report an Issue:**
+- 🐛 [Create a GitHub Issue](https://github.com/amd/gaia/issues/new/choose) - Best for bugs, feature requests, and technical issues
+- Include your GAIA version (`gaia --version`), OS, and error messages
 
-Mixins add functionality to agents. Available mixins:
+**Get Help:**
+- 📖 [GAIA Documentation](https://amd-gaia.ai) - Complete guides and API reference
+- 💬 [GitHub Discussions](https://github.com/amd/gaia/discussions) - Ask questions and share ideas
+- 📧 Email: [gaia-support@amd.com](mailto:gaia-support@amd.com) - For direct support
 
-```python
-from gaia.rag import RAGToolsMixin        # Search documents, answer from PDFs
-from gaia.database import DatabaseMixin   # Execute SQL queries
-from gaia.audio import AudioToolsMixin    # Speech-to-text, text-to-speech
-
-class MultiCapabilityAgent(Agent, SDToolsMixin, VLMToolsMixin, RAGToolsMixin):
-    def __init__(self):
-        super().__init__(model_id="Qwen3-8B-GGUF")
-        self.init_sd()
-        self.init_vlm()
-        self.init_rag()
-```
-
-Each mixin adds tools the LLM can call. The agent decides which tools to use based on the query.
-
-### Changing Models
-
-Use different models for different needs:
-
-```python
-# Faster inference, smaller context
-super().__init__(model_id="Qwen2.5-0.5B-Instruct-CPU")
-
-# Better reasoning, larger context
-super().__init__(model_id="Qwen3-Coder-30B-A3B-Instruct-GGUF")
-
-# Different vision model
-self.init_vlm(model="Qwen3-VL-8B-Instruct-GGUF")
-
-# Photorealistic images (slower)
-self.init_sd(default_model="SDXL-Base-1.0")
-```
-
-Models are downloaded automatically when first used.
+**Before Reporting:**
+1. Check the [FAQ](https://amd-gaia.ai/reference/faq) and [Troubleshooting Guide](https://amd-gaia.ai/reference/troubleshooting)
+2. Search [existing issues](https://github.com/amd/gaia/issues) to avoid duplicates
+3. Include reproduction steps, error messages, and environment details
 
 ---
 
 ## What's Next?
-
-🎉 **Congratulations!** You've built your first multi-modal agent.
 
 <Card title="Part 2: Architecture Deep Dive →" icon="diagram-project" href="/playbooks/sd-agent/part-2-architecture">
   Understand how multi-modal agents work. Learn about the reasoning loop, tool composition patterns, and mixin system.

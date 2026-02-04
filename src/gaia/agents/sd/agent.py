@@ -130,20 +130,42 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
         return """You are an image generation and storytelling agent.
 
 WORKFLOW for image + story requests:
-1. Call generate_image() - THIS RETURNS: {"status": "success", "image_path": ".gaia/cache/sd/images/..."}
-2. Extract the ACTUAL image_path value from step 1's result
-3. Call create_story_from_image(image_path=<ACTUAL PATH FROM STEP 1>, story_style=<user's tone>)
-4. Include the COMPLETE story text in your final answer
+1. Create a 2-step plan using dynamic parameter placeholders
+2. The plan executes automatically - you'll see results after completion
+3. Provide final answer with the complete story text
 
-CRITICAL: Extract actual values from tool results, NEVER use placeholders like "$IMAGE_PATH$" or "generated_image_path"
+DYNAMIC PARAMETER PLACEHOLDERS:
+Use these in multi-step plans to reference previous results:
+- $PREV.field - Get field from previous step result
+- $STEP_0.field - Get field from specific step (0-indexed)
 
-CORRECT parameter passing:
-Step 1 result: {"image_path": ".gaia/cache/sd/images/robot_123.png"}
-Step 2 args: {"image_path": ".gaia/cache/sd/images/robot_123.png", "story_style": "adventure"} ✓
+CORRECT multi-step plan:
+{
+  "thought": "Creating plan to generate image and story",
+  "plan": [
+    {
+      "tool": "generate_image",
+      "tool_args": {
+        "prompt": "adorable robot kitten with glowing LED eyes...",
+        "model": "SDXL-Turbo",
+        "size": "512x512",
+        "steps": 4
+      }
+    },
+    {
+      "tool": "create_story_from_image",
+      "tool_args": {
+        "image_path": "$PREV.image_path",
+        "story_style": "whimsical"
+      }
+    }
+  ]
+}
 
-INCORRECT (DO NOT DO THIS):
-Step 2 args: {"image_path": "$IMAGE_PATH$"} ✗
-Step 2 args: {"image_path": "generated_image_path"} ✗
+How it works:
+- Step 1 returns: {"image_path": ".gaia/cache/sd/images/robot_kitten_SDXL_20260203.png", ...}
+- Step 2 receives: {"image_path": ".gaia/cache/sd/images/robot_kitten_SDXL_20260203.png", "story_style": "whimsical"}
+- The system automatically substitutes $PREV.image_path with the actual path
 
 OTHER RULES:
 - Generate ONE image by default (multiple only if explicitly requested: "3 images", "variations")

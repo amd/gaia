@@ -41,19 +41,21 @@ User: "create a robot exploring ancient ruins"
 ↓ Step 1: Agent receives query
 
 ↓ Step 2: LLM reasons
-  "I need to generate an image first, then create a story"
-  Plan: [generate_image, create_story_from_image]
+  "I need to generate an image first"
+  Tool call: generate_image(prompt="robot exploring ancient ruins", ...)
 
 ↓ Step 3: Execute generate_image
   Tool calls Lemonade Server SD endpoint
-  Returns: "./generated_images/robot_ruins_123.png"
+  Returns: {"image_path": "./generated_images/robot_ruins_SDXL-Turbo_20260203.png"}
 
-↓ Step 4: LLM sees result
-  "Good, image created. Now analyze it for a story"
+↓ Step 4: LLM sees result and reasons
+  "Good, image created at ./generated_images/robot_ruins_SDXL-Turbo_20260203.png"
+  "Now I'll create a story using the ACTUAL path"
+  Tool call: create_story_from_image(image_path="./generated_images/robot_ruins_SDXL-Turbo_20260203.png", ...)
 
 ↓ Step 5: Execute create_story_from_image
   Tool calls Lemonade Server VLM endpoint
-  Returns: "In the heart of a forgotten civilization..."
+  Returns: {"story": "In the heart of a forgotten civilization..."}
 
 ↓ Step 6: LLM synthesizes
   "I've created your image and here's a story about it..."
@@ -62,6 +64,94 @@ User: "create a robot exploring ancient ruins"
 ```
 
 This loop can run up to `max_steps` times (default: 20 for base Agent, 10 for SDAgent) before stopping.
+
+---
+
+## Multi-Step Planning with Dynamic Parameters
+
+For workflows with dependent steps (like "generate image THEN create story"), GAIA supports **multi-step planning** with **dynamic parameter substitution**.
+
+### The Problem
+
+When step 2 needs data from step 1's result:
+```python
+# Step 1 generates image → returns {"image_path": "./generated_images/robot_123.png"}
+# Step 2 needs to use that path → create_story_from_image(image_path=???)
+```
+
+The path isn't known when creating the plan!
+
+### The Solution: Placeholder Syntax
+
+Use `$PREV.field` or `$STEP_N.field` to reference previous results:
+
+```python
+{
+  "thought": "Creating 2-step plan",
+  "plan": [
+    {
+      "tool": "generate_image",
+      "tool_args": {
+        "prompt": "robot kitten",
+        "model": "SDXL-Turbo",
+        "size": "512x512",
+        "steps": 4
+      }
+    },
+    {
+      "tool": "create_story_from_image",
+      "tool_args": {
+        "image_path": "$PREV.image_path",  // Placeholder!
+        "story_style": "whimsical"
+      }
+    }
+  ]
+}
+```
+
+### How It Works
+
+1. **LLM creates plan** - Placeholders remain as strings
+2. **Step 1 executes** - Returns `{"image_path": "./generated_images/robot_123.png", ...}`
+3. **System resolves placeholders** - Before executing step 2:
+   - Finds `$PREV.image_path` in tool_args
+   - Looks up `image_path` field in step 1's result
+   - Substitutes: `"$PREV.image_path"` → `"./generated_images/robot_123.png"`
+4. **Step 2 executes** - With the actual path
+
+### Placeholder Reference
+
+| Placeholder | Meaning | Example |
+|-------------|---------|---------|
+| `$PREV.field` | Get field from previous step | `$PREV.image_path` |
+| `$STEP_0.field` | Get field from specific step (0-indexed) | `$STEP_0.model` |
+
+### Advanced Example
+
+```python
+{
+  "plan": [
+    {"tool": "generate_image", "tool_args": {"prompt": "robot"}},  # Step 0
+    {"tool": "generate_image", "tool_args": {"prompt": "kitten"}},  # Step 1
+    {
+      "tool": "combine_images",
+      "tool_args": {
+        "image1": "$STEP_0.image_path",  # First image
+        "image2": "$STEP_1.image_path",  # Second image
+        "output": "combined.png"
+      }
+    }
+  ]
+}
+```
+
+### Error Handling
+
+- **Missing field:** Placeholder stays unchanged (e.g., `$PREV.nonexistent` → `"$PREV.nonexistent"`)
+- **Invalid step:** Warning logged, placeholder unchanged
+- **No previous steps:** Placeholder ignored for step 0
+
+This enables complex workflows while keeping the planning simple!
 
 ---
 
