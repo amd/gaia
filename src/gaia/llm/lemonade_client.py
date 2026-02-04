@@ -417,6 +417,10 @@ def _prompt_user_for_repair(model_name: str) -> bool:
             "Action:",
             "[green]Resume download (Lemonade will continue where it left off)[/green]",
         )
+        table.add_row(
+            "",
+            "[dim]To force redownload from scratch, use: [cyan]gaia init --force-models[/cyan][/dim]",
+        )
 
         console.print(
             Panel(
@@ -446,6 +450,8 @@ def _prompt_user_for_repair(model_name: str) -> bool:
         print(f"Model: {model_name}")
         print("Status: Download incomplete or files corrupted")
         print("Action: Resume download (Lemonade will continue where it left off)")
+        print()
+        print("To force redownload from scratch, use: gaia init --force-models")
         print("=" * 60)
 
         while True:

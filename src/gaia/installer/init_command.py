@@ -40,8 +40,8 @@ INIT_PROFILES = {
     "minimal": {
         "description": "Fast setup with lightweight model",
         "agent": "minimal",
-        "models": ["Qwen3-4B-Instruct-2507-GGUF"],  # Override default minimal model
-        "approx_size": "~2.5 GB",
+        "models": ["Qwen3-0.6B-GGUF"],
+        "approx_size": "~400 MB",
         "min_lemonade_version": "9.0.4",
         "min_context_size": 4096,
     },
