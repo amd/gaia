@@ -302,9 +302,7 @@ class SummarizerAgent(Agent):
         self._prepare_chat(input_type)
         if not self._should_use_iterative(content):
             prompt = self.generate_summary_prompt(content, input_type, style)
-            for chunk in self.chat_sdk.send_stream(
-                prompt, **self.generation_params
-            ):
+            for chunk in self.chat_sdk.send_stream(prompt, **self.generation_params):
                 if chunk.is_complete:
                     yield {
                         "text": "",

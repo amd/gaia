@@ -150,7 +150,9 @@ class BatchExperimentRunner:
         # Load prompts from prompts.py
         self.load_config()
 
-    def _get_content_type_agent(self, experiment: "ExperimentConfig") -> SummarizerAgent:
+    def _get_content_type_agent(
+        self, experiment: "ExperimentConfig"
+    ) -> SummarizerAgent:
         key = (
             experiment.llm_type.lower(),
             experiment.model,
@@ -197,7 +199,9 @@ class BatchExperimentRunner:
     def load_config(self):
         """Load experiment configuration from JSON file."""
         try:
-            self.log.info(f"Loading experiment config: {Path(self.config_file).resolve()}")
+            self.log.info(
+                f"Loading experiment config: {Path(self.config_file).resolve()}"
+            )
             with open(self.config_file, "r", encoding="utf-8") as f:
                 config_data = json.load(f)
 
