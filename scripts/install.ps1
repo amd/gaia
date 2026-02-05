@@ -61,6 +61,14 @@ function Install-Uv {
 }
 
 function Install-Gaia {
+    # Check if GAIA is already installed
+    $gaiaExe = "$GAIA_VENV\Scripts\gaia.exe"
+    if (Test-Path $gaiaExe) {
+        Write-Warning "GAIA is already installed at $GAIA_HOME"
+        Write-Host "  To reinstall, delete the directory first: Remove-Item -Recurse -Force '$GAIA_HOME'" -ForegroundColor $COLOR_YELLOW
+        return
+    }
+
     Write-Step "Creating GAIA environment at $GAIA_HOME..."
 
     # Create GAIA home directory

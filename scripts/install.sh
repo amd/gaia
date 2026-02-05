@@ -96,6 +96,13 @@ install_uv() {
 
 # Create virtual environment and install GAIA
 install_gaia() {
+    # Check if GAIA is already installed
+    if [[ -f "$GAIA_VENV/bin/gaia" ]]; then
+        print_warning "GAIA is already installed at $GAIA_HOME"
+        echo "  To reinstall, delete the directory first: rm -rf '$GAIA_HOME'"
+        return 0
+    fi
+
     print_step "Creating GAIA environment at $GAIA_HOME..."
 
     # Create GAIA home directory
