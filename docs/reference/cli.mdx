@@ -95,14 +95,14 @@ gaia init [OPTIONS]
 
 | Profile | Models | Description | Approx Size |
 |---------|--------|-------------|-------------|
-| `minimal` | Qwen3-4B | Fast setup with lightweight model | ~2.5 GB |
+| `minimal` | Qwen3-0.6B | Fast setup with lightweight model | ~400 MB |
 | `chat` | Qwen3-Coder-30B, nomic-embed, Qwen2.5-VL-7B | Interactive chat with RAG and vision | ~25 GB |
 | `code` | Qwen3-Coder-30B | Autonomous coding assistant | ~18 GB |
 | `rag` | Qwen3-Coder-30B, nomic-embed, Qwen2.5-VL-7B | Document Q&A with retrieval and vision | ~25 GB |
 | `all` | All models | All models for all agents | ~26 GB |
 
 <Note>
-All profiles also include the lightweight `Qwen2.5-0.5B` CPU model used by `gaia llm` for quick queries.
+All profiles also include the lightweight `Qwen3-0.6B` model used by `gaia llm` for quick queries.
 </Note>
 
 **Examples:**
@@ -294,7 +294,7 @@ gaia llm "What is machine learning?"
 
 ```bash Specify Model
 gaia llm "Explain quantum computing" \
-  --model Qwen2.5-0.5B-Instruct-CPU \
+  --model Qwen3-0.6B-GGUF \
   --max-tokens 200
 ```
 
@@ -398,7 +398,7 @@ gaia prompt "MESSAGE" [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--model` | string | Qwen2.5-0.5B-Instruct-CPU | Model to use for the agent |
+| `--model` | string | Qwen3-0.6B-GGUF | Model to use for the agent |
 | `--max-tokens` | integer | 512 | Maximum tokens to generate |
 | `--stats` | flag | false | Show performance statistics |
 
@@ -411,13 +411,13 @@ gaia prompt "What is the weather like today?"
 
 ```bash With Stats
 gaia prompt "Create a poem about AI" \
-  --model Qwen2.5-0.5B-Instruct-CPU \
+  --model Qwen3-0.6B-GGUF \
   --stats
 ```
 
 ```bash Custom Tokens
 gaia prompt "Write a story" \
-  --model Qwen2.5-0.5B-Instruct-CPU \
+  --model Qwen3-0.6B-GGUF \
   --max-tokens 1000
 ```
 </CodeGroup>
@@ -589,7 +589,7 @@ gaia talk [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--model` | string | Qwen2.5-0.5B-Instruct-CPU | Model to use |
+| `--model` | string | Qwen3-0.6B-GGUF | Model to use |
 | `--max-tokens` | integer | 512 | Maximum tokens to generate |
 | `--no-tts` | flag | false | Disable text-to-speech |
 | `--audio-device-index` | integer | auto-detect | Audio input device index |

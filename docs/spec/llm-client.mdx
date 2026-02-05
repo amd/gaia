@@ -164,7 +164,7 @@ def create_client(
         client = create_client()
 
         # Explicit provider selection
-        client = create_client(provider="lemonade", model="Qwen2.5-0.5B-Instruct-CPU")
+        client = create_client(provider="lemonade", model="Qwen3-0.6B-GGUF")
         client = create_client(provider="openai", api_key="sk-...")
         client = create_client(provider="claude", api_key="sk-ant-...")
 
@@ -379,7 +379,7 @@ class LemonadeProvider(LLMClient):
         Initialize Lemonade provider.
 
         Args:
-            model: Model name (defaults to "Qwen2.5-0.5B-Instruct-CPU")
+            model: Model name (defaults to "Qwen3-0.6B-GGUF")
             base_url: Base URL for Lemonade server (overrides LEMONADE_BASE_URL env var)
             host: Server host (alternative to base_url)
             port: Server port (alternative to base_url)
@@ -391,7 +391,7 @@ class LemonadeProvider(LLMClient):
             LEMONADE_MODEL: Default model name if not specified
 
         Note:
-            Default model is "Qwen2.5-0.5B-Instruct-CPU" for CPU-only inference.
+            Default model is "Qwen3-0.6B-GGUF" for CPU-only inference.
             All methods use temperature=0.1 by default for deterministic responses.
         """
 
@@ -802,7 +802,7 @@ from .exceptions import NotSupportedError
 from typing import Iterator, Optional, Union
 from ..base_client import LLMClient
 from ..lemonade_client import LemonadeClient, DEFAULT_MODEL_NAME
-# DEFAULT_MODEL_NAME = "Qwen2.5-0.5B-Instruct-CPU"
+# DEFAULT_MODEL_NAME = "Qwen3-0.6B-GGUF"
 ```
 
 **OpenAIProvider (`providers/openai_provider.py`):**
@@ -849,7 +849,7 @@ print(f"Speed: {stats.get('tokens_per_second', 'N/A')} tokens/sec")
 from gaia.llm import create_client
 
 # Lemonade (local)
-lemonade = create_client(provider="lemonade", model="Qwen2.5-0.5B-Instruct-CPU")
+lemonade = create_client(provider="lemonade", model="Qwen3-0.6B-GGUF")
 
 # OpenAI
 openai_client = create_client(provider="openai", api_key="sk-...")
@@ -953,7 +953,7 @@ from gaia.llm import create_client
 client = create_client()
 
 # Load a specific model
-client.load_model("Qwen2.5-0.5B-Instruct-CPU")
+client.load_model("Qwen3-0.6B-GGUF")
 
 # Generate
 response = client.generate("Hello")

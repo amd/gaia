@@ -62,7 +62,9 @@ setup(
         "gaia.agents.code.tools",
         "gaia.agents.code.validators",
         "gaia.agents.routing",
+        "gaia.agents.sd",
         "gaia.agents.summarize",
+        "gaia.sd",
         "gaia.api",
     ],
     package_data={

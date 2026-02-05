@@ -49,6 +49,7 @@ jobs:
           python-version: '3.12'
           # Note: 'blender' excluded as bpy requires Blender runtime
           install-package: '.[dev,talk,rag,mcp,api]'
+          extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade

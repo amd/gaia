@@ -1,0 +1,55 @@
+---
+title: "v0.15.3.1"
+description: "Patch release with Linux installation improvements and minimal profile optimization"
+---
+
+# GAIA v0.15.3.1 Release Notes
+
+**Patch release** with Linux installation improvements and minimal profile optimization.
+
+---
+
+## 🎯 Key Changes
+
+### Minimal Profile Optimization
+- **Smaller, faster setup**: Minimal profile now uses `Qwen3-0.6B-GGUF` (400 MB) instead of 4B model (2.5 GB)
+- **6x smaller download** for quick starts and testing
+- Updated all documentation to reflect new size
+
+### Linux Installation Improvements
+- **Reliable apt install**: Runs `apt update` before install to prevent 404 errors from stale package cache
+- **Cleaner help output**: `gaia init -h` now shows only relevant options (removed global parameters like `--use-claude`, `--model`, `--trace`)
+- **Better error UX**: Incomplete model downloads now suggest using `--force-models` flag to redownload from scratch
+
+### Code Quality & Cleanup
+- Simplified Linux version check function (34 lines vs 51 lines, -33%)
+- Removed unnecessary PATH manipulation on Linux
+- Removed debugging code from dpkg installation
+- Fixed Pylint errors in lemonade_installer.py
+
+---
+
+## 📦 Installation
+
+```bash
+pip install --upgrade amd-gaia
+```
+
+**Linux users** (avoid large CUDA dependencies):
+```bash
+pip install --upgrade amd-gaia --extra-index-url https://download.pytorch.org/whl/cpu
+```
+
+---
+
+## 🐛 Bug Fixes
+
+- Fixed apt 404 errors on Linux by updating package cache before install
+- Fixed conditional logging level setup to support commands without parent_parser
+
+---
+
+## 📝 Full Changelog
+
+See [PR #302](https://github.com/amd/gaia/pull/302) for complete details.
+
