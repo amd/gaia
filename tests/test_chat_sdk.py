@@ -303,43 +303,31 @@ class TestChatSDKIntegration(unittest.TestCase):
         print(f"✅ Quick chat: {response[:30]}...")
 
         # Test quick_chat_with_memory
-        # LLM responses are non-deterministic, so we retry a few times if memory recall fails
-        max_attempts = 3
-        memory_worked = False
-        last_responses = None
+        messages = [
+            "I have a pet dog named Max.",
+            "What is my pet's name?",
+            "What kind of animal is Max?",
+        ]
 
-        for attempt in range(max_attempts):
-            messages = [
-                "Remember this fact: I have a pet dog named Max.",
-                "Based on what I just told you, what is my pet's name?",
-                "What kind of animal is Max?",
-            ]
+        responses = quick_chat_with_memory(
+            messages,
+            model=self.model,
+            assistant_name="MemoryBot",
+            system_prompt="You are a helpful assistant. Always answer questions directly. Never ask questions back. If you don't know the answer, say 'I don't know'.",
+        )
 
-            responses = quick_chat_with_memory(
-                messages,
-                model=self.model,
-                assistant_name="MemoryBot",
-                system_prompt="You are a helpful assistant. Pay attention to facts the user shares and recall them accurately when asked.",
-            )
-            last_responses = responses
+        self.assertEqual(len(responses), 3)
 
-            self.assertEqual(len(responses), 3)
-
-            # Check memory worked - second response should mention Max
-            if "max" in responses[1].lower():
-                memory_worked = True
-                break
-            print(f"   Attempt {attempt + 1}: Memory recall missed, retrying...")
-
+        # Check memory worked - second response should mention Max
         self.assertTrue(
-            memory_worked,
-            f"Memory failed after {max_attempts} attempts. Last response: {last_responses[1]}",
+            "max" in responses[1].lower(),
+            f"Memory failed in convenience function. Response: {responses[1]}",
         )
 
         # Third response should mention dog/animal
         self.assertTrue(
-            any(word in last_responses[2].lower() for word in ["dog", "animal", "pet", "max"]),
-            f"Context failed in convenience function. Response: {last_responses[2]}",
+            any(word in responses[2].lower() for word in ["dog", "animal", "pet"]),
+            f"Context failed in convenience function. Response: {responses[2]}",
         )
 
         print(f"✅ Memory chat responses: {len(responses)}")
