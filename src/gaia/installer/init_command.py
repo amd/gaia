@@ -381,7 +381,9 @@ class InitCommand:
                         total_steps,
                         "Skipping model downloads (remote mode)...",
                     )
-                    self._print_success("Remote mode — model downloads handled by remote server")
+                    self._print_success(
+                        "Remote mode — model downloads handled by remote server"
+                    )
                     self.console.print()
                     self.console.print(
                         "   [dim]To download models, run the following on the remote machine:[/dim]"
@@ -485,9 +487,7 @@ class InitCommand:
                 f"Install Lemonade v{LEMONADE_VERSION}?", default=True
             ):
                 self._print("")
-                self._print(
-                    "   Skipping local installation."
-                )
+                self._print("   Skipping local installation.")
                 self._print(
                     "   To install manually, visit: https://www.lemonade-server.ai"
                 )
