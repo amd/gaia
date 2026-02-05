@@ -99,7 +99,15 @@ install_gaia() {
     # Check if GAIA is already installed
     if [[ -f "$GAIA_VENV/bin/gaia" ]]; then
         print_warning "GAIA is already installed at $GAIA_HOME"
-        echo "  To reinstall, delete the directory first: rm -rf '$GAIA_HOME'"
+        print_step "Checking for updates..."
+
+        # Activate venv and upgrade
+        source "$GAIA_VENV/bin/activate"
+        if uv pip install --upgrade amd-gaia --extra-index-url https://download.pytorch.org/whl/cpu --quiet; then
+            print_success "GAIA updated to latest version"
+        else
+            print_success "GAIA is already up to date"
+        fi
         return 0
     fi
 

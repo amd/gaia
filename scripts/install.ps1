@@ -65,7 +65,16 @@ function Install-Gaia {
     $gaiaExe = "$GAIA_VENV\Scripts\gaia.exe"
     if (Test-Path $gaiaExe) {
         Write-Warning "GAIA is already installed at $GAIA_HOME"
-        Write-Host "  To reinstall, delete the directory first: Remove-Item -Recurse -Force '$GAIA_HOME'" -ForegroundColor $COLOR_YELLOW
+        Write-Step "Checking for updates..."
+
+        try {
+            # Activate venv and upgrade
+            & "$GAIA_VENV\Scripts\python.exe" -m pip install --upgrade amd-gaia --quiet
+            Write-Success "GAIA updated to latest version"
+        }
+        catch {
+            Write-Success "GAIA is already up to date"
+        }
         return
     }
 
