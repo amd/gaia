@@ -5,8 +5,19 @@
 Prompts and styles for the SummarizerAgent.
 """
 
-# Summary styles
-SUMMARY_STYLES = {
+# Summary styles for transcripts and mails
+SUMMARY_STYLES_TRANSCRIPTS = {
+    "brief": """Provide a brief executive summary (2-3 sentences) of the key outcomes and decisions from this transcript.""",
+    "detailed": """Provide a detailed summary of the transcript, covering all major topics, discussions, and outcomes in paragraph form.""",
+    "executive": """Provide a brief executive summary (2-3 sentences) of the key outcomes and decisions from this transcript.""",
+    "participants": "List the participants mentioned in this transcript. Include their roles or titles when available. Provide as a simple list.",
+    "action_items": "List the specific action items that were assigned during this meeting. Include who is responsible for each item when mentioned. Provide as a simple list.",
+    "key_decisions": "List the key decisions that were made during this meeting. Focus on concrete decisions and outcomes. Provide as a simple list.",
+    "topics_discussed": "List the main topics and subjects that were discussed in this meeting. Provide as a simple list.",
+}
+
+# Summary styles for PDFs and business documents (focused on quantitative data extraction)
+SUMMARY_STYLES_PDF = {
     "brief": """Write a VERY concise summary.
 STRICT RULES:
 - Limit to at most 3 sentences.
@@ -47,10 +58,6 @@ STRICT RULES:
 - Exclude qualitative marketing descriptions unless no metrics exist
 - Maintain a formal, board-ready, outcome-focused tone.
 - Do not use bullet points.""",
-    "participants": "List the participants mentioned in this transcript or email. Include their roles or titles when available. Provide as a simple list.",
-    "action_items": "List the specific action items that were assigned during this meeting. Include who is responsible for each item when mentioned. Provide as a simple list.",
-    "key_decisions": "List the key decisions that were made during this meeting. Focus on concrete decisions and outcomes. Provide as a simple list.",
-    "topics_discussed": "List the main topics and subjects that were discussed in this meeting. Provide as a simple list.",
 }
 
 # System prompts for different input types

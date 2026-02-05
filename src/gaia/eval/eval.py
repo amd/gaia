@@ -12,7 +12,6 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-from gaia.agents.summarize.agent import SummarizerAgent
 from gaia.eval.claude import ClaudeClient
 from gaia.llm.lemonade_client import LemonadeClient
 from gaia.logger import get_logger
@@ -28,9 +27,7 @@ class Evaluator:
         self.use_local_llm = use_local_llm
 
         if use_local_llm:
-            # Use local LLM (Lemonade) via SummarizerAgent for evaluation
             self.log.info(f"Using local LLM for evaluation: {local_model or 'default'}")
-            self.summarizer_agent = SummarizerAgent(model=local_model)
             self.llm_client = LemonadeClient(
                 model=local_model or "llama3.2:3b", verbose=False
             )
@@ -39,7 +36,6 @@ class Evaluator:
             # Use Claude API for evaluation (default)
             self.log.info(f"Using Claude for evaluation: {model}")
             self.claude = ClaudeClient(model=model, max_tokens=4096)
-            self.summarizer_agent = None
             self.llm_client = None
 
     def calculate_similarity(self, text1: str, text2: str) -> float:

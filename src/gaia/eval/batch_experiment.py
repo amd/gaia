@@ -7,12 +7,11 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
 from gaia.agents.summarize.agent import SummarizerAgent
-from gaia.agents.summarize.prompts import SUMMARY_STYLES, SYSTEM_PROMPTS
 from gaia.chat.prompts import Prompts
 from gaia.eval.claude import ClaudeClient
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
@@ -147,10 +146,36 @@ class BatchExperimentRunner:
         self.experiments = []
         # Initialize SummarizerAgent for PDF text extraction
         self.summarizer_agent = SummarizerAgent()
+        self._content_type_agents: Dict[tuple, SummarizerAgent] = {}
         # Load prompts from prompts.py
-        self.prompts_styles = SUMMARY_STYLES
-        self.prompts_system = SYSTEM_PROMPTS
         self.load_config()
+
+    def _get_content_type_agent(self, experiment: "ExperimentConfig") -> SummarizerAgent:
+        key = (
+            experiment.llm_type.lower(),
+            experiment.model,
+            experiment.temperature,
+            experiment.max_tokens,
+            experiment.max_ctx_size,
+        )
+        agent = self._content_type_agents.get(key)
+        if agent is None:
+            agent_kwargs = {
+                "model": experiment.model,
+                "max_tokens": experiment.max_tokens,
+                "temperature": experiment.temperature,
+                "use_claude": experiment.llm_type.lower() == "claude",
+                "use_chatgpt": False,
+            }
+            if experiment.max_ctx_size is not None:
+                agent_kwargs["max_ctx_size"] = experiment.max_ctx_size
+            agent = SummarizerAgent(**agent_kwargs)
+            self._content_type_agents[key] = agent
+        return agent
+
+    def _detect_content_type(self, text: str, experiment: "ExperimentConfig") -> str:
+        agent = self._get_content_type_agent(experiment)
+        return agent.detect_content_type(text, input_type="auto")
 
     def _extract_text_from_pdf(self, pdf_path: str) -> str:
         """Extract text from PDF file using SummarizerAgent.
@@ -172,6 +197,7 @@ class BatchExperimentRunner:
     def load_config(self):
         """Load experiment configuration from JSON file."""
         try:
+            self.log.info(f"Loading experiment config: {Path(self.config_file).resolve()}")
             with open(self.config_file, "r", encoding="utf-8") as f:
                 config_data = json.load(f)
 
@@ -367,9 +393,12 @@ class BatchExperimentRunner:
         self,
         client: ClaudeClient,
         transcript: str,
+        system_prompt: Optional[str],
         combined_prompt: bool = False,
+        temperature: Optional[float] = None,
         max_ctx_size: int = None,
         source_file: str = None,
+        generation_params: Optional[Dict[str, Any]] = None,
     ) -> Dict:
         """Process summarization using SummarizerAgent with prompts.py styles."""
         try:
@@ -402,16 +431,22 @@ class BatchExperimentRunner:
             )  # Use set to get unique styles
 
             # Create SummarizerAgent with Claude enabled
-            agent = SummarizerAgent(
-                model=client.model,
-                max_tokens=client.max_tokens,
-                styles=requested_styles,
-                combined_prompt=combined_prompt,
-                use_claude=True,
-                use_chatgpt=False,
-                max_ctx_size=max_ctx_size,
-            )
-
+            agent_kwargs = {
+                "model": client.model,
+                "max_tokens": client.max_tokens,
+                "temperature": temperature,
+                "styles": requested_styles,
+                "combined_prompt": combined_prompt,
+                "use_claude": True,
+                "use_chatgpt": False,
+            }
+            if generation_params:
+                agent_kwargs["generation_params"] = generation_params
+            if system_prompt:
+                agent_kwargs["system_prompt_override"] = system_prompt
+            if max_ctx_size:
+                agent_kwargs["max_ctx_size"] = max_ctx_size
+            agent = SummarizerAgent(**agent_kwargs)
             # Use summarize_file if source_file is provided and exists
             if source_file and Path(source_file).exists():
                 self.log.info(f"Using summarize_file for: {source_file}")
@@ -504,10 +539,13 @@ class BatchExperimentRunner:
         self,
         client: LemonadeClient,
         transcript: str,
+        system_prompt: Optional[str],
         max_tokens: int,
         combined_prompt: bool = False,
+        temperature: Optional[float] = None,
         max_ctx_size: int = None,
         source_file: str = None,
+        generation_params: Optional[Dict[str, Any]] = None,
     ) -> Dict:
         """Process summarization using SummarizerAgent's summarize or summarize_file method."""
         try:
@@ -528,11 +566,6 @@ class BatchExperimentRunner:
 
             # For non-PDF files, detect content type and add appropriate styles
             if not is_pdf:
-                # Use the existing summarizer agent to detect content type
-                content_type = self.summarizer_agent.detect_content_type(
-                    transcript, input_type="auto"
-                )
-
                 # Add meeting-style summaries for both email and transcript
                 style_mapping["participants"] = "participants"
                 style_mapping["action_items"] = "action_items"
@@ -543,16 +576,22 @@ class BatchExperimentRunner:
             requested_styles = list(set(style_mapping.values()))
 
             # Create SummarizerAgent with the appropriate model
-            agent = SummarizerAgent(
-                model=client.model,
-                max_tokens=max_tokens,
-                styles=requested_styles,
-                combined_prompt=combined_prompt,
-                use_claude=False,
-                use_chatgpt=False,
-                max_ctx_size=max_ctx_size,
-            )
-
+            agent_kwargs = {
+                "model": client.model,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "styles": requested_styles,
+                "combined_prompt": combined_prompt,
+                "use_claude": False,
+                "use_chatgpt": False,
+            }
+            if generation_params:
+                agent_kwargs["generation_params"] = generation_params
+            if system_prompt:
+                agent_kwargs["system_prompt_override"] = system_prompt
+            if max_ctx_size:
+                agent_kwargs["max_ctx_size"] = max_ctx_size
+            agent = SummarizerAgent(**agent_kwargs)
             # Use summarize_file if source_file is provided and exists
             if source_file and Path(source_file).exists():
                 self.log.info(f"Using summarize_file for: {source_file}")
@@ -1406,24 +1445,35 @@ class BatchExperimentRunner:
 
             elif data_type == "summarization":
                 # Process summarization task using independent calls for each component
+                generation_params = {}
+                if experiment.parameters:
+                    stop = experiment.parameters.get("stop")
+                    if stop:
+                        generation_params["stop"] = stop
                 if experiment.llm_type.lower() == "claude":
                     combined = experiment.parameters.get("combined_prompt", False)
                     result = self.process_summarization_claude(
                         client,
                         data_item["transcript"],
+                        experiment.system_prompt,
                         combined,
+                        temperature=experiment.temperature,
                         max_ctx_size=experiment.max_ctx_size,
                         source_file=data_item.get("source_file"),
+                        generation_params=generation_params or None,
                     )
                 elif experiment.llm_type.lower() == "lemonade":
                     combined = experiment.parameters.get("combined_prompt", False)
                     result = self.process_summarization_lemonade(
                         client,
                         data_item["transcript"],
+                        experiment.system_prompt,
                         experiment.max_tokens,
                         combined,
+                        temperature=experiment.temperature,
                         max_ctx_size=experiment.max_ctx_size,
                         source_file=data_item.get("source_file"),
+                        generation_params=generation_params or None,
                     )
 
                 # Use the structured response directly from independent calls
@@ -1435,8 +1485,8 @@ class BatchExperimentRunner:
                     content_type = "pdf"
                 else:
                     # Detect email vs transcript for non-PDF files
-                    content_type = self.summarizer_agent.detect_content_type(
-                        data_item["transcript"], input_type="auto"
+                    content_type = self._detect_content_type(
+                        data_item["transcript"], experiment
                     )
 
                 # Create summarization result entry
