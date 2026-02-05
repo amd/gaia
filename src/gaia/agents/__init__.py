@@ -11,4 +11,3 @@ try:
 except ImportError:
     logger.debug("llm app not available")
     llm = None
-

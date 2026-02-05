@@ -145,8 +145,8 @@ class TestEntryPoints:
                     f"(checked {py_file} and {pkg_init})"
                 )
 
-        assert not failures, (
-            f"Entry point modules missing on disk:\n" + "\n".join(failures)
+        assert not failures, f"Entry point modules missing on disk:\n" + "\n".join(
+            failures
         )
 
     def test_entry_point_functions_exist_in_source(self):
@@ -166,9 +166,9 @@ class TestEntryPoints:
                         f"  {name}: function '{func}' not found in {py_file}"
                     )
 
-        assert not failures, (
-            f"Entry point functions not found in source:\n" + "\n".join(failures)
-        )
+        assert (
+            not failures
+        ), f"Entry point functions not found in source:\n" + "\n".join(failures)
 
     def test_entry_point_parent_packages_declared(self):
         """Entry point module's parent package must be in setup.py packages."""
@@ -187,7 +187,6 @@ class TestEntryPoints:
                         f"not in setup.py packages"
                     )
 
-        assert not failures, (
-            f"Entry point parent packages missing from setup.py:\n"
-            + "\n".join(failures)
-        )
+        assert (
+            not failures
+        ), f"Entry point parent packages missing from setup.py:\n" + "\n".join(failures)
