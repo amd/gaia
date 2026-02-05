@@ -122,6 +122,14 @@ Set-Clipboard -Value "========================================`n     WINDOWS SYS
 
 Use `n for newlines in the PowerShell string. Replace XX with actual values.
 
+For the ASSESSMENT section, include LLM capability analysis based on available RAM:
+- Under 16GB: Can run small models (1-3B parameters)
+- 16-32GB: Can run medium models (7-14B parameters)
+- 32-64GB: Can run large models (30B+ parameters)
+- 64GB+: Can run very large models with fast inference
+
+Add 2-3 bullet points recommending what size models the system can handle for GAIA/Lemonade.
+
 ## Step 5: Open Notepad
 
 mcp_windows_Shell with command: Start-Process notepad
