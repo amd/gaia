@@ -304,13 +304,16 @@ class TestChatSDKIntegration(unittest.TestCase):
 
         # Test quick_chat_with_memory
         messages = [
-            "I have a pet dog named Max.",
-            "What is my pet's name?",
-            "What kind of animal is Max?",
+            "Remember this: I have a pet dog named Max.",
+            "What is my pet's name? Answer with just the name.",
+            "What kind of animal is Max? Answer briefly.",
         ]
 
         responses = quick_chat_with_memory(
-            messages, model=self.model, assistant_name="MemoryBot"
+            messages,
+            model=self.model,
+            assistant_name="MemoryBot",
+            system_prompt="You are a helpful assistant with perfect memory. Always recall facts from the conversation accurately. When asked a direct question, answer concisely.",
         )
 
         self.assertEqual(len(responses), 3)
