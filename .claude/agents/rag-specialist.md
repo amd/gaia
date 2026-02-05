@@ -182,9 +182,9 @@ def get_cached_embedding(text: str):
 
 ## Multi-Modal RAG
 ```python
-# Image + text RAG with Qwen2.5-VL
+# Image + text RAG with Qwen3-VL
 config_vlm = RAGConfig(
-    vlm_model="Qwen2.5-VL-7B-Instruct-GGUF"
+    vlm_model="Qwen3-VL-4B-Instruct-GGUF"
 )
 
 rag_vlm = RAGSDK(config_vlm)
