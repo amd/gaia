@@ -24,7 +24,6 @@ from gaia.chat.sdk import (
     ChatSession,
     SimpleChat,
     quick_chat,
-    quick_chat_with_memory,
 )
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
