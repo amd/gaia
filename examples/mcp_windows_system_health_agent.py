@@ -12,11 +12,11 @@ This demonstrates GAIA's agentic MCP client flow:
 
 Workflow:
 1. mcp_windows_Shell - Execute PowerShell to get system metrics
-2. LLM analyzes results and creates a plain text report
+2. LLM analyzes results and creates a nicely formatted plain text report
 3. mcp_windows_Shell - Copy report to clipboard (Set-Clipboard)
-4. mcp_windows_App - Open Notepad
-5. mcp_windows_Click - Click the text area
-6. mcp_windows_Type - Paste with Ctrl+V (^v) - atomic, no focus loss!
+4. mcp_windows_Shell - Open Notepad (Start-Process notepad)
+5. mcp_windows_Wait - Wait for Notepad to open
+6. mcp_windows_Shortcut - Paste with Ctrl+V
 
 Compare with mcp_windows_system_health_demo.py:
 - Demo: Scripted workflow, calls methods directly, no LLM reasoning
@@ -65,21 +65,16 @@ class WindowsSystemHealthAgent(Agent, MCPClientMixin):
             debug: Enable debug output
             **kwargs: Additional arguments passed to Agent
         """
-        # Configure agent defaults
-        kwargs.setdefault("max_steps", 20)  # Allow multiple tool calls for full workflow
-        kwargs.setdefault("silent_mode", False)  # Show agent output
-        kwargs.setdefault("streaming", True)  # Stream LLM responses
-
         # Initialize Agent
-        Agent.__init__(self, debug=debug, **kwargs)
+        Agent.__init__(self, max_steps=55)
 
         # Initialize MCPClientMixin (creates _mcp_manager)
-        MCPClientMixin.__init__(self)
+        MCPClientMixin.__init__(self, auto_load_config=False)
 
         # Connect to Windows MCP server
         # MCP tools are automatically registered and system prompt is rebuilt
         print("Connecting to Windows MCP server...")
-        success = self.connect_mcp_server("windows", "uvx windows-mcp")
+        success = self.connect_mcp_server("windows", {"command": "uvx", "args": ["windows-mcp"]})
         if success:
             print("  Connected to Windows MCP server")
             if debug:
@@ -94,69 +89,53 @@ class WindowsSystemHealthAgent(Agent, MCPClientMixin):
         """Generate the system prompt for the agent."""
         return """You are an expert Windows system administrator using the Windows MCP server.
 
-ALL operations MUST use the Windows MCP tools - you cannot run commands directly.
+CRITICAL: Your task is NOT complete until you have pasted the report into Notepad.
+DO NOT give a final answer until you have completed ALL of these steps:
 
-Your task is to:
-1. Query system health using mcp_windows_Shell (PowerShell via MCP)
-2. Analyze the data and create a plain text report
-3. Output the report to Notepad using Windows MCP GUI automation tools
+## MANDATORY STEPS (must complete all 6):
 
-## Step 1: Gather Health Metrics via Windows MCP
+[ ] Step 1: Get memory info with mcp_windows_Shell
+[ ] Step 2: Get disk info with mcp_windows_Shell
+[ ] Step 3: Get CPU info with mcp_windows_Shell
+[ ] Step 4: Copy formatted report to clipboard with mcp_windows_Shell (Set-Clipboard)
+[ ] Step 5: Open Notepad with mcp_windows_Shell (Start-Process notepad)
+[ ] Step 6: Paste with mcp_windows_Shortcut (ctrl+v)
 
-Use mcp_windows_Shell to execute PowerShell commands through the Windows MCP server:
+---
 
-**Memory Usage:**
-```powershell
-Get-CimInstance Win32_OperatingSystem | Select-Object @{N='TotalGB';E={[math]::Round($_.TotalVisibleMemorySize/1MB,2)}}, @{N='FreeGB';E={[math]::Round($_.FreePhysicalMemory/1MB,2)}} | ConvertTo-Json
-```
+## Step 1-3: Gather Health Metrics
 
-**Disk Space:**
-```powershell
-Get-PSDrive -PSProvider FileSystem | Where-Object {$_.Used -ne $null} | Select-Object Name, @{N='UsedGB';E={[math]::Round($_.Used/1GB,2)}}, @{N='FreeGB';E={[math]::Round($_.Free/1GB,2)}} | ConvertTo-Json
-```
+Use mcp_windows_Shell to execute these PowerShell commands:
 
-**CPU Usage:**
-```powershell
-Get-WmiObject Win32_Processor | Select-Object Name, LoadPercentage, NumberOfCores | ConvertTo-Json
-```
+Memory: Get-CimInstance Win32_OperatingSystem | Select-Object @{N='TotalGB';E={[math]::Round($_.TotalVisibleMemorySize/1MB,2)}}, @{N='FreeGB';E={[math]::Round($_.FreePhysicalMemory/1MB,2)}} | ConvertTo-Json
 
-## Step 2: Analyze and Format Report
+Disk: Get-PSDrive -PSProvider FileSystem | Where-Object {$_.Used -ne $null} | Select-Object Name, @{N='UsedGB';E={[math]::Round($_.Used/1GB,2)}}, @{N='FreeGB';E={[math]::Round($_.Free/1GB,2)}} | ConvertTo-Json
 
-After gathering metrics, create a plain text health report section with:
-- System Information logged to the best of your ability
-- Overall health assessment (Good/Fair/Needs Attention)
-- Key findings (2-3 bullet points)
-- Recommendations (2-3 items)
+CPU: Get-WmiObject Win32_Processor | Select-Object Name, LoadPercentage, NumberOfCores | ConvertTo-Json
 
-## Step 3: Output to Notepad (Using Direct Type Tool)
+## Step 4: Copy Report to Clipboard
 
-Type the report directly into Notepad:
+After gathering all metrics, create a formatted report and copy it to clipboard:
 
-1. **Open Notepad:**
-   Use mcp_windows_App tool: {"mode": "launch", "name": "notepad"}
+mcp_windows_Shell with command:
+Set-Clipboard -Value "========================================`n     WINDOWS SYSTEM HEALTH REPORT`n========================================`n`nMEMORY`n  Total: XX GB`n  Free: XX GB`n`nDISK (C:)`n  Used: XX GB`n  Free: XX GB`n`nCPU`n  Model: XX`n  Load: XX%`n`n----------------------------------------`nASSESSMENT: Good/Fair/Needs Attention`n========================================"
 
-2. **Wait for Notepad to initialize:**
-   Use mcp_windows_Wait tool: {"seconds": 2.0}
+Use `n for newlines in the PowerShell string. Replace XX with actual values.
 
-3. **Switch focus to Notepad:**
-   Use mcp_windows_App tool: {"mode": "switch", "name": "notepad"}
+## Step 5: Open Notepad
 
-4. **Type the report directly into Notepad:**
-   Use mcp_windows_Type tool: {... "text": "YOUR REPORT TEXT"}
+mcp_windows_Shell with command: Start-Process notepad
 
-   The loc parameter clicks at those coordinates before typing.
+Then use mcp_windows_Wait with duration: 2
 
-   The Type tool types character-by-character. Newline characters become Enter key presses.
+## Step 6: Paste the Report
 
-## Guidelines
+mcp_windows_Shortcut with shortcut: ctrl+v
 
-1. ALWAYS use mcp_windows_Shell to get REAL data - NEVER make up metrics
-2. Format the report as plain text with line breaks between sections
-3. Use Wait tool after launching Notepad (2 seconds)
-4. Use App switch to focus Notepad before typing (no coordinates needed)
-5. After typing to Notepad, provide a brief confirmation as your final answer
+---
 
-**IMPORTANT:** Your final answer should confirm the report was typed to Notepad, not repeat the entire report."""
+IMPORTANT: Only provide your final answer AFTER you have executed the ctrl+v shortcut.
+The task is complete when the report is visible in Notepad."""
 
     def _register_tools(self) -> None:
         """Register agent tools.
@@ -169,75 +148,15 @@ Type the report directly into Notepad:
 
 def main():
     """Main entry point for the agent-driven demo."""
-    parser = argparse.ArgumentParser(
-        description="Agent-Driven Windows System Health Check",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Default: health check with Notepad output
-  uv run examples/mcp_windows_system_health_agent.py
+    parser = argparse.ArgumentParser()
 
-  # Custom queries (all output to Notepad)
-  uv run examples/mcp_windows_system_health_agent.py --query "Check memory only and type to Notepad"
-  uv run examples/mcp_windows_system_health_agent.py --query "Check disk space and show in Notepad"
-""",
-    )
-    parser.add_argument(
-        "--query",
-        "-q",
-        type=str,
-        default="Check my Windows system health (memory, disk, CPU) and type the report into Notepad.",
-        help="Custom query for the agent",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug output",
-    )
-    parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=20,
-        help="Maximum agent steps (default: 20)",
-    )
-
-    args = parser.parse_args()
-
-    print("=" * 60)
-    print("GAIA Agent-Driven Windows MCP Health Check")
-    print("=" * 60)
-    print()
-    print("This demo shows GAIA's agentic MCP client flow:")
-    print("  - ALL operations go through Windows MCP server")
-    print("  - mcp_windows_Shell for PowerShell commands")
-    print("  - mcp_windows_App/Click/Type for Notepad output")
-    print("  - LLM reasoning and planning visible")
-    print()
-    print(f"Query: {args.query}")
-    print("-" * 60)
-    print()
 
     try:
         # Create the agent
-        agent = WindowsSystemHealthAgent(
-            debug=args.debug,
-            max_steps=args.max_steps,
-        )
+        agent = WindowsSystemHealthAgent()
 
         # Process the query - agent loop handles everything
-        result = agent.process_query(args.query)
-
-        # The agent loop displays output automatically
-        # But we can also access the final answer programmatically
-        print()
-        print("=" * 60)
-        print("AGENT COMPLETE")
-        print("=" * 60)
-
-        if result.get("answer"):
-            print("\nFinal Answer:")
-            print("-" * 40)
-            print(result["answer"])
+        agent.process_query("Check my Windows system health (memory, disk, CPU) and type the report into Notepad.")
 
         sys.exit(0)
 
@@ -246,10 +165,6 @@ Examples:
         sys.exit(130)
     except Exception as e:
         print(f"\n[ERROR] Agent failed: {e}")
-        if args.debug:
-            import traceback
-
-            traceback.print_exc()
         sys.exit(1)
 
 
