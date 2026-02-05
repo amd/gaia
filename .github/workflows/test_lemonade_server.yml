@@ -23,7 +23,7 @@ concurrency:
 jobs:
   test-lemonade-server:
     name: Lemonade Server Smoke Test
-    runs-on: [stx]
+    runs-on: [stx, stx-test]
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
