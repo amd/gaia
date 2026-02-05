@@ -79,7 +79,7 @@ def _get_lemonade_config() -> tuple:
 # Model Configuration Defaults
 # =========================================================================
 # Default model for text generation - lightweight CPU model for testing
-DEFAULT_MODEL_NAME = "Qwen2.5-0.5B-Instruct-CPU"
+DEFAULT_MODEL_NAME = "Qwen3-0.6B-GGUF"
 # DEFAULT_MODEL_NAME = "Llama-3.2-3B-Instruct-Hybrid"
 
 # =========================================================================
@@ -153,10 +153,10 @@ MODELS = {
         display_name="Qwen3 Coder 30B",
         min_ctx_size=32768,
     ),
-    "qwen2.5-0.5b": ModelRequirement(
+    "qwen3-0.6b": ModelRequirement(
         model_type=ModelType.LLM,
-        model_id="Qwen2.5-0.5B-Instruct-CPU",
-        display_name="Qwen2.5 0.5B (Fast)",
+        model_id="Qwen3-0.6B-GGUF",
+        display_name="Qwen3 0.6B (Fast)",
         min_ctx_size=4096,
     ),
     # Embedding Models
@@ -236,7 +236,7 @@ AGENT_PROFILES = {
     "minimal": AgentProfile(
         name="minimal",
         display_name="Minimal (Fast)",
-        models=["qwen2.5-0.5b"],
+        models=["qwen3-0.6b"],
         min_ctx_size=4096,
         description="Fast responses with smaller model",
     ),
@@ -417,6 +417,10 @@ def _prompt_user_for_repair(model_name: str) -> bool:
             "Action:",
             "[green]Resume download (Lemonade will continue where it left off)[/green]",
         )
+        table.add_row(
+            "",
+            "[dim]To force redownload from scratch, use: [cyan]gaia init --force-models[/cyan][/dim]",
+        )
 
         console.print(
             Panel(
@@ -446,6 +450,8 @@ def _prompt_user_for_repair(model_name: str) -> bool:
         print(f"Model: {model_name}")
         print("Status: Download incomplete or files corrupted")
         print("Action: Resume download (Lemonade will continue where it left off)")
+        print()
+        print("To force redownload from scratch, use: gaia init --force-models")
         print("=" * 60)
 
         while True:

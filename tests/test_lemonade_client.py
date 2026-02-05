@@ -996,8 +996,8 @@ class TestLemonadeClientMock(unittest.TestCase):
         """Test get_required_models returns correct models for minimal agent."""
         model_ids = self.client.get_required_models("minimal")
 
-        # Minimal agent only requires qwen2.5-0.5b
-        self.assertIn("Qwen2.5-0.5B-Instruct-CPU", model_ids)
+        # Minimal agent only requires qwen3-0.6b
+        self.assertIn("Qwen3-0.6B-GGUF", model_ids)
         self.assertEqual(len(model_ids), 1)
 
     def test_get_required_models_all(self):
@@ -1008,7 +1008,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         self.assertIn("Qwen3-Coder-30B-A3B-Instruct-GGUF", model_ids)
         self.assertIn("nomic-embed-text-v2-moe-GGUF", model_ids)
         self.assertIn("Qwen2.5-VL-7B-Instruct-GGUF", model_ids)
-        self.assertIn("Qwen2.5-0.5B-Instruct-CPU", model_ids)
+        self.assertIn("Qwen3-0.6B-GGUF", model_ids)
         # Should be exactly 4 unique models
         self.assertEqual(len(model_ids), 4)
 
@@ -1077,7 +1077,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         # Mock /models endpoint (used by check_model_available via list_models)
         models_response = {
             "data": [
-                {"id": "Qwen2.5-0.5B-Instruct-CPU", "downloaded": True},
+                {"id": "Qwen3-0.6B-GGUF", "downloaded": True},
             ]
         }
         responses.add(
@@ -1100,7 +1100,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         # Mock /models endpoint (used by check_model_available via list_models)
         models_response = {
             "data": [
-                {"id": "Qwen2.5-0.5B-Instruct-CPU", "downloaded": False},
+                {"id": "Qwen3-0.6B-GGUF", "downloaded": False},
             ]
         }
         responses.add(

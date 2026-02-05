@@ -482,55 +482,97 @@ class LemonadeInstaller:
         except Exception as e:
             return InstallResult(success=False, error=str(e))
 
-    def _install_linux(self, installer_path: Path) -> InstallResult:
-        """Install on Linux using dpkg."""
+    @staticmethod
+    def _check_linux_version() -> Optional[str]:
+        """
+        Check if the Linux version meets minimum requirements.
+
+        Lemonade Server .deb requires Ubuntu 24.04+ or Debian 13+ due to
+        dependencies like libasound2t64 that don't exist on older releases.
+
+        Returns:
+            None if compatible, or an error message string if not.
+        """
         try:
+            # Parse /etc/os-release (systemd standard, present on all modern distros)
+            with open("/etc/os-release", encoding="utf-8") as f:
+                os_info = dict(line.strip().split("=", 1) for line in f if "=" in line)
+            # Strip quotes from values
+            os_info = {k: v.strip('"') for k, v in os_info.items()}
+
+            distro = os_info.get("ID", "").lower()
+            version = os_info.get("VERSION_ID", "")
+            pretty_name = os_info.get("PRETTY_NAME", "Unknown Linux")
+
+            # Check Ubuntu 24.04+
+            if distro == "ubuntu" and version:
+                if int(version.split(".")[0]) < 24:
+                    return f"Requires Ubuntu 24.04+. Detected: {pretty_name}"
+
+            # Check Debian 13+
+            elif distro == "debian" and version:
+                if int(version) < 13:
+                    return f"Requires Debian 13+. Detected: {pretty_name}"
+
+        except Exception as e:
+            log.debug(f"Could not check Linux version: {e}")
+
+        return None
+
+    def _install_linux(self, installer_path: Path) -> InstallResult:
+        """Install on Linux using apt (handles dependencies automatically)."""
+        try:
+            # Check Linux version compatibility before attempting install
+            version_error = self._check_linux_version()
+            if version_error:
+                return InstallResult(success=False, error=version_error)
+
             # Check if we have root access (geteuid only available on Unix)
             is_root = False
             if hasattr(os, "geteuid"):
                 is_root = os.geteuid() == 0
 
-            if not is_root:
-                # Try with sudo
-                cmd = ["sudo", "dpkg", "-i", str(installer_path)]
-            else:
-                cmd = ["dpkg", "-i", str(installer_path)]
+            sudo_prefix = [] if is_root else ["sudo"]
 
+            # Update apt cache first to avoid 404 errors from stale package lists
+            self._print_status("Updating package cache...")
+            update_cmd = sudo_prefix + ["apt", "update"]
+            log.debug(f"Running: {' '.join(update_cmd)}")
+
+            update_result = subprocess.run(
+                update_cmd, capture_output=True, text=True, timeout=120, check=False
+            )
+
+            if update_result.returncode != 0:
+                log.warning(f"apt update failed: {update_result.stderr}")
+                # Continue anyway - update failure shouldn't block install
+
+            # Use 'apt install' instead of 'dpkg -i' so dependencies are
+            # automatically resolved from the system repositories.
+            # The ./ prefix is required for apt to treat it as a local file.
+            deb_path = str(installer_path)
+            if not deb_path.startswith("/"):
+                deb_path = f"./{deb_path}"
+
+            cmd = sudo_prefix + ["apt", "install", "-y", deb_path]
             log.debug(f"Running: {' '.join(cmd)}")
+            self._print_status("Installing package and dependencies...")
 
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=300, check=False
             )
 
-            if result.returncode == 0:
-                return InstallResult(
-                    success=True,
-                    version=self.target_version,
-                    message=f"Installed Lemonade v{self.target_version}",
-                )
-            else:
-                # dpkg might fail due to missing dependencies
-                # Try to fix with apt
-                if "dependency" in result.stderr.lower():
-                    fix_cmd = ["sudo", "apt-get", "install", "-f", "-y"]
-                    fix_result = subprocess.run(
-                        fix_cmd,
-                        capture_output=True,
-                        text=True,
-                        timeout=300,
-                        check=False,
-                    )
-                    if fix_result.returncode == 0:
-                        return InstallResult(
-                            success=True,
-                            version=self.target_version,
-                            message=f"Installed Lemonade v{self.target_version} (fixed dependencies)",
-                        )
-
+            if result.returncode != 0:
                 return InstallResult(
                     success=False,
-                    error=f"dpkg failed: {result.stderr}",
+                    error=f"apt install failed: {result.stderr}",
                 )
+
+            return InstallResult(
+                success=True,
+                version=self.target_version,
+                message=f"Installed Lemonade v{self.target_version}",
+            )
 
         except subprocess.TimeoutExpired:
             return InstallResult(success=False, error="Installation timed out")
@@ -639,17 +681,15 @@ class LemonadeInstaller:
             return InstallResult(success=False, error=str(e))
 
     def _uninstall_linux(self) -> InstallResult:
-        """Uninstall on Linux using dpkg."""
+        """Uninstall on Linux using apt."""
         try:
             # Check if we have root access
             is_root = False
             if hasattr(os, "geteuid"):
                 is_root = os.geteuid() == 0
 
-            if not is_root:
-                cmd = ["sudo", "dpkg", "-r", "lemonade"]
-            else:
-                cmd = ["dpkg", "-r", "lemonade"]
+            sudo_prefix = [] if is_root else ["sudo"]
+            cmd = sudo_prefix + ["apt", "remove", "-y", "lemonade"]
 
             log.debug(f"Running: {' '.join(cmd)}")
 
@@ -665,7 +705,7 @@ class LemonadeInstaller:
             else:
                 return InstallResult(
                     success=False,
-                    error=f"dpkg failed: {result.stderr}",
+                    error=f"apt remove failed: {result.stderr}",
                 )
 
         except subprocess.TimeoutExpired:
