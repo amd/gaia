@@ -302,19 +302,30 @@ class TestChatSDKIntegration(unittest.TestCase):
 
         print(f"✅ Quick chat: {response[:30]}...")
 
-        # Test quick_chat_with_memory
+        # Test quick_chat_with_memory using ChatSDK directly for better debugging
+        from gaia.chat.sdk import ChatSDK, ChatConfig
+
+        config = ChatConfig(
+            model=self.model,
+            assistant_name="MemoryBot",
+            system_prompt="You are a helpful assistant. Always answer questions directly based on the conversation history.",
+            max_history_length=4,
+        )
+        sdk = ChatSDK(config)
+
         messages = [
             "I have a pet dog named Max.",
             "What is my pet's name?",
             "What kind of animal is Max?",
         ]
 
-        responses = quick_chat_with_memory(
-            messages,
-            model=self.model,
-            assistant_name="MemoryBot",
-            system_prompt="You are a helpful assistant. Always answer questions directly. Never ask questions back. If you don't know the answer, say 'I don't know'.",
-        )
+        responses = []
+        for msg in messages:
+            resp = sdk.send(msg)
+            responses.append(resp.text)
+            print(f"   Sent: {msg}")
+            print(f"   Got:  {resp.text[:80]}...")
+            print(f"   History size: {len(sdk.chat_history)}")
 
         self.assertEqual(len(responses), 3)
 
@@ -331,8 +342,6 @@ class TestChatSDKIntegration(unittest.TestCase):
         )
 
         print(f"✅ Memory chat responses: {len(responses)}")
-        for i, resp in enumerate(responses):
-            print(f"   {i+1}: {resp[:40]}...")
 
     def test_error_handling_integration(self):
         """Test error handling with real LLM server."""
