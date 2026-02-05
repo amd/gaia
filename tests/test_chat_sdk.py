@@ -303,7 +303,7 @@ class TestChatSDKIntegration(unittest.TestCase):
         print(f"✅ Quick chat: {response[:30]}...")
 
         # Test quick_chat_with_memory using ChatSDK directly for better debugging
-        from gaia.chat.sdk import ChatSDK, ChatConfig
+        from gaia.chat.sdk import ChatConfig, ChatSDK
 
         config = ChatConfig(
             model=self.model,
