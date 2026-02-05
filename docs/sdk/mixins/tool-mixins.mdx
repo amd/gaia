@@ -127,6 +127,96 @@ class MyAgent(Agent, FileSearchToolsMixin):
 
 ---
 
+## 9.5 Stable Diffusion Mixin
+
+**Import:** `from gaia.sd import SDToolsMixin`
+**Detailed Guide:** [Image Generation Guide](/guides/sd)
+**Source:** [`src/gaia/sd/mixin.py`](https://github.com/amd/gaia/tree/main/src/gaia/sd/mixin.py)
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.sd import SDToolsMixin
+
+class MyImageAgent(Agent, SDToolsMixin):
+    """Agent with image generation tools."""
+
+    def __init__(self):
+        super().__init__(
+            model_id="Qwen3-8B-GGUF",  # LLM for orchestration
+            min_context_size=8192,  # 8K sufficient for SD
+        )
+
+        # Initialize SD tools (auto-registers generate_image, list_sd_models, etc.)
+        self.init_sd(
+            output_dir=".gaia/cache/sd/images",
+            default_model="SDXL-Turbo",  # Fast, good quality
+        )
+
+    def _register_tools(self):
+        pass  # Tools already registered by init_sd()
+
+    def _get_system_prompt(self):
+        return "You generate images. Use generate_image with enhanced prompts."
+
+# Usage
+agent = MyImageAgent()
+result = agent.process_query("create a sunset over mountains")
+# Agent enhances prompt and calls generate_image automatically
+```
+
+**Available Tools:**
+- `generate_image(prompt, model, size, steps, cfg_scale, seed)` - Generate images with SD
+- `list_sd_models()` - Show available models
+- `get_generation_history(limit)` - See generated images from session
+
+**Supported Models:**
+- **SDXL-Turbo** (default) - Fast, 512x512, ~17s
+- **SD-Turbo** - Faster, 512x512, ~13s
+- **SDXL-Base-1.0** - Photorealistic, 1024x1024, ~9min
+- **SD-1.5** - Legacy, 512x512, ~88s
+
+---
+
+## 9.6 Vision Language Model Mixin
+
+**Import:** `from gaia.vlm import VLMToolsMixin`
+**Source:** [`src/gaia/vlm/mixin.py`](https://github.com/amd/gaia/tree/main/src/gaia/vlm/mixin.py)
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.vlm import VLMToolsMixin
+
+class MyVisionAgent(Agent, VLMToolsMixin):
+    """Agent with vision analysis tools."""
+
+    def __init__(self):
+        super().__init__(min_context_size=8192)
+
+        # Initialize VLM tools (auto-registers analyze_image, create_story_from_image, etc.)
+        self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
+
+    def _register_tools(self):
+        pass  # Tools already registered by init_vlm()
+
+    def _get_system_prompt(self):
+        return "You analyze images. Use VLM tools for descriptions, stories, and Q&A."
+
+# Usage
+agent = MyVisionAgent()
+result = agent.process_query("analyze this image: photo.jpg")
+# Agent calls analyze_image automatically
+```
+
+**Available Tools:**
+- `analyze_image(image_path, focus)` - Get detailed image description
+- `create_story_from_image(image_path, story_style)` - Generate creative narrative
+- `answer_question_about_image(image_path, question)` - Answer specific questions
+
+**Focus Options:** `composition`, `colors`, `mood`, `details`, `all` (default)
+**Story Styles:** `whimsical`, `dramatic`, `educational`, `adventure`, `any` (default)
+
+---
+
 ## Related Topics
 
 - [Core Agent System](../core/agent-system) - Learn about the base Agent class

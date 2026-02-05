@@ -79,6 +79,15 @@ class LemonadeProvider(LLMClient):
         )
         if stream:
             return self._handle_stream(response)
+
+        # Handle error responses gracefully
+        if not isinstance(response, dict) or "choices" not in response:
+            error_msg = f"Unexpected response format from Lemonade Server: {response}"
+            raise ValueError(error_msg)
+
+        if not response["choices"] or len(response["choices"]) == 0:
+            raise ValueError("Empty choices in response from Lemonade Server")
+
         return response["choices"][0]["message"]["content"]
 
     def embed(self, texts: list[str], **kwargs) -> list[list[float]]:

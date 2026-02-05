@@ -69,7 +69,7 @@ rclone config
 | Prompt | Enter | Explanation |
 |--------|-------|-------------|
 | `n/s/q>` | `n` | Create a **n**ew remote |
-| `name>` | `r2` | Name for this remote (use in commands like `r2:bucket/`) |
+| `name>` | `gaia` | Name for this remote (use in commands like `gaia:bucket/`) |
 | `Storage>` | `4` or `s3` | S3-compatible storage (R2 uses S3 API) |
 | `provider>` | `6` or `Cloudflare` | Cloudflare R2 Storage |
 | `env_auth>` | Enter (false) | We'll enter credentials manually, not from environment |
@@ -110,13 +110,13 @@ Options:
 
 ```bash
 # List bucket contents (works with Object Read/Write token)
-rclone ls r2:amd-gaia/
+rclone ls gaia:amd-gaia/
 
 # List all buckets (requires Admin token)
-rclone lsd r2:
+rclone lsd gaia:
 ```
 
-If `rclone ls r2:amd-gaia/` returns without error, the setup is correct (empty bucket = no output).
+If `rclone ls gaia:amd-gaia/` returns without error, the setup is correct (empty bucket = no output).
 
 ## Upload Files
 
@@ -124,13 +124,13 @@ If `rclone ls r2:amd-gaia/` returns without error, the setup is correct (empty b
 
 ```bash
 # Upload single file
-rclone copy video.mp4 r2:amd-gaia/videos/ --s3-no-check-bucket
+rclone copy video.mp4 gaia:amd-gaia/videos/ --s3-no-check-bucket
 
 # Upload with progress
-rclone copy video.mp4 r2:amd-gaia/videos/ --s3-no-check-bucket --progress
+rclone copy video.mp4 gaia:amd-gaia/videos/ --s3-no-check-bucket --progress
 
 # List files in bucket
-rclone ls r2:amd-gaia/videos/
+rclone ls gaia:amd-gaia/videos/
 ```
 
 **Note:** The `--s3-no-check-bucket` flag is required if your API token has Object Read/Write permissions only (not Admin).
@@ -195,7 +195,7 @@ nano ~/.config/rclone/rclone.conf
 Ensure endpoint is the full URL:
 
 ```ini
-[r2]
+[gaia]
 type = s3
 provider = Cloudflare
 access_key_id = your_access_key
@@ -217,8 +217,8 @@ rclone config
 ### Test connection
 
 ```bash
-rclone lsd r2:
-rclone ls r2:amd-gaia/
+rclone lsd gaia:
+rclone ls gaia:amd-gaia/
 ```
 
 ### "CreateBucket: Access Denied" when uploading
@@ -226,7 +226,7 @@ rclone ls r2:amd-gaia/
 This happens because rclone tries to verify/create the bucket, but your token doesn't have admin permissions. Add the `--s3-no-check-bucket` flag:
 
 ```bash
-rclone copy video.mp4 r2:amd-gaia/videos/ --s3-no-check-bucket
+rclone copy video.mp4 gaia:amd-gaia/videos/ --s3-no-check-bucket
 ```
 
 ### "Access Denied" errors

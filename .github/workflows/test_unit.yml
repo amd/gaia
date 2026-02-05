@@ -65,6 +65,9 @@ jobs:
           gaia prompt --help
           echo "✅ gaia prompt --help passed"
 
+          gaia sd --help
+          echo "✅ gaia sd --help passed"
+
       - name: Run unit tests
         run: |
           echo "=== Running Unit Tests ==="
@@ -96,8 +99,10 @@ jobs:
           echo "  - gaia --help: Main CLI entry point"
           echo "  - gaia chat --help: Chat command validation"
           echo "  - gaia prompt --help: Prompt command validation"
+          echo "  - gaia sd --help: Image generation command validation"
           echo ""
           echo "Unit Tests:"
+          echo "  - SDToolsMixin: Stable Diffusion image generation for agents"
           echo "  - DatabaseMixin: SQLite database access for agents"
           echo "  - FileWatcher: File system monitoring utilities"
           echo "  - Testing Utilities: MockLLMProvider, MockVLMClient, fixtures"

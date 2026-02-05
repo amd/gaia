@@ -56,7 +56,13 @@ def run_command(cmd: list[str], check: bool = False) -> tuple[int, str]:
 
 def uvx(tool: str, *args: str) -> list[str]:
     """Build a uvx command for a tool (auto-downloads if not installed)."""
-    return ["uvx", tool, *args]
+    # Check if uvx is available
+    import shutil
+    if shutil.which("uvx"):
+        return ["uvx", tool, *args]
+    else:
+        # Fall back to direct tool execution (assumes tools are installed)
+        return [tool, *args]
 
 
 def check_black(fix: bool = False) -> CheckResult:
@@ -338,9 +344,13 @@ def check_imports() -> CheckResult:
             False,
         ),
         ("from", "gaia.agents.routing", "RoutingAgent", "Routing agent", False),
+        ("from", "gaia.agents.sd", "SDAgent", "SD agent", False),
         # Database
         ("from", "gaia.database", "DatabaseAgent", "Database agent", False),
         ("from", "gaia.database", "DatabaseMixin", "Database mixin", False),
+        # SD and VLM Mixins
+        ("from", "gaia.sd", "SDToolsMixin", "SD tools mixin", False),
+        ("from", "gaia.vlm", "VLMToolsMixin", "VLM tools mixin", False),
         # Utilities
         ("from", "gaia.utils", "FileWatcher", "File watcher", False),
         ("from", "gaia.utils", "FileWatcherMixin", "File watcher mixin", False),
