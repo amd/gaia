@@ -19,6 +19,7 @@ description: "Connect GAIA agents to external MCP servers and use their tools"
   **Examples:**
   - [`examples/mcp_time_server_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_time_server_agent.py) - Simple Python server example
   - [`examples/mcp_config_based_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_config_based_agent.py) - Config file-based loading
+  - [`examples/mcp_windows_system_health_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_windows_system_health_agent.py) - System analysis with Windows-MCP
 </Info>
 
 <Note>
@@ -69,12 +70,6 @@ Agent: The current time in Tokyo is 11:59 PM on Wednesday, January 28, 2026, Jap
 ```
 
 That's it. Three MCP servers connected, tools auto-discovered, and the agent uses them naturally.
-
-<Warning>
-**Note:** User experience may vary depending on the MCP server implementation.
-Some servers may have different response times, error handling, or feature
-availability. Always test servers before production use.
-</Warning>
 
 ## Quick Start
 
@@ -458,6 +453,12 @@ For detailed API usage and patterns, see the [SDK Reference](/sdk/sdks/mcp).
 
   <Card title="MCP Server List" icon="server" href="https://github.com/modelcontextprotocol/servers">
     Browse official MCP servers from Anthropic
+    
+    <Warning>
+    **Note:** User experience may vary depending on the MCP server implementation.
+    Some servers may have different response times, error handling, or feature
+    availability. Always test servers before production use.
+    </Warning>
   </Card>
 
   <Card title="Create MCP Server" icon="code" href="/sdk/infrastructure/mcp">

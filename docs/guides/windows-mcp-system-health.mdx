@@ -1,0 +1,92 @@
+---
+title: "Windows MCP System Health Agent"
+description: "Run an agent that collects Windows system metrics and outputs a formatted report to Notepad"
+---
+
+{/* Video placeholder - replace with actual demo when available */}
+<Frame>
+  <img src="/images/windows-mcp-health-placeholder.png" alt="Windows MCP System Health Agent outputting report to Notepad" />
+</Frame>
+
+**Agent-driven Windows system health check with GUI output.**
+
+This example demonstrates GAIA's MCP client integration with the Windows MCP server, which provides tools for PowerShell execution and GUI automation. The agent collects system metrics (CPU, memory, disk), analyzes them with an LLM, and outputs a formatted health report directly into Notepad.
+
+<Info>
+**Source Code:** [`examples/mcp_windows_system_health_agent.py`](https://github.com/amd/gaia/blob/main/examples/mcp_windows_system_health_agent.py)
+</Info>
+
+## Prerequisites
+
+- Windows 10/11
+- Python 3.13+
+- Node.js (for `uvx` command - auto-installs Windows MCP server)
+- Lemonade server running (`lemonade-server serve`)
+
+## Run the Example
+
+```bash
+uv run examples/mcp_windows_system_health_agent.py
+```
+
+## What to Expect
+
+<Steps>
+  <Step title="Agent connects to Windows MCP server">
+    The agent auto-installs and connects to `windows-mcp` via `uvx`, which provides PowerShell and GUI automation tools.
+  </Step>
+
+  <Step title="Agent gathers system metrics">
+    Using `mcp_windows_Shell`, the agent executes PowerShell commands to collect CPU usage, memory stats, and disk space.
+  </Step>
+
+  <Step title="LLM analyzes the data">
+    The LLM reviews the metrics and creates a plain-text health report with findings and recommendations.
+  </Step>
+
+  <Step title="Report outputs to Notepad">
+    The agent copies the report to clipboard via `mcp_windows_Shell` (Set-Clipboard), opens Notepad via `mcp_windows_Shell` (Start-Process), then pastes using `mcp_windows_Shortcut` (ctrl+v).
+  </Step>
+</Steps>
+
+## Custom Queries
+
+Use `--query` to focus on specific metrics:
+
+```bash
+# Check memory only
+uv run examples/mcp_windows_system_health_agent.py --query "Check memory only and type to Notepad"
+
+# Check disk space
+uv run examples/mcp_windows_system_health_agent.py --query "Check disk space and show in Notepad"
+```
+
+Use `--debug` for detailed output:
+
+```bash
+uv run examples/mcp_windows_system_health_agent.py --debug
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="MCP Client Guide" icon="plug" href="/guides/mcp-client">
+    Learn how to connect agents to any MCP server
+  </Card>
+
+  <Card title="MCP SDK Reference" icon="book" href="/sdk/sdks/mcp">
+    API documentation for MCPClientMixin
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

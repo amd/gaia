@@ -45,7 +45,8 @@
               "guides/jira",
               "guides/docker",
               "guides/routing",
-              "guides/mcp-client"
+              "guides/mcp-client",
+              "guides/windows-mcp-system-health"
             ]
           },
           {
