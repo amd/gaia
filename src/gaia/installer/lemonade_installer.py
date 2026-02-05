@@ -496,9 +496,7 @@ class LemonadeInstaller:
         try:
             # Parse /etc/os-release (systemd standard, present on all modern distros)
             with open("/etc/os-release", encoding="utf-8") as f:
-                os_info = dict(
-                    line.strip().split("=", 1) for line in f if "=" in line
-                )
+                os_info = dict(line.strip().split("=", 1) for line in f if "=" in line)
             # Strip quotes from values
             os_info = {k: v.strip('"') for k, v in os_info.items()}
 
