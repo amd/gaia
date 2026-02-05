@@ -50,6 +50,26 @@ description: Solutions for common GAIA issues and errors
     ```
     uv will automatically download Python if not installed.
   </Accordion>
+
+  <Accordion title="Lemonade install fails with 404 errors (Linux)" icon="download">
+    If `gaia init` fails with 404 Not Found errors when installing dependencies:
+
+    **Cause:** Your apt package cache is stale. Ubuntu repositories are updated frequently, and old package versions get removed.
+
+    **Solution:** Update your package cache first:
+    ```bash
+    sudo apt update
+    gaia init --profile minimal
+    ```
+
+    **Example error:**
+    ```
+    E: Failed to fetch http://archive.ubuntu.com/ubuntu/pool/... 404 Not Found
+    E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?
+    ```
+
+    The GAIA installer now runs `apt update` automatically, but you may need to run it manually if you see these errors.
+  </Accordion>
 </AccordionGroup>
 
 ---

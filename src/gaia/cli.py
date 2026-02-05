@@ -2107,10 +2107,10 @@ Examples:
     )
 
     # Init command (one-stop GAIA setup)
+    # Note: Does not use parent_parser to avoid showing irrelevant global options
     init_parser = subparsers.add_parser(
         "init",
         help="Initialize GAIA: install Lemonade and download models",
-        parents=[parent_parser],
     )
     init_parser.add_argument(
         "--profile",
@@ -2122,7 +2122,7 @@ Examples:
     init_parser.add_argument(
         "--minimal",
         action="store_true",
-        help="Use minimal profile (~2.5 GB) - shortcut for --profile minimal",
+        help="Use minimal profile (~400 MB) - shortcut for --profile minimal",
     )
     init_parser.add_argument(
         "--skip-models",
@@ -2215,10 +2215,11 @@ Examples:
         parser.print_help()
         return
 
-    # Set logging level using the GaiaLogger manager
+    # Set logging level using the GaiaLogger manager (if provided)
     from gaia.logger import log_manager
 
-    log_manager.set_level("gaia", getattr(logging, args.logging_level))
+    if hasattr(args, "logging_level"):
+        log_manager.set_level("gaia", getattr(logging, args.logging_level))
 
     # Handle core Gaia CLI commands
     if args.action in ["prompt", "chat", "talk", "stats"]:

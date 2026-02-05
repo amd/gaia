@@ -40,8 +40,8 @@ INIT_PROFILES = {
     "minimal": {
         "description": "Fast setup with lightweight model",
         "agent": "minimal",
-        "models": ["Qwen3-4B-Instruct-2507-GGUF"],  # Override default minimal model
-        "approx_size": "~2.5 GB",
+        "models": ["Qwen3-0.6B-GGUF"],
+        "approx_size": "~400 MB",
         "min_lemonade_version": "9.0.4",
         "min_context_size": 4096,
     },
@@ -273,6 +273,7 @@ class InitCommand:
         that were just installed by MSI, without requiring a terminal restart.
         """
         if sys.platform != "win32":
+            # On Linux, standard paths (/usr/bin, /usr/local/bin) are already in PATH
             return
 
         try:
@@ -652,7 +653,7 @@ class InitCommand:
             if result.success:
                 self._print_success(f"Installed Lemonade v{result.version}")
 
-                # Refresh PATH from Windows registry so current session can find lemonade-server
+                # Refresh PATH so current session can find lemonade-server
                 if self.verbose:
                     self.console.print("   [dim]Refreshing PATH environment...[/dim]")
                 self._refresh_path_environment()
@@ -738,6 +739,7 @@ class InitCommand:
         # Fallback: check common installation paths (Linux)
         elif sys.platform.startswith("linux"):
             common_paths = [
+                "/snap/bin/lemonade-server",
                 "/usr/local/bin/lemonade-server",
                 "/usr/bin/lemonade-server",
                 os.path.expanduser("~/.local/bin/lemonade-server"),
@@ -808,13 +810,11 @@ class InitCommand:
 
                 try:
                     # Find lemonade-server executable
-                    import shutil
-
                     # Check env var first (set by install-lemonade action in CI)
                     lemonade_path = os.environ.get("LEMONADE_SERVER_PATH")
                     if not lemonade_path:
-                        # Fall back to PATH search
-                        lemonade_path = shutil.which("lemonade-server")
+                        # Use our enhanced finder (checks PATH + fallback locations)
+                        lemonade_path = self._find_lemonade_server()
 
                     if not lemonade_path:
                         raise FileNotFoundError("lemonade-server not found in PATH")
@@ -881,8 +881,18 @@ class InitCommand:
                     "   [dim]• Search for 'Lemonade' in Start Menu and launch it[/dim]"
                 )
             else:
+                # Find the actual binary path to give the user a working command
+                lemonade_path = self._find_lemonade_server()
+                if lemonade_path:
+                    self.console.print(
+                        f"   [dim]• Run:[/dim] [cyan]{lemonade_path} serve &[/cyan]"
+                    )
+                else:
+                    self.console.print(
+                        "   [dim]• Run:[/dim] [cyan]lemonade-server serve &[/cyan]"
+                    )
                 self.console.print(
-                    "   [dim]• Run:[/dim] [cyan]lemonade-server serve &[/cyan]"
+                    "   [dim]• If command not found, open a new terminal or run:[/dim] [cyan]hash -r[/cyan]"
                 )
             self.console.print()
 

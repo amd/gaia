@@ -31,7 +31,7 @@ llm = LLMClient(
 # Generate response
 response = llm.generate(
     prompt="What is AI?",
-    model="Qwen2.5-0.5B-Instruct-CPU",
+    model="Qwen3-0.6B-GGUF",
     max_tokens=200,
     temperature=0.7
 )
@@ -50,7 +50,7 @@ messages = [
 
 response = llm.chat_completions(
     messages=messages,
-    model="Qwen2.5-0.5B-Instruct-CPU"
+    model="Qwen3-0.6B-GGUF"
 )
 print(response)
 
@@ -94,7 +94,7 @@ response = llm_claude.generate("Explain Python decorators")
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, DEFAULT_LEMONADE_URL
 
 # Default configuration
-MODEL = DEFAULT_MODEL_NAME  # "Qwen2.5-0.5B-Instruct-CPU"
+MODEL = DEFAULT_MODEL_NAME  # "Qwen3-0.6B-GGUF"
 URL = DEFAULT_LEMONADE_URL   # "http://localhost:8000/api/v1"
 
 # Used internally by LLMClient when no provider specified
