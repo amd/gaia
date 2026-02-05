@@ -11,8 +11,6 @@ are consistent. Catches missing packages that only break on non-editable install
 import re
 from pathlib import Path
 
-import pytest
-
 # Project root and source directory
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
