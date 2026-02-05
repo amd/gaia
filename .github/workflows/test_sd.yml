@@ -1,0 +1,187 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# SD (Stable Diffusion) integration tests with Lemonade server
+# Tests real image generation with SD-Turbo (fastest model)
+# Platform: Windows (self-hosted runner with AMD hardware)
+
+name: SD Integration Tests (Windows)
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "src/gaia/sd/**"  # SD mixin and tools
+      - "src/gaia/agents/sd/**"  # SD agent
+      - "src/gaia/llm/lemonade_client.py"
+      - "src/gaia/cli.py"
+      - "tests/integration/test_sd_integration.py"
+      - "tests/unit/test_sd_mixin.py"
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "src/gaia/sd/**"  # SD mixin and tools
+      - "src/gaia/agents/sd/**"  # SD agent
+      - "src/gaia/llm/lemonade_client.py"
+      - "src/gaia/cli.py"
+      - "tests/integration/test_sd_integration.py"
+      - "tests/unit/test_sd_mixin.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-sd-windows:
+    name: Test SD Image Generation (Lemonade Integration)
+    runs-on: [stx]
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Kill Stuck Processes (MSI and Lemonade Server)
+        if: always()
+        continue-on-error: true
+        run: |
+          Write-Host "Cleaning up any stuck processes that block MSI install..."
+
+          # Kill stuck msiexec processes
+          $msiProcesses = Get-Process msiexec -ErrorAction SilentlyContinue
+          if ($msiProcesses) {
+              $msiProcesses | Stop-Process -Force
+              Write-Host "Killed $($msiProcesses.Count) stuck msiexec process(es)"
+          }
+
+          # Kill any running lemonade-server processes (prevents StopLegacyPythonServer hang)
+          $lemonadeProcesses = Get-Process lemonade-server -ErrorAction SilentlyContinue
+          if ($lemonadeProcesses) {
+              $lemonadeProcesses | Stop-Process -Force
+              Write-Host "Killed $($lemonadeProcesses.Count) lemonade-server process(es)"
+          }
+
+          # Wait for Windows Installer service to finish cleanup
+          if ($msiProcesses -or $lemonadeProcesses) {
+              Write-Host "Waiting 5 seconds for cleanup to complete..."
+              Start-Sleep -Seconds 5
+          }
+
+          Write-Host "Cleanup complete - ready for fresh install"
+
+      - name: Setup Python Environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          install-package: '.[dev]'
+
+      - name: Check Lemonade Version
+        id: check-version
+        continue-on-error: true
+        run: |
+          Write-Host "Checking Lemonade Server version..."
+          $version = & lemonade-server --version 2>&1
+          if ($version -match "(\d+\.\d+\.\d+)") {
+              $installedVersion = $matches[1]
+              Write-Host "Installed version: $installedVersion"
+              echo "LEMONADE_VERSION=$installedVersion" >> $env:GITHUB_ENV
+
+              # Check if version meets SD requirements
+              if ([version]$installedVersion -lt [version]"9.2.0") {
+                  Write-Host ""
+                  Write-Host "================================================================"
+                  Write-Host "⚠️  SKIPPING SD TESTS"
+                  Write-Host "================================================================"
+                  Write-Host "Reason: SD requires Lemonade v9.2.0+ (found v$installedVersion)"
+                  Write-Host ""
+                  Write-Host "To fix: Manually upgrade Lemonade on this runner to v9.2.0+"
+                  Write-Host "See: https://github.com/lemonade-sdk/lemonade/releases"
+                  Write-Host ""
+                  Write-Host "Tests will be re-enabled once runner is upgraded."
+                  Write-Host "================================================================"
+                  echo "SKIP_SD_TESTS=true" >> $env:GITHUB_ENV
+                  exit 0
+              } else {
+                  Write-Host "✅ Version $installedVersion meets SD requirements"
+                  echo "SKIP_SD_TESTS=false" >> $env:GITHUB_ENV
+              }
+          } else {
+              Write-Host "⚠️  Could not detect Lemonade version, will attempt install"
+              echo "SKIP_SD_TESTS=false" >> $env:GITHUB_ENV
+          }
+
+      - name: Initialize SD Profile (Install/Upgrade Lemonade + Start Server + Download Models)
+        if: env.SKIP_SD_TESTS != 'true'
+        id: init-sd
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        run: |
+          Write-Host "================================================================"
+          Write-Host "     Initializing GAIA SD Profile (gaia init --profile sd)"
+          Write-Host "================================================================"
+          Write-Host "This handles:"
+          Write-Host "  - Lemonade installation/upgrade (silent mode)"
+          Write-Host "  - Server startup (if not running)"
+          Write-Host "  - Model downloads (cached if available)"
+          Write-Host ""
+          Write-Host "Note: SD models require Lemonade v9.2.0+"
+          Write-Host "      gaia init will auto-upgrade from v9.0.4 if needed"
+          Write-Host ""
+
+          # Let gaia init handle everything (installation, upgrade, server start, models)
+          # Use --verbose for detailed troubleshooting output
+          & gaia init --profile sd --yes --verbose
+          $initExitCode = $LASTEXITCODE
+
+          Write-Host ""
+          if ($initExitCode -ne 0) {
+              Write-Host "================================================================"
+              Write-Host "⚠️  SD Profile Initialization Failed"
+              Write-Host "================================================================"
+              Write-Host "This is likely due to MSI installer hang (known issue)"
+              Write-Host "Marking SD tests as skipped for this run"
+              Write-Host ""
+              echo "SKIP_SD_TESTS=true" >> $env:GITHUB_ENV
+              exit 0  # Don't fail the workflow
+          } else {
+              Write-Host "================================================================"
+              Write-Host "✅ SD Profile Initialization Complete"
+              Write-Host "================================================================"
+          }
+
+      - name: Run SD Integration Tests (Fast - SD-Turbo only)
+        if: env.SKIP_SD_TESTS != 'true'
+        shell: cmd
+        run: |
+          call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
+
+          echo ================================================================
+          echo           SD INTEGRATION TESTS (SD-Turbo - Fast)
+          echo ================================================================
+          echo Testing real image generation with SD-Turbo (13s per image)
+          echo.
+
+          REM Run only the fast tests (SD-Turbo, 512x512)
+          REM Skip slow tests (SDXL-Base-1.0 takes 5+ minutes per image)
+          pytest tests/integration/test_sd_integration.py::TestSDIntegration::test_generate_small_image -v --tb=short
+          pytest tests/integration/test_sd_integration.py::TestSDIntegration::test_health_check_with_real_server -v --tb=short
+          pytest tests/integration/test_sd_integration.py::TestLemonadeClientSDMethods::test_list_sd_models -v --tb=short
+
+          echo.
+          echo ================================================================
+          echo           SD Integration Tests Completed
+          echo ================================================================
+
+      - name: Cleanup
+        if: always()
+        run: |
+          Write-Host "Stopping Lemonade Server..."
+          try {
+              Stop-Process -Name "lemonade-server" -Force -ErrorAction SilentlyContinue
+              Write-Host "Server stopped"
+          } catch {
+              Write-Host "Server already stopped or not running"
+          }

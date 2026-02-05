@@ -194,7 +194,7 @@ if ($exitCode -eq 0 -and (Test-Path -LiteralPath $Output)) {
     Write-Host "  Size:   $outputSizeMB MB ($savings% smaller)" -ForegroundColor Gray
     Write-Host ''
     Write-Host '  Upload to R2:' -ForegroundColor White
-    Write-Host "    rclone copy `"$Output`" r2:amd-gaia/videos/ --s3-no-check-bucket" -ForegroundColor Cyan
+    Write-Host "    rclone copy `"$Output`" gaia:amd-gaia/videos/ --s3-no-check-bucket" -ForegroundColor Cyan
     Write-Host ''
 } else {
     Write-Host ''

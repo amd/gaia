@@ -14,12 +14,10 @@ Main entry point for `gaia init` command that:
 
 import logging
 import os
+import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from typing import Callable, Optional
-
-import requests
 
 # Rich imports for better CLI formatting
 try:
@@ -42,32 +40,54 @@ INIT_PROFILES = {
     "minimal": {
         "description": "Fast setup with lightweight model",
         "agent": "minimal",
-        "models": ["Qwen3-4B-Instruct-2507-GGUF"],  # Override default minimal model
-        "approx_size": "~2.5 GB",
+        "models": ["Qwen3-0.6B-GGUF"],
+        "approx_size": "~400 MB",
+        "min_lemonade_version": "9.0.4",
+        "min_context_size": 4096,
+    },
+    "sd": {
+        "description": "Image generation with multi-modal AI (LLM + SD + VLM)",
+        "agent": "sd",
+        "models": [
+            "SDXL-Turbo",  # Image generation (6.5GB)
+            "Qwen3-8B-GGUF",  # Agentic reasoning + prompt enhancement (5.0GB)
+            "Qwen3-VL-4B-Instruct-GGUF",  # Vision analysis + stories (3.2GB)
+        ],
+        "approx_size": "~15 GB",
+        "min_lemonade_version": "9.2.0",  # SDXL-Turbo requires v9.2.0+
+        "min_context_size": 16384,  # SD agent needs 16K for multi-step planning
     },
     "chat": {
         "description": "Interactive chat with RAG and vision support",
         "agent": "chat",
         "models": None,  # Use agent profile defaults
         "approx_size": "~25 GB",
+        "min_lemonade_version": "9.0.4",
+        "min_context_size": 32768,
     },
     "code": {
         "description": "Autonomous coding assistant",
         "agent": "code",
         "models": None,
         "approx_size": "~18 GB",
+        "min_lemonade_version": "9.0.4",
+        "min_context_size": 32768,
     },
     "rag": {
         "description": "Document Q&A with retrieval",
         "agent": "rag",
         "models": None,
         "approx_size": "~25 GB",
+        "min_lemonade_version": "9.0.4",
+        "min_context_size": 32768,
     },
     "all": {
         "description": "All models for all agents",
         "agent": "all",
         "models": None,
         "approx_size": "~26 GB",
+        "min_lemonade_version": "9.2.0",  # Includes SD, so needs v9.2.0+
+        "min_context_size": 32768,  # Max requirement across all agents
     },
 }
 
@@ -97,6 +117,7 @@ class InitCommand:
         self,
         profile: str = "chat",
         skip_models: bool = False,
+        skip_lemonade: bool = False,
         force_reinstall: bool = False,
         force_models: bool = False,
         yes: bool = False,
@@ -110,6 +131,7 @@ class InitCommand:
         Args:
             profile: Profile to initialize (minimal, chat, code, rag, all)
             skip_models: Skip model downloads
+            skip_lemonade: Skip Lemonade installation check (for CI)
             force_reinstall: Force reinstall even if compatible version exists
             force_models: Force re-download models even if already available
             yes: Skip confirmation prompts
@@ -119,6 +141,7 @@ class InitCommand:
         """
         self.profile = profile.lower()
         self.skip_models = skip_models
+        self.skip_lemonade = skip_lemonade
         self.force_reinstall = force_reinstall
         self.force_models = force_models
         self.yes = yes
@@ -134,11 +157,12 @@ class InitCommand:
         # Initialize Rich console if available (before installer for console pass-through)
         self.console = Console() if RICH_AVAILABLE else None
 
-        # Initialize AgentConsole for download progress display
+        # Initialize AgentConsole for formatted output
         self.agent_console = AgentConsole()
 
-        # Use minimal installer for minimal profile
-        use_minimal = self.profile == "minimal"
+        # Use minimal installer for minimal profile OR when using --yes (silent mode)
+        # Minimal installer is faster and more reliable for CI
+        use_minimal = self.profile == "minimal" or yes
 
         self.installer = LemonadeInstaller(
             target_version=LEMONADE_VERSION,
@@ -146,6 +170,10 @@ class InitCommand:
             minimal=use_minimal,
             console=self.console,
         )
+
+        # Context verification state (set during model loading)
+        self._ctx_verified = None
+        self._ctx_warning = None
 
     def _print(self, message: str, end: str = "\n"):
         """Print message to stdout."""
@@ -245,6 +273,7 @@ class InitCommand:
         that were just installed by MSI, without requiring a terminal restart.
         """
         if sys.platform != "win32":
+            # On Linux, standard paths (/usr/bin, /usr/local/bin) are already in PATH
             return
 
         try:
@@ -310,12 +339,24 @@ class InitCommand:
         total_steps = 4 if not self.skip_models else 3
 
         try:
-            # Step 1: Check/Install Lemonade (skip for remote servers)
+            # Step 1: Check/Install Lemonade (skip for remote servers or CI)
             if self.remote:
                 self._print_step(
                     1, total_steps, "Skipping local Lemonade check (remote mode)..."
                 )
                 self._print_success("Using remote Lemonade Server")
+            elif self.skip_lemonade:
+                self._print_step(
+                    1, total_steps, "Skipping Lemonade installation check..."
+                )
+                # Still show version info for transparency
+                info = self.installer.check_installation()
+                if info.installed and info.version:
+                    self._print_success(
+                        f"Using pre-installed Lemonade Server v{info.version}"
+                    )
+                else:
+                    self._print_success("Using pre-installed Lemonade Server")
             else:
                 self._print_step(
                     1, total_steps, "Checking Lemonade Server installation..."
@@ -499,10 +540,44 @@ class InitCommand:
                     self._print("   This may cause compatibility issues.")
             self._print("")
 
+            # Check if upgrade is required based on profile's minimum version
+            profile_config = INIT_PROFILES[self.profile]
+            min_version_required = profile_config.get("min_lemonade_version", "9.0.0")
+            from packaging import version as pkg_version
+
+            needs_upgrade = pkg_version.parse(current_ver) < pkg_version.parse(
+                min_version_required
+            )
+
+            # In CI mode (--yes), auto-upgrade if needed for this profile
+            if self.yes and not self.force_reinstall:
+                if needs_upgrade:
+                    self._print("")
+                    if RICH_AVAILABLE and self.console:
+                        self.console.print(
+                            f"   [yellow]⚠️  Profile '{self.profile}' requires Lemonade v{min_version_required}+[/yellow]"
+                        )
+                        self.console.print(
+                            f"   [bold cyan]Upgrading:[/bold cyan] v{current_ver} → v{target_ver}"
+                        )
+                    else:
+                        self._print_warning(
+                            f"Profile '{self.profile}' requires Lemonade v{min_version_required}+"
+                        )
+                        self._print(
+                            f"   Upgrading from v{current_ver} to v{target_ver}..."
+                        )
+                    return self._upgrade_lemonade(current_ver)
+                else:
+                    self._print_success(
+                        f"Version v{current_ver} is sufficient for profile '{self.profile}'"
+                    )
+                    return True
+
             # Prompt user to upgrade
             if not self._prompt_yes_no(
                 f"Upgrade to v{target_ver}? (will uninstall current version)",
-                default=True,
+                default=False,  # Default to no for safety
             ):
                 self._print_warning("Continuing with current version")
                 return True
@@ -565,19 +640,20 @@ class InitCommand:
             self._print("")
             self._print_success("Download complete")
 
-            # Install (not silent so desktop icon is created)
+            # Install (silent in CI with --yes, interactive otherwise for desktop icon)
             self.console.print("   [bold]Installing...[/bold]")
-            self.console.print()
-            self.console.print(
-                "   [yellow]⚠️  The installer window will appear - please complete the installation[/yellow]"
-            )
-            self.console.print()
-            result = self.installer.install(installer_path, silent=False)
+            if not self.yes:
+                self.console.print()
+                self.console.print(
+                    "   [yellow]⚠️  The installer window will appear - please complete the installation[/yellow]"
+                )
+                self.console.print()
+            result = self.installer.install(installer_path, silent=self.yes)
 
             if result.success:
                 self._print_success(f"Installed Lemonade v{result.version}")
 
-                # Refresh PATH from Windows registry so current session can find lemonade-server
+                # Refresh PATH so current session can find lemonade-server
                 if self.verbose:
                     self.console.print("   [dim]Refreshing PATH environment...[/dim]")
                 self._refresh_path_environment()
@@ -663,6 +739,7 @@ class InitCommand:
         # Fallback: check common installation paths (Linux)
         elif sys.platform.startswith("linux"):
             common_paths = [
+                "/snap/bin/lemonade-server",
                 "/usr/local/bin/lemonade-server",
                 "/usr/bin/lemonade-server",
                 os.path.expanduser("~/.local/bin/lemonade-server"),
@@ -722,18 +799,79 @@ class InitCommand:
                 )
                 return False
 
-            # Server not running - ask user to start it manually
-            self._print_error("Lemonade Server is not running")
-
-            # In non-interactive mode (-y), fail immediately
+            # Server not running - start it automatically in CI mode, or prompt user
             if self.yes:
+                # In CI mode, just inform and auto-start (not an error)
+                self._print("   Lemonade Server is not running")
                 self.console.print()
                 self.console.print(
-                    "   [dim]Start Lemonade Server and run gaia init again.[/dim]"
+                    "   [dim]Auto-starting Lemonade Server (CI mode)...[/dim]"
                 )
-                return False
 
-            self.console.print()
+                try:
+                    # Find lemonade-server executable
+                    # Check env var first (set by install-lemonade action in CI)
+                    lemonade_path = os.environ.get("LEMONADE_SERVER_PATH")
+                    if not lemonade_path:
+                        # Use our enhanced finder (checks PATH + fallback locations)
+                        lemonade_path = self._find_lemonade_server()
+
+                    if not lemonade_path:
+                        raise FileNotFoundError("lemonade-server not found in PATH")
+
+                    # Start server in background
+                    if sys.platform == "win32":
+                        # Windows: use subprocess.Popen with no window
+                        subprocess.Popen(
+                            [lemonade_path, "serve", "--no-tray"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=(
+                                subprocess.CREATE_NO_WINDOW
+                                if hasattr(subprocess, "CREATE_NO_WINDOW")
+                                else 0
+                            ),
+                        )
+                    else:
+                        # Linux/Mac: background process
+                        subprocess.Popen(
+                            [lemonade_path, "serve"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+
+                    # Wait for server to start
+                    import time
+
+                    max_wait = 30
+                    waited = 0
+                    while waited < max_wait:
+                        time.sleep(2)
+                        waited += 2
+                        try:
+                            health = client.health_check()
+                            if (
+                                health
+                                and isinstance(health, dict)
+                                and health.get("status") == "ok"
+                            ):
+                                self._print_success(
+                                    f"Server started and ready (waited {waited}s)"
+                                )
+                                return True
+                        except Exception:
+                            pass
+
+                    self._print_error(f"Server failed to start after {max_wait}s")
+                    return False
+
+                except Exception as e:
+                    self._print_error(f"Failed to start server: {e}")
+                    return False
+            else:
+                # Interactive mode - prompt user to start manually
+                self._print_error("Lemonade Server is not running")
+                self.console.print()
             self.console.print("   [bold]Please start Lemonade Server:[/bold]")
             if sys.platform == "win32":
                 self.console.print(
@@ -743,8 +881,18 @@ class InitCommand:
                     "   [dim]• Search for 'Lemonade' in Start Menu and launch it[/dim]"
                 )
             else:
+                # Find the actual binary path to give the user a working command
+                lemonade_path = self._find_lemonade_server()
+                if lemonade_path:
+                    self.console.print(
+                        f"   [dim]• Run:[/dim] [cyan]{lemonade_path} serve &[/cyan]"
+                    )
+                else:
+                    self.console.print(
+                        "   [dim]• Run:[/dim] [cyan]lemonade-server serve &[/cyan]"
+                    )
                 self.console.print(
-                    "   [dim]• Run:[/dim] [cyan]lemonade-server serve &[/cyan]"
+                    "   [dim]• If command not found, open a new terminal or run:[/dim] [cyan]hash -r[/cyan]"
                 )
             self.console.print()
 
@@ -841,11 +989,13 @@ class InitCommand:
                 # Use agent profile defaults
                 model_ids = client.get_required_models(agent)
 
-            # Always include the default CPU model (used by gaia llm)
-            from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+            # Include default CPU model for profiles that need gaia llm
+            # SD profile has its own LLM (Qwen3-8B) and doesn't need the 0.5B model
+            if self.profile != "sd":
+                from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
-            if DEFAULT_MODEL_NAME not in model_ids:
-                model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
+                if DEFAULT_MODEL_NAME not in model_ids:
+                    model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
 
             if not model_ids:
                 self._print_success("No models required for this profile")
@@ -886,63 +1036,96 @@ class InitCommand:
                         except Exception as e:
                             self._print_error(f"Failed to delete {model_id}: {e}")
 
-            # Download each model
+            # Find lemonade-server executable
+            lemonade_path = self._find_lemonade_server()
+            if not lemonade_path:
+                self._print_error("Could not find lemonade-server executable")
+                self._print(
+                    "   Please ensure Lemonade Server is installed and in your PATH"
+                )
+                return False
+
+            # Download each model using CLI
             success = True
             for model_id in model_ids:
                 self._print("")
-
-                # Use AgentConsole for nicely formatted download progress
-                self.agent_console.print_download_start(model_id)
+                self.agent_console.print(
+                    f"   [bold cyan]Downloading:[/bold cyan] {model_id}"
+                )
 
                 try:
-                    event_count = 0
-                    last_bytes = 0
-                    last_time = time.time()
+                    # Use lemonade-server CLI pull command with visible progress
+                    result = subprocess.run(
+                        [lemonade_path, "pull", model_id],
+                        check=False,
+                    )
 
-                    for event in client.pull_model_stream(model_name=model_id):
-                        event_count += 1
-                        event_type = event.get("event")
-
-                        if event_type == "progress":
-                            # Skip first 2 spurious events from Lemonade
-                            if event_count <= 2:
-                                continue
-
-                            # Calculate download speed
-                            current_bytes = event.get("bytes_downloaded", 0)
-                            current_time = time.time()
-                            time_delta = current_time - last_time
-
-                            speed_mbps = 0.0
-                            if time_delta > 0.1 and current_bytes > last_bytes:
-                                bytes_delta = current_bytes - last_bytes
-                                speed_mbps = (bytes_delta / time_delta) / (1024 * 1024)
-                                last_bytes = current_bytes
-                                last_time = current_time
-
-                            self.agent_console.print_download_progress(
-                                percent=event.get("percent", 0),
-                                bytes_downloaded=current_bytes,
-                                bytes_total=event.get("bytes_total", 0),
-                                speed_mbps=speed_mbps,
+                    self._print("")
+                    if result.returncode == 0:
+                        # Verify the model was actually downloaded successfully
+                        # Check if model is now available (not just exit code)
+                        if client.check_model_available(model_id):
+                            self._print_success(f"Downloaded {model_id}")
+                        else:
+                            # Pull succeeded but model not available - likely validation error
+                            self._print_error(
+                                f"Download validation failed for {model_id}"
+                            )
+                            self.agent_console.print(
+                                "   [yellow]Corrupted download detected. Deleting and retrying...[/yellow]"
                             )
 
-                        elif event_type == "complete":
-                            self.agent_console.print_download_complete(model_id)
-
-                        elif event_type == "error":
-                            self.agent_console.print_download_error(
-                                event.get("error", "Unknown error"), model_id
+                            # Delete the corrupted model
+                            delete_result = subprocess.run(
+                                [lemonade_path, "delete", model_id],
+                                check=False,
+                                capture_output=True,
                             )
-                            success = False
-                            break
 
-                except requests.exceptions.ConnectionError as e:
-                    self.agent_console.print_download_error(f"Connection error: {e}")
-                    self._print("   Check your network connection and retry")
+                            if delete_result.returncode == 0:
+                                self.agent_console.print(
+                                    f"   [dim]Deleted corrupted {model_id}[/dim]"
+                                )
+
+                                # Retry download
+                                self.agent_console.print(
+                                    f"   [bold cyan]Retrying download:[/bold cyan] {model_id}"
+                                )
+                                retry_result = subprocess.run(
+                                    [lemonade_path, "pull", model_id],
+                                    check=False,
+                                )
+
+                                self._print("")
+                                if (
+                                    retry_result.returncode == 0
+                                    and client.check_model_available(model_id)
+                                ):
+                                    self._print_success(
+                                        f"Downloaded {model_id} (retry successful)"
+                                    )
+                                else:
+                                    self._print_error(f"Retry failed for {model_id}")
+                                    success = False
+                            else:
+                                self._print_error(
+                                    f"Failed to delete corrupted model {model_id}"
+                                )
+                                success = False
+                    else:
+                        self._print_error(
+                            f"Failed to download {model_id} (exit code: {result.returncode})"
+                        )
+                        success = False
+
+                except FileNotFoundError:
+                    self._print("")
+                    self._print_error(f"lemonade-server not found at: {lemonade_path}")
                     success = False
+                    break
                 except Exception as e:
-                    self.agent_console.print_download_error(str(e), model_id)
+                    self._print("")
+                    self._print_error(f"Error downloading {model_id}: {e}")
                     success = False
 
             return success
@@ -963,13 +1146,92 @@ class InitCommand:
             Tuple of (success: bool, error_message: str or None)
         """
         try:
-            # Load the model first
-            client.load_model(model_id, auto_download=False, prompt=False)
+            # Check if profile requires specific context size for this model
+            profile_config = INIT_PROFILES.get(self.profile, {})
+            min_ctx = profile_config.get("min_context_size")
 
-            # Check if this is an embedding model
+            # Load the model (with context size if required)
+            is_llm = not (
+                "embed" in model_id.lower()
+                or any(sd in model_id.upper() for sd in ["SDXL", "SD-", "SD1", "SD2"])
+            )
+
+            if is_llm and min_ctx:
+                # Force unload if already loaded to ensure recipe_options are saved
+                if client.check_model_loaded(model_id):
+                    client.unload_model()
+
+                # Load with explicit context size and save it
+                client.load_model(
+                    model_id,
+                    auto_download=False,
+                    prompt=False,
+                    ctx_size=min_ctx,
+                    save_options=True,
+                )
+
+                # Verify context size was set correctly by reading it back
+                try:
+                    # Get full model list with recipe_options
+                    models_list = client.list_models()
+                    model_info = next(
+                        (
+                            m
+                            for m in models_list.get("data", [])
+                            if m.get("id") == model_id
+                        ),
+                        None,
+                    )
+
+                    if not model_info:
+                        return (False, "Model info not found")
+
+                    actual_ctx = model_info.get("recipe_options", {}).get("ctx_size")
+
+                    if actual_ctx and actual_ctx >= min_ctx:
+                        # Success - context verified
+                        # Store for success message, and flag if larger than expected
+                        self._ctx_verified = actual_ctx
+                        if actual_ctx > min_ctx:
+                            self._ctx_warning = (
+                                f"(configured: {actual_ctx}, required: {min_ctx})"
+                            )
+                    elif actual_ctx:
+                        # Context was set but is too small
+                        return (False, f"Context {actual_ctx} < {min_ctx} required")
+                    else:
+                        # Context not in recipe_options - should not happen after forced unload/reload
+                        # Mark as unverified but don't fail the test
+                        self._ctx_verified = None  # Explicitly mark as unverified
+                except Exception as e:
+                    return (False, f"Context check failed: {str(e)[:50]}")
+            else:
+                # Load without context size (SD models, embedding models, or no requirement)
+                client.load_model(model_id, auto_download=False, prompt=False)
+
+            # Check model type
             is_embedding_model = "embed" in model_id.lower()
+            is_sd_model = any(
+                sd in model_id.upper() for sd in ["SDXL", "SD-", "SD1", "SD2"]
+            )
 
-            if is_embedding_model:
+            if is_sd_model:
+                # Test SD model with image generation
+                response = client.generate_image(
+                    prompt="test",
+                    model=model_id,
+                    steps=1,  # Minimal steps for quick test
+                    size="512x512",
+                )
+                # Check if we got a valid image in b64_json format
+                if (
+                    response
+                    and response.get("data")
+                    and response["data"][0].get("b64_json")
+                ):
+                    return (True, None)
+                return (False, "No image generated")
+            elif is_embedding_model:
                 # Test embedding model with a simple text
                 response = client.embeddings(
                     input_texts=["test"],
@@ -1031,6 +1293,28 @@ class InitCommand:
                 self._print_error("Server not responding")
                 return False
 
+            # Ensure proper context size for this profile
+            profile_config = INIT_PROFILES[self.profile]
+            min_ctx = profile_config.get("min_context_size")
+            if min_ctx:
+                from gaia.llm.lemonade_manager import LemonadeManager
+
+                self.console.print()
+                self.console.print(
+                    f"   [dim]Ensuring {min_ctx} token context for {self.profile} profile...[/dim]"
+                )
+                success = LemonadeManager.ensure_ready(
+                    min_context_size=min_ctx, quiet=True
+                )
+                if success:
+                    self._print_success(f"Context size verified: {min_ctx} tokens")
+                else:
+                    self._print_error(f"Failed to configure {min_ctx} token context")
+                    self._print_error(
+                        f"Try: lemonade-server serve --ctx-size {min_ctx}"
+                    )
+                    return False
+
             # Get models to verify
             profile_config = INIT_PROFILES[self.profile]
             if profile_config["models"]:
@@ -1038,11 +1322,13 @@ class InitCommand:
             else:
                 model_ids = client.get_required_models(profile_config["agent"])
 
-            # Always include the default CPU model (used by gaia llm)
-            from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+            # Include default CPU model for profiles that need gaia llm
+            # SD profile has its own LLM and doesn't need the 0.5B model
+            if self.profile != "sd":
+                from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
-            if DEFAULT_MODEL_NAME not in model_ids:
-                model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
+                if DEFAULT_MODEL_NAME not in model_ids:
+                    model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
 
             if not model_ids or self.skip_models:
                 return True
@@ -1064,7 +1350,6 @@ class InitCommand:
             # Test each model with a small inference request
             self.console.print()
             self.console.print("   [bold]Testing models with inference:[/bold]")
-            self.console.print("   [yellow]⚠️  Press Ctrl+C to skip.[/yellow]")
 
             models_passed = 0
             models_failed = []
@@ -1091,8 +1376,25 @@ class InitCommand:
                     # Clear the line and show result
                     print("\r" + " " * 80 + "\r", end="")
                     if success:
+                        # Check if context was verified
+                        ctx_msg = ""
+                        if hasattr(self, "_ctx_verified"):
+                            if self._ctx_verified:
+                                # Context successfully verified
+                                ctx_msg = f" [dim](ctx: {self._ctx_verified})[/dim]"
+
+                                # Warn if context is larger than required
+                                if hasattr(self, "_ctx_warning"):
+                                    ctx_msg = f" [yellow]{self._ctx_warning}[/yellow]"
+                                    delattr(self, "_ctx_warning")
+                            elif self._ctx_verified is None:
+                                # Context could not be verified
+                                ctx_msg = " [yellow]⚠️ Context unverified![/yellow]"
+
+                            delattr(self, "_ctx_verified")  # Reset for next model
+
                         self.console.print(
-                            f"   [green]✓[/green]  [cyan]{model_id}[/cyan] [dim]- OK[/dim]"
+                            f"   [green]✓[/green]  [cyan]{model_id}[/cyan] [dim]- OK[/dim]{ctx_msg}"
                         )
                         models_passed += 1
                     else:
@@ -1189,24 +1491,43 @@ class InitCommand:
             )
             self.console.print()
             self.console.print("  [bold]Quick start commands:[/bold]")
-            self.console.print(
-                "    [cyan]gaia chat[/cyan]              Start interactive chat"
-            )
-            self.console.print(
-                "    [cyan]gaia llm 'Hello'[/cyan]       Quick LLM query"
-            )
-            self.console.print(
-                "    [cyan]gaia talk[/cyan]              Voice interaction"
-            )
-            self.console.print()
 
-            profile_config = INIT_PROFILES[self.profile]
-            if profile_config["agent"] == "minimal":
+            # Profile-specific quick start commands
+            if self.profile == "sd":
                 self.console.print(
-                    "  [dim]Note: Minimal profile installed. For full features, run:[/dim]"
+                    '    [cyan]gaia sd "create a cute robot kitten and tell me a story"[/cyan]'
+                )
+                self.console.print('    [cyan]gaia sd "sunset over mountains"[/cyan]')
+                self.console.print(
+                    "    [cyan]gaia sd -i[/cyan]                                        Interactive mode"
+                )
+            elif self.profile == "chat":
+                self.console.print(
+                    "    [cyan]gaia chat[/cyan]              Start interactive chat with RAG"
+                )
+                self.console.print(
+                    "    [cyan]gaia chat init[/cyan]         Setup document folder"
+                )
+            elif self.profile == "minimal":
+                self.console.print(
+                    "    [cyan]gaia llm 'Hello'[/cyan]       Quick LLM query"
+                )
+                self.console.print(
+                    "    [dim]Note: Minimal profile installed. For full features, run:[/dim]"
                 )
                 self.console.print("    [cyan]gaia init --profile chat[/cyan]")
-                self.console.print()
+            else:
+                # Default commands for other profiles
+                self.console.print(
+                    "    [cyan]gaia chat[/cyan]              Start interactive chat"
+                )
+                self.console.print(
+                    "    [cyan]gaia llm 'Hello'[/cyan]       Quick LLM query"
+                )
+                self.console.print(
+                    "    [cyan]gaia talk[/cyan]              Voice interaction"
+                )
+            self.console.print()
         else:
             self._print("")
             self._print("=" * 60)
@@ -1214,23 +1535,40 @@ class InitCommand:
             self._print("=" * 60)
             self._print("")
             self._print("  Quick start commands:")
-            self._print("    gaia chat              # Start interactive chat")
-            self._print("    gaia llm 'Hello'       # Quick LLM query")
-            self._print("    gaia talk              # Voice interaction")
-            self._print("")
 
-            profile_config = INIT_PROFILES[self.profile]
-            if profile_config["agent"] == "minimal":
+            # Profile-specific quick start commands
+            if self.profile == "sd":
+                self._print(
+                    '    gaia sd "create a cute robot kitten and tell me a story"'
+                )
+                self._print('    gaia sd "sunset over mountains"')
+                self._print(
+                    "    gaia sd -i                                        # Interactive mode"
+                )
+            elif self.profile == "chat":
+                self._print(
+                    "    gaia chat              # Start interactive chat with RAG"
+                )
+                self._print("    gaia chat init         # Setup document folder")
+            elif self.profile == "minimal":
+                self._print("    gaia llm 'Hello'       # Quick LLM query")
+                self._print("")
                 self._print(
                     "  Note: Minimal profile installed. For full features, run:"
                 )
                 self._print("    gaia init --profile chat")
-                self._print("")
+            else:
+                # Default commands for other profiles
+                self._print("    gaia chat              # Start interactive chat")
+                self._print("    gaia llm 'Hello'       # Quick LLM query")
+                self._print("    gaia talk              # Voice interaction")
+            self._print("")
 
 
 def run_init(
     profile: str = "chat",
     skip_models: bool = False,
+    skip_lemonade: bool = False,
     force_reinstall: bool = False,
     force_models: bool = False,
     yes: bool = False,
@@ -1243,6 +1581,7 @@ def run_init(
     Args:
         profile: Profile to initialize (minimal, chat, code, rag, all)
         skip_models: Skip model downloads
+        skip_lemonade: Skip Lemonade installation check (for CI)
         force_reinstall: Force reinstall even if compatible version exists
         force_models: Force re-download models (deletes then re-downloads)
         yes: Skip confirmation prompts
@@ -1256,6 +1595,7 @@ def run_init(
         cmd = InitCommand(
             profile=profile,
             skip_models=skip_models,
+            skip_lemonade=skip_lemonade,
             force_reinstall=force_reinstall,
             force_models=force_models,
             yes=yes,

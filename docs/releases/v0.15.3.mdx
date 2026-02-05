@@ -1,0 +1,230 @@
+---
+title: "v0.15.3"
+description: "SD Agent with multi-modal capabilities, multi-step workflow improvements, and composable system prompts"
+---
+
+# GAIA v0.15.3 Release Notes
+
+
+## Overview
+
+This release introduces **Stable Diffusion image generation** with the new SD Agent, **multi-step workflow parameter passing**, and **composable system prompts architecture**. Includes Lemonade 9.2.0 support, comprehensive playbook, and enhanced agent reliability.
+
+**TL;DR:**
+- **New: SD Agent** - Multi-modal image generation + story creation
+- **New: SDToolsMixin & VLMToolsMixin** - Add image/vision capabilities to any agent
+- **Fixed: Multi-step workflows** - Agents pass results between steps automatically
+- **Improved: Agent reliability** - Smarter loop detection, 16K context
+
+---
+
+## What's New
+
+### SD Agent: Multi-Modal Image Generation
+
+New agent demonstrating how to combine image generation with vision analysis for creative workflows. Shows developers how to build multi-modal applications using GAIA's mixin pattern.
+
+```bash
+gaia init --profile sd
+gaia sd "create a robot exploring ancient ruins"
+# LLM enhances prompt → SD generates image (17s) → VLM creates story (15s)
+```
+
+**What you get:**
+- **4 SD Models**: SDXL-Base-1.0 (photorealistic), SDXL-Turbo (fast), SD-1.5, SD-Turbo
+- **LLM-Enhanced Prompts**: Research-backed keyword strategies automatically applied
+- **Vision Analysis**: Image descriptions and Q&A using Vision LLM
+- **Story Creation**: Creative narratives generated from images
+- **Story Persistence**: Stories saved as `.txt` files alongside images
+- **Random Seeds**: Each generation unique by default (specify seed for reproducibility)
+
+**Performance (AMD Ryzen AI):**
+- Image generation: ~17s (SDXL-Turbo, 512x512)
+- Story creation: ~15s (Qwen3-VL-4B)
+- Total workflow: ~35s
+
+**Why this helps:** Build creative AI applications (content generation, game assets, storyboarding) without cloud dependencies. Learn multi-modal agent composition in working code.
+
+**Example implementation:**
+```python
+from gaia.agents.base import Agent
+from gaia.sd import SDToolsMixin
+from gaia.vlm import VLMToolsMixin
+
+class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
+    def __init__(self):
+        super().__init__(model_id="Qwen3-8B-GGUF")
+        self.init_sd(default_model="SDXL-Turbo")  # 3 SD tools
+        self.init_vlm()                            # 2 VLM tools
+```
+
+See [SD Agent Playbook](https://amd-gaia.ai/playbooks/sd-agent) for complete tutorial, and [SD User Guide](https://amd-gaia.ai/guides/sd) for CLI reference.
+
+### SDToolsMixin: Stable Diffusion SDK
+
+New mixin for adding image generation to any agent.
+
+**How it helps:** Add professional image generation to any agent in 3 lines. Auto-configures optimal settings per model.
+
+**Features:**
+- **4 Models Supported**: SDXL-Base-1.0, SDXL-Turbo, SD-1.5, SD-Turbo
+- **3 Auto-registered Tools**: `generate_image()`, `list_sd_models()`, `get_generation_history()`
+- **Model-Specific Defaults**: Automatic size, steps, CFG scale per model (e.g., SDXL-Turbo: 512x512, 4 steps, CFG 1.0)
+- **Session Tracking**: Generation history maintained in `self.sd_generations` list
+- **Composable Prompts**: `get_sd_system_prompt()` provides research-backed prompt engineering per model
+
+**Usage:**
+```python
+class ImageAgent(Agent, SDToolsMixin):
+    def __init__(self):
+        super().__init__()
+        self.init_sd(default_model="SDXL-Turbo")
+        # 3 tools auto-registered, ready to use
+```
+
+### VLMToolsMixin: Vision Language Model SDK
+
+New mixin for adding vision capabilities to any agent.
+
+**How it helps:** Enable agents to understand and analyze images. Access vision client for building custom vision-based tools.
+
+**Features:**
+- **2 Auto-registered Tools**: `analyze_image()`, `answer_question_about_image()`
+- **Multi-Model Support**: Qwen3-VL-4B, Qwen2.5-VL-7B, and other vision models
+- **Client Access**: `self.vlm_client.extract_from_image()` for building custom tools
+- **Composable Prompts**: `get_vlm_system_prompt()` provides usage guidelines
+
+**Usage:**
+```python
+class VisionAgent(Agent, VLMToolsMixin):
+    def __init__(self):
+        super().__init__()
+        self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
+        # 2 tools auto-registered: analyze_image, answer_question_about_image
+```
+
+**Design note:** `create_story_from_image` implemented as custom tool in SDAgent (not in VLMToolsMixin) to demonstrate building specialized tools using `self.vlm_client`. Encourages custom tool development over bloating mixins with every use case.
+
+### Multi-Step Workflow Parameter Passing
+
+Framework improvement enabling agents to pass results between steps automatically.
+
+**How it helps:** Build complex workflows (data fetch → process → analyze → store) without manual result passing. Works for all agents, not just SD Agent.
+
+**Problem:** Multi-step workflows failed because agents couldn't reference previous outputs. Resulted in "Image not found" errors when step 2 needed step 1's image_path.
+
+**Solution:** Placeholder syntax automatically resolves to actual values:
+```python
+{
+  "plan": [
+    {"tool": "generate_image", "tool_args": {"prompt": "robot"}},
+    {"tool": "create_story_from_image", "tool_args": {"image_path": "$PREV.image_path"}}
+  ]
+}
+# System resolves: $PREV.image_path → "./generated/robot_123.png"
+```
+
+**Features:**
+- `$PREV.field` - Reference previous step
+- `$STEP_N.field` - Reference specific step (0-indexed)
+- Recursive resolution for nested structures
+- Backward compatible (existing plans work unchanged)
+
+---
+
+## Improvements
+
+### Composable System Prompts
+Architectural pattern enabling automatic prompt composition across mixins.
+
+**How it helps:** Build agents that inherit domain expertise automatically. No manual prompt assembly or knowledge duplication.
+
+**Implementation:**
+- **Mixins own knowledge**: `get_sd_system_prompt()` provides SD prompt engineering, `get_vlm_system_prompt()` provides VLM usage
+- **Auto-composition**: Agent base class collects and merges mixin prompts
+- **Easy extension**: Agents add custom prompts via `_get_system_prompt()`
+
+```python
+# Mixins provide domain-specific prompts
+def get_sd_system_prompt(self) -> str:
+    return BASE_GUIDELINES + MODEL_SPECIFIC_PROMPTS[self.sd_default_model]
+
+# Agent auto-composes: SD + VLM + custom prompts
+```
+
+### Agent Framework
+- **Loop Detection**: Configurable `max_consecutive_repeats` (default: 4) - Allows "create 3 designs" while preventing infinite loops
+- **Default max_steps**: Increased from 5 → 20 - Supports complex multi-step workflows without artificial limits
+- **State Management**: Cleanup on error recovery - Prevents stale data contamination between plan attempts
+- **Console Warnings**: Rich-formatted output - Better visibility than silent logger messages
+
+### Model Downloads
+- **CLI-based**: `lemonade-server pull` instead of HTTP - More reliable with built-in retry logic
+- **Interrupt Support**: Graceful Ctrl+C - Cancel long downloads without breaking state
+- **Context Verification**: Force unload/reload - Ensures 16K context persists correctly
+
+### Documentation
+- **Consolidated Playbook**: 4 files → 1 guide - Faster learning without fragmentation
+- **GitHub Support Links**: Issue reporting in troubleshooting - Clear path to get help
+- **Contributing Guide**: Documentation guidelines - Easier for community contributions
+- **Example Code**: `examples/sd_agent_example.py` - Working reference implementation
+
+### Developer Experience
+- **uvx Fallback**: Lint works without uvx - One less dependency to install
+- **Video Demo Scripts**: Documentation tooling - Easier to create demos
+- **Better Console Output**: Rich formatting - Clearer agent execution visibility
+
+### Infrastructure
+- **Lemonade 9.2.0**: Required for SDXL models
+- **Merge Queue**: Concurrency optimization - Faster CI/CD feedback
+- **Release Automation**: Auto-triggered notes - Streamlined release process
+
+---
+
+## Bug Fixes
+
+- **Multi-step workflows**: Fixed "Image not found" when step 2 references step 1 output (e.g., passing image_path)
+- **Context exceeded**: SD Agent completes without hitting token limits (16K context)
+- **Loop detection**: Agents handle "create 3 designs" without false warnings (threshold: 4 consecutive)
+- **Context persistence**: 16K settings saved correctly during `gaia init` reruns
+- **Missing exports**: Fixed `gaia.agents.tools` package in setup.py
+- **Missing dependencies**: Added `requests` to requirements
+
+---
+
+## Breaking Changes
+
+None - This release is 100% backward compatible.
+
+---
+
+## Upgrade
+
+```bash
+# Install/upgrade GAIA
+uv pip install --upgrade amd-gaia
+
+# Setup SD profile (downloads ~15GB models)
+gaia init --profile sd
+
+# Test multi-modal workflow
+gaia sd "create a robot exploring ancient ruins"
+```
+
+---
+
+## Full Changelog
+
+**66 commits** from multiple contributors
+
+Key PRs:
+- #287 - Add Stable Diffusion Image Generation Support
+- #296 - SD Agent enhancements: multi-modal capabilities, composable prompts, parameter passing
+- #291 - Use lemonade CLI for model downloads
+- #288 - Standardize playbook installation
+- #286 - Contributing guide for documentation
+- #284 - Update Lemonade to v9.2.0
+- #283 - Fix missing gaia.agents.tools package
+- #256 - Optimize merge queue
+
+Full Changelog: [v0.15.2...v0.15.3](https://github.com/amd/gaia/compare/v0.15.2...v0.15.3)

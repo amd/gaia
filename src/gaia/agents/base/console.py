@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 import json
+import subprocess
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -57,7 +58,7 @@ class OutputHandler(ABC):
     # === Core Progress/State Methods (Required) ===
 
     @abstractmethod
-    def print_processing_start(self, query: str, max_steps: int):
+    def print_processing_start(self, query: str, max_steps: int, model_id: str = None):
         """Print processing start message."""
         ...
 
@@ -204,13 +205,14 @@ class OutputHandler(ABC):
 
 
 class ProgressIndicator:
-    """A simple progress indicator that shows a spinner or dots animation."""
+    """A simple progress indicator that shows a spinner or dots animation with elapsed time."""
 
-    def __init__(self, message="Processing"):
+    def __init__(self, message="Processing", show_timer=False):
         """Initialize the progress indicator.
 
         Args:
             message: The message to display before the animation
+            show_timer: If True, show elapsed time
         """
         self.message = message
         self.is_running = False
@@ -220,6 +222,9 @@ class ProgressIndicator:
         self.spinner_idx = 0
         self.dot_idx = 0
         self.rich_spinner = None
+        self.show_timer = show_timer
+        self.start_time = None
+        self._update_timer_thread = None  # Timer update thread
         if RICH_AVAILABLE:
             self.rich_spinner = Spinner("dots", text=message)
             self.live = None
@@ -259,19 +264,23 @@ class ProgressIndicator:
 
                 time.sleep(0.1)
 
-    def start(self, message=None):
+    def start(self, message=None, show_timer=None):
         """Start the progress indicator.
 
         Args:
             message: Optional new message to display
+            show_timer: Optional override for showing timer
         """
         if message:
             self.message = message
+        if show_timer is not None:
+            self.show_timer = show_timer
 
         if self.is_running:
             return
 
         self.is_running = True
+        self.start_time = time.time()
 
         if RICH_AVAILABLE:
             if self.rich_spinner:
@@ -281,10 +290,30 @@ class ProgressIndicator:
                     self.rich_spinner, refresh_per_second=10, transient=True
                 )
                 self.live.start()
+
+                # Update with timer if enabled
+                if self.show_timer:
+                    self._update_timer_thread = threading.Thread(
+                        target=self._update_timer
+                    )
+                    self._update_timer_thread.daemon = True
+                    self._update_timer_thread.start()
         else:
             self.thread = threading.Thread(target=self._animate)
             self.thread.daemon = True
             self.thread.start()
+
+    def _update_timer(self):
+        """Update spinner text with elapsed time."""
+        while self.is_running and self.live:
+            elapsed = time.time() - self.start_time
+            timer_text = f"{self.message} ({int(elapsed)}s)"
+            try:
+                self.rich_spinner.text = timer_text
+                self.live.update(self.rich_spinner)
+                time.sleep(1.0)  # Update every 1 second
+            except Exception:
+                break
 
     def stop(self):
         """Stop the progress indicator."""
@@ -292,6 +321,13 @@ class ProgressIndicator:
             return
 
         self.is_running = False
+
+        # Stop timer thread if running
+        if RICH_AVAILABLE and hasattr(self, "_update_timer_thread"):
+            try:
+                self._update_timer_thread.join(timeout=0.5)
+            except Exception:
+                pass
 
         if RICH_AVAILABLE and self.live:
             self.live.stop()
@@ -404,7 +440,6 @@ class AgentConsole(OutputHandler):
             else:
                 # Regular JSON output
                 # Convert to formatted JSON string with safe fallback for non-serializable types (e.g., numpy.float32)
-                print(data)
                 try:
                     json_str = json.dumps(data, indent=2)
                 except TypeError:
@@ -463,21 +498,28 @@ class AgentConsole(OutputHandler):
             print(f"\n⏸️  Paused after step: {description}")
             print("Press Enter to continue, or 'n'/'q' to stop...")
 
-    def print_processing_start(self, query: str, max_steps: int) -> None:
+    def print_processing_start(
+        self, query: str, max_steps: int, model_id: str = None
+    ) -> None:
         """
         Print the initial processing message.
 
         Args:
             query: The user query being processed
             max_steps: Maximum number of steps allowed (kept for API compatibility)
+            model_id: Optional model ID to display
         """
         if self.rich_available:
             self.console.print(f"\n[bold blue]🤖 Processing:[/bold blue] '{query}'")
             self.console.print("=" * 50)
+            if model_id:
+                self.console.print(f"[dim]Model: {model_id}[/dim]")
             self.console.print()
         else:
             print(f"\n🤖 Processing: '{query}'")
             print("=" * 50)
+            if model_id:
+                print(f"Model: {model_id}")
             print()
 
     def print_separator(self, length: int = 50) -> None:
@@ -803,6 +845,162 @@ class AgentConsole(OutputHandler):
         else:
             print(f"\n✅ SUCCESS: {message}\n")
 
+    def print_image(
+        self, image_path: str, caption: str = None, prompt_to_open: bool = False
+    ) -> None:
+        """
+        Display an image in terminal and optionally prompt to open in viewer.
+
+        Args:
+            image_path: Path to the image file
+            caption: Optional caption to display
+            prompt_to_open: If True, prompt user to open in default viewer after display
+        """
+        import os
+        import sys
+        from pathlib import Path
+
+        path = Path(image_path)
+        if not path.exists():
+            return
+
+        if self.rich_available:
+            try:
+                # Try term-image with Sixel protocol for full resolution
+                # Sixel works in: Windows Terminal Preview, iTerm2, Kitty, WezTerm, etc.
+                from term_image.image import from_file
+
+                # Load image with auto-detected best protocol
+                img = from_file(str(path))
+
+                # Try to enable Sixel if supported
+                try:
+                    # Set render method to auto-detect best available (Sixel, Kitty, iTerm2)
+                    img.set_render_method("auto")
+                except Exception:
+                    pass
+
+                # Set size maintaining aspect ratio
+                # Terminal characters are ~2:1 (height:width), so use fit_to_width
+                img.set_size(columns=60, fit_to_width=True)
+
+                # Render the image
+                if caption:
+                    # Create a panel around the rendered image
+                    rendered = str(img)
+                    self.console.print(
+                        Panel(
+                            rendered,
+                            title=f"🖼️  {caption}",
+                            border_style="cyan",
+                            padding=(0, 0),
+                        ),
+                        justify="center",
+                    )
+                else:
+                    # Print image directly with centering
+                    # Note: term-image returns ANSI escape codes with actual image data
+                    print(
+                        str(img)
+                    )  # Use plain print to avoid Rich interfering with image codes
+
+                self.console.print()
+
+            except (ImportError, Exception):
+                # Fallback to rich-pixels for broader compatibility
+                try:
+                    from PIL import Image
+                    from rich_pixels import Pixels
+
+                    # Load image to check dimensions
+                    pil_img = Image.open(path)
+                    img_width, img_height = pil_img.size
+                    aspect_ratio = img_width / img_height
+
+                    # Terminal characters are roughly 2:1 (height:width)
+                    # A char is ~2x taller than wide, so to show square image as square:
+                    # need width_chars = height_chars * 2
+                    # For proper aspect: width_chars = height_chars * 2 * image_aspect_ratio
+                    target_height = 50  # rows
+                    target_width = int(target_height * 2.0 * aspect_ratio)  # columns
+
+                    # Resize to these dimensions maintaining aspect
+                    pixels = Pixels.from_image_path(
+                        str(path), resize=(target_width, target_height)
+                    )
+
+                    if caption:
+                        self.console.print(
+                            Panel(
+                                pixels,
+                                title=f"🖼️  {caption}",
+                                border_style="cyan",
+                                padding=(0, 0),
+                            ),
+                            justify="center",
+                        )
+                    else:
+                        self.console.print(pixels, justify="center")
+                    self.console.print()
+
+                except ImportError:
+                    # No image libraries, show file info only
+                    try:
+                        from PIL import Image
+
+                        img = Image.open(path)
+                        info = f"[cyan]{path.name}[/cyan]\n"
+                        info += f"[dim]Size: {img.width}x{img.height} | Format: {img.format} | File: {path.stat().st_size:,} bytes[/dim]"
+
+                        if caption:
+                            self.console.print(
+                                Panel(
+                                    info, title=f"🖼️  {caption}", border_style="cyan"
+                                ),
+                                justify="center",
+                            )
+                        else:
+                            self.console.print(
+                                Panel(info, border_style="cyan"), justify="center"
+                            )
+                    except Exception:
+                        # Fallback to just showing the path
+                        self.console.print(
+                            f"[cyan]🖼️  Image: {path}[/cyan]", justify="center"
+                        )
+
+            # Prompt to open in default viewer
+            if prompt_to_open and sys.platform == "win32":
+                try:
+                    response = (
+                        input("\nOpen image in default viewer? [Y/n]: ").strip().lower()
+                    )
+                    if response in ("", "y", "yes"):
+                        if sys.platform == "win32":
+                            os.startfile(str(path))  # pylint: disable=no-member
+                        elif sys.platform == "darwin":
+                            subprocess.run(["open", str(path)], check=False)
+                        else:
+                            subprocess.run(["xdg-open", str(path)], check=False)
+                except (KeyboardInterrupt, EOFError):
+                    pass  # User cancelled
+        else:
+            # Text-only terminal
+            print(f"\n🖼️  Image: {path}")
+            if caption:
+                print(f"   {caption}")
+
+            # Prompt to open in default viewer
+            if prompt_to_open and sys.platform == "win32":
+                try:
+                    response = input("\nOpen image? [Y/n]: ").strip().lower()
+                    if response in ("", "y", "yes"):
+                        os.startfile(str(path))  # pylint: disable=no-member
+                except (KeyboardInterrupt, EOFError):
+                    pass
+
+            print()
+
     def print_diff(self, diff: str, filename: str) -> None:
         """
         Print a code diff with syntax highlighting.
@@ -974,12 +1172,13 @@ class AgentConsole(OutputHandler):
         # Print the table in a panel
         self.console.print(Panel(table, border_style="blue"))
 
-    def start_progress(self, message: str) -> None:
+    def start_progress(self, message: str, show_timer: bool = False) -> None:
         """
         Start the progress indicator.
 
         Args:
             message: Message to display with the indicator
+            show_timer: If True, show elapsed time in progress message
         """
         # If file preview is active, pause it temporarily
         self._paused_preview = False
@@ -993,7 +1192,7 @@ class AgentConsole(OutputHandler):
             except Exception:
                 pass
 
-        self.progress.start(message)
+        self.progress.start(message, show_timer=show_timer)
 
     def stop_progress(self) -> None:
         """Stop the progress indicator."""
@@ -1853,7 +2052,7 @@ class SilentConsole(OutputHandler):
         console.print(Panel(table, border_style="blue"))
 
     # All other abstract methods as no-ops
-    def print_processing_start(self, query: str, max_steps: int):
+    def print_processing_start(self, query: str, max_steps: int, model_id: str = None):
         """No-op implementation."""
 
     def print_step_header(self, step_num: int, step_limit: int):
