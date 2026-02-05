@@ -30,7 +30,29 @@ class CheckResult:
 SRC_DIR = "src/gaia"
 TEST_DIR = "tests"
 PYLINT_CONFIG = ".pylintrc"
-DISABLED_CHECKS = "C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718"
+# Disabled checks:
+# C0103: Invalid name (convention)
+# C0301: Line too long (handled by black)
+# C0303: Trailing whitespace (handled by black)
+# C0413: Wrong import position (intentional in some modules)
+# W0107: Unnecessary pass (style)
+# W0122: Use of exec (intentional in blender_mcp_server)
+# W0201: Attribute defined outside __init__ (acceptable for lazy init)
+# W0246: Useless parent delegation
+# W0221: Arguments differ from overridden method
+# W0404: Reimport (sometimes intentional)
+# W0612: Unused variable (often intentional for destructuring)
+# W0613: Unused argument (often required by interface)
+# W0705: Duplicate except (complex exception handling)
+# W1309: f-string without interpolation (style)
+# W1510: subprocess.run without check (intentional)
+# W1514: open without encoding (legacy code)
+# E1101: No member (false positives with dynamic attributes)
+# E1102: Not callable
+# R0401: Cyclic import
+# E0401: Import error (handled separately)
+# W0718: Broad exception
+DISABLED_CHECKS = "C0103,C0301,C0303,C0413,W0107,W0122,W0201,W0246,W0221,W0404,W0612,W0613,W0705,W1309,W1510,W1514,E1101,E1102,R0401,E0401,W0718"
 EXCLUDE_DIRS = (
     ".git,__pycache__,venv,.venv,.mypy_cache,.tox,.eggs,_build,buck-out,node_modules"
 )

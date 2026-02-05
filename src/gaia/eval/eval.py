@@ -147,7 +147,7 @@ class Evaluator:
     def load_results(self, results_path: str) -> Dict:
         """Load test results from a JSON file."""
         try:
-            with open(results_path, "r") as f:
+            with open(results_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
             self.log.error(f"Error loading results file: {e}")
@@ -1103,7 +1103,7 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                             "explanation": "detailed analysis"
                         }},
                         "detail_completeness": {{
-                            "rating": "excellent/good/fair/poor", 
+                            "rating": "excellent/good/fair/poor",
                             "explanation": "detailed analysis"
                         }},
                         "action_items_structure": {{

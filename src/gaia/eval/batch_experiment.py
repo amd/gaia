@@ -837,7 +837,7 @@ class BatchExperimentRunner:
         with open(groundtruth_file, "r", encoding="utf-8") as f:
             groundtruth_data = json.load(f)
 
-        analysis = groundtruth_data.get("analysis", {})
+        _analysis = groundtruth_data.get("analysis", {})  # noqa: F841
         metadata = groundtruth_data.get("metadata", {})
 
         # Check if this is a consolidated groundtruth file
@@ -2067,7 +2067,7 @@ class BatchExperimentRunner:
                 groundtruth_data = json.load(f)
 
             metadata = groundtruth_data.get("metadata", {})
-            analysis = groundtruth_data.get("analysis", {})
+            _analysis = groundtruth_data.get("analysis", {})  # noqa: F841
 
             # Extract key information
             use_case = metadata.get("use_case", "qa")
@@ -2319,12 +2319,12 @@ Examples:
         print(f"✅ Completed {len(result_files)} experiments")
 
     print(f"  Results saved to: {args.output_dir}")
-    print(f"  Generated files:")
+    print("  Generated files:")
     for result_file in result_files:
         print(f"    - {Path(result_file).name}")
 
-    print(f"\nNext steps:")
-    print(f"  1. Evaluate results using: gaia eval -f <result_file>")
+    print("\nNext steps:")
+    print("  1. Evaluate results using: gaia eval -f <result_file>")
     print(f"  2. Generate comparative report: gaia report -d {args.output_dir}")
 
 
