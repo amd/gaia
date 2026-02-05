@@ -794,7 +794,7 @@ def start_server(host="localhost", port=8765, base_url=None, verbose=False):
         print("\n✅ Server stopped")
 
 
-if __name__ == "__main__":
+def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="GAIA MCP Bridge - HTTP Native")
@@ -809,3 +809,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     start_server(args.host, args.port, args.base_url, args.verbose)
+
+
+if __name__ == "__main__":
+    main()
