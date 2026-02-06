@@ -32,6 +32,8 @@ from gaia.agents.blender.agent import (  # pylint: disable=wrong-import-position
 from gaia.llm import create_client  # pylint: disable=wrong-import-position
 from gaia.logger import get_logger  # pylint: disable=wrong-import-position
 
+# pylint: enable=wrong-import-position
+
 logger = get_logger(__name__)
 
 # Global verbose flag for request logging
@@ -129,6 +131,7 @@ class GAIAMCPBridge:
         self.llm_client = None
         self.chat_sdk = None
         self.verbose = verbose
+        self.chat_sdk = None  # Lazy initialized in _execute_chat
         global VERBOSE
         VERBOSE = verbose
 
