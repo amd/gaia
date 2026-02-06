@@ -16,13 +16,9 @@ from gaia.mcp import MCPClientMixin
 class TimeAgent(Agent, MCPClientMixin):
     """Agent with time tools from mcp-server-time."""
 
-    def __init__(self, **kwargs):
-        kwargs.setdefault("skip_lemonade", True)
-        kwargs.setdefault("max_steps", 10)
-        kwargs.setdefault("silent_mode", True)
-
-        Agent.__init__(self, **kwargs)
-        MCPClientMixin.__init__(self)
+    def __init__(self):
+        Agent.__init__(self, max_steps=10)
+        MCPClientMixin.__init__(self, auto_load_config=False)
 
         # Connect to Python-based MCP server via uvx
         self.connect_mcp_server("time", {
@@ -39,16 +35,7 @@ class TimeAgent(Agent, MCPClientMixin):
 
 def main():
     agent = TimeAgent()
-
-    # Show available tools
-    client = agent.get_mcp_client("time")
-    tools = client.list_tools()
-    print(f"Available tools: {[t.name for t in tools]}")
-
-    # Demo: Get current time
-    result = agent.process_query("What time is it in New York?")
-    print(f"\nAgent: {result.get('result', 'No response')}")
-
+    agent.process_query("What time is it in New York?")
 
 if __name__ == "__main__":
     main()
