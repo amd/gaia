@@ -7,8 +7,13 @@ MCP Agent Example - Config-Based Server Loading
 Run: python examples/mcp_config_based_agent.py
 """
 
+from pathlib import Path
+
 from gaia.agents.base.agent import Agent
 from gaia.mcp import MCPClientMixin
+
+# Config file next to this script
+CONFIG_FILE = str(Path(__file__).parent / "mcp_servers.json")
 
 
 class MCPAgent(Agent, MCPClientMixin):
@@ -16,7 +21,7 @@ class MCPAgent(Agent, MCPClientMixin):
 
     def __init__(self):
         Agent.__init__(self, max_steps=20)
-        MCPClientMixin.__init__(self)
+        MCPClientMixin.__init__(self, debug=True, config_file=CONFIG_FILE)
 
     def _get_system_prompt(self) -> str:
         return """You are a helpful assistant with MCP tools.

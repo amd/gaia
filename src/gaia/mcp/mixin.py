@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: MIT
 """Mixin for adding MCP client support to agents."""
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.logger import get_logger
+from gaia.mcp.client.config import MCPConfig
 from gaia.mcp.client.mcp_client import MCPClient
 from gaia.mcp.client.mcp_client_manager import MCPClientManager
 
@@ -29,9 +30,17 @@ class MCPClientMixin:
                 })
     """
 
-    def __init__(self, auto_load_config: bool = True):
+    def __init__(
+        self,
+        auto_load_config: bool = True,
+        debug: bool = False,
+        config_file: Optional[str] = None,
+    ):
         super().__init__()
-        self._mcp_manager = MCPClientManager(debug=getattr(self, "debug", False))
+        config = MCPConfig(config_file=config_file) if config_file else None
+        self._mcp_manager = MCPClientManager(
+            config=config, debug=getattr(self, "debug", debug)
+        )
 
         if auto_load_config:
             self.load_mcp_servers_from_config()
@@ -239,11 +248,6 @@ class MCPClientMixin:
             _TOOL_REGISTRY[gaia_name] = gaia_tool
 
             logger.debug(f"Registered MCP tool: {gaia_name}")
-
-        self._console_print(
-            "print_info",
-            f"Registered {len(tools)} tools from MCP server '{client.name}'",
-        )
 
     def _unregister_mcp_tools(self, client: MCPClient) -> None:
         """Unregister all tools from an MCP server.
