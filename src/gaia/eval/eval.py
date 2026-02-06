@@ -13,31 +13,16 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from gaia.eval.claude import ClaudeClient
-from gaia.llm.lemonade_client import LemonadeClient
 from gaia.logger import get_logger
 
 
 class Evaluator:
     """Evaluates AI model performance across various use cases (summarization, Q&A, RAG, etc.)."""
 
-    def __init__(
-        self, model="claude-sonnet-4-20250514", use_local_llm=False, local_model=None
-    ):
+    def __init__(self, model="claude-sonnet-4-20250514"):
         self.log = get_logger(__name__)
-        self.use_local_llm = use_local_llm
-
-        if use_local_llm:
-            self.log.info(f"Using local LLM for evaluation: {local_model or 'default'}")
-            self.llm_client = LemonadeClient(
-                model=local_model or "llama3.2:3b", verbose=False
-            )
-            self.claude = None
-        else:
-            # Use Claude API for evaluation (default)
-            self.log.info(f"Using Claude for evaluation: {model}")
-            self.claude = ClaudeClient(model=model, max_tokens=4096)
-            self.llm_client = None
-
+        # Increase max_tokens to 4096 to avoid truncation of complex JSON responses
+        self.claude = ClaudeClient(model=model, max_tokens=4096)
         self.intermediate_dir = None
 
     def calculate_similarity(self, text1: str, text2: str) -> float:
@@ -159,54 +144,6 @@ class Evaluator:
                 "qualitative_details": criteria_details,
             },
         }
-
-    def _send_prompt(self, prompt: str, system_prompt: str = "") -> Dict:
-        """Send prompt to either Claude or local LLM based on configuration.
-
-        Args:
-            prompt: The evaluation prompt
-            system_prompt: Optional system prompt for context
-
-        Returns:
-            Dict with 'content', 'usage', and 'cost' keys
-        """
-        if self.use_local_llm:
-            # Use local LLM (Lemonade) for evaluation
-            try:
-                # Combine system prompt with user prompt if provided
-                full_prompt = (
-                    f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-                )
-
-                response = self.llm_client.get_completion(
-                    prompt=full_prompt,
-                    max_tokens=4096,
-                    temperature=0.1,  # Low temperature for consistent evaluation
-                )
-
-                # Get performance stats
-                usage = {
-                    "input_tokens": 0,  # Lemonade doesn't track this
-                    "output_tokens": 0,
-                    "total_tokens": 0,
-                }
-                cost = {
-                    "input_cost": 0.0,
-                    "output_cost": 0.0,
-                    "total_cost": 0.0,  # Local LLM is free
-                }
-
-                return {
-                    "content": response,
-                    "usage": usage,
-                    "cost": cost,
-                }
-            except Exception as e:
-                self.log.error(f"Error using local LLM for evaluation: {e}")
-                raise
-        else:
-            # Use Claude API for evaluation (default)
-            return self.claude.get_completion_with_usage(prompt)
 
     def load_results(self, results_path: str) -> Dict:
         """Load test results from a JSON file."""
@@ -512,7 +449,7 @@ class Evaluator:
                     }}
                     """
 
-                response_data = self._send_prompt(prompt)
+                response_data = self.claude.get_completion_with_usage(prompt)
 
                 try:
                     # Extract JSON and combine with qa_inputs
@@ -755,7 +692,9 @@ class Evaluator:
                 }}
                 """
 
-            overall_response_data = self._send_prompt(overall_prompt)
+            overall_response_data = self.claude.get_completion_with_usage(
+                overall_prompt
+            )
 
             try:
                 # Extract JSON from overall response
@@ -1343,7 +1282,7 @@ class Evaluator:
                     """
 
                 try:
-                    response_data = self._send_prompt(prompt)
+                    response_data = self.claude.get_completion_with_usage(prompt)
                     response = response_data["content"]
                     usage = response_data["usage"]
                     cost = response_data["cost"]
@@ -1676,7 +1615,9 @@ class Evaluator:
                 """
 
             try:
-                overall_response_data = self._send_prompt(overall_prompt)
+                overall_response_data = self.claude.get_completion_with_usage(
+                    overall_prompt
+                )
 
                 # Extract JSON from overall response
                 overall_response = overall_response_data["content"]
