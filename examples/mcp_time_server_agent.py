@@ -34,8 +34,7 @@ class TimeAgent(Agent, MCPClientMixin):
 
 
 def main():
-    agent = TimeAgent()
-    agent.process_query("What time is it in New York?")
+    TimeAgent().process_query("What time is it in New York?")
 
 if __name__ == "__main__":
     main()
