@@ -4,6 +4,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 from typing import Any, Dict, List, Optional
 
@@ -64,7 +65,9 @@ class StdioTransport(MCPTransport):
             if use_shell:
                 cmd = self.command
             else:
-                cmd = [self.command] + self.args
+                # Resolve command via PATH (handles Windows .cmd/.bat extensions)
+                resolved = shutil.which(self.command)
+                cmd = [resolved or self.command] + self.args
 
             if self.debug:
                 logger.debug(f"Starting MCP server with command: {cmd}")
