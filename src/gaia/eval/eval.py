@@ -23,6 +23,7 @@ class Evaluator:
         self.log = get_logger(__name__)
         # Increase max_tokens to 4096 to avoid truncation of complex JSON responses
         self.claude = ClaudeClient(model=model, max_tokens=4096)
+        self.intermediate_dir = None
 
     def calculate_similarity(self, text1: str, text2: str) -> float:
         """
@@ -147,7 +148,7 @@ class Evaluator:
     def load_results(self, results_path: str) -> Dict:
         """Load test results from a JSON file."""
         try:
-            with open(results_path, "r") as f:
+            with open(results_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
             self.log.error(f"Error loading results file: {e}")
@@ -568,7 +569,7 @@ class Evaluator:
                                 )
 
                     else:
-                        self.log.error(f"No JSON found in response for question")
+                        self.log.error("No JSON found in response for question")
 
                         # Determine pass/fail without Claude analysis (similarity only)
                         pass_fail_result = self.determine_pass_fail(
@@ -869,18 +870,15 @@ class Evaluator:
                     }
                 )
                 return analysis
-            raise  # Re-raise if it's not an overload error
-
-        except Exception as e:
-            self.log.error(f"Error in analyze_with_claude: {e}")
+            self.log.error(f"Error in analyze_with_claude: {api_error}")
             return {
-                "overall_analysis": f"Analysis failed: {str(e)}",
+                "overall_analysis": f"Analysis failed: {str(api_error)}",
                 "strengths": [],
                 "weaknesses": ["Analysis failed to complete"],
                 "recommendations": ["Check logs for error details"],
                 "use_case_fit": "",
                 "per_question": [],
-                "overall_rating": {"rating": "error", "explanation": str(e)},
+                "overall_rating": {"rating": "error", "explanation": str(api_error)},
             }
 
     def _analyze_summarization_results(
@@ -1024,7 +1022,7 @@ class Evaluator:
                                 if len(available_sources) > 10:
                                     error_msg += f"  ... and {len(available_sources) - 10} more\n"
 
-                                error_msg += f"\nAvailable transcript IDs:\n"
+                                error_msg += "\nAvailable transcript IDs:\n"
                                 for idx, tid in enumerate(available_ids[:10], 1):
                                     error_msg += f"  {idx}. {tid}\n"
                                 if len(available_ids) > 10:
@@ -1103,7 +1101,7 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                             "explanation": "detailed analysis"
                         }},
                         "detail_completeness": {{
-                            "rating": "excellent/good/fair/poor", 
+                            "rating": "excellent/good/fair/poor",
                             "explanation": "detailed analysis"
                         }},
                         "action_items_structure": {{
@@ -1484,7 +1482,7 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
             experiment_name = results.get("metadata", {}).get(
                 "experiment_name", "Unknown Model"
             )
-            model_type = results.get("metadata", {}).get("model", "")
+            _model_type = results.get("metadata", {}).get("model", "")
 
             overall_prompt = f"""
                 Review these summarization test results and provide a comprehensive overall analysis.
@@ -1893,7 +1891,7 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
 
             if output_dir:
                 results_path_obj = Path(results_path)
-                results_filename = results_path_obj.name
+                _results_filename = results_path_obj.name
 
                 # Preserve directory hierarchy if base_experiment_dir is provided
                 if base_experiment_dir:
@@ -1912,7 +1910,7 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                     # Flat structure (original behavior)
                     json_path = output_path / f"{results_path_obj.stem}.eval.json"
 
-                with open(json_path, "w") as f:
+                with open(json_path, "w", encoding="utf-8") as f:
                     json.dump(evaluation_data, f, indent=2)
                 self.log.info(f"Evaluation data saved to: {json_path}")
 
@@ -2001,8 +1999,6 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
         self, evaluation_files: List[str], output_dir: str, base_experiment_dir: str
     ) -> str:
         """Create a consolidated report of all evaluations."""
-        from datetime import datetime
-
         output_base_path = Path(output_dir)
 
         # Load all evaluation results
@@ -2316,8 +2312,6 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
         Returns:
             Path to the consolidated report file
         """
-        from datetime import datetime
-
         output_base_path = Path(output_dir)
         consolidated_filename = "consolidated_evaluations_report.json"
         consolidated_path = output_base_path / consolidated_filename
@@ -2652,7 +2646,7 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
             model_analyses.append(f"- **Strengths**: {', '.join(best_strengths)}")
             model_analyses.append(f"- **Weakness**: {best_weakness}")
             model_analyses.append(
-                f"- **Actionable**: Implement quality validation workflows, standardize summary templates"
+                "- **Actionable**: Implement quality validation workflows, standardize summary templates"
             )
 
             if len(models_data) > 1:
@@ -2667,7 +2661,7 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                 model_analyses.append(f"### **{worst['name']}** - Needs Improvement")
                 model_analyses.append(f"- **Issues**: {', '.join(worst_issues)}")
                 model_analyses.append(
-                    f"- **Actionable**: Enhance prompt engineering, add structured output validation"
+                    "- **Actionable**: Enhance prompt engineering, add structured output validation"
                 )
 
         # Cost efficiency analysis
@@ -2915,11 +2909,11 @@ Performance ranking: {ranking_text}
 
         # Create executive summary
         best_model = models_data[0] if models_data else None
-        worst_model = models_data[-1] if models_data else None
+        _worst_model = models_data[-1] if models_data else None
 
         # Build performance ranking
         ranking = []
-        for i, model in enumerate(models_data):
+        for _i, model in enumerate(models_data):
             ranking.append(f"**{model['name']}** ({model['pass_rate']:.0%})")
         ranking_text = " > ".join(ranking)
 
@@ -3016,7 +3010,7 @@ Performance ranking: {ranking_text}
             model_analyses.append(f"- **Strengths**: {', '.join(best_strengths)}")
             model_analyses.append(f"- **Weakness**: {best_weakness}")
             model_analyses.append(
-                f"- **Actionable**: Improve retrieval consistency, expand knowledge base coverage"
+                "- **Actionable**: Improve retrieval consistency, expand knowledge base coverage"
             )
 
             if len(models_data) > 1:
@@ -3031,7 +3025,7 @@ Performance ranking: {ranking_text}
                 model_analyses.append(f"### **{worst['name']}** - Needs Improvement")
                 model_analyses.append(f"- **Issues**: {', '.join(worst_issues)}")
                 model_analyses.append(
-                    f"- **Actionable**: Requires significant system improvements before production use"
+                    "- **Actionable**: Requires significant system improvements before production use"
                 )
 
         # Cost efficiency analysis

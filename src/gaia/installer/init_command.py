@@ -375,13 +375,34 @@ class InitCommand:
             if not self.skip_models:
                 step_num = 3
                 self._print("")
-                self._print_step(
-                    step_num,
-                    total_steps,
-                    f"Downloading models for '{self.profile}' profile...",
-                )
-                if not self._download_models():
-                    return 1
+                if self.remote:
+                    self._print_step(
+                        step_num,
+                        total_steps,
+                        "Skipping model downloads (remote mode)...",
+                    )
+                    self._print_success(
+                        "Remote mode — model downloads handled by remote server"
+                    )
+                    self.console.print()
+                    self.console.print(
+                        "   [dim]To download models, run the following on the remote machine:[/dim]"
+                    )
+                    profile_config = INIT_PROFILES[self.profile]
+                    model_ids = profile_config.get("models") or []
+                    for model_id in model_ids:
+                        self.console.print(
+                            f"     [cyan]lemonade-server pull {model_id}[/cyan]"
+                        )
+                    self.console.print()
+                else:
+                    self._print_step(
+                        step_num,
+                        total_steps,
+                        f"Downloading models for '{self.profile}' profile...",
+                    )
+                    if not self._download_models():
+                        return 1
 
             # Step 4: Verify setup
             step_num = total_steps
@@ -452,7 +473,9 @@ class InitCommand:
             if not self._prompt_yes_no(
                 f"Install/update Lemonade v{LEMONADE_VERSION}?", default=True
             ):
-                return False
+                self._print("   Skipping update. Will verify server connectivity.")
+                # Continue to next step - server health check will verify connectivity
+                return True
 
             return self._install_lemonade()
 
@@ -464,10 +487,15 @@ class InitCommand:
                 f"Install Lemonade v{LEMONADE_VERSION}?", default=True
             ):
                 self._print("")
+                self._print("   Skipping local installation.")
                 self._print(
                     "   To install manually, visit: https://www.lemonade-server.ai"
                 )
-                return False
+                self._print(
+                    "   Or set LEMONADE_BASE_URL environment variable for a remote server."
+                )
+                # Continue to next step - server health check will verify connectivity
+                return True
 
             return self._install_lemonade()
 
