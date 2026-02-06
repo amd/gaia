@@ -123,7 +123,12 @@ class TestChatSDKIntegration(unittest.TestCase):
         """Test conversation memory with real LLM."""
         print("Testing conversation memory with real LLM...")
 
-        config = ChatConfig(model=self.model, max_tokens=100, max_history_length=3)
+        config = ChatConfig(
+            model=self.model,
+            max_tokens=100,
+            max_history_length=3,
+            system_prompt="You are a helpful assistant. Answer questions based on the conversation history.",
+        )
         chat = ChatSDK(config)
 
         # Establish context
