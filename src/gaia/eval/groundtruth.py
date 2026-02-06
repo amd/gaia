@@ -153,7 +153,7 @@ class GroundTruthGenerator:
     IMPORTANT: Return ONLY the JSON object with no additional text, explanations, or formatting.
     """
         elif use_case == UseCase.PDF:
-            return f"""
+            return """
     Given this PDF document, generate comprehensive ground truth summaries and key information extraction for evaluation.
     Analyze the document content and provide structured summaries with evaluation criteria.
     Return a json formatted response as follows:

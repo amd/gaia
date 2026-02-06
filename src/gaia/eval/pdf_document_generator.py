@@ -669,19 +669,19 @@ Examples:
         total_cost = generation_info["total_claude_cost"]["total_cost"]
         avg_cost = total_cost / len(summary["documents"]) if summary["documents"] else 0
 
-        print(f"\n📊 Content Metrics:")
+        print("\n📊 Content Metrics:")
         print(
             f"  Target tokens per document: {generation_info['target_tokens_per_file']:,}"
         )
         print(f"  Actual content tokens (avg): {avg_content_tokens:.0f}")
         print(f"  Total content tokens: {total_content_tokens:,}")
 
-        print(f"\n💰 API Usage:")
+        print("\n💰 API Usage:")
         print(f"  Total token count (input+output): {total_llm_tokens:,}")
         print(f"  Total cost: ${total_cost:.4f}")
         print(f"  Average cost per file: ${avg_cost:.4f}")
 
-        print(f"\n🔧 Generation Details:")
+        print("\n🔧 Generation Details:")
         print(f"  Document types: {', '.join(generation_info['document_types'])}")
         print(f"  Claude model: {generation_info['claude_model']}")
 
