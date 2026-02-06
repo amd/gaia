@@ -31,6 +31,7 @@
       "Bash(git push)",
       "Bash(git show:*)",
       "Bash(git stash:*)",
+      "Bash(git status:*)",
       "Bash(grep:*)",
       "Bash(isort:*)",
       "Bash(ls:*)",
@@ -86,7 +87,7 @@
       "WebFetch",
       "WebFetch(domain:code.claude.com)",
       "WebFetch(domain:lemonade-server.ai)",
-      "WebSearch"
+      "WebSearch"      
     ],
     "deny": []
   },

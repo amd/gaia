@@ -138,8 +138,9 @@ class TestStdioTransport:
             # Verify debug was called at least once
             assert mock_logger.debug.called
 
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", side_effect=lambda cmd: cmd)
     @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
-    def test_stdio_transport_accepts_args_list(self, mock_popen):
+    def test_stdio_transport_accepts_args_list(self, mock_popen, _):
         """Test that StdioTransport accepts separate args list."""
         mock_process = Mock()
         mock_process.poll.return_value = None
@@ -157,8 +158,9 @@ class TestStdioTransport:
         # Should not use shell=True when using args list
         assert call_args[1]["shell"] is False
 
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", side_effect=lambda cmd: cmd)
     @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
-    def test_stdio_transport_builds_command_from_args(self, mock_popen):
+    def test_stdio_transport_builds_command_from_args(self, mock_popen, _):
         """Test that command is built correctly from command + args."""
         mock_process = Mock()
         mock_process.poll.return_value = None
