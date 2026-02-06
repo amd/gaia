@@ -29,12 +29,25 @@ class MCPClientMixin:
                 })
     """
 
-    def __init__(self, *args, auto_load_config: bool = True, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, auto_load_config: bool = True):
+        super().__init__()
         self._mcp_manager = MCPClientManager(debug=getattr(self, "debug", False))
 
         if auto_load_config:
             self.load_mcp_servers_from_config()
+
+    def _console_print(self, method_name: str, message: str) -> None:
+        """Print via self.console if available, else fall back to logger."""
+        console = getattr(self, "console", None)
+        if console is not None and hasattr(console, method_name):
+            getattr(console, method_name)(message)
+        else:
+            log_method = {
+                "print_info": logger.info,
+                "print_warning": logger.warning,
+                "print_error": logger.error,
+            }.get(method_name, logger.info)
+            log_method(message)
 
     def connect_mcp_server(self, name: str, config: Dict) -> bool:
         """Connect to an MCP server and register its tools.
@@ -72,8 +85,7 @@ class MCPClientMixin:
 
         logger.debug(f"Connecting to MCP server '{name}'...")
 
-        if getattr(self, "debug", False):
-            print(f"[DEBUG] Config: {config}")
+        logger.debug(f"Config: {config}")
 
         try:
             client = self._mcp_manager.add_server(name, config)
@@ -86,16 +98,21 @@ class MCPClientMixin:
                 if hasattr(self, "rebuild_system_prompt"):
                     self.rebuild_system_prompt()
 
-                logger.debug(
-                    f"Connected to '{name}' - {client.server_info.get('name', 'Unknown')}"
+                self._console_print(
+                    "print_info",
+                    f"Connected to MCP server '{name}' - {client.server_info.get('name', 'Unknown')}",
                 )
                 return True
             else:
-                logger.warning(f"Failed to connect to MCP server '{name}'")
+                self._console_print(
+                    "print_warning", f"Failed to connect to MCP server '{name}'"
+                )
                 return False
 
         except Exception as e:
-            logger.error(f"Error connecting to '{name}': {e}")
+            self._console_print(
+                "print_error", f"Error connecting to MCP server '{name}': {e}"
+            )
             return False
 
     def load_mcp_servers_from_config(self) -> int:
@@ -137,7 +154,7 @@ class MCPClientMixin:
         """
         client = self._mcp_manager.get_client(name)
         if not client:
-            logger.warning(f"MCP server '{name}' not found")
+            self._console_print("print_warning", f"MCP server '{name}' not found")
             return
 
         # Unregister tools
@@ -146,7 +163,7 @@ class MCPClientMixin:
         # Disconnect
         self._mcp_manager.remove_server(name)
 
-        logger.debug(f"Disconnected from MCP server '{name}'")
+        self._console_print("print_info", f"Disconnected from MCP server '{name}'")
 
     def list_mcp_servers(self) -> List[str]:
         """List all connected MCP servers.
@@ -223,7 +240,10 @@ class MCPClientMixin:
 
             logger.debug(f"Registered MCP tool: {gaia_name}")
 
-        logger.debug(f"Registered {len(tools)} tools from MCP server '{client.name}'")
+        self._console_print(
+            "print_info",
+            f"Registered {len(tools)} tools from MCP server '{client.name}'",
+        )
 
     def _unregister_mcp_tools(self, client: MCPClient) -> None:
         """Unregister all tools from an MCP server.
@@ -239,7 +259,10 @@ class MCPClientMixin:
                 del _TOOL_REGISTRY[gaia_name]
                 logger.debug(f"Unregistered MCP tool: {gaia_name}")
 
-        logger.debug(f"Unregistered {len(tools)} tools from MCP server '{client.name}'")
+        self._console_print(
+            "print_info",
+            f"Unregistered {len(tools)} tools from MCP server '{client.name}'",
+        )
 
     def __del__(self):
         """Cleanup: disconnect from all MCP servers."""
