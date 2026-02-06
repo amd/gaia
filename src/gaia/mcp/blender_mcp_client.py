@@ -14,8 +14,6 @@ from gaia.logger import get_logger
 class MCPError(Exception):
     """Exception raised for MCP client errors."""
 
-    pass
-
 
 # MCP client class for tests
 class MCPClient:
@@ -88,11 +86,11 @@ class MCPClient:
             raise MCPError(error_msg)
 
     def execute_code(self, code):
-        self.log.debug(f"Executing code in Blender")
+        self.log.debug("Executing code in Blender")
         return self.send_command("execute_code", {"code": code})
 
     def get_scene_info(self):
-        self.log.debug(f"Getting scene info")
+        self.log.debug("Getting scene info")
         return self.send_command("get_scene_info")
 
     def create_object(

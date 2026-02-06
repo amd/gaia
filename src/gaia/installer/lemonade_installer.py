@@ -563,9 +563,15 @@ class LemonadeInstaller:
             )
 
             if result.returncode != 0:
+                # Combine stdout + stderr for full diagnostic output.
+                # apt puts dependency resolution details in stdout,
+                # but only a generic warning in stderr.
+                full_output = (
+                    result.stdout.strip() + "\n" + result.stderr.strip()
+                ).strip()
                 return InstallResult(
                     success=False,
-                    error=f"apt install failed: {result.stderr}",
+                    error=f"apt install failed:\n{full_output}",
                 )
 
             return InstallResult(

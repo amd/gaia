@@ -11,9 +11,3 @@ try:
 except ImportError:
     logger.debug("llm app not available")
     llm = None
-
-try:
-    from gaia.chat.app import ChatApp as chat
-except ImportError:
-    logger.debug("Chat app not available")
-    chat = None

@@ -50,35 +50,35 @@ class GroundTruthGenerator:
     IMPORTANT: Return ONLY the JSON object with no additional text, explanations, or formatting.
     """
         elif use_case == UseCase.SUMMARIZATION:
-            return f"""
+            return """
     Given this transcript, generate comprehensive ground truth summaries and metadata for evaluation.
     Analyze the content and provide different types of summaries with evaluation criteria.
     Return a json formatted response as follows:
-    {{
+    {
         'source': 'path/to/transcript',
-        'transcript_metadata': {{
+        'transcript_metadata': {
             'estimated_duration': 'estimated meeting duration',
             'participant_count': 'estimated number of participants',
             'meeting_type': 'type of meeting (e.g., standup, planning, review)'
-        }},
-        'summaries': {{
+        },
+        'summaries': {
             'executive_summary': 'high-level overview for executives',
             'detailed_summary': 'comprehensive summary with key details',
             'action_items': ['list', 'of', 'action', 'items'],
             'key_decisions': ['list', 'of', 'key', 'decisions'],
             'participants': ['list', 'of', 'identified', 'participants'],
             'topics_discussed': ['list', 'of', 'main', 'topics']
-        }},
-        'evaluation_criteria': {{
+        },
+        'evaluation_criteria': {
             'summary_completeness': 'how complete should a good summary be',
             'summary_accuracy': 'what constitutes accurate information extraction for summaries',
             'relevance': 'what information is most relevant to include',
             'structure': 'how should the summary be structured'
-        }}
-    }}
+        }
+    }
 
     Focus on generating comprehensive summaries and metadata for transcript summarization evaluation.
-    
+
     IMPORTANT: Return ONLY the JSON object with no additional text, explanations, or formatting.
     """
         elif use_case == UseCase.QA:
@@ -112,44 +112,44 @@ class GroundTruthGenerator:
     IMPORTANT: Return ONLY the JSON object with no additional text, explanations, or formatting.
     """
         elif use_case == UseCase.EMAIL:
-            return f"""
+            return """
     Given this business email, generate comprehensive ground truth summaries and analysis for evaluation.
     Analyze the email content and provide structured summaries with evaluation criteria.
     Return a json formatted response as follows:
-    {{
+    {
         'source': 'path/to/email',
-        'email_metadata': {{
+        'email_metadata': {
             'email_type': 'type of email (e.g., project_update, customer_support, sales_outreach)',
             'sender_role': 'estimated role of sender',
             'recipient_type': 'type of recipients',
             'urgency_level': 'low/medium/high priority assessment'
-        }},
-        'summaries': {{
+        },
+        'summaries': {
             'executive_summary': 'high-level overview of email purpose and content',
             'detailed_summary': 'comprehensive summary with key details and context',
             'key_points': ['list', 'of', 'main', 'points'],
             'action_items': ['list', 'of', 'action', 'items', 'or', 'requests'],
             'decisions_mentioned': ['list', 'of', 'decisions', 'or', 'announcements'],
             'follow_up_required': 'whether follow-up is needed and what type'
-        }},
+        },
         'qa_pairs': [
-            {{'query': 'What is the main purpose of this email?', 'response': 'detailed answer based on email content'}},
-            {{'query': 'What action items or requests are mentioned?', 'response': 'specific actions requested'}},
-            {{'query': 'What key information or updates are shared?', 'response': 'main information conveyed'}},
-            {{'query': 'Who is the intended audience and what is expected of them?', 'response': 'recipient expectations and required responses'}},
-            {{'query': 'What is the timeline or urgency level?', 'response': 'timing and priority information'}}
+            {'query': 'What is the main purpose of this email?', 'response': 'detailed answer based on email content'},
+            {'query': 'What action items or requests are mentioned?', 'response': 'specific actions requested'},
+            {'query': 'What key information or updates are shared?', 'response': 'main information conveyed'},
+            {'query': 'Who is the intended audience and what is expected of them?', 'response': 'recipient expectations and required responses'},
+            {'query': 'What is the timeline or urgency level?', 'response': 'timing and priority information'}
         ],
-        'evaluation_criteria': {{
+        'evaluation_criteria': {
             'summary_completeness': 'how complete should a good email summary be',
             'summary_accuracy': 'what constitutes accurate information extraction for emails',
             'relevance': 'what information is most relevant to include',
             'context_understanding': 'how well should the business context be captured',
             'action_identification': 'how effectively should action items be identified'
-        }}
-    }}
+        }
+    }
 
     Focus on generating comprehensive summaries and analysis for business email evaluation. Always include exactly 5 qa_pairs.
-    
+
     IMPORTANT: Return ONLY the JSON object with no additional text, explanations, or formatting.
     """
         elif use_case == UseCase.PDF:
@@ -423,7 +423,7 @@ class GroundTruthGenerator:
 
         if not filtered_files:
             self.log.warning(
-                f"No valid files to process after filtering out metadata files"
+                "No valid files to process after filtering out metadata files"
             )
             return None
 
@@ -978,7 +978,7 @@ Examples:
                 output_dir=args.output_dir,
                 num_samples=args.num_samples,
             )
-            print(f"✅ Successfully generated ground truth data")
+            print("Successfully generated ground truth data")
             print(f"  Output: {args.output_dir}")
             usage = result["metadata"]["usage"]
             cost = result["metadata"]["cost"]
@@ -1047,7 +1047,7 @@ Examples:
                     cumulative_usage = results["metadata"]["total_usage"]
                     cumulative_cost = results["metadata"]["total_cost"]
                     num_files = results["metadata"]["consolidated_from"]
-                    print(f"✅ Successfully processed batch")
+                    print("Successfully processed batch")
                     print(f"  Output: {args.output_dir}")
                     print(
                         f"  Total files: {num_files} ({results['metadata'].get('source_files', []).__len__()} in consolidated output)"

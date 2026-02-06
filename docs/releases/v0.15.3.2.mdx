@@ -1,0 +1,97 @@
+---
+title: "v0.15.3.2"
+description: "Patch release fixing package registration, entry points, and CI reliability"
+---
+
+# GAIA v0.15.3.2 Release Notes
+
+**Patch release** fixing package registration issues that caused `ModuleNotFoundError` on non-editable installs, plus CI reliability improvements and bug fixes.
+
+---
+
+## 🎯 Key Changes
+
+### Package Registration Fixes
+
+Fixed `ModuleNotFoundError` errors that occurred when GAIA was installed via `pip install` (non-editable mode). These packages existed on disk but weren't registered in `setup.py`:
+
+- `gaia.vlm` - Vision Language Model support
+- `gaia.apps.docker` - Docker application
+- `gaia.apps.jira` - Jira application
+- `gaia.apps.summarize.templates` - Summarization templates
+- `gaia.eval.fix_code_testbench` - Code fix evaluation testbench
+
+Also created missing `__init__.py` files for:
+- `gaia.mcp` - MCP protocol module
+- `gaia.eval` - Evaluation framework
+- `gaia.talk` - Voice interaction
+- `gaia.apps.summarize` - Summarization app
+
+### Entry Point Fixes
+
+- **Fixed `gaia-mcp` command**: Added missing `main()` function to `mcp_bridge.py` so the console script entry point works
+- **Removed broken entry point**: Deleted `gaia-mcp-atlassian` entry point that referenced a non-existent file
+
+### Improved `gaia init` Flow
+
+Previously, if a user answered 'n' to installing Lemonade, the init wizard would stop at step 1/4. Now it continues to step 2 (server health check) which properly verifies connectivity regardless of setup method:
+
+- Remote server via `LEMONADE_BASE_URL` environment variable
+- Manual local installation
+- Pre-existing installation
+
+The health check is now the proper gate for determining server availability, not the installation prompt.
+
+---
+
+## 🔧 CI/CD Improvements
+
+### Fixed Release Notes Race Condition
+
+The `pypi.yml` workflow was overwriting release notes with an empty string when `publish_installer.yml` had already created the GitHub release. Now it checks if the release exists first and only creates as a fallback with `--generate-notes`.
+
+### New Packaging Integrity Tests
+
+Added `test_packaging.py` with 6 comprehensive tests to catch packaging issues in CI:
+
+1. All filesystem packages are registered in `setup.py`
+2. All `setup.py` packages exist on disk
+3. All packages have `__init__.py` files
+4. Entry point modules exist on disk
+5. Entry point functions exist in source code
+6. Entry point parent packages are declared
+
+### Lint Configuration Updates
+
+Re-enabled 13 pylint checks that were previously disabled, after fixing all violations in:
+- `eval.py`, `groundtruth.py`, `batch_experiment.py`
+- All MCP module files (`agent_mcp_server.py`, `blender_mcp_server.py`, `mcp_bridge.py`, etc.)
+
+---
+
+## 🐛 Bug Fixes
+
+- Fixed flaky Chat SDK memory test by removing system prompt instruction that confused small models
+- Fixed unused variable warnings in `batch_experiment.py`
+- Fixed f-strings without interpolation in `batch_experiment.py`
+- Fixed trailing whitespace and encoding issues in `eval.py`
+- Removed dead `ChatApp` import from `agents/__init__.py`
+
+---
+
+## 📦 Installation
+
+```bash
+pip install --upgrade amd-gaia
+```
+
+**Linux users** (avoid large CUDA dependencies):
+```bash
+pip install --upgrade amd-gaia --extra-index-url https://download.pytorch.org/whl/cpu
+```
+
+---
+
+## 📝 Full Changelog
+
+See [PR #309](https://github.com/amd/gaia/pull/309) for complete details.
