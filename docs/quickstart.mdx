@@ -7,13 +7,70 @@ description: "Build your first AI agent in 5 minutes"
   **First time here?** Complete the [Setup](/setup) guide first to install uv (Python package manager).
 </Info>
 
-## Install GAIA
+## Quick Install
 
-Choose your platform and installation type, then follow the steps below.
+**Recommended for users** wanting to try the GAIA CLI.
+
+Install GAIA globally with a single command:
 
 <Tabs>
   <Tab title="Windows">
-    Installs [amd-gaia](https://pypi.org/project/amd-gaia/) from PyPI. **Recommended** for most users on **Windows**.
+    Open **PowerShell** and run:
+
+    ```powershell
+    irm https://amd-gaia.ai/install.ps1 | iex
+    ```
+
+    This will:
+    - ✅ Install `uv` (if not already installed)
+    - ✅ Download Python 3.12 (if needed)
+    - ✅ Create `%USERPROFILE%\.gaia\venv` virtual environment
+    - ✅ Install GAIA CLI (accessible globally via PATH)
+    - ✅ Add GAIA to your PATH
+
+    <Tip>
+      After installation, close and reopen your terminal, then run:
+      ```powershell
+      gaia init --profile minimal
+      ```
+    </Tip>
+  </Tab>
+
+  <Tab title="Linux">
+    Open a **terminal** and run:
+
+    ```bash
+    curl -fsSL https://amd-gaia.ai/install.sh | sh
+    ```
+
+    This will:
+    - ✅ Install `uv` (if not already installed)
+    - ✅ Download Python 3.12 (if needed)
+    - ✅ Create `~/.gaia/venv` virtual environment
+    - ✅ Install GAIA CLI (accessible globally via PATH)
+    - ✅ Add GAIA to your PATH
+
+    <Tip>
+      After installation, reload your shell config, then run:
+      ```bash
+      source ~/.bashrc  # or ~/.zshrc
+      gaia init --profile minimal
+      ```
+    </Tip>
+  </Tab>
+</Tabs>
+
+---
+
+## Manual Install
+
+**Recommended for developers** integrating GAIA into their projects.
+
+Choose your platform and installation type:
+
+<Tabs>
+  <Tab title="Windows (PyPI)">
+    Installs [amd-gaia](https://pypi.org/project/amd-gaia/) from PyPI in a project-specific virtual environment.
 
     ### Step 1: Create Project Directory
 
@@ -82,8 +139,8 @@ Choose your platform and installation type, then follow the steps below.
     </Note>
   </Tab>
 
-  <Tab title="Linux">
-    Installs [amd-gaia](https://pypi.org/project/amd-gaia/) from PyPI. **Recommended** for most users on **Linux**.
+  <Tab title="Linux (PyPI)">
+    Installs [amd-gaia](https://pypi.org/project/amd-gaia/) from PyPI in a project-specific virtual environment.
 
     ### Step 1: Create Project Directory
 
@@ -148,7 +205,7 @@ Choose your platform and installation type, then follow the steps below.
     </Note>
   </Tab>
 
-  <Tab title="Windows (Dev)">
+  <Tab title="Windows (Clone)">
     For contributors. Clones [amd/gaia](https://github.com/amd/gaia) from GitHub.
 
     <Note>
@@ -226,7 +283,7 @@ Choose your platform and installation type, then follow the steps below.
     </Note>
   </Tab>
 
-  <Tab title="Linux (Dev)">
+  <Tab title="Linux (Clone)">
     For contributors. Clones [amd/gaia](https://github.com/amd/gaia) from GitHub.
 
     <Note>
