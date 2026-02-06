@@ -136,6 +136,7 @@ setup(
             "scikit-learn>=1.5.0",
             "numpy>=2.0,<2.3.0",
             "pypdf",
+            "reportlab",
         ],
         "talk": [
             "pyaudio",
