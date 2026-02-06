@@ -21,7 +21,8 @@ from .prompts import (
     DETECTION_PROMPT_TEMPLATE,
     DOCUMENT_SUMMARY_TEMPLATE,
     ITERATIVE_SUMMARY_TEMPLATE,
-    SUMMARY_STYLES,
+    SUMMARY_STYLES_PDF,
+    SUMMARY_STYLES_TRANSCRIPTS,
     SYSTEM_PROMPTS,
 )
 
@@ -120,21 +121,28 @@ class SummarizerAgent(Agent):
         model: Optional[str] = None,
         max_tokens: int = 1024,
         max_ctx_size: int = 8192,
+        temperature: Optional[float] = None,
         styles: Optional[List[str]] = None,
         combined_prompt: bool = False,
         use_claude: bool = False,
         use_chatgpt: bool = False,
+        system_prompt_override: Optional[str] = None,
+        generation_params: Optional[Dict[str, Any]] = None,
     ):
         self.model = model or self.DEFAULT_MODEL
         self.max_tokens = max_tokens
+        self.temperature = temperature
         self.styles = styles or ["executive", "participants", "action_items"]
         self.combined_prompt = combined_prompt
         self.use_claude = use_claude
         self.use_chatgpt = use_chatgpt
+        self.system_prompt_override = system_prompt_override
+        self.generation_params = generation_params or {}
         self.log = get_logger(__name__)
         chat_config = ChatConfig(
             model=self.model,
             max_tokens=self.max_tokens,
+            temperature=self.temperature,
             use_claude=self.use_claude,
             use_chatgpt=self.use_chatgpt,
             show_stats=True,
@@ -154,7 +162,8 @@ class SummarizerAgent(Agent):
         self.overlap_tokens = int(self.chunk_tokens * self.overlap_tokens_ratio)
 
         # Load prompts from prompts.py
-        self.summary_styles = SUMMARY_STYLES
+        self.summary_styles_transcripts = SUMMARY_STYLES_TRANSCRIPTS
+        self.summary_styles_pdf = SUMMARY_STYLES_PDF
         self.system_prompts = SYSTEM_PROMPTS
         self.iterative_summary_template = ITERATIVE_SUMMARY_TEMPLATE
         self.document_summary_template = DOCUMENT_SUMMARY_TEMPLATE
@@ -180,6 +189,8 @@ class SummarizerAgent(Agent):
         Returns:
             System prompt string for the specified content type.
         """
+        if self.system_prompt_override:
+            return self.system_prompt_override
         if content_type is None:
             content_type = "transcript"
         return self.system_prompts.get(
@@ -200,9 +211,14 @@ class SummarizerAgent(Agent):
             raise KeyError(f"Missing system prompt for '{input_type}' in prompts")
         self.chat_sdk.config.system_prompt = system_prompt
 
-    def _validate_styles(self, styles: Any) -> None:
+    def _get_summary_styles(self, content_type: Optional[str]) -> Dict[str, str]:
+        if content_type == "pdf":
+            return self.summary_styles_pdf
+        return self.summary_styles_transcripts
+
+    def _validate_styles(self, styles: Any, content_type: Optional[str] = None) -> None:
         """Validate provided style or list of styles against prompt definitions."""
-        allowed = set((self.summary_styles or {}).keys())
+        allowed = set(self._get_summary_styles(content_type).keys())
         provided = styles if isinstance(styles, list) else [styles]
         invalid = [s for s in provided if s not in allowed]
         if invalid:
@@ -286,7 +302,7 @@ class SummarizerAgent(Agent):
         self._prepare_chat(input_type)
         if not self._should_use_iterative(content):
             prompt = self.generate_summary_prompt(content, input_type, style)
-            for chunk in self.chat_sdk.send_stream(prompt):
+            for chunk in self.chat_sdk.send_stream(prompt, **self.generation_params):
                 if chunk.is_complete:
                     yield {
                         "text": "",
@@ -327,7 +343,7 @@ class SummarizerAgent(Agent):
         overlap_tokens = int(chunk_tokens * self.overlap_tokens_ratio)
         chunks = self.chunker.chunk_text(content, chunk_tokens, overlap_tokens)
         for i, chunk in enumerate(chunks):
-            style_instruction = (self.summary_styles or {}).get(style)
+            style_instruction = self._get_summary_styles(input_type).get(style)
             if not style_instruction:
                 raise KeyError(f"Missing style '{style}' in prompts")
             if i == 0:
@@ -420,16 +436,15 @@ class SummarizerAgent(Agent):
             detected_type = "transcript"
         else:
             # Fall back to LLM only if score is ambiguous
-            if self.detection_prompt_template:
-                detection_prompt = self.detection_prompt_template.format(
-                    text_excerpt=content
-                )
+            detection_prompt = self.detection_prompt_template.format(
+                text_excerpt=content
+            )
 
             # Add strict output constraints
             for attempt in range(self.max_retries):
                 try:
                     response = self.llm_client.generate(
-                        detection_prompt, model=self.model
+                        detection_prompt, model=self.model, max_tokens=32
                     )
                     text = (response or "").strip().lower()
                     m = re.findall(r"[a-z]+", text)
@@ -462,23 +477,19 @@ class SummarizerAgent(Agent):
     def generate_summary_prompt(
         self, content: str, content_type: str, style: str
     ) -> str:
-        style_instruction = (self.summary_styles or {}).get(style)
+        style_instruction = self._get_summary_styles(content_type).get(style)
         if not style_instruction:
             raise KeyError(f"Missing style '{style}' in prompts")
-        if style == "participants" and content_type == "email":
-            prompt = f"""Extract the sender and all recipients from this email.\n\nFormat your response as JSON:\n{{\n    \"sender\": \"sender email/name\",\n    \"recipients\": [\"recipient1\", \"recipient2\"],\n    \"cc\": [\"cc1\", \"cc2\"] (if any),\n    \"bcc\": [\"bcc1\"] (if any)\n}}\n\nEmail content:\n{content}"""
-        elif style == "action_items":
-            prompt = f"""Extract all action items from this {content_type}.\n\n{style_instruction}\n\nFormat each action item with:\n- The specific action required\n- Who is responsible (if mentioned)\n- Any deadline or timeline (if mentioned)\n\nIf no action items are found, respond with \"No specific action items identified.\"\n\nContent:\n{content}"""
-        else:
-            prompt = f"""Analyze this {content_type} and {style_instruction}\n\nContent:\n{content}"""
+        prompt = f"""Analyze this {content_type} and {style_instruction}\n\nContent:\n{content}"""
         return prompt
 
     def generate_combined_prompt(
         self, content: str, content_type: str, styles: List[str]
     ) -> str:
         sections = []
+        style_map = self._get_summary_styles(content_type)
         for style in styles:
-            style_instruction = (self.summary_styles or {}).get(style)
+            style_instruction = style_map.get(style)
             if not style_instruction:
                 raise KeyError(f"Missing style '{style}' in prompts")
             sections.append(f"- {style.upper()}: {style_instruction}")
@@ -489,8 +500,12 @@ class SummarizerAgent(Agent):
         self, content: str, content_type: str, style: str
     ) -> Dict[str, Any]:
         start_time = time.time()
+        try:
+            self.chat_sdk.clear_history()
+        except Exception as e:
+            self.log.warning(f"Failed to clear chat history: {e}")
         system_prompt = self._get_system_prompt(content_type)
-        style_instruction = (self.summary_styles or {}).get(style)
+        style_instruction = self._get_summary_styles(content_type).get(style)
         if not style_instruction:
             raise KeyError(f"Missing style '{style}' in prompts")
         # Merge style guidance into the system prompt for consistent behavior
@@ -500,7 +515,9 @@ class SummarizerAgent(Agent):
         last_error = None
         for attempt in range(self.max_retries):
             try:
-                response = self.chat_sdk.send(prompt)
+                response = self.chat_sdk.send(
+                    prompt, no_history=True, **self.generation_params
+                )
                 break
             except Exception as e:
                 last_error = e
@@ -583,7 +600,7 @@ class SummarizerAgent(Agent):
         system_prompt = self._get_system_prompt(content_type)
         self.chat_sdk.config.system_prompt = system_prompt
         prompt = self.generate_combined_prompt(content, content_type, styles)
-        response = self.chat_sdk.send(prompt)
+        response = self.chat_sdk.send(prompt, **self.generation_params)
         perf_stats = self.llm_client.get_performance_stats()
         processing_time_ms = int((time.time() - start_time) * 1000)
         response_text = response.text
@@ -659,7 +676,7 @@ class SummarizerAgent(Agent):
         content_type = self.detect_content_type(content, input_type)
         applicable_styles = styles or self.styles.copy()
         # Early validation: fail fast with clear guidance if a style is unsupported
-        self._validate_styles(applicable_styles)
+        self._validate_styles(applicable_styles, content_type)
         if content_type == "email" and "participants" in applicable_styles:
             pass
         if (
@@ -722,8 +739,9 @@ class SummarizerAgent(Agent):
         self, content: str, input_type: str = "auto", style: str = "brief"
     ) -> Generator[Dict[str, Any], None, None]:
         """Stream a single-style summary, using iterative folding for large inputs."""
-        self._validate_styles(style)
-        yield from self._stream_summary_content(content, input_type, style)
+        content_type = input_type if input_type != "auto" else "transcript"
+        self._validate_styles(style, content_type)
+        yield from self._stream_summary_content(content, content_type, style)
 
     def _ensure_path(self, file_path) -> Path:
         """Convert file_path to Path object if it's not already."""

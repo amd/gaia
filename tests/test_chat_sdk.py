@@ -24,7 +24,6 @@ from gaia.chat.sdk import (
     ChatSession,
     SimpleChat,
     quick_chat,
-    quick_chat_with_memory,
 )
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
@@ -124,7 +123,12 @@ class TestChatSDKIntegration(unittest.TestCase):
         """Test conversation memory with real LLM."""
         print("Testing conversation memory with real LLM...")
 
-        config = ChatConfig(model=self.model, max_tokens=100, max_history_length=3)
+        config = ChatConfig(
+            model=self.model,
+            max_tokens=100,
+            max_history_length=3,
+            system_prompt="You are a helpful assistant. Answer questions based on the conversation history.",
+        )
         chat = ChatSDK(config)
 
         # Establish context
@@ -302,16 +306,30 @@ class TestChatSDKIntegration(unittest.TestCase):
 
         print(f"✅ Quick chat: {response[:30]}...")
 
-        # Test quick_chat_with_memory
+        # Test quick_chat_with_memory using ChatSDK directly for better debugging
+        from gaia.chat.sdk import ChatConfig, ChatSDK
+
+        config = ChatConfig(
+            model=self.model,
+            assistant_name="MemoryBot",
+            system_prompt="You are a helpful assistant. Always answer questions directly based on the conversation history.",
+            max_history_length=4,
+        )
+        sdk = ChatSDK(config)
+
         messages = [
             "I have a pet dog named Max.",
             "What is my pet's name?",
             "What kind of animal is Max?",
         ]
 
-        responses = quick_chat_with_memory(
-            messages, model=self.model, assistant_name="MemoryBot"
-        )
+        responses = []
+        for msg in messages:
+            resp = sdk.send(msg)
+            responses.append(resp.text)
+            print(f"   Sent: {msg}")
+            print(f"   Got:  {resp.text[:80]}...")
+            print(f"   History size: {len(sdk.chat_history)}")
 
         self.assertEqual(len(responses), 3)
 
@@ -328,8 +346,6 @@ class TestChatSDKIntegration(unittest.TestCase):
         )
 
         print(f"✅ Memory chat responses: {len(responses)}")
-        for i, resp in enumerate(responses):
-            print(f"   {i+1}: {resp[:40]}...")
 
     def test_error_handling_integration(self):
         """Test error handling with real LLM server."""

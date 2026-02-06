@@ -26,10 +26,11 @@ sys.path.insert(
     0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
 
-# pylint: disable=wrong-import-position
-from gaia.agents.blender.agent import BlenderAgent
-from gaia.llm import create_client
-from gaia.logger import get_logger
+from gaia.agents.blender.agent import (  # pylint: disable=wrong-import-position
+    BlenderAgent,
+)
+from gaia.llm import create_client  # pylint: disable=wrong-import-position
+from gaia.logger import get_logger  # pylint: disable=wrong-import-position
 
 # pylint: enable=wrong-import-position
 
@@ -128,6 +129,7 @@ class GAIAMCPBridge:
         self.agents = {}
         self.tools = {}
         self.llm_client = None
+        self.chat_sdk = None
         self.verbose = verbose
         self.chat_sdk = None  # Lazy initialized in _execute_chat
         global VERBOSE
@@ -796,7 +798,7 @@ def start_server(host="localhost", port=8765, base_url=None, verbose=False):
         print("\n✅ Server stopped")
 
 
-if __name__ == "__main__":
+def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="GAIA MCP Bridge - HTTP Native")
@@ -811,3 +813,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     start_server(args.host, args.port, args.base_url, args.verbose)
+
+
+if __name__ == "__main__":
+    main()

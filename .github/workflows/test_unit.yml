@@ -46,6 +46,14 @@ jobs:
           uv pip install --system pytest pytest-cov
           uv pip install --system -e ".[api]"
 
+      - name: Validate packaging integrity
+        run: |
+          echo "=== Validating Packaging Integrity ==="
+          echo "Checking setup.py packages, __init__.py files, and entry points"
+          echo ""
+          pytest tests/unit/test_packaging.py -v --tb=short
+          echo "✅ Packaging integrity checks passed"
+
       - name: Validate CLI commands (dry-run)
         run: |
           echo "=== Validating CLI Commands ==="

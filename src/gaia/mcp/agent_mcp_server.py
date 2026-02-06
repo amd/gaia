@@ -213,9 +213,11 @@ class AgentMCPServer:
             print("\n✅ Server stopped")
 
     def stop(self):
-        """Stop the MCP server"""
-        # Note: With uvicorn, stopping is handled by KeyboardInterrupt
-        # This method is kept for API compatibility
+        """Stop the MCP server.
+
+        Note: With uvicorn, stopping is handled by KeyboardInterrupt.
+        This method is kept for API compatibility.
+        """
 
     def _print_startup_info(self):
         """Print startup banner"""

@@ -23,6 +23,7 @@ class Evaluator:
         self.log = get_logger(__name__)
         # Increase max_tokens to 4096 to avoid truncation of complex JSON responses
         self.claude = ClaudeClient(model=model, max_tokens=4096)
+        self.intermediate_dir = None
 
     def calculate_similarity(self, text1: str, text2: str) -> float:
         """
@@ -147,7 +148,7 @@ class Evaluator:
     def load_results(self, results_path: str) -> Dict:
         """Load test results from a JSON file."""
         try:
-            with open(results_path, "r") as f:
+            with open(results_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
             self.log.error(f"Error loading results file: {e}")
@@ -568,7 +569,7 @@ class Evaluator:
                                 )
 
                     else:
-                        self.log.error(f"No JSON found in response for question")
+                        self.log.error("No JSON found in response for question")
 
                         # Determine pass/fail without Claude analysis (similarity only)
                         pass_fail_result = self.determine_pass_fail(
@@ -869,18 +870,15 @@ class Evaluator:
                     }
                 )
                 return analysis
-            raise  # Re-raise if it's not an overload error
-
-        except Exception as e:
-            self.log.error(f"Error in analyze_with_claude: {e}")
+            self.log.error(f"Error in analyze_with_claude: {api_error}")
             return {
-                "overall_analysis": f"Analysis failed: {str(e)}",
+                "overall_analysis": f"Analysis failed: {str(api_error)}",
                 "strengths": [],
                 "weaknesses": ["Analysis failed to complete"],
                 "recommendations": ["Check logs for error details"],
                 "use_case_fit": "",
                 "per_question": [],
-                "overall_rating": {"rating": "error", "explanation": str(e)},
+                "overall_rating": {"rating": "error", "explanation": str(api_error)},
             }
 
     def _analyze_summarization_results(
@@ -973,6 +971,24 @@ class Evaluator:
                 summary_start_time = time.time()
                 generated_summaries = summary_result.get("generated_summaries", {})
 
+                # Check if generated_summaries is a string (error case from batch_experiment)
+                if isinstance(generated_summaries, str):
+                    # This is an error result, create an error entry for this summary
+                    analysis["per_question"].append(
+                        {
+                            "summary_index": i,
+                            "source_file": summary_result.get("source_file", ""),
+                            "analysis": {"error": generated_summaries},
+                            "overall_quality": "error",
+                            "error": generated_summaries,
+                        }
+                    )
+                    per_summary_timings.append(time.time() - summary_start_time)
+                    self.log.warning(
+                        f"Skipping analysis for summary {i}: {generated_summaries}"
+                    )
+                    continue
+
                 # Get ground truth summaries from embedded data or separate file
                 groundtruth_summaries = summary_result.get("groundtruth_summaries", {})
 
@@ -1024,7 +1040,7 @@ class Evaluator:
                                 if len(available_sources) > 10:
                                     error_msg += f"  ... and {len(available_sources) - 10} more\n"
 
-                                error_msg += f"\nAvailable transcript IDs:\n"
+                                error_msg += "\nAvailable transcript IDs:\n"
                                 for idx, tid in enumerate(available_ids[:10], 1):
                                     error_msg += f"  {idx}. {tid}\n"
                                 if len(available_ids) > 10:
@@ -1067,90 +1083,74 @@ class Evaluator:
                     "overall_quality": "",
                 }
 
-                # Compare generated vs ground truth if available
-                if groundtruth_summaries:
-                    prompt = f"""
-                    Analyze this summarization system result by comparing the generated summary against the ground truth.
+                # Determine document type from stored content_type or fall back to file extension
+                content_type = summary_result.get("content_type")
+                if not content_type:
+                    # Fallback for older experiments without content_type field
+                    source_file = summary_result.get("source_file", "")
+                    content_type = (
+                        "pdf" if source_file.lower().endswith(".pdf") else "transcript"
+                    )
 
-                    GENERATED SUMMARY:
-                    Executive Summary: {generated_summaries.get('executive_summary', 'N/A')}
-                    Detailed Summary: {generated_summaries.get('detailed_summary', 'N/A')}
-                    Action Items: {generated_summaries.get('action_items', [])}
-                    Key Decisions: {generated_summaries.get('key_decisions', [])}
-                    Participants: {generated_summaries.get('participants', [])}
-                    Topics Discussed: {generated_summaries.get('topics_discussed', [])}
+                # Build prompt sections based on document type
+                if content_type == "pdf":
+                    # For PDFs, only include brief and detailed summaries
+                    generated_sections = f"""
+                    Brief Summary: {generated_summaries.get('brief_summary', 'N/A')}
+                    Detailed Summary: {generated_summaries.get('detailed_summary', 'N/A')}"""
 
-                    GROUND TRUTH SUMMARY:
-                    Executive Summary: {groundtruth_summaries.get('executive_summary', 'N/A')}
-Detailed Summary: {groundtruth_summaries.get('detailed_summary', 'N/A')}
-Action Items: {groundtruth_summaries.get('action_items', [])}
-Key Decisions: {groundtruth_summaries.get('key_decisions', [])}
-Participants: {groundtruth_summaries.get('participants', [])}
-Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
+                    groundtruth_sections = (
+                        f"""
+                    Brief Summary: {groundtruth_summaries.get('brief_summary', 'N/A')}
+                    Detailed Summary: {groundtruth_summaries.get('detailed_summary', 'N/A')}"""
+                        if groundtruth_summaries
+                        else ""
+                    )
 
-                    Evaluate the generated summary on these criteria (rate each as excellent/good/fair/poor):
-                    1. Executive Summary Accuracy: How well does the executive summary capture the key points?
-                    2. Completeness: Are all important details covered?
-                    3. Action Items Accuracy: Are action items correctly identified and detailed?
-                    4. Key Decisions Accuracy: Are key decisions properly captured?
-                    5. Participant Identification: Are participants correctly identified?
-                    6. Topic Coverage: Are all discussed topics included?
+                    evaluation_criteria = """
+                    1. Brief Summary Quality: How well does the brief summary capture the key points? Is it concise and high-level?
+                    2. Detailed Summary Completeness: Are all important details covered in the detailed summary? Does it provide sufficient context and depth?"""
 
-                    Return your analysis in this JSON format:
-                    {{
-                        "executive_summary_quality": {{
+                    json_fields = """
+                        "brief_summary_quality": {{
                             "rating": "excellent/good/fair/poor",
                             "explanation": "detailed analysis"
                         }},
                         "detail_completeness": {{
                             "rating": "excellent/good/fair/poor", 
                             "explanation": "detailed analysis"
-                        }},
-                        "action_items_structure": {{
-                            "rating": "excellent/good/fair/poor",
-                            "explanation": "detailed analysis"
-                        }},
-                        "key_decisions_clarity": {{
-                            "rating": "excellent/good/fair/poor",
-                            "explanation": "detailed analysis"
-                        }},
-                        "participant_information": {{
-                            "rating": "excellent/good/fair/poor",
-                            "explanation": "detailed analysis"
-                        }},
-                        "topic_organization": {{
-                            "rating": "excellent/good/fair/poor",
-                            "explanation": "detailed analysis"
-                        }},
-                        "overall_quality": "excellent/good/fair/poor"
-                    }}
-                    """
+                        }},"""
                 else:
-                    # Analyze standalone summary quality
-                    prompt = f"""
-                    Analyze this generated meeting summary for quality and completeness.
-
-                    GENERATED SUMMARY:
+                    # For emails and transcripts, include action items, key decisions, participants and topics discussed
+                    generated_sections = f"""
                     Executive Summary: {generated_summaries.get('executive_summary', 'N/A')}
                     Detailed Summary: {generated_summaries.get('detailed_summary', 'N/A')}
                     Action Items: {generated_summaries.get('action_items', [])}
                     Key Decisions: {generated_summaries.get('key_decisions', [])}
                     Participants: {generated_summaries.get('participants', [])}
-                    Topics Discussed: {generated_summaries.get('topics_discussed', [])}
+                    Topics Discussed: {generated_summaries.get('topics_discussed', [])}"""
 
-                    Evaluate the summary quality (rate each as excellent/good/fair/poor):
-                    1. Executive Summary Quality: Is it clear and high-level?
-                    2. Detail Completeness: Does the detailed summary provide sufficient context?
-                    3. Action Items Structure: Are action items specific and actionable?
-                    4. Key Decisions Clarity: Are decisions clearly stated?
-                    5. Participant Information: Are participants properly identified?
-                    6. Topic Organization: Are topics well-organized and comprehensive?
+                    groundtruth_sections = (
+                        f"""
+                    Executive Summary: {groundtruth_summaries.get('executive_summary', 'N/A')}
+                    Detailed Summary: {groundtruth_summaries.get('detailed_summary', 'N/A')}
+                    Action Items: {groundtruth_summaries.get('action_items', [])}
+                    Key Decisions: {groundtruth_summaries.get('key_decisions', [])}
+                    Participants: {groundtruth_summaries.get('participants', [])}
+                    Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}"""
+                        if groundtruth_summaries
+                        else ""
+                    )
 
-                    IMPORTANT: Return ONLY valid JSON with no additional text, markdown formatting, or explanations.
-                    Ensure all JSON syntax is correct - no trailing commas, proper quotes, and complete structure.
+                    evaluation_criteria = """
+                    1. Executive Summary Accuracy: How well does the executive summary capture the key points?
+                    2. Completeness: Are all important details covered?
+                    3. Action Items Accuracy: Are action items correctly identified and detailed?
+                    4. Key Decisions Accuracy: Are key decisions properly captured?
+                    5. Participant Identification: Are participants correctly identified?
+                    6. Topic Coverage: Are all discussed topics included?"""
 
-                    Return your analysis in this exact JSON format:
-                    {{
+                    json_fields = """
                         "executive_summary_quality": {{
                             "rating": "excellent/good/fair/poor",
                             "explanation": "detailed analysis"
@@ -1174,7 +1174,109 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                         "topic_organization": {{
                             "rating": "excellent/good/fair/poor",
                             "explanation": "detailed analysis"
+                        }},"""
+
+                # Compare generated vs ground truth if available
+                if groundtruth_summaries:
+                    prompt = f"""
+                    Analyze this summarization system result by comparing the generated summary against the ground truth.
+
+                    GENERATED SUMMARY:
+                    {generated_sections}
+                    
+                    GROUND TRUTH SUMMARY:
+                    {groundtruth_sections}
+
+                    Evaluate the generated summary on these criteria (rate each as excellent/good/fair/poor):
+                    {evaluation_criteria}
+
+                    Return your analysis in this JSON format:
+                    {{
+                        {json_fields}
+                        "overall_quality": "excellent/good/fair/poor"
+                    }}
+                    """
+                else:
+                    # Analyze standalone summary quality (no ground truth)
+                    if content_type == "pdf":
+                        # For PDFs, only evaluate executive and detailed summaries
+                        standalone_sections = f"""
+                    Brief Summary: {generated_summaries.get('brief_summary', 'N/A')}
+                    Detailed Summary: {generated_summaries.get('detailed_summary', 'N/A')}"""
+
+                        standalone_criteria = """
+                    1. Brief Summary Quality: Is it clear, concise, and high-level? Does it effectively capture the main points?
+                    2. Detailed Summary Completeness: Does the detailed summary provide sufficient context and depth? Are all important details covered?"""
+
+                        standalone_json = """
+                        "brief_summary_quality": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
                         }},
+                        "detail_completeness": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},"""
+                    else:
+                        # For emails and transcripts, also evaluate action items, key decisions, participants and topics discussed
+
+                        standalone_sections = f"""
+                    Executive Summary: {generated_summaries.get('executive_summary', 'N/A')}
+                    Detailed Summary: {generated_summaries.get('detailed_summary', 'N/A')}
+                    Action Items: {generated_summaries.get('action_items', [])}
+                    Key Decisions: {generated_summaries.get('key_decisions', [])}
+                    Participants: {generated_summaries.get('participants', [])}
+                    Topics Discussed: {generated_summaries.get('topics_discussed', [])}"""
+
+                        standalone_criteria = """
+                    1. Executive Summary Quality: Is it clear and high-level?
+                    2. Detail Completeness: Does the detailed summary provide sufficient context?
+                    3. Action Items Structure: Are action items specific and actionable?
+                    4. Key Decisions Clarity: Are decisions clearly stated?
+                    5. Participant Information: Are participants properly identified?
+                    6. Topic Organization: Are topics well-organized and comprehensive?"""
+
+                        standalone_json = """
+                        "executive_summary_quality": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},
+                        "detail_completeness": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},
+                        "action_items_structure": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},
+                        "key_decisions_clarity": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},
+                        "participant_information": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},
+                        "topic_organization": {{
+                            "rating": "excellent/good/fair/poor",
+                            "explanation": "detailed analysis"
+                        }},"""
+
+                    prompt = f"""
+                    Analyze this generated document summary for quality and completeness.
+
+                    GENERATED SUMMARY:
+                    {standalone_sections}
+                    
+                    Evaluate the summary quality (rate each as excellent/good/fair/poor):
+                    {standalone_criteria}
+
+                    IMPORTANT: Return ONLY valid JSON with no additional text, markdown formatting, or explanations.
+                    Ensure all JSON syntax is correct - no trailing commas, proper quotes, and complete structure.
+
+                    Return your analysis in this exact JSON format:
+                    {{
+                        {standalone_json}
                         "overall_quality": "excellent/good/fair/poor"
                     }}
                     """
@@ -1304,22 +1406,6 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                                             "explanation": "[PARSE ERROR - See raw_response]",
                                         },
                                         "detail_completeness": {
-                                            "rating": "error",
-                                            "explanation": "[PARSE ERROR - See raw_response]",
-                                        },
-                                        "action_items_structure": {
-                                            "rating": "error",
-                                            "explanation": "[PARSE ERROR - See raw_response]",
-                                        },
-                                        "key_decisions_clarity": {
-                                            "rating": "error",
-                                            "explanation": "[PARSE ERROR - See raw_response]",
-                                        },
-                                        "participant_information": {
-                                            "rating": "error",
-                                            "explanation": "[PARSE ERROR - See raw_response]",
-                                        },
-                                        "topic_organization": {
                                             "rating": "error",
                                             "explanation": "[PARSE ERROR - See raw_response]",
                                         },
@@ -1484,7 +1570,7 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
             experiment_name = results.get("metadata", {}).get(
                 "experiment_name", "Unknown Model"
             )
-            model_type = results.get("metadata", {}).get("model", "")
+            _model_type = results.get("metadata", {}).get("model", "")
 
             overall_prompt = f"""
                 Review these summarization test results and provide a comprehensive overall analysis.
@@ -1893,7 +1979,7 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
 
             if output_dir:
                 results_path_obj = Path(results_path)
-                results_filename = results_path_obj.name
+                _results_filename = results_path_obj.name
 
                 # Preserve directory hierarchy if base_experiment_dir is provided
                 if base_experiment_dir:
@@ -1912,7 +1998,7 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                     # Flat structure (original behavior)
                     json_path = output_path / f"{results_path_obj.stem}.eval.json"
 
-                with open(json_path, "w") as f:
+                with open(json_path, "w", encoding="utf-8") as f:
                     json.dump(evaluation_data, f, indent=2)
                 self.log.info(f"Evaluation data saved to: {json_path}")
 
@@ -2001,8 +2087,6 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
         self, evaluation_files: List[str], output_dir: str, base_experiment_dir: str
     ) -> str:
         """Create a consolidated report of all evaluations."""
-        from datetime import datetime
-
         output_base_path = Path(output_dir)
 
         # Load all evaluation results
@@ -2049,7 +2133,7 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                     ),  # This is evaluation cost
                 }
 
-                # Load the corresponding experiment file to get inference cost
+                # Load the corresponding experiment file to get inference cost and performance
                 experiment_name = eval_path.stem.replace(".experiment.eval", "")
 
                 # Preserve the subdirectory structure when looking for experiment file
@@ -2076,6 +2160,25 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                         eval_info["inference_type"] = experiment_data.get(
                             "metadata", {}
                         ).get("inference_type", "unknown")
+
+                        # Add performance metrics (TTFT, latency, throughput)
+                        timing_data = experiment_data.get("metadata", {}).get(
+                            "timing", {}
+                        )
+                        eval_info["performance"] = {
+                            "total_time_seconds": timing_data.get(
+                                "total_experiment_time_seconds", 0
+                            ),
+                            "avg_latency_seconds": timing_data.get(
+                                "average_per_item_seconds", 0
+                            ),
+                            "min_latency_seconds": timing_data.get(
+                                "min_per_item_seconds", 0
+                            ),
+                            "max_latency_seconds": timing_data.get(
+                                "max_per_item_seconds", 0
+                            ),
+                        }
                     except Exception as e:
                         self.log.warning(
                             f"Could not load experiment file {experiment_file}: {e}"
@@ -2092,6 +2195,12 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                             "total_tokens": 0,
                         }
                         eval_info["inference_type"] = "unknown"
+                        eval_info["performance"] = {
+                            "total_time_seconds": 0,
+                            "avg_latency_seconds": 0,
+                            "min_latency_seconds": 0,
+                            "max_latency_seconds": 0,
+                        }
                 else:
                     self.log.warning(f"Experiment file not found: {experiment_file}")
                     # Set default values for missing experiment data
@@ -2106,6 +2215,12 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                         "total_tokens": 0,
                     }
                     eval_info["inference_type"] = "unknown"
+                    eval_info["performance"] = {
+                        "total_time_seconds": 0,
+                        "avg_latency_seconds": 0,
+                        "min_latency_seconds": 0,
+                        "max_latency_seconds": 0,
+                    }
 
                 # Extract aspect summary if available (aggregate only)
                 if evaluation_data.get("per_question"):
@@ -2316,8 +2431,6 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
         Returns:
             Path to the consolidated report file
         """
-        from datetime import datetime
-
         output_base_path = Path(output_dir)
         consolidated_filename = "consolidated_evaluations_report.json"
         consolidated_path = output_base_path / consolidated_filename
@@ -2652,7 +2765,7 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
             model_analyses.append(f"- **Strengths**: {', '.join(best_strengths)}")
             model_analyses.append(f"- **Weakness**: {best_weakness}")
             model_analyses.append(
-                f"- **Actionable**: Implement quality validation workflows, standardize summary templates"
+                "- **Actionable**: Implement quality validation workflows, standardize summary templates"
             )
 
             if len(models_data) > 1:
@@ -2667,7 +2780,7 @@ Topics Discussed: {groundtruth_summaries.get('topics_discussed', [])}
                 model_analyses.append(f"### **{worst['name']}** - Needs Improvement")
                 model_analyses.append(f"- **Issues**: {', '.join(worst_issues)}")
                 model_analyses.append(
-                    f"- **Actionable**: Enhance prompt engineering, add structured output validation"
+                    "- **Actionable**: Enhance prompt engineering, add structured output validation"
                 )
 
         # Cost efficiency analysis
@@ -2838,6 +2951,33 @@ Performance ranking: {ranking_text}
                             ) / total_summaries
                             quality_score = ((quality_score_raw - 1) / 3) * 100
 
+                    # Extract performance metrics from the original experiment file
+                    performance_data = {}
+                    experiment_file = eval_file.parent / f"{model_name}.experiment.json"
+                    if experiment_file.exists():
+                        try:
+                            with open(experiment_file, "r", encoding="utf-8") as f:
+                                exp_data = json.load(f)
+                            timing = exp_data.get("metadata", {}).get("timing", {})
+                            performance_data = {
+                                "avg_latency_seconds": timing.get(
+                                    "average_per_item_seconds", 0
+                                ),
+                                "min_latency_seconds": timing.get(
+                                    "min_per_item_seconds", 0
+                                ),
+                                "max_latency_seconds": timing.get(
+                                    "max_per_item_seconds", 0
+                                ),
+                                "total_time_seconds": timing.get(
+                                    "total_experiment_time_seconds", 0
+                                ),
+                            }
+                        except Exception as e:
+                            self.log.debug(
+                                f"Could not load performance data from {experiment_file}: {e}"
+                            )
+
                     model_info = {
                         "name": model_name,
                         "filename": eval_file.name,
@@ -2854,6 +2994,7 @@ Performance ranking: {ranking_text}
                         "rating": overall_rating.get("rating", "unknown"),
                         "quality_score": quality_score,  # Add quality score to model info
                         "total_cost": total_cost.get("total_cost", 0),
+                        "performance": performance_data,  # Add performance metrics
                         "analysis": eval_data.get("overall_analysis", ""),
                         "strengths": eval_data.get("strengths", []),
                         "weaknesses": eval_data.get("weaknesses", []),
@@ -2915,11 +3056,11 @@ Performance ranking: {ranking_text}
 
         # Create executive summary
         best_model = models_data[0] if models_data else None
-        worst_model = models_data[-1] if models_data else None
+        _worst_model = models_data[-1] if models_data else None
 
         # Build performance ranking
         ranking = []
-        for i, model in enumerate(models_data):
+        for _i, model in enumerate(models_data):
             ranking.append(f"**{model['name']}** ({model['pass_rate']:.0%})")
         ranking_text = " > ".join(ranking)
 
@@ -3016,7 +3157,7 @@ Performance ranking: {ranking_text}
             model_analyses.append(f"- **Strengths**: {', '.join(best_strengths)}")
             model_analyses.append(f"- **Weakness**: {best_weakness}")
             model_analyses.append(
-                f"- **Actionable**: Improve retrieval consistency, expand knowledge base coverage"
+                "- **Actionable**: Improve retrieval consistency, expand knowledge base coverage"
             )
 
             if len(models_data) > 1:
@@ -3031,7 +3172,7 @@ Performance ranking: {ranking_text}
                 model_analyses.append(f"### **{worst['name']}** - Needs Improvement")
                 model_analyses.append(f"- **Issues**: {', '.join(worst_issues)}")
                 model_analyses.append(
-                    f"- **Actionable**: Requires significant system improvements before production use"
+                    "- **Actionable**: Requires significant system improvements before production use"
                 )
 
         # Cost efficiency analysis

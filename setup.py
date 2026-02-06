@@ -33,9 +33,13 @@ setup(
         "gaia.testing",
         "gaia.utils",
         "gaia.apps",
+        "gaia.apps.docker",
+        "gaia.apps.jira",
         "gaia.apps.llm",
         "gaia.apps.summarize",
+        "gaia.apps.summarize.templates",
         "gaia.eval",
+        "gaia.eval.fix_code_testbench",
         "gaia.installer",
         "gaia.rag",
         "gaia.mcp",
@@ -65,6 +69,7 @@ setup(
         "gaia.agents.sd",
         "gaia.agents.summarize",
         "gaia.sd",
+        "gaia.vlm",
         "gaia.api",
     ],
     package_data={
@@ -133,6 +138,7 @@ setup(
             "scikit-learn>=1.5.0",
             "numpy>=2.0,<2.3.0",
             "pypdf",
+            "reportlab",
         ],
         "talk": [
             "pyaudio",
@@ -177,7 +183,6 @@ setup(
             "gaia = gaia.cli:main",
             "gaia-cli = gaia.cli:main",
             "gaia-mcp = gaia.mcp.mcp_bridge:main",
-            "gaia-mcp-atlassian = gaia.mcp.atlassian_mcp:main",
             "gaia-emr = gaia.agents.emr.cli:main",
             "gaia-code = gaia.agents.code.cli:main",
         ]

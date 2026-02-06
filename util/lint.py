@@ -30,6 +30,15 @@ class CheckResult:
 SRC_DIR = "src/gaia"
 TEST_DIR = "tests"
 PYLINT_CONFIG = ".pylintrc"
+# Disabled checks:
+# C0103: Invalid name (convention)
+# C0301: Line too long (handled by black)
+# W0246: Useless parent delegation
+# W0221: Arguments differ from overridden method
+# E1102: Not callable
+# R0401: Cyclic import
+# E0401: Import error (handled separately)
+# W0718: Broad exception
 DISABLED_CHECKS = "C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718"
 EXCLUDE_DIRS = (
     ".git,__pycache__,venv,.venv,.mypy_cache,.tox,.eggs,_build,buck-out,node_modules"
