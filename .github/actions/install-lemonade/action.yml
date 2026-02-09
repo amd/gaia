@@ -34,16 +34,23 @@ runs:
         $knownExe = Join-Path $knownPath "lemonade-server.exe"
 
         if (Test-Path $knownExe) {
+            Write-Host "Found at known location: $knownPath"
             if ($env:PATH -notlike "*$knownPath*") {
+                Write-Host "Adding to PATH"
                 $env:PATH = "$knownPath;$env:PATH"
                 echo "$knownPath" >> $env:GITHUB_PATH
+            } else {
+                Write-Host "Already in PATH"
             }
+        } else {
+            Write-Host "Not found at known location"
         }
 
         # Check if lemonade-server is now available
         $lemonadeCmd = Get-Command lemonade-server -ErrorAction SilentlyContinue
 
         if (-not $lemonadeCmd) {
+            Write-Host "lemonade-server not found in PATH, searching alternatives..."
             # Fallback: search other common installation locations
             $searchPaths = @(
                 "$env:ProgramFiles\Lemonade Server\bin",
@@ -58,8 +65,10 @@ runs:
             foreach ($path in $searchPaths) {
                 $exePath = Join-Path $path "lemonade-server.exe"
                 if (Test-Path $exePath) {
+                    Write-Host "Found at alternative location: $path"
                     $lemonadePath = $exePath
                     $dir = Split-Path $lemonadePath -Parent
+                    Write-Host "Adding to PATH"
                     echo "$dir" >> $env:GITHUB_PATH
                     $env:PATH = "$dir;$env:PATH"
                     break
