@@ -23,8 +23,8 @@ Compare with mcp_windows_system_health_demo.py:
 - Agent: LLM decides tool calls, shows reasoning, outputs to Notepad
 
 Requirements:
-- Windows 10/11
-- Python 3.10+
+- Windows 11
+- Python 3.12+
 - Windows MCP: uvx windows-mcp (auto-installed)
 - Lemonade server running for LLM reasoning
 
