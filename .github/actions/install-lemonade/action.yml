@@ -37,6 +37,8 @@ runs:
 
             # Common installation paths to check
             $searchPaths = @(
+                "${env:ProgramFiles(x86)}\Lemonade Server\bin",
+                "$env:ProgramFiles\Lemonade Server\bin",
                 "$env:LOCALAPPDATA\Programs\Lemonade",
                 "$env:ProgramFiles\Lemonade",
                 "${env:ProgramFiles(x86)}\Lemonade",
