@@ -161,7 +161,7 @@ class MCPInitCommand:
             self.console.print()
             self.console.print("  [bold]Learn more:[/bold]")
             self.console.print(
-                "     [cyan]https://amd-gaia.ai/guides/mcp-client[/cyan]"
+                "     [cyan]https://amd-gaia.ai/guides/mcp/client[/cyan]"
             )
             self.console.print()
         else:
@@ -182,7 +182,7 @@ class MCPInitCommand:
             self._print("     https://github.com/punkpeye/awesome-mcp-servers")
             self._print("")
             self._print("  Learn more:")
-            self._print("     https://amd-gaia.ai/guides/mcp-client")
+            self._print("     https://amd-gaia.ai/guides/mcp/client")
             self._print("")
 
 

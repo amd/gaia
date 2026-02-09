@@ -45,8 +45,13 @@
               "guides/jira",
               "guides/docker",
               "guides/routing",
-              "guides/mcp-client",
-              "guides/windows-mcp-system-health"
+              {
+                "group": "MCP",
+                "pages": [
+                  "guides/mcp/client",
+                  "guides/mcp/windows-system-health"
+                ]
+              }
             ]
           },
           {
