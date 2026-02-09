@@ -44,6 +44,9 @@ jobs:
           python-version: '3.12'
           install-package: '.[lemonade]'
 
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
       - name: Start Lemonade Server, Load Model, and Test
         shell: powershell
         timeout-minutes: 10
