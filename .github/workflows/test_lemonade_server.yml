@@ -31,8 +31,8 @@ concurrency:
 
 jobs:
   test-lemonade-server:
-    name: Lemonade Server Smoke Test (${{ inputs.runson || 'stx' }})
-    runs-on: ${{ inputs.runson || 'stx' }}
+    name: Lemonade Server Smoke Test (${{ inputs.runson || (contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test') || 'stx' }})
+    runs-on: ${{ inputs.runson || (contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test') || 'stx' }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
