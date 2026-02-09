@@ -27,70 +27,25 @@ runs:
       id: verify
       shell: powershell
       run: |
-        Write-Host "=== Checking for Lemonade Server ==="
+        Write-Host "=== Verifying Lemonade Server ==="
 
-        # Debug: Show PATH variables
-        Write-Host "=== System PATH (from registry) ==="
-        $systemPath = [Environment]::GetEnvironmentVariable("PATH", "Machine")
-        if ($systemPath) {
-            $systemPath -split ';' | ForEach-Object { Write-Host "  $_" }
-        } else {
-            Write-Host "  (empty or not accessible)"
-        }
-        Write-Host ""
-
-        Write-Host "=== User PATH (from registry) ==="
-        $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-        if ($userPath) {
-            $userPath -split ';' | ForEach-Object { Write-Host "  $_" }
-        } else {
-            Write-Host "  (empty or not accessible)"
-        }
-        Write-Host ""
-
-        Write-Host "=== Current Session PATH ==="
-        $env:PATH -split ';' | ForEach-Object { Write-Host "  $_" }
-        Write-Host ""
-
-        Write-Host "=== Checking for Lemonade Server path ==="
-        $lemonadeInPath = $env:PATH -split ';' | Where-Object { $_ -like "*Lemonade*" }
-        if ($lemonadeInPath) {
-            Write-Host "Found Lemonade-related paths:"
-            $lemonadeInPath | ForEach-Object { Write-Host "  $_" }
-        } else {
-            Write-Host "No Lemonade-related paths found in session PATH"
-        }
-        Write-Host ""
-
-        # Known installation path for stx runners - add it proactively
+        # Known installation path - check and add to PATH if needed
         $knownPath = "${env:ProgramFiles(x86)}\Lemonade Server\bin"
         $knownExe = Join-Path $knownPath "lemonade-server.exe"
 
-        Write-Host "Checking known path: $knownPath"
         if (Test-Path $knownExe) {
-            Write-Host "Found lemonade-server.exe at: $knownExe"
             if ($env:PATH -notlike "*$knownPath*") {
-                Write-Host "Adding to PATH for this session"
                 $env:PATH = "$knownPath;$env:PATH"
-                # Also add to GITHUB_PATH for subsequent steps
                 echo "$knownPath" >> $env:GITHUB_PATH
-            } else {
-                Write-Host "Path already in PATH variable"
             }
-        } else {
-            Write-Host "Known path does not exist or lemonade-server.exe not found"
         }
-        Write-Host ""
 
-        # First check if it's already in PATH (including newly added)
+        # Check if lemonade-server is now available
         $lemonadeCmd = Get-Command lemonade-server -ErrorAction SilentlyContinue
 
         if (-not $lemonadeCmd) {
-            Write-Host "lemonade-server not found in PATH, searching common installation locations..."
-
-            # Common installation paths to check
+            # Fallback: search common installation locations
             $searchPaths = @(
-                "${env:ProgramFiles(x86)}\Lemonade Server\bin",
                 "$env:ProgramFiles\Lemonade Server\bin",
                 "$env:LOCALAPPDATA\Programs\Lemonade",
                 "$env:ProgramFiles\Lemonade",
@@ -103,11 +58,8 @@ runs:
             foreach ($path in $searchPaths) {
                 $exePath = Join-Path $path "lemonade-server.exe"
                 if (Test-Path $exePath) {
-                    Write-Host "Found lemonade-server at: $exePath"
                     $lemonadePath = $exePath
-                    # Add directory to PATH for this job
                     $dir = Split-Path $lemonadePath -Parent
-                    Write-Host "Adding $dir to PATH"
                     echo "$dir" >> $env:GITHUB_PATH
                     $env:PATH = "$dir;$env:PATH"
                     break
@@ -115,15 +67,16 @@ runs:
             }
 
             if (-not $lemonadePath) {
-                Write-Host "ERROR: lemonade-server not found in any common location"
-                Write-Host "Searched: $($searchPaths -join ', ')"
+                Write-Host "ERROR: lemonade-server not found"
                 Write-Host "Please ensure Lemonade Server is installed on this runner"
                 exit 1
             }
-        } else {
-            $lemonadePath = $lemonadeCmd.Source
-            Write-Host "Found lemonade-server in PATH at: $lemonadePath"
+
+            $lemonadeCmd = Get-Command lemonade-server -ErrorAction SilentlyContinue
         }
+
+        $lemonadePath = $lemonadeCmd.Source
+        Write-Host "Found lemonade-server at: $lemonadePath"
 
         $versionOutput = & lemonade-server --version 2>&1
         Write-Host $versionOutput
