@@ -51,14 +51,14 @@ GAIA agents act as **MCP clients** that connect to **MCP servers**. Each server 
 
 ## See It In Action
 
-Try it now - this connects to multiple MCP servers and starts an interactive session:
+Try it now - this connects to an MCP server and starts an interactive session:
 
 ```bash
 uv run examples/mcp_config_based_agent.py
 ```
 
 ```
-Connected to MCP servers: memory, thinking, time
+Connected to MCP servers: time
 Try: 'What time is it in Tokyo?' | Type 'quit' to exit.
 
 You: What time is it in Tokyo?
@@ -66,7 +66,7 @@ You: What time is it in Tokyo?
 Agent: The current time in Tokyo is 11:59 PM on Wednesday, January 28, 2026, Japan Standard Time (JST).
 ```
 
-Three MCP servers connected, tools auto-discovered, and the agent uses them naturally.
+MCP server connected, tools auto-discovered, and the agent uses them naturally.
 
 ## Quick Start
 
@@ -334,7 +334,7 @@ This format is compatible with Claude Desktop and other Anthropic tools. The `mc
     uv run examples/mcp_config_based_agent.py
     ```
     ```
-    Connected to MCP servers: memory
+    Connected to MCP servers: memory, time
     Try: 'What time is it in Tokyo?' | Type 'quit' to exit.
 
     You: Remember that my favorite color is blue

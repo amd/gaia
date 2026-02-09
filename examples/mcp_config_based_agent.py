@@ -4,7 +4,7 @@
 """
 MCP Agent Example - Config-Based Server Loading
 
-Run: python examples/mcp_config_based_agent.py
+Run: uv run examples/mcp_config_based_agent.py
 """
 
 from pathlib import Path
@@ -24,15 +24,24 @@ class MCPAgent(Agent, MCPClientMixin):
         MCPClientMixin.__init__(self, debug=True, config_file=CONFIG_FILE)
 
     def _get_system_prompt(self) -> str:
-        return """You are a helpful assistant with MCP tools.
-Use tools prefixed with 'mcp_<server>_<tool>' when needed."""
+        return "You are a helpful assistant. Use the available tools when needed."
 
     def _register_tools(self) -> None:
         pass  # MCP tools auto-registered
 
 
-def main():
-    MCPAgent().process_query("What time is it in Tokyo?")
-
 if __name__ == "__main__":
-    main()
+    agent = MCPAgent()
+
+    servers = agent.list_mcp_servers()
+    print(f"Connected to MCP servers: {', '.join(servers)}")
+    print("Try: 'What time is it in Tokyo?' | Type 'quit' to exit.\n")
+
+    while True:
+        user_input = input("You: ").strip()
+        if user_input.lower() in ("quit", "exit", "q"):
+            break
+        if user_input:
+            result = agent.process_query(user_input)
+            if result.get("result"):
+                print(f"\nAgent: {result['result']}\n")

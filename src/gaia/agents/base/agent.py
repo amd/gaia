@@ -1016,6 +1016,26 @@ You must respond ONLY in valid JSON. No text before { or after }.
         # For all other types (int, float, bool, None), return unchanged
         return tool_args
 
+    def _resolve_tool_name(self, tool_name: str) -> Optional[str]:
+        """Resolve an unrecognised tool name to a registered one.
+
+        Handles common LLM mistakes:
+        - Unprefixed MCP names  ("get_current_time" -> "mcp_time_get_current_time")
+        - Case-insensitive match ("Get_Current_Time" -> "mcp_time_get_current_time")
+
+        Returns the resolved name, or None if no unique match is found.
+        """
+        lower = tool_name.lower()
+        suffix = f"_{lower}"
+        matches = [n for n in _TOOL_REGISTRY if n.lower().endswith(suffix)]
+        if len(matches) == 1:
+            return matches[0]
+        # Also try exact case-insensitive match
+        matches = [n for n in _TOOL_REGISTRY if n.lower() == lower]
+        if len(matches) == 1:
+            return matches[0]
+        return None
+
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
         Execute a tool by name with the provided arguments.
@@ -1030,8 +1050,18 @@ You must respond ONLY in valid JSON. No text before { or after }.
         logger.debug(f"Executing tool {tool_name} with args: {tool_args}")
 
         if tool_name not in _TOOL_REGISTRY:
-            logger.error(f"Tool '{tool_name}' not found in registry")
-            return {"status": "error", "error": f"Tool '{tool_name}' not found"}
+            # Try to resolve unprefixed MCP tool names (e.g. "get_current_time"
+            # when registry has "mcp_time_get_current_time"). Local LLMs often
+            # strip the mcp_<server>_ prefix.
+            resolved = self._resolve_tool_name(tool_name)
+            if resolved:
+                logger.debug(
+                    f"Resolved tool '{tool_name}' -> '{resolved}'"
+                )
+                tool_name = resolved
+            else:
+                logger.error(f"Tool '{tool_name}' not found in registry")
+                return {"status": "error", "error": f"Tool '{tool_name}' not found"}
 
         tool = _TOOL_REGISTRY[tool_name]["function"]
         sig = inspect.signature(tool)
