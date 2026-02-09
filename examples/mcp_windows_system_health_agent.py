@@ -24,24 +24,13 @@ Compare with mcp_windows_system_health_demo.py:
 
 Requirements:
 - Windows 10/11
-- Python 3.13+
+- Python 3.10+
 - Windows MCP: uvx windows-mcp (auto-installed)
 - Lemonade server running for LLM reasoning
 
 Run:
-    # Default: health check with Notepad output
     uv run examples/mcp_windows_system_health_agent.py
-
-    # Custom queries
-    uv run examples/mcp_windows_system_health_agent.py --query "Check memory only and type to Notepad"
-    uv run examples/mcp_windows_system_health_agent.py --query "Check disk space and show in Notepad"
-
-    # Debug mode to see more details
-    uv run examples/mcp_windows_system_health_agent.py --debug
 """
-
-import argparse
-import sys
 
 from gaia.agents.base.agent import Agent
 from gaia.mcp import MCPClientMixin
@@ -74,7 +63,9 @@ class WindowsSystemHealthAgent(Agent, MCPClientMixin):
         # Connect to Windows MCP server
         # MCP tools are automatically registered and system prompt is rebuilt
         print("Connecting to Windows MCP server...")
-        success = self.connect_mcp_server("windows", {"command": "uvx", "args": ["windows-mcp"]})
+        success = self.connect_mcp_server(
+            "windows", {"command": "uvx", "args": ["windows-mcp"]}
+        )
         if success:
             print("  Connected to Windows MCP server")
             if debug:
@@ -154,27 +145,16 @@ The task is complete when the report is visible in Notepad."""
         pass
 
 
-def main():
-    """Main entry point for the agent-driven demo."""
-    parser = argparse.ArgumentParser()
-
-
-    try:
-        # Create the agent
-        agent = WindowsSystemHealthAgent()
-
-        # Process the query - agent loop handles everything
-        agent.process_query("Check my Windows system health (memory, disk, CPU) and type the report into Notepad.")
-
-        sys.exit(0)
-
-    except KeyboardInterrupt:
-        print("\n\nInterrupted by user")
-        sys.exit(130)
-    except Exception as e:
-        print(f"\n[ERROR] Agent failed: {e}")
-        sys.exit(1)
-
-
 if __name__ == "__main__":
-    main()
+    agent = WindowsSystemHealthAgent()
+
+    print("Windows System Health Agent ready! Type 'quit' to exit.\n")
+
+    while True:
+        user_input = input("You: ").strip()
+        if user_input.lower() in ("quit", "exit", "q"):
+            break
+        if user_input:
+            result = agent.process_query(user_input)
+            if result.get("result"):
+                print(f"\nAgent: {result['result']}\n")
