@@ -51,20 +51,22 @@ GAIA agents act as **MCP clients** that connect to **MCP servers**. Each server 
 
 ## See It In Action
 
-Try it now - this single command connects to multiple MCP servers and uses their tools:
+Try it now - this connects to multiple MCP servers and starts an interactive session:
 
 ```bash
-python examples/mcp_config_based_agent.py
+uv run examples/mcp_config_based_agent.py
 ```
 
-Output:
 ```
-Connected: memory, thinking, time
+Connected to MCP servers: memory, thinking, time
+Try: 'What time is it in Tokyo?' | Type 'quit' to exit.
+
+You: What time is it in Tokyo?
 
 Agent: The current time in Tokyo is 11:59 PM on Wednesday, January 28, 2026, Japan Standard Time (JST).
 ```
 
-That's it. Three MCP servers connected, tools auto-discovered, and the agent uses them naturally.
+Three MCP servers connected, tools auto-discovered, and the agent uses them naturally.
 
 ## Quick Start
 
@@ -112,9 +114,30 @@ That's it. Three MCP servers connected, tools auto-discovered, and the agent use
         def _register_tools(self) -> None:
             pass  # MCP tools are auto-registered by the mixin
 
-    agent = MCPAgent(skip_lemonade=True)
+    agent = MCPAgent()
     result = agent.process_query("What time is it in Tokyo?")
     print(result.get("result", "No response"))
+    ```
+    Expected output:
+    ```
+    The current time in Tokyo is 11:42 PM on Wednesday, January 28, 2026 (JST, UTC+9).
+    ```
+  </Step>
+
+  <Step title="Verify with a query">
+    Run the config-based example to interactively test:
+    ```bash
+    uv run examples/mcp_config_based_agent.py
+    ```
+    ```
+    Connected to MCP servers: time
+    Try: 'What time is it in Tokyo?' | Type 'quit' to exit.
+
+    You: What time is it in Paris?
+    Agent: The current time in Paris is 3:42 PM on Wednesday, January 28, 2026 (CET, UTC+1).
+
+    You: And in New York?
+    Agent: The current time in New York is 9:42 AM on Wednesday, January 28, 2026 (EST, UTC-5).
     ```
   </Step>
 </Steps>
@@ -155,6 +178,61 @@ graph TB
 3. **Transport Layer** communicates via stdio (subprocess)
 4. **MCP Servers** expose tools that become available to your agent
 
+## Connecting to Servers
+
+### `connect_mcp_server(name, config)`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | `str` | Yes | Friendly name for the server (used as tool prefix) |
+| `config` | `dict` | Yes | Server configuration (see fields below) |
+| `config.command` | `str` | Yes | Base command to run (e.g., `"npx"`, `"uvx"`) |
+| `config.args` | `list[str]` | No | Arguments for the command |
+| `config.env` | `dict[str, str]` | No | Environment variables for the server process |
+
+**Returns:** `bool` — `True` if connection and tool registration succeeded.
+
+<Tip>
+**Finding MCP servers:** Browse the [MCP Server Hub on glama.ai](https://glama.ai/mcp/servers) to discover servers and their available tools. Each listing shows the install command, available tools, and usage examples.
+</Tip>
+
+<Tabs>
+  <Tab title="From Config File">
+    ```python
+    # Load all servers from mcp_servers.json
+    count = agent.load_mcp_servers_from_config()
+    print(f"Loaded {count} servers")
+    ```
+  </Tab>
+
+  <Tab title="Programmatically">
+    ```python
+    # Connect to individual servers in code
+    agent.connect_mcp_server("filesystem", {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    })
+    ```
+  </Tab>
+
+  <Tab title="Via CLI">
+    ```bash
+    # Add server to config
+    gaia mcp add filesystem "npx -y @modelcontextprotocol/server-filesystem /tmp"
+
+    # List configured servers
+    gaia mcp list
+    ```
+  </Tab>
+</Tabs>
+
+After connecting, verify the server is working by sending a query:
+
+```python
+result = agent.process_query("List the files in /tmp")
+print(result.get("result"))
+```
+
 ## Configuration
 
 ### Config File Locations
@@ -194,38 +272,6 @@ This allows project-specific MCP server configurations while maintaining a globa
 This format is compatible with Claude Desktop and other Anthropic tools. The `mcpServers` key, separate `command`/`args` fields, and `env` support are standard across the ecosystem.
 </Note>
 
-### Connecting to Servers
-
-<Tabs>
-  <Tab title="From Config File">
-    ```python
-    # Load all servers from mcp_servers.json
-    count = agent.load_mcp_servers_from_config()
-    print(f"Loaded {count} servers")
-    ```
-  </Tab>
-
-  <Tab title="Programmatically">
-    ```python
-    # Connect to individual servers in code
-    agent.connect_mcp_server("filesystem", {
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-    })
-    ```
-  </Tab>
-
-  <Tab title="Via CLI">
-    ```bash
-    # Add server to config
-    gaia mcp add filesystem "npx -y @modelcontextprotocol/server-filesystem /tmp"
-
-    # List configured servers
-    gaia mcp list
-    ```
-  </Tab>
-</Tabs>
-
 ### Popular MCP Servers
 
 <Tabs>
@@ -258,6 +304,57 @@ This format is compatible with Claude Desktop and other Anthropic tools. The `mc
     ```
   </Tab>
 </Tabs>
+
+## Adding a New MCP Server
+
+<Steps>
+  <Step title="Find a server">
+    Browse the [MCP Server Hub on glama.ai](https://glama.ai/mcp/servers) or the [official MCP servers list](https://github.com/modelcontextprotocol/servers). Each listing includes the install command and available tools.
+  </Step>
+
+  <Step title="Add to config">
+    ```bash
+    gaia mcp add <name> "<command>"
+    ```
+    For example, to add the Memory server:
+    ```bash
+    gaia mcp add memory "npx -y @modelcontextprotocol/server-memory"
+    ```
+  </Step>
+
+  <Step title="Test the connection">
+    ```bash
+    gaia mcp test-client memory
+    ```
+    This verifies GAIA can start the server and discover its tools.
+  </Step>
+
+  <Step title="Verify with a query">
+    ```bash
+    uv run examples/mcp_config_based_agent.py
+    ```
+    ```
+    Connected to MCP servers: memory
+    Try: 'What time is it in Tokyo?' | Type 'quit' to exit.
+
+    You: Remember that my favorite color is blue
+    Agent: I've stored that your favorite color is blue.
+    ```
+  </Step>
+</Steps>
+
+## Security Considerations
+
+<Warning>
+**Vet MCP servers before connecting.** Each MCP server runs as a subprocess with access to your system. A malicious server could read files, execute commands, or exfiltrate data.
+</Warning>
+
+Before adding an MCP server:
+
+1. **Review the source** — Only use servers from trusted sources with public repositories
+2. **Check permissions** — Understand what system access the server requires (filesystem paths, API tokens, network access)
+3. **Limit scope** — When connecting filesystem servers, restrict to specific directories rather than `/`
+4. **Audit environment variables** — Never pass secrets (API keys, tokens) to servers you haven't reviewed
 
 ## Complete Examples
 
@@ -438,22 +535,16 @@ For detailed API usage and patterns, see the [SDK Reference](/sdk/sdks/mcp).
 ## Next Steps
 
 <CardGroup cols={2}>
-  <Card title="Browse Community Servers" icon="globe" href="https://github.com/punkpeye/awesome-mcp-servers">
-    Curated list of MCP server implementations from the community
+  <Card title="MCP Server Hub" icon="globe" href="https://glama.ai/mcp/servers">
+    Browse and discover MCP servers with install commands and tool listings
+  </Card>
+
+  <Card title="Official MCP Servers" icon="server" href="https://github.com/modelcontextprotocol/servers">
+    Browse official MCP servers from Anthropic
   </Card>
 
   <Card title="Build a Custom Agent" icon="robot" href="/guides/code">
     Learn how to create agents that leverage MCP tools
-  </Card>
-
-  <Card title="MCP Server List" icon="server" href="https://github.com/modelcontextprotocol/servers">
-    Browse official MCP servers from Anthropic
-    
-    <Warning>
-    **Note:** User experience may vary depending on the MCP server implementation.
-    Some servers may have different response times, error handling, or feature
-    availability. Always test servers before production use.
-    </Warning>
   </Card>
 
   <Card title="Create MCP Server" icon="code" href="/sdk/infrastructure/mcp">
