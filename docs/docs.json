@@ -320,6 +320,7 @@
               "plans/cua",
               "plans/docker-containers",
               "plans/image-agent",
+              "plans/vision-sdk",
               "plans/mcp-docs"
             ]
           }
