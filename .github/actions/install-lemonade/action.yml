@@ -29,15 +29,46 @@ runs:
       run: |
         Write-Host "=== Checking for Lemonade Server ==="
 
+        # First check if it's already in PATH
         $lemonadeCmd = Get-Command lemonade-server -ErrorAction SilentlyContinue
-        if (-not $lemonadeCmd) {
-            Write-Host "ERROR: lemonade-server not found in PATH"
-            Write-Host "Please ensure Lemonade Server is installed on this runner"
-            exit 1
-        }
 
-        $lemonadePath = $lemonadeCmd.Source
-        Write-Host "Found lemonade-server at: $lemonadePath"
+        if (-not $lemonadeCmd) {
+            Write-Host "lemonade-server not found in PATH, searching common installation locations..."
+
+            # Common installation paths to check
+            $searchPaths = @(
+                "$env:LOCALAPPDATA\Programs\Lemonade",
+                "$env:ProgramFiles\Lemonade",
+                "${env:ProgramFiles(x86)}\Lemonade",
+                "$env:USERPROFILE\Lemonade",
+                "$env:LOCALAPPDATA\Lemonade"
+            )
+
+            $lemonadePath = $null
+            foreach ($path in $searchPaths) {
+                $exePath = Join-Path $path "lemonade-server.exe"
+                if (Test-Path $exePath) {
+                    Write-Host "Found lemonade-server at: $exePath"
+                    $lemonadePath = $exePath
+                    # Add directory to PATH for this job
+                    $dir = Split-Path $lemonadePath -Parent
+                    Write-Host "Adding $dir to PATH"
+                    echo "$dir" >> $env:GITHUB_PATH
+                    $env:PATH = "$dir;$env:PATH"
+                    break
+                }
+            }
+
+            if (-not $lemonadePath) {
+                Write-Host "ERROR: lemonade-server not found in any common location"
+                Write-Host "Searched: $($searchPaths -join ', ')"
+                Write-Host "Please ensure Lemonade Server is installed on this runner"
+                exit 1
+            }
+        } else {
+            $lemonadePath = $lemonadeCmd.Source
+            Write-Host "Found lemonade-server in PATH at: $lemonadePath"
+        }
 
         $versionOutput = & lemonade-server --version 2>&1
         Write-Host $versionOutput
