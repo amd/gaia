@@ -35,7 +35,7 @@ permissions:
 jobs:
   test-chat-sdk-windows:
     name: Test Chat SDK on Windows (Lemonade Integration)
-    runs-on: [stx]
+    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
       - uses: actions/checkout@v6
