@@ -29,17 +29,58 @@ runs:
       run: |
         Write-Host "=== Checking for Lemonade Server ==="
 
-        # Debug: Show current PATH
-        Write-Host "Current PATH:"
+        # Debug: Show PATH variables
+        Write-Host "=== System PATH (from registry) ==="
+        $systemPath = [Environment]::GetEnvironmentVariable("PATH", "Machine")
+        if ($systemPath) {
+            $systemPath -split ';' | ForEach-Object { Write-Host "  $_" }
+        } else {
+            Write-Host "  (empty or not accessible)"
+        }
+        Write-Host ""
+
+        Write-Host "=== User PATH (from registry) ==="
+        $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+        if ($userPath) {
+            $userPath -split ';' | ForEach-Object { Write-Host "  $_" }
+        } else {
+            Write-Host "  (empty or not accessible)"
+        }
+        Write-Host ""
+
+        Write-Host "=== Current Session PATH ==="
         $env:PATH -split ';' | ForEach-Object { Write-Host "  $_" }
+        Write-Host ""
+
+        Write-Host "=== Checking for Lemonade Server path ==="
+        $lemonadeInPath = $env:PATH -split ';' | Where-Object { $_ -like "*Lemonade*" }
+        if ($lemonadeInPath) {
+            Write-Host "Found Lemonade-related paths:"
+            $lemonadeInPath | ForEach-Object { Write-Host "  $_" }
+        } else {
+            Write-Host "No Lemonade-related paths found in session PATH"
+        }
         Write-Host ""
 
         # Known installation path for stx runners - add it proactively
         $knownPath = "${env:ProgramFiles(x86)}\Lemonade Server\bin"
-        if ((Test-Path $knownPath) -and ($env:PATH -notlike "*$knownPath*")) {
-            Write-Host "Adding known Lemonade Server path to session: $knownPath"
-            $env:PATH = "$knownPath;$env:PATH"
+        $knownExe = Join-Path $knownPath "lemonade-server.exe"
+
+        Write-Host "Checking known path: $knownPath"
+        if (Test-Path $knownExe) {
+            Write-Host "Found lemonade-server.exe at: $knownExe"
+            if ($env:PATH -notlike "*$knownPath*") {
+                Write-Host "Adding to PATH for this session"
+                $env:PATH = "$knownPath;$env:PATH"
+                # Also add to GITHUB_PATH for subsequent steps
+                echo "$knownPath" >> $env:GITHUB_PATH
+            } else {
+                Write-Host "Path already in PATH variable"
+            }
+        } else {
+            Write-Host "Known path does not exist or lemonade-server.exe not found"
         }
+        Write-Host ""
 
         # First check if it's already in PATH (including newly added)
         $lemonadeCmd = Get-Command lemonade-server -ErrorAction SilentlyContinue
