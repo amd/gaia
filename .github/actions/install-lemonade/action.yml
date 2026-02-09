@@ -29,7 +29,19 @@ runs:
       run: |
         Write-Host "=== Checking for Lemonade Server ==="
 
-        # First check if it's already in PATH
+        # Debug: Show current PATH
+        Write-Host "Current PATH:"
+        $env:PATH -split ';' | ForEach-Object { Write-Host "  $_" }
+        Write-Host ""
+
+        # Known installation path for stx runners - add it proactively
+        $knownPath = "${env:ProgramFiles(x86)}\Lemonade Server\bin"
+        if ((Test-Path $knownPath) -and ($env:PATH -notlike "*$knownPath*")) {
+            Write-Host "Adding known Lemonade Server path to session: $knownPath"
+            $env:PATH = "$knownPath;$env:PATH"
+        }
+
+        # First check if it's already in PATH (including newly added)
         $lemonadeCmd = Get-Command lemonade-server -ErrorAction SilentlyContinue
 
         if (-not $lemonadeCmd) {
