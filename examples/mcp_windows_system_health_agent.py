@@ -148,7 +148,10 @@ The task is complete when the report is visible in Notepad."""
 if __name__ == "__main__":
     agent = WindowsSystemHealthAgent()
 
-    print("Windows System Health Agent ready! Type 'quit' to exit.\n")
+    print("Windows System Health Agent ready! Type 'quit' to exit.")
+    print("Try: 'Run a full system health check and paste the report into Notepad'")
+    print("  or 'How much RAM and disk space do I have?'")
+    print("  or 'What LLM models can my system run?'\n")
 
     while True:
         user_input = input("You: ").strip()
