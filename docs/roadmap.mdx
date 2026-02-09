@@ -40,6 +40,7 @@ graph TD
     subgraph Q2["Q2 2026"]
         F("MCP Docs Server<br/><i>AI assistant context</i>")
         G("AI PC Agents Hub<br/><i>Discover & compete</i>")
+        V("Vision SDK<br/><i>Document processing pipeline</i>")
     end
 
     subgraph Q3["Q3 2026"]
@@ -52,7 +53,8 @@ graph TD
     C --> C2
     C2 --> D
     D --> F
-    F --> G
+    F --> V
+    V --> G
     G --> H
 
     style A fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
@@ -61,6 +63,7 @@ graph TD
     style C2 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style D fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style E fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style V fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style F fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style G fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style H fill:#2d2d2d,stroke:#555,stroke-width:2px,color:#fff
@@ -216,6 +219,41 @@ Key capabilities:
 Transform "a cat" into professional SD images through intelligent optimization of all generation parameters, with a searchable gallery that learns your aesthetic preferences.
 
 → [View detailed plan](/plans/image-agent) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/272)
+
+### Q2 2026: Vision SDK
+
+**Unified document processing pipeline with VLM-powered OCR**
+
+A comprehensive SDK for processing any document type—medical forms, legal logs, technical manuals—using Vision Language Models running locally on AMD hardware.
+
+```python
+from gaia.vision import VisionSDK
+
+vision = VisionSDK()
+
+# Medical forms → structured data
+result = vision.extract("form.pdf", schema=medical_schema)
+
+# Legal logs → tables + visuals
+result = vision.extract("logs.pdf", extract_tables=True, extract_visuals=True)
+
+# Technical manuals → RAG indexing
+result = vision.extract("manual.pdf", pages="all")
+```
+
+Key capabilities:
+- Multi-page document processing (1 to 1,200+ pages)
+- Table and visual element extraction
+- Handwriting recognition (validated)
+- Structured data extraction with schemas
+- Batch processing and expense reporting
+- Seamless RAG integration
+- Agent mixin for vision-powered tools
+- Production-ready with checkpointing and parallel processing
+
+**Impact:** Reduce vision agent code by 60%, enable document automation workflows, power legal/medical/technical document processing.
+
+→ [View detailed plan](/plans/vision-sdk) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/325)
 
 ### Q2 2026: MCP Docs Server
 
