@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "time": {
-      "command": "uvx",
-      "args": ["mcp-server-time"]
+      "command": "npx",
+      "args": ["-y", "@theo.foobar/mcp-time"]
     }
   }
 }

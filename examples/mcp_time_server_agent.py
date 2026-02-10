@@ -20,10 +20,10 @@ class TimeAgent(Agent, MCPClientMixin):
         Agent.__init__(self, max_steps=10)
         MCPClientMixin.__init__(self, auto_load_config=False)
 
-        # Connect to Python-based MCP server via uvx
+        # Connect to Node.js-based MCP server via npx
         self.connect_mcp_server("time", {
-            "command": "uvx",
-            "args": ["mcp-server-time"]
+            "command": "npx",
+            "args": ["-y", "@theo.foobar/mcp-time"]
         })
 
     def _get_system_prompt(self) -> str:

@@ -75,6 +75,7 @@ class MCPClient:
         self.debug = debug
         self.server_info: Dict[str, Any] = {}
         self._tools: Optional[List[MCPTool]] = None
+        self.last_error: Optional[str] = None
 
     @classmethod
     def from_command(
@@ -130,13 +131,24 @@ class MCPClient:
     def connect(self) -> bool:
         """Connect to the MCP server and initialize.
 
+        On failure, stores the error message in ``self.last_error``.
+
         Returns:
             bool: True if connection and initialization successful
         """
+        self.last_error = None
         logger.debug(f"Connecting to MCP server '{self.name}'...")
 
-        if not self.transport.connect():
-            logger.error(f"Failed to establish transport connection to '{self.name}'")
+        try:
+            if not self.transport.connect():
+                self.last_error = (
+                    f"Failed to establish transport connection to '{self.name}'"
+                )
+                logger.warning(self.last_error)
+                return False
+        except Exception as e:
+            self.last_error = f"Transport error for '{self.name}': {e}"
+            logger.warning(self.last_error)
             return False
 
         try:
@@ -155,9 +167,10 @@ class MCPClient:
 
             if "error" in response:
                 error = response["error"]
-                logger.error(
+                self.last_error = (
                     f"Initialization failed: {error.get('message', 'Unknown error')}"
                 )
+                logger.warning(f"MCP server '{self.name}': {self.last_error}")
                 return False
 
             result = response.get("result", {})
@@ -169,7 +182,8 @@ class MCPClient:
             return True
 
         except Exception as e:
-            logger.error(f"Error during initialization: {e}")
+            self.last_error = f"Error during initialization: {e}"
+            logger.warning(f"MCP server '{self.name}': {self.last_error}")
             self.disconnect()
             return False
 

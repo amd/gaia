@@ -71,7 +71,8 @@ class MCPClientManager:
 
         # Connect
         if not client.connect():
-            raise RuntimeError(f"Failed to connect to MCP server '{name}'")
+            detail = f": {client.last_error}" if client.last_error else ""
+            raise RuntimeError(f"Failed to connect to MCP server '{name}'{detail}")
 
         # Store client
         self._clients[name] = client
@@ -171,7 +172,10 @@ class MCPClientManager:
                     self._clients[name] = client
                     logger.debug(f"Loaded MCP server: {name}")
                 else:
-                    logger.warning(f"Failed to connect to configured server: {name}")
+                    detail = f": {client.last_error}" if client.last_error else ""
+                    logger.warning(
+                        f"Failed to connect to configured server: {name}{detail}"
+                    )
 
             except Exception as e:
                 logger.error(f"Error loading server '{name}': {e}")

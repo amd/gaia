@@ -87,7 +87,7 @@
       "WebFetch",
       "WebFetch(domain:code.claude.com)",
       "WebFetch(domain:lemonade-server.ai)",
-      "WebSearch"      
+      "WebSearch"
     ],
     "deny": []
   },

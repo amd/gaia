@@ -613,18 +613,7 @@ When user asks to "index my data folder" or similar:
                 logger.error(f"Failed to index {doc}: {e}")
 
         # Update system prompt after indexing to include the new documents
-        self.update_system_prompt()
-
-    def update_system_prompt(self) -> None:
-        """Update the system prompt with current indexed documents."""
-        # Use base class method to regenerate prompt with tools and JSON format
-        # ChatAgent's _get_system_prompt() includes document list, so this works
         self.rebuild_system_prompt()
-
-        if self.rag:
-            logger.debug(
-                f"Updated system prompt with {len(self.rag.indexed_files)} indexed documents"
-            )
 
     def _start_watching(self) -> None:
         """Start watching directories for changes."""

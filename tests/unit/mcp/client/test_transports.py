@@ -93,11 +93,16 @@ class TestStdioTransport:
         with pytest.raises(RuntimeError, match="Transport not connected"):
             transport.send_request("test_method")
 
+    @patch("gaia.mcp.client.transports.stdio.time.sleep")
     @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
-    def test_send_request_when_process_died_raises_error(self, mock_popen):
-        """Test that send_request() raises error if process died."""
+    def test_send_request_when_process_died_raises_error(self, mock_popen, mock_sleep):
+        """Test that send_request() raises error if process dies after connect."""
         mock_process = Mock()
-        mock_process.poll.return_value = 1  # Process exited with code 1
+        # Process alive during connect, dead by send_request
+        mock_process.poll.side_effect = [None, 1, 1]
+        mock_process.returncode = 1
+        mock_process.pid = 1234
+        mock_process.stderr = StringIO("")
         mock_popen.return_value = mock_process
 
         transport = StdioTransport("test command")
@@ -106,11 +111,21 @@ class TestStdioTransport:
         with pytest.raises(RuntimeError, match="process died"):
             transport.send_request("test_method")
 
+    @patch("gaia.mcp.client.transports.stdio.time.sleep")
     @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
-    def test_is_connected_returns_false_when_process_exits(self, mock_popen):
+    def test_is_connected_returns_false_when_process_exits(
+        self, mock_popen, mock_sleep
+    ):
         """Test that is_connected() returns False when process exits."""
         mock_process = Mock()
-        mock_process.poll.side_effect = [None, None, 0]  # Alive, alive, then dead
+        # connect() calls poll() once for early crash check, then is_connected() calls poll()
+        mock_process.poll.side_effect = [
+            None,
+            None,
+            None,
+            0,
+        ]  # connect, alive, alive, dead
+        mock_process.pid = 1234
         mock_popen.return_value = mock_process
 
         transport = StdioTransport("test command")
@@ -247,3 +262,93 @@ class TestStdioTransport:
         call_args = mock_popen.call_args
         # Empty args should use shell mode like legacy
         assert call_args[1]["shell"] is True
+
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_read_stderr_from_dead_process(self, mock_popen):
+        """Test that _read_stderr captures output from a dead process."""
+        mock_process = Mock()
+        mock_process.poll.return_value = 1  # Process is dead
+        mock_process.stderr = StringIO("Error: something went wrong\n")
+        mock_popen.return_value = mock_process
+
+        transport = StdioTransport("test command")
+        transport._process = mock_process
+
+        stderr = transport._read_stderr()
+        assert "something went wrong" in stderr
+
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_read_stderr_skips_live_process(self, mock_popen):
+        """Test that _read_stderr returns empty for a live process."""
+        mock_process = Mock()
+        mock_process.poll.return_value = None  # Process is alive
+        mock_process.stderr = StringIO("should not be read")
+        mock_popen.return_value = mock_process
+
+        transport = StdioTransport("test command")
+        transport._process = mock_process
+
+        stderr = transport._read_stderr()
+        assert stderr == ""
+
+    def test_format_exit_code_with_signal(self):
+        """Test that _format_exit_code translates signal numbers to names."""
+        # -11 is SIGSEGV on Unix
+        result = StdioTransport._format_exit_code(-11)
+        assert "-11" in result
+        assert "SIGSEGV" in result
+
+    def test_format_exit_code_with_sigkill(self):
+        """Test _format_exit_code for SIGKILL (-9)."""
+        result = StdioTransport._format_exit_code(-9)
+        assert "-9" in result
+        assert "SIGKILL" in result
+
+    def test_format_exit_code_positive(self):
+        """Test _format_exit_code for normal exit codes (no signal name)."""
+        result = StdioTransport._format_exit_code(1)
+        assert result == "1"
+
+    def test_format_exit_code_none(self):
+        """Test _format_exit_code for None."""
+        result = StdioTransport._format_exit_code(None)
+        assert result == "None"
+
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_process_died_error_includes_signal_name(self, mock_popen):
+        """Test that _process_died_error includes signal name and stderr."""
+        mock_process = Mock()
+        mock_process.returncode = -11
+        mock_process.poll.return_value = -11
+        mock_process.stderr = StringIO("Segmentation fault (core dumped)\n")
+        mock_popen.return_value = mock_process
+
+        transport = StdioTransport("test command")
+        transport._process = mock_process
+
+        error = transport._process_died_error()
+        msg = str(error)
+        assert "SIGSEGV" in msg
+        assert "Segmentation fault" in msg
+        assert "Hint:" in msg
+        assert "uvx cache clean" in msg
+
+    @patch("gaia.mcp.client.transports.stdio.time.sleep")
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_connect_detects_immediate_crash(self, mock_popen, mock_sleep):
+        """Test that connect() detects process dying immediately after start."""
+        mock_process = Mock()
+        # poll returns None first (for Popen), then -11 after sleep
+        mock_process.poll.return_value = -11
+        mock_process.returncode = -11
+        mock_process.pid = 12345
+        mock_process.stderr = StringIO("fatal error\n")
+        mock_popen.return_value = mock_process
+
+        transport = StdioTransport("bad-command", args=["--crash"])
+
+        with pytest.raises(RuntimeError, match="process died"):
+            transport.connect()
+
+        # Process reference should be cleaned up
+        assert transport._process is None

@@ -71,13 +71,9 @@ class MCPInitCommand:
                 config_data = {"mcpServers": {}}
                 with open(config_path, "w", encoding="utf-8") as f:
                     json.dump(config_data, f, indent=2)
-                self.console.print(
-                    f"   [green]✓[/green] Created config: {config_path}"
-                )
+                self.console.print(f"   [green]✓[/green] Created config: {config_path}")
             else:
-                self.console.print(
-                    f"   [green]✓[/green] Config exists: {config_path}"
-                )
+                self.console.print(f"   [green]✓[/green] Config exists: {config_path}")
                 self.console.print(f"   [dim](Existing config preserved)[/dim]")
 
             # Step 3: Print guidance
@@ -109,9 +105,7 @@ class MCPInitCommand:
         self.console.print("  [bold]Next steps:[/bold]")
         self.console.print()
         self.console.print("  1. Add MCP servers to your config:")
-        self.console.print(
-            '     [cyan]gaia mcp add time "uvx mcp-server-time"[/cyan]'
-        )
+        self.console.print('     [cyan]gaia mcp add time "uvx mcp-server-time"[/cyan]')
         self.console.print()
         self.console.print("  2. Or edit the config file directly:")
         self.console.print(f"     [cyan]{config_path}[/cyan]")
@@ -122,9 +116,7 @@ class MCPInitCommand:
         )
         self.console.print()
         self.console.print("  [bold]Learn more:[/bold]")
-        self.console.print(
-            "     [cyan]https://amd-gaia.ai/guides/mcp/client[/cyan]"
-        )
+        self.console.print("     [cyan]https://amd-gaia.ai/guides/mcp/client[/cyan]")
         self.console.print()
 
 

@@ -372,7 +372,7 @@ def interactive_mode(agent: ChatAgent):
 
                         # Update system prompt to include newly indexed documents
                         if success_count > 0:
-                            agent.update_system_prompt()
+                            agent.rebuild_system_prompt()
 
                     else:
                         # Single file
@@ -423,7 +423,7 @@ def interactive_mode(agent: ChatAgent):
                                 print("=" * 60)
 
                                 # Update system prompt to include newly indexed document
-                                agent.update_system_prompt()
+                                agent.rebuild_system_prompt()
                             else:
                                 # Display error
                                 print("❌ INDEXING FAILED")

@@ -1055,9 +1055,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
             # strip the mcp_<server>_ prefix.
             resolved = self._resolve_tool_name(tool_name)
             if resolved:
-                logger.debug(
-                    f"Resolved tool '{tool_name}' -> '{resolved}'"
-                )
+                logger.debug(f"Resolved tool '{tool_name}' -> '{resolved}'")
                 tool_name = resolved
             else:
                 logger.error(f"Tool '{tool_name}' not found in registry")
