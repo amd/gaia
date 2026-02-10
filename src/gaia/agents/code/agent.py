@@ -361,7 +361,11 @@ class CodeAgent(
         def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> Any:
             """Execute a registered tool."""
             if tool_name not in _TOOL_REGISTRY:
-                return {"success": False, "error": f"Unknown tool: {tool_name}"}
+                resolved = self._resolve_tool_name(tool_name)
+                if resolved:
+                    tool_name = resolved
+                else:
+                    return {"success": False, "error": f"Unknown tool: {tool_name}"}
 
             tool_func = _TOOL_REGISTRY[tool_name]["function"]
             try:
