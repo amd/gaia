@@ -81,7 +81,7 @@ gaia init [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--profile, -p` | string | chat | Profile to initialize (minimal, chat, code, rag, all) |
+| `--profile, -p` | string | chat | Profile to initialize (minimal, chat, code, rag, vlm, all) |
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
 | `--skip-models` | flag | false | Skip model downloads (only install Lemonade) |
 | `--skip-lemonade` | flag | false | Skip Lemonade installation check (for CI with pre-installed Lemonade) |
@@ -99,6 +99,7 @@ gaia init [OPTIONS]
 | `chat` | Qwen3-Coder-30B, nomic-embed, Qwen2.5-VL-7B | Interactive chat with RAG and vision | ~25 GB |
 | `code` | Qwen3-Coder-30B | Autonomous coding assistant | ~18 GB |
 | `rag` | Qwen3-Coder-30B, nomic-embed, Qwen2.5-VL-7B | Document Q&A with retrieval and vision | ~25 GB |
+| `vlm` | Qwen3-VL-4B | Vision pipeline for document and image extraction | ~3 GB |
 | `all` | All models | All models for all agents | ~26 GB |
 
 <Note>
@@ -118,6 +119,10 @@ gaia init --minimal
 
 ```bash Code Development
 gaia init --profile code
+```
+
+```bash Vision Pipeline (Lightweight)
+gaia init --profile vlm
 ```
 
 ```bash Non-Interactive CI/CD

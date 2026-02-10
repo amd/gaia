@@ -7,130 +7,235 @@ title: "Vision-Language Models"
 </Info>
 
 <Note>
-**Import:** `from gaia.llm import VLMClient`
+**Import:** `from gaia.vlm import StructuredVLMExtractor` (structured extraction) or `from gaia.llm import VLMClient` (raw VLM)
 </Note>
----
 
-<Badge text="development" color="orange" />
+---
 
 **Detailed Spec:** [spec/vlm-client](/spec/vlm-client)
 
-**Note:** Status is Beta because VLM model availability depends on Lemonade Server configuration.
+**Setup:** `gaia init --profile vlm` installs Lemonade Server and downloads the Qwen3-VL-4B vision model (~3 GB).
 
-**Purpose:** Extract text from images and documents using vision-language models.
+**Purpose:** Extract structured data (tables, charts, key-value pairs, timelines) from images and documents using vision-language models.
 
 ---
 
-## Basic VLM Usage
+## StructuredVLMExtractor (Recommended)
+
+The `StructuredVLMExtractor` is the high-level API for extracting structured data from images and documents. It handles prompt engineering, JSON parsing, and format conversion automatically.
+
+```python
+from gaia.vlm import StructuredVLMExtractor
+
+extractor = StructuredVLMExtractor()
+```
+
+### Extract Key-Value Pairs
+
+Pull specific fields from an image (invoices, forms, receipts):
+
+```python
+from pathlib import Path
+
+image_bytes = Path("invoice.png").read_bytes()
+
+fields = extractor.extract_key_values(
+    image_bytes,
+    keys=["invoice_number", "date", "total", "vendor_name"]
+)
+# {"invoice_number": "INV-12345", "date": "2024-01-15", "total": 150.00, "vendor_name": "Acme Corp"}
+```
+
+### Extract Tables
+
+Pull tabular data as a list of row dictionaries:
+
+```python
+image_bytes = Path("spreadsheet.png").read_bytes()
+
+rows = extractor.extract_table(image_bytes, table_description="a sales report table")
+# [
+#   {"product": "Widget A", "units": "150", "revenue": "$7,500"},
+#   {"product": "Widget B", "units": "230", "revenue": "$11,500"}
+# ]
+```
+
+### Extract Chart Data
+
+Pull values from bar charts, pie charts, timelines, or any visual data representation. The `value_format` parameter controls how values are returned:
+
+```python
+# Bar chart with numeric values
+sales = extractor.extract_chart_data(
+    image_bytes,
+    categories=["Q1", "Q2", "Q3", "Q4"],
+    value_format="number"
+)
+# {"Q1": 150000, "Q2": 175000, "Q3": 200000, "Q4": 225000}
+
+# Pie chart with percentages
+shares = extractor.extract_chart_data(
+    image_bytes,
+    categories=["Product A", "Product B", "Product C"],
+    value_format="percentage"
+)
+# {"Product A": 45.5, "Product B": 32.0, "Product C": 22.5}
+
+# Timeline with time durations (HH:MM:SS converted to decimal hours)
+hours = extractor.extract_chart_data(
+    image_bytes,
+    categories=["Active", "Idle", "Offline", "Maintenance"],
+    value_format="time_hms_decimal"
+)
+# {"Active": 14.777, "Idle": 0.022, "Offline": 7.654, "Maintenance": 1.547}
+```
+
+**Supported formats:**
+
+| value_format | Use Case | VLM Extracts | Python Converts | Output |
+|--------------|----------|-------------|-----------------|--------|
+| `"auto"` | Unknown charts | As-is | No conversion | Mixed |
+| `"number"` | Bar/line charts | Numbers | No conversion | Number |
+| `"percentage"` | Pie charts | Percentages | No conversion | Float |
+| `"time_hms"` | Time charts | `"14:46:38"` | No conversion | String |
+| `"time_hms_decimal"` | Time charts | `"14:46:38"` | HH:MM:SS to decimal | Float |
+
+### Extract with Custom Schema
+
+Define a typed schema for complex documents:
+
+```python
+schema = {
+    "fields": {
+        "driver_name": {"type": "string", "description": "driver full name", "required": True},
+        "total_hours": {"type": "number", "description": "total duty hours"},
+        "record_date": {"type": "date", "description": "log date"}
+    }
+}
+
+data = extractor.extract_structured(image_bytes, schema)
+# {"driver_name": "HOLMAN, UNDRA D", "total_hours": 24.0, "record_date": "2024-08-05"}
+```
+
+### Process Full Documents
+
+Extract from multi-page PDFs with a single call:
+
+```python
+result = extractor.extract(
+    "driver-logs.pdf",
+    pages="all",
+    extract_tables=True,
+    extract_timelines=True,
+    timeline_status_types=["OFF", "SB", "D", "ON"],
+    on_progress=lambda current, total: print(f"Page {current}/{total}")
+)
+
+# Access structured data
+for page in result["pages"]:
+    print(f"Page {page['page']}: {page.get('timeline', {})}")
+
+# Aggregated totals across all pages
+print(result["aggregated_data"]["timeline_totals"])
+```
+
+---
+
+## How Two-Step Extraction Works
+
+A key design principle: **VLMs read text accurately but do math poorly**. When extracting numeric data from charts, the extractor uses a two-step approach:
+
+1. **VLM extracts strings** - Ask the model to read values as text (e.g., `"14:46:38"`)
+2. **Python converts** - Reliable code does the math (e.g., `14 + 46/60 + 38/3600 = 14.777`)
+
+This achieves 100% accuracy on numeric conversions, compared to ~40% when asking the VLM to convert directly. The `value_format` parameter controls whether conversion happens.
+
+---
+
+## Low-Level VLMClient
+
+For custom prompts or direct VLM access, use `VLMClient`:
 
 ```python
 from gaia.llm import VLMClient
 from pathlib import Path
 
-# Initialize VLM
 vlm = VLMClient()
 
-# Check if VLM is available
 if vlm.check_availability():
-    # Extract from image
-    image_path = Path("invoice.png")
-    image_bytes = image_path.read_bytes()
+    image_bytes = Path("document.png").read_bytes()
 
-    # Extract text
-    extracted_text = vlm.extract_from_image(
-        image_bytes=image_bytes,
-        prompt="Extract all text from this invoice image."
+    # Raw text extraction (default OCR prompt)
+    text = vlm.extract_from_image(image_bytes)
+
+    # Custom prompt
+    result = vlm.extract_from_image(
+        image_bytes,
+        prompt="Describe all charts and diagrams in this image."
     )
-    print(extracted_text)
 ```
+
+<Note>
+`StructuredVLMExtractor` uses `VLMClient` internally. Use `VLMClient` directly only when you need full control over the prompt.
+</Note>
 
 ---
 
-## Structured Extraction
-
-```python
-from gaia.llm import VLMClient
-from pathlib import Path
-import json
-
-vlm = VLMClient()
-
-# Structured extraction with JSON
-image_bytes = Path("medical_form.png").read_bytes()
-
-prompt = """Extract patient information from this medical form.
-Return a JSON object with these fields:
-{
-    "first_name": "",
-    "last_name": "",
-    "date_of_birth": "YYYY-MM-DD",
-    "phone": "",
-    "email": "",
-    "allergies": [],
-    "medications": []
-}"""
-
-result = vlm.extract_from_image(image_bytes, prompt)
-
-# Parse JSON from result
-try:
-    if "```json" in result:
-        json_str = result.split("```json")[1].split("```")[0]
-    else:
-        json_str = result
-
-    data = json.loads(json_str.strip())
-    print(f"Patient: {data['first_name']} {data['last_name']}")
-    print(f"Allergies: {', '.join(data['allergies'])}")
-except json.JSONDecodeError:
-    print("Failed to parse JSON")
-```
-
----
-
-## VLM in Agent
+## VLM in an Agent
 
 ```python
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import tool
-from gaia.llm import VLMClient
+from gaia.vlm import StructuredVLMExtractor
 from pathlib import Path
 
-class FormProcessingAgent(Agent):
-    """Agent that processes scanned forms."""
+class InvoiceAgent(Agent):
+    """Agent that processes scanned invoices."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.vlm = VLMClient()
+        self.extractor = StructuredVLMExtractor()
+
+    def _get_system_prompt(self) -> str:
+        return "You process scanned invoices and extract billing data."
 
     def _register_tools(self):
+        agent = self
+
         @tool
-        def extract_form(image_path: str) -> dict:
-            """Extract data from a scanned form image."""
+        def extract_invoice(image_path: str) -> dict:
+            """Extract invoice fields from a scanned image."""
             path = Path(image_path)
             if not path.exists():
                 return {"error": f"Image not found: {image_path}"}
 
-            image_bytes = path.read_bytes()
+            return agent.extractor.extract_key_values(
+                path.read_bytes(),
+                keys=["invoice_number", "date", "total", "vendor", "line_items"]
+            )
 
-            # Extract text with structured prompt
-            prompt = "Extract all form fields as JSON: {field_name: value, ...}"
-            extracted = self.vlm.extract_from_image(image_bytes, prompt)
+        @tool
+        def extract_table(image_path: str) -> dict:
+            """Extract line items table from an invoice image."""
+            path = Path(image_path)
+            if not path.exists():
+                return {"error": f"Image not found: {image_path}"}
 
-            return {
-                "status": "success",
-                "image": str(path),
-                "extracted_data": extracted
-            }
+            rows = agent.extractor.extract_table(
+                path.read_bytes(),
+                table_description="an invoice line items table"
+            )
+            return {"line_items": rows, "count": len(rows)}
 ```
 
 ---
 
 ## Related Topics
 
-- **[Agent System](../core/agent-system)** - Building agents with VLM
-- **[Complete Examples](../examples)** - Receipt processing example
+- **[Agent System](../core/agent-system)** - Building agents with VLM tools
+- **[Complete Examples](../examples)** - Receipt and document processing examples
 - **[LLM Integration](./llm)** - Working with language models
+- **[CLI Reference](/reference/cli#init-command)** - `gaia init --profile vlm` setup
 
 ---
 
