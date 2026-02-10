@@ -149,7 +149,7 @@ if __name__ == "__main__":
     agent = WindowsSystemHealthAgent()
 
     print("Windows System Health Agent ready! Type 'quit' to exit.")
-    print("Try: 'Run a full system health check and paste the report into Notepad'")
+    print("Try: 'Run a full system health analysis.'")
     print("  or 'How much RAM and disk space do I have?'")
     print("  or 'What LLM models can my system run?'\n")
 
