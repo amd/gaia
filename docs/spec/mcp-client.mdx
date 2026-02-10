@@ -51,13 +51,20 @@ flowchart TB
         Transport(["StdioTransport"])
     end
 
+    subgraph ExtServers ["External MCP Servers"]
+        Time(["Time"])
+        GitHub(["GitHub"])
+        FS(["Filesystem"])
+        More(["..."])
+    end
+
     Mixin --> Manager
     Manager --> Client
     Client --> Transport
-    Transport --> Time(["Time"])
-    Transport --> GitHub(["GitHub"])
-    Transport --> FS(["Filesystem"])
-    Transport --> More(["..."])
+    Transport --> Time
+    Transport --> GitHub
+    Transport --> FS
+    Transport --> More
 
     style Mixin fill:#ED1C24,stroke:#C8171E,stroke-width:3px,color:#fff
     style Manager fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
@@ -68,6 +75,7 @@ flowchart TB
     style FS fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
     style More fill:#444,stroke:#666,stroke-width:2px,color:#aaa,stroke-dasharray:3
     style GA fill:none,stroke:#ED1C24,stroke-width:2px,stroke-dasharray:5,color:#ED1C24
+    style ExtServers fill:none,stroke:#2d2d2d,stroke-width:2px,stroke-dasharray:5,color:#2d2d2d
 
     linkStyle default stroke:#ED1C24,stroke-width:2px
 ```
