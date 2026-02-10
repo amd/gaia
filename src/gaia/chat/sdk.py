@@ -24,6 +24,7 @@ class ChatConfig:
 
     model: str = DEFAULT_MODEL_NAME
     max_tokens: int = 512
+    temperature: Optional[float] = None
     system_prompt: Optional[str] = None
     max_history_length: int = 4  # Number of conversation pairs to keep
     show_stats: bool = False
@@ -222,6 +223,8 @@ class ChatSDK:
                 kwargs.setdefault("stop", ["<|eot_id|>", "<|start_header_id|>"])
 
             # Use generate with formatted prompt
+            if "temperature" not in kwargs and self.config.temperature is not None:
+                kwargs["temperature"] = self.config.temperature
             response = self.llm_client.generate(
                 prompt=formatted_prompt,
                 model=self.config.model,
@@ -305,6 +308,8 @@ class ChatSDK:
                 kwargs.setdefault("stop", ["<|eot_id|>", "<|start_header_id|>"])
 
             # Use generate with formatted prompt for streaming
+            if "temperature" not in kwargs and self.config.temperature is not None:
+                kwargs["temperature"] = self.config.temperature
             full_response = ""
             for chunk in self.llm_client.generate(
                 prompt=formatted_prompt, model=self.config.model, stream=True, **kwargs
@@ -376,6 +381,11 @@ class ChatSDK:
             generate_kwargs = dict(kwargs)
             if "max_tokens" not in generate_kwargs:
                 generate_kwargs["max_tokens"] = self.config.max_tokens
+            if (
+                "temperature" not in generate_kwargs
+                and self.config.temperature is not None
+            ):
+                generate_kwargs["temperature"] = self.config.temperature
 
             # Note: Retry logic is now handled at the LLM client level
             response = self.llm_client.generate(
@@ -445,6 +455,11 @@ class ChatSDK:
             generate_kwargs = dict(kwargs)
             if "max_tokens" not in generate_kwargs:
                 generate_kwargs["max_tokens"] = self.config.max_tokens
+            if (
+                "temperature" not in generate_kwargs
+                and self.config.temperature is not None
+            ):
+                generate_kwargs["temperature"] = self.config.temperature
 
             full_response = ""
             for chunk in self.llm_client.generate(

@@ -108,6 +108,11 @@ ENV/
 # IDE settings
 .idea/
 
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
 # Node.js
 node_modules/
 npm-debug.log*
@@ -189,3 +194,11 @@ version.txt
 **/version.nsh
 **/.gaia_servers.json
 **/agent_output_*.json
+
+# SD test results and artifacts
+sd_model_sweep_results/
+quick_test_results/
+test_*.png
+diffusers_*.png
+sdxl_base_*.png
+docs/playbooks/sd-agent/index-backup.mdx

@@ -27,6 +27,11 @@ on:
   merge_group:
   workflow_dispatch:
 
+# Cancel in-progress runs when a new run is triggered
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -44,6 +49,7 @@ jobs:
           python-version: '3.12'
           # Note: 'blender' excluded as bpy requires Blender runtime
           install-package: '.[dev,talk,rag,mcp,api]'
+          extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade

@@ -79,7 +79,7 @@ def _get_lemonade_config() -> tuple:
 # Model Configuration Defaults
 # =========================================================================
 # Default model for text generation - lightweight CPU model for testing
-DEFAULT_MODEL_NAME = "Qwen2.5-0.5B-Instruct-CPU"
+DEFAULT_MODEL_NAME = "Qwen3-0.6B-GGUF"
 # DEFAULT_MODEL_NAME = "Llama-3.2-3B-Instruct-Hybrid"
 
 # =========================================================================
@@ -153,10 +153,10 @@ MODELS = {
         display_name="Qwen3 Coder 30B",
         min_ctx_size=32768,
     ),
-    "qwen2.5-0.5b": ModelRequirement(
+    "qwen3-0.6b": ModelRequirement(
         model_type=ModelType.LLM,
-        model_id="Qwen2.5-0.5B-Instruct-CPU",
-        display_name="Qwen2.5 0.5B (Fast)",
+        model_id="Qwen3-0.6B-GGUF",
+        display_name="Qwen3 0.6B (Fast)",
         min_ctx_size=4096,
     ),
     # Embedding Models
@@ -236,7 +236,7 @@ AGENT_PROFILES = {
     "minimal": AgentProfile(
         name="minimal",
         display_name="Minimal (Fast)",
-        models=["qwen2.5-0.5b"],
+        models=["qwen3-0.6b"],
         min_ctx_size=4096,
         description="Fast responses with smaller model",
     ),
@@ -417,6 +417,10 @@ def _prompt_user_for_repair(model_name: str) -> bool:
             "Action:",
             "[green]Resume download (Lemonade will continue where it left off)[/green]",
         )
+        table.add_row(
+            "",
+            "[dim]To force redownload from scratch, use: [cyan]gaia init --force-models[/cyan][/dim]",
+        )
 
         console.print(
             Panel(
@@ -446,6 +450,8 @@ def _prompt_user_for_repair(model_name: str) -> bool:
         print(f"Model: {model_name}")
         print("Status: Download incomplete or files corrupted")
         print("Action: Resume download (Lemonade will continue where it left off)")
+        print()
+        print("To force redownload from scratch, use: gaia init --force-models")
         print("=" * 60)
 
         while True:
@@ -1601,6 +1607,139 @@ class LemonadeClient:
             self.log.error(f"Error generating embeddings: {str(e)}")
             raise LemonadeClientError(f"Error generating embeddings: {str(e)}")
 
+    # =========================================================================
+    # Image Generation (Stable Diffusion)
+    # =========================================================================
+
+    # Supported SD configurations
+    SD_MODELS = ["SD-1.5", "SD-Turbo", "SDXL-Base-1.0", "SDXL-Turbo"]
+    SD_SIZES = ["512x512", "768x768", "1024x1024"]
+
+    # Model-specific defaults
+    SD_MODEL_DEFAULTS = {
+        "SD-1.5": {"steps": 20, "cfg_scale": 7.5, "size": "512x512"},
+        "SD-Turbo": {"steps": 4, "cfg_scale": 1.0, "size": "512x512"},
+        "SDXL-Base-1.0": {"steps": 20, "cfg_scale": 7.5, "size": "1024x1024"},
+        "SDXL-Turbo": {"steps": 4, "cfg_scale": 1.0, "size": "512x512"},
+    }
+
+    def generate_image(
+        self,
+        prompt: str,
+        model: str = "SDXL-Turbo",
+        size: Optional[str] = None,
+        steps: Optional[int] = None,
+        cfg_scale: Optional[float] = None,
+        seed: Optional[int] = None,
+        timeout: int = 300,
+    ) -> Dict[str, Any]:
+        """
+        Generate an image from a text prompt using Stable Diffusion.
+
+        Args:
+            prompt: Text description of the image to generate
+            model: SD model - SD-1.5, SD-Turbo, SDXL-Base-1.0 (photorealistic), SDXL-Turbo
+            size: Image dimensions (auto-selected if None, or 512x512, 768x768, 1024x1024)
+            steps: Inference steps (auto-selected if None: Turbo=4, Base=20)
+            cfg_scale: CFG scale (auto-selected if None: Turbo=1.0, Base=7.5)
+            seed: Random seed for reproducibility (optional)
+            timeout: Request timeout in seconds (default: 300 for slower Base models)
+
+        Returns:
+            Dict with 'data' containing list of generated images in b64_json format
+
+        Raises:
+            LemonadeClientError: If generation fails or invalid parameters
+
+        Example:
+            # Photorealistic with SDXL-Base-1.0 (auto-settings)
+            result = client.generate_image(
+                prompt="a sunset over mountains, golden hour, photorealistic",
+                model="SDXL-Base-1.0"
+            )
+
+            # Fast stylized with SDXL-Turbo
+            result = client.generate_image(
+                prompt="cyberpunk city",
+                model="SDXL-Turbo"
+            )
+        """
+        # Validate model
+        if model not in self.SD_MODELS:
+            raise LemonadeClientError(
+                f"Invalid model '{model}'. Choose from: {self.SD_MODELS}"
+            )
+
+        # Apply model-specific defaults
+        defaults = self.SD_MODEL_DEFAULTS.get(model, {})
+        size = size or defaults.get("size", "512x512")
+        steps = steps if steps is not None else defaults.get("steps", 20)
+        cfg_scale = (
+            cfg_scale if cfg_scale is not None else defaults.get("cfg_scale", 7.5)
+        )
+
+        # Validate size
+        if size not in self.SD_SIZES:
+            raise LemonadeClientError(
+                f"Invalid size '{size}'. Choose from: {self.SD_SIZES}"
+            )
+
+        try:
+            # Generate random seed if not provided for varied results
+            import random
+
+            if seed is None:
+                seed = random.randint(0, 2**32 - 1)
+
+            payload = {
+                "prompt": prompt,
+                "model": model,
+                "size": size,
+                "n": 1,
+                "response_format": "b64_json",
+                "cfg_scale": cfg_scale,
+                "steps": steps,
+                "seed": seed,
+            }
+
+            self.log.info(
+                f"Generating image: model={model}, size={size}, steps={steps}, cfg={cfg_scale}"
+            )
+            url = f"{self.base_url}/images/generations"
+            response = self._send_request("POST", url, data=payload, timeout=timeout)
+
+            return response
+
+        except LemonadeClientError:
+            raise
+        except Exception as e:
+            self.log.error(f"Error generating image: {str(e)}")
+            raise LemonadeClientError(f"Error generating image: {str(e)}")
+
+    def list_sd_models(self) -> List[Dict[str, Any]]:
+        """
+        List available Stable Diffusion models from the server.
+
+        Returns:
+            List of SD model info dicts with id, labels, and image_defaults
+
+        Example:
+            sd_models = client.list_sd_models()
+            for m in sd_models:
+                print(f"{m['id']}: {m.get('image_defaults', {})}")
+        """
+        try:
+            models = self.list_models()
+            sd_models = [
+                m
+                for m in models.get("data", [])
+                if m.get("id") in self.SD_MODELS or "image" in m.get("labels", [])
+            ]
+            return sd_models
+        except Exception as e:
+            self.log.error(f"Error listing SD models: {str(e)}")
+            raise LemonadeClientError(f"Error listing SD models: {str(e)}")
+
     def list_models(self, show_all: bool = False) -> Dict[str, Any]:
         """
         List available models from the server.
@@ -2184,6 +2323,8 @@ class LemonadeClient:
         auto_download: bool = False,
         _download_timeout: int = 7200,  # Reserved for future use
         llamacpp_args: Optional[str] = None,
+        ctx_size: Optional[int] = None,
+        save_options: bool = False,
         prompt: bool = True,
     ) -> Dict[str, Any]:
         """
@@ -2203,6 +2344,10 @@ class LemonadeClient:
                              Large models can be 100GB+ and take hours to download
             llamacpp_args: Optional llama.cpp arguments (e.g., "--ubatch-size 2048").
                           Used to configure model loading parameters like batch sizes.
+            ctx_size: Context size for the model in tokens (e.g., 8192, 32768).
+                     Overrides the default value for this model.
+            save_options: If True, persists ctx_size and llamacpp_args to config file.
+                         Model will use these settings on future loads.
             prompt: If True, prompt user before downloading (default: True).
                    Set to False to download automatically without user confirmation.
 
@@ -2219,6 +2364,10 @@ class LemonadeClient:
         request_data = {"model_name": model_name}
         if llamacpp_args:
             request_data["llamacpp_args"] = llamacpp_args
+        if ctx_size is not None:
+            request_data["ctx_size"] = ctx_size
+        if save_options:
+            request_data["save_options"] = save_options
         url = f"{self.base_url}/load"
 
         try:

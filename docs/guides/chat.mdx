@@ -82,7 +82,7 @@ class ChatConfig:
     max_history_length: int = 4
     show_stats: bool = False
     use_local_llm: bool = True
-    assistant_name: str = "assistant"
+    assistant_name: str = "gaia"
 ```
 
 ### ChatResponse
@@ -315,7 +315,7 @@ RAG (Retrieval-Augmented Generation) enables chatting with PDF documents using s
 </Tabs>
 
 <Note>
-  **PDF Indexing Requirements:** Processing PDFs with images requires a Vision Language Model (VLM). GAIA uses `Qwen2.5-VL-7B-Instruct-GGUF` by default for extracting text from images in PDFs.
+  **PDF Indexing Requirements:** Processing PDFs with images requires a Vision Language Model (VLM). GAIA uses `Qwen3-VL-4B-Instruct-GGUF` by default for extracting text from images in PDFs.
 
   To download all models needed for chat (including VLM):
   ```bash

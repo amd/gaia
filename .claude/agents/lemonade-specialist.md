@@ -66,7 +66,7 @@ In GAIA, Lemonade Server is the primary LLM backend:
 - **NPU Acceleration**: `gaia llm "query" --use-npu`
 
 ### Model Selection in GAIA
-- **General**: Qwen2.5-0.5B-Instruct-CPU
+- **General**: Qwen3-0.6B-GGUF
 - **Coding**: Qwen3-Coder-30B-A3B-Instruct-GGUF
 - **Jira/JSON**: Qwen3-Coder for reliable parsing
 - **Voice**: Whisper ASR + Kokoro TTS

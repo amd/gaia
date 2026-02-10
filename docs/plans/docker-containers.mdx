@@ -1,0 +1,410 @@
+---
+title: Docker Containers
+description: Self-contained Docker images for running and developing GAIA
+---
+
+# Docker Containers
+
+<Warning>
+**Q1 2026** - This plan is in development. Implementation has not started yet.
+</Warning>
+
+## Overview
+
+Three official Docker images for running GAIA in isolated environments:
+
+1. **Linux Runtime** (`amd/gaia:linux`) - GAIA pre-installed via pip
+2. **Windows Runtime** (`amd/gaia:windows`) - GAIA pre-installed via pip
+3. **Development** (`amd/gaia:dev`) - Full dev environment with Claude Code sandboxing
+
+All images are self-contained—you create the container, then connect from your host terminal using `docker exec -it`.
+
+## Motivation
+
+Pre-built Docker images enable rapid testing and development with GAIA in one or two commands. Spin up an isolated environment, run tests, and tear it down instantly.
+
+**Key benefits:**
+- **Rapid testing**: Launch GAIA in seconds with `docker run` + `docker exec`
+- **Clean isolation**: Test different configurations without affecting your host system
+- **Consistent environments**: Same setup across all platforms and team members
+- **Quick cleanup**: Remove containers when done, no residual files
+
+**Use cases:**
+- Rapid prototyping and experimentation
+- CI/CD pipelines and automated testing
+- Development in isolated environments
+- Multi-configuration testing
+- Containerized deployments
+
+## Architecture
+
+### Common Design Pattern
+
+All three images follow the same pattern:
+
+```bash
+# 1. Create container (runs in background)
+docker run -dit --name CONTAINER_NAME -e LEMONADE_BASE_URL=<lemonade-url> IMAGE_NAME
+
+# 2. Connect from host terminal
+docker exec -it CONTAINER_NAME SHELL
+```
+
+**Key design decisions:**
+- **Self-contained**: No volume mounts required (optional for persistence)
+- **Background execution**: Containers run detached, accessed via `docker exec`
+- **Consistent ports**: All images expose the same ports for predictability
+- **Environment config**: Set at `docker run` time, not build time
+
+### Port Mappings
+
+All images expose the same ports for consistency:
+
+| Port | Purpose | Used By |
+|------|---------|---------|
+| 3000 | Next.js dev server | Frontend development |
+| 5173 | Vite dev server | Frontend development |
+| 8000 | GAIA API server | `gaia api start` |
+| 9229 | Node.js debugging | Frontend debugging |
+| 9222 | Chrome DevTools (Electron) | Desktop app debugging |
+
+Map ports when creating container:
+```bash
+docker run -dit -p 8000:8000 -p 3000:3000 ...
+```
+
+## Image Specifications
+
+### 1. Linux Runtime Image
+
+**Name:** `amd/gaia:linux`
+**Base:** `python:3.12-slim`
+
+**Contents:**
+- Python 3.12
+- GAIA installed via `pip install amd-gaia`
+- zsh shell
+- Git, curl, basic utilities
+
+**Environment variables:**
+- `LEMONADE_BASE_URL` - Lemonade URL (required)
+
+**Example usage:**
+```bash
+# Create container
+docker run -dit \
+  --name gaia \
+  -p 8000:8000 \
+  -e LEMONADE_BASE_URL=<lemonade-url> \
+  amd/gaia:linux
+
+# Connect and use GAIA
+docker exec -it gaia zsh
+gaia llm "Hello from Docker!"
+gaia chat
+```
+
+**Dockerfile:**
+```dockerfile
+FROM python:3.12-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    zsh \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install GAIA
+RUN pip install --no-cache-dir amd-gaia
+
+# Set zsh as default shell
+ENV SHELL=/bin/zsh
+RUN chsh -s /bin/zsh
+
+# Expose standard GAIA ports
+EXPOSE 3000 5173 8000 9229 9222
+
+# Keep container running
+CMD ["tail", "-f", "/dev/null"]
+```
+
+---
+
+### 2. Windows Runtime Image
+
+**Name:** `amd/gaia:windows`
+**Base:** `mcr.microsoft.com/windows/servercore:ltsc2022`
+
+**Contents:**
+- Python 3.12
+- GAIA installed via `pip install amd-gaia`
+- PowerShell + cmd available
+- Git for Windows
+
+**Environment variables:**
+- `LEMONADE_BASE_URL` - Lemonade URL (required)
+
+**Example usage:**
+```powershell
+# Create container
+docker run -dit `
+  --name gaia `
+  -p 8000:8000 `
+  -e LEMONADE_BASE_URL=<lemonade-url> `
+  amd/gaia:windows
+
+# Connect and use GAIA
+docker exec -it gaia powershell
+gaia llm "Hello from Windows Docker!"
+gaia chat
+```
+
+**Dockerfile:**
+```dockerfile
+FROM mcr.microsoft.com/windows/servercore:ltsc2022
+
+# Install Python
+ADD https://www.python.org/ftp/python/3.12.0/python-3.12.0-amd64.exe C:\python-installer.exe
+RUN C:\python-installer.exe /quiet InstallAllUsers=1 PrependPath=1 && \
+    del C:\python-installer.exe
+
+# Install Git for Windows
+ADD https://github.com/git-for-windows/git/releases/download/v2.43.0.windows.1/Git-2.43.0-64-bit.exe C:\git-installer.exe
+RUN C:\git-installer.exe /VERYSILENT /NORESTART && \
+    del C:\git-installer.exe
+
+# Install GAIA
+RUN pip install --no-cache-dir amd-gaia
+
+# Expose standard GAIA ports
+EXPOSE 3000 5173 8000 9229 9222
+
+# Keep container running
+CMD ["powershell", "-NoExit", "-Command", "while ($true) { Start-Sleep -Seconds 3600 }"]
+```
+
+---
+
+### 3. Development Image
+
+**Name:** `amd/gaia:dev`
+**Base:** `ubuntu:24.04`
+
+**Contents (pre-installed in image):**
+- Python 3.12 + UV package manager
+- Node.js LTS v20 + npm
+- GitHub CLI (`gh`)
+- Claude Code (`npm install -g @anthropic-ai/claude-code`)
+- Sandboxing dependencies: `bubblewrap`, `socat`
+- zsh shell, git, build tools
+
+**NOT included in image (cloned on container startup):**
+- GAIA repository (cloned to `/src/gaia` on first run)
+
+**Environment variables (required at `docker run`):**
+- `LEMONADE_BASE_URL` - Lemonade URL
+- `GITHUB_TOKEN` - Token for cloning GAIA repo on startup
+
+**Example usage:**
+```bash
+# Create container (repo clones on startup)
+docker run -dit \
+  --name gaia-dev \
+  -p 8000:8000 \
+  -p 3000:3000 \
+  -e LEMONADE_BASE_URL=<lemonade-url> \
+  -e GITHUB_TOKEN=<github-token> \
+  amd/gaia:dev
+
+# Connect and develop
+docker exec -it gaia-dev zsh
+cd /src/gaia
+gaia llm "Hello from dev container!"
+pytest tests/
+```
+
+**Startup behavior:**
+
+On container creation, an entrypoint script:
+1. Authenticates `gh` CLI with `GITHUB_TOKEN`
+2. Clones `https://github.com/amd/gaia` to `/src/gaia`
+3. Runs `uv pip install -e ".[dev]"` to install in editable mode
+4. Container remains running for `docker exec` connections
+
+**Claude Code sandboxing:**
+
+The dev image includes `bubblewrap` and `socat` for Claude Code's sandboxing:
+
+```json
+// .claude/settings.json (auto-created in container)
+{
+  "sandboxing": {
+    "enableWeakerNestedSandbox": true
+  }
+}
+```
+
+**Dockerfile:**
+```dockerfile
+FROM ubuntu:24.04
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    python3.12 \
+    python3.12-venv \
+    python3-pip \
+    git \
+    curl \
+    zsh \
+    build-essential \
+    bubblewrap \
+    socat \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install UV (fast Python package manager)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.cargo/bin:$PATH"
+
+# Install Node.js LTS v20
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | \
+    gpg --dearmor -o /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | \
+    tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
+    apt-get update && apt-get install -y gh && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code globally
+RUN npm install -g @anthropic-ai/claude-code
+
+# Set zsh as default shell
+ENV SHELL=/bin/zsh
+RUN chsh -s /bin/zsh
+
+# Create src directory
+RUN mkdir -p /src
+
+# Expose standard GAIA ports
+EXPOSE 3000 5173 8000 9229 9222
+
+# Copy entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Set entrypoint
+ENTRYPOINT ["/entrypoint.sh"]
+```
+
+**Entrypoint script (`entrypoint.sh`):**
+```bash
+#!/bin/bash
+set -e
+
+# Check for required environment variables
+if [ -z "$GITHUB_TOKEN" ]; then
+    echo "ERROR: GITHUB_TOKEN environment variable is required"
+    exit 1
+fi
+
+if [ -z "$LEMONADE_BASE_URL" ]; then
+    echo "WARNING: LEMONADE_BASE_URL not set. Set it to connect to a Lemonade Server."
+fi
+
+# Authenticate GitHub CLI
+echo "$GITHUB_TOKEN" | gh auth login --with-token
+
+# Clone GAIA repository if not already present
+if [ ! -d "/src/gaia" ]; then
+    echo "Cloning GAIA repository..."
+    gh repo clone amd/gaia /src/gaia
+else
+    echo "GAIA repository already exists at /src/gaia"
+fi
+
+# Install GAIA in editable mode
+cd /src/gaia
+echo "Installing GAIA in editable mode..."
+uv pip install -e ".[dev]"
+
+# Configure Claude Code sandboxing for Docker
+mkdir -p /root/.claude
+cat > /root/.claude/settings.json <<EOF
+{
+  "sandboxing": {
+    "enableWeakerNestedSandbox": true
+  }
+}
+EOF
+
+echo "GAIA development environment ready!"
+echo "Connect with: docker exec -it <container-name> zsh"
+
+# Keep container running
+tail -f /dev/null
+```
+
+---
+
+## Connecting to Lemonade Server
+
+All images require `LEMONADE_BASE_URL` to connect to a Lemonade Server.
+
+### Server setup:
+
+```bash
+# Install Lemonade Server
+pip install lemonade-server
+
+# Start server
+lemonade-server serve --host 0.0.0.0 --port 8080
+```
+
+### Container configuration:
+
+Set `LEMONADE_BASE_URL` to the URL of your Lemonade Server when creating the container:
+
+```bash
+-e LEMONADE_BASE_URL=<lemonade-url>
+```
+
+**Note:** Use `host.docker.internal` to reference the host machine from inside the container (Docker Desktop feature).
+
+---
+
+## Image Build & Distribution
+
+### Build locally
+
+```bash
+# Linux runtime
+docker build -t amd/gaia:linux -f Dockerfile.linux .
+
+# Windows runtime (requires Windows host with Windows containers)
+docker build -t amd/gaia:windows -f Dockerfile.windows .
+
+# Development
+docker build -t amd/gaia:dev -f Dockerfile.dev .
+```
+
+### Official distribution
+
+Images will be published to Docker Hub:
+- `docker pull amd/gaia:linux`
+- `docker pull amd/gaia:windows`
+- `docker pull amd/gaia:dev`
+
+### Versioning
+
+Images follow GAIA's semantic versioning:
+- `amd/gaia:linux` (latest)
+- `amd/gaia:linux-0.15.2` (specific version)
+- `amd/gaia:dev` (latest dev environment)
+
+---
+
+**Vote on this plan:** [GitHub Issue #270](https://github.com/amd/gaia/issues/270)

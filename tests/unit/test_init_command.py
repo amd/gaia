@@ -272,12 +272,12 @@ class TestInitProfiles(unittest.TestCase):
         for profile in expected:
             self.assertIn(profile, INIT_PROFILES)
 
-    def test_minimal_profile_uses_qwen3_4b(self):
-        """Test that minimal profile uses Qwen3-4B model."""
+    def test_minimal_profile_uses_qwen3_0_6b(self):
+        """Test that minimal profile uses Qwen3-0.6B model."""
         from gaia.installer.init_command import INIT_PROFILES
 
         minimal = INIT_PROFILES["minimal"]
-        self.assertIn("Qwen3-4B-Instruct-2507-GGUF", minimal["models"])
+        self.assertIn("Qwen3-0.6B-GGUF", minimal["models"])
 
     def test_profiles_have_required_keys(self):
         """Test that all profiles have required keys."""

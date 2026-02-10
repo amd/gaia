@@ -30,6 +30,15 @@ class CheckResult:
 SRC_DIR = "src/gaia"
 TEST_DIR = "tests"
 PYLINT_CONFIG = ".pylintrc"
+# Disabled checks:
+# C0103: Invalid name (convention)
+# C0301: Line too long (handled by black)
+# W0246: Useless parent delegation
+# W0221: Arguments differ from overridden method
+# E1102: Not callable
+# R0401: Cyclic import
+# E0401: Import error (handled separately)
+# W0718: Broad exception
 DISABLED_CHECKS = "C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718"
 EXCLUDE_DIRS = (
     ".git,__pycache__,venv,.venv,.mypy_cache,.tox,.eggs,_build,buck-out,node_modules"
@@ -56,7 +65,13 @@ def run_command(cmd: list[str], check: bool = False) -> tuple[int, str]:
 
 def uvx(tool: str, *args: str) -> list[str]:
     """Build a uvx command for a tool (auto-downloads if not installed)."""
-    return ["uvx", tool, *args]
+    # Check if uvx is available
+    import shutil
+    if shutil.which("uvx"):
+        return ["uvx", tool, *args]
+    else:
+        # Fall back to direct tool execution (assumes tools are installed)
+        return [tool, *args]
 
 
 def check_black(fix: bool = False) -> CheckResult:
@@ -349,9 +364,13 @@ def check_imports() -> CheckResult:
             False,
         ),
         ("from", "gaia.agents.routing", "RoutingAgent", "Routing agent", False),
+        ("from", "gaia.agents.sd", "SDAgent", "SD agent", False),
         # Database
         ("from", "gaia.database", "DatabaseAgent", "Database agent", False),
         ("from", "gaia.database", "DatabaseMixin", "Database mixin", False),
+        # SD and VLM Mixins
+        ("from", "gaia.sd", "SDToolsMixin", "SD tools mixin", False),
+        ("from", "gaia.vlm", "VLMToolsMixin", "VLM tools mixin", False),
         # Utilities
         ("from", "gaia.utils", "FileWatcher", "File watcher", False),
         ("from", "gaia.utils", "FileWatcherMixin", "File watcher mixin", False),

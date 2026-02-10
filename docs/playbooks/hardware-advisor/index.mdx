@@ -84,10 +84,42 @@ graph TD
 Get a working agent running to understand the basic flow.
 
 <Steps>
-  <Step title="Install GAIA">
-    ```bash
-    uv pip install amd-gaia
-    ```
+  <Step title="Set up your project">
+    Choose your installation path:
+
+    <Tabs>
+      <Tab title="PyPI (Recommended)">
+        Create a new project folder and install from PyPI:
+
+        ```bash
+        mkdir my-hardware-advisor
+        cd my-hardware-advisor
+        uv venv .venv
+        source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
+        uv pip install amd-gaia
+        ```
+
+        <Info>
+        This is the recommended path for most users. You'll create your agent scripts in this folder.
+        </Info>
+      </Tab>
+
+      <Tab title="Developer (Editable Install)">
+        Clone the repository for development or to run the example directly:
+
+        ```bash
+        git clone https://github.com/amd/gaia.git
+        cd gaia
+        uv venv .venv
+        source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
+        uv pip install -e ".[dev]"
+        ```
+
+        <Info>
+        Use this path if you want to modify GAIA source code or run the example from `examples/hardware_advisor_agent.py`.
+        </Info>
+      </Tab>
+    </Tabs>
   </Step>
 
   <Step title="Start Lemonade Server">
@@ -102,9 +134,23 @@ Get a working agent running to understand the basic flow.
   </Step>
 
   <Step title="Run the Hardware Advisor">
-    ```bash
-    uv run examples/hardware_advisor_agent.py
-    ```
+    <Tabs>
+      <Tab title="PyPI Installation">
+        Create `hardware_advisor.py` in your project folder and follow the step-by-step build below, or copy the complete example from the [Building It](#building-it-the-step-by-step-journey) section.
+
+        ```bash
+        python hardware_advisor.py
+        ```
+      </Tab>
+
+      <Tab title="Developer Installation">
+        Run the example directly from the repository:
+
+        ```bash
+        uv run examples/hardware_advisor_agent.py
+        ```
+      </Tab>
+    </Tabs>
 
     **Try asking:**
     - "What size LLM can I run?"
@@ -181,8 +227,8 @@ Before we build step-by-step, let's understand what each piece does **under the 
     {
         "data": [
             {
-                "id": "Qwen2.5-0.5B-Instruct-CPU",
-                "name": "Qwen 2.5 0.5B (CPU)",
+                "id": "Qwen3-0.6B-GGUF",
+                "name": "Qwen3 0.6B",
                 "downloaded": True,
                 "labels": ["hot", "cpu", "small"]
             },
@@ -669,7 +715,7 @@ Large models:
 - Llama-3.1-8B (4.7 GB) [general] - Downloaded ✓
 
 Small models:
-- Qwen2.5-0.5B (0.3 GB) [hot, cpu, small] - Downloaded ✓
+- Qwen3-0.6B (0.4 GB) [hot, cpu, small] - Downloaded ✓
 ```
 
 #### Progress Check

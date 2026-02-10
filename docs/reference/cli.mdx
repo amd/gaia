@@ -64,6 +64,7 @@ GAIA provides a comprehensive command-line interface (CLI) for interacting with 
 Initialize GAIA with a single command: installs Lemonade Server and downloads required models.
 
 <video
+  controls
   autoPlay
   loop
   muted
@@ -83,6 +84,7 @@ gaia init [OPTIONS]
 | `--profile, -p` | string | chat | Profile to initialize (minimal, chat, code, rag, all) |
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
 | `--skip-models` | flag | false | Skip model downloads (only install Lemonade) |
+| `--skip-lemonade` | flag | false | Skip Lemonade installation check (for CI with pre-installed Lemonade) |
 | `--force-reinstall` | flag | false | Force reinstall even if compatible version exists |
 | `--force-models` | flag | false | Force re-download models (deletes then re-downloads each model) |
 | `--yes, -y` | flag | false | Skip confirmation prompts (non-interactive) |
@@ -93,14 +95,14 @@ gaia init [OPTIONS]
 
 | Profile | Models | Description | Approx Size |
 |---------|--------|-------------|-------------|
-| `minimal` | Qwen3-4B | Fast setup with lightweight model | ~2.5 GB |
-| `chat` | Qwen3-Coder-30B, nomic-embed, Qwen2.5-VL-7B | Interactive chat with RAG and vision | ~25 GB |
+| `minimal` | Qwen3-0.6B | Fast setup with lightweight model | ~400 MB |
+| `chat` | Qwen3-Coder-30B, nomic-embed, Qwen3-VL-4B | Interactive chat with RAG and vision | ~25 GB |
 | `code` | Qwen3-Coder-30B | Autonomous coding assistant | ~18 GB |
-| `rag` | Qwen3-Coder-30B, nomic-embed, Qwen2.5-VL-7B | Document Q&A with retrieval and vision | ~25 GB |
+| `rag` | Qwen3-Coder-30B, nomic-embed, Qwen3-VL-4B | Document Q&A with retrieval and vision | ~25 GB |
 | `all` | All models | All models for all agents | ~26 GB |
 
 <Note>
-All profiles also include the lightweight `Qwen2.5-0.5B` CPU model used by `gaia llm` for quick queries.
+All profiles also include the lightweight `Qwen3-0.6B` model used by `gaia llm` for quick queries.
 </Note>
 
 **Examples:**
@@ -292,7 +294,7 @@ gaia llm "What is machine learning?"
 
 ```bash Specify Model
 gaia llm "Explain quantum computing" \
-  --model Qwen2.5-0.5B-Instruct-CPU \
+  --model Qwen3-0.6B-GGUF \
   --max-tokens 200
 ```
 
@@ -396,7 +398,7 @@ gaia prompt "MESSAGE" [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--model` | string | Qwen2.5-0.5B-Instruct-CPU | Model to use for the agent |
+| `--model` | string | Qwen3-0.6B-GGUF | Model to use for the agent |
 | `--max-tokens` | integer | 512 | Maximum tokens to generate |
 | `--stats` | flag | false | Show performance statistics |
 
@@ -409,13 +411,13 @@ gaia prompt "What is the weather like today?"
 
 ```bash With Stats
 gaia prompt "Create a poem about AI" \
-  --model Qwen2.5-0.5B-Instruct-CPU \
+  --model Qwen3-0.6B-GGUF \
   --stats
 ```
 
 ```bash Custom Tokens
 gaia prompt "Write a story" \
-  --model Qwen2.5-0.5B-Instruct-CPU \
+  --model Qwen3-0.6B-GGUF \
   --max-tokens 1000
 ```
 </CodeGroup>
@@ -518,6 +520,61 @@ gaia blender --example 2
 
 ---
 
+### SD Command
+
+<Card title="Image Generation" icon="image" href="/guides/sd">
+  Generate images using Stable Diffusion on Ryzen AI
+</Card>
+
+```bash
+gaia sd <prompt> [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `prompt` | string | - | Text description of the image to generate |
+| `-i, --interactive` | flag | false | Run in interactive mode |
+| `--sd-model` | string | SD-Turbo | Model: SD-Turbo (fast, default), SDXL-Turbo, SDXL-Base-1.0 (photorealistic), SD-1.5 |
+| `--size` | string | auto | Image size: 512x512, 768x768, 1024x1024 (auto-selected per model) |
+| `--steps` | integer | auto | Inference steps (auto: 4 for Turbo, 20 for Base) |
+| `--cfg-scale` | float | auto | CFG scale (auto: 1.0 for Turbo, 7.5 for Base) |
+| `--output-dir` | path | .gaia/cache/sd/images | Directory to save images |
+| `--seed` | integer | random | Seed for reproducibility |
+| `--no-open` | flag | false | Skip prompt to open image in viewer |
+
+**Examples:**
+
+Fast generation with default (SD-Turbo, ~13s):
+```bash
+gaia sd "a sunset over mountains"
+```
+
+Better quality with SDXL-Turbo (~17s):
+```bash
+gaia sd "cyberpunk city at night" --sd-model SDXL-Turbo
+```
+
+Photorealistic with SDXL-Base-1.0 (slow, ~9min):
+```bash
+gaia sd "portrait, photorealistic, detailed" --sd-model SDXL-Base-1.0
+```
+
+For automation (no prompts):
+```bash
+gaia sd "test image" --no-open
+```
+
+Interactive mode:
+```bash
+gaia sd -i
+```
+
+[→ Full Image Generation Documentation](/guides/sd)
+
+---
+
 ### Talk Command
 
 <Card title="Voice Interaction" icon="microphone" href="/guides/talk">
@@ -532,7 +589,7 @@ gaia talk [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--model` | string | Qwen2.5-0.5B-Instruct-CPU | Model to use |
+| `--model` | string | Qwen3-0.6B-GGUF | Model to use |
 | `--max-tokens` | integer | 512 | Maximum tokens to generate |
 | `--no-tts` | flag | false | Disable text-to-speech |
 | `--audio-device-index` | integer | auto-detect | Audio input device index |

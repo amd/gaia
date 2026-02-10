@@ -26,29 +26,48 @@ Timelines are estimates and may shift based on community feedback and technical 
 ### Timeline
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontSize':'16px', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
-graph LR
-    Q1["Q1 2026<br/>Lightweight Installer<br/><small>One-command install</small>"]
-    Q1B["Q1 2026<br/>Chat Desktop UI<br/><small>Privacy-first RAG</small>"]
-    Q1C["Q1 2026<br/>MCP Client Mixin<br/><small>Computer Use Agents</small>"]
-    Q2["Q2 2026<br/>MCP Docs Server<br/><small>AI assistant context</small>"]
-    Q3["Q3 2026<br/>TBD<br/><small>Community-driven</small>"]
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontSize':'14px', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+graph TD
+    subgraph Q1["Q1 2026"]
+        A("Lightweight Installer<br/><i>One-command install</i>")
+        B("Chat Desktop UI<br/><i>Privacy-first RAG</i>")
+        C("MCP Client Mixin<br/><i>Computer Use Agents</i>")
+        C2("Computer Use Agent<br/><i>Desktop automation</i>")
+        D("Docker Containers<br/><i>Run & develop GAIA</i>")
+        E("SD Agent<br/><i>Stable Diffusion optimization</i>")
+    end
 
-    Q1 -.-> Q1B
-    Q1B --> Q1C
-    Q1C --> Q2
-    Q2 --> Q3
+    subgraph Q2["Q2 2026"]
+        F("MCP Docs Server<br/><i>AI assistant context</i>")
+        G("AI PC Agents Hub<br/><i>Discover & compete</i>")
+    end
 
-    style Q1 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style Q1B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style Q1C fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style Q2 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style Q3 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    subgraph Q3["Q3 2026"]
+        H("Community-Driven<br/><i>Vote on GitHub</i>")
+    end
 
-    linkStyle 0 stroke:#ED1C24,stroke-width:2px,stroke-dasharray: 5 5
-    linkStyle 1 stroke:#ED1C24,stroke-width:2px
-    linkStyle 2 stroke:#ED1C24,stroke-width:2px
-    linkStyle 3 stroke:#ED1C24,stroke-width:2px
+    A --> B
+    A --> E
+    B --> C
+    C --> C2
+    C2 --> D
+    D --> F
+    F --> G
+    G --> H
+
+    style A fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style C fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style C2 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style D fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style E fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style F fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style G fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style H fill:#2d2d2d,stroke:#555,stroke-width:2px,color:#fff
+
+    style Q1 fill:transparent,stroke:#F4484D,stroke-width:2px,stroke-dasharray: 5 5,color:#F4484D
+    style Q2 fill:transparent,stroke:#F4484D,stroke-width:2px,stroke-dasharray: 5 5,color:#F4484D
+    style Q3 fill:transparent,stroke:#555,stroke-width:2px,stroke-dasharray: 5 5,color:#888
 ```
 
 ### Q1 2026: Lightweight Installer
@@ -107,7 +126,96 @@ Key capabilities:
 - Auto-registration of MCP tools as agent tools
 - Multi-server orchestration
 
-→ [View detailed plan](/plans/mcp-client) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/203)
+→ [View detailed plan](/plans/mcp-client) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/203) • See [CUA](#q1-2026-computer-use-agent-cua) for the first production implementation
+
+### Q1 2026: Computer Use Agent (CUA)
+
+**AI-powered desktop automation through natural language**
+
+The first production agent built on GAIA's MCP Client infrastructure. CUA lets you control your desktop through natural language commands:
+
+```bash
+gaia cua "turn on dark mode"
+gaia cua "check my battery status"
+gaia cua "prepare my laptop for a meeting"
+```
+
+Built as a reference design, CUA demonstrates how to create computer-use agents that connect to MCP servers (like Windows MCP) for desktop automation.
+
+**Key capabilities:**
+- Natural language desktop control
+- Battery conservation workflows
+- System health monitoring
+- Meeting preparation automation
+- Windows settings management
+
+CUA validates the MCP Client Mixin framework and serves as a template for building other computer-use agents.
+
+→ [View detailed plan](/plans/cua) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/224)
+
+### Q1 2026: Docker Containers
+
+**Self-contained images for running and developing GAIA**
+
+Official Docker images for running GAIA in isolated environments. All images are self-contained—connect from your host terminal via `docker exec -it`.
+
+<CodeGroup>
+```bash Linux Runtime
+docker run -dit --name gaia -e LEMONADE_BASE_URL=<lemonade-url> amd/gaia:linux
+docker exec -it gaia zsh
+```
+
+```bash Windows Runtime
+docker run -dit --name gaia -e LEMONADE_BASE_URL=<lemonade-url> amd/gaia:windows
+docker exec -it gaia powershell
+```
+
+```bash Development (with Claude Code)
+docker run -dit --name gaia-dev -e LEMONADE_BASE_URL=<lemonade-url> -e GITHUB_TOKEN=<github-token> amd/gaia:dev
+docker exec -it gaia-dev zsh
+```
+</CodeGroup>
+
+Key capabilities:
+- **Linux image**: Run GAIA on any Docker-compatible host via pip-installed package
+- **Windows image**: Native Windows container for Windows Server environments
+- **Development image**: Full dev environment with UV, Node.js 20, GitHub CLI, and Claude Code with sandboxing
+- **Consistent ports**: All images expose the same ports (3000, 5173, 8000, 9229, 9222) for API, debugging, and frontend dev
+- **Environment config**: Set `LEMONADE_BASE_URL` at container creation to connect to a Lemonade Server
+
+→ [View detailed plan](/plans/docker-containers) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/270)
+
+### Q1 2026: SD Agent
+
+**Intelligent Stable Diffusion optimization assistant**
+
+An AI agent that optimizes both prompts and generation parameters for Stable Diffusion, producing professional-quality images from simple descriptions. Built with AMD NPU-accelerated LLMs.
+
+```bash
+# Analyze and enhance prompt, optimize parameters
+gaia sd generate "a mountain landscape"
+
+# Search your generation history
+gaia sd search "show me all cyberpunk images"
+
+# Browse gallery with ratings and annotations
+gaia sd gallery
+```
+
+Dual optimization approach: enhance text prompts AND recommend optimal SD parameters (model, size, steps, cfg_scale). Includes searchable database with gallery UI for managing your creations.
+
+Key capabilities:
+- LLM-powered prompt enhancement and parameter optimization
+- SQLite database with natural language search
+- Gallery UI with chat interface for image creation
+- Rating system that learns your preferences
+- Template library with proven prompt+parameter combinations
+- Terminal image display for immediate feedback
+- Reference-based generation using your top-rated images
+
+Transform "a cat" into professional SD images through intelligent optimization of all generation parameters, with a searchable gallery that learns your aesthetic preferences.
+
+→ [View detailed plan](/plans/image-agent) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/272)
 
 ### Q2 2026: MCP Docs Server
 
@@ -128,6 +236,33 @@ Key capabilities:
 Make AI assistants expert GAIA developers out of the box.
 
 → [View detailed plan](/plans/mcp-docs) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/201)
+
+### Q2 2026: AI PC Agents Hub
+
+**The App Store for AI PC agents—discover, try, compete, and run locally**
+
+A community platform where developers publish agents, users discover solutions, and the community decides what's best:
+
+<CardGroup cols={3}>
+  <Card title="Agents Hub" icon="grid">
+    Browse and install AI PC agents
+  </Card>
+  <Card title="Agent Arena" icon="play">
+    Try agents on AMD Strix Halo cloud
+  </Card>
+  <Card title="Competitions" icon="trophy">
+    Compete for prizes and recognition
+  </Card>
+</CardGroup>
+
+Key capabilities:
+- One-click "Try in Agent Arena" on AMD Strix Halo hardware
+- `gaia agent install <name>` for local deployment
+- Themed competitions with real prizes
+- Community voting and leaderboards
+- Developer profiles with badges and recognition
+
+→ [View detailed plan](/plans/agent-hub)
 
 ---
 
@@ -181,4 +316,4 @@ The more votes an issue gets, the higher priority it becomes. Your input directl
 
 ---
 
-*Updated: January 19, 2026*
+*Updated: January 26, 2026*

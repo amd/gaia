@@ -7,21 +7,16 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from gaia.agents.summarize.agent import SummarizerAgent
 from gaia.chat.prompts import Prompts
 from gaia.eval.claude import ClaudeClient
-from gaia.eval.config import DEFAULT_CLAUDE_MODEL
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
 from gaia.llm.lemonade_client import LemonadeClient
 from gaia.logger import get_logger
-
-# Import PDF reader
-try:
-    from pypdf import PdfReader
-except ImportError:
-    PdfReader = None
 
 # Experiment configuration constants
 CREATIVE_TEMPERATURE_MAX = 0.7
@@ -125,6 +120,7 @@ class ExperimentConfig:
     experiment_type: str = "qa"  # "qa" or "summarization"
     max_tokens: int = 512
     temperature: float = 0.7
+    max_ctx_size: int = None
     parameters: Dict[str, Any] = None
 
     def __post_init__(self):
@@ -148,43 +144,64 @@ class BatchExperimentRunner:
         self.log = get_logger(__name__)
         self.config_file = config_file
         self.experiments = []
+        # Initialize SummarizerAgent for PDF text extraction
+        self.summarizer_agent = SummarizerAgent()
+        self._content_type_agents: Dict[tuple, SummarizerAgent] = {}
+        # Load prompts from prompts.py
         self.load_config()
 
+    def _get_content_type_agent(
+        self, experiment: "ExperimentConfig"
+    ) -> SummarizerAgent:
+        key = (
+            experiment.llm_type.lower(),
+            experiment.model,
+            experiment.temperature,
+            experiment.max_tokens,
+            experiment.max_ctx_size,
+        )
+        agent = self._content_type_agents.get(key)
+        if agent is None:
+            agent_kwargs = {
+                "model": experiment.model,
+                "max_tokens": experiment.max_tokens,
+                "temperature": experiment.temperature,
+                "use_claude": experiment.llm_type.lower() == "claude",
+                "use_chatgpt": False,
+            }
+            if experiment.max_ctx_size is not None:
+                agent_kwargs["max_ctx_size"] = experiment.max_ctx_size
+            agent = SummarizerAgent(**agent_kwargs)
+            self._content_type_agents[key] = agent
+        return agent
+
+    def _detect_content_type(self, text: str, experiment: "ExperimentConfig") -> str:
+        agent = self._get_content_type_agent(experiment)
+        return agent.detect_content_type(text, input_type="auto")
+
     def _extract_text_from_pdf(self, pdf_path: str) -> str:
-        """Extract text from PDF file using local PDF library."""
-        if PdfReader is None:
-            raise ImportError(
-                "PDF reading library not found. Please install pypdf:\n"
-                "  uv pip install pypdf"
-            )
+        """Extract text from PDF file using SummarizerAgent.
 
+        Uses SummarizerAgent's PDF extraction with built-in caching for efficiency.
+        """
         try:
-            reader = PdfReader(pdf_path)
-            total_pages = len(reader.pages)
-            self.log.info(
-                f"📄 Extracting text from {total_pages} pages of {pdf_path}..."
+            # Use SummarizerAgent's PDF extraction with built-in caching
+            self.log.info(f"📄 Extracting text from PDF: {pdf_path}")
+            pdf_text = self.summarizer_agent.get_summary_content_from_file(
+                Path(pdf_path)
             )
-
-            text = ""
-            for i, page in enumerate(reader.pages, 1):
-                # Show progress for large PDFs
-                if i % 10 == 0 or i == total_pages:
-                    self.log.debug(f"  Processing page {i}/{total_pages}...")
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
-
-            extracted_text = text.strip()
-            self.log.info(f"📝 Extracted {len(extracted_text):,} characters from PDF")
-            return extracted_text
-
+            self.log.info(f"📝 Extracted {len(pdf_text):,} characters from PDF")
+            return pdf_text.strip()
         except Exception as e:
             self.log.error(f"Error reading PDF {pdf_path}: {e}")
-            raise
+            raise RuntimeError(f"Failed to extract text from PDF {pdf_path}: {e}")
 
     def load_config(self):
         """Load experiment configuration from JSON file."""
         try:
+            self.log.info(
+                f"Loading experiment config: {Path(self.config_file).resolve()}"
+            )
             with open(self.config_file, "r", encoding="utf-8") as f:
                 config_data = json.load(f)
 
@@ -198,10 +215,11 @@ class BatchExperimentRunner:
                     name=exp_data["name"],
                     llm_type=exp_data["llm_type"],
                     model=exp_data["model"],
-                    system_prompt=exp_data["system_prompt"],
+                    system_prompt=exp_data.get("system_prompt", ""),
                     experiment_type=exp_data.get("experiment_type", "qa"),
                     max_tokens=exp_data.get("max_tokens", 512),
                     temperature=exp_data.get("temperature", 0.7),
+                    max_ctx_size=exp_data.get("max_ctx_size"),
                     parameters=exp_data.get("parameters", {}),
                 )
                 self.experiments.append(experiment)
@@ -211,6 +229,29 @@ class BatchExperimentRunner:
         except Exception as e:
             self.log.error(f"Error loading config file: {e}")
             raise
+
+    def calculate_claude_cost(
+        self, model: str, input_tokens: int, output_tokens: int
+    ) -> Dict:
+        """Calculate cost for Claude API usage."""
+        # Get pricing for the model, fallback to default if not found
+        pricing = MODEL_PRICING.get(
+            model,
+            MODEL_PRICING.get(
+                "default", {"input_per_mtok": 3.0, "output_per_mtok": 15.0}
+            ),
+        )
+
+        # Calculate costs (convert tokens to millions)
+        input_cost = (input_tokens / 1_000_000) * pricing["input_per_mtok"]
+        output_cost = (output_tokens / 1_000_000) * pricing["output_per_mtok"]
+        total_cost = input_cost + output_cost
+
+        return {
+            "input_cost": round(input_cost, 6),
+            "output_cost": round(output_cost, 6),
+            "total_cost": round(total_cost, 6),
+        }
 
     def create_llm_client(self, experiment: ExperimentConfig):
         """Create appropriate LLM client based on experiment config."""
@@ -352,151 +393,136 @@ class BatchExperimentRunner:
                 "error": str(e),
             }
 
-    def _get_summary_prompts(self) -> Dict[str, str]:
-        """Generate individual user prompts for each summary component.
-
-        Note: System prompt is passed separately when formatting with chat template.
-        These are just the user-facing questions/tasks.
-        """
-        return {
-            "executive_summary": "Provide a brief executive summary (2-3 sentences) of the key outcomes and decisions from this transcript.",
-            "detailed_summary": "Provide a detailed summary of the transcript, covering all major topics, discussions, and outcomes in paragraph form.",
-            "action_items": "List the specific action items that were assigned during this meeting. Include who is responsible for each item when mentioned. Provide as a simple list.",
-            "key_decisions": "List the key decisions that were made during this meeting. Focus on concrete decisions and outcomes. Provide as a simple list.",
-            "participants": "List the participants mentioned in this transcript. Include their roles or titles when available. Provide as a simple list.",
-            "topics_discussed": "List the main topics and subjects that were discussed in this meeting. Provide as a simple list.",
-        }
-
     def process_summarization_claude(
         self,
         client: ClaudeClient,
         transcript: str,
-        system_prompt: str,
+        system_prompt: Optional[str],
         combined_prompt: bool = False,
+        temperature: Optional[float] = None,
+        max_ctx_size: int = None,
+        source_file: str = None,
+        generation_params: Optional[Dict[str, Any]] = None,
     ) -> Dict:
-        """Process summarization by making independent or combined calls for each component."""
+        """Process summarization using SummarizerAgent with prompts.py styles."""
         try:
-            summary_prompts = self._get_summary_prompts()
+            # Determine if source is a PDF
+            is_pdf = (
+                source_file and Path(source_file).suffix.lower() == ".pdf"
+                if source_file
+                else False
+            )
+
+            # Map experiment components to prompts.py styles
+            style_mapping = {
+                ("brief_summary" if is_pdf else "executive_summary"): (
+                    "brief" if is_pdf else "executive"
+                ),
+                "detailed_summary": "detailed",
+            }
+
+            # For non-PDF files, detect content type and add appropriate styles
+            if not is_pdf:
+                # Add meeting-style summaries for both email and transcript
+                style_mapping["participants"] = "participants"
+                style_mapping["action_items"] = "action_items"
+                style_mapping["key_decisions"] = "key_decisions"
+                style_mapping["topics_discussed"] = "topics_discussed"
+
+            # Get the styles to request from the agent (only from style_mapping keys to avoid duplicates)
+            requested_styles = list(
+                set(style_mapping.values())
+            )  # Use set to get unique styles
+
+            # Create SummarizerAgent with Claude enabled
+            agent_kwargs = {
+                "model": client.model,
+                "max_tokens": client.max_tokens,
+                "temperature": temperature,
+                "styles": requested_styles,
+                "combined_prompt": combined_prompt,
+                "use_claude": True,
+                "use_chatgpt": False,
+            }
+            if generation_params:
+                agent_kwargs["generation_params"] = generation_params
+            if system_prompt:
+                agent_kwargs["system_prompt_override"] = system_prompt
+            if max_ctx_size:
+                agent_kwargs["max_ctx_size"] = max_ctx_size
+            agent = SummarizerAgent(**agent_kwargs)
+            # Use summarize_file if source_file is provided and exists
+            if source_file and Path(source_file).exists():
+                self.log.info(f"Using summarize_file for: {source_file}")
+                summary_result = agent.summarize_file(
+                    file_path=Path(source_file),
+                    styles=requested_styles,
+                    combined_prompt=combined_prompt,
+                    input_type="auto",
+                )
+            else:
+                # Use summarize method with content string
+                self.log.info(f"Using summarize with {len(requested_styles)} styles")
+                summary_result = agent.summarize(
+                    content=transcript,
+                    input_file=source_file,
+                    input_type="auto",
+                    styles=requested_styles,
+                    combined_prompt=combined_prompt,
+                )
+
+            # Extract results from agent output
             results = {}
             total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
             total_cost = {"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0}
             errors = []
 
-            if combined_prompt:
-                # Make a single call with all components
-                self.log.info(
-                    f"Summarizing transcript with 1 combined model call for: {', '.join(summary_prompts.keys())}"
+            # Handle single style vs multiple styles output format
+            if len(requested_styles) == 1:
+                # Single style: summary is directly in "summary" key
+                style = requested_styles[0]
+                # Map back to original component name
+                component = next(
+                    (k for k, v in style_mapping.items() if v == style), style
                 )
+                summary_text = summary_result.get("summary", {}).get("text", "")
+                results[component] = summary_text
 
-                # Build combined prompt
-                combined_request = f"{system_prompt}\n\nPlease provide the following summaries for the transcript:\n\n"
-                for component, user_prompt in summary_prompts.items():
-                    combined_request += f"**{component.upper()}**:\n{user_prompt}\n\n"
-                combined_request += f"\nTranscript:\n{transcript}\n\nPlease structure your response with clear headers for each section."
-
-                response_data = client.get_completion_with_usage(combined_request)
-
-                # Extract response text
-                response = response_data["content"]
-                if isinstance(response, list):
-                    response_text = (
-                        response[0].text
-                        if hasattr(response[0], "text")
-                        else str(response[0])
-                    )
-                else:
-                    response_text = (
-                        response.text if hasattr(response, "text") else str(response)
-                    )
-
-                # Parse response into components
-                for component in summary_prompts.keys():
-                    # Try to extract each component from the combined response
-                    component_upper = component.upper()
-                    start_markers = [
-                        f"**{component_upper}**:",
-                        f"{component_upper}:",
-                        f"# {component_upper}",
-                        f"## {component_upper}",
-                    ]
-
-                    section_text = ""
-                    for marker in start_markers:
-                        if marker in response_text:
-                            start_idx = response_text.find(marker) + len(marker)
-                            # Find the next section or end
-                            end_idx = len(response_text)
-                            for other_component in summary_prompts.keys():
-                                if other_component == component:
-                                    continue
-                                other_upper = other_component.upper()
-                                for other_marker in [
-                                    f"**{other_upper}**:",
-                                    f"{other_upper}:",
-                                    f"# {other_upper}",
-                                    f"## {other_upper}",
-                                ]:
-                                    idx = response_text.find(other_marker, start_idx)
-                                    if idx != -1 and idx < end_idx:
-                                        end_idx = idx
-                            section_text = response_text[start_idx:end_idx].strip()
-                            break
-
-                    results[component] = (
-                        section_text if section_text else response_text.strip()
-                    )
-
-                # Use combined usage and cost
-                if response_data["usage"]:
-                    total_usage = response_data["usage"]
-                if response_data["cost"]:
-                    total_cost = response_data["cost"]
-
+                # Get performance stats
+                perf = summary_result.get("performance", {})
+                total_usage = {
+                    "input_tokens": perf.get("prompt_tokens", 0),
+                    "output_tokens": perf.get("completion_tokens", 0),
+                    "total_tokens": perf.get("total_tokens", 0),
+                }
+                # Calculate cost from token usage
+                total_cost = self.calculate_claude_cost(
+                    client.model,
+                    total_usage["input_tokens"],
+                    total_usage["output_tokens"],
+                )
             else:
-                # Original behavior: independent calls
-                self.log.info(
-                    f"Summarizing transcript with {len(summary_prompts)} independent model calls: {', '.join(summary_prompts.keys())}"
+                # Multiple styles: summaries is a dict keyed by style
+                summaries = summary_result.get("summaries", {})
+                for style, summary_data in summaries.items():
+                    # Map back to original component name
+                    component = next(
+                        (k for k, v in style_mapping.items() if v == style), style
+                    )
+                    results[component] = summary_data.get("text", "")
+
+                    # Accumulate performance stats
+                    perf = summary_data.get("performance", {})
+                    total_usage["input_tokens"] += perf.get("prompt_tokens", 0)
+                    total_usage["output_tokens"] += perf.get("completion_tokens", 0)
+                    total_usage["total_tokens"] += perf.get("total_tokens", 0)
+
+                # Calculate cost from accumulated token usage
+                total_cost = self.calculate_claude_cost(
+                    client.model,
+                    total_usage["input_tokens"],
+                    total_usage["output_tokens"],
                 )
-
-                for component, user_prompt in summary_prompts.items():
-                    try:
-                        # Create full prompt with system prompt, user prompt, and transcript
-                        full_prompt = f"{system_prompt}\n\n{user_prompt}\n\nTranscript:\n{transcript}\n\nResponse:"
-
-                        response_data = client.get_completion_with_usage(full_prompt)
-
-                        # Extract response text
-                        response = response_data["content"]
-                        if isinstance(response, list):
-                            response_text = (
-                                response[0].text
-                                if hasattr(response[0], "text")
-                                else str(response[0])
-                            )
-                        else:
-                            response_text = (
-                                response.text
-                                if hasattr(response, "text")
-                                else str(response)
-                            )
-
-                        results[component] = response_text.strip()
-
-                        # Accumulate usage and cost
-                        if response_data["usage"]:
-                            for key in total_usage:
-                                total_usage[key] += response_data["usage"].get(key, 0)
-                        if response_data["cost"]:
-                            for key in total_cost:
-                                total_cost[key] += response_data["cost"].get(key, 0.0)
-
-                        # Small delay between component calls to avoid rate limiting
-                        time.sleep(0.5)
-
-                    except Exception as e:
-                        self.log.error(f"Error processing {component} with Claude: {e}")
-                        results[component] = f"ERROR: {str(e)}"
-                        errors.append(f"{component}: {str(e)}")
 
             return {
                 "response": results,
@@ -517,206 +543,131 @@ class BatchExperimentRunner:
         self,
         client: LemonadeClient,
         transcript: str,
-        system_prompt: str,
+        system_prompt: Optional[str],
         max_tokens: int,
-        temperature: float,
         combined_prompt: bool = False,
-        extra_params: Dict[str, Any] = None,
+        temperature: Optional[float] = None,
+        max_ctx_size: int = None,
+        source_file: str = None,
+        generation_params: Optional[Dict[str, Any]] = None,
     ) -> Dict:
-        """Process summarization by making independent or combined calls for each component."""
+        """Process summarization using SummarizerAgent's summarize or summarize_file method."""
         try:
-            summary_prompts = self._get_summary_prompts()
+            # Determine if source is a PDF
+            is_pdf = (
+                source_file and Path(source_file).suffix.lower() == ".pdf"
+                if source_file
+                else False
+            )
+
+            # Map experiment components to prompts.py styles
+            style_mapping = {
+                ("brief_summary" if is_pdf else "executive_summary"): (
+                    "brief" if is_pdf else "executive"
+                ),
+                "detailed_summary": "detailed",
+            }
+
+            # For non-PDF files, detect content type and add appropriate styles
+            if not is_pdf:
+                # Add meeting-style summaries for both email and transcript
+                style_mapping["participants"] = "participants"
+                style_mapping["action_items"] = "action_items"
+                style_mapping["key_decisions"] = "key_decisions"
+                style_mapping["topics_discussed"] = "topics_discussed"
+
+            # Get the styles to request from the agent (only unique styles)
+            requested_styles = list(set(style_mapping.values()))
+
+            # Create SummarizerAgent with the appropriate model
+            agent_kwargs = {
+                "model": client.model,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "styles": requested_styles,
+                "combined_prompt": combined_prompt,
+                "use_claude": False,
+                "use_chatgpt": False,
+            }
+            if generation_params:
+                agent_kwargs["generation_params"] = generation_params
+            if system_prompt:
+                agent_kwargs["system_prompt_override"] = system_prompt
+            if max_ctx_size:
+                agent_kwargs["max_ctx_size"] = max_ctx_size
+            agent = SummarizerAgent(**agent_kwargs)
+            # Use summarize_file if source_file is provided and exists
+            if source_file and Path(source_file).exists():
+                self.log.info(f"Using summarize_file for: {source_file}")
+                summary_result = agent.summarize_file(
+                    file_path=Path(source_file),
+                    styles=requested_styles,
+                    combined_prompt=combined_prompt,
+                    input_type="auto",
+                )
+            else:
+                # Use summarize method with content string
+                self.log.info(f"Using summarize with {len(requested_styles)} styles")
+                summary_result = agent.summarize(
+                    content=transcript,
+                    input_file=source_file,
+                    input_type="auto",
+                    styles=requested_styles,
+                    combined_prompt=combined_prompt,
+                )
+
+            # Extract results from agent output
             results = {}
             total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-            total_cost = {"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0}
-            errors = []
 
-            # Prepare extra parameters (like stop sequences)
-            if extra_params is None:
-                extra_params = {}
-
-            if combined_prompt:
-                # Make a single call with all components
-                self.log.info(
-                    f"Summarizing transcript with 1 combined model call for: {', '.join(summary_prompts.keys())}"
+            # Handle single style vs multiple styles output format
+            if len(requested_styles) == 1:
+                # Single style: summary is directly in "summary" key
+                style = requested_styles[0]
+                # Map back to original component name
+                component = next(
+                    (k for k, v in style_mapping.items() if v == style), style
                 )
+                summary_text = summary_result.get("summary", {}).get("text", "")
+                results[component] = summary_text
 
-                # Build user request for all components
-                user_request = (
-                    "Please provide the following summaries for the transcript:\n\n"
-                )
-                for component, user_prompt in summary_prompts.items():
-                    user_request += f"**{component.upper()}**:\n{user_prompt}\n\n"
-                user_request += "\nPlease structure your response with clear headers for each section."
-
-                # Format prompt for summarization using chat template
-                formatted_prompt = format_prompt_with_template(
-                    model=client.model,
-                    system_prompt=system_prompt,
-                    user_content=user_request,
-                    document_content=transcript,  # Pass transcript as context
-                    use_chat_template=True,  # Use chat template for summarization
-                )
-
-                response_data = client.completions(
-                    model=client.model,
-                    prompt=formatted_prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    stream=False,
-                    **extra_params,  # Pass stop sequences and other params
-                )
-
-                # Extract text from the response
-                response_text = ""
-                if "choices" in response_data and response_data["choices"]:
-                    response_text = response_data["choices"][0].get("text", "")
-
-                # Extract thinking tokens if present
-                extracted = extract_thinking_from_response(response_text)
-                response_text = extracted["response"]
-                thinking_content = extracted["thinking"]
-
-                # Get token statistics from Lemonade
-                try:
-                    stats = client.get_stats()
-                    input_tokens = stats.get("input_tokens", 0) if stats else 0
-                    output_tokens = stats.get("output_tokens", 0) if stats else 0
-                    total_tokens = input_tokens + output_tokens
-                    total_usage = {
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                        "total_tokens": total_tokens,
-                    }
-                except Exception as e:
-                    self.log.warning(f"Failed to get stats from Lemonade: {e}")
-                    total_usage = {
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "total_tokens": 0,
-                    }
-
-                # Parse response into components
-                for component in summary_prompts.keys():
-                    # Try to extract each component from the combined response
-                    component_upper = component.upper()
-                    start_markers = [
-                        f"**{component_upper}**:",
-                        f"{component_upper}:",
-                        f"# {component_upper}",
-                        f"## {component_upper}",
-                    ]
-
-                    section_text = ""
-                    for marker in start_markers:
-                        if marker in response_text:
-                            start_idx = response_text.find(marker) + len(marker)
-                            # Find the next section or end
-                            end_idx = len(response_text)
-                            for other_component in summary_prompts.keys():
-                                if other_component == component:
-                                    continue
-                                other_upper = other_component.upper()
-                                for other_marker in [
-                                    f"**{other_upper}**:",
-                                    f"{other_upper}:",
-                                    f"# {other_upper}",
-                                    f"## {other_upper}",
-                                ]:
-                                    idx = response_text.find(other_marker, start_idx)
-                                    if idx != -1 and idx < end_idx:
-                                        end_idx = idx
-                            section_text = response_text[start_idx:end_idx].strip()
-                            break
-
-                    results[component] = (
-                        section_text if section_text else response_text.strip()
-                    )
-
-                # Total usage already calculated above, cost is always 0 for local
-                total_cost = {"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0}
-
-                # Store thinking content if present (for combined mode)
-                if thinking_content:
-                    results["_thinking"] = thinking_content
-
+                # Get performance stats
+                perf = summary_result.get("performance", {})
+                total_usage = {
+                    "input_tokens": perf.get("prompt_tokens", 0),
+                    "output_tokens": perf.get("completion_tokens", 0),
+                    "total_tokens": perf.get("total_tokens", 0),
+                }
             else:
-                # Original behavior: independent calls
-                self.log.info(
-                    f"Summarizing transcript with {len(summary_prompts)} independent model calls: {', '.join(summary_prompts.keys())}"
-                )
+                # Multiple styles: summaries is a dict keyed by style
+                summaries = summary_result.get("summaries", {})
+                for style, summary_data in summaries.items():
+                    # Map back to original component name
+                    component = next(
+                        (k for k, v in style_mapping.items() if v == style), style
+                    )
+                    results[component] = summary_data.get("text", "")
 
-                for component, user_prompt in summary_prompts.items():
-                    try:
-                        # Format using chat template with separate system prompt and user prompt
-                        formatted_prompt = format_prompt_with_template(
-                            model=client.model,
-                            system_prompt=system_prompt,
-                            user_content=user_prompt,
-                            document_content=transcript,
-                            use_chat_template=True,  # Use chat template for summarization
-                        )
+                    # Accumulate performance stats
+                    perf = summary_data.get("performance", {})
+                    total_usage["input_tokens"] += perf.get("prompt_tokens", 0)
+                    total_usage["output_tokens"] += perf.get("completion_tokens", 0)
+                    total_usage["total_tokens"] += perf.get("total_tokens", 0)
 
-                        response_data = client.completions(
-                            model=client.model,
-                            prompt=formatted_prompt,
-                            max_tokens=max_tokens,
-                            temperature=temperature,
-                            stream=False,
-                            **extra_params,  # Pass stop sequences and other params
-                        )
-
-                        # Extract text from the response
-                        response_text = ""
-                        if "choices" in response_data and response_data["choices"]:
-                            response_text = response_data["choices"][0].get("text", "")
-
-                        # Extract thinking tokens if present
-                        extracted = extract_thinking_from_response(response_text)
-
-                        results[component] = extracted["response"]
-
-                        # Get token statistics from Lemonade
-                        try:
-                            stats = client.get_stats()
-                            if stats:
-                                total_usage["input_tokens"] += stats.get(
-                                    "input_tokens", 0
-                                )
-                                total_usage["output_tokens"] += stats.get(
-                                    "output_tokens", 0
-                                )
-                                total_usage["total_tokens"] += stats.get(
-                                    "input_tokens", 0
-                                ) + stats.get("output_tokens", 0)
-                        except Exception as e:
-                            self.log.warning(f"Failed to get stats from Lemonade: {e}")
-
-                        # Small delay between component calls to avoid rate limiting
-                        time.sleep(0.5)
-
-                    except Exception as e:
-                        self.log.error(
-                            f"Error processing {component} with Lemonade: {e}"
-                        )
-                        results[component] = f"ERROR: {str(e)}"
-                        errors.append(f"{component}: {str(e)}")
+            # Cost is always 0 for local models
+            total_cost = {"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0}
 
             result_dict = {
                 "response": results,
                 "usage": total_usage,
                 "cost": total_cost,
-                "error": "; ".join(errors) if errors else None,
+                "error": None,
             }
-
-            # Add thinking if present (stored with key "_thinking" in results dict)
-            if "_thinking" in results:
-                result_dict["thinking"] = results.pop("_thinking")
 
             return result_dict
 
         except Exception as e:
-            self.log.error(f"Error in independent summarization with Lemonade: {e}")
+            self.log.error(f"Error in summarization with SummarizerAgent: {e}")
             return {
                 "response": f"ERROR: {str(e)}",
                 "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
@@ -837,7 +788,7 @@ class BatchExperimentRunner:
         with open(groundtruth_file, "r", encoding="utf-8") as f:
             groundtruth_data = json.load(f)
 
-        analysis = groundtruth_data.get("analysis", {})
+        _analysis = groundtruth_data.get("analysis", {})  # noqa: F841
         metadata = groundtruth_data.get("metadata", {})
 
         # Check if this is a consolidated groundtruth file
@@ -901,8 +852,21 @@ class BatchExperimentRunner:
             if not source_file or not Path(source_file).exists():
                 raise ValueError(f"Source transcript file not found: {source_file}")
 
-            with open(source_file, "r", encoding="utf-8") as f:
-                transcript_content = f.read().strip()
+            source_path = Path(source_file)
+
+            try:
+                # Handle PDF files
+                if source_path.suffix.lower() == ".pdf":
+                    self.log.info(f"PDF file detected: {source_path}")
+                    # Use local PDF extraction
+                    transcript_content = self._extract_text_from_pdf(str(source_path))
+                # Handle text files
+                else:
+                    with open(source_path, "r", encoding="utf-8") as f:
+                        transcript_content = f.read().strip()
+
+            except Exception as e:
+                raise ValueError(f"Failed to read document {source_path}: {e}")
 
             if not transcript_content:
                 raise ValueError(f"Empty transcript file: {source_file}")
@@ -1113,8 +1077,24 @@ class BatchExperimentRunner:
                     )
                     continue
 
-                with open(source_path, "r", encoding="utf-8") as f:
-                    transcript_content = f.read().strip()
+                try:
+                    # Handle PDF files
+                    if source_path.suffix.lower() == ".pdf":
+                        self.log.info(f"PDF file detected: {source_path}")
+                        # Use local PDF extraction
+                        transcript_content = self._extract_text_from_pdf(
+                            str(source_path)
+                        )
+                    # Handle text files
+                    else:
+                        with open(source_path, "r", encoding="utf-8") as f:
+                            transcript_content = f.read().strip()
+
+                except Exception as e:
+                    self.log.warning(
+                        f"Failed to load document {source_path}: {e}, skipping {item_id}"
+                    )
+                    continue
 
                 if not transcript_content:
                     self.log.warning(
@@ -1145,9 +1125,17 @@ class BatchExperimentRunner:
     def _load_from_transcript_file(
         self, transcript_file: str, experiment_type: str, queries_source: str = None
     ) -> List[Dict]:
-        """Load data from a single transcript file."""
-        with open(transcript_file, "r", encoding="utf-8") as f:
-            transcript_content = f.read().strip()
+        """Load data from a single transcript/document file (supports .txt and .pdf)."""
+        transcript_path = Path(transcript_file)
+
+        # Handle PDF files
+        if transcript_path.suffix.lower() == ".pdf":
+            self.log.info(f"PDF file detected: {transcript_path}")
+            transcript_content = self._extract_text_from_pdf(str(transcript_path))
+        # Handle text files
+        else:
+            with open(transcript_file, "r", encoding="utf-8") as f:
+                transcript_content = f.read().strip()
 
         if not transcript_content:
             raise ValueError(f"Empty transcript file: {transcript_file}")
@@ -1188,13 +1176,22 @@ class BatchExperimentRunner:
     def _load_from_transcript_directory(
         self, transcript_dir: str, experiment_type: str, queries_source: str = None
     ) -> List[Dict]:
-        """Load data from a directory of transcript files."""
+        """Load data from a directory of transcript/document files (supports .txt and .pdf)."""
         transcript_dir = Path(transcript_dir)
 
-        # Find all text files in directory (recursively)
-        transcript_files = list(transcript_dir.rglob("*.txt"))
+        # Find all text and PDF files in directory (recursively)
+        txt_files = list(transcript_dir.rglob("*.txt"))
+        pdf_files = list(transcript_dir.rglob("*.pdf"))
+        transcript_files = txt_files + pdf_files
+
         if not transcript_files:
-            raise ValueError(f"No .txt files found in directory: {transcript_dir}")
+            raise ValueError(
+                f"No .txt or .pdf files found in directory: {transcript_dir}"
+            )
+
+        self.log.info(
+            f"Found {len(txt_files)} .txt files and {len(pdf_files)} .pdf files in {transcript_dir}"
+        )
 
         data = []
         for transcript_file in transcript_files:
@@ -1452,6 +1449,11 @@ class BatchExperimentRunner:
 
             elif data_type == "summarization":
                 # Process summarization task using independent calls for each component
+                generation_params = {}
+                if experiment.parameters:
+                    stop = experiment.parameters.get("stop")
+                    if stop:
+                        generation_params["stop"] = stop
                 if experiment.llm_type.lower() == "claude":
                     combined = experiment.parameters.get("combined_prompt", False)
                     result = self.process_summarization_claude(
@@ -1459,27 +1461,37 @@ class BatchExperimentRunner:
                         data_item["transcript"],
                         experiment.system_prompt,
                         combined,
+                        temperature=experiment.temperature,
+                        max_ctx_size=experiment.max_ctx_size,
+                        source_file=data_item.get("source_file"),
+                        generation_params=generation_params or None,
                     )
                 elif experiment.llm_type.lower() == "lemonade":
                     combined = experiment.parameters.get("combined_prompt", False)
-                    # Extract parameters to pass (excluding combined_prompt)
-                    extra_params = {
-                        k: v
-                        for k, v in experiment.parameters.items()
-                        if k != "combined_prompt"
-                    }
                     result = self.process_summarization_lemonade(
                         client,
                         data_item["transcript"],
                         experiment.system_prompt,
                         experiment.max_tokens,
-                        experiment.temperature,
                         combined,
-                        extra_params,
+                        temperature=experiment.temperature,
+                        max_ctx_size=experiment.max_ctx_size,
+                        source_file=data_item.get("source_file"),
+                        generation_params=generation_params or None,
                     )
 
                 # Use the structured response directly from independent calls
                 generated_summaries = result["response"]
+
+                # Detect content type for this document
+                source_file = data_item.get("source_file", "")
+                if source_file and Path(source_file).suffix.lower() == ".pdf":
+                    content_type = "pdf"
+                else:
+                    # Detect email vs transcript for non-PDF files
+                    content_type = self._detect_content_type(
+                        data_item["transcript"], experiment
+                    )
 
                 # Create summarization result entry
                 result_entry = {
@@ -1489,7 +1501,8 @@ class BatchExperimentRunner:
                         else data_item["transcript"]
                     ),
                     "generated_summaries": generated_summaries,
-                    "source_file": data_item.get("source_file", ""),
+                    "source_file": source_file,
+                    "content_type": content_type,  # Add detected content type
                 }
 
                 # Add ground truth summaries if available (from groundtruth files)
@@ -2049,6 +2062,18 @@ class BatchExperimentRunner:
                     "parameters": {"host": "localhost", "port": 8000},
                     "_comment": "Local inference - FREE, runs on your hardware",
                 },
+                {
+                    "name": "Lemonade-Llama-Summarization-LargeContext",
+                    "llm_type": "lemonade",
+                    "model": "llama3.2:3b",
+                    "experiment_type": "summarization",
+                    "system_prompt": "You are an expert meeting analyst. Analyze the transcript carefully and provide clear, accurate information based on the content.",
+                    "max_tokens": 512,
+                    "temperature": 0.1,
+                    "max_ctx_size": 8192,
+                    "parameters": {"host": "localhost", "port": 8000},
+                    "_comment": "Local inference with custom context size (8192 tokens) - FREE, runs on your hardware",
+                },
             ],
         }
 
@@ -2067,7 +2092,7 @@ class BatchExperimentRunner:
                 groundtruth_data = json.load(f)
 
             metadata = groundtruth_data.get("metadata", {})
-            analysis = groundtruth_data.get("analysis", {})
+            _analysis = groundtruth_data.get("analysis", {})  # noqa: F841
 
             # Extract key information
             use_case = metadata.get("use_case", "qa")
@@ -2201,11 +2226,17 @@ Examples:
   # Run batch experiments on transcript directory
   python -m gaia.eval.batch_experiment -c experiment_config.json -i ./transcripts -o ./experiments
 
+  # Run batch experiments on PDF directory
+  python -m gaia.eval.batch_experiment -c experiment_config.json -i ./output/pdfs -o ./experiments
+
   # Run batch experiments on transcript directory with custom queries from groundtruth
   python -m gaia.eval.batch_experiment -c experiment_config.json -i ./transcripts -q ./groundtruth/meeting.qa.groundtruth.json -o ./experiments
 
   # Run batch experiments on groundtruth file
   python -m gaia.eval.batch_experiment -c experiment_config.json -i ./groundtruth/transcript.qa.groundtruth.json -o ./experiments
+
+  # Run batch experiments on consolidated PDF groundtruth file
+  python -m gaia.eval.batch_experiment -c experiment_config.json -i ./output/groundtruth/consolidated_pdf_groundtruth.json -o ./experiments
 
   # Run batch experiments on consolidated groundtruth file
   python -m gaia.eval.batch_experiment -c experiment_config.json -i ./groundtruth/consolidated_summarization_groundtruth.json -o ./experiments
@@ -2222,7 +2253,7 @@ Examples:
         "-i",
         "--input",
         type=str,
-        help="Path to input data: transcript file, directory of transcripts, or groundtruth JSON file",
+        help="Path to input data: document file (.txt/.pdf), directory of documents, or groundtruth JSON file",
     )
     parser.add_argument(
         "-q",
@@ -2319,12 +2350,12 @@ Examples:
         print(f"✅ Completed {len(result_files)} experiments")
 
     print(f"  Results saved to: {args.output_dir}")
-    print(f"  Generated files:")
+    print("  Generated files:")
     for result_file in result_files:
         print(f"    - {Path(result_file).name}")
 
-    print(f"\nNext steps:")
-    print(f"  1. Evaluate results using: gaia eval -f <result_file>")
+    print("\nNext steps:")
+    print("  1. Evaluate results using: gaia eval -f <result_file>")
     print(f"  2. Generate comparative report: gaia report -d {args.output_dir}")
 
 

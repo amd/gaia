@@ -32,6 +32,10 @@ This is the GAIA repository (`amd/gaia`) on GitHub: https://github.com/amd/gaia
 3. Verify code examples compile/run correctly
 4. Ensure documentation links are valid
 5. Confirm changes align with the original request
+6. **For documentation:** Check both technical accuracy AND internal consistency:
+   - Does the code match the SDK implementation? (technical accuracy)
+   - Do code examples match their explanations? (internal consistency)
+   - If example shows `return "text"`, explanation should describe returning text, not `return ""`
 
 This self-review step is mandatory - never skip verification of your output.
 
@@ -234,7 +238,7 @@ gaia/
 | **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3-Coder-30B |
 
 ### Default Models
-- General tasks: `Qwen2.5-0.5B-Instruct-CPU`
+- General tasks: `Qwen3-0.6B-GGUF`
 - Code/Agents: `Qwen3-Coder-30B-A3B-Instruct-GGUF`
 - Vision tasks: `Qwen2.5-VL-7B-Instruct-GGU`
 

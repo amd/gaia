@@ -65,7 +65,8 @@ VLMClient provides Vision-Language Model capabilities for extracting text from i
 ### Non-Functional Requirements
 
 1. **Performance**
-   - 60-second timeout for VLM inference
+   - 300-second timeout for VLM image extraction (5 minutes for complex forms)
+   - 60-second timeout for model loading
    - Low temperature (0.1) for accuracy
    - Up to 2048 tokens per extraction
    - Progress logging for user feedback

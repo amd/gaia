@@ -1,0 +1,123 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: Lemonade Server Smoke Test
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      runson:
+        description: 'Which runner group to run the workflow on'
+        default: 'stx'
+        required: true
+        type: choice
+        options:
+        - 'stx'
+        - 'stx-test'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-lemonade-server:
+    name: Lemonade Server Smoke Test (${{ inputs.runson || 'stx' }})
+    runs-on: ${{ inputs.runson || 'stx' }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          install-package: '.[lemonade]'
+
+      - name: Start Lemonade Server, Load Model, and Test
+        shell: powershell
+        timeout-minutes: 10
+        run: |
+          try {
+              # Start server and load model (all in one session)
+              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-Instruct-2507-GGUF" -Port 8000 -CtxSize 32768 -InitWaitTime 10
+
+              # Verify health endpoint
+              Write-Host "=== Verifying Health Endpoint ==="
+              $health = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 10
+              Write-Host "Health response: $($health | ConvertTo-Json -Compress)"
+
+              if ($health.status -ne "ok") {
+                  Write-Host "[ERROR] Health check failed - status: $($health.status)"
+                  throw "Health endpoint returned non-ok status"
+              }
+              Write-Host "[OK] Health check passed"
+
+              # Print Lemonade version
+              if ($health.PSObject.Properties['version']) {
+                  Write-Host "[INFO] Lemonade Server version: $($health.version)"
+              } else {
+                  Write-Host "[WARN] Lemonade Server version not found in health response"
+              }
+
+              # Print context_size (informational - for tracking future fixes)
+              if ($health.PSObject.Properties['context_size']) {
+                  Write-Host "[INFO] context_size: $($health.context_size)"
+              } elseif ($health.PSObject.Properties['all_models_loaded'] -and $health.all_models_loaded.Count -gt 0) {
+                  $ctxSize = $health.all_models_loaded[0].recipe_options.ctx_size
+                  Write-Host "[INFO] context_size: $ctxSize (from all_models_loaded)"
+              } else {
+                  Write-Host "[WARN] context_size not found in health response"
+                  Write-Host "       TODO: Update CI runner to Lemonade Server 9.1.4+ for context_size support"
+              }
+              Write-Host ""
+
+              # Test completion (in same session while server is still alive)
+              Write-Host "=== Testing Completion ==="
+              $testBody = @{
+                  model = "Qwen3-4B-Instruct-2507-GGUF"
+                  prompt = "Say exactly: Hello World"
+                  max_tokens = 10
+              } | ConvertTo-Json
+
+              $completion = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/completions" `
+                  -Method POST -ContentType "application/json" -Body $testBody -TimeoutSec 30
+
+              Write-Host "[OK] Completion successful"
+              Write-Host "     Response: $($completion.choices[0].text)"
+              Write-Host ""
+              Write-Host "[SUCCESS] All lemonade server tests passed!"
+
+          } catch {
+              Write-Host "[ERROR] Test failed: $($_.Exception.Message)"
+              if ($_.ErrorDetails) {
+                  Write-Host "Error details: $($_.ErrorDetails.Message)"
+              }
+              throw "Lemonade server smoke test failed"
+          } finally {
+              # Cleanup
+              if ($env:LEMONADE_PROCESS_ID) {
+                  Write-Host "Stopping server process $env:LEMONADE_PROCESS_ID..."
+                  Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
+              }
+          }
+
+      - name: Upload Server Logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lemonade-server-logs
+          path: |
+            lemonade-server-stdout.log
+            lemonade-server-stderr.log
+            lemonade-server.log

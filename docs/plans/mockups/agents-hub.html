@@ -1,0 +1,1694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GAIA AI PC Agents Hub</title>
+    <style>
+        :root {
+            /* Softer color palette */
+            --amd-red: #E63946;
+            --amd-red-light: #FF6B6B;
+            --amd-red-dark: #C1121F;
+            --amd-red-subtle: rgba(230, 57, 70, 0.1);
+
+            /* Softer backgrounds - not pure black */
+            --bg-page: #121418;
+            --bg-elevated: #1a1d24;
+            --bg-card: #22262f;
+            --bg-card-hover: #2a2f3a;
+            --bg-input: #2a2f3a;
+
+            /* Text with better hierarchy */
+            --text-primary: #f0f2f5;
+            --text-secondary: #9ca3b0;
+            --text-muted: #6b7280;
+            --text-accent: var(--amd-red-light);
+
+            /* Borders and shadows */
+            --border-subtle: rgba(255, 255, 255, 0.06);
+            --border-default: rgba(255, 255, 255, 0.1);
+            --border-hover: rgba(255, 255, 255, 0.15);
+            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+            --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.3);
+            --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4);
+            --shadow-glow: 0 0 20px rgba(230, 57, 70, 0.15);
+
+            /* Status colors - softer */
+            --success: #4ade80;
+            --warning: #fbbf24;
+            --gold: #fcd34d;
+            --silver: #cbd5e1;
+            --bronze: #f59e0b;
+
+            /* Spacing */
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 24px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--bg-page);
+            color: var(--text-primary);
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Header */
+        .header {
+            background: var(--bg-elevated);
+            border-bottom: 1px solid var(--border-subtle);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(12px);
+        }
+
+        .header-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            text-decoration: none;
+            color: var(--text-primary);
+        }
+
+        .logo-icon {
+            width: 42px;
+            height: 42px;
+            background: linear-gradient(135deg, var(--amd-red) 0%, var(--amd-red-dark) 100%);
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1.1rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .logo-text {
+            font-size: 1.2rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+        }
+
+        .logo-text span {
+            color: var(--amd-red-light);
+        }
+
+        .nav {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .nav a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius-sm);
+            transition: all 0.2s ease;
+        }
+
+        .nav a:hover {
+            color: var(--text-primary);
+            background: var(--bg-card);
+        }
+
+        .nav a.active {
+            color: var(--amd-red-light);
+            background: var(--amd-red-subtle);
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+        }
+
+        .search-box {
+            display: flex;
+            align-items: center;
+            background: var(--bg-input);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 0.6rem 1rem;
+            gap: 0.6rem;
+            transition: all 0.2s ease;
+        }
+
+        .search-box:focus-within {
+            border-color: var(--amd-red);
+            box-shadow: 0 0 0 3px var(--amd-red-subtle);
+        }
+
+        .search-box svg {
+            color: var(--text-muted);
+        }
+
+        .search-box input {
+            background: transparent;
+            border: none;
+            color: var(--text-primary);
+            outline: none;
+            width: 180px;
+            font-size: 0.9rem;
+        }
+
+        .search-box input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .btn {
+            padding: 0.6rem 1.25rem;
+            border-radius: var(--radius-lg);
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            border: none;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--amd-red) 0%, var(--amd-red-dark) 100%);
+            color: white;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, var(--amd-red-light) 0%, var(--amd-red) 100%);
+            box-shadow: var(--shadow-glow);
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary {
+            background: var(--bg-card);
+            color: var(--text-primary);
+            border: 1px solid var(--border-default);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--border-hover);
+        }
+
+        /* Hero Section */
+        .hero {
+            background: linear-gradient(180deg, var(--bg-elevated) 0%, var(--bg-page) 100%);
+            padding: 3.5rem 2rem;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+
+        .hero-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            gap: 3rem;
+            align-items: center;
+        }
+
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: var(--amd-red-subtle);
+            color: var(--amd-red-light);
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius-xl);
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 1.25rem;
+        }
+
+        .hero-badge::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--amd-red-light);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .hero h1 {
+            font-size: 2.75rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            line-height: 1.15;
+            letter-spacing: -0.03em;
+            background: linear-gradient(135deg, var(--text-primary) 0%, var(--text-secondary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero-description {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+            margin-bottom: 2rem;
+            max-width: 580px;
+            line-height: 1.7;
+        }
+
+        .hero-meta {
+            display: flex;
+            gap: 2.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .hero-meta-item {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .hero-meta-label {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .hero-meta-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .hero-meta-value.countdown {
+            color: var(--amd-red-light);
+        }
+
+        .hero-actions {
+            display: flex;
+            gap: 1rem;
+        }
+
+        /* Prize Card */
+        .prize-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 1.75rem;
+            box-shadow: var(--shadow-md);
+        }
+
+        .prize-card h3 {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 1.25rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        .prize-item {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem;
+            margin: 0.5rem 0;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-md);
+            transition: all 0.2s ease;
+        }
+
+        .prize-item:hover {
+            background: var(--bg-card-hover);
+            transform: translateX(4px);
+        }
+
+        .prize-medal {
+            font-size: 1.75rem;
+        }
+
+        .prize-details h4 {
+            font-size: 0.95rem;
+            font-weight: 600;
+            margin-bottom: 0.2rem;
+        }
+
+        .prize-details p {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+
+        /* Main Content */
+        .main {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2.5rem 2rem;
+        }
+
+        /* Section Headers */
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.75rem;
+        }
+
+        .section-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+        }
+
+        .section-link {
+            color: var(--amd-red-light);
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+
+        .section-link:hover {
+            color: var(--amd-red);
+        }
+
+        /* Categories */
+        .categories {
+            display: flex;
+            gap: 0.6rem;
+            flex-wrap: wrap;
+            margin-bottom: 2.5rem;
+        }
+
+        .category-tag {
+            padding: 0.6rem 1.25rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-xl);
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .category-tag:hover {
+            background: var(--bg-card-hover);
+            color: var(--text-primary);
+            border-color: var(--border-hover);
+        }
+
+        .category-tag.active {
+            background: var(--amd-red-subtle);
+            border-color: var(--amd-red);
+            color: var(--amd-red-light);
+        }
+
+        /* Agent Cards Grid */
+        .agents-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 3.5rem;
+        }
+
+        .agent-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .agent-card:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--amd-red);
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-lg), var(--shadow-glow);
+        }
+
+        .agent-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1.25rem;
+        }
+
+        .agent-icon {
+            width: 52px;
+            height: 52px;
+            background: linear-gradient(135deg, var(--bg-card-hover) 0%, var(--bg-elevated) 100%);
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            border: 1px solid var(--border-default);
+        }
+
+        .agent-badges {
+            display: flex;
+            gap: 0.4rem;
+        }
+
+        .badge {
+            padding: 0.3rem 0.6rem;
+            border-radius: var(--radius-sm);
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        .badge-winner {
+            background: linear-gradient(135deg, var(--gold) 0%, #f59e0b 100%);
+            color: #000;
+        }
+
+        .badge-official {
+            background: var(--amd-red-subtle);
+            color: var(--amd-red-light);
+            border: 1px solid var(--amd-red);
+        }
+
+        .badge-new {
+            background: rgba(74, 222, 128, 0.15);
+            color: var(--success);
+            border: 1px solid var(--success);
+        }
+
+        .badge-featured {
+            background: rgba(139, 92, 246, 0.15);
+            color: #a78bfa;
+            border: 1px solid #8b5cf6;
+        }
+
+        .agent-card h3 {
+            font-size: 1.15rem;
+            font-weight: 600;
+            margin-bottom: 0.3rem;
+            letter-spacing: -0.01em;
+        }
+
+        .agent-author {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .agent-description {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            margin-bottom: 1rem;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            line-height: 1.5;
+        }
+
+        .agent-stats {
+            display: flex;
+            gap: 1.25rem;
+            margin-bottom: 1.25rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border-subtle);
+        }
+
+        .agent-stat {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        .agent-stat.rating {
+            color: var(--gold);
+        }
+
+        .agent-tags {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            margin-bottom: 1.25rem;
+        }
+
+        .agent-tag {
+            padding: 0.3rem 0.65rem;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-sm);
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .agent-actions {
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        .agent-actions .btn {
+            flex: 1;
+            justify-content: center;
+            padding: 0.65rem 1rem;
+        }
+
+        /* Leaderboard Section */
+        .leaderboard {
+            background: var(--bg-card);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 1.75rem;
+            margin-bottom: 3.5rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .leaderboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+
+        .leaderboard-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .leaderboard-meta {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        .leaderboard-item {
+            display: grid;
+            grid-template-columns: 50px 1fr 160px 80px 70px;
+            align-items: center;
+            padding: 1rem;
+            margin: 0.5rem 0;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-md);
+            gap: 1rem;
+            transition: all 0.2s ease;
+        }
+
+        .leaderboard-item:hover {
+            background: var(--bg-card-hover);
+        }
+
+        .leaderboard-rank {
+            font-size: 1.25rem;
+            font-weight: 700;
+            text-align: center;
+        }
+
+        .leaderboard-rank.gold { color: var(--gold); }
+        .leaderboard-rank.silver { color: var(--silver); }
+        .leaderboard-rank.bronze { color: var(--bronze); }
+
+        .leaderboard-agent {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .leaderboard-agent-icon {
+            width: 44px;
+            height: 44px;
+            background: var(--bg-card);
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+        }
+
+        .leaderboard-agent-info h4 {
+            font-size: 0.95rem;
+            font-weight: 600;
+            margin-bottom: 0.15rem;
+        }
+
+        .leaderboard-agent-info p {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        .leaderboard-votes {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .vote-bar {
+            flex: 1;
+            height: 6px;
+            background: var(--bg-card);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .vote-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--amd-red) 0%, var(--amd-red-light) 100%);
+            border-radius: 3px;
+        }
+
+        .vote-count {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            min-width: 60px;
+            text-align: right;
+        }
+
+        .leaderboard-rating {
+            color: var(--gold);
+            font-size: 0.9rem;
+        }
+
+        /* Credits Callout */
+        .credits-callout {
+            background: linear-gradient(135deg, var(--amd-red-subtle) 0%, rgba(139, 92, 246, 0.08) 100%);
+            border: 1px solid var(--amd-red);
+            border-radius: var(--radius-lg);
+            padding: 1.75rem 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 3rem;
+            box-shadow: var(--shadow-glow);
+        }
+
+        .credits-content h3 {
+            font-size: 1.15rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .credits-content p {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        /* Arena Preview */
+        .arena-preview {
+            background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-elevated) 100%);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 2.5rem;
+            margin-bottom: 3.5rem;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 3rem;
+            align-items: center;
+        }
+
+        .arena-info h2 {
+            font-size: 1.75rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            letter-spacing: -0.02em;
+        }
+
+        .arena-info p {
+            color: var(--text-secondary);
+            margin-bottom: 1.75rem;
+            line-height: 1.7;
+        }
+
+        .arena-features {
+            display: flex;
+            flex-direction: column;
+            gap: 0.85rem;
+            margin-bottom: 2rem;
+        }
+
+        .arena-feature {
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+        }
+
+        .arena-feature-icon {
+            color: var(--success);
+            font-size: 1.1rem;
+        }
+
+        .arena-mockup {
+            background: var(--bg-page);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-md);
+            padding: 1.25rem;
+            box-shadow: var(--shadow-md);
+        }
+
+        .arena-mockup-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+
+        .arena-mockup-title {
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        .arena-mockup-badge {
+            background: rgba(74, 222, 128, 0.15);
+            color: var(--success);
+            padding: 0.25rem 0.6rem;
+            border-radius: var(--radius-sm);
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+
+        .arena-chat {
+            display: flex;
+            flex-direction: column;
+            gap: 0.85rem;
+        }
+
+        .arena-message {
+            padding: 0.85rem 1.1rem;
+            border-radius: var(--radius-md);
+            font-size: 0.85rem;
+            max-width: 88%;
+            line-height: 1.5;
+        }
+
+        .arena-message.bot {
+            background: var(--bg-card);
+            align-self: flex-start;
+            border: 1px solid var(--border-subtle);
+        }
+
+        .arena-message.user {
+            background: linear-gradient(135deg, var(--amd-red) 0%, var(--amd-red-dark) 100%);
+            align-self: flex-end;
+        }
+
+        /* Activity Section */
+        .activity {
+            background: var(--bg-card);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 1.75rem;
+            margin-bottom: 3.5rem;
+        }
+
+        .activity-item {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem;
+            margin: 0.4rem 0;
+            border-radius: var(--radius-md);
+            transition: all 0.2s ease;
+        }
+
+        .activity-item:hover {
+            background: var(--bg-elevated);
+        }
+
+        .activity-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+        }
+
+        .activity-content {
+            flex: 1;
+        }
+
+        .activity-content p {
+            font-size: 0.9rem;
+        }
+
+        .activity-content span {
+            color: var(--amd-red-light);
+            font-weight: 500;
+        }
+
+        .activity-time {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+
+        /* Profile Preview */
+        .profile-preview {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            gap: 2rem;
+            margin-bottom: 3.5rem;
+        }
+
+        .profile-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 2rem 1.5rem;
+            text-align: center;
+        }
+
+        .profile-avatar {
+            width: 88px;
+            height: 88px;
+            background: linear-gradient(135deg, var(--amd-red) 0%, #8b5cf6 100%);
+            border-radius: 50%;
+            margin: 0 auto 1.25rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2.25rem;
+            font-weight: 600;
+            box-shadow: var(--shadow-md);
+        }
+
+        .profile-name {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .profile-handle {
+            color: var(--text-muted);
+            margin-bottom: 1rem;
+        }
+
+        .profile-tier {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: linear-gradient(135deg, var(--gold) 0%, #f59e0b 100%);
+            color: #000;
+            padding: 0.4rem 0.85rem;
+            border-radius: var(--radius-xl);
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-bottom: 1.25rem;
+        }
+
+        .profile-stats {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1rem;
+            padding-top: 1.25rem;
+            border-top: 1px solid var(--border-subtle);
+        }
+
+        .profile-stat {
+            text-align: center;
+        }
+
+        .profile-stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+
+        .profile-stat-label {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+
+        .profile-badges-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 1.75rem;
+        }
+
+        .profile-badges-section h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .profile-badges-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.6rem;
+            margin-bottom: 2rem;
+        }
+
+        .profile-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 0.85rem;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-md);
+            font-size: 0.85rem;
+            border: 1px solid var(--border-subtle);
+            transition: all 0.2s ease;
+        }
+
+        .profile-badge:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--border-default);
+        }
+
+        .competition-history-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid var(--border-subtle);
+            font-size: 0.9rem;
+        }
+
+        .competition-history-item:last-child {
+            border-bottom: none;
+        }
+
+        /* Footer */
+        .footer {
+            background: var(--bg-elevated);
+            border-top: 1px solid var(--border-subtle);
+            padding: 3.5rem 2rem;
+            margin-top: 2rem;
+        }
+
+        .footer-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr;
+            gap: 3rem;
+        }
+
+        .footer-brand p {
+            color: var(--text-secondary);
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+
+        .footer-section h4 {
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: var(--text-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .footer-section ul {
+            list-style: none;
+        }
+
+        .footer-section li {
+            margin-bottom: 0.6rem;
+        }
+
+        .footer-section a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s ease;
+        }
+
+        .footer-section a:hover {
+            color: var(--amd-red-light);
+        }
+
+        .footer-bottom {
+            max-width: 1400px;
+            margin: 2.5rem auto 0;
+            padding-top: 2rem;
+            border-top: 1px solid var(--border-subtle);
+            display: flex;
+            justify-content: space-between;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        /* Notification Banner */
+        .notification-banner {
+            background: linear-gradient(90deg, var(--amd-red) 0%, #8b5cf6 100%);
+            padding: 0.85rem 2rem;
+            text-align: center;
+            font-size: 0.9rem;
+        }
+
+        .notification-banner a {
+            color: white;
+            font-weight: 600;
+            text-decoration: underline;
+            text-underline-offset: 2px;
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .hero-content {
+                grid-template-columns: 1fr;
+            }
+            .arena-preview {
+                grid-template-columns: 1fr;
+            }
+            .profile-preview {
+                grid-template-columns: 1fr;
+            }
+            .footer-content {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 768px) {
+            .nav {
+                display: none;
+            }
+            .agents-grid {
+                grid-template-columns: 1fr;
+            }
+            .leaderboard-item {
+                grid-template-columns: 40px 1fr 80px;
+            }
+            .leaderboard-votes, .leaderboard-rating {
+                display: none;
+            }
+            .footer-content {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Notification Banner -->
+    <div class="notification-banner">
+        New Competition Live: <a href="#">Best Code Review Agent</a> — 12 days remaining. Enter now for a chance to win an AMD Ryzen AI PC!
+    </div>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <a href="#" class="logo">
+                <div class="logo-icon">G</div>
+                <div class="logo-text">GAIA <span>Agents Hub</span></div>
+            </a>
+
+            <nav class="nav">
+                <a href="#" class="active">Discover</a>
+                <a href="#">Competitions</a>
+                <a href="#">Arena</a>
+                <a href="#">Leaderboard</a>
+                <a href="#">Docs</a>
+            </nav>
+
+            <div class="header-actions">
+                <div class="search-box">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <path d="m21 21-4.35-4.35"></path>
+                    </svg>
+                    <input type="text" placeholder="Search agents...">
+                </div>
+                <a href="#" class="btn btn-secondary">Sign In</a>
+                <a href="#" class="btn btn-primary">Join Program</a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Hero - Current Competition -->
+    <section class="hero">
+        <div class="hero-content">
+            <div class="hero-main">
+                <div class="hero-badge">
+                    <span>Live Competition</span>
+                </div>
+                <h1>Best Code Review Agent</h1>
+                <p class="hero-description">
+                    Build an AI agent that reviews code for bugs, security issues, style violations,
+                    and best practices. Winners receive prizes and get featured on the Agents Hub homepage.
+                </p>
+
+                <div class="hero-meta">
+                    <div class="hero-meta-item">
+                        <span class="hero-meta-label">Time Remaining</span>
+                        <span class="hero-meta-value countdown">12d 4h 32m</span>
+                    </div>
+                    <div class="hero-meta-item">
+                        <span class="hero-meta-label">Entries</span>
+                        <span class="hero-meta-value">23</span>
+                    </div>
+                    <div class="hero-meta-item">
+                        <span class="hero-meta-label">Votes Cast</span>
+                        <span class="hero-meta-value">142</span>
+                    </div>
+                </div>
+
+                <div class="hero-actions">
+                    <a href="#" class="btn btn-primary">Submit Your Agent</a>
+                    <a href="#" class="btn btn-secondary">View All Entries</a>
+                </div>
+            </div>
+
+            <div class="prize-card">
+                <h3>Prizes</h3>
+                <div class="prize-item">
+                    <span class="prize-medal">🥇</span>
+                    <div class="prize-details">
+                        <h4>1st Place</h4>
+                        <p>AMD Ryzen AI PC + $1,000 + Featured</p>
+                    </div>
+                </div>
+                <div class="prize-item">
+                    <span class="prize-medal">🥈</span>
+                    <div class="prize-details">
+                        <h4>2nd Place</h4>
+                        <p>AMD Radeon RX 9070 XT + $500</p>
+                    </div>
+                </div>
+                <div class="prize-item">
+                    <span class="prize-medal">🥉</span>
+                    <div class="prize-details">
+                        <h4>3rd Place</h4>
+                        <p>$250 + Featured on AMD Developer</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Main Content -->
+    <main class="main">
+        <!-- Developer Credits Callout -->
+        <div class="credits-callout">
+            <div class="credits-content">
+                <h3>Free Strix Halo Cloud Access for Competitors</h3>
+                <p>Sign up for the competition and get free access to AMD Strix Halo Developer Cloud to build and test your agent.</p>
+            </div>
+            <a href="#" class="btn btn-primary">Get Started</a>
+        </div>
+
+        <!-- Categories -->
+        <div class="categories">
+            <span class="category-tag active">All</span>
+            <span class="category-tag">Productivity</span>
+            <span class="category-tag">Code</span>
+            <span class="category-tag">Documents</span>
+            <span class="category-tag">Creative</span>
+            <span class="category-tag">Data</span>
+            <span class="category-tag">Automation</span>
+            <span class="category-tag">Voice</span>
+        </div>
+
+        <!-- Featured Agents -->
+        <section>
+            <div class="section-header">
+                <h2 class="section-title">Featured Agents</h2>
+                <a href="#" class="section-link">View all agents →</a>
+            </div>
+
+            <div class="agents-grid">
+                <!-- Agent Card 1 -->
+                <div class="agent-card">
+                    <div class="agent-card-header">
+                        <div class="agent-icon">📝</div>
+                        <div class="agent-badges">
+                            <span class="badge badge-winner">Winner</span>
+                            <span class="badge badge-featured">Featured</span>
+                        </div>
+                    </div>
+                    <h3>TaxBot</h3>
+                    <p class="agent-author">by @janedoe</p>
+                    <p class="agent-description">AI assistant for tax preparation and filing. Helps find deductions, explains tax concepts, and processes W-2 forms.</p>
+                    <div class="agent-tags">
+                        <span class="agent-tag">finance</span>
+                        <span class="agent-tag">tax</span>
+                        <span class="agent-tag">documents</span>
+                    </div>
+                    <div class="agent-stats">
+                        <span class="agent-stat rating">★ 4.9 (312)</span>
+                        <span class="agent-stat">↓ 1.2K</span>
+                        <span class="agent-stat">v2.1.0</span>
+                    </div>
+                    <div class="agent-actions">
+                        <a href="#" class="btn btn-primary">Try in Arena</a>
+                        <a href="#" class="btn btn-secondary">Install</a>
+                    </div>
+                </div>
+
+                <!-- Agent Card 2 -->
+                <div class="agent-card">
+                    <div class="agent-card-header">
+                        <div class="agent-icon">💬</div>
+                        <div class="agent-badges">
+                            <span class="badge badge-official">AMD Official</span>
+                        </div>
+                    </div>
+                    <h3>ChatAgent</h3>
+                    <p class="agent-author">by @amd</p>
+                    <p class="agent-description">Document Q&A with RAG capabilities. Upload PDFs, code files, and documents for intelligent conversation.</p>
+                    <div class="agent-tags">
+                        <span class="agent-tag">documents</span>
+                        <span class="agent-tag">RAG</span>
+                        <span class="agent-tag">Q&A</span>
+                    </div>
+                    <div class="agent-stats">
+                        <span class="agent-stat rating">★ 4.8 (421)</span>
+                        <span class="agent-stat">↓ 3.4K</span>
+                        <span class="agent-stat">v1.5.0</span>
+                    </div>
+                    <div class="agent-actions">
+                        <a href="#" class="btn btn-primary">Try in Arena</a>
+                        <a href="#" class="btn btn-secondary">Install</a>
+                    </div>
+                </div>
+
+                <!-- Agent Card 3 -->
+                <div class="agent-card">
+                    <div class="agent-card-header">
+                        <div class="agent-icon">🎨</div>
+                        <div class="agent-badges">
+                            <span class="badge badge-official">AMD Official</span>
+                        </div>
+                    </div>
+                    <h3>BlenderAgent</h3>
+                    <p class="agent-author">by @amd</p>
+                    <p class="agent-description">3D scene automation with Blender. Create procedural models, animations, and render scenes via natural language.</p>
+                    <div class="agent-tags">
+                        <span class="agent-tag">3D</span>
+                        <span class="agent-tag">blender</span>
+                        <span class="agent-tag">creative</span>
+                    </div>
+                    <div class="agent-stats">
+                        <span class="agent-stat rating">★ 4.6 (89)</span>
+                        <span class="agent-stat">↓ 756</span>
+                        <span class="agent-stat">v1.2.0</span>
+                    </div>
+                    <div class="agent-actions">
+                        <a href="#" class="btn btn-primary">Try in Arena</a>
+                        <a href="#" class="btn btn-secondary">Install</a>
+                    </div>
+                </div>
+
+                <!-- Agent Card 4 -->
+                <div class="agent-card">
+                    <div class="agent-card-header">
+                        <div class="agent-icon">🔍</div>
+                        <div class="agent-badges">
+                            <span class="badge badge-new">New</span>
+                        </div>
+                    </div>
+                    <h3>CodeSensei</h3>
+                    <p class="agent-author">by @alice</p>
+                    <p class="agent-description">Advanced code review agent that catches bugs, security issues, and suggests best practices. Currently competing!</p>
+                    <div class="agent-tags">
+                        <span class="agent-tag">code</span>
+                        <span class="agent-tag">review</span>
+                        <span class="agent-tag">security</span>
+                    </div>
+                    <div class="agent-stats">
+                        <span class="agent-stat rating">★ 4.7 (47)</span>
+                        <span class="agent-stat">↓ 234</span>
+                        <span class="agent-stat">v1.0.0</span>
+                    </div>
+                    <div class="agent-actions">
+                        <a href="#" class="btn btn-primary">Try in Arena</a>
+                        <a href="#" class="btn btn-secondary">Install</a>
+                    </div>
+                </div>
+
+                <!-- Agent Card 5 -->
+                <div class="agent-card">
+                    <div class="agent-card-header">
+                        <div class="agent-icon">🎫</div>
+                        <div class="agent-badges">
+                            <span class="badge badge-official">AMD Official</span>
+                        </div>
+                    </div>
+                    <h3>JiraAgent</h3>
+                    <p class="agent-author">by @amd</p>
+                    <p class="agent-description">Natural language Jira management. Create issues, query backlogs, plan sprints using conversational commands.</p>
+                    <div class="agent-tags">
+                        <span class="agent-tag">jira</span>
+                        <span class="agent-tag">productivity</span>
+                        <span class="agent-tag">PM</span>
+                    </div>
+                    <div class="agent-stats">
+                        <span class="agent-stat rating">★ 4.5 (156)</span>
+                        <span class="agent-stat">↓ 890</span>
+                        <span class="agent-stat">v1.3.0</span>
+                    </div>
+                    <div class="agent-actions">
+                        <a href="#" class="btn btn-primary">Try in Arena</a>
+                        <a href="#" class="btn btn-secondary">Install</a>
+                    </div>
+                </div>
+
+                <!-- Agent Card 6 -->
+                <div class="agent-card">
+                    <div class="agent-card-header">
+                        <div class="agent-icon">🎤</div>
+                        <div class="agent-badges">
+                            <span class="badge badge-official">AMD Official</span>
+                        </div>
+                    </div>
+                    <h3>TalkAgent</h3>
+                    <p class="agent-author">by @amd</p>
+                    <p class="agent-description">Voice-first interaction with speech-to-speech capabilities. Talk naturally using Whisper ASR and Kokoro TTS.</p>
+                    <div class="agent-tags">
+                        <span class="agent-tag">voice</span>
+                        <span class="agent-tag">ASR</span>
+                        <span class="agent-tag">TTS</span>
+                    </div>
+                    <div class="agent-stats">
+                        <span class="agent-stat rating">★ 4.4 (67)</span>
+                        <span class="agent-stat">↓ 445</span>
+                        <span class="agent-stat">v1.1.0</span>
+                    </div>
+                    <div class="agent-actions">
+                        <a href="#" class="btn btn-primary">Try in Arena</a>
+                        <a href="#" class="btn btn-secondary">Install</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Leaderboard -->
+        <section class="leaderboard">
+            <div class="leaderboard-header">
+                <h2 class="leaderboard-title">🏆 Competition: Best Code Review Agent</h2>
+                <span class="leaderboard-meta">142 votes • 12 days remaining</span>
+            </div>
+
+            <div class="leaderboard-item">
+                <span class="leaderboard-rank gold">1</span>
+                <div class="leaderboard-agent">
+                    <div class="leaderboard-agent-icon">🔍</div>
+                    <div class="leaderboard-agent-info">
+                        <h4>CodeSensei</h4>
+                        <p>by @alice</p>
+                    </div>
+                </div>
+                <div class="leaderboard-votes">
+                    <div class="vote-bar"><div class="vote-bar-fill" style="width: 100%"></div></div>
+                    <span class="vote-count">47 votes</span>
+                </div>
+                <span class="leaderboard-rating">★ 4.7</span>
+                <a href="#" class="btn btn-secondary" style="padding: 0.4rem 0.85rem; font-size: 0.85rem;">Try</a>
+            </div>
+
+            <div class="leaderboard-item">
+                <span class="leaderboard-rank silver">2</span>
+                <div class="leaderboard-agent">
+                    <div class="leaderboard-agent-icon">🤖</div>
+                    <div class="leaderboard-agent-info">
+                        <h4>ReviewBot</h4>
+                        <p>by @bob</p>
+                    </div>
+                </div>
+                <div class="leaderboard-votes">
+                    <div class="vote-bar"><div class="vote-bar-fill" style="width: 87%"></div></div>
+                    <span class="vote-count">41 votes</span>
+                </div>
+                <span class="leaderboard-rating">★ 4.5</span>
+                <a href="#" class="btn btn-secondary" style="padding: 0.4rem 0.85rem; font-size: 0.85rem;">Try</a>
+            </div>
+
+            <div class="leaderboard-item">
+                <span class="leaderboard-rank bronze">3</span>
+                <div class="leaderboard-agent">
+                    <div class="leaderboard-agent-icon">✨</div>
+                    <div class="leaderboard-agent-info">
+                        <h4>LintMaster</h4>
+                        <p>by @charlie</p>
+                    </div>
+                </div>
+                <div class="leaderboard-votes">
+                    <div class="vote-bar"><div class="vote-bar-fill" style="width: 60%"></div></div>
+                    <span class="vote-count">28 votes</span>
+                </div>
+                <span class="leaderboard-rating">★ 4.3</span>
+                <a href="#" class="btn btn-secondary" style="padding: 0.4rem 0.85rem; font-size: 0.85rem;">Try</a>
+            </div>
+
+            <div class="leaderboard-item">
+                <span class="leaderboard-rank">4</span>
+                <div class="leaderboard-agent">
+                    <div class="leaderboard-agent-icon">🐛</div>
+                    <div class="leaderboard-agent-info">
+                        <h4>BugHunter</h4>
+                        <p>by @diana</p>
+                    </div>
+                </div>
+                <div class="leaderboard-votes">
+                    <div class="vote-bar"><div class="vote-bar-fill" style="width: 38%"></div></div>
+                    <span class="vote-count">18 votes</span>
+                </div>
+                <span class="leaderboard-rating">★ 4.1</span>
+                <a href="#" class="btn btn-secondary" style="padding: 0.4rem 0.85rem; font-size: 0.85rem;">Try</a>
+            </div>
+
+            <div class="leaderboard-item">
+                <span class="leaderboard-rank">5</span>
+                <div class="leaderboard-agent">
+                    <div class="leaderboard-agent-icon">🛡️</div>
+                    <div class="leaderboard-agent-info">
+                        <h4>CodeGuard</h4>
+                        <p>by @eve</p>
+                    </div>
+                </div>
+                <div class="leaderboard-votes">
+                    <div class="vote-bar"><div class="vote-bar-fill" style="width: 17%"></div></div>
+                    <span class="vote-count">8 votes</span>
+                </div>
+                <span class="leaderboard-rating">★ 3.9</span>
+                <a href="#" class="btn btn-secondary" style="padding: 0.4rem 0.85rem; font-size: 0.85rem;">Try</a>
+            </div>
+        </section>
+
+        <!-- Arena Preview -->
+        <section class="arena-preview">
+            <div class="arena-info">
+                <h2>Try Agents Instantly in the Arena</h2>
+                <p>No installation required. Test any agent running on AMD Strix Halo hardware with NPU acceleration. Experience the power of AI PC agents before downloading.</p>
+
+                <div class="arena-features">
+                    <div class="arena-feature">
+                        <span class="arena-feature-icon">✓</span>
+                        <span>No signup required to try</span>
+                    </div>
+                    <div class="arena-feature">
+                        <span class="arena-feature-icon">✓</span>
+                        <span>Runs on AMD Strix Halo Developer Cloud</span>
+                    </div>
+                    <div class="arena-feature">
+                        <span class="arena-feature-icon">✓</span>
+                        <span>Test with your own prompts and use cases</span>
+                    </div>
+                    <div class="arena-feature">
+                        <span class="arena-feature-icon">✓</span>
+                        <span>One-click install when you're ready</span>
+                    </div>
+                </div>
+
+                <a href="#" class="btn btn-primary">Open Arena</a>
+            </div>
+
+            <div class="arena-mockup">
+                <div class="arena-mockup-header">
+                    <span class="arena-mockup-title">Arena: ChatAgent v1.5.0</span>
+                    <span class="arena-mockup-badge">LIVE</span>
+                </div>
+                <div class="arena-chat">
+                    <div class="arena-message bot">Hi! I'm ChatAgent. Upload a document or ask me anything. I can help with Q&A, summarization, and more.</div>
+                    <div class="arena-message user">Can you summarize the key points from this quarterly report?</div>
+                    <div class="arena-message bot">Based on the Q4 2025 report, here are the key points: 1) Revenue increased 23% YoY... 2) New product launches exceeded targets...</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Profile Preview -->
+        <section>
+            <div class="section-header">
+                <h2 class="section-title">Top Contributors</h2>
+                <a href="#" class="section-link">View Hall of Fame →</a>
+            </div>
+
+            <div class="profile-preview">
+                <div class="profile-card">
+                    <div class="profile-avatar">J</div>
+                    <h3 class="profile-name">Jane Doe</h3>
+                    <p class="profile-handle">@janedoe</p>
+                    <div class="profile-tier">🏆 Champion</div>
+                    <div class="profile-stats">
+                        <div class="profile-stat">
+                            <div class="profile-stat-value">4</div>
+                            <div class="profile-stat-label">Agents</div>
+                        </div>
+                        <div class="profile-stat">
+                            <div class="profile-stat-value">1.2K</div>
+                            <div class="profile-stat-label">Downloads</div>
+                        </div>
+                        <div class="profile-stat">
+                            <div class="profile-stat-value">1</div>
+                            <div class="profile-stat-label">Wins</div>
+                        </div>
+                        <div class="profile-stat">
+                            <div class="profile-stat-value">89</div>
+                            <div class="profile-stat-label">Votes</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="profile-badges-section">
+                    <h3>Achievements & Badges</h3>
+                    <div class="profile-badges-grid">
+                        <div class="profile-badge">🏆 Competition Winner</div>
+                        <div class="profile-badge">🔧 Contributor</div>
+                        <div class="profile-badge">⭐ Community Favorite</div>
+                        <div class="profile-badge">📦 100+ Downloads</div>
+                        <div class="profile-badge">🥉 Top 3 Finisher</div>
+                        <div class="profile-badge">🚀 Early Adopter</div>
+                        <div class="profile-badge">💬 Helpful Voter</div>
+                        <div class="profile-badge">📝 First Agent</div>
+                    </div>
+
+                    <h3>Competition History</h3>
+                    <div class="competition-history-item">
+                        <span>Mar 2026 "Best Tax Agent"</span>
+                        <span style="color: var(--gold);">🥇 1st Place</span>
+                    </div>
+                    <div class="competition-history-item">
+                        <span>Feb 2026 "Document Processing"</span>
+                        <span style="color: var(--bronze);">🥉 3rd Place</span>
+                    </div>
+                    <div class="competition-history-item">
+                        <span>Jan 2026 "General Assistant"</span>
+                        <span style="color: var(--text-muted);">8th Place</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Activity -->
+        <section class="activity">
+            <div class="section-header">
+                <h2 class="section-title">Recent Activity</h2>
+            </div>
+
+            <div class="activity-item">
+                <div class="activity-icon">📦</div>
+                <div class="activity-content">
+                    <p><span>@sarah</span> published <span>MeetingNotes v1.2.0</span></p>
+                </div>
+                <span class="activity-time">2 hours ago</span>
+            </div>
+
+            <div class="activity-item">
+                <div class="activity-icon">⭐</div>
+                <div class="activity-content">
+                    <p><span>@developer42</span> voted for <span>CodeSensei</span> in the competition</p>
+                </div>
+                <span class="activity-time">3 hours ago</span>
+            </div>
+
+            <div class="activity-item">
+                <div class="activity-icon">🏆</div>
+                <div class="activity-content">
+                    <p><span>@alice</span> entered <span>CodeSensei</span> in Best Code Review Agent</p>
+                </div>
+                <span class="activity-time">5 hours ago</span>
+            </div>
+
+            <div class="activity-item">
+                <div class="activity-icon">📦</div>
+                <div class="activity-content">
+                    <p><span>@dbexpert</span> published <span>SQLHelper v2.0.0</span></p>
+                </div>
+                <span class="activity-time">5 hours ago</span>
+            </div>
+
+            <div class="activity-item">
+                <div class="activity-icon">↓</div>
+                <div class="activity-content">
+                    <p><span>ChatAgent</span> reached <span>3,400 downloads</span></p>
+                </div>
+                <span class="activity-time">1 day ago</span>
+            </div>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-content">
+            <div class="footer-brand">
+                <a href="#" class="logo">
+                    <div class="logo-icon">G</div>
+                    <div class="logo-text">GAIA <span>Agents Hub</span></div>
+                </a>
+                <p>The definitive ecosystem for AI PC agents. Build, share, and compete with AI agents running on AMD hardware.</p>
+            </div>
+
+            <div class="footer-section">
+                <h4>Platform</h4>
+                <ul>
+                    <li><a href="#">Discover Agents</a></li>
+                    <li><a href="#">Competitions</a></li>
+                    <li><a href="#">Arena</a></li>
+                    <li><a href="#">Leaderboard</a></li>
+                </ul>
+            </div>
+
+            <div class="footer-section">
+                <h4>Developers</h4>
+                <ul>
+                    <li><a href="#">Documentation</a></li>
+                    <li><a href="#">GAIA SDK</a></li>
+                    <li><a href="#">Submit an Agent</a></li>
+                    <li><a href="#">AMD Dev Program</a></li>
+                </ul>
+            </div>
+
+            <div class="footer-section">
+                <h4>Community</h4>
+                <ul>
+                    <li><a href="#">GitHub</a></li>
+                    <li><a href="#">Discord</a></li>
+                    <li><a href="#">Twitter</a></li>
+                    <li><a href="#">Blog</a></li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="footer-bottom">
+            <span>© 2026 Advanced Micro Devices, Inc. All rights reserved.</span>
+            <span>Powered by GAIA SDK • Running on AMD Strix Halo</span>
+        </div>
+    </footer>
+</body>
+</html>
