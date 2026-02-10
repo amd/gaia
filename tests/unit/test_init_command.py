@@ -221,7 +221,7 @@ class TestInitCommand(unittest.TestCase):
         """Test that valid profiles are accepted."""
         from gaia.installer.init_command import InitCommand
 
-        valid_profiles = ["minimal", "chat", "code", "rag", "all"]
+        valid_profiles = ["minimal", "chat", "code", "rag", "mcp", "all"]
         for profile in valid_profiles:
             cmd = InitCommand(profile=profile, yes=True)
             self.assertEqual(cmd.profile, profile)
@@ -268,7 +268,7 @@ class TestInitProfiles(unittest.TestCase):
         """Test that expected profiles are defined."""
         from gaia.installer.init_command import INIT_PROFILES
 
-        expected = ["minimal", "chat", "code", "rag", "all"]
+        expected = ["minimal", "chat", "code", "rag", "mcp", "all"]
         for profile in expected:
             self.assertIn(profile, INIT_PROFILES)
 

@@ -63,6 +63,12 @@ INIT_PROFILES = {
         "models": None,
         "approx_size": "~25 GB",
     },
+    "mcp": {
+        "description": "MCP server and client support",
+        "agent": "mcp",
+        "models": None,  # Uses agent profile defaults
+        "approx_size": "~25 GB",
+    },
     "all": {
         "description": "All models for all agents",
         "agent": "all",
