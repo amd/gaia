@@ -66,9 +66,12 @@ try {
     Write-Host "=== Checking Port $Port ==="
     $portInUse = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
     if ($portInUse) {
-        $pid = $portInUse.OwningProcess
-        Write-Host "[WARN] Port $Port in use by PID: $pid - killing orphaned process"
-        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+        # Get unique PIDs (may have multiple connections on same port)
+        $processIds = $portInUse.OwningProcess | Select-Object -Unique
+        foreach ($processId in $processIds) {
+            Write-Host "[WARN] Port $Port in use by PID: $processId - killing orphaned process"
+            Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+        }
         Start-Sleep -Seconds 2
     } else {
         Write-Host "[OK] Port $Port is available"

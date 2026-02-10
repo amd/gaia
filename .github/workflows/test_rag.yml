@@ -58,7 +58,7 @@ jobs:
 
   test-rag-integration:
     name: RAG Integration Tests
-    runs-on: [stx]
+    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
     needs: test-rag-unit
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 

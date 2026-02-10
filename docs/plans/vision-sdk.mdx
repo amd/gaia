@@ -1,0 +1,347 @@
+---
+title: Vision SDK
+description: Unified document processing pipeline with VLM-powered OCR for AMD AI PCs
+---
+
+# Vision SDK - Document Processing Pipeline
+
+<Info>
+**Status:** Planning
+**Timeline:** Q2-Q3 2026
+[Vote with 👍](https://github.com/amd/gaia/issues/325)
+</Info>
+
+## Executive Summary
+
+A comprehensive Vision Pipeline SDK for document processing, OCR, and structured data extraction. Consolidates fragmented vision capabilities across GAIA into a unified, developer-friendly API.
+
+**Value:** Transform any document (medical forms, legal logs, technical manuals) into structured, searchable data using VLM-powered OCR—100% locally on AMD hardware.
+
+**Impact:** Reduce vision agent code by 60%, enable document automation workflows, power legal/medical/technical document processing.
+
+---
+
+## The Problem
+
+### Fragmented Vision Capabilities
+
+**Current state:**
+- Image processing duplicated across agents (EMR has 400+ lines of boilerplate)
+- No unified document processing API
+- Vision capabilities scattered across `llm/`, `vlm/`, `rag/`, `utils/`
+- Each agent reimplements the same patterns
+
+**Missing features:**
+- No multi-page document processing
+- No table extraction from documents
+- No visual element extraction (charts, timelines)
+- No structured extraction with flexible schemas
+- No seamless RAG integration
+
+**Impact:**
+- Developers write 400+ lines for basic vision tasks
+- Cannot process large legal documents (1,200+ pages)
+- Technical manuals require manual preprocessing for RAG
+- Each vision agent starts from scratch
+
+---
+
+## The Solution
+
+### Vision SDK - One API for All Documents
+
+```python
+from gaia.vision import VisionSDK, ExtractionSchema
+
+vision = VisionSDK()
+
+# Medical forms → structured data
+result = vision.extract("form.pdf", schema=medical_schema)
+
+# Legal logs → text + tables + visuals
+result = vision.extract("logs.pdf", extract_tables=True, extract_visuals=True)
+
+# Technical manuals → RAG indexing
+result = vision.extract("manual.pdf", pages="all")
+```
+
+**Key capabilities:**
+- Multi-page processing (1 to 1,200+ pages)
+- Table and visual element extraction
+- **Handwriting recognition** (validated, production-ready)
+- Structured data with flexible schemas
+- Batch processing and multi-document detection
+- Seamless RAG integration
+- Agent mixin for vision-powered tools
+- Production-ready with checkpointing and parallel processing
+
+---
+
+## Use Cases
+
+### Medical Forms (EMR Agent)
+Extract patient data from intake forms with validation.
+
+```python
+from gaia.vision import VisionSDK, ExtractionSchema
+
+schema = ExtractionSchema.from_dict({
+    "required": ["first_name", "last_name"],
+    "fields": {
+        "date_of_birth": {"type": "date"},
+        "allergies": {"type": "string", "critical": True},
+    },
+    "allow_additional": True,
+})
+
+vision = VisionSDK()
+result = vision.extract("intake_form.pdf", schema=schema)
+```
+
+**Impact:** EMR agent code reduces from 1,500 → 600 lines (60% reduction)
+
+---
+
+### Legal Compliance (Driver Logs)
+Process multi-page driver logs with timeline charts and violation detection.
+
+```python
+vision = VisionSDK()
+
+result = vision.extract(
+    "driver_logs.pdf",
+    pages="all",  # 1,200 pages
+    extract_tables=True,
+    extract_visuals=True,
+    on_progress=callback,
+)
+
+# Access timeline charts
+for page in result.pages:
+    for visual in page.visuals:
+        if visual.type == "timeline":
+            print(visual.data)
+```
+
+**Impact:** Automate $$$+ legal expert analysis work
+
+---
+
+### Technical Manuals (RAG Q&A)
+Index operations manuals for accurate Q&A.
+
+```python
+from gaia.vision import VisionSDK
+from gaia.rag import RAGSDK
+
+# Extract with tables
+vision = VisionSDK()
+doc = vision.extract("manual.pdf", pages="all", extract_tables=True)
+
+# Index with RAG
+rag = RAGSDK()
+rag.add_document(doc.to_markdown())
+
+# Query
+answer = rag.query("What are the safety procedures?")
+```
+
+**Impact:** Enable precise answers from complex technical documents
+
+---
+
+### Batch Receipts (Expense Automation)
+Process multiple receipts and generate expense reports.
+
+```python
+vision = VisionSDK()
+
+# Batch process receipts
+results = vision.extract_batch(
+    files=["receipt1.jpg", "receipt2.jpg", ...],
+    schema=receipt_schema,
+)
+
+# Export as expense report
+results.to_excel("expenses.xlsx")
+
+# Or single image with multiple receipts
+result = vision.extract(
+    "three_receipts.jpg",
+    detect_multiple=True,  # Detect 3 receipts in one image
+    schema=receipt_schema,
+)
+```
+
+**Impact:** Expense reporting automation, receipt digitization
+
+---
+
+### Business Cards (CRM Integration)
+Extract contact information for CRM import.
+
+```python
+vision = VisionSDK()
+
+result = vision.extract("business_card.jpg", schema=contact_schema)
+
+# Export to VCF/CSV
+result.to_vcard("contact.vcf")
+# Fields: name, title, company, email, phone, linkedin
+```
+
+**Impact:** Networking automation, contact management
+
+---
+
+### ID Cards (KYC Compliance)
+Identity verification for compliance and onboarding.
+
+```python
+vision = VisionSDK()
+
+result = vision.extract(
+    "drivers_license.jpg",
+    schema=id_card_schema,
+    detect_face=True,  # Face detection
+)
+
+# Validate
+age = calculate_age(result.data["date_of_birth"])
+is_valid = result.data["expiration_date"] > today()
+```
+
+**Impact:** KYC automation, age verification, identity fraud prevention
+
+---
+
+### Bank Statements (Financial Analysis)
+Extract transactions for accounting and reconciliation.
+
+```python
+vision = VisionSDK()
+
+result = vision.extract(
+    "bank_statement.pdf",
+    pages="all",
+    extract_tables=True,
+)
+
+# Transaction table
+transactions = result.tables[0].to_dataframe()
+transactions.to_csv("transactions.csv")
+```
+
+**Impact:** Accounting automation, expense tracking, reconciliation
+
+---
+
+### Handwritten Forms & Notes
+Digitize handwritten content with high accuracy.
+
+```python
+vision = VisionSDK()
+
+# Handwritten meeting notes
+result = vision.extract(
+    "meeting_notes.jpg",
+    handwriting_mode=True,  # Optimized for handwriting
+)
+
+# Filled forms (mixed print + handwriting)
+result = vision.extract(
+    "filled_application.pdf",
+    schema=application_schema,
+    handwriting_mode=True,
+)
+```
+
+**Impact:** Form digitization, note-taking automation, historical document preservation
+
+<Note>
+**Validated:** VLM handwriting recognition performs well on real-world forms. Included as core capability.
+</Note>
+
+---
+
+## Architecture
+
+### Module Structure
+
+```
+src/gaia/vision/
+├── sdk.py               # Main VisionSDK class
+├── document.py          # Document/Page models
+├── schema.py            # ExtractionSchema, ValidationRule
+├── preprocessor.py      # Image optimization
+├── loaders.py           # PDF/image loading
+├── extractors/
+│   ├── text.py          # OCR extraction
+│   ├── table.py         # Table extraction
+│   ├── visual.py        # Visual element extraction
+│   └── structured.py    # Schema-based extraction
+└── mixin.py             # Agent integration
+```
+
+---
+
+## Implementation Milestones
+
+### M1: Foundation (1 week)
+- Core architecture
+- Image preprocessing (EXIF, resize, optimize)
+- Basic single-page OCR
+- Document/Page models
+
+### M2: Structured Extraction (1-1.5 weeks)
+- Multi-page support
+- ExtractionSchema with validation
+- Progress tracking
+- **Deliverable:** EMR agent refactored
+
+### M3: Tables & Visuals (1.5-2 weeks)
+- Table extraction
+- Visual element extraction
+- RAG integration
+- **Deliverable:** Driver logs prototype, manual RAG indexing
+
+### M4: Optimization (1-1.5 weeks)
+- Parallel processing
+- Checkpoint/resume
+- Production performance
+- **Deliverable:** Full 1,200-page driver logs processing
+
+### M5: Superset (1.5-2 weeks)
+- Advanced analysis tools
+- Report generation
+- Specialized processors
+- **Deliverable:** Complete SDK
+
+---
+
+## Success Criteria
+
+- ✅ EMR agent refactored with 60% code reduction
+- ✅ Process 1,200-page documents successfully
+- ✅ Table/visual extraction working (70%+ accuracy)
+- ✅ RAG integration seamless
+- ✅ 95%+ test coverage
+- ✅ Production-ready performance
+
+---
+
+## Dependencies
+
+**Required:**
+- VLMClient (Qwen3-VL-4B-Instruct-GGUF)
+- Lemonade Server
+- PyMuPDF (PDF processing)
+- PIL/Pillow (image processing)
+
+---
+
+**Vote on this plan:** [GitHub Issue #325](https://github.com/amd/gaia/issues/325)
+
+---
+
+*Last Updated: February 9, 2026*
