@@ -74,7 +74,7 @@ class MCPInitCommand:
                 self.console.print(f"   [green]✓[/green] Created config: {config_path}")
             else:
                 self.console.print(f"   [green]✓[/green] Config exists: {config_path}")
-                self.console.print(f"   [dim](Existing config preserved)[/dim]")
+                self.console.print("   [dim](Existing config preserved)[/dim]")
 
             # Step 3: Print guidance
             self._print_completion(config_path)
