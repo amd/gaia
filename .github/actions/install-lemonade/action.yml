@@ -27,17 +27,50 @@ runs:
       id: verify
       shell: powershell
       run: |
-        Write-Host "=== Checking for Lemonade Server ==="
+        Write-Host "=== Verifying Lemonade Server ==="
 
+        # Check if lemonade-server is already available
         $lemonadeCmd = Get-Command lemonade-server -ErrorAction SilentlyContinue
+
         if (-not $lemonadeCmd) {
-            Write-Host "ERROR: lemonade-server not found in PATH"
-            Write-Host "Please ensure Lemonade Server is installed on this runner"
-            exit 1
+            Write-Host "lemonade-server not found in PATH, searching common locations..."
+
+            # Search common installation paths
+            $searchPaths = @(
+                "${env:ProgramFiles(x86)}\Lemonade Server\bin",
+                "$env:ProgramFiles\Lemonade Server\bin",
+                "$env:LOCALAPPDATA\Programs\Lemonade",
+                "$env:ProgramFiles\Lemonade",
+                "${env:ProgramFiles(x86)}\Lemonade",
+                "$env:USERPROFILE\Lemonade",
+                "$env:LOCALAPPDATA\Lemonade"
+            )
+
+            $found = $false
+            foreach ($path in $searchPaths) {
+                $exePath = Join-Path $path "lemonade-server.exe"
+                if (Test-Path $exePath) {
+                    Write-Host "Found lemonade-server at: $exePath"
+                    Write-Host "Adding to PATH"
+                    echo "$path" >> $env:GITHUB_PATH
+                    $env:PATH = "$path;$env:PATH"
+                    $found = $true
+                    break
+                }
+            }
+
+            if (-not $found) {
+                Write-Host "ERROR: lemonade-server not found"
+                Write-Host "Please ensure Lemonade Server is installed on this runner"
+                exit 1
+            }
+
+            # Verify it's now available
+            $lemonadeCmd = Get-Command lemonade-server -ErrorAction SilentlyContinue
         }
 
         $lemonadePath = $lemonadeCmd.Source
-        Write-Host "Found lemonade-server at: $lemonadePath"
+        Write-Host "lemonade-server verified at: $lemonadePath"
 
         $versionOutput = & lemonade-server --version 2>&1
         Write-Host $versionOutput
