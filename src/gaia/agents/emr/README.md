@@ -5,7 +5,7 @@ AI-powered patient intake form processing using AMD Ryzen AI.
 ## Features
 
 - **Automatic Form Processing** - Watch directory for new intake forms
-- **VLM Extraction** - Extract patient data from images using Qwen2.5-VL
+- **VLM Extraction** - Extract patient data from images using Qwen3-VL-4B
 - **Database Storage** - SQLite database with patient records
 - **Natural Language Interface** - Query patients using conversational AI
 - **Web Dashboard** - Real-time monitoring with live feed

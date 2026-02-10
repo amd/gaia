@@ -57,7 +57,7 @@ jobs:
           uv pip install lemonade-sdk --python .venv/bin/python
 
           echo "=== Verifying Lemonade Installation ==="
-          lemonade-server -h
+          lemonade-server-dev -h
 
       - name: Verify GAIA CLI installation
         run: |
@@ -84,7 +84,7 @@ jobs:
           echo "Note: First run may take 5-10 minutes to download the model (~3GB)"
 
           # Start server and capture both stdout and stderr
-          lemonade-server run Qwen3-4B-Instruct-2507-GGUF > lemonade.log 2>&1 &
+          lemonade-server-dev run Qwen3-0.6B-GGUF > lemonade.log 2>&1 &
           LEMONADE_PID=$!
           echo "Lemonade server started with PID: $LEMONADE_PID"
 
@@ -145,8 +145,8 @@ jobs:
           fi
 
           # Pull the model now that server is running
-          echo "=== Pulling Qwen3-4B-Instruct-2507-GGUF model ==="
-          lemonade-server pull Qwen3-4B-Instruct-2507-GGUF
+          echo "=== Pulling Qwen3-0.6B-GGUF model ==="
+          lemonade-server-dev pull Qwen3-0.6B-GGUF
 
           # List available models for debugging
           echo "=== Listing Available Models ==="
@@ -155,16 +155,16 @@ jobs:
           echo "=== Testing Core GAIA CLI Commands with Lemonade ==="
 
           # Test chat command with Qwen model (should now work with Lemonade)
-          echo "Testing chat command with Qwen3-4B-Instruct-2507-GGUF model:"
-          timeout 30s gaia chat --model "Qwen3-4B-Instruct-2507-GGUF" "Hello, this is a test message. Please respond briefly." || echo "Chat command completed"
+          echo "Testing chat command with Qwen3-0.6B-GGUF model:"
+          timeout 30s gaia chat --model "Qwen3-0.6B-GGUF" -q "Hello, this is a test message. Please respond briefly." || echo "Chat command completed"
 
           # Test prompt command with Qwen model
-          echo "Testing prompt command with Qwen3-4B-Instruct-2507-GGUF model:"
-          timeout 30s gaia prompt --model "Qwen3-4B-Instruct-2507-GGUF" "What is 2+2?" || echo "Prompt command completed"
+          echo "Testing prompt command with Qwen3-0.6B-GGUF model:"
+          timeout 30s gaia prompt --model "Qwen3-0.6B-GGUF" "What is 2+2?" || echo "Prompt command completed"
 
           # Test llm command with Qwen model
-          echo "Testing llm command with Qwen3-4B-Instruct-2507-GGUF model:"
-          timeout 30s gaia llm --model "Qwen3-4B-Instruct-2507-GGUF" "Say hello" || echo "LLM command completed"
+          echo "Testing llm command with Qwen3-0.6B-GGUF model:"
+          timeout 30s gaia llm --model "Qwen3-0.6B-GGUF" "Say hello" || echo "LLM command completed"
 
           echo "✅ Core commands tested successfully!"
 
@@ -174,7 +174,7 @@ jobs:
           echo "Testing complete CLI workflow: gaia summarize command"
 
           # Set the test model for summarizer tests
-          export GAIA_TEST_MODEL="Qwen3-4B-Instruct-2507-GGUF"
+          export GAIA_TEST_MODEL="Qwen3-0.6B-GGUF"
 
           # Run the summarizer integration tests
           python -m pytest tests/test_summarizer.py -vs --tb=short || TEST_EXIT=$?
@@ -205,7 +205,7 @@ jobs:
           echo "Testing LemonadeClient API with running server"
 
           # Run the lemonade client integration tests (skip hybrid NPU test - no NPU on Linux)
-          GAIA_TEST_MODEL="Qwen3-4B-Instruct-2507-GGUF" python -m pytest tests/test_lemonade_client.py -vs --tb=short -k "Integration and not hybrid" || LEMONADE_TEST_EXIT=$?
+          GAIA_TEST_MODEL="Qwen3-0.6B-GGUF" python -m pytest tests/test_lemonade_client.py -vs --tb=short -k "Integration and not hybrid" || LEMONADE_TEST_EXIT=$?
 
           if [ "${LEMONADE_TEST_EXIT:-0}" -eq 0 ]; then
             echo "✅ Lemonade client integration tests passed successfully!"
@@ -308,7 +308,7 @@ jobs:
           echo ""
           echo "🎉 Linux now has full GAIA CLI functionality!"
           echo "📋 Tested components:"
-          echo "   ✅ Lemonade server with Qwen3-4B-Instruct-2507-GGUF model"
+          echo "   ✅ Lemonade server with Qwen3-0.6B-GGUF model"
           echo "   ✅ Core CLI commands using Qwen model (chat, prompt, llm)"
           echo "   ✅ Evaluation commands (eval, groundtruth, report, etc.)"
           echo "   ✅ Summarizer CLI integration (gaia summarize command)"
