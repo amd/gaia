@@ -41,41 +41,35 @@ The MCP Client enables GAIA agents to connect to and use tools from external MCP
 
 **Architecture Overview:**
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                     GAIA Agent                          │
-│  ┌─────────────────────────────────────────────────────┤
-│  │                MCPClientMixin                       │
-│  │  • connect_mcp_server()                             │
-│  │  • load_mcp_servers_from_config()                   │
-│  │  • _register_mcp_tools() → _TOOL_REGISTRY           │
-│  └──────────────────┬──────────────────────────────────┤
-│                     │                                   │
-│  ┌──────────────────▼──────────────────────────────────┤
-│  │              MCPClientManager                       │
-│  │  • add_server() / remove_server()                   │
-│  │  • get_client() / list_servers()                    │
-│  └──────────────────┬──────────────────────────────────┤
-│                     │                                   │
-│  ┌──────────────────▼──────────────────────────────────┤
-│  │                MCPClient                            │
-│  │  • connect() / disconnect()                         │
-│  │  • list_tools() / call_tool()                       │
-│  │  • create_tool_wrapper()                            │
-│  └──────────────────┬──────────────────────────────────┤
-│                     │                                   │
-│  ┌──────────────────▼──────────────────────────────────┤
-│  │             StdioTransport                          │
-│  │  • subprocess.Popen(command)                        │
-│  │  • send_request() via stdin/stdout                  │
-│  └─────────────────────────────────────────────────────┤
-└─────────────────────────────────────────────────────────┘
-                      │
-                      ▼
-        ┌─────────────────────────┐
-        │   External MCP Server   │
-        │  (npx, python, etc.)    │
-        └─────────────────────────┘
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#ED1C24', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}, 'flowchart': {'curve': 'basis'}}}%%
+flowchart TB
+    subgraph GA ["GAIA MCP Client SDK"]
+        Mixin(["MCPClientMixin"])
+        Manager(["MCPClientManager"])
+        Client(["MCPClient"])
+        Transport(["StdioTransport"])
+    end
+
+    Mixin --> Manager
+    Manager --> Client
+    Client --> Transport
+    Transport --> Time(["Time"])
+    Transport --> GitHub(["GitHub"])
+    Transport --> FS(["Filesystem"])
+    Transport --> More(["..."])
+
+    style Mixin fill:#ED1C24,stroke:#C8171E,stroke-width:3px,color:#fff
+    style Manager fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Client fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+    style Transport fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    style Time fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    style GitHub fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    style FS fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    style More fill:#444,stroke:#666,stroke-width:2px,color:#aaa,stroke-dasharray:3
+    style GA fill:none,stroke:#ED1C24,stroke-width:2px,stroke-dasharray:5,color:#ED1C24
+
+    linkStyle default stroke:#ED1C24,stroke-width:2px
 ```
 
 ---

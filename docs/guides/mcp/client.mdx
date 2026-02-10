@@ -145,30 +145,41 @@ MCP server connected, tools auto-discovered, and the agent uses them naturally.
 ## How It Works
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'18px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
-graph TB
-    User("User Query")
-    YourAgent("YourAgent<br/>(Agent + MCPClientMixin)")
-    Manager("MCPClientManager")
-    Transport("Transport<br/>(stdio)")
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#ED1C24', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}, 'flowchart': {'curve': 'basis'}}}%%
+flowchart TB
+    User(["User Query"])
+    Agent(["Your Agent (Agent + MCPClientMixin)"])
 
-    User --> YourAgent
-    YourAgent --> Manager
+    subgraph GAIAClient ["GAIA MCP Client SDK"]
+        Manager(["MCPClientManager"])
+        Transport(["Transport"])
+    end
+
+    subgraph ExtServers ["External Servers"]
+        FS(["Filesystem"])
+        GH(["GitHub"])
+        DB(["Database"])
+        More(["..."])
+    end
+
+    User --> Agent
+    Agent --> Manager
     Manager --> Transport
+    Transport --> FS
+    Transport --> GH
+    Transport --> DB
+    Transport --> More
 
-    Transport --> FS("Filesystem")
-    Transport --> GH("GitHub")
-    Transport --> DB("Database")
-    Transport --> Custom("Your Server")
-
-    style User fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style YourAgent fill:#ED1C24,stroke:#F4484D,stroke-width:3px,color:#fff
+    style User fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    style Agent fill:#ED1C24,stroke:#C8171E,stroke-width:3px,color:#fff
     style Manager fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style Transport fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style FS fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style GH fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style DB fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Custom fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style FS fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    style GH fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    style DB fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
+    style More fill:#666,stroke:#999,stroke-width:2px,color:#ccc,stroke-dasharray:3
+    style GAIAClient fill:none,stroke:#ED1C24,stroke-width:2px,stroke-dasharray:5,color:#ED1C24
+    style ExtServers fill:none,stroke:#2d2d2d,stroke-width:2px,stroke-dasharray:5,color:#2d2d2d
 
     linkStyle default stroke:#ED1C24,stroke-width:2px
 ```
