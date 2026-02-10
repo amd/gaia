@@ -1,0 +1,260 @@
+---
+title: "MCP SDK"
+description: "SDK reference for connecting agents to MCP servers"
+icon: "sitemap"
+---
+
+<Note>
+⚡ **Quick Reference** - Connect GAIA agents to any MCP server
+
+**See also:** [User Guide](/guides/mcp/client) · [Full Specification](/spec/mcp-client)
+</Note>
+
+<Info>
+  **Source Code:**
+  - [`src/gaia/mcp/mixin.py`](https://github.com/amd/gaia/blob/main/src/gaia/mcp/mixin.py)
+  - [`src/gaia/mcp/client/`](https://github.com/amd/gaia/blob/main/src/gaia/mcp/client)
+</Info>
+
+<Note>
+**Import:** `from gaia.mcp import MCPClientMixin, MCPClient, MCPClientManager`
+</Note>
+
+---
+
+## Quick Start
+
+MCP (Model Context Protocol) lets your agent call tools provided by external servers — such as reading files, creating GitHub issues, or querying databases — using a standardized protocol. The `MCPClientMixin` adds this capability to any GAIA agent. Mix it into your agent class, point it at a server, and that server's tools become available to your agent automatically.
+
+Connect your agent to an MCP server with a single line. This example uses the [**filesystem** server](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem)
+from the official MCP repository:
+
+- **`npx`**: Node.js package runner (runs packages without installing globally)
+- **`@modelcontextprotocol/server-filesystem`**: [Official MCP filesystem server](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem) package
+- **`/tmp`**: The directory the server will have access to (required argument)
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.mcp import MCPClientMixin
+
+class MyAgent(Agent, MCPClientMixin):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.connect_mcp_server("filesystem", {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+        })
+
+agent = MyAgent()
+result = agent.run("List all files in /tmp")
+```
+
+---
+
+## Connect Multiple Servers
+
+Your agent is not limited to a single MCP server. You can connect to as many servers as you need, and each one contributes its own set of tools. GAIA keeps them organized by automatically prefixing each tool with the server's name (e.g., `mcp_filesystem_read_file`, `mcp_github_create_issue`), so tools from different servers never collide even if they share the same original name.
+
+<Note>
+Some servers require authentication. Pass tokens via the `env` field in the config dict.
+See the [User Guide](/guides/mcp/client#setting-up-github-token) for details.
+</Note>
+
+```python
+class MultiToolAgent(Agent, MCPClientMixin):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.connect_mcp_server("filesystem", {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+        })
+        self.connect_mcp_server("github", {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-github"],
+            "env": {"GITHUB_TOKEN": "ghp_xxx"}
+        })
+
+agent = MultiToolAgent()
+response = agent.run("List files in /tmp, then create a GitHub issue")
+```
+
+---
+
+## Load from Config
+
+Hardcoding server connections in Python works for quick experiments, but for real projects you will want to manage them separately. A configuration file lets you add, remove, or update MCP servers without changing your agent code. It also makes it easy to share a setup across a team or between machines.
+
+GAIA searches for `mcp_servers.json` in two locations, in order: first the current working directory (`./mcp_servers.json`) for project-specific configs, then the user's home directory (`~/.gaia/mcp_servers.json`) for a global default.
+
+<Tip>
+To use a custom config file path, pass `--config PATH` to any `gaia mcp` CLI command,
+or pass `config_file="path/to/config.json"` when initializing `MCPClientMixin` in Python.
+</Tip>
+
+**Config file format** (`mcp_servers.json`):
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_TOKEN": "ghp_xxx"
+      }
+    }
+  }
+}
+```
+
+<Tip>
+The config format follows the [MCP client configuration](https://modelcontextprotocol.io/docs/develop/build-client#mcp-client-configuration) standard.
+If you already have an MCP config from another client (e.g. Claude Desktop), you can copy it directly.
+</Tip>
+
+```python
+class ConfigAgent(Agent, MCPClientMixin):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        count = self.load_mcp_servers_from_config()  # Loads ~/.gaia/mcp_servers.json
+        print(f"Loaded {count} MCP servers")
+
+agent = ConfigAgent()
+servers = agent.list_mcp_servers()
+```
+
+---
+
+## Direct Client Usage
+
+The examples above all use `MCPClientMixin`, which integrates MCP into the agent lifecycle — tools are registered automatically and the agent's LLM can call them during reasoning. But sometimes you want to work with an MCP server outside of an agent: in a standalone script, a test suite, or a custom pipeline.
+
+`MCPClient` is the lower-level building block that `MCPClientMixin` uses internally. It gives you direct control over connecting, listing tools, calling tools, and disconnecting. You manage the connection lifecycle yourself.
+
+```python
+from gaia.mcp.client import MCPClient
+
+client = MCPClient.from_config("filesystem", {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+})
+
+if client.connect():
+    tools = client.list_tools()
+    result = client.call_tool("read_file", {"path": "/tmp/example.txt"})
+    client.disconnect()
+```
+
+<Note>
+`MCPClient` only supports **stdio** transport (subprocess-based). The server runs as a
+child process of your script. HTTP and SSE transports are not supported at this time.
+</Note>
+
+---
+
+## Error Handling
+
+GAIA's MCP client uses a **return-value** error model rather than raising exceptions for expected failures. This means your agent keeps running even if one MCP server is unreachable or a tool call fails — you check the return value and decide how to respond.
+
+There are two places to check for errors:
+- **Connection time:** `connect_mcp_server()` returns `False` if the server could not be started or did not respond.
+- **Tool execution:** `call_tool()` returns a dict containing an `"error"` key when the server reports a failure (e.g., file not found, invalid arguments).
+
+```python
+success = agent.connect_mcp_server("server", {
+    "command": "npx",
+    "args": ["-y", "@mcp/server"]
+})
+if not success:
+    print("Connection failed")
+
+client = agent.get_mcp_client("server")
+result = client.call_tool("tool", {"arg": "value"})
+if "error" in result:
+    print(f"Tool failed: {result['error']}")
+```
+
+---
+
+## API Quick Reference
+
+Summary of the public API. `MCPClientMixin` is the high-level interface you add to agents; `MCPClient` is the standalone client for use outside of agents.
+
+### MCPClientMixin
+
+| Method | Description |
+|--------|-------------|
+| `connect_mcp_server(name, config)` | Connect and register tools. Returns `bool`. |
+| `disconnect_mcp_server(name)` | Disconnect and unregister |
+| `list_mcp_servers()` | List connected server names. Returns `list[str]`. |
+| `get_mcp_client(name)` | Get client instance. Returns `MCPClient` or `None`. |
+| `load_mcp_servers_from_config()` | Load from config file. Returns `int` (count). |
+
+### MCPClient
+
+| Method | Description |
+|--------|-------------|
+| `from_config(name, config)` | Create client from config dict |
+| `from_command(name, command)` | Create client (legacy, shell string) |
+| `connect()` | Connect to server. Returns `bool`. |
+| `disconnect()` | Disconnect |
+| `list_tools()` | List available tools (cached). Returns `list[MCPTool]`. |
+| `call_tool(name, args)` | Execute a tool. Returns `dict`. |
+
+---
+
+## CLI Commands
+
+You do not need to write Python code to manage your MCP server configuration. The CLI reads and writes `~/.gaia/mcp_servers.json` — the same config file that `load_mcp_servers_from_config()` uses at runtime. Servers you add via CLI are available to your agents on next startup.
+
+```bash
+gaia mcp add <name> "<command>"  # Add server (shell command string)
+gaia mcp list                    # List servers
+gaia mcp tools <name>            # List tools
+gaia mcp remove <name>           # Remove server
+```
+
+<Note>
+The CLI accepts a shell command string (e.g., `"npx -y @modelcontextprotocol/server-filesystem /tmp"`)
+and automatically converts it into `command` and `args` fields in the config file.
+</Note>
+
+---
+
+## Tool Namespacing
+
+Many MCP servers expose tools with common names like `read_file`, `search`, or `list`. If you connect two servers that both have a `read_file` tool, your agent needs a way to tell them apart. GAIA solves this by automatically prefixing every tool name with `mcp_{server_name}_`, where `server_name` is the name you chose when connecting.
+
+This happens transparently — your agent's LLM sees the prefixed names in its tool list and routes calls to the correct server. You do not need to handle namespacing yourself.
+
+`read_file` → `mcp_filesystem_read_file`
+
+```python
+# Multiple servers work without conflicts:
+# mcp_fs1_read_file → filesystem server
+# mcp_github_read_file → GitHub server
+```
+
+---
+
+## Related Topics
+
+For deeper coverage of MCP concepts and related GAIA features:
+
+- [Full Specification](/spec/mcp-client) - Complete API reference
+- [User Guide](/guides/mcp/client) - Step-by-step tutorials
+- [MCP Server SDK](/sdk/infrastructure/mcp) - Build MCP servers
+- [CLI Reference](/reference/cli#mcp-client) - CLI commands
+
+---
+
+<small style="color: #666;">
+
+Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>
