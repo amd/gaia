@@ -613,21 +613,7 @@ When user asks to "index my data folder" or similar:
                 logger.error(f"Failed to index {doc}: {e}")
 
         # Update system prompt after indexing to include the new documents
-        self.update_system_prompt()
-
-    def update_system_prompt(self) -> None:
-        """Update the system prompt with current indexed documents."""
-        # Regenerate the system prompt with updated document list
-        self.system_prompt = self._get_system_prompt()
-
-        # Add the tools description using the parent class method
-        tools_description = self._format_tools_for_prompt()
-        self.system_prompt += f"\n\n==== AVAILABLE TOOLS ====\n{tools_description}\n\n"
-
-        if self.rag:
-            logger.debug(
-                f"Updated system prompt with {len(self.rag.indexed_files)} indexed documents"
-            )
+        self.rebuild_system_prompt()
 
     def _start_watching(self) -> None:
         """Start watching directories for changes."""

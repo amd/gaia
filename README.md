@@ -61,7 +61,7 @@ print(result)
 - **Agent Framework** — Base class with tool orchestration, state management, and error recovery
 - **RAG System** — Document indexing and semantic search for Q&A
 - **Voice Integration** — Whisper ASR + Kokoro TTS for speech interaction
-- **Vision Models** — Extract text from images with Qwen2.5-VL
+- **Vision Models** — Extract text from images with Qwen3-VL-4B
 - **Plugin System** — Distribute agents via PyPI with auto-discovery
 - **Web UI Packaging** — Generate modern interfaces for your agents
 

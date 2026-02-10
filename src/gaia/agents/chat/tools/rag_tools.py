@@ -1098,8 +1098,7 @@ class RAGToolsMixin:
                             self.session_manager.save_session(self.current_session)
 
                     # Update system prompt to include the new document
-                    if hasattr(self, "update_system_prompt"):
-                        self.update_system_prompt()
+                    self.rebuild_system_prompt()
 
                     # Return detailed stats from RAG SDK
                     return {
@@ -1719,8 +1718,8 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                         skipped_files.append(str(file_path))
 
                 # Update system prompt after indexing directory
-                if indexed_files and hasattr(self, "update_system_prompt"):
-                    self.update_system_prompt()
+                if indexed_files:
+                    self.rebuild_system_prompt()
 
                 return {
                     "status": "success",

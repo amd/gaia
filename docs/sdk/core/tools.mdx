@@ -314,6 +314,86 @@ def search_all(query: str) -> dict:
 
 ---
 
+## Standard Response Format
+
+All GAIA tools should return responses in a standardized format that helps the LLM understand the result and how to use it. This is especially important for tools that return structured JSON data.
+
+### The GAIA Response Pattern
+
+```python
+{
+    "status": "success",           # Required: "success", "error", or "partial"
+    "message": "Brief summary",    # Recommended: Human-readable summary
+    "data": {...},                 # When applicable: Structured data
+    "instruction": "Guidance...",  # Recommended: How to use this data
+}
+```
+
+### Why This Format Matters
+
+When tools return raw JSON without context, the LLM may:
+- Echo the JSON directly instead of summarizing it
+- Return structured data in its answer instead of human-readable text
+- Misunderstand how to interpret the data
+
+The `instruction` field explicitly tells the LLM what to do with the data.
+
+### Field Reference
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `status` | Yes | string | `"success"`, `"error"`, or `"partial"` |
+| `message` | Recommended | string | Brief human-readable summary of what happened |
+| `data` | When applicable | object | Structured data returned by the tool |
+| `instruction` | Recommended | string | Guidance for LLM on how to interpret/use the data |
+| `error` | On error | string | Error description when status is "error" |
+| `suggestion` | Optional | string | Recovery hint on errors |
+
+### Complete Example
+
+```python
+@tool
+def get_system_stats() -> dict:
+    """Get current system statistics.
+
+    Args:
+        None
+
+    Use this tool when the user asks about system health,
+    performance, or resource usage.
+    """
+    stats = collect_system_stats()
+
+    return {
+        "status": "success",
+        "message": "Retrieved system statistics",
+        "data": {
+            "cpu_percent": stats.cpu,
+            "memory_gb_used": stats.memory_used,
+            "memory_gb_total": stats.memory_total,
+            "disk_free_gb": stats.disk_free
+        },
+        "instruction": (
+            "Summarize these statistics in a human-readable format. "
+            "Your answer must be a plain text string, not a JSON object."
+        )
+    }
+```
+
+**With this format, the LLM responds:**
+
+> "Your system is running well. CPU usage is at 23%, memory is using 8.2 GB of 16 GB (51%), and you have 245 GB of free disk space."
+
+**Instead of echoing the JSON:**
+
+> `{"cpu_percent": 23, "memory_gb_used": 8.2, ...}`
+
+<Note>
+**MCP Tools:** When using `MCPClientMixin`, external MCP tool responses are automatically wrapped in this GAIA format with status, message, data, and instruction fields.
+</Note>
+
+---
+
 ## The Power of Good Docstrings
 
 Your docstring teaches the LLM when and how to use your tool. Compare:

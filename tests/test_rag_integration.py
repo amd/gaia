@@ -52,7 +52,7 @@ def ensure_models_downloaded():
         required_models = [
             "Qwen3-0.6B-GGUF",  # LLM model used in tests
             "nomic-embed-text-v2-moe-GGUF",  # Embedding model (RAG default)
-            "Qwen2.5-VL-7B-Instruct-GGUF",  # VLM model (for PDFs with images)
+            "Qwen3-VL-4B-Instruct-GGUF",  # VLM model (for PDFs with images)
         ]
 
         print(f"Checking {len(required_models)} required models...\n")

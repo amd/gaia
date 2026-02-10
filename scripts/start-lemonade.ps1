@@ -31,7 +31,7 @@
     .\scripts\start-lemonade.ps1 -ModelName "Qwen3-0.6B-GGUF"
 
 .EXAMPLE
-    .\scripts\start-lemonade.ps1 -ModelName "nomic-embed-text-v2-moe-GGUF" -AdditionalModels "Qwen3-0.6B-GGUF,Qwen2.5-VL-7B-Instruct-GGUF" -InitWaitTime 30 -ClearCache
+    .\scripts\start-lemonade.ps1 -ModelName "nomic-embed-text-v2-moe-GGUF" -AdditionalModels "Qwen3-0.6B-GGUF,Qwen3-VL-4B-Instruct-GGUF" -InitWaitTime 30 -ClearCache
 #>
 
 param(
@@ -66,9 +66,12 @@ try {
     Write-Host "=== Checking Port $Port ==="
     $portInUse = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
     if ($portInUse) {
-        $pid = $portInUse.OwningProcess
-        Write-Host "[WARN] Port $Port in use by PID: $pid - killing orphaned process"
-        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+        # Get unique PIDs (may have multiple connections on same port)
+        $processIds = $portInUse.OwningProcess | Select-Object -Unique
+        foreach ($processId in $processIds) {
+            Write-Host "[WARN] Port $Port in use by PID: $processId - killing orphaned process"
+            Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+        }
         Start-Sleep -Seconds 2
     } else {
         Write-Host "[OK] Port $Port is available"
