@@ -1,0 +1,145 @@
+---
+title: "v0.15.4"
+description: "MCP client support — connect GAIA agents to any MCP server for external tool integration"
+---
+
+# GAIA v0.15.4 Release Notes
+
+**Feature release** adding MCP client support to GAIA agents. Connect to any MCP server using stdio and use its tools automatically — build agents that orchestrate external tools via the Model Context Protocol.
+
+**TL;DR:**
+- **New: MCPClientMixin** — Connect any agent to MCP servers; tools auto-register
+- **New: JSON config deployment** — Define MCP servers in `mcp_servers.json`, swap tools without code changes
+- **New: `gaia init --profile mcp`** — One-command MCP setup with config file generation
+
+
+---
+
+## What's New
+
+### MCPClientMixin: Connect Agents to Any MCP Server
+
+New mixin that gives any GAIA agent the ability to connect to external MCP servers and use their tools. Tools are automatically discovered and registered — no manual wiring needed.
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.mcp import MCPClientMixin
+
+class TimeAgent(Agent, MCPClientMixin):
+    def __init__(self):
+        Agent.__init__(self, max_steps=10)
+        MCPClientMixin.__init__(self, auto_load_config=False)
+
+        self.connect_mcp_server("time", {
+            "command": "npx",
+            "args": ["-y", "@theo.foobar/mcp-time"]
+        })
+
+    def _get_system_prompt(self) -> str:
+        return "You are a helpful assistant with access to time tools."
+
+    def _register_tools(self) -> None:
+        pass  # MCP tools auto-registered
+
+TimeAgent().process_query("What time is it in New York?")
+```
+
+**Features:**
+- **Automatic tool registration** — MCP tools discovered at startup and added to the agent's tool registry
+- **Automatic system prompt rebuild** — Agent system prompt updated with MCP tool descriptions
+- **Stdio transport** — Connects to MCP servers via standard I/O (subprocess-based)
+- **Multi-server support** — Connect to multiple MCP servers simultaneously
+- **Tool name prefixing** — Tools prefixed with server name to avoid conflicts (e.g., `mcp_windows_Shell`)
+- **Standardized tool responses** — MCP tool outputs wrapped in GAIA's response format
+
+### JSON Config Deployment
+
+Define which MCP servers to load in a JSON config file. Swap tools per product line or customer segment without code changes.
+
+```json
+{
+  "mcpServers": {
+    "time": {
+      "command": "npx",
+      "args": ["-y", "@theo.foobar/mcp-time"]
+    },
+    "windows": {
+      "command": "uvx",
+      "args": ["windows-mcp"]
+    }
+  }
+}
+```
+
+**Features:**
+- **Anthropic-standard format** — Industry standard configuration, compatible with Claude Desktop, Cursor, and other MCP hosts
+- **Auto-load from config** — Set `auto_load_config=True` (default) to connect all servers at agent startup, or bypass using False
+- **Config file lookup** — Searches working directory `./mcp_servers.json`, and `~/.gaia/mcp_servers.json`
+
+### `gaia init --profile mcp`
+
+New initialization profile for MCP development. Checks Node.js prerequisites and generates a starter `mcp_servers.json` config file.
+
+```bash
+gaia init --profile mcp
+```
+
+## Improvements
+
+### MCP Infrastructure
+- **Command resolution** — Enhanced StdioTransport resolves `npx`, `uvx`, and other commands across platforms
+- **Error handling** — Validation errors with clear messages for missing commands, failed connections, and malformed configs
+- **Connection logging** — Streamlined console output showing server connections, discovered tools, and agent workflow
+
+### Documentation
+- **MCP Client Guide** — Step-by-step guide for connecting agents to MCP servers
+- **MCP SDK Reference** — Full API documentation for MCPClientMixin
+- **MCP Client Specification** — Technical specification for transport, tool registration, and config format
+- **Examples** — Walkthrough of variuous agentic examples and configuration options
+- **Node.js/NVM Setup** — Prerequisites documentation for Node.js-based MCP servers
+
+### Developer Experience
+- **Reorganized MCP docs** — Guides, SDK reference, and specs restructured for clarity
+- **Architecture diagrams** — Mermaid flowcharts showing MCP client data flow
+- **Example prompts** — Suggested prompts included in agent startup output
+
+---
+
+## Bug Fixes
+
+- **Unprefixed tool names** — Fixed local LLMs calling MCP tools without server prefix
+- **Config message formatting** — Corrected display of existing config path during `gaia init`
+- **Transport test reliability** — Patched `shutil.which` in tests to prevent CI path resolution failures
+- **Pylint compliance** — Fixed pre-existing lint errors across MCP modules
+
+---
+
+## Breaking Changes
+
+None — This release is 100% backward compatible.
+
+---
+
+## Upgrade
+
+```bash
+# Install/upgrade GAIA
+pip install --upgrade amd-gaia
+
+# Setup MCP profile (checks Node.js prerequisites)
+gaia init --profile mcp
+
+# Try the time server example
+python examples/mcp_time_server_agent.py
+```
+
+---
+
+## Full Changelog
+
+**75 commits** from multiple contributors
+
+Key PRs:
+- #203 - MCP Client Support: Connect GAIA agents to any MCP server
+
+Full Changelog: [v0.15.3.2...v0.15.4](https://github.com/amd/gaia/compare/v0.15.3.2...v0.15.4)
