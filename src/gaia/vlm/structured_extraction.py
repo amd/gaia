@@ -361,7 +361,7 @@ IMPORTANT:
             logger.info(f"Extracted {len(data)} fields")
             return data
         else:
-            logger.warning(f"Key-value extraction failed")
+            logger.warning("Key-value extraction failed")
             return {key: None for key in keys}
 
     def extract_structured(
