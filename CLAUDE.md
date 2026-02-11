@@ -240,7 +240,7 @@ gaia/
 ### Default Models
 - General tasks: `Qwen3-0.6B-GGUF`
 - Code/Agents: `Qwen3-Coder-30B-A3B-Instruct-GGUF`
-- Vision tasks: `Qwen2.5-VL-7B-Instruct-GGU`
+- Vision tasks: `Qwen3-VL-4B-Instruct-GGUF`
 
 ## CLI Commands
 

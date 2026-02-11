@@ -105,7 +105,7 @@ class TestChatAgent:
 
         This test simulates what the /index command handler should do:
         1. Index the document via agent.rag.index_document()
-        2. Update the system prompt via agent.update_system_prompt()
+        2. Update the system prompt via agent.rebuild_system_prompt()
 
         After these steps, the system prompt should list the indexed document.
         """
@@ -146,7 +146,7 @@ class TestChatAgent:
                 assert result.get("success"), f"Indexing failed: {result.get('error')}"
 
             # Step 2: Update the system prompt (what /index command should do after indexing)
-            agent.update_system_prompt()
+            agent.rebuild_system_prompt()
 
             # After both steps, system prompt should be updated to list the document
             assert "test_document_for_prompt.txt" in agent.system_prompt
@@ -247,7 +247,7 @@ class TestChatAgent:
                 ), f"Indexing failed: {result2.get('error')}"
 
             # Update system prompt
-            agent.update_system_prompt()
+            agent.rebuild_system_prompt()
 
             # Verify both documents in system prompt
             assert "doc1.txt" in agent.system_prompt

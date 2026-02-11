@@ -70,7 +70,7 @@ class RAGConfig:
         False  # Enable LLM-based intelligent chunking (requires LLM client)
     )
     # VLM settings (enabled if available, errors out if model can't be loaded)
-    vlm_model: str = "Qwen2.5-VL-7B-Instruct-GGUF"
+    vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF"
     # Security settings
     allowed_paths: Optional[List[str]] = None
 

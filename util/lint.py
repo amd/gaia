@@ -312,6 +312,17 @@ def check_imports() -> CheckResult:
     print("\n[7/7] Testing comprehensive SDK imports...")
     print("-" * 40)
 
+    # Pre-check: verify gaia is installed
+    try:
+        import gaia  # noqa: F401
+    except ImportError:
+        print("[!] GAIA package not installed in current Python environment.")
+        print(f"    Python: {sys.executable}")
+        print()
+        print("    To fix, run: uv pip install -e .")
+        print("    Or run lint via: uv run python util/lint.py --all")
+        return CheckResult("Import Validation", False, False, 1, "GAIA not installed")
+
     # Comprehensive import tests matching lint.ps1
     tests = [
         # Core CLI

@@ -67,7 +67,6 @@ class VLMToolsMixin:
 
         Example:
             self.init_vlm()  # Use default Qwen3-VL-4B
-            self.init_vlm(model="Qwen3-VL-8B-Instruct-GGUF")  # Use larger model
         """
         from gaia.llm.vlm_client import VLMClient
 

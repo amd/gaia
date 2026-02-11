@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "time": {
+      "command": "npx",
+      "args": ["-y", "@theo.foobar/mcp-time"]
+    }
+  }
+}
