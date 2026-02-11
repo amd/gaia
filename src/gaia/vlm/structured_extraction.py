@@ -133,6 +133,7 @@ class StructuredVLMExtractor:
             table_rows = result["pages"][1]["tables"][0]
         """
         from pathlib import Path
+
         from gaia.utils import pdf_page_to_image
 
         doc_path = Path(document_path)
@@ -140,11 +141,12 @@ class StructuredVLMExtractor:
             raise FileNotFoundError(f"Document not found: {document_path}")
 
         # Determine if PDF or image
-        is_pdf = doc_path.suffix.lower() == '.pdf'
+        is_pdf = doc_path.suffix.lower() == ".pdf"
 
         # Get total pages
         if is_pdf:
             import fitz
+
             doc = fitz.open(str(doc_path))
             total_pages = len(doc)
             doc.close()
@@ -164,7 +166,9 @@ class StructuredVLMExtractor:
 
             # Load page as image (internal)
             if is_pdf:
-                image_bytes = pdf_page_to_image(doc_path, page=page_num - 1, scale=scale)
+                image_bytes = pdf_page_to_image(
+                    doc_path, page=page_num - 1, scale=scale
+                )
             else:
                 image_bytes = doc_path.read_bytes()
 
@@ -190,16 +194,24 @@ class StructuredVLMExtractor:
                 # Aggregate
                 if aggregated_timeline is not None:
                     for status, hours in timeline_data.items():
-                        aggregated_timeline[status] = aggregated_timeline.get(status, 0.0) + hours
+                        aggregated_timeline[status] = (
+                            aggregated_timeline.get(status, 0.0) + hours
+                        )
 
             # Fields or schema
             if extract_fields:
-                page_data["fields"] = self.extract_key_values(image_bytes, extract_fields, page_num=page_num)
+                page_data["fields"] = self.extract_key_values(
+                    image_bytes, extract_fields, page_num=page_num
+                )
             elif schema:
-                page_data["fields"] = self.extract_structured(image_bytes, schema, page_num=page_num)
+                page_data["fields"] = self.extract_structured(
+                    image_bytes, schema, page_num=page_num
+                )
 
             # Raw text (always included)
-            page_data["raw_text"] = self.vlm.extract_from_image(image_bytes, page_num=page_num)
+            page_data["raw_text"] = self.vlm.extract_from_image(
+                image_bytes, page_num=page_num
+            )
 
             pages_data.append(page_data)
 
@@ -220,10 +232,10 @@ class StructuredVLMExtractor:
 
     def _parse_page_range(self, range_str: str, total_pages: int) -> List[int]:
         """Internal: Parse page range string."""
-        if range_str.lower() == 'all':
+        if range_str.lower() == "all":
             return list(range(1, total_pages + 1))
-        if '-' in range_str:
-            start, end = range_str.split('-')
+        if "-" in range_str:
+            start, end = range_str.split("-")
             return list(range(int(start.strip()), int(end.strip()) + 1))
         return [int(range_str)]
 
@@ -286,7 +298,9 @@ IMPORTANT:
             logger.info(f"Extracted table with {len(data)} rows")
             return data
         else:
-            logger.warning(f"Table extraction failed or returned non-list: {type(data)}")
+            logger.warning(
+                f"Table extraction failed or returned non-list: {type(data)}"
+            )
             return []
 
     def extract_key_values(
@@ -439,8 +453,8 @@ IMPORTANT:
             Decimal hours
         """
         try:
-            if ':' in time_str:
-                parts = time_str.split(':')
+            if ":" in time_str:
+                parts = time_str.split(":")
                 hours = int(parts[0])
                 minutes = int(parts[1]) if len(parts) > 1 else 0
                 seconds = int(parts[2]) if len(parts) > 2 else 0
@@ -634,5 +648,3 @@ ALL {len(categories)} fields REQUIRED."""
             value_format="time_hms_decimal",
             page_num=page_num,
         )
-
-

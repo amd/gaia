@@ -1597,7 +1597,9 @@ class InitCommand:
                 )
                 self._print("    gaia chat init         # Setup document folder")
             elif self.profile == "vlm":
-                self._print("    gaia cache status      # Verify VLM model is available")
+                self._print(
+                    "    gaia cache status      # Verify VLM model is available"
+                )
                 self._print("")
                 self._print(
                     "  Vision model ready! Use with the driver logs processor or VLM SDK:"
