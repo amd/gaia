@@ -4,62 +4,168 @@
 """
 Integration tests for example agents.
 
-These tests verify that example agents can be instantiated and have the
-required methods and structure. They do NOT require Lemonade server.
+These tests actually run the agents and validate their responses.
+Tests require Lemonade server to be running.
 """
 
 import pytest
 import sys
 import os
 from pathlib import Path
+import tempfile
+import shutil
 
 # Add examples directory to Python path
 examples_dir = Path(__file__).parent.parent.parent / "examples"
 sys.path.insert(0, str(examples_dir))
 
+# Check if Lemonade server is available
+LEMONADE_AVAILABLE = False
+try:
+    from gaia.llm.lemonade_client import LemonadeClient
+    client = LemonadeClient()
+    client.get_system_info()
+    LEMONADE_AVAILABLE = True
+except Exception:
+    pass
 
-class TestWeatherAgent:
-    """Test weather_agent.py example."""
+requires_lemonade = pytest.mark.skipif(
+    not LEMONADE_AVAILABLE,
+    reason="Lemonade server not running - start with: lemonade-server serve"
+)
 
-    def test_import(self):
-        """Test that WeatherAgent can be imported."""
-        from weather_agent import WeatherAgent
-        assert WeatherAgent is not None
 
-    def test_class_structure(self):
-        """Test that WeatherAgent has required methods."""
-        from weather_agent import WeatherAgent
+@requires_lemonade
+class TestNotesAgent:
+    """Test notes_agent.py with actual execution."""
 
-        required_methods = ["_get_system_prompt", "_register_tools"]
+    def test_agent_creates_and_lists_notes(self):
+        """Test that NotesAgent can create and retrieve notes."""
+        from notes_agent import NotesAgent
+
+        # Create agent with temp database
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test_notes.db")
+            agent = NotesAgent(db_path=db_path)
+
+            # Create a note
+            result = agent.process_query("Create a note called 'Integration Test' with content 'Testing GAIA'")
+
+            # Validate response structure
+            assert result.get("status") == "success", f"Query failed: {result.get('error', 'Unknown error')}"
+            assert "result" in result
+
+            response_text = result.get("result", "").lower()
+            assert "note" in response_text or "created" in response_text, "Response doesn't mention note creation"
+
+            # List notes to verify creation
+            result = agent.process_query("Show me all my notes")
+            assert result.get("status") == "success"
+            assert "integration test" in result.get("result", "").lower()
+
+            agent.close_db()
+
+
+@requires_lemonade
+class TestProductMockupAgent:
+    """Test product_mockup_agent.py with actual execution."""
+
+    def test_agent_generates_html(self):
+        """Test that ProductMockupAgent generates HTML files."""
+        from product_mockup_agent import ProductMockupAgent
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = ProductMockupAgent(output_dir=tmpdir)
+
+            # Generate a mockup
+            result = agent.process_query(
+                "Create a landing page for 'TestApp' with features: Authentication, API, Dashboard"
+            )
+
+            # Validate response
+            assert result.get("status") == "success", f"Query failed: {result.get('error')}"
+
+            # Verify HTML file was created
+            html_files = list(Path(tmpdir).glob("*.html"))
+            assert len(html_files) > 0, "No HTML file was generated"
+
+            # Verify HTML content has required elements
+            html_content = html_files[0].read_text()
+            assert "<!DOCTYPE html>" in html_content, "Missing DOCTYPE"
+            assert "TestApp" in html_content or "testapp" in html_content.lower(), "Product name not in HTML"
+            assert "tailwindcss" in html_content.lower(), "Tailwind CSS not included"
+
+
+@requires_lemonade
+class TestFileWatcherAgent:
+    """Test file_watcher_agent.py with actual execution."""
+
+    def test_agent_watches_directory(self):
+        """Test that FileWatcherAgent can watch directories."""
+        from file_watcher_agent import FileWatcherAgent
+        import time
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create agent watching temp directory
+            agent = FileWatcherAgent(watch_dir=tmpdir)
+
+            # Verify agent initialized
+            assert agent is not None
+            assert len(agent.watching_directories) > 0, "Agent not watching any directories"
+
+            # Create a test file
+            test_file = Path(tmpdir) / "test.txt"
+            test_file.write_text("Hello from integration test")
+
+            # Give watcher time to detect file
+            time.sleep(2)
+
+            # Verify file was processed
+            assert len(agent.processed_files) > 0, "No files were processed"
+            assert any(f["name"] == "test.txt" for f in agent.processed_files), "test.txt not in processed files"
+
+            agent.stop_all_watchers()
+
+
+class TestHardwareAdvisorAgent:
+    """Test hardware_advisor_agent.py structure (requires system info)."""
+
+    def test_import_and_structure(self):
+        """Test that HardwareAdvisorAgent has correct structure."""
+        from hardware_advisor_agent import HardwareAdvisorAgent
+
+        required_methods = ["_get_system_prompt", "_register_tools", "_get_gpu_info"]
         for method in required_methods:
-            assert hasattr(WeatherAgent, method), f"Missing method: {method}"
+            assert hasattr(HardwareAdvisorAgent, method), f"Missing method: {method}"
 
-    def test_system_prompt(self):
-        """Test that system prompt is defined."""
+
+class TestMCPAgents:
+    """Test MCP-based agents (require external MCP servers - test structure only)."""
+
+    def test_weather_agent_structure(self):
+        """Test WeatherAgent has correct structure."""
         from weather_agent import WeatherAgent
+        assert hasattr(WeatherAgent, "_get_system_prompt")
+        assert hasattr(WeatherAgent, "_register_tools")
 
-        # Create instance without connecting to MCP server
-        os.environ["GAIA_SUPPRESS_WARNINGS"] = "1"
-        try:
-            # Don't actually initialize - just check the class method exists
-            prompt = WeatherAgent._get_system_prompt(None)
-            assert isinstance(prompt, str)
-            assert len(prompt) > 0
-        except Exception:
-            # If initialization fails, that's OK - we're just checking structure
-            pass
+    def test_mcp_config_agent_structure(self):
+        """Test MCPAgent has correct structure."""
+        from mcp_config_based_agent import MCPAgent
+        assert hasattr(MCPAgent, "_get_system_prompt")
+        assert hasattr(MCPAgent, "_register_tools")
+
+    def test_time_agent_structure(self):
+        """Test TimeAgent has correct structure."""
+        from mcp_time_server_agent import TimeAgent
+        assert hasattr(TimeAgent, "_get_system_prompt")
+        assert hasattr(TimeAgent, "_register_tools")
 
 
-class TestRagDocAgent:
-    """Test rag_doc_agent.py example."""
+class TestRAGDocAgent:
+    """Test rag_doc_agent.py structure (requires documents)."""
 
-    def test_import(self):
-        """Test that DocAgent can be imported."""
-        from rag_doc_agent import DocAgent
-        assert DocAgent is not None
-
-    def test_class_structure(self):
-        """Test that DocAgent has required methods."""
+    def test_import_and_structure(self):
+        """Test that DocAgent has correct structure."""
         from rag_doc_agent import DocAgent
 
         required_methods = ["_get_system_prompt", "_register_tools"]
@@ -67,160 +173,23 @@ class TestRagDocAgent:
             assert hasattr(DocAgent, method), f"Missing method: {method}"
 
 
-class TestProductMockupAgent:
-    """Test product_mockup_agent.py example."""
-
-    def test_import(self):
-        """Test that ProductMockupAgent can be imported."""
-        from product_mockup_agent import ProductMockupAgent
-        assert ProductMockupAgent is not None
-
-    def test_class_structure(self):
-        """Test that ProductMockupAgent has required methods."""
-        from product_mockup_agent import ProductMockupAgent
-
-        required_methods = ["_get_system_prompt", "_register_tools"]
-        for method in required_methods:
-            assert hasattr(ProductMockupAgent, method), f"Missing method: {method}"
-
-    def test_tool_registration(self):
-        """Test that ProductMockupAgent registers generate_landing_page tool."""
-        from product_mockup_agent import ProductMockupAgent
-        from gaia.agents.base.tools import _TOOL_REGISTRY
-
-        # Clear registry
-        _TOOL_REGISTRY.clear()
-
-        # Create agent (may fail without Lemonade, but tools should register)
-        try:
-            agent = ProductMockupAgent()
-            agent._register_tools()
-        except Exception:
-            pass  # OK if initialization fails
-
-        # Check that tool was registered
-        assert "generate_landing_page" in _TOOL_REGISTRY
-
-
-class TestFileWatcherAgent:
-    """Test file_watcher_agent.py example."""
-
-    def test_import(self):
-        """Test that FileWatcherAgent can be imported."""
-        from file_watcher_agent import FileWatcherAgent
-        assert FileWatcherAgent is not None
-
-    def test_class_structure(self):
-        """Test that FileWatcherAgent has required methods."""
-        from file_watcher_agent import FileWatcherAgent
-
-        required_methods = ["_get_system_prompt", "_register_tools"]
-        for method in required_methods:
-            assert hasattr(FileWatcherAgent, method), f"Missing method: {method}"
-
-
-class TestNotesAgent:
-    """Test notes_agent.py example."""
-
-    def test_import(self):
-        """Test that NotesAgent can be imported."""
-        from notes_agent import NotesAgent
-        assert NotesAgent is not None
-
-    def test_class_structure(self):
-        """Test that NotesAgent has required methods."""
-        from notes_agent import NotesAgent
-
-        required_methods = ["_get_system_prompt", "_register_tools"]
-        for method in required_methods:
-            assert hasattr(NotesAgent, method), f"Missing method: {method}"
-
-
-class TestHardwareAdvisorAgent:
-    """Test hardware_advisor_agent.py example."""
-
-    def test_import(self):
-        """Test that HardwareAdvisorAgent can be imported."""
-        from hardware_advisor_agent import HardwareAdvisorAgent
-        assert HardwareAdvisorAgent is not None
-
-    def test_class_structure(self):
-        """Test that HardwareAdvisorAgent has required methods."""
-        from hardware_advisor_agent import HardwareAdvisorAgent
-
-        required_methods = ["_get_system_prompt", "_register_tools"]
-        for method in required_methods:
-            assert hasattr(HardwareAdvisorAgent, method), f"Missing method: {method}"
-
-
-class TestMCPConfigBasedAgent:
-    """Test mcp_config_based_agent.py example."""
-
-    def test_import(self):
-        """Test that MCPAgent can be imported."""
-        from mcp_config_based_agent import MCPAgent
-        assert MCPAgent is not None
-
-    def test_class_structure(self):
-        """Test that MCPAgent has required methods."""
-        from mcp_config_based_agent import MCPAgent
-
-        required_methods = ["_get_system_prompt", "_register_tools"]
-        for method in required_methods:
-            assert hasattr(MCPAgent, method), f"Missing method: {method}"
-
-
-class TestMCPTimeServerAgent:
-    """Test mcp_time_server_agent.py example."""
-
-    def test_import(self):
-        """Test that TimeAgent can be imported."""
-        from mcp_time_server_agent import TimeAgent
-        assert TimeAgent is not None
-
-    def test_class_structure(self):
-        """Test that TimeAgent has required methods."""
-        from mcp_time_server_agent import TimeAgent
-
-        required_methods = ["_get_system_prompt", "_register_tools"]
-        for method in required_methods:
-            assert hasattr(TimeAgent, method), f"Missing method: {method}"
-
-
-class TestMCPWindowsSystemHealthAgent:
-    """Test mcp_windows_system_health_agent.py example."""
-
-    def test_import(self):
-        """Test that WindowsSystemHealthAgent can be imported."""
-        from mcp_windows_system_health_agent import WindowsSystemHealthAgent
-        assert WindowsSystemHealthAgent is not None
-
-    def test_class_structure(self):
-        """Test that WindowsSystemHealthAgent has required methods."""
-        from mcp_windows_system_health_agent import WindowsSystemHealthAgent
-
-        required_methods = ["_get_system_prompt", "_register_tools"]
-        for method in required_methods:
-            assert hasattr(WindowsSystemHealthAgent, method), f"Missing method: {method}"
-
-
 class TestSDAgentExample:
-    """Test sd_agent_example.py example."""
+    """Test sd_agent_example.py structure."""
 
     def test_import(self):
-        """Test that example main function exists."""
+        """Test that SD example can be imported."""
         import sd_agent_example
         assert sd_agent_example is not None
 
-    def test_has_main_or_agent(self):
-        """Test that file has either main function or agent class."""
-        import sd_agent_example
 
-        # SD example might have main() or direct execution
-        has_main = hasattr(sd_agent_example, 'main')
-        has_agent_ref = 'Agent' in dir(sd_agent_example) or 'SDAgent' in dir(sd_agent_example)
+class TestWindowsSystemHealthAgent:
+    """Test mcp_windows_system_health_agent.py structure (Windows-specific)."""
 
-        assert has_main or has_agent_ref, "Example should have main() or agent reference"
+    def test_import_and_structure(self):
+        """Test that WindowsSystemHealthAgent has correct structure."""
+        from mcp_windows_system_health_agent import WindowsSystemHealthAgent
+        assert hasattr(WindowsSystemHealthAgent, "_get_system_prompt")
+        assert hasattr(WindowsSystemHealthAgent, "_register_tools")
 
 
 if __name__ == "__main__":

@@ -33,8 +33,8 @@ class WeatherAgent(Agent, MCPClientMixin):
         Args:
             **kwargs: Additional arguments passed to Agent
         """
-        # Initialize Agent
-        Agent.__init__(self, max_steps=10, **kwargs)
+        # Initialize Agent with lightweight model for faster inference
+        Agent.__init__(self, max_steps=10, model_id="Qwen3-4B-GGUF", **kwargs)
 
         # Initialize MCPClientMixin
         MCPClientMixin.__init__(self, auto_load_config=False)

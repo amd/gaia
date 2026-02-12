@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 
 # This workflow runs integration tests for example agents
-# Tests verify: imports, class structure, tool registration
-# Platform: Linux (faster for CI)
+# Tests verify: agent execution, tool registration, response validation
+# Platform: Windows (self-hosted Strix runner with Lemonade server)
 
 name: Example Agents Integration Tests
 
@@ -38,7 +38,7 @@ permissions:
 jobs:
   test-examples:
     name: Example Agents Integration Tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
@@ -53,26 +53,40 @@ jobs:
           python-version: '3.12'
 
       - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+        run: |
+          irm https://astral.sh/uv/install.ps1 | iex
+          echo "$env:USERPROFILE\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: pwsh
 
       - name: Install dependencies
         run: |
           uv pip install --system -e .[dev,mcp,rag]
           uv pip install --system pytest pytest-timeout
+        shell: pwsh
+
+      - name: Start Lemonade Server
+        run: |
+          Write-Host "Starting Lemonade server with Qwen3-4B-GGUF..."
+          Start-Process -FilePath "lemonade-server" -ArgumentList "serve","--model","Qwen3-4B-GGUF","--ctx-size","8192" -NoNewWindow
+          Start-Sleep -Seconds 15
+          Write-Host "✅ Lemonade server started"
+        shell: pwsh
 
       - name: Validate Python Syntax
         run: |
-          echo "Validating Python syntax for all examples..."
+          Write-Host "Validating Python syntax for all examples..."
           python -m py_compile examples/*.py
-          echo "✅ All example files have valid Python syntax"
+          Write-Host "✅ All example files have valid Python syntax"
+        shell: pwsh
 
       - name: Run Integration Tests
         env:
           GAIA_SUPPRESS_WARNINGS: "1"
         run: |
-          echo "Running integration tests for example agents..."
-          pytest tests/integration/test_example_agents.py -v --tb=short
-          echo "✅ All example integration tests passed"
+          Write-Host "Running integration tests for example agents..."
+          pytest tests/integration/test_example_agents.py -v --tb=short --timeout=300
+          Write-Host "✅ All example integration tests passed"
+        shell: pwsh
 
       - name: Test Tool Decorator
         run: |

@@ -37,7 +37,8 @@ class ProductMockupAgent(Agent):
             output_dir: Directory to save generated HTML files
             **kwargs: Additional arguments passed to Agent
         """
-        super().__init__(**kwargs)
+        # Use lightweight model for faster mockup generation
+        super().__init__(model_id="Qwen3-4B-GGUF", **kwargs)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 

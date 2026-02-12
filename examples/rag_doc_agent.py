@@ -42,8 +42,8 @@ class DocAgent(Agent, RAGToolsMixin):
             index_dir: Directory containing documents to index
             **kwargs: Additional arguments passed to Agent
         """
-        # Initialize Agent
-        Agent.__init__(self, **kwargs)
+        # Initialize Agent with lightweight model for faster inference
+        Agent.__init__(self, model_id="Qwen3-4B-GGUF", **kwargs)
 
         # Store the index directory
         self.index_dir = Path(index_dir)
