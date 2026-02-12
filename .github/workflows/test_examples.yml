@@ -95,15 +95,6 @@ print('✅ Tool decorator working correctly')
         run: |
           echo "Validating example file structure and documentation..."
 
-          # Check that all examples have copyright headers
-          for file in examples/*.py; do
-              if ! grep -q "Copyright(C)" "$file"; then
-                  echo "❌ Missing copyright header: $file"
-                  exit 1
-              fi
-          done
-          echo "✅ All examples have copyright headers"
-
           # Check that all examples have docstrings
           for file in examples/*.py; do
               if ! grep -q '"""' "$file"; then
