@@ -170,5 +170,58 @@ class TestMCPConfigBasedAgent:
             assert hasattr(MCPAgent, method), f"Missing method: {method}"
 
 
+class TestMCPTimeServerAgent:
+    """Test mcp_time_server_agent.py example."""
+
+    def test_import(self):
+        """Test that TimeAgent can be imported."""
+        from mcp_time_server_agent import TimeAgent
+        assert TimeAgent is not None
+
+    def test_class_structure(self):
+        """Test that TimeAgent has required methods."""
+        from mcp_time_server_agent import TimeAgent
+
+        required_methods = ["_get_system_prompt", "_register_tools"]
+        for method in required_methods:
+            assert hasattr(TimeAgent, method), f"Missing method: {method}"
+
+
+class TestMCPWindowsSystemHealthAgent:
+    """Test mcp_windows_system_health_agent.py example."""
+
+    def test_import(self):
+        """Test that WindowsSystemHealthAgent can be imported."""
+        from mcp_windows_system_health_agent import WindowsSystemHealthAgent
+        assert WindowsSystemHealthAgent is not None
+
+    def test_class_structure(self):
+        """Test that WindowsSystemHealthAgent has required methods."""
+        from mcp_windows_system_health_agent import WindowsSystemHealthAgent
+
+        required_methods = ["_get_system_prompt", "_register_tools"]
+        for method in required_methods:
+            assert hasattr(WindowsSystemHealthAgent, method), f"Missing method: {method}"
+
+
+class TestSDAgentExample:
+    """Test sd_agent_example.py example."""
+
+    def test_import(self):
+        """Test that example main function exists."""
+        import sd_agent_example
+        assert sd_agent_example is not None
+
+    def test_has_main_or_agent(self):
+        """Test that file has either main function or agent class."""
+        import sd_agent_example
+
+        # SD example might have main() or direct execution
+        has_main = hasattr(sd_agent_example, 'main')
+        has_agent_ref = 'Agent' in dir(sd_agent_example) or 'SDAgent' in dir(sd_agent_example)
+
+        assert has_main or has_agent_ref, "Example should have main() or agent reference"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
