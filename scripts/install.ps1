@@ -1,4 +1,4 @@
-﻿# GAIA Installer for Windows
+# GAIA Installer for Windows
 # One-command installation: irm https://amd-gaia.ai/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
