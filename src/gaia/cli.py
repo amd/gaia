@@ -2894,8 +2894,8 @@ Let me know your answer!
                 print("\nAvailable Audio Input Devices:")
                 for device in devices:
                     print(f"Index {device['index']}: {device['name']}")
-                    print(f"    Max Input Channels: {device['maxInputChannels']}")
-                    print(f"    Default Sample Rate: {device['defaultSampleRate']}")
+                    print(f"    Max Input Channels: {device['max_input_channels']}")
+                    print(f"    Default Sample Rate: {device['default_samplerate']}")
                     print()
                 return
 

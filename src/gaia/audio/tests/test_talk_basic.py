@@ -10,7 +10,7 @@ Basic talk mode test - minimal complexity for debugging
 import time
 
 import numpy as np
-import pyaudio
+import sounddevice as sd
 import whisper
 
 
@@ -20,31 +20,27 @@ def test_basic_talk():
     print("Loading Whisper model (tiny for speed)...")
     model = whisper.load_model("tiny")
 
-    # Setup audio
-    p = pyaudio.PyAudio()
-
     # Get default device
     try:
-        default_device = p.get_default_input_device_info()
-        device_idx = default_device["index"]
-        print(f"Using device [{device_idx}]: {default_device['name']}")
-    except:
+        device_idx = sd.default.device[0]
+        device_info = sd.query_devices(device_idx)
+        print(f"Using device [{device_idx}]: {device_info['name']}")
+    except Exception:
         print("No default device, using device 0")
         device_idx = 0
 
     CHUNK = 2048
-    FORMAT = pyaudio.paFloat32
     CHANNELS = 1
     RATE = 16000
 
-    stream = p.open(
-        format=FORMAT,
+    stream = sd.InputStream(
+        samplerate=RATE,
         channels=CHANNELS,
-        rate=RATE,
-        input=True,
-        input_device_index=device_idx,
-        frames_per_buffer=CHUNK,
+        dtype="float32",
+        device=device_idx,
+        blocksize=CHUNK,
     )
+    stream.start()
 
     print("\n" + "=" * 60)
     print("RECORDING - Speak for 3 seconds then wait for transcription")
@@ -59,18 +55,18 @@ def test_basic_talk():
             start_time = time.time()
 
             while time.time() - start_time < 3:
-                data = stream.read(CHUNK, exception_on_overflow=False)
-                audio_buffer.append(data)
+                frames, _ = stream.read(CHUNK)
+                audio_buffer.append(frames[:, 0])  # Extract mono channel
 
             # Convert to numpy array
-            audio_data = np.frombuffer(b"".join(audio_buffer), dtype=np.float32)
+            audio_data = np.concatenate(audio_buffer)
 
             # Check if we got audio
             energy = np.abs(audio_data).mean()
             print(f"Audio captured: {len(audio_data)} samples, energy: {energy:.6f}")
 
             if energy < 0.0001:
-                print("⚠️  No audio detected! Check your microphone.")
+                print("\u26a0\ufe0f  No audio detected! Check your microphone.")
                 print("Waiting 2 seconds before next attempt...\n")
                 time.sleep(2)
                 continue
@@ -87,12 +83,12 @@ def test_basic_talk():
 
                 text = result["text"].strip()
                 if text:
-                    print(f"✅ TRANSCRIBED: {text}")
+                    print(f"\u2705 TRANSCRIBED: {text}")
                 else:
-                    print("❌ No speech detected in audio")
+                    print("\u274c No speech detected in audio")
 
             except Exception as e:
-                print(f"❌ Transcription error: {e}")
+                print(f"\u274c Transcription error: {e}")
 
             print("\nWaiting 2 seconds before next recording...\n")
             print("-" * 60 + "\n")
@@ -102,9 +98,8 @@ def test_basic_talk():
         print("\nStopping...")
 
     finally:
-        stream.stop_stream()
+        stream.stop()
         stream.close()
-        p.terminate()
 
 
 if __name__ == "__main__":

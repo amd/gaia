@@ -43,7 +43,7 @@ class KokoroTTS:
             error_msg = (
                 f"\n❌ Error: Missing required talk dependencies: {', '.join(missing)}\n\n"
                 f"Please install the talk dependencies:\n"
-                f'  uv pip install -e ".[talk]"\n\n'
+                f'  uv pip install "amd-gaia[talk]"\n\n'
                 f"Or install packages directly:\n"
                 f"  uv pip install {' '.join(missing)}\n"
             )

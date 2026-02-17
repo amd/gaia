@@ -13,6 +13,9 @@ import pytest
 
 # Skip entire module if audio dependencies not available
 try:
+    import sounddevice  # noqa: F401
+    import whisper  # noqa: F401
+
     from gaia.audio.whisper_asr import WhisperAsr
     from gaia.talk.sdk import TalkConfig, TalkSDK
 
@@ -23,7 +26,7 @@ except ImportError:
 from gaia.logger import get_logger
 
 pytestmark = pytest.mark.skipif(
-    not HAS_AUDIO_DEPS, reason="Audio dependencies (pyaudio) not available"
+    not HAS_AUDIO_DEPS, reason="Audio dependencies (sounddevice/whisper) not available"
 )
 
 

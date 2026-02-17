@@ -12,38 +12,35 @@ import sys
 import time
 
 import numpy as np
-import pyaudio
+import sounddevice as sd
 
 
 def test_microphone_basics():
     """Test 1: Basic microphone functionality"""
     print("\n=== TEST 1: Basic Microphone Test ===")
 
-    p = pyaudio.PyAudio()
-
     # List all audio devices
     print("\nAvailable audio input devices:")
+    devices = sd.query_devices()
     input_devices = []
-    for i in range(p.get_device_count()):
-        info = p.get_device_info_by_index(i)
-        if info.get("maxInputChannels") > 0:
+    for i, info in enumerate(devices):
+        if info.get("max_input_channels", 0) > 0:
             print(
-                f"  [{i}] {info.get('name')} - {info.get('maxInputChannels')} channels"
+                f"  [{i}] {info.get('name')} - {info.get('max_input_channels')} channels"
             )
             input_devices.append(i)
 
     # Get default device
     try:
-        default_device = p.get_default_input_device_info()
-        default_idx = default_device["index"]
-        print(f"\nDefault input device: [{default_idx}] {default_device['name']}")
-    except:
+        default_idx = sd.default.device[0]
+        default_info = sd.query_devices(default_idx)
+        print(f"\nDefault input device: [{default_idx}] {default_info['name']}")
+    except Exception:
         print("\nNo default input device found!")
-        default_idx = 0 if input_devices else None
+        default_idx = input_devices[0] if input_devices else None
 
     if not input_devices:
-        print("\n❌ No input devices found! Check your microphone connection.")
-        p.terminate()
+        print("\n\u274c No input devices found! Check your microphone connection.")
         return None
 
     # Test recording from default device
@@ -51,34 +48,33 @@ def test_microphone_basics():
     print("Speak now for 3 seconds...")
 
     CHUNK = 2048
-    FORMAT = pyaudio.paFloat32
     CHANNELS = 1
     RATE = 16000
 
     try:
-        stream = p.open(
-            format=FORMAT,
+        stream = sd.InputStream(
+            samplerate=RATE,
             channels=CHANNELS,
-            rate=RATE,
-            input=True,
-            input_device_index=default_idx,
-            frames_per_buffer=CHUNK,
+            dtype="float32",
+            device=default_idx,
+            blocksize=CHUNK,
         )
+        stream.start()
 
         audio_data = []
         start_time = time.time()
 
         while time.time() - start_time < 3:
-            data = stream.read(CHUNK, exception_on_overflow=False)
-            audio_data.append(data)
+            frames, _ = stream.read(CHUNK)
+            audio_data.append(frames[:, 0])
 
-        stream.stop_stream()
+        stream.stop()
         stream.close()
 
         # Convert to numpy array and analyze
-        audio_array = np.frombuffer(b"".join(audio_data), dtype=np.float32)
+        audio_array = np.concatenate(audio_data)
 
-        print(f"\n✅ Recorded {len(audio_array)/RATE:.2f} seconds of audio")
+        print(f"\n\u2705 Recorded {len(audio_array)/RATE:.2f} seconds of audio")
         print(f"   Audio shape: {audio_array.shape}")
         print(f"   Min value: {audio_array.min():.4f}")
         print(f"   Max value: {audio_array.max():.4f}")
@@ -86,18 +82,16 @@ def test_microphone_basics():
 
         # Check if we got any sound
         if np.abs(audio_array).mean() < 0.0001:
-            print("\n⚠️  WARNING: Audio levels are very low! Check:")
+            print("\n\u26a0\ufe0f  WARNING: Audio levels are very low! Check:")
             print("   - Microphone is not muted")
             print("   - Microphone permissions are granted")
             print("   - Correct microphone is selected")
         else:
-            print("\n✅ Audio levels look good!")
+            print("\n\u2705 Audio levels look good!")
 
     except Exception as e:
-        print(f"\n❌ Error recording audio: {e}")
+        print(f"\n\u274c Error recording audio: {e}")
         default_idx = None
-    finally:
-        p.terminate()
 
     return default_idx
 
@@ -139,15 +133,15 @@ def test_audio_recorder():
         recorder.stop_recording()
 
         if audio_chunks:
-            print(f"\n✅ Captured {len(audio_chunks)} audio chunks")
+            print(f"\n\u2705 Captured {len(audio_chunks)} audio chunks")
         else:
             print(
-                "\n⚠️  No audio chunks captured! The voice activity detection might be too strict."
+                "\n\u26a0\ufe0f  No audio chunks captured! The voice activity detection might be too strict."
             )
             print("   Try speaking louder or continuously.")
 
     except Exception as e:
-        print(f"\n❌ Error testing AudioRecorder: {e}")
+        print(f"\n\u274c Error testing AudioRecorder: {e}")
         import traceback
 
         traceback.print_exc()
@@ -172,7 +166,7 @@ def test_whisper_asr():
             enable_cuda=False,
         )
 
-        print(f"✅ Model loaded: {asr.model}")
+        print(f"\u2705 Model loaded: {asr.model}")
         print(f"Device: {asr.get_device_name()}")
 
         print("\nStarting transcription for 10 seconds...")
@@ -193,7 +187,7 @@ def test_whisper_asr():
             while not transcription_queue.empty():
                 text = transcription_queue.get()
                 transcriptions.append(text)
-                print(f"  📝 Transcribed: {text}")
+                print(f"  Transcribed: {text}")
 
             time.sleep(0.5)
 
@@ -204,20 +198,20 @@ def test_whisper_asr():
         while not transcription_queue.empty():
             text = transcription_queue.get()
             transcriptions.append(text)
-            print(f"  📝 Transcribed: {text}")
+            print(f"  Transcribed: {text}")
 
         if transcriptions:
-            print(f"\n✅ Got {len(transcriptions)} transcriptions")
+            print(f"\n\u2705 Got {len(transcriptions)} transcriptions")
             print(f"Full text: {' '.join(transcriptions)}")
         else:
-            print("\n⚠️  No transcriptions received!")
+            print("\n\u26a0\ufe0f  No transcriptions received!")
             print("Possible issues:")
             print("  - Microphone not working")
             print("  - Speech not detected (try speaking louder)")
             print("  - Whisper model issues")
 
     except Exception as e:
-        print(f"\n❌ Error testing WhisperAsr: {e}")
+        print(f"\n\u274c Error testing WhisperAsr: {e}")
         import traceback
 
         traceback.print_exc()
@@ -227,30 +221,27 @@ def test_raw_recording():
     """Test 4: Raw continuous recording without VAD"""
     print("\n=== TEST 4: Raw Recording Test (No VAD) ===")
 
-    p = pyaudio.PyAudio()
-
     try:
         # Use default device
-        default_device = p.get_default_input_device_info()
-        device_idx = default_device["index"]
+        device_idx = sd.default.device[0]
+        device_info = sd.query_devices(device_idx)
 
         CHUNK = 2048
-        FORMAT = pyaudio.paFloat32
         CHANNELS = 1
         RATE = 16000
 
-        print(f"Recording from: {default_device['name']}")
+        print(f"Recording from: {device_info['name']}")
         print("Recording for 5 seconds (no voice detection)...")
         print("Make some noise!\n")
 
-        stream = p.open(
-            format=FORMAT,
+        stream = sd.InputStream(
+            samplerate=RATE,
             channels=CHANNELS,
-            rate=RATE,
-            input=True,
-            input_device_index=device_idx,
-            frames_per_buffer=CHUNK,
+            dtype="float32",
+            device=device_idx,
+            blocksize=CHUNK,
         )
+        stream.start()
 
         chunks_with_sound = 0
         total_chunks = 0
@@ -258,8 +249,8 @@ def test_raw_recording():
 
         start_time = time.time()
         while time.time() - start_time < 5:
-            data = stream.read(CHUNK, exception_on_overflow=False)
-            audio = np.frombuffer(data, dtype=np.float32)
+            frames, _ = stream.read(CHUNK)
+            audio = frames[:, 0]
 
             level = np.abs(audio).mean()
             max_level = max(max_level, level)
@@ -267,34 +258,32 @@ def test_raw_recording():
 
             if level > 0.001:  # Very low threshold
                 chunks_with_sound += 1
-                print(f"  Level: {'█' * int(level * 500):{20}} {level:.6f}")
+                print(f"  Level: {'\u2588' * int(level * 500):{20}} {level:.6f}")
             else:
                 print(f"  Level: {'':{20}} {level:.6f} (silence)")
 
             time.sleep(0.05)
 
-        stream.stop_stream()
+        stream.stop()
         stream.close()
 
-        print(f"\n📊 Recording Statistics:")
+        print(f"\nRecording Statistics:")
         print(f"   Total chunks: {total_chunks}")
         print(f"   Chunks with sound: {chunks_with_sound}")
         print(f"   Max level: {max_level:.6f}")
 
         if chunks_with_sound == 0:
-            print("\n❌ No sound detected at all!")
+            print("\n\u274c No sound detected at all!")
             print("   - Check microphone is connected")
             print("   - Check microphone permissions")
             print("   - Check microphone is not muted")
         elif chunks_with_sound < total_chunks * 0.1:
-            print("\n⚠️  Very little sound detected")
+            print("\n\u26a0\ufe0f  Very little sound detected")
         else:
-            print("\n✅ Sound detection working!")
+            print("\n\u2705 Sound detection working!")
 
     except Exception as e:
-        print(f"\n❌ Error in raw recording: {e}")
-    finally:
-        p.terminate()
+        print(f"\n\u274c Error in raw recording: {e}")
 
 
 if __name__ == "__main__":
@@ -306,7 +295,7 @@ if __name__ == "__main__":
     device_idx = test_microphone_basics()
 
     if device_idx is None:
-        print("\n❌ Microphone test failed. Fix microphone issues before continuing.")
+        print("\n\u274c Microphone test failed. Fix microphone issues before continuing.")
         sys.exit(1)
 
     input("\nPress Enter to continue to AudioRecorder test...")

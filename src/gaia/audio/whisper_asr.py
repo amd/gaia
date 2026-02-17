@@ -11,9 +11,9 @@ import time
 import numpy as np
 
 try:
-    import pyaudio
+    import sounddevice as sd
 except ImportError:
-    pyaudio = None
+    sd = None
 
 try:
     import torch
@@ -45,8 +45,8 @@ class WhisperAsr(AudioRecorder):
     ):
         # Check for required dependencies
         missing = []
-        if pyaudio is None:
-            missing.append("pyaudio")
+        if sd is None:
+            missing.append("sounddevice")
         if torch is None:
             missing.append("torch")
         if whisper is None:
@@ -54,9 +54,9 @@ class WhisperAsr(AudioRecorder):
 
         if missing:
             error_msg = (
-                f"\n❌ Error: Missing required talk dependencies: {', '.join(missing)}\n\n"
+                f"\n\u274c Error: Missing required talk dependencies: {', '.join(missing)}\n\n"
                 f"Please install the talk dependencies:\n"
-                f'  uv pip install -e ".[talk]"\n\n'
+                f'  uv pip install "amd-gaia[talk]"\n\n'
                 f"Or install packages directly:\n"
                 f"  uv pip install {' '.join(missing)}\n"
             )
@@ -96,28 +96,26 @@ class WhisperAsr(AudioRecorder):
 
     def _record_audio_streaming(self):
         """Record audio for streaming mode - puts chunks directly into queue."""
-        pa = pyaudio.PyAudio()
-
         try:
             # Log device info
             if self.device_index is not None:
-                device_info = pa.get_device_info_by_index(self.device_index)
+                device_info = sd.query_devices(self.device_index)
             else:
-                device_info = pa.get_default_input_device_info()
-                self.device_index = device_info["index"]
+                self.device_index = sd.default.device[0]
+                device_info = sd.query_devices(self.device_index)
 
             self.log.debug(
                 f"Using audio device [{self.device_index}]: {device_info['name']}"
             )
 
-            self.stream = pa.open(
-                format=self.FORMAT,
+            self.stream = sd.InputStream(
+                samplerate=self.RATE,
                 channels=self.CHANNELS,
-                rate=self.RATE,
-                input=True,
-                input_device_index=self.device_index,
-                frames_per_buffer=self.CHUNK,
+                dtype=self.DTYPE,
+                device=self.device_index,
+                blocksize=self.CHUNK,
             )
+            self.stream.start()
 
             self.log.debug("Streaming recording started...")
             audio_buffer = np.array([], dtype=np.float32)
@@ -135,10 +133,10 @@ class WhisperAsr(AudioRecorder):
 
             while self.is_recording:
                 try:
-                    data = np.frombuffer(
-                        self.stream.read(self.CHUNK, exception_on_overflow=False),
-                        dtype=np.float32,
-                    )
+                    frames, overflowed = self.stream.read(self.CHUNK)
+                    if overflowed:
+                        self.log.debug("Audio input overflowed")
+                    data = frames[:, 0]  # Extract mono channel
                     audio_buffer = np.concatenate((audio_buffer, data))
 
                     # Process when we have enough audio (3 seconds)
@@ -172,9 +170,8 @@ class WhisperAsr(AudioRecorder):
 
         finally:
             if self.stream:
-                self.stream.stop_stream()
+                self.stream.stop()
                 self.stream.close()
-            pa.terminate()
 
     def start_recording_streaming(self):
         """Start recording in streaming mode."""

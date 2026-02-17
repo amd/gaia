@@ -10,44 +10,42 @@ Simple microphone test - just records and shows audio levels
 import time
 
 import numpy as np
-import pyaudio
+import sounddevice as sd
 
 
 def test_mic():
     """Simple test to record and display audio levels"""
-    p = pyaudio.PyAudio()
 
     # List devices
     print("Available input devices:")
-    for i in range(p.get_device_count()):
-        info = p.get_device_info_by_index(i)
-        if info.get("maxInputChannels") > 0:
+    devices = sd.query_devices()
+    for i, info in enumerate(devices):
+        if info.get("max_input_channels", 0) > 0:
             print(f"  [{i}] {info.get('name')}")
 
     # Get default device
     try:
-        default_device = p.get_default_input_device_info()
-        device_idx = default_device["index"]
-        print(f"\nUsing default device [{device_idx}]: {default_device['name']}")
-    except:
+        device_idx = sd.default.device[0]
+        device_info = sd.query_devices(device_idx)
+        print(f"\nUsing default device [{device_idx}]: {device_info['name']}")
+    except Exception:
         print("No default device, using device 0")
         device_idx = 0
 
     # Audio settings
     CHUNK = 2048
-    FORMAT = pyaudio.paFloat32
     CHANNELS = 1
     RATE = 16000
 
     print(f"\nOpening audio stream...")
-    stream = p.open(
-        format=FORMAT,
+    stream = sd.InputStream(
+        samplerate=RATE,
         channels=CHANNELS,
-        rate=RATE,
-        input=True,
-        input_device_index=device_idx,
-        frames_per_buffer=CHUNK,
+        dtype="float32",
+        device=device_idx,
+        blocksize=CHUNK,
     )
+    stream.start()
 
     print("Recording... Speak into the microphone (Press Ctrl+C to stop)\n")
     print("Energy Level:")
@@ -60,8 +58,8 @@ def test_mic():
 
         while True:
             # Read audio
-            data = stream.read(CHUNK, exception_on_overflow=False)
-            audio = np.frombuffer(data, dtype=np.float32)
+            frames, overflowed = stream.read(CHUNK)
+            audio = frames[:, 0]  # Extract mono channel
 
             # Calculate energy
             energy = np.abs(audio).mean()
@@ -70,7 +68,7 @@ def test_mic():
 
             # Visualize
             bar_length = int(energy * 1000)  # Scale for visualization
-            bar = "█" * min(bar_length, 50)
+            bar = "\u2588" * min(bar_length, 50)
 
             if energy > 0.001:
                 chunks_with_sound += 1
@@ -89,23 +87,22 @@ def test_mic():
         print(f"  Max energy: {max_energy:.6f}")
 
         if chunks_with_sound == 0:
-            print("\n⚠️  NO SOUND DETECTED!")
+            print("\n\u26a0\ufe0f  NO SOUND DETECTED!")
             print("Check:")
             print("  - Microphone is not muted")
             print("  - Correct microphone selected")
             print("  - Microphone permissions granted")
         elif max_energy < 0.01:
-            print("\n⚠️  Very low audio levels")
+            print("\n\u26a0\ufe0f  Very low audio levels")
             print("  - Try speaking louder")
             print("  - Move closer to microphone")
-            print("  - Check microphone volume in Windows settings")
+            print("  - Check microphone volume in system settings")
         else:
-            print("\n✅ Microphone is working!")
+            print("\n\u2705 Microphone is working!")
 
     finally:
-        stream.stop_stream()
+        stream.stop()
         stream.close()
-        p.terminate()
 
 
 if __name__ == "__main__":

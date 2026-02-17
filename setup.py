@@ -141,12 +141,11 @@ setup(
             "reportlab",
         ],
         "talk": [
-            "pyaudio",
             "openai-whisper",
-            "numpy==1.26.4",
             "kokoro>=0.3.1",
             "soundfile",
             "sounddevice",
+            "psutil",
         ],
         "youtube": [
             "llama-index-readers-youtube-transcript",
