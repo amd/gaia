@@ -147,6 +147,7 @@ setup(
             "kokoro>=0.3.1",
             "soundfile",
             "sounddevice",
+            "pip",  # Required: spacy model download needs pip in venv (uv omits it)
         ],
         "youtube": [
             "llama-index-readers-youtube-transcript",
