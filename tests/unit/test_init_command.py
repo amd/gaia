@@ -341,106 +341,87 @@ class TestRemoteAutoDetection(unittest.TestCase):
         self.assertIsNone(cmd._lemonade_base_url)
 
 
-class TestPullModelsViaApi(unittest.TestCase):
-    """Test _pull_models_via_api method."""
+class TestDownloadModels(unittest.TestCase):
+    """Test _download_models delegates to LemonadeClient."""
 
-    def _make_cmd(self):
-        """Create an InitCommand instance for testing."""
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_calls_ensure_model_downloaded_per_model(self, mock_installer_class):
+        """Test that ensure_model_downloaded is called for each model."""
         from gaia.installer.init_command import InitCommand
 
         cmd = InitCommand(profile="minimal", yes=True)
-        return cmd
 
-    def test_successful_download(self):
-        """Test successful model download via API."""
-        cmd = self._make_cmd()
-        mock_client = MagicMock()
-        mock_client.pull_model_stream.return_value = iter(
-            [
-                {
-                    "event": "progress",
-                    "percent": 50,
-                    "bytes_downloaded": 100,
-                    "bytes_total": 200,
-                },
-                {"event": "complete"},
-            ]
-        )
-        mock_client.check_model_available.return_value = True
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.get_required_models.return_value = []
+            mock_client.check_model_available.return_value = False
+            mock_client.ensure_model_downloaded.return_value = True
+            mock_client_class.return_value = mock_client
 
-        result = cmd._pull_models_via_api(mock_client, ["Qwen3-0.6B-GGUF"])
-        self.assertTrue(result)
-        mock_client.pull_model_stream.assert_called_once_with(
-            model_name="Qwen3-0.6B-GGUF"
-        )
+            result = cmd._download_models()
+            self.assertTrue(result)
+            # minimal profile has Qwen3-0.6B-GGUF plus DEFAULT_MODEL_NAME
+            self.assertGreaterEqual(mock_client.ensure_model_downloaded.call_count, 1)
 
-    def test_error_event_returns_false(self):
-        """Test that an error event causes failure."""
-        cmd = self._make_cmd()
-        mock_client = MagicMock()
-        mock_client.pull_model_stream.return_value = iter(
-            [{"event": "error", "error": "disk full"}]
-        )
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_returns_false_on_download_failure(self, mock_installer_class):
+        """Test that a failed download returns False."""
+        from gaia.installer.init_command import InitCommand
 
-        result = cmd._pull_models_via_api(mock_client, ["Qwen3-0.6B-GGUF"])
-        self.assertFalse(result)
+        cmd = InitCommand(profile="minimal", yes=True)
 
-    def test_exception_returns_false(self):
-        """Test that an exception causes failure."""
-        cmd = self._make_cmd()
-        mock_client = MagicMock()
-        mock_client.pull_model_stream.side_effect = ConnectionError("unreachable")
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.get_required_models.return_value = []
+            mock_client.check_model_available.return_value = False
+            mock_client.ensure_model_downloaded.return_value = False
+            mock_client_class.return_value = mock_client
 
-        result = cmd._pull_models_via_api(mock_client, ["Qwen3-0.6B-GGUF"])
-        self.assertFalse(result)
-
-
-class TestDownloadModelsFallback(unittest.TestCase):
-    """Test _download_models fallback to API when CLI unavailable."""
+            result = cmd._download_models()
+            self.assertFalse(result)
 
     @patch("gaia.installer.init_command.LemonadeInstaller")
     @patch.dict(
         "os.environ",
         {"LEMONADE_BASE_URL": "http://192.168.1.100:8000/api/v1"},
     )
-    def test_remote_mode_uses_api(self, mock_installer_class):
-        """Test that remote mode routes to _pull_models_via_api."""
+    def test_remote_mode_uses_ensure_model_downloaded(self, mock_installer_class):
+        """Test that remote mode delegates to ensure_model_downloaded."""
         from gaia.installer.init_command import InitCommand
 
         cmd = InitCommand(profile="minimal", yes=True)
         self.assertTrue(cmd.remote)
 
-        cmd._pull_models_via_api = MagicMock(return_value=True)
-
         with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
             mock_client = MagicMock()
             mock_client.get_required_models.return_value = []
             mock_client.check_model_available.return_value = False
+            mock_client.ensure_model_downloaded.return_value = True
             mock_client_class.return_value = mock_client
 
             result = cmd._download_models()
             self.assertTrue(result)
-            cmd._pull_models_via_api.assert_called_once()
+            self.assertGreaterEqual(mock_client.ensure_model_downloaded.call_count, 1)
 
     @patch("gaia.installer.init_command.LemonadeInstaller")
-    def test_no_cli_falls_back_to_api(self, mock_installer_class):
-        """Test that missing CLI falls back to _pull_models_via_api."""
+    def test_force_models_deletes_before_download(self, mock_installer_class):
+        """Test that --force-models deletes models before re-downloading."""
         from gaia.installer.init_command import InitCommand
 
-        cmd = InitCommand(profile="minimal", yes=True)
-
-        cmd._find_lemonade_server = MagicMock(return_value=None)
-        cmd._pull_models_via_api = MagicMock(return_value=True)
+        cmd = InitCommand(profile="minimal", yes=True, force_models=True)
 
         with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
             mock_client = MagicMock()
             mock_client.get_required_models.return_value = []
-            mock_client.check_model_available.return_value = False
+            mock_client.check_model_available.return_value = True
+            mock_client.ensure_model_downloaded.return_value = True
             mock_client_class.return_value = mock_client
 
             result = cmd._download_models()
             self.assertTrue(result)
-            cmd._pull_models_via_api.assert_called_once()
+            # Should have called delete_model for each model before downloading
+            self.assertGreaterEqual(mock_client.delete_model.call_count, 1)
+            self.assertGreaterEqual(mock_client.ensure_model_downloaded.call_count, 1)
 
 
 if __name__ == "__main__":
