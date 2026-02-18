@@ -157,6 +157,19 @@ class InitCommand:
         self.remote = remote
         self.progress_callback = progress_callback
 
+        # Auto-detect remote mode from LEMONADE_BASE_URL environment variable
+        self._lemonade_base_url = os.environ.get("LEMONADE_BASE_URL")
+        if self._lemonade_base_url is not None and not self.remote:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(self._lemonade_base_url)
+            hostname = parsed.hostname or "localhost"
+            if hostname not in ("localhost", "127.0.0.1", "::1"):
+                self.remote = True
+                log.info(
+                    f"Auto-detected remote mode from LEMONADE_BASE_URL={self._lemonade_base_url}"
+                )
+
         # Validate profile
         if self.profile not in INIT_PROFILES:
             valid = ", ".join(INIT_PROFILES.keys())
@@ -349,10 +362,13 @@ class InitCommand:
         try:
             # Step 1: Check/Install Lemonade (skip for remote servers or CI)
             if self.remote:
-                self._print_step(
-                    1, total_steps, "Skipping local Lemonade check (remote mode)..."
-                )
-                self._print_success("Using remote Lemonade Server")
+                self._print_step(1, total_steps, "Checking remote Lemonade Server...")
+                if self._lemonade_base_url:
+                    self._print_success(
+                        f"Using remote Lemonade Server at {self._lemonade_base_url}"
+                    )
+                else:
+                    self._print_success("Using remote Lemonade Server")
             elif self.skip_lemonade:
                 self._print_step(
                     1, total_steps, "Skipping Lemonade installation check..."
@@ -383,34 +399,13 @@ class InitCommand:
             if not self.skip_models:
                 step_num = 3
                 self._print("")
-                if self.remote:
-                    self._print_step(
-                        step_num,
-                        total_steps,
-                        "Skipping model downloads (remote mode)...",
-                    )
-                    self._print_success(
-                        "Remote mode — model downloads handled by remote server"
-                    )
-                    self.console.print()
-                    self.console.print(
-                        "   [dim]To download models, run the following on the remote machine:[/dim]"
-                    )
-                    profile_config = INIT_PROFILES[self.profile]
-                    model_ids = profile_config.get("models") or []
-                    for model_id in model_ids:
-                        self.console.print(
-                            f"     [cyan]lemonade-server pull {model_id}[/cyan]"
-                        )
-                    self.console.print()
-                else:
-                    self._print_step(
-                        step_num,
-                        total_steps,
-                        f"Downloading models for '{self.profile}' profile...",
-                    )
-                    if not self._download_models():
-                        return 1
+                self._print_step(
+                    step_num,
+                    total_steps,
+                    f"Downloading models for '{self.profile}' profile...",
+                )
+                if not self._download_models():
+                    return 1
 
             # Step 4: Verify setup
             step_num = total_steps
@@ -1072,14 +1067,15 @@ class InitCommand:
                         except Exception as e:
                             self._print_error(f"Failed to delete {model_id}: {e}")
 
-            # Find lemonade-server executable
+            # Remote mode: always use API (local CLI would download to local disk, not remote)
+            if self.remote:
+                return self._pull_models_via_api(client, model_ids)
+
+            # Local mode: prefer CLI, fall back to API
             lemonade_path = self._find_lemonade_server()
             if not lemonade_path:
-                self._print_error("Could not find lemonade-server executable")
-                self._print(
-                    "   Please ensure Lemonade Server is installed and in your PATH"
-                )
-                return False
+                self._print_warning("lemonade-server CLI not found, using REST API...")
+                return self._pull_models_via_api(client, model_ids)
 
             # Download each model using CLI
             success = True
@@ -1169,6 +1165,57 @@ class InitCommand:
         except Exception as e:
             self._print_error(f"Error downloading models: {e}")
             return False
+
+    def _pull_models_via_api(self, client, model_ids: list) -> bool:
+        """Pull models via Lemonade REST API (POST /api/v1/pull with SSE streaming)."""
+        import time
+
+        success = True
+        for model_id in model_ids:
+            self._print("")
+            self.agent_console.print(
+                f"   [bold cyan]Downloading:[/bold cyan] {model_id}"
+            )
+            try:
+                last_update = 0
+                for event in client.pull_model_stream(model_name=model_id):
+                    evt = event.get("event", "")
+                    if evt == "progress":
+                        now = time.time()
+                        if now - last_update >= 0.5:
+                            percent = event.get("percent", 0)
+                            bytes_dl = event.get("bytes_downloaded", 0)
+                            bytes_total = event.get("bytes_total", 0)
+                            bar_width = 20
+                            filled = int(bar_width * percent / 100)
+                            bar = "=" * filled + "-" * (bar_width - filled)
+                            size_str = f"{bytes_dl / 1024 / 1024:.1f} MB"
+                            if bytes_total > 0:
+                                size_str += f"/{bytes_total / 1024 / 1024:.1f} MB"
+                            self._print(
+                                f"\r   [{bar}] {percent:.0f}% ({size_str})",
+                                end="",
+                            )
+                            last_update = now
+                    elif evt == "complete":
+                        self._print("")
+                        if client.check_model_available(model_id):
+                            self._print_success(f"Downloaded {model_id}")
+                        else:
+                            self._print_warning(
+                                f"Download completed but model not verified: {model_id}"
+                            )
+                    elif evt == "error":
+                        self._print("")
+                        self._print_error(
+                            f"Failed: {model_id}: {event.get('error', 'Unknown')}"
+                        )
+                        success = False
+            except Exception as e:
+                self._print("")
+                self._print_error(f"Error downloading {model_id}: {e}")
+                success = False
+        return success
 
     def _test_model_inference(self, client, model_id: str) -> tuple:
         """

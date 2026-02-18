@@ -289,5 +289,159 @@ class TestInitProfiles(unittest.TestCase):
                 self.assertIn(key, profile, f"Profile '{name}' missing key '{key}'")
 
 
+class TestRemoteAutoDetection(unittest.TestCase):
+    """Test auto-detection of remote mode from LEMONADE_BASE_URL."""
+
+    @patch.dict("os.environ", {"LEMONADE_BASE_URL": "http://192.168.1.100:8000/api/v1"})
+    def test_remote_url_sets_remote_true(self):
+        """Test that a non-localhost LEMONADE_BASE_URL enables remote mode."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="minimal", yes=True)
+        self.assertTrue(cmd.remote)
+        self.assertEqual(cmd._lemonade_base_url, "http://192.168.1.100:8000/api/v1")
+
+    @patch.dict("os.environ", {"LEMONADE_BASE_URL": "http://localhost:8000/api/v1"})
+    def test_localhost_url_keeps_remote_false(self):
+        """Test that localhost LEMONADE_BASE_URL does not enable remote mode."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="minimal", yes=True)
+        self.assertFalse(cmd.remote)
+
+    @patch.dict("os.environ", {"LEMONADE_BASE_URL": "http://127.0.0.1:8000/api/v1"})
+    def test_loopback_url_keeps_remote_false(self):
+        """Test that 127.0.0.1 LEMONADE_BASE_URL does not enable remote mode."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="minimal", yes=True)
+        self.assertFalse(cmd.remote)
+
+    @patch.dict(
+        "os.environ",
+        {"LEMONADE_BASE_URL": "http://localhost:8000/api/v1"},
+    )
+    def test_explicit_remote_flag_overrides_localhost(self):
+        """Test that --remote flag takes effect even with localhost URL."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="minimal", yes=True, remote=True)
+        self.assertTrue(cmd.remote)
+
+    @patch.dict("os.environ", {}, clear=False)
+    def test_no_env_var_no_flag_remote_false(self):
+        """Test that without env var or flag, remote stays False."""
+        import os
+
+        from gaia.installer.init_command import InitCommand
+
+        os.environ.pop("LEMONADE_BASE_URL", None)
+        cmd = InitCommand(profile="minimal", yes=True)
+        self.assertFalse(cmd.remote)
+        self.assertIsNone(cmd._lemonade_base_url)
+
+
+class TestPullModelsViaApi(unittest.TestCase):
+    """Test _pull_models_via_api method."""
+
+    def _make_cmd(self):
+        """Create an InitCommand instance for testing."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="minimal", yes=True)
+        return cmd
+
+    def test_successful_download(self):
+        """Test successful model download via API."""
+        cmd = self._make_cmd()
+        mock_client = MagicMock()
+        mock_client.pull_model_stream.return_value = iter(
+            [
+                {
+                    "event": "progress",
+                    "percent": 50,
+                    "bytes_downloaded": 100,
+                    "bytes_total": 200,
+                },
+                {"event": "complete"},
+            ]
+        )
+        mock_client.check_model_available.return_value = True
+
+        result = cmd._pull_models_via_api(mock_client, ["Qwen3-0.6B-GGUF"])
+        self.assertTrue(result)
+        mock_client.pull_model_stream.assert_called_once_with(
+            model_name="Qwen3-0.6B-GGUF"
+        )
+
+    def test_error_event_returns_false(self):
+        """Test that an error event causes failure."""
+        cmd = self._make_cmd()
+        mock_client = MagicMock()
+        mock_client.pull_model_stream.return_value = iter(
+            [{"event": "error", "error": "disk full"}]
+        )
+
+        result = cmd._pull_models_via_api(mock_client, ["Qwen3-0.6B-GGUF"])
+        self.assertFalse(result)
+
+    def test_exception_returns_false(self):
+        """Test that an exception causes failure."""
+        cmd = self._make_cmd()
+        mock_client = MagicMock()
+        mock_client.pull_model_stream.side_effect = ConnectionError("unreachable")
+
+        result = cmd._pull_models_via_api(mock_client, ["Qwen3-0.6B-GGUF"])
+        self.assertFalse(result)
+
+
+class TestDownloadModelsFallback(unittest.TestCase):
+    """Test _download_models fallback to API when CLI unavailable."""
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    @patch.dict(
+        "os.environ",
+        {"LEMONADE_BASE_URL": "http://192.168.1.100:8000/api/v1"},
+    )
+    def test_remote_mode_uses_api(self, mock_installer_class):
+        """Test that remote mode routes to _pull_models_via_api."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="minimal", yes=True)
+        self.assertTrue(cmd.remote)
+
+        cmd._pull_models_via_api = MagicMock(return_value=True)
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.get_required_models.return_value = []
+            mock_client.check_model_available.return_value = False
+            mock_client_class.return_value = mock_client
+
+            result = cmd._download_models()
+            self.assertTrue(result)
+            cmd._pull_models_via_api.assert_called_once()
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_no_cli_falls_back_to_api(self, mock_installer_class):
+        """Test that missing CLI falls back to _pull_models_via_api."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="minimal", yes=True)
+
+        cmd._find_lemonade_server = MagicMock(return_value=None)
+        cmd._pull_models_via_api = MagicMock(return_value=True)
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.get_required_models.return_value = []
+            mock_client.check_model_available.return_value = False
+            mock_client_class.return_value = mock_client
+
+            result = cmd._download_models()
+            self.assertTrue(result)
+            cmd._pull_models_via_api.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
