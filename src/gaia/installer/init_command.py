@@ -996,9 +996,9 @@ class InitCommand:
         """
         Download models for the selected profile.
 
-        Simplified approach: Just try to download all required models.
-        Lemonade handles the "already downloaded" case efficiently by
-        returning a complete event immediately.
+        Delegates to LemonadeClient.ensure_model_downloaded() which handles
+        checking availability, downloading via API, and waiting for completion.
+        Works for both local and remote Lemonade servers.
 
         Returns:
             True if all models downloaded, False on failure
@@ -1010,15 +1010,12 @@ class InitCommand:
 
             # Get profile config
             profile_config = INIT_PROFILES[self.profile]
-            agent = profile_config["agent"]
 
             # Get models to download
             if profile_config["models"]:
-                # Use profile-specific models (for minimal profile)
-                model_ids = profile_config["models"]
+                model_ids = list(profile_config["models"])
             else:
-                # Use agent profile defaults
-                model_ids = client.get_required_models(agent)
+                model_ids = client.get_required_models(profile_config["agent"])
 
             # Include default CPU model for profiles that need gaia llm
             # SD profile has its own LLM (Qwen3-8B) and doesn't need the 0.5B model
@@ -1067,97 +1064,17 @@ class InitCommand:
                         except Exception as e:
                             self._print_error(f"Failed to delete {model_id}: {e}")
 
-            # Remote mode: always use API (local CLI would download to local disk, not remote)
-            if self.remote:
-                return self._pull_models_via_api(client, model_ids)
-
-            # Local mode: prefer CLI, fall back to API
-            lemonade_path = self._find_lemonade_server()
-            if not lemonade_path:
-                self._print_warning("lemonade-server CLI not found, using REST API...")
-                return self._pull_models_via_api(client, model_ids)
-
-            # Download each model using CLI
+            # Download each model via LemonadeClient API
             success = True
             for model_id in model_ids:
                 self._print("")
                 self.agent_console.print(
                     f"   [bold cyan]Downloading:[/bold cyan] {model_id}"
                 )
-
-                try:
-                    # Use lemonade-server CLI pull command with visible progress
-                    result = subprocess.run(
-                        [lemonade_path, "pull", model_id],
-                        check=False,
-                    )
-
-                    self._print("")
-                    if result.returncode == 0:
-                        # Verify the model was actually downloaded successfully
-                        # Check if model is now available (not just exit code)
-                        if client.check_model_available(model_id):
-                            self._print_success(f"Downloaded {model_id}")
-                        else:
-                            # Pull succeeded but model not available - likely validation error
-                            self._print_error(
-                                f"Download validation failed for {model_id}"
-                            )
-                            self.agent_console.print(
-                                "   [yellow]Corrupted download detected. Deleting and retrying...[/yellow]"
-                            )
-
-                            # Delete the corrupted model
-                            delete_result = subprocess.run(
-                                [lemonade_path, "delete", model_id],
-                                check=False,
-                                capture_output=True,
-                            )
-
-                            if delete_result.returncode == 0:
-                                self.agent_console.print(
-                                    f"   [dim]Deleted corrupted {model_id}[/dim]"
-                                )
-
-                                # Retry download
-                                self.agent_console.print(
-                                    f"   [bold cyan]Retrying download:[/bold cyan] {model_id}"
-                                )
-                                retry_result = subprocess.run(
-                                    [lemonade_path, "pull", model_id],
-                                    check=False,
-                                )
-
-                                self._print("")
-                                if (
-                                    retry_result.returncode == 0
-                                    and client.check_model_available(model_id)
-                                ):
-                                    self._print_success(
-                                        f"Downloaded {model_id} (retry successful)"
-                                    )
-                                else:
-                                    self._print_error(f"Retry failed for {model_id}")
-                                    success = False
-                            else:
-                                self._print_error(
-                                    f"Failed to delete corrupted model {model_id}"
-                                )
-                                success = False
-                    else:
-                        self._print_error(
-                            f"Failed to download {model_id} (exit code: {result.returncode})"
-                        )
-                        success = False
-
-                except FileNotFoundError:
-                    self._print("")
-                    self._print_error(f"lemonade-server not found at: {lemonade_path}")
-                    success = False
-                    break
-                except Exception as e:
-                    self._print("")
-                    self._print_error(f"Error downloading {model_id}: {e}")
+                if client.ensure_model_downloaded(model_id):
+                    self._print_success(f"Downloaded {model_id}")
+                else:
+                    self._print_error(f"Failed to download {model_id}")
                     success = False
 
             return success
@@ -1165,57 +1082,6 @@ class InitCommand:
         except Exception as e:
             self._print_error(f"Error downloading models: {e}")
             return False
-
-    def _pull_models_via_api(self, client, model_ids: list) -> bool:
-        """Pull models via Lemonade REST API (POST /api/v1/pull with SSE streaming)."""
-        import time
-
-        success = True
-        for model_id in model_ids:
-            self._print("")
-            self.agent_console.print(
-                f"   [bold cyan]Downloading:[/bold cyan] {model_id}"
-            )
-            try:
-                last_update = 0
-                for event in client.pull_model_stream(model_name=model_id):
-                    evt = event.get("event", "")
-                    if evt == "progress":
-                        now = time.time()
-                        if now - last_update >= 0.5:
-                            percent = event.get("percent", 0)
-                            bytes_dl = event.get("bytes_downloaded", 0)
-                            bytes_total = event.get("bytes_total", 0)
-                            bar_width = 20
-                            filled = int(bar_width * percent / 100)
-                            bar = "=" * filled + "-" * (bar_width - filled)
-                            size_str = f"{bytes_dl / 1024 / 1024:.1f} MB"
-                            if bytes_total > 0:
-                                size_str += f"/{bytes_total / 1024 / 1024:.1f} MB"
-                            self._print(
-                                f"\r   [{bar}] {percent:.0f}% ({size_str})",
-                                end="",
-                            )
-                            last_update = now
-                    elif evt == "complete":
-                        self._print("")
-                        if client.check_model_available(model_id):
-                            self._print_success(f"Downloaded {model_id}")
-                        else:
-                            self._print_warning(
-                                f"Download completed but model not verified: {model_id}"
-                            )
-                    elif evt == "error":
-                        self._print("")
-                        self._print_error(
-                            f"Failed: {model_id}: {event.get('error', 'Unknown')}"
-                        )
-                        success = False
-            except Exception as e:
-                self._print("")
-                self._print_error(f"Error downloading {model_id}: {e}")
-                success = False
-        return success
 
     def _test_model_inference(self, client, model_id: str) -> tuple:
         """
