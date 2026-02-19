@@ -826,7 +826,7 @@ class InitCommand:
                     "   [dim]Ensure the remote Lemonade Server is running and accessible.[/dim]"
                 )
                 self.console.print(
-                    "   [dim]Check LEMONADE_HOST environment variable if using a custom host.[/dim]"
+                    "   [dim]Check LEMONADE_BASE_URL environment variable if using a custom URL.[/dim]"
                 )
                 return False
 
