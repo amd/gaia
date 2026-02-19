@@ -148,11 +148,21 @@ gaia init --force-models
 
 **What It Does:**
 
-1. **Checks Lemonade Server** - Detects if installed and verifies version compatibility _(remote mode: checks remote server version via API)_
-2. **Installs/Upgrades Lemonade** - Downloads and installs from GitHub releases (Windows/Linux only). Automatically uninstalls old version if version mismatch detected. _(remote mode: skipped)_
-3. **Checks Server** - Ensures Lemonade server is running (prompts to start if not) _(remote mode: verifies remote server is reachable)_
-4. **Downloads Models** - Pulls required models for the selected profile _(remote mode: downloads models on the remote server via REST API)_
-5. **Verifies Setup** - Tests each model with inference to detect corrupted downloads
+<Tabs>
+  <Tab title="Local Mode">
+    1. **Checks Lemonade Server** - Detects if installed and verifies version compatibility
+    2. **Installs/Upgrades Lemonade** - Downloads and installs from GitHub releases (Windows/Linux only). Automatically uninstalls old version if version mismatch detected.
+    3. **Starts Server** - Ensures Lemonade server is running, prompts to start if not
+    4. **Downloads Models** - Pulls required models for the selected profile
+    5. **Verifies Setup** - Tests each model with inference to detect corrupted downloads
+  </Tab>
+  <Tab title="Remote Mode">
+    1. **Checks Remote Server** - Verifies remote Lemonade server version via API
+    2. **Checks Connectivity** - Verifies remote server is reachable
+    3. **Downloads Models** - Downloads models on the remote server via REST API
+    4. **Verifies Setup** - Tests each model with inference to detect corrupted downloads
+  </Tab>
+</Tabs>
 
 <Warning>
 **Platform Support:** Automatic installation supports Windows (MSI) and Linux (DEB) only. macOS users should install Lemonade Server manually from [lemonade-server.ai](https://www.lemonade-server.ai).
@@ -166,12 +176,14 @@ gaia init --force-models
 **Corrupted Model Detection:** `gaia init` verifies each model with a quick inference test. If a model fails verification (e.g., corrupted download), you'll see instructions to manually delete and re-download it, or use `gaia init --force-models` to force re-download all models.
 </Tip>
 
-<Tip>
-**Remote Mode:** Set `LEMONADE_BASE_URL` to a remote server URL
-(e.g., `http://192.168.1.100:8000/api/v1`). Remote mode is auto-detected
-when the hostname is not localhost/127.0.0.1/::1. This is equivalent to
-passing `--remote`. Models are downloaded on the remote server via REST API.
-</Tip>
+#### Remote Mode
+
+Enable remote mode in either of two ways:
+
+- Pass `--remote` to `gaia init`
+- Set `LEMONADE_BASE_URL` to a remote server URL (e.g., `http://192.168.1.100:8000/api/v1`)
+
+When using the environment variable, remote mode is auto-detected if the hostname is not localhost/127.0.0.1/::1.
 
 ### Install Command
 
