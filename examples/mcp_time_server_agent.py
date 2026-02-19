@@ -1,12 +1,12 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-MCP Agent Example - Python Server (uvx)
+MCP Agent Example - Inline Server Configuration
 
-Demonstrates connecting to a Python-based MCP server using uvx.
-This is the simplest way to add MCP tools to a GAIA agent.
+Demonstrates connecting to an MCP server with inline configuration
+(no config file). This is the simplest way to add MCP tools to a GAIA agent.
 
-Run: python examples/mcp_time_server_agent.py
+Run: uv run examples/mcp_time_server_agent.py
 """
 
 from gaia.agents.base.agent import Agent
@@ -17,13 +17,13 @@ class TimeAgent(Agent, MCPClientMixin):
     """Agent with time tools from mcp-server-time."""
 
     def __init__(self):
-        Agent.__init__(self, max_steps=10)
-        MCPClientMixin.__init__(self, auto_load_config=False)
+        Agent.__init__(self, max_steps=20)
+        MCPClientMixin.__init__(self, debug=True, auto_load_config=False)
 
-        # Connect to Node.js-based MCP server via npx
+        # Connect to Python-based MCP server via uvx
         self.connect_mcp_server("time", {
-            "command": "npx",
-            "args": ["-y", "@theo.foobar/mcp-time"]
+            "command": "uvx",
+            "args": ["mcp-server-time"]
         })
 
     def _get_system_prompt(self) -> str:
@@ -33,8 +33,18 @@ class TimeAgent(Agent, MCPClientMixin):
         pass  # MCP tools auto-registered
 
 
-def main():
-    TimeAgent().process_query("What time is it in New York?")
-
 if __name__ == "__main__":
-    main()
+    agent = TimeAgent()
+
+    servers = agent.list_mcp_servers()
+    print(f"Connected to MCP servers: {', '.join(servers)}")
+    print("Try: 'What time is it in Tokyo?' | Type 'quit' to exit.\n")
+
+    while True:
+        user_input = input("You: ").strip()
+        if user_input.lower() in ("quit", "exit", "q"):
+            break
+        if user_input:
+            result = agent.process_query(user_input)
+            if result.get("result"):
+                print(f"\nAgent: {result['result']}\n")

@@ -81,6 +81,14 @@ INIT_PROFILES = {
         "min_lemonade_version": "9.0.4",
         "min_context_size": 32768,
     },
+    "vlm": {
+        "description": "Vision pipeline for document and image extraction",
+        "agent": "vlm",
+        "models": ["Qwen3-VL-4B-Instruct-GGUF"],
+        "approx_size": "~3 GB",
+        "min_lemonade_version": "9.0.4",
+        "min_context_size": 8192,
+    },
     "all": {
         "description": "All models for all agents",
         "agent": "all",
@@ -1536,6 +1544,16 @@ class InitCommand:
                 self.console.print(
                     "    [cyan]gaia chat init[/cyan]         Setup document folder"
                 )
+            elif self.profile == "vlm":
+                self.console.print(
+                    "    [cyan]gaia cache status[/cyan]      Verify VLM model is available"
+                )
+                self.console.print(
+                    "    [dim]Vision model ready! Use with the driver logs processor or VLM SDK:[/dim]"
+                )
+                self.console.print(
+                    "    [cyan]from gaia.vlm import StructuredVLMExtractor[/cyan]"
+                )
             elif self.profile == "minimal":
                 self.console.print(
                     "    [cyan]gaia llm 'Hello'[/cyan]       Quick LLM query"
@@ -1578,6 +1596,15 @@ class InitCommand:
                     "    gaia chat              # Start interactive chat with RAG"
                 )
                 self._print("    gaia chat init         # Setup document folder")
+            elif self.profile == "vlm":
+                self._print(
+                    "    gaia cache status      # Verify VLM model is available"
+                )
+                self._print("")
+                self._print(
+                    "  Vision model ready! Use with the driver logs processor or VLM SDK:"
+                )
+                self._print("    from gaia.vlm import StructuredVLMExtractor")
             elif self.profile == "minimal":
                 self._print("    gaia llm 'Hello'       # Quick LLM query")
                 self._print("")
