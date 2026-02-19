@@ -249,7 +249,7 @@ Output format: Clean markdown with the ACTUAL text from the image."""
                 model=self.vlm_model,
                 messages=messages,
                 temperature=0.1,  # Low temp for accurate extraction
-                max_completion_tokens=2048,  # Allow detailed extraction
+                max_completion_tokens=4096,  # Increased for complex extractions
                 timeout=300,  # VLM needs more time for complex forms (5 min)
             )
 
