@@ -93,6 +93,7 @@ setup(
         "requests",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",
+        "term-image>=0.7.0,<0.8",
     ],
     extras_require={
         "api": [
