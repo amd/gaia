@@ -488,7 +488,7 @@ class SDToolsMixin:
         image_path = self.sd_output_dir / filename
         image_path.write_bytes(image_bytes)
 
-        return image_path
+        return image_path.resolve()
 
     @staticmethod
     def get_base_sd_guidelines() -> str:

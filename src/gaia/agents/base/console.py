@@ -873,16 +873,8 @@ class AgentConsole(OutputHandler):
                 # Load image with auto-detected best protocol
                 img = from_file(str(path))
 
-                # Try to enable Sixel if supported
-                try:
-                    # Set render method to auto-detect best available (Sixel, Kitty, iTerm2)
-                    img.set_render_method("auto")
-                except Exception:
-                    pass
-
-                # Set size maintaining aspect ratio
-                # Terminal characters are ~2:1 (height:width), so use fit_to_width
-                img.set_size(columns=60, fit_to_width=True)
+                # Set size to 60 terminal columns
+                img.set_size(width=60)
 
                 # Render the image
                 if caption:
@@ -970,7 +962,7 @@ class AgentConsole(OutputHandler):
                         )
 
             # Prompt to open in default viewer
-            if prompt_to_open and sys.platform == "win32":
+            if prompt_to_open:
                 try:
                     response = (
                         input("\nOpen image in default viewer? [Y/n]: ").strip().lower()
@@ -991,11 +983,16 @@ class AgentConsole(OutputHandler):
                 print(f"   {caption}")
 
             # Prompt to open in default viewer
-            if prompt_to_open and sys.platform == "win32":
+            if prompt_to_open:
                 try:
                     response = input("\nOpen image? [Y/n]: ").strip().lower()
                     if response in ("", "y", "yes"):
-                        os.startfile(str(path))  # pylint: disable=no-member
+                        if sys.platform == "win32":
+                            os.startfile(str(path))  # pylint: disable=no-member
+                        elif sys.platform == "darwin":
+                            subprocess.run(["open", str(path)], check=False)
+                        else:
+                            subprocess.run(["xdg-open", str(path)], check=False)
                 except (KeyboardInterrupt, EOFError):
                     pass
 

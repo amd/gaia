@@ -42,7 +42,7 @@ class TestSDToolsMixinInit:
         mixin.init_sd(output_dir=str(output_dir))
 
         assert output_dir.exists()
-        assert mixin.sd_output_dir == output_dir
+        assert mixin.sd_output_dir == output_dir.resolve()
 
     def test_init_sd_sets_defaults(self, mock_lemonade_client):
         """Test that init_sd sets default values correctly."""
@@ -69,6 +69,14 @@ class TestSDToolsMixinInit:
         assert mixin.sd_default_model == "SD-Turbo"  # Custom model we passed
         assert mixin.sd_default_size == "512x512"
         assert mixin.sd_default_steps == 8
+
+    def test_init_sd_output_dir_is_absolute(self, tmp_path, mock_lemonade_client):
+        """Test that sd_output_dir is always stored as an absolute path."""
+        mixin = SDToolsMixin()
+        output_dir = tmp_path / "sd_images"
+        mixin.init_sd(output_dir=str(output_dir))
+
+        assert mixin.sd_output_dir.is_absolute()
 
     def test_generations_list_is_instance_level(self, mock_lemonade_client):
         """Test that sd_generations is instance-level, not shared."""
@@ -198,6 +206,22 @@ class TestSDToolsMixinGeneration:
         # Verify seed was passed in request
         call_kwargs = mock_lemonade_client.generate_image.call_args[1]
         assert call_kwargs["seed"] == 42
+
+    def test_generate_image_returns_absolute_path(self, tmp_path, mock_lemonade_client):
+        """Test that generated image path is absolute."""
+        fake_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100).decode()
+        mock_lemonade_client.generate_image.return_value = {
+            "data": [{"b64_json": fake_png}]
+        }
+        mock_lemonade_client.load_model.return_value = {"status": "success"}
+
+        mixin = SDToolsMixin()
+        mixin.init_sd(output_dir=str(tmp_path))
+
+        result = mixin._generate_image("a test image")
+
+        assert result["status"] == "success"
+        assert Path(result["image_path"]).is_absolute()
 
     def test_load_model_called_before_generation(self, tmp_path, mock_lemonade_client):
         """Test that load_model is called before image generation."""

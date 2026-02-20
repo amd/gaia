@@ -5226,7 +5226,7 @@ def handle_sd_command(args):
 
                             if response in ("", "y", "yes"):
                                 for img in new_images:
-                                    path = img["image_path"]
+                                    path = str(Path(img["image_path"]).resolve())
                                     if sys.platform == "win32":
                                         os.startfile(path)  # pylint: disable=no-member
                                     elif sys.platform == "darwin":
@@ -5269,7 +5269,7 @@ def handle_sd_command(args):
 
                     if response in ("", "y", "yes"):
                         for img in new_images:
-                            path = img["image_path"]
+                            path = str(Path(img["image_path"]).resolve())
                             if sys.platform == "win32":
                                 os.startfile(path)  # pylint: disable=no-member
                             elif sys.platform == "darwin":
