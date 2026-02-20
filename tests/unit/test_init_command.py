@@ -289,5 +289,140 @@ class TestInitProfiles(unittest.TestCase):
                 self.assertIn(key, profile, f"Profile '{name}' missing key '{key}'")
 
 
+class TestRemoteAutoDetection(unittest.TestCase):
+    """Test auto-detection of remote mode from LEMONADE_BASE_URL."""
+
+    @patch.dict("os.environ", {"LEMONADE_BASE_URL": "http://192.168.1.100:8000/api/v1"})
+    def test_remote_url_sets_remote_true(self):
+        """Test that a non-localhost LEMONADE_BASE_URL enables remote mode."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="minimal", yes=True)
+        self.assertTrue(cmd.remote)
+        self.assertEqual(cmd._lemonade_base_url, "http://192.168.1.100:8000/api/v1")
+
+    @patch.dict("os.environ", {"LEMONADE_BASE_URL": "http://localhost:8000/api/v1"})
+    def test_localhost_url_keeps_remote_false(self):
+        """Test that localhost LEMONADE_BASE_URL does not enable remote mode."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="minimal", yes=True)
+        self.assertFalse(cmd.remote)
+
+    @patch.dict("os.environ", {"LEMONADE_BASE_URL": "http://127.0.0.1:8000/api/v1"})
+    def test_loopback_url_keeps_remote_false(self):
+        """Test that 127.0.0.1 LEMONADE_BASE_URL does not enable remote mode."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="minimal", yes=True)
+        self.assertFalse(cmd.remote)
+
+    @patch.dict(
+        "os.environ",
+        {"LEMONADE_BASE_URL": "http://localhost:8000/api/v1"},
+    )
+    def test_explicit_remote_flag_overrides_localhost(self):
+        """Test that --remote flag takes effect even with localhost URL."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="minimal", yes=True, remote=True)
+        self.assertTrue(cmd.remote)
+
+    @patch.dict("os.environ", {}, clear=False)
+    def test_no_env_var_no_flag_remote_false(self):
+        """Test that without env var or flag, remote stays False."""
+        import os
+
+        from gaia.installer.init_command import InitCommand
+
+        os.environ.pop("LEMONADE_BASE_URL", None)
+        cmd = InitCommand(profile="minimal", yes=True)
+        self.assertFalse(cmd.remote)
+        self.assertIsNone(cmd._lemonade_base_url)
+
+
+class TestDownloadModels(unittest.TestCase):
+    """Test _download_models delegates to LemonadeClient."""
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_calls_ensure_model_downloaded_per_model(self, mock_installer_class):
+        """Test that ensure_model_downloaded is called for each model."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="minimal", yes=True)
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.get_required_models.return_value = []
+            mock_client.check_model_available.return_value = False
+            mock_client.ensure_model_downloaded.return_value = True
+            mock_client_class.return_value = mock_client
+
+            result = cmd._download_models()
+            self.assertTrue(result)
+            # minimal profile has Qwen3-0.6B-GGUF plus DEFAULT_MODEL_NAME
+            self.assertGreaterEqual(mock_client.ensure_model_downloaded.call_count, 1)
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_returns_false_on_download_failure(self, mock_installer_class):
+        """Test that a failed download returns False."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="minimal", yes=True)
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.get_required_models.return_value = []
+            mock_client.check_model_available.return_value = False
+            mock_client.ensure_model_downloaded.return_value = False
+            mock_client_class.return_value = mock_client
+
+            result = cmd._download_models()
+            self.assertFalse(result)
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    @patch.dict(
+        "os.environ",
+        {"LEMONADE_BASE_URL": "http://192.168.1.100:8000/api/v1"},
+    )
+    def test_remote_mode_uses_ensure_model_downloaded(self, mock_installer_class):
+        """Test that remote mode delegates to ensure_model_downloaded."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="minimal", yes=True)
+        self.assertTrue(cmd.remote)
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.get_required_models.return_value = []
+            mock_client.check_model_available.return_value = False
+            mock_client.ensure_model_downloaded.return_value = True
+            mock_client_class.return_value = mock_client
+
+            result = cmd._download_models()
+            self.assertTrue(result)
+            self.assertGreaterEqual(mock_client.ensure_model_downloaded.call_count, 1)
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_force_models_deletes_before_download(self, mock_installer_class):
+        """Test that --force-models deletes models before re-downloading."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="minimal", yes=True, force_models=True)
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.get_required_models.return_value = []
+            mock_client.check_model_available.return_value = True
+            mock_client.ensure_model_downloaded.return_value = True
+            mock_client_class.return_value = mock_client
+
+            result = cmd._download_models()
+            self.assertTrue(result)
+            # Should have called delete_model for each model before downloading
+            self.assertGreaterEqual(mock_client.delete_model.call_count, 1)
+            self.assertGreaterEqual(mock_client.ensure_model_downloaded.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -157,6 +157,19 @@ class InitCommand:
         self.remote = remote
         self.progress_callback = progress_callback
 
+        # Auto-detect remote mode from LEMONADE_BASE_URL environment variable
+        self._lemonade_base_url = os.environ.get("LEMONADE_BASE_URL")
+        if self._lemonade_base_url is not None and not self.remote:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(self._lemonade_base_url)
+            hostname = parsed.hostname or "localhost"
+            if hostname not in ("localhost", "127.0.0.1", "::1"):
+                self.remote = True
+                log.info(
+                    f"Auto-detected remote mode from LEMONADE_BASE_URL={self._lemonade_base_url}"
+                )
+
         # Validate profile
         if self.profile not in INIT_PROFILES:
             valid = ", ".join(INIT_PROFILES.keys())
@@ -349,10 +362,13 @@ class InitCommand:
         try:
             # Step 1: Check/Install Lemonade (skip for remote servers or CI)
             if self.remote:
-                self._print_step(
-                    1, total_steps, "Skipping local Lemonade check (remote mode)..."
-                )
-                self._print_success("Using remote Lemonade Server")
+                self._print_step(1, total_steps, "Checking remote Lemonade Server...")
+                if self._lemonade_base_url:
+                    self._print_success(
+                        f"Using remote Lemonade Server at {self._lemonade_base_url}"
+                    )
+                else:
+                    self._print_success("Using remote Lemonade Server")
             elif self.skip_lemonade:
                 self._print_step(
                     1, total_steps, "Skipping Lemonade installation check..."
@@ -383,34 +399,13 @@ class InitCommand:
             if not self.skip_models:
                 step_num = 3
                 self._print("")
-                if self.remote:
-                    self._print_step(
-                        step_num,
-                        total_steps,
-                        "Skipping model downloads (remote mode)...",
-                    )
-                    self._print_success(
-                        "Remote mode — model downloads handled by remote server"
-                    )
-                    self.console.print()
-                    self.console.print(
-                        "   [dim]To download models, run the following on the remote machine:[/dim]"
-                    )
-                    profile_config = INIT_PROFILES[self.profile]
-                    model_ids = profile_config.get("models") or []
-                    for model_id in model_ids:
-                        self.console.print(
-                            f"     [cyan]lemonade-server pull {model_id}[/cyan]"
-                        )
-                    self.console.print()
-                else:
-                    self._print_step(
-                        step_num,
-                        total_steps,
-                        f"Downloading models for '{self.profile}' profile...",
-                    )
-                    if not self._download_models():
-                        return 1
+                self._print_step(
+                    step_num,
+                    total_steps,
+                    f"Downloading models for '{self.profile}' profile...",
+                )
+                if not self._download_models():
+                    return 1
 
             # Step 4: Verify setup
             step_num = total_steps
@@ -831,7 +826,7 @@ class InitCommand:
                     "   [dim]Ensure the remote Lemonade Server is running and accessible.[/dim]"
                 )
                 self.console.print(
-                    "   [dim]Check LEMONADE_HOST environment variable if using a custom host.[/dim]"
+                    "   [dim]Check LEMONADE_BASE_URL environment variable if using a custom URL.[/dim]"
                 )
                 return False
 
@@ -1001,9 +996,9 @@ class InitCommand:
         """
         Download models for the selected profile.
 
-        Simplified approach: Just try to download all required models.
-        Lemonade handles the "already downloaded" case efficiently by
-        returning a complete event immediately.
+        Delegates to LemonadeClient.ensure_model_downloaded() which handles
+        checking availability, downloading via API, and waiting for completion.
+        Works for both local and remote Lemonade servers.
 
         Returns:
             True if all models downloaded, False on failure
@@ -1015,15 +1010,12 @@ class InitCommand:
 
             # Get profile config
             profile_config = INIT_PROFILES[self.profile]
-            agent = profile_config["agent"]
 
             # Get models to download
             if profile_config["models"]:
-                # Use profile-specific models (for minimal profile)
-                model_ids = profile_config["models"]
+                model_ids = list(profile_config["models"])
             else:
-                # Use agent profile defaults
-                model_ids = client.get_required_models(agent)
+                model_ids = client.get_required_models(profile_config["agent"])
 
             # Include default CPU model for profiles that need gaia llm
             # SD profile has its own LLM (Qwen3-8B) and doesn't need the 0.5B model
@@ -1072,96 +1064,17 @@ class InitCommand:
                         except Exception as e:
                             self._print_error(f"Failed to delete {model_id}: {e}")
 
-            # Find lemonade-server executable
-            lemonade_path = self._find_lemonade_server()
-            if not lemonade_path:
-                self._print_error("Could not find lemonade-server executable")
-                self._print(
-                    "   Please ensure Lemonade Server is installed and in your PATH"
-                )
-                return False
-
-            # Download each model using CLI
+            # Download each model via LemonadeClient API
             success = True
             for model_id in model_ids:
                 self._print("")
                 self.agent_console.print(
                     f"   [bold cyan]Downloading:[/bold cyan] {model_id}"
                 )
-
-                try:
-                    # Use lemonade-server CLI pull command with visible progress
-                    result = subprocess.run(
-                        [lemonade_path, "pull", model_id],
-                        check=False,
-                    )
-
-                    self._print("")
-                    if result.returncode == 0:
-                        # Verify the model was actually downloaded successfully
-                        # Check if model is now available (not just exit code)
-                        if client.check_model_available(model_id):
-                            self._print_success(f"Downloaded {model_id}")
-                        else:
-                            # Pull succeeded but model not available - likely validation error
-                            self._print_error(
-                                f"Download validation failed for {model_id}"
-                            )
-                            self.agent_console.print(
-                                "   [yellow]Corrupted download detected. Deleting and retrying...[/yellow]"
-                            )
-
-                            # Delete the corrupted model
-                            delete_result = subprocess.run(
-                                [lemonade_path, "delete", model_id],
-                                check=False,
-                                capture_output=True,
-                            )
-
-                            if delete_result.returncode == 0:
-                                self.agent_console.print(
-                                    f"   [dim]Deleted corrupted {model_id}[/dim]"
-                                )
-
-                                # Retry download
-                                self.agent_console.print(
-                                    f"   [bold cyan]Retrying download:[/bold cyan] {model_id}"
-                                )
-                                retry_result = subprocess.run(
-                                    [lemonade_path, "pull", model_id],
-                                    check=False,
-                                )
-
-                                self._print("")
-                                if (
-                                    retry_result.returncode == 0
-                                    and client.check_model_available(model_id)
-                                ):
-                                    self._print_success(
-                                        f"Downloaded {model_id} (retry successful)"
-                                    )
-                                else:
-                                    self._print_error(f"Retry failed for {model_id}")
-                                    success = False
-                            else:
-                                self._print_error(
-                                    f"Failed to delete corrupted model {model_id}"
-                                )
-                                success = False
-                    else:
-                        self._print_error(
-                            f"Failed to download {model_id} (exit code: {result.returncode})"
-                        )
-                        success = False
-
-                except FileNotFoundError:
-                    self._print("")
-                    self._print_error(f"lemonade-server not found at: {lemonade_path}")
-                    success = False
-                    break
-                except Exception as e:
-                    self._print("")
-                    self._print_error(f"Error downloading {model_id}: {e}")
+                if client.ensure_model_downloaded(model_id):
+                    self._print_success(f"Downloaded {model_id}")
+                else:
+                    self._print_error(f"Failed to download {model_id}")
                     success = False
 
             return success
@@ -1400,17 +1313,8 @@ class InitCommand:
                         )
                         continue
 
-                    # Show testing status
-                    self.console.print(
-                        f"   [dim]🔄[/dim] [cyan]{model_id}[/cyan] [dim]- testing...[/dim]",
-                        end="",
-                    )
-
                     # Test the model
                     success, error = self._test_model_inference(client, model_id)
-
-                    # Clear the line and show result
-                    print("\r" + " " * 80 + "\r", end="")
                     if success:
                         # Check if context was verified
                         ctx_msg = ""
@@ -1420,9 +1324,9 @@ class InitCommand:
                                 ctx_msg = f" [dim](ctx: {self._ctx_verified})[/dim]"
 
                                 # Warn if context is larger than required
-                                if hasattr(self, "_ctx_warning"):
+                                if self._ctx_warning:
                                     ctx_msg = f" [yellow]{self._ctx_warning}[/yellow]"
-                                    delattr(self, "_ctx_warning")
+                                    self._ctx_warning = None
                             elif self._ctx_verified is None:
                                 # Context could not be verified
                                 ctx_msg = " [yellow]⚠️ Context unverified![/yellow]"
@@ -1440,7 +1344,6 @@ class InitCommand:
                         models_failed.append((model_id, error))
 
             except KeyboardInterrupt:
-                print("\r" + " " * 80 + "\r", end="")
                 self.console.print()
                 self._print_warning("Verification interrupted")
                 interrupted = True

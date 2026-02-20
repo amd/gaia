@@ -2198,7 +2198,7 @@ Examples:
     init_parser.add_argument(
         "--remote",
         action="store_true",
-        help="Lemonade is hosted on a remote machine (skip local server start, still check version)",
+        help="Use remote Lemonade Server (skip local install/start; downloads models via API). Auto-detected when LEMONADE_BASE_URL points to a non-localhost URL.",
     )
 
     # Install command (install specific components)
