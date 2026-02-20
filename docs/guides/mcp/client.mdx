@@ -148,12 +148,16 @@ MCP server connected, tools auto-discovered, and the agent uses them naturally.
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#ED1C24', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}, 'flowchart': {'curve': 'basis'}}}%%
 flowchart TB
     User(["User Query"])
-    Agent(["Your Agent"])
+    YourAgent(["Your Agent"])
+    LLM(["Language Model"])
 
-    subgraph GAIAClient ["GAIA MCP Client SDK"]
-        Mixin(["MCPClientMixin"])
-        Manager(["MCPClientManager"])
-        Transport(["Transport"])
+    subgraph GAIASDK ["GAIA SDK"]
+        AgentBase(["Agent"])
+        subgraph MCPSDK ["GAIA MCP"]
+            Mixin(["MCPClientMixin"])
+            Manager(["MCPClientManager"])
+            Transport(["Transport"])
+        end
     end
 
     subgraph ExtServers ["External Servers"]
@@ -163,8 +167,10 @@ flowchart TB
         More(["..."])
     end
 
-    User --> Agent
-    Agent --> Mixin
+    User --> YourAgent
+    YourAgent --> Mixin
+    YourAgent --> AgentBase
+    AgentBase --> LLM
     Mixin --> Manager
     Manager --> Transport
     Transport --> FS
@@ -173,24 +179,28 @@ flowchart TB
     Transport --> More
 
     style User fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
-    style Agent fill:#ED1C24,stroke:#C8171E,stroke-width:3px,color:#fff
-    style Mixin fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style Manager fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style YourAgent fill:#ED1C24,stroke:#C8171E,stroke-width:3px,color:#fff
+    style Mixin fill:#555555,stroke:#C8171E,stroke-width:2px,color:#fff
+    style AgentBase fill:#555555,stroke:#C8171E,stroke-width:2px,color:#fff
+    style Manager fill:#444444,stroke:#C8171E,stroke-width:2px,color:#fff
     style Transport fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style LLM fill:#1565C0,stroke:#0D47A1,stroke-width:2px,color:#fff
     style FS fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
     style GH fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
     style DB fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
     style More fill:#666,stroke:#999,stroke-width:2px,color:#ccc,stroke-dasharray:3
-    style GAIAClient fill:none,stroke:#ED1C24,stroke-width:2px,stroke-dasharray:5,color:#ED1C24
+    style GAIASDK fill:none,stroke:#ED1C24,stroke-width:2px,stroke-dasharray:5,color:#ED1C24
+    style MCPSDK fill:none,stroke:#888,stroke-width:2px,stroke-dasharray:5,color:#999
     style ExtServers fill:none,stroke:#2d2d2d,stroke-width:2px,stroke-dasharray:5,color:#2d2d2d
 
     linkStyle default stroke:#ED1C24,stroke-width:2px
 ```
 
-1. **Your Agent** inherits from `Agent` + `MCPClientMixin` — the mixin adds MCP capabilities
-2. **MCPClientManager** handles connections to multiple servers
-3. **Transport Layer** communicates via stdio (subprocess)
-4. **MCP Servers** expose tools that become available to your agent
+1. **Your Agent** inherits from `Agent` + `MCPClientMixin` — combining LLM and MCP capabilities
+2. **Agent** handles LLM communication via the Language Model
+3. **MCPClientMixin** delegates to `MCPClientManager` for server connections
+4. **Transport Layer** communicates via stdio (subprocess)
+5. **MCP Servers** expose tools that become available to your agent
 
 ## Connecting to Servers
 
