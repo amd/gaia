@@ -340,30 +340,27 @@ class AudioClient:
     def _check_mic_levels(self):
         """Brief microphone level check at startup to verify audio capture."""
         import numpy as np
-        import pyaudio
+        import sounddevice as sd
 
         if not self.whisper_asr:
             return
 
-        pa = pyaudio.PyAudio()
         stream = None
         try:
-            stream = pa.open(
-                format=pyaudio.paFloat32,
+            stream = sd.InputStream(
+                samplerate=self.whisper_asr.RATE,
                 channels=1,
-                rate=self.whisper_asr.RATE,
-                input=True,
-                input_device_index=self.whisper_asr.device_index,
-                frames_per_buffer=self.whisper_asr.CHUNK,
+                dtype="float32",
+                device=self.whisper_asr.device_index,
+                blocksize=self.whisper_asr.CHUNK,
             )
+            stream.start()
 
             max_energy = 0.0
             chunks_to_check = 15  # ~2 seconds at 2048 samples / 16kHz
             for _ in range(chunks_to_check):
-                data = np.frombuffer(
-                    stream.read(self.whisper_asr.CHUNK, exception_on_overflow=False),
-                    dtype=np.float32,
-                )
+                frames, overflowed = stream.read(self.whisper_asr.CHUNK)
+                data = frames[:, 0]
                 energy = np.abs(data).mean()
                 max_energy = max(max_energy, energy)
 
@@ -380,9 +377,8 @@ class AudioClient:
             self.log.debug(f"Mic level check skipped: {e}")
         finally:
             if stream:
-                stream.stop_stream()
+                stream.stop()
                 stream.close()
-            pa.terminate()
 
     def _process_audio_wrapper(self, message_processor_callback):
         """Wrapper method to process audio and handle transcriptions"""

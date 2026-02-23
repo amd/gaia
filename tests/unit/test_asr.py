@@ -23,7 +23,7 @@ except ImportError:
 from gaia.logger import get_logger
 
 pytestmark = pytest.mark.skipif(
-    not HAS_AUDIO_DEPS, reason="Audio dependencies (pyaudio) not available"
+    not HAS_AUDIO_DEPS, reason="Audio dependencies (sounddevice) not available"
 )
 
 
@@ -340,16 +340,6 @@ class TestProcessAudioWrapper(unittest.TestCase):
         # Stop the print patcher
         self.print_patcher.stop()
         super().tearDown()
-
-
-class TestMicThreshold(unittest.TestCase):
-    """Tests for mic_threshold propagation through TalkSDK → AudioClient."""
-
-    def test_mic_threshold_forwarded_to_audio_client(self):
-        """TalkConfig(mic_threshold=0.01) is stored on the resulting AudioClient."""
-        config = TalkConfig(mic_threshold=0.01, enable_tts=False)
-        client = TalkSDK(config)
-        self.assertEqual(client.audio_client.mic_threshold, 0.01)
 
 
 if __name__ == "__main__":

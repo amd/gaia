@@ -15,6 +15,20 @@ GAIA's talk mode enables natural voice-based interaction with LLMs using Whisper
 
 ## Quick Start
 
+### System Prerequisites
+
+<Tabs>
+  <Tab title="Linux">
+    sounddevice requires the PortAudio runtime library:
+    ```bash
+    sudo apt-get install -y libportaudio2
+    ```
+  </Tab>
+  <Tab title="Windows">
+    No additional system packages required — PortAudio is bundled with the sounddevice Python package.
+  </Tab>
+</Tabs>
+
 <Steps>
   <Step title="Install talk extras">
     With GAIA installed, add the talk extras:

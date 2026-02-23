@@ -27,24 +27,29 @@ def audio_client():
     return client
 
 
-def _make_pyaudio_mock(samples: np.ndarray):
-    """Return a mock pyaudio module where stream.read() yields the given samples."""
-    mock_pyaudio = MagicMock()
-    mock_pyaudio.paFloat32 = 8  # pyaudio constant value
+def _make_sd_mock(samples: np.ndarray):
+    """Return a mock sounddevice module where InputStream.read() yields the given samples.
 
+    sounddevice stream.read() returns (frames, overflowed) where frames has
+    shape (blocksize, channels).
+    """
+    mock_sd = MagicMock()
     mock_stream = MagicMock()
-    mock_stream.read.return_value = samples.tobytes()
-    mock_pyaudio.PyAudio.return_value.open.return_value = mock_stream
 
-    return mock_pyaudio
+    # stream.read() returns (ndarray shape (CHUNK, 1), overflowed_bool)
+    frames = samples.reshape(-1, 1)
+    mock_stream.read.return_value = (frames, False)
+    mock_sd.InputStream.return_value = mock_stream
+
+    return mock_sd
 
 
 def test_check_mic_levels_warns_on_silence(audio_client, capsys):
     """_check_mic_levels prints a warning when all audio samples are zero."""
     silent_samples = np.zeros(2048, dtype=np.float32)
-    mock_pyaudio = _make_pyaudio_mock(silent_samples)
+    mock_sd = _make_sd_mock(silent_samples)
 
-    with patch.dict(sys.modules, {"pyaudio": mock_pyaudio}):
+    with patch.dict(sys.modules, {"sounddevice": mock_sd}):
         audio_client._check_mic_levels()
 
     captured = capsys.readouterr()
@@ -55,9 +60,9 @@ def test_check_mic_levels_warns_on_silence(audio_client, capsys):
 def test_check_mic_levels_passes_on_audio(audio_client, capsys):
     """_check_mic_levels does not warn when audio is present."""
     noisy_samples = np.ones(2048, dtype=np.float32) * 0.1
-    mock_pyaudio = _make_pyaudio_mock(noisy_samples)
+    mock_sd = _make_sd_mock(noisy_samples)
 
-    with patch.dict(sys.modules, {"pyaudio": mock_pyaudio}):
+    with patch.dict(sys.modules, {"sounddevice": mock_sd}):
         audio_client._check_mic_levels()
 
     captured = capsys.readouterr()
@@ -65,12 +70,11 @@ def test_check_mic_levels_passes_on_audio(audio_client, capsys):
 
 
 def test_check_mic_levels_handles_exception_gracefully(audio_client):
-    """_check_mic_levels does not raise when pyaudio raises an exception."""
-    mock_pyaudio = MagicMock()
-    mock_pyaudio.paFloat32 = 8
-    mock_pyaudio.PyAudio.return_value.open.side_effect = OSError("No audio device")
+    """_check_mic_levels does not raise when sounddevice raises an exception."""
+    mock_sd = MagicMock()
+    mock_sd.InputStream.side_effect = OSError("No audio device")
 
-    with patch.dict(sys.modules, {"pyaudio": mock_pyaudio}):
+    with patch.dict(sys.modules, {"sounddevice": mock_sd}):
         # Should not raise
         audio_client._check_mic_levels()
 
@@ -81,11 +85,11 @@ def test_check_mic_levels_skipped_without_whisper_asr():
         client = AudioClient(enable_tts=False)
     client.whisper_asr = None
 
-    mock_pyaudio = MagicMock()
-    with patch.dict(sys.modules, {"pyaudio": mock_pyaudio}):
+    mock_sd = MagicMock()
+    with patch.dict(sys.modules, {"sounddevice": mock_sd}):
         client._check_mic_levels()
 
-    mock_pyaudio.PyAudio.assert_not_called()
+    mock_sd.InputStream.assert_not_called()
 
 
 def test_no_speech_warning_after_10_seconds(audio_client, capsys):

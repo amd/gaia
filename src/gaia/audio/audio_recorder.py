@@ -8,7 +8,11 @@ import time
 
 # Third-party imports next
 import numpy as np
-import pyaudio
+
+try:
+    import sounddevice as sd
+except ImportError:
+    sd = None
 
 from gaia.logger import get_logger
 
@@ -22,13 +26,19 @@ class AudioRecorder:
     ):
         self.log = self.__class__.log  # Use the class-level logger for instances
 
+        if sd is None:
+            raise ImportError(
+                "sounddevice is required for audio recording.\n"
+                'Install with: uv pip install -e ".[talk]"'
+            )
+
         # Add thread attributes
         self.record_thread = None
         self.process_thread = None
 
         # Audio parameters - optimized for better quality
         self.CHUNK = 1024 * 2  # Reduced for lower latency while maintaining quality
-        self.FORMAT = pyaudio.paFloat32
+        self.DTYPE = "float32"
         self.CHANNELS = 1
         self.RATE = 16000
         self.device_index = (
@@ -49,16 +59,13 @@ class AudioRecorder:
 
     def _get_default_input_device(self):
         """Get the default input device index."""
-        pa = pyaudio.PyAudio()
         try:
-            default_device = pa.get_default_input_device_info()
+            default_device = sd.query_devices(kind="input")
             return default_device["index"]
         except Exception as e:
             self.log.error(f"Error getting default input device: {e}")
             # Fall back to device 0 if no default found
             return 0
-        finally:
-            pa.terminate()
 
     def _is_speech(self, audio_chunk):
         """Detect if audio chunk contains speech based on amplitude."""
@@ -66,20 +73,18 @@ class AudioRecorder:
 
     def _record_audio(self):
         """Internal method to record audio."""
-        pa = pyaudio.PyAudio()
-
         try:
-            device_info = pa.get_device_info_by_index(self.device_index)
+            device_info = sd.query_devices(self.device_index)
             self.log.debug(f"Using audio device: {device_info['name']}")
 
-            self.stream = pa.open(  # Store stream as class attribute
-                format=self.FORMAT,
+            self.stream = sd.InputStream(
+                samplerate=self.RATE,
                 channels=self.CHANNELS,
-                rate=self.RATE,
-                input=True,
-                input_device_index=self.device_index,
-                frames_per_buffer=self.CHUNK,
+                dtype=self.DTYPE,
+                device=self.device_index,
+                blocksize=self.CHUNK,
             )
+            self.stream.start()
 
             self.log.debug("Recording started...")
 
@@ -101,10 +106,8 @@ class AudioRecorder:
                             time.sleep(0.1)
                             continue
 
-                    data = np.frombuffer(
-                        self.stream.read(self.CHUNK, exception_on_overflow=False),
-                        dtype=np.float32,
-                    )
+                    frames, overflowed = self.stream.read(self.CHUNK)
+                    data = frames[:, 0].copy()  # Extract mono channel
                     data = np.clip(data, -1, 1)
 
                     chunk_count += 1
@@ -154,12 +157,11 @@ class AudioRecorder:
         finally:
             try:
                 if self.stream is not None:
-                    self.stream.stop_stream()
+                    self.stream.stop()
                     self.stream.close()
                     self.stream = None
             except Exception as e:
                 self.log.error(f"Error closing audio stream: {e}")
-            pa.terminate()
 
     def _process_audio(self):
         """Process recorded audio chunks from the queue."""
@@ -178,28 +180,23 @@ class AudioRecorder:
 
     def list_audio_devices(self):
         """List all available audio input devices."""
-        pa = pyaudio.PyAudio()
+        devices = sd.query_devices()
         info = []
         self.log.info("Available Audio Devices:")
-        for i in range(pa.get_device_count()):
-            dev_info = pa.get_device_info_by_index(i)
-            if dev_info.get("maxInputChannels") > 0:
-                self.log.info(f"Index {i}: {dev_info.get('name')}")
+        for dev_info in devices:
+            if dev_info.get("max_input_channels", 0) > 0:
+                self.log.info(f"Index {dev_info['index']}: {dev_info.get('name')}")
                 info.append(dev_info)
-        pa.terminate()
         return info
 
     def get_device_name(self):
         """Get the name of the current audio device"""
-        pa = pyaudio.PyAudio()
         try:
-            device_info = pa.get_device_info_by_index(self.device_index)
+            device_info = sd.query_devices(self.device_index)
             return device_info.get("name", f"Device {self.device_index}")
         except Exception as e:
             self.log.error(f"Error getting device name: {str(e)}")
             return f"Device {self.device_index} (Error: {str(e)})"
-        finally:
-            pa.terminate()
 
     def start_recording(self, duration=None):
         """Start recording and transcription."""

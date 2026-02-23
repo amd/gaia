@@ -103,8 +103,8 @@ python src/gaia/audio/whisper_asr.py --mode mic --stream --duration 20
 3. **Select Correct Device:**
    ```bash
    # List all audio devices
-   python -c "import pyaudio; p=pyaudio.PyAudio(); [print(f'{i}: {p.get_device_info_by_index(i)[\"name\"]}') for i in range(p.get_device_count()) if p.get_device_info_by_index(i).get('maxInputChannels')>0]; p.terminate()"
-   
+   python -c "import sounddevice as sd; [print(f'{d[\"index\"]}: {d[\"name\"]}') for d in sd.query_devices() if d.get('max_input_channels', 0) > 0]"
+
    # Use specific device (replace 0 with your device number)
    gaia talk --audio-device-index 0 --no-tts
    ```
@@ -222,7 +222,7 @@ gaia talk --no-tts --logging-level DEBUG --whisper-model-size tiny
 ## Audio System Architecture
 
 ```
-Microphone → PyAudio → AudioRecorder → Voice Activity Detection → 
+Microphone → sounddevice → AudioRecorder → Voice Activity Detection →
 Audio Queue → WhisperAsr → Transcription Queue → LLM → Response
 ```
 
@@ -281,7 +281,7 @@ export GAIA_LOG_LEVEL=DEBUG
    ```bash
    python --version  # Should be 3.8+
    pip show whisper  # Should be installed
-   pip show pyaudio  # Should be installed
+   pip show sounddevice  # Should be installed
    ```
 
 2. **Check System Audio:**
