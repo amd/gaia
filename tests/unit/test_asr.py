@@ -342,5 +342,15 @@ class TestProcessAudioWrapper(unittest.TestCase):
         super().tearDown()
 
 
+class TestMicThreshold(unittest.TestCase):
+    """Tests for mic_threshold propagation through TalkSDK → AudioClient."""
+
+    def test_mic_threshold_forwarded_to_audio_client(self):
+        """TalkConfig(mic_threshold=0.01) is stored on the resulting AudioClient."""
+        config = TalkConfig(mic_threshold=0.01, enable_tts=False)
+        client = TalkSDK(config)
+        self.assertEqual(client.audio_client.mic_threshold, 0.01)
+
+
 if __name__ == "__main__":
     unittest.main()
