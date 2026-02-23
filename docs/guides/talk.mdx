@@ -110,6 +110,19 @@ Customize your voice interaction experience:
     <Tip>Use `gaia test --test-type asr-list-audio-devices` to list available devices</Tip>
   </Tab>
 
+  <Tab title="Mic Sensitivity">
+    ```bash
+    # Adjust microphone sensitivity for voice detection
+    gaia talk --mic-threshold 0.001
+
+    # Lower values = more sensitive (picks up quieter speech)
+    # Higher values = less sensitive (needs louder speech)
+    # Default: 0.003
+    ```
+
+    <Note>If voice detection is not picking up your speech, try lowering the threshold. If it triggers on background noise, raise it.</Note>
+  </Tab>
+
   <Tab title="Performance Stats">
     ```bash
     # Show performance statistics

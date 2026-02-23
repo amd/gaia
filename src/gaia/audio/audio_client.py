@@ -18,6 +18,7 @@ class AudioClient:
         whisper_model_size="base",
         audio_device_index=None,  # Use default input device
         silence_threshold=0.5,
+        mic_threshold=0.003,
         enable_tts=True,
         logging_level="INFO",
         use_claude=False,
@@ -31,6 +32,7 @@ class AudioClient:
         self.whisper_model_size = whisper_model_size
         self.audio_device_index = audio_device_index
         self.silence_threshold = silence_threshold
+        self.mic_threshold = mic_threshold
         self.enable_tts = enable_tts
 
         # Audio state
@@ -65,14 +67,15 @@ class AudioClient:
 
             from gaia.audio.whisper_asr import WhisperAsr
 
-            # Create WhisperAsr with custom thresholds
-            # Your audio shows energy levels of 0.02-0.03 when speaking
+            # Create WhisperAsr with configurable mic threshold
+            # Default 0.003 works across most microphones on Windows/Linux
+            # MIN_AUDIO_LENGTH=0.5s allows short commands like "stop" to be detected
             self.whisper_asr = WhisperAsr(
                 model_size=self.whisper_model_size,
                 device_index=self.audio_device_index,
                 transcription_queue=self.transcription_queue,
-                silence_threshold=0.01,  # Set higher to ensure detection (your levels are 0.01-0.2+)
-                min_audio_length=16000 * 1.0,  # 1 second minimum at 16kHz
+                silence_threshold=self.mic_threshold,
+                min_audio_length=16000 * 0.5,  # 0.5 second minimum at 16kHz
             )
 
             # Log the thresholds being used (reduce verbosity)
@@ -82,7 +85,10 @@ class AudioClient:
             )
 
             device_name = self.whisper_asr.get_device_name()
-            self.log.debug(f"Using audio device: {device_name}")
+            print(f"Microphone: {device_name} (index {self.whisper_asr.device_index})")
+
+            # Brief mic level check before starting recording threads
+            self._check_mic_levels()
 
             # Start recording
             self.log.debug("Starting audio recording...")
@@ -331,6 +337,53 @@ class AudioClient:
         text_queue.put("__END__")
         tts_thread.join(timeout=5.0)
 
+    def _check_mic_levels(self):
+        """Brief microphone level check at startup to verify audio capture."""
+        import numpy as np
+        import pyaudio
+
+        if not self.whisper_asr:
+            return
+
+        pa = pyaudio.PyAudio()
+        stream = None
+        try:
+            stream = pa.open(
+                format=pyaudio.paFloat32,
+                channels=1,
+                rate=self.whisper_asr.RATE,
+                input=True,
+                input_device_index=self.whisper_asr.device_index,
+                frames_per_buffer=self.whisper_asr.CHUNK,
+            )
+
+            max_energy = 0.0
+            chunks_to_check = 15  # ~2 seconds at 2048 samples / 16kHz
+            for _ in range(chunks_to_check):
+                data = np.frombuffer(
+                    stream.read(self.whisper_asr.CHUNK, exception_on_overflow=False),
+                    dtype=np.float32,
+                )
+                energy = np.abs(data).mean()
+                max_energy = max(max_energy, energy)
+
+            if max_energy < 0.001:
+                print(
+                    f"WARNING: No audio detected from microphone (peak level: {max_energy:.6f}).\n"
+                    f"  - Check that your microphone is not muted\n"
+                    f"  - Try a different device: gaia talk --audio-device-index <N>\n"
+                    f"  - List devices with: gaia test asr-list-audio-devices"
+                )
+            else:
+                self.log.debug(f"Mic check passed (peak level: {max_energy:.4f})")
+        except Exception as e:
+            self.log.debug(f"Mic level check skipped: {e}")
+        finally:
+            if stream:
+                stream.stop_stream()
+                stream.close()
+            pa.terminate()
+
     def _process_audio_wrapper(self, message_processor_callback):
         """Wrapper method to process audio and handle transcriptions"""
         try:
@@ -343,6 +396,8 @@ class AudioClient:
             dots_idx = 0
             animation_counter = 0
             self.is_speaking = False  # Initialize speaking state
+            no_audio_warning_shown = False
+            session_start_time = time.time()
 
             while self.whisper_asr and self.whisper_asr.is_recording:
                 try:
@@ -420,6 +475,20 @@ class AudioClient:
                         asyncio.run(message_processor_callback(complete_text))
                         accumulated_text = []
                         current_display = ""
+
+                    # Warn if no speech detected after 10 seconds
+                    if (
+                        not no_audio_warning_shown
+                        and not accumulated_text
+                        and (time.time() - session_start_time) > 10
+                    ):
+                        no_audio_warning_shown = True
+                        print(
+                            "\r\033[K"
+                            "No speech detected. Check your microphone or try:\n"
+                            "  gaia talk --audio-device-index <N>\n"
+                            "  gaia test asr-list-audio-devices"
+                        )
 
         except Exception as e:
             self.log.error(f"Error in process_audio_wrapper: {str(e)}")
