@@ -35,7 +35,9 @@ class ChatConfig:
         True  # Use local LLM (computed as not use_claude and not use_chatgpt if not explicitly set)
     )
     claude_model: str = "claude-sonnet-4-20250514"  # Claude model when use_claude=True
-    base_url: str = "http://localhost:8000/api/v1"  # Lemonade server base URL
+    base_url: Optional[str] = (
+        None  # Lemonade server base URL (None = use LEMONADE_BASE_URL env var)
+    )
     assistant_name: str = "gaia"  # Name to use for the assistant in conversations
 
 

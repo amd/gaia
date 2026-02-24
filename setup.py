@@ -144,12 +144,11 @@ setup(
             "reportlab",
         ],
         "talk": [
-            "pyaudio",
+            "sounddevice",
             "openai-whisper",
-            "numpy==1.26.4",
             "kokoro>=0.3.1",
             "soundfile",
-            "sounddevice",
+            "psutil",
             "pip",  # Required: spacy model download needs pip in venv (uv omits it)
         ],
         "youtube": [

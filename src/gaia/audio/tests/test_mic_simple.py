@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 """
@@ -10,44 +10,41 @@ Simple microphone test - just records and shows audio levels
 import time
 
 import numpy as np
-import pyaudio
+import sounddevice as sd
 
 
 def test_mic():
     """Simple test to record and display audio levels"""
-    p = pyaudio.PyAudio()
-
     # List devices
+    devices = sd.query_devices()
     print("Available input devices:")
-    for i in range(p.get_device_count()):
-        info = p.get_device_info_by_index(i)
-        if info.get("maxInputChannels") > 0:
-            print(f"  [{i}] {info.get('name')}")
+    for dev_info in devices:
+        if dev_info.get("max_input_channels", 0) > 0:
+            print(f"  [{dev_info['index']}] {dev_info.get('name')}")
 
     # Get default device
     try:
-        default_device = p.get_default_input_device_info()
+        default_device = sd.query_devices(kind="input")
         device_idx = default_device["index"]
         print(f"\nUsing default device [{device_idx}]: {default_device['name']}")
-    except:
+    except Exception:
         print("No default device, using device 0")
         device_idx = 0
 
     # Audio settings
     CHUNK = 2048
-    FORMAT = pyaudio.paFloat32
     CHANNELS = 1
     RATE = 16000
 
     print(f"\nOpening audio stream...")
-    stream = p.open(
-        format=FORMAT,
+    stream = sd.InputStream(
+        samplerate=RATE,
         channels=CHANNELS,
-        rate=RATE,
-        input=True,
-        input_device_index=device_idx,
-        frames_per_buffer=CHUNK,
+        dtype="float32",
+        device=device_idx,
+        blocksize=CHUNK,
     )
+    stream.start()
 
     print("Recording... Speak into the microphone (Press Ctrl+C to stop)\n")
     print("Energy Level:")
@@ -60,8 +57,8 @@ def test_mic():
 
         while True:
             # Read audio
-            data = stream.read(CHUNK, exception_on_overflow=False)
-            audio = np.frombuffer(data, dtype=np.float32)
+            frames, overflowed = stream.read(CHUNK)
+            audio = frames[:, 0]
 
             # Calculate energy
             energy = np.abs(audio).mean()
@@ -98,14 +95,13 @@ def test_mic():
             print("\n⚠️  Very low audio levels")
             print("  - Try speaking louder")
             print("  - Move closer to microphone")
-            print("  - Check microphone volume in Windows settings")
+            print("  - Check microphone volume in system settings")
         else:
             print("\n✅ Microphone is working!")
 
     finally:
-        stream.stop_stream()
+        stream.stop()
         stream.close()
-        p.terminate()
 
 
 if __name__ == "__main__":
