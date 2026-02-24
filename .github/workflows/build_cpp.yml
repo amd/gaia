@@ -1,0 +1,90 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# This workflow builds and tests the C++ library in cpp/
+# Tests include: CMake build, GoogleTest unit tests
+# Platform: Cross-platform (Linux and Windows)
+
+name: C++ Build & Test
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+    paths:
+      - 'cpp/**'
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'cpp/**'
+      - '.github/workflows/build_cpp.yml'
+  merge_group:
+  workflow_dispatch:
+
+# Cancel in-progress runs when a new run is triggered
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: C++ (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Restore FetchContent cache
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: cpp/build/_deps
+          key: fetchcontent-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
+
+      - name: Configure CMake
+        run: cmake -B cpp/build -S cpp -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build cpp/build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir cpp/build -C Release --output-on-failure
+
+  # Summary job
+  cpp-build-summary:
+    name: C++ Build Summary
+    runs-on: ubuntu-latest
+    needs: [build-and-test]
+    if: >-
+      ${{ always() && !cancelled() &&
+          needs.build-and-test.result != 'cancelled' }}
+    steps:
+      - name: Check build results
+        run: |
+          echo "=== C++ Build & Test Summary ==="
+          echo "Build & Test: ${{ needs.build-and-test.result }}"
+          echo ""
+
+          if [[ "${{ needs.build-and-test.result }}" == "skipped" ]]; then
+            echo "All C++ jobs skipped (draft PR - add 'ready_for_ci' label to run)"
+            exit 0
+          fi
+
+          if [[ "${{ needs.build-and-test.result }}" == "success" ]]; then
+            echo "All C++ builds and tests passed!"
+            echo "  - Ubuntu: passed"
+            echo "  - Windows: passed"
+          else
+            echo "Some C++ builds or tests failed"
+            exit 1
+          fi
