@@ -95,6 +95,9 @@ setup(
         "pillow>=9.0.0",
     ],
     extras_require={
+        "image": [
+            "term-image>=0.7.0,<0.8",
+        ],
         "api": [
             "fastapi>=0.115.0",
             "uvicorn>=0.32.0",
