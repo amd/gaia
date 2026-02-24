@@ -72,7 +72,6 @@ class SDToolsMixin:
 
     def init_sd(
         self,
-        base_url: str = "http://localhost:8000",
         output_dir: Optional[str] = None,
         default_model: str = "SDXL-Turbo",
         default_size: Optional[str] = None,
@@ -86,7 +85,6 @@ class SDToolsMixin:
         No need to call register_sd_tools() separately.
 
         Args:
-            base_url: Lemonade Server base URL
             output_dir: Directory to save generated images (default: .gaia/cache/sd/images)
             default_model: Default SD model (SD-Turbo for fast/default, SDXL-Base-1.0 for photorealistic)
             default_size: Default image size (None = auto: 512px for SD-1.5/Turbo, 1024px for SDXL)
@@ -106,8 +104,8 @@ class SDToolsMixin:
             # Custom settings
             self.init_sd(default_model="SDXL-Base-1.0", default_steps=30)
         """
-        # Create LemonadeClient for API calls
-        self.sd_client = LemonadeClient(base_url=base_url, verbose=False)
+        # Create LemonadeClient for API calls - resolves base URL from LEMONADE_BASE_URL env var
+        self.sd_client = LemonadeClient(verbose=False)
 
         self.sd_output_dir = (
             Path(output_dir) if output_dir else Path(".gaia/cache/sd/images")

@@ -59,7 +59,6 @@ class TestSDToolsMixinInit:
         """Test init_sd with custom configuration."""
         mixin = SDToolsMixin()
         mixin.init_sd(
-            base_url="http://custom:9000",
             output_dir=str(tmp_path),
             default_model="SD-Turbo",
             default_size="512x512",

@@ -93,9 +93,11 @@ setup(
         "requests",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",
-        "term-image>=0.7.0,<0.8",
     ],
     extras_require={
+        "image": [
+            "term-image>=0.7.0,<0.8",
+        ],
         "api": [
             "fastapi>=0.115.0",
             "uvicorn>=0.32.0",

@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: MIT
 
 import json
+import logging
 import subprocess
 import threading
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 # Import Rich library for pretty printing and syntax highlighting
 try:
@@ -845,6 +848,63 @@ class AgentConsole(OutputHandler):
         else:
             print(f"\n✅ SUCCESS: {message}\n")
 
+    def _render_image_halfblock(self, image_path: str, max_width: int = 60) -> str:
+        """
+        Render an image as Unicode half-block characters with 24-bit ANSI colors.
+
+        Uses U+2580 (upper half block) with foreground = top pixel color and
+        background = bottom pixel color, so each character row encodes two image rows.
+        Works in any terminal that supports 24-bit ANSI colors (Windows Terminal,
+        gnome-terminal, etc.) with no extra dependencies beyond PIL.
+
+        Args:
+            image_path: Path to the image file
+            max_width: Maximum width in terminal columns
+
+        Returns:
+            Rendered ANSI string, or empty string on failure
+        """
+        try:
+            import shutil
+            from pathlib import Path
+
+            from PIL import Image
+
+            path_obj = Path(image_path)
+            if not path_obj.exists():
+                return ""
+
+            img = Image.open(path_obj).convert("RGB")
+            term_w = shutil.get_terminal_size((80, 24)).columns
+            width = min(max_width, term_w - 4)
+
+            # Each terminal char covers 2 image rows, so height = rows * 2
+            aspect = img.height / img.width
+            height = max(2, int(width * aspect * 0.5) * 2)  # ensure even
+
+            img = img.resize((width, height), Image.LANCZOS)
+            pixels = list(img.getdata())
+
+            lines = []
+            for row in range(0, height, 2):
+                line_parts = []
+                for col in range(width):
+                    top = pixels[row * width + col]
+                    bottom_row = row + 1
+                    bottom = (
+                        pixels[bottom_row * width + col]
+                        if bottom_row < height
+                        else (0, 0, 0)
+                    )
+                    fg = f"\x1b[38;2;{top[0]};{top[1]};{top[2]}m"
+                    bg = f"\x1b[48;2;{bottom[0]};{bottom[1]};{bottom[2]}m"
+                    line_parts.append(f"{fg}{bg}\u2580")
+                lines.append("".join(line_parts) + "\x1b[0m")
+
+            return "\n".join(lines)
+        except Exception:
+            return ""
+
     def print_image(
         self, image_path: str, caption: str = None, prompt_to_open: bool = False
     ) -> None:
@@ -865,85 +925,49 @@ class AgentConsole(OutputHandler):
             return
 
         if self.rich_available:
+            # Tier 1: term-image (Sixel/Kitty — only if installed)
+            term_image_ok = False
             try:
-                # Try term-image with Sixel protocol for full resolution
-                # Sixel works in: Windows Terminal Preview, iTerm2, Kitty, WezTerm, etc.
                 from term_image.image import from_file
 
-                # Load image with auto-detected best protocol
                 img = from_file(str(path))
-
-                # Set size to 60 terminal columns
                 img.set_size(width=60)
-
-                # Render the image
+                # Use plain print — Rich Panel corrupts graphics protocol escape sequences
                 if caption:
-                    # Create a panel around the rendered image
-                    rendered = str(img)
                     self.console.print(
-                        Panel(
-                            rendered,
-                            title=f"🖼️  {caption}",
-                            border_style="cyan",
-                            padding=(0, 0),
-                        ),
-                        justify="center",
+                        f"[bold cyan]🖼️  {caption}[/bold cyan]", justify="center"
                     )
-                else:
-                    # Print image directly with centering
-                    # Note: term-image returns ANSI escape codes with actual image data
-                    print(
-                        str(img)
-                    )  # Use plain print to avoid Rich interfering with image codes
-
+                print(str(img))
                 self.console.print()
+                term_image_ok = True
+            except ImportError:
+                logger.debug(
+                    "term-image not installed; falling back to half-block renderer"
+                )
+            except Exception as exc:
+                logger.debug(
+                    "term-image failed (%s); falling back to half-block renderer", exc
+                )
 
-            except (ImportError, Exception):
-                # Fallback to rich-pixels for broader compatibility
-                try:
-                    from PIL import Image
-                    from rich_pixels import Pixels
-
-                    # Load image to check dimensions
-                    pil_img = Image.open(path)
-                    img_width, img_height = pil_img.size
-                    aspect_ratio = img_width / img_height
-
-                    # Terminal characters are roughly 2:1 (height:width)
-                    # A char is ~2x taller than wide, so to show square image as square:
-                    # need width_chars = height_chars * 2
-                    # For proper aspect: width_chars = height_chars * 2 * image_aspect_ratio
-                    target_height = 50  # rows
-                    target_width = int(target_height * 2.0 * aspect_ratio)  # columns
-
-                    # Resize to these dimensions maintaining aspect
-                    pixels = Pixels.from_image_path(
-                        str(path), resize=(target_width, target_height)
-                    )
-
+            if not term_image_ok:
+                # Tier 2: PIL half-block renderer (always available when PIL is installed)
+                rendered = self._render_image_halfblock(str(path))
+                if rendered:
+                    # Use plain print — Rich Panel processing is very slow on large ANSI strings
                     if caption:
                         self.console.print(
-                            Panel(
-                                pixels,
-                                title=f"🖼️  {caption}",
-                                border_style="cyan",
-                                padding=(0, 0),
-                            ),
-                            justify="center",
+                            f"[bold cyan]🖼️  {caption}[/bold cyan]", justify="center"
                         )
-                    else:
-                        self.console.print(pixels, justify="center")
-                    self.console.print()
-
-                except ImportError:
-                    # No image libraries, show file info only
+                    print(rendered)
+                    print()
+                else:
+                    # Tier 3: PIL metadata fallback
                     try:
                         from PIL import Image
 
                         img = Image.open(path)
                         info = f"[cyan]{path.name}[/cyan]\n"
                         info += f"[dim]Size: {img.width}x{img.height} | Format: {img.format} | File: {path.stat().st_size:,} bytes[/dim]"
-
                         if caption:
                             self.console.print(
                                 Panel(
@@ -956,7 +980,6 @@ class AgentConsole(OutputHandler):
                                 Panel(info, border_style="cyan"), justify="center"
                             )
                     except Exception:
-                        # Fallback to just showing the path
                         self.console.print(
                             f"[cyan]🖼️  Image: {path}[/cyan]", justify="center"
                         )
