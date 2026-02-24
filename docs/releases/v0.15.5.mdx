@@ -1,0 +1,164 @@
+---
+title: "v0.15.5"
+description: "StructuredVLMExtractor API — extract tables, key-values, and chart data from images and documents"
+---
+
+# GAIA v0.15.5 Release Notes
+
+**Feature release** adding the `StructuredVLMExtractor` API for structured data extraction from images and documents. Also includes voice interaction improvements (mic sensitivity controls, sounddevice migration) and several bug fixes.
+
+**TL;DR:**
+- **New: StructuredVLMExtractor** — Extract tables, key-values, charts, and timelines from images/PDFs as structured JSON
+- **New: `gaia init --profile vlm`** — One-command VLM setup
+- **New: `--mic-threshold` CLI option** — Control microphone sensitivity and fix stuck-listening issues
+- **Improved: PyAudio → sounddevice** — More reliable cross-platform audio capture
+
+
+---
+
+## What's New
+
+### StructuredVLMExtractor: Structured Data from Images
+
+New `StructuredVLMExtractor` class that extends `VLMClient` with methods for extracting structured data (tables, key-value pairs, charts, timelines) from images and documents. Uses a two-step approach: VLM reads the visual content, Python parses and returns clean JSON — no hallucinated math.
+
+```python
+from gaia.vlm import StructuredVLMExtractor
+
+extractor = StructuredVLMExtractor()
+
+# Extract everything from a PDF in one call
+result = extractor.extract(
+    "report.pdf",
+    pages="all",
+    extract_tables=True,
+    extract_timelines=True,
+    timeline_status_types=["Active", "Idle", "Offline"],
+    extract_fields=["invoice_number", "total", "date"],
+)
+
+# Access structured data
+print(result["pages"][0]["tables"])
+print(result["aggregated_data"]["timeline_totals"])
+```
+
+**6 public methods:**
+
+| Method | Description | Returns |
+|--------|-------------|---------|
+| `extract()` | Extract everything from a document | Structured dict with pages + aggregated data |
+| `extract_table()` | Extract table rows from an image | `[{"col1": "val1", ...}, ...]` |
+| `extract_key_values()` | Extract specific named fields | `{"field": "value", ...}` |
+| `extract_structured()` | Extract using a custom schema | Dict matching schema |
+| `extract_chart_data()` | Extract chart/graph values | Dict of category → value |
+| `extract_timeline()` | Extract timeline data as decimal hours | `{"Active": 14.777, ...}` |
+
+**Two-step accuracy pattern:**
+
+VLM reads visual text, Python handles any math — 100% accurate numeric aggregation:
+
+```python
+extractor = StructuredVLMExtractor()
+
+# VLM reads "14:46:38" from the chart — Python converts to hours
+hours = extractor.extract_chart_data(
+    image_bytes,
+    categories=["Active", "Idle", "Offline", "Maintenance"],
+    value_format="time_hms_decimal",
+)
+# {"Active": 14.777, "Idle": 0.022, "Offline": 7.654, "Maintenance": 1.547}
+
+# Sum across pages — Python does the math, not the VLM
+total_active = sum(page["timeline"].get("Active", 0) for page in result["pages"])
+```
+
+### `gaia init --profile vlm`
+
+New initialization profile for VLM development. Checks prerequisites and sets up the VLM model for use with `StructuredVLMExtractor` and `VLMClient`.
+
+```bash
+gaia init --profile vlm
+```
+
+---
+
+## Improvements
+
+### Voice Interaction: Mic Sensitivity Controls
+
+New `--mic-threshold` CLI option for `gaia talk` lets users tune how sensitive the microphone is before speaking, fixing issues with stuck listening states on some hardware configurations.
+
+```bash
+# Increase threshold if mic picks up background noise
+gaia talk --mic-threshold 0.02
+
+# Lower threshold for quiet environments
+gaia talk --mic-threshold 0.005
+```
+
+Also adds stuck-listening detection that automatically recovers when audio capture stalls.
+
+### PyAudio → sounddevice Migration
+
+`gaia talk` now uses `sounddevice` for audio capture instead of PyAudio. `sounddevice` has better cross-platform support and fewer installation issues.
+
+### MCP Client Architecture Diagram Refinements
+
+The MCP Client architecture diagram in the documentation has been refined for clarity (PR #342).
+
+---
+
+## Bug Fixes
+
+- **Fix gaia init for remote Lemonade Server** — `gaia init` now correctly handles remote Lemonade Server URLs (PR #345)
+- **Fix gaia talk 'No module named pip' error** — Resolved installation error when setting up voice dependencies (PR #344)
+- **Fix MCP time server example** — Updated example to use the correct `mcp-server-time` package (PR #339)
+- **Fix gaia sd terminal preview and image viewer** — Corrected terminal image preview and image viewer display in the stable diffusion agent (PR #346)
+
+---
+
+## Breaking Changes
+
+### PyAudio → sounddevice
+
+`gaia talk` now requires `sounddevice` instead of PyAudio. `sounddevice` depends on PortAudio, which must be installed at the system level:
+
+```bash
+# macOS
+brew install portaudio
+
+# Ubuntu/Debian
+sudo apt-get install libportaudio2
+
+# Windows — PortAudio is bundled in the sounddevice wheel, no extra step needed
+```
+
+If you previously installed PyAudio manually, it can be removed — it is no longer a dependency.
+
+---
+
+## Upgrade
+
+```bash
+# Install/upgrade GAIA
+pip install --upgrade amd-gaia
+
+# Setup VLM profile
+gaia init --profile vlm
+```
+
+---
+
+## Full Changelog
+
+**7 commits** since v0.15.4:
+
+- `b882930` - Add VLM profile and structured extraction API (#336)
+- `d26b7a0` - Fix MCP time server example to use mcp-server-time (#339)
+- `a094149` - Fix gaia talk 'No module named pip' error (#344)
+- `12acbab` - Fix gaia init for remote Lemonade Server (#345)
+- `05b6fda` - Refine MCP Client architecture diagram (#342)
+- `1198af5` - Fix gaia talk: mic sensitivity, LEMONADE_BASE_URL, stuck listening (#347) (#348)
+- `8d12a4a` - Fix gaia sd terminal preview and image viewer (#346)
+
+Full Changelog: [v0.15.4...v0.15.5](https://github.com/amd/gaia/compare/v0.15.4...v0.15.5)
