@@ -147,6 +147,10 @@ flowchart LR
     ```
 
     The agent connects to the Windows MCP server, gathers CPU/memory/disk metrics via PowerShell, and pastes a formatted report into Notepad. Type `quit` to exit.
+
+    <Note>
+    Also try the [Wi-Fi Troubleshooter Agent](/guides/cpp/wifi-agent) — a pure registered-tool agent that diagnoses and fixes network issues without MCP.
+    </Note>
   </Step>
 </Steps>
 
@@ -259,6 +263,7 @@ cpp/
     console.cpp
   examples/
     simple_agent.cpp        # Windows System Health Agent (CUA demo)
+    wifi_agent.cpp          # Wi-Fi Troubleshooter Agent (registered tools)
   tests/
     test_agent.cpp
     test_tool_registry.cpp
@@ -321,6 +326,10 @@ The test suite covers all six modules: agent loop, tool registry, JSON utilities
 
   <Card title="Customizing Your Agent" icon="sliders" href="/guides/cpp/custom-agent">
     Step-by-step: custom prompts, typed tools, MCP servers, output capture, and AgentConfig tuning
+  </Card>
+
+  <Card title="Wi-Fi Troubleshooter Agent" icon="wifi" href="/guides/cpp/wifi-agent">
+    Full network diagnostic and auto-fix using only registered C++ tools — no Python, no MCP
   </Card>
 
   <Card title="Windows System Health Agent" icon="desktop" href="/guides/mcp/windows-system-health">

@@ -605,6 +605,12 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
             executionState_ = AgentState::EXECUTING_PLAN;
 
             console_->printPlan(currentPlan_, 0);
+
+            // If the LLM provided a plan but no tool call, start executing
+            // the plan on the next loop iteration.
+            if (!parsed.toolName.has_value()) {
+                continue;
+            }
         }
 
         // ---- Handle tool call ----

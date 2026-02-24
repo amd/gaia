@@ -57,7 +57,8 @@
                 "pages": [
                   "guides/cpp/overview",
                   "guides/cpp/integration",
-                  "guides/cpp/custom-agent"
+                  "guides/cpp/custom-agent",
+                  "guides/cpp/wifi-agent"
                 ]
               }
             ]

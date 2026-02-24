@@ -152,6 +152,9 @@ endif()
 if(GAIA_BUILD_EXAMPLES)
     add_executable(simple_agent examples/simple_agent.cpp)
     target_link_libraries(simple_agent PRIVATE gaia::gaia_core)
+
+    add_executable(wifi_agent examples/wifi_agent.cpp)
+    target_link_libraries(wifi_agent PRIVATE gaia::gaia_core)
 endif()
 
 # ---------------------------------------------------------------------------
