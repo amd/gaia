@@ -53,7 +53,7 @@ private:
     static gaia::AgentConfig makeConfig() {
         gaia::AgentConfig cfg;
         cfg.baseUrl  = "http://localhost:8000/api/v1";
-        cfg.modelId  = "Qwen3-Coder-30B-A3B-Instruct-GGUF";
+        cfg.modelId  = "Qwen3-4B-GGUF";
         cfg.maxSteps = 10;
         return cfg;
     }

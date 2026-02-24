@@ -166,7 +166,7 @@ config.debug = true;
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `baseUrl` | `std::string` | `"http://localhost:8000/api/v1"` | LLM server endpoint (OpenAI-compatible) |
-| `modelId` | `std::string` | `"Qwen3-Coder-30B-A3B-Instruct-GGUF"` | Model identifier sent to the server |
+| `modelId` | `std::string` | `"Qwen3-4B-GGUF"` | Model identifier sent to the server |
 | `maxSteps` | `int` | `20` | Maximum agent loop iterations per query |
 | `maxPlanIterations` | `int` | `3` | Maximum plan/replan cycles before forcing completion |
 | `maxConsecutiveRepeats` | `int` | `4` | Consecutive identical responses before loop-detection triggers |
@@ -317,6 +317,10 @@ The test suite covers all six modules: agent loop, tool registry, JSON utilities
 <CardGroup cols={2}>
   <Card title="Integration Guide" icon="puzzle-piece" href="/guides/cpp/integration">
     Consume gaia_core in your own CMake project via FetchContent, find_package, or shared library
+  </Card>
+
+  <Card title="Customizing Your Agent" icon="sliders" href="/guides/cpp/custom-agent">
+    Step-by-step: custom prompts, typed tools, MCP servers, output capture, and AgentConfig tuning
   </Card>
 
   <Card title="Windows System Health Agent" icon="desktop" href="/guides/mcp/windows-system-health">

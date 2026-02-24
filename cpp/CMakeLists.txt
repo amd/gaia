@@ -20,6 +20,14 @@ else()
     option(GAIA_BUILD_EXAMPLES "Build gaia_core examples" OFF)
 endif()
 
+# Integration tests require a running Lemonade server -- always OFF by default.
+option(GAIA_BUILD_INTEGRATION_TESTS
+    "Build LLM integration tests (requires lemonade-server with Qwen3-4B-GGUF loaded)" OFF)
+
+# HTTPS support for LLM endpoints -- OFF by default (HTTP sufficient for local Lemonade).
+option(GAIA_ENABLE_SSL
+    "Enable HTTPS support for LLM endpoints (requires OpenSSL)" OFF)
+
 # ---------------------------------------------------------------------------
 # Dependencies -- prefer system packages, fall back to FetchContent
 # ---------------------------------------------------------------------------
@@ -34,7 +42,14 @@ if(NOT nlohmann_json_FOUND)
         GIT_REPOSITORY https://github.com/nlohmann/json.git
         GIT_TAG        v3.11.3
     )
+    # Only populate the headers; do not create install rules for the fetched target
+    set(JSON_Install OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(json)
+    set(GAIA_JSON_FETCHED TRUE)
+    # Retrieve the include directory from the fetched target for manual use
+    get_target_property(GAIA_JSON_INCLUDE_DIR nlohmann_json::nlohmann_json INTERFACE_INCLUDE_DIRECTORIES)
+else()
+    set(GAIA_JSON_FETCHED FALSE)
 endif()
 
 # cpp-httplib (private dependency -- implementation detail)
@@ -49,8 +64,8 @@ if(NOT httplib_FOUND)
     FetchContent_MakeAvailable(httplib)
 endif()
 
-# Google Test (only when building tests)
-if(GAIA_BUILD_TESTS)
+# Google Test (unit tests and/or integration tests)
+if(GAIA_BUILD_TESTS OR GAIA_BUILD_INTEGRATION_TESTS)
     find_package(GTest QUIET)
     if(NOT GTest_FOUND)
         message(STATUS "GTest not found -- fetching via FetchContent")
@@ -99,16 +114,36 @@ target_compile_options(gaia_core PRIVATE
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
 )
 
-# Link libraries -- nlohmann_json is PUBLIC (part of the API),
-# httplib is PRIVATE (implementation detail).
-target_link_libraries(gaia_core
-    PUBLIC  nlohmann_json::nlohmann_json
-    PRIVATE httplib::httplib
-)
+# Link libraries.
+# When nlohmann_json is fetched via FetchContent it cannot be part of an
+# install export set.  We add only the include directory (not the CMake
+# target) so that install(EXPORT) does not see a non-installable dependency.
+if(GAIA_JSON_FETCHED)
+    # Add include path only -- no CMake target dependency recorded.
+    target_include_directories(gaia_core
+        PUBLIC  $<BUILD_INTERFACE:${GAIA_JSON_INCLUDE_DIR}>
+    )
+else()
+    # System install: safe to export the dependency.
+    target_link_libraries(gaia_core PUBLIC nlohmann_json::nlohmann_json)
+endif()
+
+# httplib is always PRIVATE (implementation detail).
+target_link_libraries(gaia_core PRIVATE httplib::httplib)
 
 # Platform-specific libraries
 if(UNIX)
     target_link_libraries(gaia_core PUBLIC pthread)
+endif()
+
+# Optional HTTPS support for LLM endpoints (off by default; local Lemonade uses HTTP)
+if(GAIA_ENABLE_SSL)
+    find_package(OpenSSL REQUIRED)
+    target_compile_definitions(gaia_core PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+    target_link_libraries(gaia_core PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    message(STATUS "GAIA SSL: enabled -- HTTPS LLM endpoints supported")
+else()
+    message(STATUS "GAIA SSL: disabled -- HTTP only (set -DGAIA_ENABLE_SSL=ON for HTTPS)")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -141,6 +176,28 @@ if(GAIA_BUILD_TESTS)
 
     include(GoogleTest)
     gtest_discover_tests(gaia_tests)
+endif()
+
+# ---------------------------------------------------------------------------
+# Integration tests  (require a running lemonade-server with Qwen3-4B-GGUF)
+# Enable with:  cmake ... -DGAIA_BUILD_INTEGRATION_TESTS=ON
+# ---------------------------------------------------------------------------
+if(GAIA_BUILD_INTEGRATION_TESTS)
+    enable_testing()
+
+    add_executable(gaia_integration_tests
+        tests/integration/test_integration_llm.cpp
+    )
+
+    target_link_libraries(gaia_integration_tests PRIVATE
+        gaia::gaia_core
+        GTest::gtest_main
+    )
+
+    include(GoogleTest)
+    gtest_discover_tests(gaia_integration_tests
+        PROPERTIES TIMEOUT 120
+    )
 endif()
 
 # ---------------------------------------------------------------------------

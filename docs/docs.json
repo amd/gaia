@@ -56,7 +56,8 @@
                 "group": "C++ Framework",
                 "pages": [
                   "guides/cpp/overview",
-                  "guides/cpp/integration"
+                  "guides/cpp/integration",
+                  "guides/cpp/custom-agent"
                 ]
               }
             ]

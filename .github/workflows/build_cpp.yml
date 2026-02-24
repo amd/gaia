@@ -60,11 +60,154 @@ jobs:
       - name: Test
         run: ctest --test-dir cpp/build -C Release --output-on-failure
 
+  # Verify cmake --install + find_package round-trip works
+  install-test:
+    name: C++ Install Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Restore FetchContent cache
+        uses: actions/cache@v4
+        with:
+          path: cpp/build/_deps
+          key: fetchcontent-install-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
+
+      - name: Build and install gaia_core
+        shell: bash
+        run: |
+          cmake -B cpp/build -S cpp -DCMAKE_BUILD_TYPE=Release \
+                -DGAIA_BUILD_TESTS=OFF -DGAIA_BUILD_EXAMPLES=OFF \
+                -DCMAKE_INSTALL_PREFIX=${{ runner.temp }}/gaia_install
+          cmake --build cpp/build --config Release --parallel
+          cmake --install cpp/build --config Release
+
+      - name: Build consumer via find_package
+        shell: bash
+        run: |
+          cmake -B consumer/build -S cpp/examples/fetch_content_consumer \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_PREFIX_PATH=${{ runner.temp }}/gaia_install \
+                -DUSE_FIND_PACKAGE=ON
+          cmake --build consumer/build --config Release --parallel
+
+  # Verify BUILD_SHARED_LIBS=ON (shared library / DLL) compiles cleanly
+  shared-lib-test:
+    name: C++ Shared Library (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Restore FetchContent cache
+        uses: actions/cache@v4
+        with:
+          path: cpp/build-shared/_deps
+          key: fetchcontent-shared-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
+
+      - name: Build shared library
+        run: |
+          cmake -B cpp/build-shared -S cpp -DCMAKE_BUILD_TYPE=Release \
+                -DBUILD_SHARED_LIBS=ON \
+                -DGAIA_BUILD_TESTS=OFF -DGAIA_BUILD_EXAMPLES=OFF
+          cmake --build cpp/build-shared --config Release --parallel
+
+  # LLM integration tests on STX hardware with Lemonade Server
+  integration-test:
+    name: C++ LLM Integration Test (STX)
+    runs-on: ${{ (contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test') || 'stx' }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          install-package: '.[lemonade]'
+
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
+      - name: Restore FetchContent cache
+        uses: actions/cache@v4
+        with:
+          path: cpp/build-integration/_deps
+          key: fetchcontent-integration-windows-${{ hashFiles('cpp/CMakeLists.txt') }}
+
+      - name: Configure and build integration tests
+        shell: bash
+        run: |
+          cmake -B cpp/build-integration -S cpp \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DGAIA_BUILD_INTEGRATION_TESTS=ON \
+                -DGAIA_BUILD_TESTS=OFF \
+                -DGAIA_BUILD_EXAMPLES=OFF
+          cmake --build cpp/build-integration --config Release --parallel
+
+      - name: Start Lemonade Server and run integration tests
+        shell: powershell
+        timeout-minutes: 15
+        env:
+          GAIA_CPP_TEST_MODEL: Qwen3-4B-GGUF
+          GAIA_CPP_BASE_URL: http://localhost:8000/api/v1
+        run: |
+          try {
+              # Start Lemonade with Qwen3-4B-GGUF
+              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-GGUF" -Port 8000 -CtxSize 8192 -InitWaitTime 15
+
+              # Verify health
+              $health = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 10
+              if ($health.status -ne "ok") { throw "Lemonade health check failed" }
+              Write-Host "[OK] Lemonade Server ready with Qwen3-4B-GGUF"
+
+              # Run C++ integration tests
+              Write-Host "=== Running C++ LLM Integration Tests ==="
+              $env:GAIA_CPP_TEST_MODEL = "Qwen3-4B-GGUF"
+              $env:GAIA_CPP_BASE_URL   = "http://localhost:8000/api/v1"
+              ctest --test-dir cpp/build-integration -C Release --output-on-failure
+              if ($LASTEXITCODE -ne 0) { throw "C++ integration tests failed" }
+              Write-Host "[SUCCESS] All C++ LLM integration tests passed!"
+
+          } catch {
+              Write-Host "[ERROR] $($_.Exception.Message)"
+              throw
+          } finally {
+              if ($env:LEMONADE_PROCESS_ID) {
+                  Write-Host "Stopping Lemonade Server (PID $env:LEMONADE_PROCESS_ID)..."
+                  Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
+              }
+          }
+
+      - name: Upload server logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cpp-integration-lemonade-logs
+          path: |
+            lemonade-server-stdout.log
+            lemonade-server-stderr.log
+            lemonade-server.log
+
   # Summary job
   cpp-build-summary:
     name: C++ Build Summary
     runs-on: ubuntu-latest
-    needs: [build-and-test]
+    needs: [build-and-test, install-test, shared-lib-test, integration-test]
     if: >-
       ${{ always() && !cancelled() &&
           needs.build-and-test.result != 'cancelled' }}
@@ -72,7 +215,10 @@ jobs:
       - name: Check build results
         run: |
           echo "=== C++ Build & Test Summary ==="
-          echo "Build & Test: ${{ needs.build-and-test.result }}"
+          echo "Build & Test:      ${{ needs.build-and-test.result }}"
+          echo "Install Test:      ${{ needs.install-test.result }}"
+          echo "Shared Lib Test:   ${{ needs.shared-lib-test.result }}"
+          echo "LLM Integration:   ${{ needs.integration-test.result }}"
           echo ""
 
           if [[ "${{ needs.build-and-test.result }}" == "skipped" ]]; then
@@ -80,11 +226,16 @@ jobs:
             exit 0
           fi
 
-          if [[ "${{ needs.build-and-test.result }}" == "success" ]]; then
-            echo "All C++ builds and tests passed!"
-            echo "  - Ubuntu: passed"
-            echo "  - Windows: passed"
+          FAILED=0
+          [[ "${{ needs.build-and-test.result }}"  != "success" ]] && FAILED=1
+          [[ "${{ needs.install-test.result }}"    != "success" ]] && FAILED=1
+          [[ "${{ needs.shared-lib-test.result }}" != "success" ]] && FAILED=1
+          # Integration test is STX-only; treat 'skipped' as acceptable
+          if [[ "${{ needs.integration-test.result }}" == "failure" ]]; then FAILED=1; fi
+
+          if [[ "$FAILED" == "0" ]]; then
+            echo "All C++ jobs passed (unit tests, install round-trip, shared library, LLM integration)!"
           else
-            echo "Some C++ builds or tests failed"
+            echo "One or more C++ jobs failed"
             exit 1
           fi

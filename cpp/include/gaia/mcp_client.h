@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -64,6 +65,13 @@ public:
     StdioTransport(const std::string& command, const std::vector<std::string>& args,
                    int timeout = 30, bool debug = false);
 
+    /// Construct with command + args + environment overrides.
+    /// @param env  Additional environment variables to set in the server process.
+    ///             These are merged with the parent process environment.
+    StdioTransport(const std::string& command, const std::vector<std::string>& args,
+                   const std::map<std::string, std::string>& env,
+                   int timeout = 30, bool debug = false);
+
     ~StdioTransport() override;
 
     // Non-copyable, movable
@@ -80,6 +88,7 @@ public:
 private:
     std::string command_;
     std::vector<std::string> args_;
+    std::map<std::string, std::string> envVars_; // Additional env vars for the server process
     int timeout_;
     bool debug_;
     int requestId_ = 0;

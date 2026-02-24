@@ -98,7 +98,8 @@ struct StdioTransport::Impl {
         }
     }
 
-    bool launch(const std::string& cmdLine) {
+    bool launch(const std::string& cmdLine,
+                const std::map<std::string, std::string>& envVars) {
         SECURITY_ATTRIBUTES sa;
         sa.nLength = sizeof(SECURITY_ATTRIBUTES);
         sa.bInheritHandle = TRUE;
@@ -122,13 +123,39 @@ struct StdioTransport::Impl {
         si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
         si.dwFlags |= STARTF_USESTDHANDLES;
 
+        // Build merged environment block if overrides provided
+        std::string envBlock;
+        LPVOID lpEnv = nullptr;
+        if (!envVars.empty()) {
+            // Enumerate current process environment and merge overrides
+            LPCH envStrings = GetEnvironmentStrings();
+            std::map<std::string, std::string> merged;
+            if (envStrings) {
+                LPCH p = envStrings;
+                while (*p) {
+                    std::string entry(p);
+                    size_t eq = entry.find('=');
+                    if (eq != std::string::npos && eq > 0)
+                        merged[entry.substr(0, eq)] = entry.substr(eq + 1);
+                    p += strlen(p) + 1;
+                }
+                FreeEnvironmentStrings(envStrings);
+            }
+            for (const auto& kv : envVars)
+                merged[kv.first] = kv.second;
+            for (const auto& kv : merged)
+                envBlock += kv.first + "=" + kv.second + '\0';
+            envBlock += '\0';
+            lpEnv = envBlock.empty() ? nullptr : static_cast<LPVOID>(&envBlock[0]);
+        }
+
         std::string mutableCmd(cmdLine);
         BOOL ok = CreateProcessA(
             nullptr,
             mutableCmd.data(),
             nullptr, nullptr,
             TRUE, 0,
-            nullptr, nullptr,
+            lpEnv, nullptr,
             &si, &procInfo
         );
 
@@ -217,7 +244,8 @@ struct StdioTransport::Impl {
         }
     }
 
-    bool launch(const std::string& cmdLine) {
+    bool launch(const std::string& cmdLine,
+                const std::map<std::string, std::string>& envVars) {
         int stdinPipe[2], stdoutPipe[2];
         if (pipe(stdinPipe) != 0 || pipe(stdoutPipe) != 0) return false;
 
@@ -235,6 +263,10 @@ struct StdioTransport::Impl {
             close(stdinPipe[0]); close(stdinPipe[1]);
             close(stdoutPipe[0]); close(stdoutPipe[1]);
 
+            // Apply environment overrides before exec
+            for (const auto& kv : envVars)
+                setenv(kv.first.c_str(), kv.second.c_str(), 1 /*overwrite*/);
+
             execl("/bin/sh", "sh", "-c", cmdLine.c_str(), nullptr);
             _exit(127);
         }
@@ -250,8 +282,17 @@ struct StdioTransport::Impl {
 
     void writeLine(const std::string& line) {
         std::string data = line + "\n";
-        ssize_t result = write(stdinFd, data.c_str(), data.size());
-        (void)result; // suppress unused warning
+        const char* buf = data.c_str();
+        size_t remaining = data.size();
+        while (remaining > 0) {
+            ssize_t written = write(stdinFd, buf, remaining);
+            if (written < 0) {
+                if (errno == EINTR) continue;
+                break; // unrecoverable write error
+            }
+            buf += written;
+            remaining -= static_cast<size_t>(written);
+        }
     }
 
     std::string readLine(int timeoutMs) {
@@ -314,6 +355,12 @@ StdioTransport::StdioTransport(const std::string& command, const std::vector<std
     : command_(command), args_(args), timeout_(timeout), debug_(debug),
       impl_(std::make_unique<Impl>()) {}
 
+StdioTransport::StdioTransport(const std::string& command, const std::vector<std::string>& args,
+                               const std::map<std::string, std::string>& env,
+                               int timeout, bool debug)
+    : command_(command), args_(args), envVars_(env), timeout_(timeout), debug_(debug),
+      impl_(std::make_unique<Impl>()) {}
+
 StdioTransport::~StdioTransport() = default;
 
 StdioTransport::StdioTransport(StdioTransport&& other) noexcept = default;
@@ -322,14 +369,20 @@ StdioTransport& StdioTransport::operator=(StdioTransport&& other) noexcept = def
 bool StdioTransport::connect() {
     if (impl_->running) return true;
 
-    // Build command line
+    // Build command line, quoting arguments that contain spaces
+    auto quoteArg = [](const std::string& arg) -> std::string {
+        if (arg.find(' ') != std::string::npos) {
+            return "\"" + arg + "\"";
+        }
+        return arg;
+    };
     std::string cmdLine;
     if (args_.empty()) {
         cmdLine = command_;
     } else {
         cmdLine = command_;
         for (const auto& arg : args_) {
-            cmdLine += " " + arg;
+            cmdLine += " " + quoteArg(arg);
         }
     }
 
@@ -337,7 +390,7 @@ bool StdioTransport::connect() {
         std::cerr << "[MCP] Starting server: " << cmdLine << std::endl;
     }
 
-    if (!impl_->launch(cmdLine)) {
+    if (!impl_->launch(cmdLine, envVars_)) {
         return false;
     }
 
@@ -430,12 +483,14 @@ MCPClient MCPClient::fromConfig(const std::string& name, const json& config,
         }
     }
 
-    std::unique_ptr<MCPTransport> transport;
-    if (args.empty()) {
-        transport = std::make_unique<StdioTransport>(command, timeout, debug);
-    } else {
-        transport = std::make_unique<StdioTransport>(command, args, timeout, debug);
+    std::map<std::string, std::string> envVars;
+    if (config.contains("env") && config["env"].is_object()) {
+        for (const auto& kv : config["env"].items()) {
+            envVars[kv.key()] = kv.value().get<std::string>();
+        }
     }
+
+    auto transport = std::make_unique<StdioTransport>(command, args, envVars, timeout, debug);
 
     return MCPClient(name, std::move(transport), debug);
 }

@@ -199,7 +199,7 @@ private:
     static gaia::AgentConfig makeConfig() {
         gaia::AgentConfig cfg;
         cfg.baseUrl = "http://localhost:8000/api/v1";
-        cfg.modelId = "Qwen3-Coder-30B-A3B-Instruct-GGUF";
+        cfg.modelId = "Qwen3-4B-GGUF";
         cfg.maxSteps = 10;
         return cfg;
     }
@@ -276,6 +276,10 @@ No manual annotation is needed in consumer code. Linking against the `gaia::gaia
 
   <Card title="C++ Source Code" icon="github" href="https://github.com/amd/gaia/tree/main/cpp">
     Browse the implementation on GitHub
+  </Card>
+
+  <Card title="Customizing Your Agent" icon="sliders" href="/guides/cpp/custom-agent">
+    Custom prompts, typed tools, MCP servers, output capture, and AgentConfig tuning
   </Card>
 
   <Card title="MCP Client Guide" icon="plug" href="/guides/mcp/client">

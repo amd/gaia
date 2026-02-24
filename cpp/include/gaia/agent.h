@@ -118,6 +118,12 @@ private:
     /// Compose the full system prompt from parts.
     std::string composeSystemPrompt() const;
 
+    /// Call an MCP tool with automatic reconnect on connection failure.
+    json callMcpTool(const std::string& serverName, const std::string& toolName, const json& args);
+
+    /// Attempt to reconnect to a previously registered MCP server using its stored config.
+    bool reconnectMcpServer(const std::string& name);
+
     // ---- State ----
     AgentConfig config_;
     ToolRegistry tools_;
@@ -132,8 +138,9 @@ private:
     std::vector<std::string> errorHistory_;
     std::vector<Message> conversationHistory_;
 
-    // MCP clients
+    // MCP clients and their configs (configs stored for reconnect)
     std::map<std::string, std::unique_ptr<MCPClient>> mcpClients_;
+    std::map<std::string, json> mcpServerConfigs_;
 
     // Cached system prompt
     mutable std::string cachedSystemPrompt_;

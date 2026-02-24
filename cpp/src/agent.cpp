@@ -276,16 +276,19 @@ bool Agent::connectMcpServer(const std::string& name, const json& config) {
             return false;
         }
 
+        // Store config for potential reconnect later
+        mcpServerConfigs_[name] = config;
+
         // List tools and register them
         auto mcpTools = client->listTools();
         for (const auto& mcpTool : mcpTools) {
             ToolInfo toolInfo = mcpTool.toToolInfo(name);
 
-            // Capture client pointer for callback closure
-            MCPClient* clientPtr = client.get();
+            // Capture server name and tool name; use callMcpTool for auto-reconnect
+            std::string serverName = name;
             std::string originalToolName = mcpTool.name;
-            toolInfo.callback = [clientPtr, originalToolName](const json& args) -> json {
-                return clientPtr->callTool(originalToolName, args);
+            toolInfo.callback = [this, serverName, originalToolName](const json& args) -> json {
+                return callMcpTool(serverName, originalToolName, args);
             };
 
             try {
@@ -306,6 +309,61 @@ bool Agent::connectMcpServer(const std::string& name, const json& config) {
 
     } catch (const std::exception& e) {
         console_->printError("Error connecting to MCP server '" + name + "': " + e.what());
+        return false;
+    }
+}
+
+json Agent::callMcpTool(const std::string& serverName, const std::string& toolName, const json& args) {
+    auto it = mcpClients_.find(serverName);
+    if (it == mcpClients_.end()) {
+        return json{{"error", "MCP server '" + serverName + "' not found"}};
+    }
+
+    MCPClient* client = it->second.get();
+
+    // First attempt — happy path
+    if (client->isConnected()) {
+        try {
+            return client->callTool(toolName, args);
+        } catch (const std::runtime_error& e) {
+            console_->printWarning("MCP tool call failed: " + std::string(e.what()) +
+                                   " -- attempting reconnect to '" + serverName + "'");
+        }
+    } else {
+        console_->printWarning("MCP server '" + serverName + "' disconnected -- attempting reconnect");
+    }
+
+    // Reconnect once and retry
+    if (!reconnectMcpServer(serverName)) {
+        return json{{"error", "MCP server '" + serverName + "' disconnected and reconnect failed"}};
+    }
+
+    try {
+        return mcpClients_[serverName]->callTool(toolName, args);
+    } catch (const std::runtime_error& e) {
+        return json{{"error", "MCP tool call failed after reconnect: " + std::string(e.what())}};
+    }
+}
+
+bool Agent::reconnectMcpServer(const std::string& name) {
+    auto cfgIt = mcpServerConfigs_.find(name);
+    if (cfgIt == mcpServerConfigs_.end()) return false;
+
+    // Drop the old (dead) client
+    mcpClients_.erase(name);
+
+    try {
+        auto client = std::make_unique<MCPClient>(
+            MCPClient::fromConfig(name, cfgIt->second, 30, config_.debug));
+        if (!client->connect()) {
+            console_->printError("MCP reconnect failed for '" + name + "': " + client->lastError());
+            return false;
+        }
+        mcpClients_.emplace(name, std::move(client));
+        console_->printInfo("Reconnected to MCP server '" + name + "'");
+        return true;
+    } catch (const std::exception& e) {
+        console_->printError("MCP reconnect exception for '" + name + "': " + e.what());
         return false;
     }
 }
@@ -632,7 +690,12 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
 
     console_->printCompletion(stepsTaken, stepsLimit);
 
-    // Store conversation history for session persistence
+    // Store conversation history for session persistence, pruning to maxHistoryMessages
+    if (config_.maxHistoryMessages > 0 &&
+        static_cast<int>(messages.size()) > config_.maxHistoryMessages) {
+        messages.erase(messages.begin(),
+                       messages.begin() + (static_cast<int>(messages.size()) - config_.maxHistoryMessages));
+    }
     conversationHistory_ = messages;
 
     return json{

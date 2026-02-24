@@ -141,10 +141,11 @@ struct ParsedResponse {
 
 struct AgentConfig {
     std::string baseUrl = "http://localhost:8000/api/v1";
-    std::string modelId = "Qwen3-Coder-30B-A3B-Instruct-GGUF";
+    std::string modelId = "Qwen3-4B-GGUF";
     int maxSteps = 20;
     int maxPlanIterations = 3;
     int maxConsecutiveRepeats = 4;
+    int maxHistoryMessages = 40; // Max messages kept between processQuery() calls (0 = unlimited)
     bool debug = false;
     bool showPrompts = false;
     bool streaming = false;
