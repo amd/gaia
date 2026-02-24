@@ -20,6 +20,7 @@
 #include <nlohmann/json.hpp>
 
 #include "types.h"
+#include "gaia/export.h"
 
 namespace gaia {
 
@@ -27,7 +28,7 @@ using json = nlohmann::json;
 
 /// Represents an MCP tool with its JSON Schema.
 /// Mirrors Python MCPTool dataclass.
-struct MCPToolSchema {
+struct GAIA_API MCPToolSchema {
     std::string name;
     std::string description;
     json inputSchema; // JSON Schema for tool parameters
@@ -39,7 +40,7 @@ struct MCPToolSchema {
 
 /// Abstract transport interface for MCP communication.
 /// Mirrors Python MCPTransport ABC.
-class MCPTransport {
+class GAIA_API MCPTransport {
 public:
     virtual ~MCPTransport() = default;
 
@@ -54,7 +55,7 @@ public:
 ///
 /// Launches an MCP server as a subprocess and communicates via stdin/stdout
 /// using newline-delimited JSON-RPC 2.0.
-class StdioTransport : public MCPTransport {
+class GAIA_API StdioTransport : public MCPTransport {
 public:
     /// Construct with a shell command string (legacy mode).
     explicit StdioTransport(const std::string& command, int timeout = 30, bool debug = false);
@@ -90,7 +91,7 @@ private:
 
 /// MCP client for interacting with an MCP server.
 /// Mirrors Python MCPClient.
-class MCPClient {
+class GAIA_API MCPClient {
 public:
     /// Create client with a transport.
     MCPClient(const std::string& name, std::unique_ptr<MCPTransport> transport,

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
+#include "gaia/export.h"
 
 namespace gaia {
 
@@ -20,7 +21,7 @@ using json = nlohmann::json;
 
 /// Abstract output handler interface.
 /// Mirrors Python OutputHandler ABC with 15+ required methods.
-class OutputHandler {
+class GAIA_API OutputHandler {
 public:
     virtual ~OutputHandler() = default;
 
@@ -62,7 +63,7 @@ public:
 
 /// Terminal console with ANSI color output.
 /// Simplified version of Python's AgentConsole (without Rich dependency).
-class TerminalConsole : public OutputHandler {
+class GAIA_API TerminalConsole : public OutputHandler {
 public:
     void printProcessingStart(const std::string& query, int maxSteps,
                               const std::string& modelId = "") override;
@@ -102,7 +103,7 @@ private:
 /// Silent console that suppresses all output.
 /// Used for testing and JSON-only operation.
 /// Mirrors Python SilentConsole.
-class SilentConsole : public OutputHandler {
+class GAIA_API SilentConsole : public OutputHandler {
 public:
     explicit SilentConsole(bool silenceFinalAnswer = false)
         : silenceFinalAnswer_(silenceFinalAnswer) {}

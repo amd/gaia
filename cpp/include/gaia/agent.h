@@ -22,6 +22,7 @@
 #include "mcp_client.h"
 #include "tool_registry.h"
 #include "types.h"
+#include "gaia/export.h"
 
 namespace gaia {
 
@@ -33,7 +34,7 @@ namespace gaia {
 ///   - processQuery() main loop
 ///   - JSON parsing with multi-strategy fallback
 ///   - Error recovery with loop detection
-class Agent {
+class GAIA_API Agent {
 public:
     explicit Agent(const AgentConfig& config = {});
     virtual ~Agent();

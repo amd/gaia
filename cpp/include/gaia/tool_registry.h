@@ -15,10 +15,11 @@
 #include <vector>
 
 #include "types.h"
+#include "gaia/export.h"
 
 namespace gaia {
 
-class ToolRegistry {
+class GAIA_API ToolRegistry {
 public:
     /// Register a tool with the registry.
     /// @param info Complete tool information including callback.

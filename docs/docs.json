@@ -52,7 +52,13 @@
                   "guides/mcp/windows-system-health"
                 ]
               },
-              "guides/cpp"
+              {
+                "group": "C++ Framework",
+                "pages": [
+                  "guides/cpp/overview",
+                  "guides/cpp/integration"
+                ]
+              }
             ]
           },
           {
