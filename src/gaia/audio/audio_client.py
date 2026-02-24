@@ -85,7 +85,9 @@ class AudioClient:
             )
 
             device_name = self.whisper_asr.get_device_name()
-            print(f"Microphone: {device_name} (index {self.whisper_asr.device_index})")
+            self.log.info(
+                f"Microphone: {device_name} (index {self.whisper_asr.device_index})"
+            )
 
             # Brief mic level check before starting recording threads
             self._check_mic_levels()
@@ -359,7 +361,7 @@ class AudioClient:
             max_energy = 0.0
             chunks_to_check = 15  # ~2 seconds at 2048 samples / 16kHz
             for _ in range(chunks_to_check):
-                frames, overflowed = stream.read(self.whisper_asr.CHUNK)
+                frames, _ = stream.read(self.whisper_asr.CHUNK)
                 data = frames[:, 0]
                 energy = np.abs(data).mean()
                 max_energy = max(max_energy, energy)

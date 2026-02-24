@@ -3,7 +3,6 @@
 
 """Unit tests for AudioRecorder with mocked sounddevice."""
 
-import queue
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -72,8 +71,6 @@ class TestAudioRecorderInit:
 
     def test_missing_sounddevice_raises(self):
         with patch("gaia.audio.audio_recorder.sd", None):
-            from importlib import reload
-
             import gaia.audio.audio_recorder as mod
 
             # Re-assign sd to None to simulate missing import

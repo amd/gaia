@@ -13,6 +13,9 @@ import pytest
 
 # Skip entire module if audio dependencies not available
 try:
+    import sounddevice  # noqa: F401
+    import whisper  # noqa: F401
+
     from gaia.audio.whisper_asr import WhisperAsr
     from gaia.talk.sdk import TalkConfig, TalkSDK
 

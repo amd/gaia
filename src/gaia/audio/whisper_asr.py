@@ -133,7 +133,7 @@ class WhisperAsr(AudioRecorder):
 
             while self.is_recording:
                 try:
-                    frames, overflowed = self.stream.read(self.CHUNK)
+                    frames, _ = self.stream.read(self.CHUNK)
                     data = frames[:, 0].copy()  # Extract mono channel
                     audio_buffer = np.concatenate((audio_buffer, data))
 

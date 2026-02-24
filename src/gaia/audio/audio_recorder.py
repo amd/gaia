@@ -106,7 +106,7 @@ class AudioRecorder:
                             time.sleep(0.1)
                             continue
 
-                    frames, overflowed = self.stream.read(self.CHUNK)
+                    frames, _ = self.stream.read(self.CHUNK)
                     data = frames[:, 0].copy()  # Extract mono channel
                     data = np.clip(data, -1, 1)
 
