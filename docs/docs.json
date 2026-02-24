@@ -51,7 +51,8 @@
                   "guides/mcp/client",
                   "guides/mcp/windows-system-health"
                 ]
-              }
+              },
+              "guides/cpp"
             ]
           },
           {

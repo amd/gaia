@@ -1,0 +1,262 @@
+---
+title: "C++ Agent Framework"
+description: "Build and run GAIA agents natively in C++17 — same agent loop and MCP integration, no Python runtime required"
+---
+
+**A C++17 port of the GAIA base agent framework.**
+
+- ⚡ **Native performance** — compiled binary, no interpreter overhead
+- 🔌 **Full MCP support** — connects to any MCP server via stdio transport
+- 🧠 **Same agent loop** — planning, tool execution, error recovery, multi-step plans
+- 🪟 **Windows CUA demo** — runs a computer-use agent via the Windows MCP server
+
+<Info>
+**Source Code:** [`cpp/`](https://github.com/amd/gaia/tree/main/cpp) — lives alongside the Python package in this repository.
+</Info>
+
+<Note>
+The C++ framework targets the base agent only. Specialized agents (Code, Docker, Jira, etc.), the REST API server, RAG, and audio are Python-only. See the [Python quickstart](/quickstart) for the full feature set.
+</Note>
+
+## Quick Start
+
+<Steps>
+  <Step title="Install prerequisites">
+    Install [Visual Studio 2022](https://visualstudio.microsoft.com/) (Desktop C++ workload) and [CMake 3.14+](https://cmake.org/download/). Git must be on your PATH (required by CMake FetchContent).
+
+    Also install `uv` for the Windows MCP server:
+    ```bash
+    pip install uv
+    ```
+  </Step>
+
+  <Step title="Build">
+    From the repository root:
+
+    <Tabs>
+      <Tab title="Windows (MSVC)">
+        ```bat
+        cd cpp
+        cmake -B build -G "Visual Studio 17 2022" -A x64
+        cmake --build build --config Release
+        ```
+        Binaries land in `cpp\build\Release\`.
+      </Tab>
+      <Tab title="Windows (Ninja)">
+        ```bat
+        cd cpp
+        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        cmake --build build
+        ```
+      </Tab>
+      <Tab title="Linux / macOS">
+        ```bash
+        cd cpp
+        cmake -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build
+        ```
+      </Tab>
+    </Tabs>
+
+    All dependencies (nlohmann/json, cpp-httplib, Google Test) are fetched automatically — no manual installs.
+  </Step>
+
+  <Step title="Start Lemonade Server">
+    The agent connects to an OpenAI-compatible LLM at `http://localhost:8000/api/v1` by default.
+
+    ```bash
+    lemonade-server serve
+    ```
+
+    See [Setup Guide](/setup) to install Lemonade and download a model.
+  </Step>
+
+  <Step title="Run the Windows CUA demo">
+    ```bat
+    cpp\build\Release\simple_agent.exe
+    ```
+
+    Then try:
+    ```
+    You: Run a full system health analysis.
+    ```
+
+    The agent connects to the Windows MCP server, gathers CPU/memory/disk metrics via PowerShell, and pastes a formatted report into Notepad.
+
+    Type `quit` to exit.
+  </Step>
+</Steps>
+
+## How It Works
+
+The `simple_agent` demo is a C++ port of the [Windows System Health Agent](/guides/mcp/windows-system-health). It subclasses `gaia::Agent`, connects to the Windows MCP server on startup, then enters the same planning loop as the Python version.
+
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'18px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
+graph TB
+    User("User query")
+    Agent("WindowsSystemHealthAgent\n(gaia::Agent subclass)")
+    LLM("LLM\nhttp://localhost:8000")
+    MCP("Windows MCP Server\nuvx windows-mcp")
+
+    User --> Agent
+    Agent -->|"chat/completions"| LLM
+    LLM -->|"plan + tool calls"| Agent
+    Agent -->|"JSON-RPC 2.0 stdio"| MCP
+
+    MCP --> Shell1("mcp_windows_Shell\nGet-CimInstance (Memory)")
+    MCP --> Shell2("mcp_windows_Shell\nGet-PSDrive (Disk)")
+    MCP --> Shell3("mcp_windows_Shell\nGet-WmiObject (CPU)")
+    MCP --> Clipboard("mcp_windows_Shell\nSet-Clipboard")
+    MCP --> Notepad("mcp_windows_Shell\nStart-Process notepad")
+    MCP --> Paste("mcp_windows_Shortcut\nctrl+v")
+
+    style User fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Agent fill:#ED1C24,stroke:#F4484D,stroke-width:3px,color:#fff
+    style LLM fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style MCP fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Shell1 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Shell2 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Shell3 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Clipboard fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Notepad fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Paste fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+
+    linkStyle default stroke:#ED1C24,stroke-width:2px
+```
+
+**Execution flow:**
+1. User query enters `agent.processQuery()`
+2. Agent composes a system prompt (tool list + response format) and calls the LLM
+3. LLM returns a JSON plan with tool calls
+4. Agent executes each tool through the MCP client via JSON-RPC 2.0 over stdio
+5. Tool results feed back to the LLM until a final answer is produced
+
+## Writing Your Own Agent
+
+Subclass `gaia::Agent`, override `getSystemPrompt()` and optionally `registerTools()`, then call `init()` at the end of your constructor:
+
+```cpp
+#include <gaia/agent.h>
+
+class MyAgent : public gaia::Agent {
+public:
+    MyAgent() : Agent(makeConfig()) {
+        init();  // registers tools and composes system prompt
+    }
+
+protected:
+    std::string getSystemPrompt() const override {
+        return "You are a helpful assistant. Use tools to answer questions.";
+    }
+
+    void registerTools() override {
+        toolRegistry().registerTool(
+            "get_time",
+            "Return the current UTC time.",
+            [](const gaia::json&) -> gaia::json {
+                return {{"time", "2026-02-24T00:00:00Z"}};
+            },
+            {}  // no parameters
+        );
+    }
+
+private:
+    static gaia::AgentConfig makeConfig() {
+        gaia::AgentConfig cfg;
+        cfg.baseUrl = "http://localhost:8000/api/v1";
+        cfg.modelId = "Qwen3-Coder-30B-A3B-Instruct-GGUF";
+        cfg.maxSteps = 20;
+        return cfg;
+    }
+};
+
+int main() {
+    MyAgent agent;
+    auto result = agent.processQuery("What time is it?");
+    std::cout << result["result"].get<std::string>() << std::endl;
+}
+```
+
+To connect an MCP server and auto-register its tools:
+
+```cpp
+agent.connectMcpServer("my_server", {
+    {"command", "uvx"},
+    {"args", {"my-mcp-package"}}
+});
+// Tools are now available as mcp_my_server_<tool_name>
+```
+
+## AgentConfig Reference
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `baseUrl` | `http://localhost:8000/api/v1` | LLM server endpoint (OpenAI-compatible) |
+| `modelId` | `Qwen3-Coder-30B-A3B-Instruct-GGUF` | Model to request from the server |
+| `maxSteps` | `20` | Maximum agent loop iterations |
+| `maxPlanIterations` | `3` | Maximum plan/replan cycles |
+| `maxConsecutiveRepeats` | `4` | Loop-detection threshold |
+| `debug` | `false` | Enable debug logging |
+| `showPrompts` | `false` | Print system prompts to stdout |
+
+## Running Tests
+
+```bat
+cd cpp\build
+ctest -C Release --output-on-failure
+```
+
+Or directly:
+
+```bat
+cpp\build\Release\gaia_tests.exe --gtest_color=yes
+```
+
+The test suite covers all six modules: agent loop, tool registry, JSON utilities, MCP client, console output, and types.
+
+## Comparison with Python GAIA
+
+| Feature | Python | C++ |
+|---------|--------|-----|
+| Agent loop (plan → tool → answer) | ✓ | ✓ |
+| Tool registration | ✓ | ✓ |
+| MCP client (stdio) | ✓ | ✓ |
+| JSON parsing with fallbacks | ✓ | ✓ |
+| OpenAI-compatible LLM backend | ✓ | ✓ |
+| Multiple LLM providers (Claude, OpenAI) | ✓ | planned |
+| Specialized agents (Code, Docker, Jira…) | ✓ | not ported |
+| REST API server | ✓ | not ported |
+| Audio / RAG / Stable Diffusion | ✓ | not ported |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Windows System Health Agent" icon="windows" href="/guides/mcp/windows-system-health">
+    The Python version of the same demo — compare the two implementations
+  </Card>
+
+  <Card title="MCP Client Guide" icon="plug" href="/guides/mcp/client">
+    How MCP client-server integration works in GAIA
+  </Card>
+
+  <Card title="C++ Source Code" icon="code" href="https://github.com/amd/gaia/tree/main/cpp">
+    Browse the full C++ implementation on GitHub
+  </Card>
+
+  <Card title="SDK Core Concepts" icon="book" href="/sdk/core/agent-system">
+    Understand the Python agent loop that the C++ port mirrors
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

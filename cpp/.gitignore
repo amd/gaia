@@ -1,0 +1,84 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# ---- CMake build output ----
+build/
+out/
+cmake-build-*/
+
+# ---- Compiled binaries ----
+*.exe
+*.dll
+*.lib
+*.a
+*.so
+*.so.*
+*.dylib
+*.pdb
+*.ilk
+*.exp
+
+# ---- Object files ----
+*.o
+*.obj
+
+# ---- CMake generated files (if in-source) ----
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+_deps/
+install_manifest.txt
+compile_commands.json
+
+# ---- Visual Studio ----
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.user
+*.suo
+*.ncb
+*.opendb
+*.VC.db
+*.VC.opendb
+ipch/
+x64/
+x86/
+Debug/
+Release/
+RelWithDebInfo/
+MinSizeRel/
+
+# ---- Xcode ----
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+
+# ---- CLion / JetBrains ----
+.idea/
+cmake-build-debug/
+cmake-build-release/
+
+# ---- VS Code ----
+.vscode/
+*.code-workspace
+
+# ---- Testing ----
+Testing/
+CTestResults/
+LastTest.log
+
+# ---- OS ----
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ---- Logs and runtime files ----
+*.log
+agent_trace_*.json
+agent_output_*.json
