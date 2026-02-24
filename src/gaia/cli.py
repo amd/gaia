@@ -623,6 +623,7 @@ async def async_main(action, **kwargs):
                 "audio_device_index", None
             ),  # Use default device if not specified
             silence_threshold=kwargs.get("silence_threshold", 0.5),
+            mic_threshold=kwargs.get("mic_threshold", 0.003),
             enable_tts=not kwargs.get("no_tts", False),
             system_prompt=None,  # Could add this as a parameter later
             show_stats=kwargs.get("stats", False),
@@ -847,6 +848,12 @@ def main():
         type=float,
         default=0.5,
         help="Silence threshold in seconds (default: 0.5)",
+    )
+    talk_parser.add_argument(
+        "--mic-threshold",
+        type=float,
+        default=0.003,
+        help="Microphone amplitude threshold for voice detection (default: 0.003). Lower = more sensitive",
     )
 
     # RAG configuration for talk (document Q&A with voice)
@@ -2894,8 +2901,8 @@ Let me know your answer!
                 print("\nAvailable Audio Input Devices:")
                 for device in devices:
                     print(f"Index {device['index']}: {device['name']}")
-                    print(f"    Max Input Channels: {device['maxInputChannels']}")
-                    print(f"    Default Sample Rate: {device['defaultSampleRate']}")
+                    print(f"    Max Input Channels: {device['max_input_channels']}")
+                    print(f"    Default Sample Rate: {device['default_samplerate']}")
                     print()
                 return
 

@@ -222,6 +222,17 @@ description: Solutions for common GAIA issues and errors
 ## Voice & Audio Issues
 
 <AccordionGroup>
+  <Accordion title="PortAudio library not found" icon="circle-exclamation">
+    The `sounddevice` package requires the PortAudio runtime library.
+
+    **Linux:**
+    ```bash
+    sudo apt-get install -y libportaudio2
+    ```
+
+    Windows users do not need to install PortAudio separately — it is bundled with the sounddevice Python package.
+  </Accordion>
+
   <Accordion title="Audio device errors" icon="microphone-slash">
     **List available audio devices:**
     ```bash
