@@ -153,14 +153,17 @@ jobs:
               return
           }
 
-          # Try Visual Studio bundled CMake
-          $vsCmake = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
-              -latest -requires Microsoft.VisualStudio.Component.VC.CMake.Project `
-              -find "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin" 2>$null
-          if ($vsCmake -and (Test-Path "$vsCmake\cmake.exe")) {
-              Write-Host "Adding VS-bundled CMake to PATH: $vsCmake"
-              echo "$vsCmake" >> $env:GITHUB_PATH
-              return
+          # Try Visual Studio bundled CMake (skip if VS not installed)
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+              $vsCmake = & $vswhere -latest `
+                  -requires Microsoft.VisualStudio.Component.VC.CMake.Project `
+                  -find "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin" 2>$null
+              if ($vsCmake -and (Test-Path "$vsCmake\cmake.exe")) {
+                  Write-Host "Adding VS-bundled CMake to PATH: $vsCmake"
+                  echo "$vsCmake" >> $env:GITHUB_PATH
+                  return
+              }
           }
 
           # Install CMake via winget (available on Windows 10+)
