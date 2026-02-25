@@ -94,7 +94,7 @@ jobs:
         run: |
           cmake -B consumer/build -S cpp/examples/fetch_content_consumer \
                 -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_PREFIX_PATH="${{ runner.temp }}/gaia_install;$(pwd)/cpp/build/_deps/json-build" \
+                -DCMAKE_PREFIX_PATH="${{ runner.temp }}/gaia_install" \
                 -DUSE_FIND_PACKAGE=ON
           cmake --build consumer/build --config Release --parallel
 

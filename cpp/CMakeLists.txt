@@ -128,8 +128,17 @@ else()
     target_link_libraries(gaia_core PUBLIC nlohmann_json::nlohmann_json)
 endif()
 
-# httplib is always PRIVATE (implementation detail).
-target_link_libraries(gaia_core PRIVATE httplib::httplib)
+# httplib is PRIVATE (implementation detail, header-only).
+# When fetched via FetchContent, use include directories only so the
+# FetchContent target is not recorded in the install export set (which would
+# force consumers to find httplib even though it's compiled into gaia_core).
+if(httplib_FOUND)
+    target_link_libraries(gaia_core PRIVATE httplib::httplib)
+else()
+    target_include_directories(gaia_core PRIVATE
+        $<TARGET_PROPERTY:httplib::httplib,INTERFACE_INCLUDE_DIRECTORIES>
+    )
+endif()
 
 # Platform-specific libraries
 if(UNIX)
@@ -228,6 +237,16 @@ install(EXPORT gaia_coreTargets
     NAMESPACE gaia::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/gaia_core
 )
+
+# When nlohmann_json was fetched via FetchContent, bundle its headers in
+# the install prefix so consumers don't need a separate json install.
+if(GAIA_JSON_FETCHED)
+    install(DIRECTORY ${json_SOURCE_DIR}/include/nlohmann
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    set(GAIA_REQUIRE_FIND_JSON FALSE)
+else()
+    set(GAIA_REQUIRE_FIND_JSON TRUE)
+endif()
 
 configure_package_config_file(
     cmake/gaia_coreConfig.cmake.in

@@ -2,12 +2,12 @@
 
 include(CMakeFindDependencyMacro)
 
-# nlohmann/json is part of gaia_core's public API (json type alias).
-# Install it via your package manager:
-#   apt:   sudo apt install nlohmann-json3-dev
-#   vcpkg: vcpkg install nlohmann-json
-#   conan: conan install nlohmann_json/3.11.3
-find_dependency(nlohmann_json REQUIRED)
+# When nlohmann_json was fetched at build time its headers are bundled in
+# the install prefix -- no find_dependency needed.  When it came from the
+# system package manager, consumers must have it installed too.
+if(@GAIA_REQUIRE_FIND_JSON@)
+    find_dependency(nlohmann_json REQUIRED)
+endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/gaia_coreTargets.cmake")
 
