@@ -200,9 +200,12 @@ std::string Agent::callLlm(const std::vector<Message>& messages, const std::stri
                 return choice["message"]["content"].get<std::string>();
             }
         }
-        throw std::runtime_error("Unexpected LLM response format");
+        // Include truncated response body in error for debugging
+        std::string preview = responseBody.substr(0, 200);
+        throw std::runtime_error("Unexpected LLM response format: " + preview);
     } catch (const json::parse_error& e) {
-        throw std::runtime_error(std::string("Failed to parse LLM response: ") + e.what());
+        std::string preview = responseBody.substr(0, 200);
+        throw std::runtime_error(std::string("Failed to parse LLM response: ") + e.what() + " | body: " + preview);
     }
 }
 
@@ -433,16 +436,25 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
             stepResults.clear();
         }
 
-        // Call LLM
+        // Call LLM (retry once on failure)
         console_->startProgress("Thinking");
         std::string response;
         try {
             response = callLlm(messages, systemPrompt());
         } catch (const std::exception& e) {
             console_->stopProgress();
-            console_->printError(std::string("LLM error: ") + e.what());
-            finalAnswer = std::string("Unable to complete task due to LLM error: ") + e.what();
-            break;
+            console_->printWarning(std::string("LLM call failed, retrying: ") + e.what());
+
+            // Retry once
+            console_->startProgress("Retrying");
+            try {
+                response = callLlm(messages, systemPrompt());
+            } catch (const std::exception& e2) {
+                console_->stopProgress();
+                console_->printError(std::string("LLM error: ") + e2.what());
+                finalAnswer = std::string("Unable to complete task due to LLM error: ") + e2.what();
+                break;
+            }
         }
         console_->stopProgress();
 
