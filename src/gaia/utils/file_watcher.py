@@ -94,7 +94,11 @@ def compute_file_hash(
             processed_hashes.add(file_hash)
     """
     try:
-        file_path = Path(path)
+        file_path = Path(path).resolve()
+        # Reject paths with traversal components
+        if ".." in Path(path).parts:
+            logger.warning(f"Rejected path with traversal: {path}")
+            return None
         if not file_path.exists() or not file_path.is_file():
             return None
 

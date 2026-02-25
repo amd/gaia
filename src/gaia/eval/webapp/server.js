@@ -8,6 +8,15 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Validate that a resolved path stays within the allowed base directory
+function safePath(basePath, userInput) {
+    const resolved = path.resolve(basePath, userInput);
+    if (!resolved.startsWith(path.resolve(basePath) + path.sep) && resolved !== path.resolve(basePath)) {
+        return null;
+    }
+    return resolved;
+}
+
 // Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -108,8 +117,11 @@ app.get('/api/files', (req, res) => {
 app.get('/api/experiment/:filename', (req, res) => {
     try {
         const filename = req.params.filename;
-        const filePath = path.join(EXPERIMENTS_PATH, filename);
-        
+        const filePath = safePath(EXPERIMENTS_PATH, filename);
+        if (!filePath) {
+            return res.status(400).json({ error: 'Invalid file path' });
+        }
+
         if (!fs.existsSync(filePath)) {
             return res.status(404).json({ error: 'File not found' });
         }
@@ -125,8 +137,11 @@ app.get('/api/experiment/:filename', (req, res) => {
 app.get('/api/evaluation/*', (req, res) => {
     try {
         const filename = req.params[0];
-        const filePath = path.join(EVALUATIONS_PATH, filename);
-        
+        const filePath = safePath(EVALUATIONS_PATH, filename);
+        if (!filePath) {
+            return res.status(400).json({ error: 'Invalid file path' });
+        }
+
         if (!fs.existsSync(filePath)) {
             return res.status(404).json({ error: 'File not found' });
         }
@@ -145,11 +160,14 @@ app.get('/api/agent-output/:filename(*)', (req, res) => {
         let filePath;
         
         // Check if it's a single file mode or directory mode
-        if (SINGLE_AGENT_FILE && fs.existsSync(SINGLE_AGENT_FILE) && 
+        if (SINGLE_AGENT_FILE && fs.existsSync(SINGLE_AGENT_FILE) &&
             path.basename(SINGLE_AGENT_FILE) === filename) {
             filePath = SINGLE_AGENT_FILE;
         } else {
-            filePath = path.join(AGENT_OUTPUTS_PATH, filename);
+            filePath = safePath(AGENT_OUTPUTS_PATH, filename);
+            if (!filePath) {
+                return res.status(400).json({ error: 'Invalid file path' });
+            }
         }
         
         if (!fs.existsSync(filePath)) {
@@ -185,7 +203,10 @@ app.get('/api/report/:experimentFile/:evaluationFile?', (req, res) => {
         const evaluationFile = req.params.evaluationFile;
 
         // Load experiment data
-        const experimentPath = path.join(EXPERIMENTS_PATH, experimentFile);
+        const experimentPath = safePath(EXPERIMENTS_PATH, experimentFile);
+        if (!experimentPath) {
+            return res.status(400).json({ error: 'Invalid experiment file path' });
+        }
         if (!fs.existsSync(experimentPath)) {
             return res.status(404).json({ error: 'Experiment file not found' });
         }
@@ -193,8 +214,8 @@ app.get('/api/report/:experimentFile/:evaluationFile?', (req, res) => {
 
         let evaluationData = null;
         if (evaluationFile) {
-            const evaluationPath = path.join(EVALUATIONS_PATH, evaluationFile);
-            if (fs.existsSync(evaluationPath)) {
+            const evaluationPath = safePath(EVALUATIONS_PATH, evaluationFile);
+            if (evaluationPath && fs.existsSync(evaluationPath)) {
                 evaluationData = JSON.parse(fs.readFileSync(evaluationPath, 'utf8'));
             }
         }
@@ -277,12 +298,15 @@ app.get('/api/test-data/:type/:filename', (req, res) => {
         const type = req.params.type;
         const filename = req.params.filename;
         // Try subdirectory first, then root level
-        let filePath = path.join(TEST_DATA_PATH, type, filename);
+        let filePath = safePath(path.join(TEST_DATA_PATH, type), filename);
+        if (!filePath) {
+            return res.status(400).json({ error: 'Invalid file path' });
+        }
 
         // If not found in subdirectory, try root level
         if (!fs.existsSync(filePath)) {
-            const rootPath = path.join(TEST_DATA_PATH, filename);
-            if (fs.existsSync(rootPath)) {
+            const rootPath = safePath(TEST_DATA_PATH, filename);
+            if (rootPath && fs.existsSync(rootPath)) {
                 filePath = rootPath;
             } else {
                 return res.status(404).json({ error: 'Test data file not found' });
@@ -385,8 +409,11 @@ app.get('/api/groundtruth', (req, res) => {
 app.get('/api/groundtruth/:filename(*)', (req, res) => {
     try {
         const filename = req.params.filename;
-        const filePath = path.join(GROUNDTRUTH_PATH, filename);
-        
+        const filePath = safePath(GROUNDTRUTH_PATH, filename);
+        if (!filePath) {
+            return res.status(400).json({ error: 'Invalid file path' });
+        }
+
         if (!fs.existsSync(filePath)) {
             return res.status(404).json({ error: 'Groundtruth file not found' });
         }

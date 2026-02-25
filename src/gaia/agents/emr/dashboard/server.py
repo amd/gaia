@@ -656,7 +656,7 @@ def create_app(
             }
         except Exception as e:
             logger.error(f"Error listing patients: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     @app.get("/api/patients/{patient_id}")
     async def get_patient(patient_id: int) -> Dict[str, Any]:
@@ -685,7 +685,7 @@ def create_app(
             raise
         except Exception as e:
             logger.error(f"Error getting patient: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     @app.put("/api/patients/{patient_id}")
     async def update_patient(
@@ -761,7 +761,7 @@ def create_app(
                     {"pid": patient_id},
                 )
 
-            logger.info(f"Updated patient {patient_id}: {list(update_data.keys())}")
+            logger.info(f"Updated patient record: {len(update_data)} field(s)")
 
             return {
                 "success": True,
@@ -774,7 +774,7 @@ def create_app(
             raise
         except Exception as e:
             logger.error(f"Error updating patient: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     @app.delete("/api/patients/{patient_id}")
     async def delete_patient(patient_id: int, delete_file: bool = True):
@@ -831,7 +831,7 @@ def create_app(
             raise
         except Exception as e:
             logger.error(f"Error deleting patient: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     @app.post("/api/patients/{patient_id}/mark-reviewed")
     async def mark_patient_reviewed(patient_id: int) -> Dict[str, Any]:
@@ -871,7 +871,7 @@ def create_app(
                     {"id": latest_session["id"]},
                 )
 
-            logger.info(f"Marked patient {patient_id} as reviewed")
+            logger.info("Marked patient record as reviewed")
 
             return {
                 "success": True,
@@ -884,7 +884,7 @@ def create_app(
             raise
         except Exception as e:
             logger.error(f"Error marking patient as reviewed: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     @app.get("/api/patients/{patient_id}/file")
     async def download_patient_file(patient_id: int, inline: bool = False):
@@ -936,7 +936,7 @@ def create_app(
             raise
         except Exception as e:
             logger.error(f"Error downloading file: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     @app.get("/api/stats")
     async def get_stats() -> Dict[str, Any]:
@@ -948,7 +948,7 @@ def create_app(
             return _agent_instance.get_stats()
         except Exception as e:
             logger.error(f"Error getting stats: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     @app.get("/api/alerts")
     async def list_alerts(
@@ -994,7 +994,7 @@ def create_app(
             return {"alerts": results, "count": len(results)}
         except Exception as e:
             logger.error(f"Error listing alerts: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     @app.post("/api/alerts/{alert_id}/acknowledge")
     async def acknowledge_alert(
@@ -1031,7 +1031,7 @@ def create_app(
             raise
         except Exception as e:
             logger.error(f"Error acknowledging alert: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     @app.get("/api/sessions")
     async def list_sessions(limit: int = 50) -> Dict[str, Any]:
@@ -1053,7 +1053,7 @@ def create_app(
             return {"sessions": results, "count": len(results)}
         except Exception as e:
             logger.error(f"Error listing sessions: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     @app.get("/api/events")
     async def event_stream():
@@ -1158,7 +1158,7 @@ def create_app(
             return {
                 "success": False,
                 "message": request.message,
-                "response": f"Error processing your request: {str(e)}",
+                "response": "An error occurred processing your request. Please try again.",
                 "timestamp": datetime.now().isoformat(),
             }
 
@@ -1336,7 +1336,7 @@ def create_app(
                 },
                 "ready_count": 0,
                 "total_models": 3,
-                "message": f"Error: {str(e)}",
+                "message": "Error checking initialization status. Check server logs for details.",
             }
 
     @app.post("/api/init")
@@ -1379,10 +1379,11 @@ def create_app(
                     }
                 steps[-1]["status"] = "complete"
             except Exception as e:
+                logger.error(f"Lemonade server health check failed: {e}")
                 steps[-1]["status"] = "error"
                 return {
                     "success": False,
-                    "message": f"Lemonade server not running: {str(e)}",
+                    "message": "Lemonade server not running. Please start it first.",
                     "steps": steps,
                 }
 
@@ -1442,7 +1443,7 @@ def create_app(
             logger.error(f"Error during init: {e}")
             return {
                 "success": False,
-                "message": f"Initialization failed: {str(e)}",
+                "message": "Initialization failed. Check server logs for details.",
                 "steps": steps if "steps" in dir() else [],
             }
 
@@ -1590,7 +1591,7 @@ def create_app(
 
         except Exception as e:
             logger.error(f"Error getting watch folder files: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     def _format_file_size(size_bytes: int) -> str:
         """Format file size in human-readable format."""
@@ -1608,6 +1609,16 @@ def create_app(
             raise HTTPException(status_code=503, detail="Agent not initialized")
 
         new_dir = Path(config.watch_dir).expanduser().resolve()
+
+        # Validate the path doesn't traverse to sensitive system directories
+        sensitive_dirs = ["/etc", "/usr", "/bin", "/sbin", "/boot", "/proc", "/sys"]
+        new_dir_str = str(new_dir)
+        for sensitive in sensitive_dirs:
+            if new_dir_str == sensitive or new_dir_str.startswith(sensitive + "/"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot watch system directories",
+                )
 
         try:
             # Create directory if it doesn't exist
@@ -1631,7 +1642,7 @@ def create_app(
             }
         except Exception as e:
             logger.error(f"Failed to update watch directory: {e}")
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail="Invalid request")
 
     @app.post("/api/upload")
     async def upload_file(file: UploadFile = File(...)) -> Dict[str, Any]:
@@ -1750,7 +1761,7 @@ def create_app(
             except NameError:
                 pass
             logger.error(f"Error uploading file: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     @app.post("/api/upload-path")
     async def upload_file_by_path(request: Dict[str, Any]) -> Dict[str, Any]:
@@ -1762,10 +1773,14 @@ def create_app(
         if not file_path:
             raise HTTPException(status_code=400, detail="No file_path provided")
 
-        source_path = Path(file_path)
+        source_path = Path(file_path).resolve()
+
+        # Validate path doesn't contain traversal
+        if ".." in Path(file_path).parts:
+            raise HTTPException(status_code=400, detail="Invalid file path")
 
         if not source_path.exists():
-            raise HTTPException(status_code=400, detail=f"File not found: {file_path}")
+            raise HTTPException(status_code=400, detail="File not found")
 
         # Validate file type
         allowed_extensions = {".png", ".jpg", ".jpeg", ".pdf", ".tiff", ".bmp"}
@@ -1871,7 +1886,7 @@ def create_app(
             except NameError:
                 pass
             logger.error(f"Error processing file by path: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     @app.delete("/api/database")
     async def clear_database() -> Dict[str, Any]:
@@ -1913,7 +1928,10 @@ def create_app(
             raise
         except Exception as e:
             logger.error(f"Error clearing database: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to clear database. Check server logs for details.",
+            )
 
     # Serve static frontend files
     dashboard_dir = Path(__file__).parent / "frontend" / "dist"

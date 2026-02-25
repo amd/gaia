@@ -16,6 +16,7 @@
 
 require('dotenv').config();
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
@@ -227,8 +228,17 @@ function authMiddleware(req, res, next) {
   res.status(401).send(getLoginPage(originalUrl).replace('{{ERROR}}', ''));
 }
 
+// Rate limit login attempts
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // limit each IP to 10 login attempts per windowMs
+  message: 'Too many login attempts. Please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // Login handler
-app.post('/auth/login', (req, res) => {
+app.post('/auth/login', loginLimiter, (req, res) => {
   const { code, redirect } = req.body;
   const safeRedirect = sanitizeRedirect(redirect);
 
@@ -242,8 +252,8 @@ app.post('/auth/login', (req, res) => {
       maxAge: COOKIE_MAX_AGE,
       sameSite: 'lax'
     });
-    // Redirect to the original URL the user was trying to access
-    res.redirect(safeRedirect);
+    // Redirect to the original URL the user was trying to access (local paths only)
+    res.redirect(303, safeRedirect);
   } else {
     // Preserve the redirect URL even on error so user can retry
     res.redirect(`/auth/login-error?redirect=${encodeURIComponent(safeRedirect)}`);
