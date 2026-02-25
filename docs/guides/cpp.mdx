@@ -3,13 +3,13 @@ title: "C++ Agent Framework"
 description: "Build and run GAIA agents natively in C++17 — same agent loop and MCP integration, no Python runtime required"
 ---
 
-**A C++17 port of the GAIA base agent framework.**
+**A C++17 port of the GAIA base agent framework.** Drop AI agent capabilities into any C++ project — three lines of CMake, zero manual dependencies, any OpenAI-compatible LLM backend.
 
-- ⚡ **Native performance** — compiled binary, no interpreter overhead
-- 🔌 **Full MCP support** — connects to any MCP server via stdio transport
-- 🧠 **Same agent loop** — planning, tool execution, error recovery, multi-step plans
-- 🪟 **Windows CUA demo** — runs a computer-use agent via the Windows MCP server
-- 📡 **Wi-Fi Troubleshooter demo** — adaptive reasoning with real diagnostic/fix tools
+- **Native performance** — compiled binary, no interpreter overhead, no Python runtime
+- **Easy integration** — add to any CMake project via FetchContent, git submodule, or find_package ([Integration Guide](/guides/cpp/integration))
+- **Any LLM backend** — works with Lemonade, llama.cpp, Ollama, vLLM, OpenAI, or any OpenAI-compatible server ([details](/guides/cpp/integration#using-alternative-llm-backends))
+- **Full MCP support** — connects to any MCP server via stdio transport
+- **Same agent loop** — planning, tool execution, error recovery, multi-step plans
 
 <Info>
 **Source Code:** [`cpp/`](https://github.com/amd/gaia/tree/main/cpp) — lives alongside the Python package in this repository.
@@ -18,6 +18,18 @@ description: "Build and run GAIA agents natively in C++17 — same agent loop an
 <Note>
 The C++ framework targets the base agent only. Specialized agents (Code, Docker, Jira, etc.), the REST API server, RAG, and audio are Python-only. See the [Python quickstart](/quickstart) for the full feature set.
 </Note>
+
+## Use in Your Project
+
+Add `gaia_core` to any C++ project with three lines of CMake:
+
+```cmake
+FetchContent_Declare(gaia GIT_REPOSITORY https://github.com/amd/gaia.git GIT_TAG main SOURCE_SUBDIR cpp)
+FetchContent_MakeAvailable(gaia)
+target_link_libraries(my_app PRIVATE gaia::gaia_core)
+```
+
+All dependencies are resolved automatically. See the [Integration Guide](/guides/cpp/integration) for git submodule, find_package, and shared library methods.
 
 ## Quick Start
 
@@ -232,7 +244,7 @@ private:
     static gaia::AgentConfig makeConfig() {
         gaia::AgentConfig cfg;
         cfg.baseUrl = "http://localhost:8000/api/v1";
-        cfg.modelId = "Qwen3-Coder-30B-A3B-Instruct-GGUF";
+        cfg.modelId = "Qwen3-4B-GGUF";  // or any model on your server
         cfg.maxSteps = 20;
         return cfg;
     }
@@ -259,15 +271,17 @@ agent.connectMcpServer("my_server", {
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `baseUrl` | `http://localhost:8000/api/v1` | LLM server endpoint (OpenAI-compatible) |
-| `modelId` | `Qwen3-Coder-30B-A3B-Instruct-GGUF` | Model to request from the server |
-| `maxSteps` | `20` | Maximum agent loop iterations |
-| `maxPlanIterations` | `3` | Maximum plan/replan cycles |
-| `maxConsecutiveRepeats` | `4` | Loop-detection threshold |
+| `baseUrl` | `http://localhost:8000/api/v1` | LLM server endpoint (any OpenAI-compatible server) |
+| `modelId` | `Qwen3-4B-GGUF` | Model identifier sent to the server |
+| `maxSteps` | `20` | Maximum agent loop iterations per query |
+| `maxPlanIterations` | `3` | Maximum plan/replan cycles before forcing completion |
+| `maxConsecutiveRepeats` | `4` | Consecutive identical responses before loop-detection triggers |
 | `maxHistoryMessages` | `40` | Max messages kept between queries (0 = unlimited) |
 | `contextSize` | `16384` | LLM context window size in tokens (`n_ctx`) |
-| `debug` | `false` | Enable debug logging |
-| `showPrompts` | `false` | Print system prompts to stdout |
+| `debug` | `false` | Enable verbose debug logging to stdout |
+| `showPrompts` | `false` | Print full system prompts and LLM responses |
+| `streaming` | `false` | Enable streaming responses from the LLM |
+| `silentMode` | `false` | Suppress all console output (use `SilentConsole`) |
 
 ## Running Tests
 
@@ -301,20 +315,20 @@ The test suite covers all six modules: agent loop, tool registry, JSON utilities
 ## Next Steps
 
 <CardGroup cols={2}>
-  <Card title="Windows System Health Agent" icon="windows" href="/guides/mcp/windows-system-health">
-    The Python version of the same demo — compare the two implementations
+  <Card title="Integration Guide" icon="puzzle-piece" href="/guides/cpp/integration">
+    FetchContent, git submodule, find_package, shared library — plus alternative LLM backends
   </Card>
 
-  <Card title="MCP Client Guide" icon="plug" href="/guides/mcp/client">
-    How MCP client-server integration works in GAIA
+  <Card title="Customizing Your Agent" icon="sliders" href="/guides/cpp/custom-agent">
+    Custom prompts, typed tools, MCP servers, output capture, and AgentConfig tuning
+  </Card>
+
+  <Card title="Wi-Fi Troubleshooter Agent" icon="wifi" href="/guides/cpp/wifi-agent">
+    Full network diagnostic and auto-fix using only registered C++ tools
   </Card>
 
   <Card title="C++ Source Code" icon="code" href="https://github.com/amd/gaia/tree/main/cpp">
     Browse the full C++ implementation on GitHub
-  </Card>
-
-  <Card title="SDK Core Concepts" icon="book" href="/sdk/core/agent-system">
-    Understand the Python agent loop that the C++ port mirrors
   </Card>
 </CardGroup>
 

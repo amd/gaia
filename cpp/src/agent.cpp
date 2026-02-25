@@ -145,7 +145,11 @@ std::string Agent::callLlm(const std::vector<Message>& messages, const std::stri
     // Extract port from host
     auto colonPos = host.find(':');
     if (colonPos != std::string::npos) {
-        port = std::stoi(host.substr(colonPos + 1));
+        try {
+            port = std::stoi(host.substr(colonPos + 1));
+        } catch (const std::exception&) {
+            throw std::runtime_error("Invalid port in baseUrl: " + config_.baseUrl);
+        }
         host = host.substr(0, colonPos);
     }
 
@@ -170,7 +174,12 @@ std::string Agent::callLlm(const std::vector<Message>& messages, const std::stri
         cli.set_read_timeout(120);
         auto res = cli.Post(path, requestBody.dump(), "application/json");
         if (!res) {
-            throw std::runtime_error("LLM HTTP request failed (SSL)");
+            throw std::runtime_error("LLM HTTP request failed (SSL): connection error to " +
+                                     host + ":" + std::to_string(port));
+        }
+        if (res->status != 200) {
+            throw std::runtime_error("LLM HTTP request failed (SSL) with status " +
+                                     std::to_string(res->status) + ": " + res->body);
         }
         responseBody = res->body;
 #else

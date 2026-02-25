@@ -119,12 +119,16 @@ flowchart LR
     All dependencies (nlohmann/json, cpp-httplib, Google Test) are fetched automatically by CMake -- no manual installs required.
   </Step>
 
-  <Step title="Start Lemonade Server">
-    The agent connects to an OpenAI-compatible LLM at `http://localhost:8000/api/v1` by default.
+  <Step title="Start an LLM server">
+    The agent connects to any OpenAI-compatible LLM server at `http://localhost:8000/api/v1` by default. The recommended backend is [Lemonade Server](https://github.com/amd/lemonade) (optimized for AMD hardware):
 
     ```bash
     lemonade-server serve
     ```
+
+    <Note>
+    **Not using Lemonade?** Any OpenAI-compatible server works — llama.cpp, Ollama, vLLM, or a cloud endpoint. Just set `AgentConfig::baseUrl` and `AgentConfig::modelId`. See the [Integration Guide](/guides/cpp/integration#using-alternative-llm-backends) for configuration examples.
+    </Note>
   </Step>
 
   <Step title="Run the demo agent">
@@ -146,10 +150,14 @@ flowchart LR
     You: Run a full system health analysis.
     ```
 
-    The agent connects to the Windows MCP server, gathers CPU/memory/disk metrics via PowerShell, and pastes a formatted report into Notepad. Type `quit` to exit.
+    **On Windows:** The agent connects to the Windows MCP server, gathers CPU/memory/disk metrics via PowerShell, and pastes a formatted report into Notepad.
+
+    **On Linux/macOS:** The `simple_agent` demo compiles but requires the Windows MCP server to function. Try the [Wi-Fi Troubleshooter Agent](/guides/cpp/wifi-agent) instead, or write your own agent with platform-appropriate tools.
+
+    Type `quit` to exit.
 
     <Note>
-    Also try the [Wi-Fi Troubleshooter Agent](/guides/cpp/wifi-agent) — a pure registered-tool agent that diagnoses and fixes network issues without MCP.
+    Also try the [Wi-Fi Troubleshooter Agent](/guides/cpp/wifi-agent) -- a pure registered-tool agent that diagnoses and fixes network issues without MCP.
     </Note>
   </Step>
 </Steps>
@@ -169,11 +177,13 @@ config.debug = true;
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `baseUrl` | `std::string` | `"http://localhost:8000/api/v1"` | LLM server endpoint (OpenAI-compatible) |
+| `baseUrl` | `std::string` | `"http://localhost:8000/api/v1"` | LLM server endpoint (any OpenAI-compatible server) |
 | `modelId` | `std::string` | `"Qwen3-4B-GGUF"` | Model identifier sent to the server |
 | `maxSteps` | `int` | `20` | Maximum agent loop iterations per query |
 | `maxPlanIterations` | `int` | `3` | Maximum plan/replan cycles before forcing completion |
 | `maxConsecutiveRepeats` | `int` | `4` | Consecutive identical responses before loop-detection triggers |
+| `maxHistoryMessages` | `int` | `40` | Max messages kept between queries (0 = unlimited) |
+| `contextSize` | `int` | `16384` | LLM context window size in tokens (`n_ctx`) |
 | `debug` | `bool` | `false` | Enable verbose debug logging to stdout |
 | `showPrompts` | `bool` | `false` | Print full system prompts and LLM responses |
 | `silentMode` | `bool` | `false` | Suppress all console output (use `SilentConsole`) |

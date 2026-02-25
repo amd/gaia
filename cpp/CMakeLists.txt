@@ -135,7 +135,7 @@ endif()
 if(httplib_FOUND)
     target_link_libraries(gaia_core PRIVATE httplib::httplib)
 else()
-    target_include_directories(gaia_core PRIVATE
+    target_include_directories(gaia_core SYSTEM PRIVATE
         $<TARGET_PROPERTY:httplib::httplib,INTERFACE_INCLUDE_DIRECTORIES>
     )
 endif()

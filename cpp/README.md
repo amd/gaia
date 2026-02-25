@@ -32,12 +32,12 @@ Install and start Lemonade before running the agent:
 
 ```bash
 pip install lemonade-server
-lemonade-server start
+lemonade-server serve
 ```
 
-Default model: `Qwen3-Coder-30B-A3B-Instruct-GGUF`
+Default model: `Qwen3-4B-GGUF` (configurable via `AgentConfig::modelId`)
 
-> Any OpenAI-compatible server (vLLM, llama.cpp server, Ollama, etc.) works — update `AgentConfig::baseUrl` and `AgentConfig::modelId` in `examples/simple_agent.cpp` to point to your endpoint.
+> **Any OpenAI-compatible server works.** The agent talks to a standard `/v1/chat/completions` endpoint. You can use [llama.cpp server](https://github.com/ggerganov/llama.cpp), [Ollama](https://ollama.com/), [vLLM](https://github.com/vllm-project/vllm), or any other OpenAI-compatible backend — just set `AgentConfig::baseUrl` and `AgentConfig::modelId` to match your endpoint. See the [Integration Guide](docs/guides/cpp/integration.mdx) for details.
 
 ### 3. Windows MCP Server (for the demo)
 
@@ -309,7 +309,7 @@ private:
     static gaia::AgentConfig makeConfig() {
         gaia::AgentConfig cfg;
         cfg.baseUrl = "http://localhost:8000/api/v1";
-        cfg.modelId = "Qwen3-Coder-30B-A3B-Instruct-GGUF";
+        cfg.modelId = "Qwen3-4B-GGUF";  // or any model on your server
         cfg.maxSteps = 20;
         return cfg;
     }
@@ -367,5 +367,5 @@ This C++ library is a port of `src/gaia/agents/base/` from the [GAIA Python pack
 
 ## License
 
-MIT License — see [LICENSE.md](LICENSE.md).
-Copyright (C) 2025-2026 Advanced Micro Devices, Inc.
+MIT License — see [LICENSE.md](../LICENSE.md).
+Copyright (C) 2024-2026 Advanced Micro Devices, Inc.

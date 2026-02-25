@@ -5,7 +5,7 @@ icon: "wifi"
 ---
 
 <Info>
-  **Source Code:** [`cpp/examples/wifi_agent.cpp`](https://github.com/amd/gaia/blob/main/cpp/examples/wifi_agent.cpp) — single-file, self-contained agent (~320 lines).
+  **Source Code:** [`cpp/examples/wifi_agent.cpp`](https://github.com/amd/gaia/blob/main/cpp/examples/wifi_agent.cpp) — single-file, self-contained agent (~1,100 lines including 13 tools and a custom TUI).
 </Info>
 
 <Note>
@@ -25,6 +25,22 @@ Here's what makes it interesting:
 2. **The LLM decides what to do** — the agent doesn't follow a hardcoded if/else tree. The LLM reads each tool's output, reasons about it, and decides the next step.
 3. **It's pure C++** — no Python interpreter, no MCP server subprocess, no external dependencies. Just a compiled binary talking to a local LLM.
 4. **Everything is local** — the LLM runs on your AMD hardware via Lemonade Server. No data leaves your machine.
+
+---
+
+## See It In Action
+
+<video
+  controls
+  autoPlay
+  loop
+  muted
+  playsInline
+  className="w-full rounded-lg"
+  src="https://assets.amd-gaia.ai/videos/wifi-agent-cpp-npu.webm"
+/>
+
+Full diagnostic run on a Ryzen AI PC: the agent calls 5 tools in sequence, reads real network output, and reports status — all powered by a local LLM on the NPU.
 
 ---
 
@@ -60,9 +76,14 @@ The key insight: **your C++ code provides the tools (what the agent *can* do), a
 
 ---
 
-## The Three Building Blocks
+## The Four Building Blocks
 
-The entire agent is a single `.cpp` file with three sections. Let's walk through each one.
+The entire agent is a single `.cpp` file with four sections. Let's walk through each one.
+
+1. **Shell Helper** — bridges C++ and PowerShell for command execution
+2. **Tool Registration** — 13 tools the LLM can call (7 diagnostic + 6 fix)
+3. **System Prompt** — teaches the LLM the diagnostic strategy
+4. **CleanConsole** — custom TUI that color-codes the LLM's structured reasoning (FINDING/DECISION labels)
 
 ### 1. The Shell Helper: Bridging C++ and PowerShell
 
@@ -258,7 +279,7 @@ End every response with one of:
 
 ## The Complete Tool Set
 
-The agent registers 9 tools in two categories:
+The agent registers 13 tools in two categories:
 
 ### Diagnostic Tools (Read-Only)
 
@@ -267,9 +288,11 @@ These gather information without changing anything on the system.
 | Tool | What It Runs | Parameters | What the LLM Learns |
 |------|-------------|------------|---------------------|
 | `check_adapter` | `netsh wlan show interfaces` | none | Is Wi-Fi adapter present? Connected? Signal strength? |
+| `check_wifi_drivers` | `netsh wlan show drivers` | none | Driver name, version, vendor, supported radio types |
 | `check_ip_config` | `ipconfig /all` | none | IP address, subnet, gateway, DNS servers, DHCP status |
 | `test_dns_resolution` | `Resolve-DnsName` | `hostname` (optional) | Can DNS resolve names to IPs? |
 | `test_internet` | `Test-NetConnection 8.8.8.8 -Port 443` | none | Can we reach the internet on HTTPS? |
+| `test_bandwidth` | Cloudflare CDN parallel download/upload | none | Download and upload speed in Mbps |
 | `ping_host` | `Test-NetConnection <host>` | `host` (required) | Is a specific host reachable? Latency? |
 
 ### Fix Tools (Write Operations)
@@ -281,7 +304,9 @@ These actively modify network configuration to resolve issues.
 | `flush_dns_cache` | `Clear-DnsClientCache` | none | Stale DNS entries causing resolution failures |
 | `set_dns_servers` | `Set-DnsClientServerAddress` | `adapter_name`, `primary_dns`, `secondary_dns` | Default DNS servers not responding |
 | `renew_dhcp_lease` | `ipconfig /release` + `/renew` | none | No IP address or APIPA (169.254.x.x) address |
-| `restart_wifi_adapter` | `Disable-NetAdapter` + `Enable-NetAdapter` | `adapter_name` | Adapter stuck in bad state |
+| `toggle_wifi_radio` | Windows Radio Management API | `state` (optional: "on"/"off") | Adapter shows "Software Off" — `Enable-NetAdapter` alone won't turn on the radio |
+| `enable_wifi_adapter` | `Enable-NetAdapter` | `adapter_name` | Adapter is administratively disabled but hardware radio is on |
+| `restart_wifi_adapter` | `Disable-NetAdapter` + `Enable-NetAdapter` | `adapter_name` | Adapter stuck in bad state, needs full disable/enable cycle |
 
 ---
 
@@ -293,27 +318,35 @@ The system prompt instructs the LLM to follow this decision tree. The LLM doesn'
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'14px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
 flowchart TD
     A["1. check_adapter\nWi-Fi adapter present?"] -->|Yes| B["2. check_ip_config\nIP address via DHCP?"]
-    A -->|No / Disconnected| F1["FIX: restart_wifi_adapter"]
+    A -->|"Radio Off"| F4["FIX: toggle_wifi_radio"]
+    A -->|"Disabled"| F5["FIX: enable_wifi_adapter"]
+    A -->|"Stuck"| F1["FIX: restart_wifi_adapter"]
     B -->|Valid IP| C["3. ping_host\nGateway reachable?"]
     B -->|No IP / APIPA| F2["FIX: renew_dhcp_lease"]
     C -->|Reachable| D["4. test_dns_resolution\nDNS resolving?"]
     C -->|Unreachable| F1
     D -->|Resolving| E["5. test_internet\nPort 443 open?"]
     D -->|Failing| F3["FIX: flush_dns_cache\nthen set_dns_servers"]
-    E -->|Connected| R["RESOLVED"]
+    E -->|Connected| BW["6. test_bandwidth\nSpeed test"]
     E -->|Failed| M["NEEDS MANUAL ACTION"]
+    BW --> R["RESOLVED"]
     F1 --> A
     F2 --> B
     F3 --> D
+    F4 --> A
+    F5 --> A
 
     style A fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
     style B fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
     style C fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
     style D fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
     style E fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style BW fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
     style F1 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style F2 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style F3 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style F4 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style F5 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style R fill:#2d8a2d,stroke:#4CAF50,stroke-width:2px,color:#fff
     style M fill:#d4a017,stroke:#FFC107,stroke-width:2px,color:#000
 ```
@@ -329,7 +362,9 @@ Here's how the three sections fit into the GAIA framework:
 ```cpp
 class WiFiTroubleshooterAgent : public gaia::Agent {
 public:
-    WiFiTroubleshooterAgent() : Agent(makeConfig()) {
+    explicit WiFiTroubleshooterAgent(const std::string& modelId)
+        : Agent(makeConfig(modelId)) {
+        setOutputHandler(std::make_unique<CleanConsole>());  // custom TUI
         init();  // calls registerTools() + composes system prompt
     }
 
@@ -341,14 +376,14 @@ protected:
     void registerTools() override {
         toolRegistry().registerTool("check_adapter", ...);
         toolRegistry().registerTool("check_ip_config", ...);
-        // ... 7 more tools ...
+        // ... 11 more tools (13 total) ...
     }
 
 private:
-    static gaia::AgentConfig makeConfig() {
+    static gaia::AgentConfig makeConfig(const std::string& modelId) {
         gaia::AgentConfig config;
         config.maxSteps = 20;   // up to 20 tool calls per query
-        config.modelId = "Qwen3-4B-Instruct-2507-GGUF";
+        config.modelId = modelId;
         return config;
     }
 };
@@ -367,24 +402,27 @@ The `main()` function follows the same pattern as the `simple_agent` example:
 ```cpp
 int main() {
     try {
-        std::cout << "\n=== Wi-Fi Troubleshooter | GAIA C++ | Local inference ==="
-                  << std::endl;
+        // Model selection: GPU (GGUF) or NPU (FLM)
+        std::string modelId = "Qwen3-4B-Instruct-2507-GGUF";  // default GPU
+        // ... interactive selection menu chooses between GPU/NPU ...
 
-        WiFiTroubleshooterAgent agent;  // constructor registers tools + connects to LLM
+        WiFiTroubleshooterAgent agent(modelId);
 
+        // Interactive loop with diagnostic menu
         std::string userInput;
         while (true) {
-            std::cout << "You: " << std::flush;
+            // Show numbered menu: [1] Full diagnostic, [2] Check adapter, ...
+            printDiagnosticMenu();
+            std::cout << "  > " << std::flush;
             std::getline(std::cin, userInput);
 
-            if (userInput == "quit" || userInput == "exit") break;
+            if (userInput == "quit" || userInput == "exit" || userInput == "q") break;
 
-            auto result = agent.processQuery(userInput);
-            if (result.contains("result")) {
-                std::cout << "\nAgent: "
-                          << result["result"].get<std::string>()
-                          << "\n" << std::endl;
-            }
+            // Map numbered selection to pre-written prompt, or use free-text
+            std::string query = mapMenuSelection(userInput);
+            auto result = agent.processQuery(query);
+            // Final answer is printed by CleanConsole::printFinalAnswer()
+            (void)result;
         }
     } catch (const std::exception& e) {
         std::cerr << "Fatal error: " << e.what() << std::endl;
@@ -457,31 +495,57 @@ int main() {
 ## Sample Session
 
 ```
-=== Wi-Fi Troubleshooter | GAIA C++ | Local inference ===
+  ========================================================================================
+   Wi-Fi Troubleshooter  |  GAIA C++ Agent Framework  |  Local Inference
+  ========================================================================================
 
-Ready! Type 'quit' to exit.
-Try:
-  'Run a full network diagnostic.'
-  'My Wi-Fi is connected but I can't browse the web.'
-  'Check if DNS is working and fix it if not.'
+  Select inference backend:
+  [1] GPU  - Qwen3-4B-Instruct-2507-GGUF
+  [2] NPU  - Qwen3-4B-Instruct-2507-FLM
 
-You: Run a full network diagnostic.
+  > 1
+  Using GPU backend: Qwen3-4B-Instruct-2507-GGUF
 
-  [step 1/20] Calling check_adapter ...
-  [step 2/20] Calling check_ip_config ...
-  [step 3/20] Calling ping_host (gateway: 192.168.1.1) ...
-  [step 4/20] Calling test_dns_resolution ...
-  [step 5/20] Calling test_internet ...
+  Ready!
 
-Agent: ## Network Diagnostic Report
+  [1] Full network diagnostic
+  [2] Check Wi-Fi adapter
+  ...
+  Or type your own question. Type 'quit' to exit.
 
-**1. Wi-Fi Adapter:** Connected to "HomeNetwork" (802.11ac, signal 92%)
-**2. IP Configuration:** 192.168.1.105 via DHCP (lease valid)
-**3. Gateway:** 192.168.1.1 — ping succeeded (3ms)
-**4. DNS Resolution:** google.com -> 142.250.80.46 — OK
-**5. Internet:** TCP connection to 8.8.8.8:443 — succeeded
+  > 1
+  > Full network diagnostic
 
-**Status: RESOLVED** — All diagnostics passed. Your network connection is healthy.
+  [1/20] check_adapter
+      Command: netsh wlan show interfaces
+      Output:
+      .----
+      | State          : connected
+      | SSID           : HomeNetwork
+      | Signal         : 92%
+      | Radio type     : 802.11ac
+      '----
+  Finding: Wi-Fi adapter is connected to "HomeNetwork" with 92% signal.
+  Decision: Adapter OK. Proceeding with IP configuration check.
+
+  [2/20] check_ip_config
+      Command: ipconfig /all
+      ...
+  Finding: Valid IP 192.168.1.105 via DHCP. Gateway: 192.168.1.1.
+  Decision: IP configuration looks healthy. Testing gateway reachability.
+
+  [3/20] ping_host
+      ...
+
+  [4/20] test_dns_resolution
+      ...
+
+  [5/20] test_internet
+      ...
+
+  ========================================================================================
+   RESOLVED - All diagnostics passed. Network connection is healthy.
+  ========================================================================================
 ```
 
 ---

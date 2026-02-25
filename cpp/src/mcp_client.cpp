@@ -247,7 +247,11 @@ struct StdioTransport::Impl {
     bool launch(const std::string& cmdLine,
                 const std::map<std::string, std::string>& envVars) {
         int stdinPipe[2], stdoutPipe[2];
-        if (pipe(stdinPipe) != 0 || pipe(stdoutPipe) != 0) return false;
+        if (pipe(stdinPipe) != 0) return false;
+        if (pipe(stdoutPipe) != 0) {
+            close(stdinPipe[0]); close(stdinPipe[1]);
+            return false;
+        }
 
         pid = fork();
         if (pid < 0) {

@@ -1,6 +1,6 @@
 ---
 title: "C++ Integration Guide"
-description: "Consume gaia_core in your own C++ project via FetchContent, find_package, or shared library"
+description: "Add AI agent capabilities to any C++ project — three lines of CMake, zero manual dependencies"
 icon: "puzzle-piece"
 ---
 
@@ -16,17 +16,28 @@ icon: "puzzle-piece"
 
 ## Overview
 
-There are three ways to consume `gaia_core` in your own CMake project, listed in order of recommendation:
+`gaia_core` is designed to drop into any C++ project with minimal friction. The library is self-contained — all dependencies (nlohmann/json, cpp-httplib) are resolved automatically, so you never install or manage them by hand. Your project only needs **CMake 3.14+** and a **C++17 compiler**.
+
+**The shortest path** — add three lines to your `CMakeLists.txt`:
+
+```cmake
+FetchContent_Declare(gaia GIT_REPOSITORY https://github.com/amd/gaia.git GIT_TAG main SOURCE_SUBDIR cpp)
+FetchContent_MakeAvailable(gaia)
+target_link_libraries(my_app PRIVATE gaia::gaia_core)
+```
+
+That gives you `#include <gaia/agent.h>`, the full agent loop, tool registry, MCP client, and JSON utilities — no manual installs, no system packages, no dependency conflicts.
+
+### Integration Methods
 
 | Method | When to use |
 |--------|------------|
 | **FetchContent** | Default choice -- no install step, works everywhere |
+| **Git submodule** | You want the source in your repo for offline builds or pinned versions |
 | **find_package** | You want a system-wide install or use a package manager |
 | **Shared library** | You need a `.so` / `.dll` for plugin architectures |
 
 ---
-
-## Integration Methods
 
 <Tabs>
   <Tab title="FetchContent (Recommended)">
@@ -53,10 +64,43 @@ There are three ways to consume `gaia_core` in your own CMake project, listed in
     ```
 
     <Note>
+    `SOURCE_SUBDIR cpp` tells CMake to use only the `cpp/` subdirectory of the GAIA repository. This skips the Python package entirely — your build tree contains only the C++ library and its dependencies.
+    </Note>
+
+    <Note>
     When consumed as a sub-project, `GAIA_BUILD_TESTS` and `GAIA_BUILD_EXAMPLES` default to `OFF`, so you only get the library -- no test binaries or demo executables in your build tree.
     </Note>
 
     **That is it.** All transitive dependencies (nlohmann/json, cpp-httplib) are fetched automatically. Your `main.cpp` can `#include <gaia/agent.h>` and subclass `gaia::Agent` immediately.
+  </Tab>
+
+  <Tab title="Git Submodule">
+    Use this when you want the GAIA source checked into your repository for offline/reproducible builds or to pin a specific commit.
+
+    ```bash
+    # Add GAIA as a submodule
+    git submodule add https://github.com/amd/gaia.git extern/gaia
+    git submodule update --init
+    ```
+
+    Then in your `CMakeLists.txt`, add the `cpp/` subdirectory:
+
+    ```cmake title="CMakeLists.txt"
+    cmake_minimum_required(VERSION 3.14)
+    project(my_agent LANGUAGES CXX)
+
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+    add_subdirectory(extern/gaia/cpp)
+
+    add_executable(my_agent main.cpp)
+    target_link_libraries(my_agent PRIVATE gaia::gaia_core)
+    ```
+
+    <Note>
+    This works identically to FetchContent but with the source already in your tree. `GAIA_BUILD_TESTS` and `GAIA_BUILD_EXAMPLES` default to `OFF` because `gaia-cpp` is not the top-level project. To update, run `git submodule update --remote extern/gaia`.
+    </Note>
   </Tab>
 
   <Tab title="find_package (Install)">
@@ -227,6 +271,153 @@ Add it to your `CMakeLists.txt`:
 add_executable(time_agent time_agent.cpp)
 target_link_libraries(time_agent PRIVATE gaia::gaia_core)
 ```
+
+---
+
+## Using Alternative LLM Backends
+
+The GAIA C++ agent framework is **not tied to Lemonade or any specific LLM provider**. It talks to a standard HTTP endpoint — any server that implements the OpenAI chat completions API works out of the box. Switch backends by changing two fields:
+
+```cpp
+gaia::AgentConfig cfg;
+cfg.baseUrl = "http://localhost:8080/v1";   // your server's base URL
+cfg.modelId = "my-model-name";              // model name your server expects
+```
+
+### What "OpenAI-Compatible" Means
+
+The agent uses a single HTTP endpoint: `POST {baseUrl}/chat/completions`. It sends a standard request body and expects a standard response:
+
+```json
+// Request (what the agent sends)
+{
+  "model": "...",          // from AgentConfig::modelId
+  "messages": [...],       // system prompt + conversation history
+  "temperature": 0.7
+}
+
+// Response (what the agent expects)
+{
+  "choices": [{
+    "message": { "content": "..." }
+  }]
+}
+```
+
+That is the entire API surface. No embeddings endpoint, no streaming (unless `cfg.streaming = true`), no fine-tuning API. Any server that handles this request/response format works — local or remote, open-source or commercial.
+
+### Local Inference Servers
+
+<Tabs>
+  <Tab title="llama.cpp">
+    [llama.cpp](https://github.com/ggerganov/llama.cpp) includes a built-in server with OpenAI-compatible endpoints. This is the most direct way to run a GGUF model locally without any Python dependencies.
+
+    ```bash
+    # Download a model and start the server
+    ./llama-server -m qwen3-4b.gguf --port 8080
+    ```
+
+    ```cpp
+    gaia::AgentConfig cfg;
+    cfg.baseUrl = "http://localhost:8080/v1";
+    cfg.modelId = "qwen3-4b.gguf";  // llama.cpp ignores this field, but it must be non-empty
+    ```
+
+    <Note>
+    llama.cpp runs entirely in C++ — no Python, no pip. If you want a fully native stack (C++ agent + C++ inference), this is the combination to use.
+    </Note>
+  </Tab>
+
+  <Tab title="Ollama">
+    [Ollama](https://ollama.com/) provides an OpenAI-compatible API on port 11434 with simple model management.
+
+    ```bash
+    # Pull a model and start Ollama
+    ollama pull qwen3:4b
+    ollama serve
+    ```
+
+    ```cpp
+    gaia::AgentConfig cfg;
+    cfg.baseUrl = "http://localhost:11434/v1";
+    cfg.modelId = "qwen3:4b";
+    ```
+  </Tab>
+
+  <Tab title="vLLM">
+    [vLLM](https://github.com/vllm-project/vllm) serves models with OpenAI-compatible API and optimized batching for high throughput.
+
+    ```bash
+    python -m vllm.entrypoints.openai.api_server \
+        --model Qwen/Qwen3-4B --port 8000
+    ```
+
+    ```cpp
+    gaia::AgentConfig cfg;
+    cfg.baseUrl = "http://localhost:8000/v1";
+    cfg.modelId = "Qwen/Qwen3-4B";
+    ```
+  </Tab>
+
+  <Tab title="Lemonade (default)">
+    [Lemonade Server](https://github.com/amd/lemonade) is the default backend, optimized for AMD Ryzen AI NPU and GPU acceleration.
+
+    ```bash
+    lemonade-server serve
+    ```
+
+    ```cpp
+    gaia::AgentConfig cfg;
+    // defaults work out of the box
+    cfg.baseUrl = "http://localhost:8000/api/v1";
+    cfg.modelId = "Qwen3-4B-GGUF";
+    ```
+  </Tab>
+</Tabs>
+
+### Cloud and Remote Providers
+
+You can also point the agent at cloud-hosted LLM services. Build with SSL support first:
+
+```bash
+cmake -B build -S cpp -DGAIA_ENABLE_SSL=ON
+```
+
+This requires OpenSSL to be installed on your system.
+
+<Tabs>
+  <Tab title="OpenAI">
+    ```cpp
+    gaia::AgentConfig cfg;
+    cfg.baseUrl = "https://api.openai.com/v1";
+    cfg.modelId = "gpt-4o";
+    ```
+
+    Set the `Authorization` header via the `OPENAI_API_KEY` environment variable, or modify the HTTP request in a custom `Agent` subclass.
+  </Tab>
+
+  <Tab title="Azure OpenAI">
+    ```cpp
+    gaia::AgentConfig cfg;
+    cfg.baseUrl = "https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT";
+    cfg.modelId = "gpt-4o";
+    ```
+  </Tab>
+
+  <Tab title="Any OpenAI-compatible API">
+    Any hosted service that exposes a `/chat/completions` endpoint works:
+
+    ```cpp
+    gaia::AgentConfig cfg;
+    cfg.baseUrl = "https://your-server.example.com/v1";
+    cfg.modelId = "your-model-name";
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+**Model requirements:** The agent needs a model that can produce structured JSON output with tool names and arguments. Most instruction-tuned models 4B+ work well. Smaller models (< 3B parameters) may struggle with the structured response format required for tool calling.
+</Note>
 
 ---
 
