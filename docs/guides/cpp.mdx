@@ -9,6 +9,7 @@ description: "Build and run GAIA agents natively in C++17 — same agent loop an
 - 🔌 **Full MCP support** — connects to any MCP server via stdio transport
 - 🧠 **Same agent loop** — planning, tool execution, error recovery, multi-step plans
 - 🪟 **Windows CUA demo** — runs a computer-use agent via the Windows MCP server
+- 📡 **Wi-Fi Troubleshooter demo** — adaptive reasoning with real diagnostic/fix tools
 
 <Info>
 **Source Code:** [`cpp/`](https://github.com/amd/gaia/tree/main/cpp) — lives alongside the Python package in this repository.
@@ -71,19 +72,20 @@ The C++ framework targets the base agent only. Specialized agents (Code, Docker,
     See [Setup Guide](/setup) to install Lemonade and download a model.
   </Step>
 
-  <Step title="Run the Windows CUA demo">
+  <Step title="Run a demo">
+    **Option A: Windows CUA demo** (requires MCP server + `uv`):
     ```bat
     cpp\build\Release\simple_agent.exe
     ```
-
-    Then try:
-    ```
-    You: Run a full system health analysis.
-    ```
-
     The agent connects to the Windows MCP server, gathers CPU/memory/disk metrics via PowerShell, and pastes a formatted report into Notepad.
 
-    Type `quit` to exit.
+    **Option B: Wi-Fi Troubleshooter** (no dependencies, run as admin for fix tools):
+    ```bat
+    cpp\build\Release\wifi_agent.exe
+    ```
+    Select GPU or NPU backend, then try "Full network diagnostic" or ask a specific question. The agent reasons about each result and adapts its approach in real-time.
+
+    Type `quit` to exit either demo.
   </Step>
 </Steps>
 
@@ -128,9 +130,21 @@ graph TB
 **Execution flow:**
 1. User query enters `agent.processQuery()`
 2. Agent composes a system prompt (tool list + response format) and calls the LLM
-3. LLM returns a JSON plan with tool calls
-4. Agent executes each tool through the MCP client via JSON-RPC 2.0 over stdio
-5. Tool results feed back to the LLM until a final answer is produced
+3. LLM returns structured JSON with reasoning and a tool call
+4. Agent executes the tool (via MCP or registered callback) and feeds the result back
+5. LLM reasons about the result, decides the next action, and the loop continues
+6. When the LLM has enough information, it provides a final answer
+
+## Wi-Fi Troubleshooter Demo
+
+The `wifi_agent` demonstrates **adaptive reasoning** without MCP — all tools are registered directly in C++ as PowerShell commands. This showcases how an agent differs from a script: it reasons about each result, skips irrelevant steps, applies fixes, and verifies outcomes.
+
+**Key features:**
+- **Structured reasoning** — LLM outputs `FINDING:` and `DECISION:` prefixes, displayed with color-coded labels in the TUI
+- **Adaptive behavior** — skips downstream checks if adapter is disconnected, adds fix/verify steps when issues are found
+- **Real tools** — all diagnostics (`netsh`, `ipconfig`, `Test-NetConnection`) and fixes (`flush DNS`, `toggle Wi-Fi radio`, `restart adapter`) execute real PowerShell commands
+- **GPU/NPU selection** — choose between GGUF (GPU) and FLM (NPU) model backends at startup
+- **Admin detection** — warns on startup if fix tools won't work without elevation
 
 ## Writing Your Own Agent
 
@@ -197,6 +211,8 @@ agent.connectMcpServer("my_server", {
 | `maxSteps` | `20` | Maximum agent loop iterations |
 | `maxPlanIterations` | `3` | Maximum plan/replan cycles |
 | `maxConsecutiveRepeats` | `4` | Loop-detection threshold |
+| `maxHistoryMessages` | `40` | Max messages kept between queries (0 = unlimited) |
+| `contextSize` | `16384` | LLM context window size in tokens (`n_ctx`) |
 | `debug` | `false` | Enable debug logging |
 | `showPrompts` | `false` | Print system prompts to stdout |
 

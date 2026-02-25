@@ -19,6 +19,7 @@
 
 #include <array>
 #include <cstdio>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -93,7 +94,7 @@ public:
 
                 std::cout << color::GREEN << color::BOLD << "  Finding: "
                           << color::RESET;
-                printWrapped(text, 39, 11);
+                printWrapped(text, 79, 11);
             }
             if (decisionPos != std::string::npos) {
                 size_t start = decisionPos + 9; // skip "DECISION:"
@@ -104,7 +105,7 @@ public:
 
                 std::cout << color::YELLOW << color::BOLD << "  Decision: "
                           << color::RESET;
-                printWrapped(text, 38, 12);
+                printWrapped(text, 78, 12);
             }
         } else {
             // --- Fallback: existing Analysis/Thinking display ---
@@ -114,7 +115,7 @@ public:
             } else {
                 std::cout << color::MAGENTA << "  Thinking: " << color::RESET;
             }
-            printWrapped(thought, 38, 12);
+            printWrapped(thought, 78, 12);
         }
     }
 
@@ -124,7 +125,7 @@ public:
         std::cout << std::endl;
         std::cout << color::CYAN << color::ITALIC
                   << "  Goal: " << color::RESET;
-        printWrapped(goal, 42, 8);
+        printWrapped(goal, 82, 8);
     }
 
     void printPlan(const gaia::json& plan, int /*currentStep*/) override {
@@ -168,7 +169,7 @@ public:
                 first = false;
             }
             std::cout << color::GRAY << "      Args: ";
-            printWrapped(argsStr, 39, 12);
+            printWrapped(argsStr, 78, 12);
             std::cout << color::RESET;
             return;
         }
@@ -180,7 +181,7 @@ public:
             std::string cmd = data["command"].get<std::string>();
             std::cout << color::CYAN << "      Cmd: " << color::RESET
                       << color::GRAY;
-            printWrapped(cmd, 39, 11);
+            printWrapped(cmd, 79, 11);
             std::cout << color::RESET;
         }
 
@@ -220,7 +221,7 @@ public:
     void printError(const std::string& message) override {
         std::cout << color::RED << color::BOLD << "  ERROR: " << color::RESET
                   << color::RED;
-        printWrapped(message, 41, 9);
+        printWrapped(message, 81, 9);
         std::cout << color::RESET;
     }
 
@@ -258,12 +259,12 @@ public:
 
         std::cout << std::endl;
         std::cout << color::GREEN
-                  << "  ============================================"
+                  << "  ========================================================================================"
                   << color::RESET << std::endl;
         std::cout << color::GREEN << color::BOLD
                   << "  Conclusion" << color::RESET << std::endl;
         std::cout << color::GREEN
-                  << "  ============================================"
+                  << "  ========================================================================================"
                   << color::RESET << std::endl;
         // Print each line of the answer word-wrapped
         std::string line;
@@ -273,11 +274,11 @@ public:
                 std::cout << std::endl;
             } else {
                 std::cout << "  ";
-                printWrapped(line, 46, 2);
+                printWrapped(line, 88, 2);
             }
         }
         std::cout << color::GREEN
-                  << "  ============================================"
+                  << "  ========================================================================================"
                   << color::RESET << std::endl;
     }
 
@@ -327,7 +328,7 @@ private:
             }
         }
 
-        std::cout << color::GRAY << "      .------------------------------------"
+        std::cout << color::GRAY << "      .------------------------------------------------------------------------------------"
                   << color::RESET << std::endl;
         while (std::getline(stream, line) && lineCount < kMaxPreviewLines) {
             // Skip empty lines
@@ -336,7 +337,7 @@ private:
             // Trim trailing \r
             if (!line.empty() && line.back() == '\r') line.pop_back();
             // Truncate long lines
-            if (line.size() > 42) line = line.substr(0, 39) + "...";
+            if (line.size() > 82) line = line.substr(0, 79) + "...";
             std::cout << color::GRAY << "      | " << line << color::RESET
                       << std::endl;
             ++lineCount;
@@ -346,7 +347,7 @@ private:
                       << (totalLines - kMaxPreviewLines)
                       << " more lines)" << color::RESET << std::endl;
         }
-        std::cout << color::GRAY << "      '------------------------------------"
+        std::cout << color::GRAY << "      '------------------------------------------------------------------------------------"
                   << color::RESET << std::endl;
     }
 
@@ -409,12 +410,16 @@ protected:
 
 You are an intelligent agent. Given a user's question, decide which tools are relevant, run them one at a time, reason about each result, adapt your approach based on what you find, and continue until the question is answered or the issue is resolved.
 
+IMPORTANT: Be concise. Keep FINDING and DECISION to 1-2 sentences each. No filler words.
+
+CRITICAL: Do NOT provide a final "answer" until you have finished ALL relevant tool calls. If you still have tools to run or fixes to apply, you MUST call the next tool — do NOT stop early with an answer. Only provide an "answer" when your investigation is truly complete.
+
 ## REASONING PROTOCOL
 
 After EVERY tool result, structure your thought using these exact prefixes:
 
-FINDING: <what the data shows — key facts, values, status from the output>
-DECISION: <what to do next and WHY — especially when skipping steps, pivoting, applying a fix, or re-verifying>
+FINDING: <1-2 sentences: key facts and values from the output>
+DECISION: <1 sentence: what to do next and WHY>
 
 The user sees FINDING and DECISION highlighted in the UI. Use them to make your reasoning visible.
 
@@ -423,12 +428,12 @@ The user sees FINDING and DECISION highlighted in the UI. Use them to make your 
 1. Read the user's question and decide which tools are relevant
 2. Create a plan showing the tools you intend to run (include it in your first response)
 3. Execute the first tool
-4. After each result: analyze it (FINDING), decide what to do next (DECISION)
+4. After each result: analyze it (FINDING), decide what to do next (DECISION), then CALL THE NEXT TOOL
 5. Update your plan as needed — skip steps that are no longer relevant, add fix/verify steps
-6. When you have enough information to answer, provide your final answer
+6. Only when ALL tools are done, provide your final answer
 
 Your approach should be entirely driven by the query:
-- "Run a full diagnostic" → run all relevant diagnostic tools, summarize everything
+- "Run a full diagnostic" → run ALL diagnostic tools, summarize everything at the end
 - "Check my DNS" → just run DNS test, report result, stop
 - "Why can't I connect?" → start with adapter check, follow the evidence
 - "Fix my internet" → diagnose first, apply fixes, verify fixes worked
@@ -441,35 +446,44 @@ For a full network diagnostic, the typical sequence is:
 3. `ping_host` — gateway reachable?
 4. `test_dns_resolution` — name resolution working?
 5. `test_internet` — end-to-end connectivity?
+6. `test_bandwidth` — download speed acceptable?
 
-But adapt based on what you find. If the adapter is disconnected, skip IP/DNS/internet checks — they will fail. If everything passes early, you can stop early.
+Adapt based on what you find. If the adapter is disconnected, try to enable it first, then continue. If everything passes early, you can stop early for targeted queries (but NOT for a full diagnostic).
 
 ## FIXING ISSUES
 
 When you find a problem, fix it and verify:
-1. Apply the fix (e.g. `flush_dns_cache`, `renew_dhcp_lease`, `enable_wifi_adapter`)
+1. Apply the fix
 2. Re-run the diagnostic that failed to verify the fix worked
 3. Report the before/after in your FINDING
-4. If the fix failed, escalate (e.g. `flush_dns_cache` didn't work → try `set_dns_servers`)
+4. If the fix failed, try the next option
 
-Available fix tools:
-- `flush_dns_cache` — clear stale DNS entries
-- `set_dns_servers` — switch to Google DNS (8.8.8.8/8.8.4.4)
-- `renew_dhcp_lease` — get a fresh IP address
-- `enable_wifi_adapter` — re-enable a disabled adapter
-- `restart_wifi_adapter` — full disable+enable cycle (last resort)
+IMPORTANT — Wi-Fi radio vs adapter:
+- If radio status shows "Software Off": use `toggle_wifi_radio` (turns on the Windows Wi-Fi radio toggle)
+- If adapter is administratively disabled: use `enable_wifi_adapter` (enables the network interface)
+- `enable_wifi_adapter` does NOT turn on the radio. You need `toggle_wifi_radio` for that.
+- After toggling the radio on, wait a moment then re-check with `check_adapter` to verify it connected.
+
+Available fix tools: `toggle_wifi_radio`, `flush_dns_cache`, `set_dns_servers`, `renew_dhcp_lease`, `enable_wifi_adapter`, `restart_wifi_adapter`
 
 ## FINAL ANSWER
 
-When done, provide a summary with:
-- What you checked and what you found
-- Any fixes applied and whether they worked
-- Current status: RESOLVED, PARTIALLY RESOLVED, or NEEDS MANUAL ACTION
-- Next steps if not fully resolved, or a follow-up question if you need more info
+Only provide an "answer" after ALL tool calls are complete. Format your summary as:
+
+1. A results table showing each check and its status:
+   - Adapter: OK / FAIL (details)
+   - IP Config: OK / FAIL (details)
+   - DNS: OK / FAIL (details)
+   - Internet: OK / FAIL (details)
+   - Speed: X Mbps (if tested)
+
+2. Any fixes applied and whether they worked
+3. Overall status: RESOLVED, PARTIALLY RESOLVED, or NEEDS MANUAL ACTION
+4. One sentence summary of the situation
 
 ## GOAL TRACKING
 
-Always set a `goal` field describing your current objective. Update it as your focus changes.)";
+Always set a short `goal` field (3-6 words) describing your current objective.)";
     }
 
     void registerTools() override {
@@ -538,6 +552,31 @@ Always set a `goal` field describing your current objective. Update it as your f
                     " | ConvertTo-Json";
                 std::string output = runShell(cmd);
                 return {{"tool", "test_internet"}, {"command", cmd}, {"output", output}};
+            },
+            {}  // no parameters
+        );
+
+        toolRegistry().registerTool(
+            "test_bandwidth",
+            "Run a quick download speed test by fetching a small file from a CDN and measuring throughput. Returns download speed in Mbps. This is a rough estimate, not a full speed test.",
+            [](const gaia::json& /*args*/) -> gaia::json {
+                // Download a ~1MB file from Cloudflare's speed test endpoint and measure time
+                std::string cmd =
+                    "$url = 'https://speed.cloudflare.com/__down?bytes=1000000'; "
+                    "$sw = [System.Diagnostics.Stopwatch]::StartNew(); "
+                    "$response = Invoke-WebRequest -Uri $url -UseBasicParsing; "
+                    "$sw.Stop(); "
+                    "$bytes = $response.Content.Length; "
+                    "$seconds = $sw.Elapsed.TotalSeconds; "
+                    "$mbps = [math]::Round(($bytes * 8) / ($seconds * 1000000), 2); "
+                    "@{ "
+                    "  download_mbps = $mbps; "
+                    "  bytes = $bytes; "
+                    "  seconds = [math]::Round($seconds, 2); "
+                    "  source = 'speed.cloudflare.com' "
+                    "} | ConvertTo-Json";
+                std::string output = runShell(cmd);
+                return {{"tool", "test_bandwidth"}, {"command", "Download speed test (1MB from Cloudflare CDN)"}, {"output", output}};
             },
             {}  // no parameters
         );
@@ -686,6 +725,88 @@ Always set a `goal` field describing your current objective. Update it as your f
                  "The adapter name to enable (e.g. 'Wi-Fi')"}
             }
         );
+
+        toolRegistry().registerTool(
+            "toggle_wifi_radio",
+            "Turn the Wi-Fi radio ON or OFF using the Windows Radio Management API. Use this when the adapter shows 'Software Off' in radio status — Enable-NetAdapter alone does NOT turn on the radio. This is the equivalent of the Wi-Fi toggle in Windows Settings.",
+            [](const gaia::json& args) -> gaia::json {
+                std::string state = args.value("state", "on");
+                // Use WinRT Radio API via PowerShell to toggle the Wi-Fi radio.
+                // This requires .NET reflection to resolve the generic AsTask() method,
+                // so we write a temp .ps1 script and execute via -File to avoid
+                // escaping issues with powershell -Command "...".
+                std::string radioState = (state == "off") ? "Off" : "On";
+
+                // Build script content
+                std::string script =
+                    "Add-Type -AssemblyName System.Runtime.WindowsRuntime\n"
+                    "[Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null\n"
+                    "$at = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {\n"
+                    "    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and\n"
+                    "    $_.GetParameters()[0].ParameterType.Name.StartsWith('IAsyncOperation')\n"
+                    "})[0]\n"
+                    "Function Await($o, $r) {\n"
+                    "    $t = $at.MakeGenericMethod($r).Invoke($null, @($o))\n"
+                    "    $t.Wait() | Out-Null\n"
+                    "    $t.Result\n"
+                    "}\n"
+                    "$rs = Await ([Windows.Devices.Radios.Radio]::GetRadiosAsync()) "
+                    "([System.Collections.Generic.IReadOnlyList[Windows.Devices.Radios.Radio]])\n"
+                    "$w = $rs | Where-Object { $_.Kind -eq 'WiFi' }\n"
+                    "if ($w) {\n"
+                    "    Await ($w.SetStateAsync([Windows.Devices.Radios.RadioState]::" + radioState + ")) "
+                    "([Windows.Devices.Radios.RadioAccessStatus]) | Out-Null\n"
+                    "    Write-Output 'Wi-Fi radio set to " + radioState + "'\n"
+                    "    $w | Select-Object Name,Kind,State | ConvertTo-Json\n"
+                    "} else {\n"
+                    "    Write-Output 'ERROR: No Wi-Fi radio found'\n"
+                    "}\n";
+
+                // Write to temp file and execute
+                std::string tempPath;
+#ifdef _WIN32
+                char* tmp = std::getenv("TEMP");
+                tempPath = (tmp ? std::string(tmp) : "C:\\Temp") + "\\gaia_radio.ps1";
+#else
+                tempPath = "/tmp/gaia_radio.ps1";
+#endif
+                {
+                    std::ofstream f(tempPath);
+                    f << script;
+                }
+
+                std::string execCmd = "powershell -NoProfile -ExecutionPolicy Bypass -File \""
+                                      + tempPath + "\"";
+                std::string output;
+                std::array<char, 4096> buffer;
+#ifdef _WIN32
+                std::unique_ptr<FILE, decltype(&_pclose)> pipe(
+                    _popen((execCmd + " 2>&1").c_str(), "r"), _pclose);
+#else
+                std::unique_ptr<FILE, decltype(&pclose)> pipe(
+                    popen((execCmd + " 2>&1").c_str(), "r"), pclose);
+#endif
+                if (pipe) {
+                    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe.get()))
+                        output += buffer.data();
+                }
+
+                // Cleanup temp file
+                std::remove(tempPath.c_str());
+
+                return {
+                    {"tool", "toggle_wifi_radio"},
+                    {"command", "Windows Radio API: Set Wi-Fi radio to " + radioState},
+                    {"requested_state", radioState},
+                    {"status", "completed"},
+                    {"output", output}
+                };
+            },
+            {
+                {"state", gaia::ToolParamType::STRING, /*required=*/false,
+                 "The desired radio state: 'on' or 'off' (default: 'on')"}
+            }
+        );
     }
 
 private:
@@ -713,6 +834,8 @@ static const std::pair<std::string, std::string> kDiagnosticMenu[] = {
      "Test DNS resolution and report whether name resolution is working correctly."},
     {"Test internet connectivity",
      "Test internet connectivity and report whether the internet is reachable."},
+    {"Test bandwidth",
+     "Run a quick download speed test and report the approximate Wi-Fi speed in Mbps."},
     {"Flush DNS cache",
      "Flush the DNS cache to clear any stale or corrupted entries, then verify DNS is working."},
     {"Renew DHCP lease",
@@ -722,7 +845,7 @@ static constexpr size_t kMenuSize = sizeof(kDiagnosticMenu) / sizeof(kDiagnostic
 
 static void printDiagnosticMenu() {
     std::cout << color::CYAN
-              << "  ============================================"
+              << "  ========================================================================================"
               << color::RESET << std::endl;
     for (size_t i = 0; i < kMenuSize; ++i) {
         std::cout << color::YELLOW << "  [" << (i + 1) << "] "
@@ -731,13 +854,10 @@ static void printDiagnosticMenu() {
                   << color::RESET << std::endl;
     }
     std::cout << color::CYAN
-              << "  ============================================"
+              << "  ========================================================================================"
               << color::RESET << std::endl;
     std::cout << color::GRAY
-              << "  Type a number, a question,"
-              << color::RESET << std::endl;
-    std::cout << color::GRAY
-              << "  or 'quit' to exit."
+              << "  Or type your own question. Type 'quit' to exit."
               << color::RESET << std::endl;
     std::cout << std::endl;
 }
@@ -783,13 +903,13 @@ int main() {
         // --- Banner ---
         std::cout << std::endl;
         std::cout << color::CYAN << color::BOLD
-                  << "  ============================================"
+                  << "  ========================================================================================"
                   << color::RESET << std::endl;
         std::cout << color::CYAN << color::BOLD
-                  << "   Wi-Fi Agent  |  GAIA C++  |  Local"
+                  << "   Wi-Fi Troubleshooter  |  GAIA C++ Agent Framework  |  Local Inference"
                   << color::RESET << std::endl;
         std::cout << color::CYAN << color::BOLD
-                  << "  ============================================"
+                  << "  ========================================================================================"
                   << color::RESET << std::endl;
 
         // --- Model selection ---
@@ -798,11 +918,11 @@ int main() {
                   << color::RESET << std::endl;
         std::cout << color::YELLOW << "  [1] " << color::RESET
                   << color::GREEN << "GPU" << color::RESET
-                  << color::GRAY << "  Qwen3-4B-GGUF"
+                  << color::GRAY << "  - Qwen3-4B-Instruct-2507-GGUF"
                   << color::RESET << std::endl;
         std::cout << color::YELLOW << "  [2] " << color::RESET
                   << color::MAGENTA << "NPU" << color::RESET
-                  << color::GRAY << "  Qwen3-4B-FLM"
+                  << color::GRAY << "  - Qwen3-4B-Instruct-2507-FLM"
                   << color::RESET << std::endl;
         std::cout << std::endl;
         std::cout << color::BOLD << "  > " << color::RESET << std::flush;

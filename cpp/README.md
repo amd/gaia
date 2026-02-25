@@ -5,7 +5,10 @@
 
 A C++ port of the [GAIA](https://github.com/amd/gaia) Python base agent framework. Implements the core agentic loop — LLM reasoning, tool execution, multi-step planning, and MCP (Model Context Protocol) client integration — as a lightweight, header-friendly C++17 library.
 
-The included demo (`simple_agent`) runs a **Windows System Health Agent** that connects to the [Windows MCP server](https://github.com/microsoft/windows-mcp), gathers memory/disk/CPU metrics via PowerShell, and pastes a formatted report into Notepad — demonstrating the full computer-use (CUA) flow over the MCP client-server interface.
+Included demos:
+
+- **`simple_agent`** — Windows System Health Agent that connects to the [Windows MCP server](https://github.com/microsoft/windows-mcp), gathers memory/disk/CPU metrics via PowerShell, and pastes a formatted report into Notepad — demonstrating the full computer-use (CUA) flow over the MCP client-server interface.
+- **`wifi_agent`** — Wi-Fi Troubleshooter that diagnoses and fixes network connectivity issues using registered PowerShell tools. Demonstrates adaptive reasoning: the agent decides which tools to run based on the query, interprets results, skips irrelevant steps, applies fixes, and verifies fixes worked — all driven by real LLM reasoning with no hard-coded sequences.
 
 ---
 
@@ -61,7 +64,8 @@ cmake --build build --config Release
 ```
 
 Binaries are placed in `build\Release\`:
-- `simple_agent.exe` — demo agent
+- `simple_agent.exe` — System Health Agent (MCP demo)
+- `wifi_agent.exe` — Wi-Fi Troubleshooter (registered-tool demo)
 - `gaia_tests.exe` — unit test suite
 
 ### Windows (Ninja / faster builds)
@@ -80,6 +84,7 @@ cmake --build build
 
 Binaries are placed in `build/`:
 - `simple_agent`
+- `wifi_agent`
 - `gaia_tests`
 
 ---
@@ -109,6 +114,48 @@ The agent will:
 Type `quit`, `exit`, or `q` to stop.
 
 > If the Windows MCP server fails to connect, verify that `uvx` is on your PATH and that `uvx windows-mcp` runs without errors in a separate terminal.
+
+### Wi-Fi Troubleshooter (Registered-Tool Demo)
+
+The `wifi_agent` demo showcases **adaptive reasoning** — the agent decides which tools to run based on the query, interprets each result, and adapts its approach in real-time. No MCP server required; all tools are registered directly in C++.
+
+```bat
+build\Release\wifi_agent.exe
+```
+
+Select a model backend (GPU or NPU), then choose from the diagnostic menu or type your own question:
+
+```
+> Run a full network diagnostic.
+> Check my Wi-Fi adapter.
+> Fix my internet.
+```
+
+The agent will:
+1. Create a diagnostic plan based on your query
+2. Run tools one at a time, reasoning about each result (visible as **Finding** / **Decision** labels)
+3. Adapt — skip irrelevant steps, apply fixes, re-verify after fixes
+4. Provide a final summary with status (RESOLVED / NEEDS MANUAL ACTION)
+
+**Available tools:**
+
+| Tool | Type | Description |
+|------|------|-------------|
+| `check_adapter` | Diagnostic | Wi-Fi adapter status, SSID, signal |
+| `check_wifi_drivers` | Diagnostic | Driver info, supported radio types |
+| `check_ip_config` | Diagnostic | IP, gateway, DNS, DHCP status |
+| `test_dns_resolution` | Diagnostic | DNS name resolution test |
+| `test_internet` | Diagnostic | End-to-end connectivity test |
+| `ping_host` | Diagnostic | Ping a specific host |
+| `test_bandwidth` | Diagnostic | Quick download speed test (~1MB from Cloudflare CDN) |
+| `toggle_wifi_radio` | Fix | Turn Wi-Fi radio ON/OFF (Windows Radio API) |
+| `enable_wifi_adapter` | Fix | Enable a disabled adapter interface |
+| `restart_wifi_adapter` | Fix | Full disable+enable cycle |
+| `flush_dns_cache` | Fix | Clear DNS resolver cache |
+| `set_dns_servers` | Fix | Set custom DNS servers |
+| `renew_dhcp_lease` | Fix | Release and renew DHCP lease |
+
+> **Note:** Fix tools require running the agent from an elevated (Run as Administrator) terminal. The agent warns on startup if not running as admin.
 
 ---
 
@@ -147,7 +194,8 @@ gaia/                           # repo root
     │   ├── json_utils.cpp
     │   └── console.cpp
     ├── examples/
-    │   └── simple_agent.cpp    # Windows System Health Agent (CUA demo)
+    │   ├── simple_agent.cpp    # Windows System Health Agent (MCP/CUA demo)
+    │   └── wifi_agent.cpp      # Wi-Fi Troubleshooter (registered-tool demo)
     └── tests/
         ├── test_agent.cpp
         ├── test_tool_registry.cpp
