@@ -72,6 +72,7 @@ TEST(TypesTest, AgentConfigDefaults) {
     EXPECT_EQ(config.maxSteps, 20);
     EXPECT_EQ(config.maxPlanIterations, 3);
     EXPECT_EQ(config.maxConsecutiveRepeats, 4);
+    EXPECT_EQ(config.contextSize, 16384);
     EXPECT_FALSE(config.debug);
     EXPECT_FALSE(config.showPrompts);
     EXPECT_FALSE(config.streaming);

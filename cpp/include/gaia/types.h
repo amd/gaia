@@ -146,6 +146,7 @@ struct AgentConfig {
     int maxPlanIterations = 3;
     int maxConsecutiveRepeats = 4;
     int maxHistoryMessages = 40; // Max messages kept between processQuery() calls (0 = unlimited)
+    int contextSize = 16384;    // LLM context window size in tokens (n_ctx)
     bool debug = false;
     bool showPrompts = false;
     bool streaming = false;
