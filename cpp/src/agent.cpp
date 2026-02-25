@@ -20,25 +20,18 @@ You must respond ONLY in valid JSON. No text before { or after }.
 **To call a tool:**
 {"thought": "reasoning", "goal": "objective", "tool": "tool_name", "tool_args": {"arg1": "value1"}}
 
-**To create a multi-step plan:**
-{
-  "thought": "reasoning",
-  "goal": "objective",
-  "plan": [
-    {"tool": "tool1", "tool_args": {"arg": "val"}},
-    {"tool": "tool2", "tool_args": {"arg": "val"}}
-  ],
-  "tool": "tool1",
-  "tool_args": {"arg": "val"}
-}
+**To call a tool with an initial plan:**
+{"thought": "reasoning", "goal": "objective", "plan": [{"tool": "t1", "tool_args": {}}, {"tool": "t2", "tool_args": {}}], "tool": "t1", "tool_args": {}}
 
 **To provide a final answer:**
 {"thought": "reasoning", "goal": "achieved", "answer": "response to user"}
 
 **RULES:**
 1. ALWAYS use tools for real data - NEVER hallucinate
-2. Plan steps MUST be objects like {"tool": "x", "tool_args": {}}, NOT strings
-3. After tool results, provide an "answer" summarizing them
+2. Call ONE tool at a time - observe the result, reason about it, then decide the next action
+3. You may include a "plan" to show your intended steps, but always execute only the "tool" field
+4. After each tool result, you can change, skip, or add steps - the plan is a roadmap, not a script
+5. After all tools complete, provide an "answer" summarizing results
 )";
 
 Agent::Agent(const AgentConfig& config)
@@ -422,103 +415,8 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
         ++stepsTaken;
         console_->printStepHeader(stepsTaken, stepsLimit);
 
-        // ---- Plan Execution Mode ----
-        if (executionState_ == AgentState::EXECUTING_PLAN &&
-            currentStep_ < totalPlanSteps_) {
-
-            console_->printStateInfo("EXECUTING PLAN: Step " +
-                                    std::to_string(currentStep_ + 1) + "/" +
-                                    std::to_string(totalPlanSteps_));
-
-            if (currentPlan_.is_array()) {
-                console_->printPlan(currentPlan_, currentStep_);
-            }
-
-            auto& nextStep = currentPlan_[static_cast<size_t>(currentStep_)];
-
-            if (nextStep.is_object() && nextStep.contains("tool") && nextStep.contains("tool_args")) {
-                std::string toolName = nextStep["tool"].get<std::string>();
-                json toolArgs = nextStep["tool_args"];
-
-                // Resolve placeholders
-                toolArgs = resolvePlanParameters(toolArgs, stepResults);
-
-                console_->printThought("Executing step " + std::to_string(currentStep_ + 1) + " of the plan");
-                console_->printToolUsage(toolName);
-                console_->startProgress("Executing " + toolName);
-
-                json toolResult = executeTool(toolName, toolArgs);
-
-                console_->stopProgress();
-                console_->printToolComplete();
-                console_->prettyPrintJson(toolResult, "Tool Result");
-
-                // Track for loop detection
-                toolCallHistory.emplace_back(toolName, toolArgs);
-
-                // Share result with LLM
-                Message toolMsg;
-                toolMsg.role = MessageRole::TOOL;
-                toolMsg.name = toolName;
-                if (toolResult.is_string()) {
-                    toolMsg.content = toolResult.get<std::string>();
-                } else {
-                    // Truncate large results
-                    std::string resultStr = toolResult.dump();
-                    if (resultStr.size() > 20000) {
-                        resultStr = resultStr.substr(0, 10000) + "\n...[truncated]...\n" +
-                                    resultStr.substr(resultStr.size() - 5000);
-                    }
-                    toolMsg.content = resultStr;
-                }
-                messages.push_back(toolMsg);
-
-                stepResults.push_back(toolResult);
-
-                // Check for error
-                bool isError = toolResult.is_object() && (
-                    toolResult.value("status", "") == "error" ||
-                    toolResult.value("success", true) == false
-                );
-
-                if (isError) {
-                    ++errorCount;
-                    lastError = toolResult.value("error", "Unknown error");
-                    console_->printError(lastError);
-                    executionState_ = AgentState::ERROR_RECOVERY;
-                    continue;
-                }
-
-                // Success - advance
-                ++currentStep_;
-
-                if (currentStep_ >= totalPlanSteps_) {
-                    executionState_ = AgentState::COMPLETION;
-                    ++planIterations_;
-
-                    // Request final answer from LLM
-                    Message completionMsg;
-                    completionMsg.role = MessageRole::USER;
-                    completionMsg.content =
-                        "You have successfully completed all steps in the plan.\n"
-                        "Task: " + userInput + "\n\n"
-                        "Provide a final summary answer.\n"
-                        R"(Respond with {"thought": "...", "goal": "...", "answer": "..."})";
-                    messages.push_back(completionMsg);
-                    continue;
-                }
-
-                continue; // Next plan step
-            } else {
-                // Malformed plan step - fall through to LLM
-                console_->printWarning("Plan step has incorrect format, consulting LLM");
-            }
-        }
-
-        // ---- Normal/Error Recovery/Completion: Query LLM ----
-        if (executionState_ == AgentState::PLANNING) {
-            console_->printStateInfo("PLANNING: Creating or refining plan");
-        } else if (executionState_ == AgentState::ERROR_RECOVERY) {
+        // ---- Error Recovery ----
+        if (executionState_ == AgentState::ERROR_RECOVERY) {
             console_->printStateInfo("ERROR RECOVERY: Handling previous error");
 
             Message errorMsg;
@@ -527,35 +425,12 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
                 "TOOL EXECUTION FAILED!\n\n"
                 "Error: " + lastError + "\n\n"
                 "Original task: " + userInput + "\n\n"
-                "Please analyze the error, create a corrected plan, and execute the first step.\n"
+                "Please analyze the error and try an alternative approach.\n"
                 R"(Respond with {"thought": "...", "goal": "...", "tool": "...", "tool_args": {...}})";
             messages.push_back(errorMsg);
 
             executionState_ = AgentState::PLANNING;
-            currentPlan_ = json();
-            currentStep_ = 0;
-            totalPlanSteps_ = 0;
             stepResults.clear();
-        } else if (executionState_ == AgentState::COMPLETION) {
-            console_->printStateInfo("COMPLETION: Finalizing response");
-        }
-
-        // Add planning instruction on first iteration
-        if (stepsTaken == 1) {
-            Message planMsg;
-            planMsg.role = MessageRole::USER;
-            planMsg.content =
-                "User request: " + userInput + "\n\n"
-                "IMPORTANT: ALWAYS BEGIN WITH A PLAN before executing any tools.\n"
-                "First create a detailed plan with all necessary steps, then execute the first step.\n"
-                "When creating a plan with multiple steps:\n"
-                "   1. ALWAYS follow the plan in the correct order, starting with the FIRST step.\n"
-                "   2. Include both a plan and a 'tool' field, the 'tool' field MUST match the tool in the first step of the plan.\n"
-                "   3. Create plans with clear, executable steps that include both the tool name and the exact arguments for each step.\n";
-            // Replace the original user message with the augmented one
-            if (!messages.empty() && messages.back().role == MessageRole::USER) {
-                messages.back() = planMsg;
-            }
         }
 
         // Call LLM
@@ -596,21 +471,9 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
             break;
         }
 
-        // ---- Handle plan ----
+        // ---- Display plan if provided (advisory only — not auto-executed) ----
         if (parsed.plan.has_value() && parsed.plan.value().is_array()) {
-            currentPlan_ = parsed.plan.value();
-            totalPlanSteps_ = static_cast<int>(currentPlan_.size());
-            currentStep_ = 0;
-            planIterations_ = 0;
-            executionState_ = AgentState::EXECUTING_PLAN;
-
-            console_->printPlan(currentPlan_, 0);
-
-            // If the LLM provided a plan but no tool call, start executing
-            // the plan on the next loop iteration.
-            if (!parsed.toolName.has_value()) {
-                continue;
-            }
+            console_->printPlan(parsed.plan.value(), -1);
         }
 
         // ---- Handle tool call ----
@@ -646,15 +509,6 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
 
             toolCallHistory.emplace_back(toolName, toolArgs);
             stepResults.push_back(toolResult);
-
-            // If we have a plan and this was step 0, advance
-            if (executionState_ == AgentState::EXECUTING_PLAN && currentStep_ == 0) {
-                bool isError = toolResult.is_object() &&
-                               toolResult.value("status", "") == "error";
-                if (!isError) {
-                    ++currentStep_;
-                }
-            }
 
             // Add tool result to messages
             Message toolMsg;
@@ -696,7 +550,20 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
 
     console_->printCompletion(stepsTaken, stepsLimit);
 
-    // Store conversation history for session persistence, pruning to maxHistoryMessages
+    // Store conversation history for session persistence.
+    // Convert TOOL messages to USER messages so the LLM server can replay
+    // them without requiring tool_call_id / tool_calls pairing.
+    for (auto& msg : messages) {
+        if (msg.role == MessageRole::TOOL) {
+            std::string toolName = msg.name.value_or("tool");
+            msg.role = MessageRole::USER;
+            msg.content = "[Result from " + toolName + "]: " + msg.content;
+            msg.name = std::nullopt;
+            msg.toolCallId = std::nullopt;
+        }
+    }
+
+    // Prune to maxHistoryMessages
     if (config_.maxHistoryMessages > 0 &&
         static_cast<int>(messages.size()) > config_.maxHistoryMessages) {
         messages.erase(messages.begin(),

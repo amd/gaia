@@ -13,10 +13,15 @@
 //   - Windows (PowerShell commands for network diagnostics)
 //   - LLM server running at http://localhost:8000/api/v1
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include <array>
 #include <cstdio>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -26,23 +31,37 @@
 #include <gaia/types.h>
 
 // ---------------------------------------------------------------------------
-// Clean console — nicely formatted progress without redundancy
+// ANSI color constants (shared by CleanConsole and TUI helpers)
+// ---------------------------------------------------------------------------
+namespace color {
+    constexpr const char* RESET   = "\033[0m";
+    constexpr const char* BOLD    = "\033[1m";
+    constexpr const char* DIM     = "\033[2m";
+    constexpr const char* ITALIC  = "\033[3m";
+    constexpr const char* UNDERLN = "\033[4m";
+    constexpr const char* GRAY    = "\033[90m";
+    constexpr const char* RED     = "\033[91m";
+    constexpr const char* GREEN   = "\033[92m";
+    constexpr const char* YELLOW  = "\033[93m";
+    constexpr const char* BLUE    = "\033[94m";
+    constexpr const char* MAGENTA = "\033[95m";
+    constexpr const char* CYAN    = "\033[96m";
+    constexpr const char* WHITE   = "\033[97m";
+    // Background
+    constexpr const char* BG_BLUE = "\033[44m";
+}
+
+// ---------------------------------------------------------------------------
+// Clean console — nicely formatted progress with tool output summaries
 // ---------------------------------------------------------------------------
 class CleanConsole : public gaia::OutputHandler {
 public:
-    static constexpr const char* RESET   = "\033[0m";
-    static constexpr const char* BOLD    = "\033[1m";
-    static constexpr const char* DIM     = "\033[90m";
-    static constexpr const char* RED     = "\033[91m";
-    static constexpr const char* GREEN   = "\033[92m";
-    static constexpr const char* YELLOW  = "\033[93m";
-    static constexpr const char* BLUE    = "\033[94m";
-    static constexpr const char* MAGENTA = "\033[95m";
-    static constexpr const char* CYAN    = "\033[96m";
-
     void printProcessingStart(const std::string& /*query*/, int /*maxSteps*/,
                               const std::string& /*modelId*/) override {
         std::cout << std::endl;
+        planShown_ = false;
+        toolsRun_ = 0;
+        lastGoal_.clear();
     }
 
     void printStepHeader(int stepNum, int stepLimit) override {
@@ -53,78 +72,290 @@ public:
     void printStateInfo(const std::string& /*message*/) override {}
 
     void printThought(const std::string& thought) override {
-        if (!thought.empty()) {
-            std::cout << MAGENTA << "  Thinking: " << RESET << DIM
-                      << truncate(thought, 120) << RESET << std::endl;
+        if (thought.empty()) return;
+
+        // Look for structured FINDING:/DECISION: reasoning format
+        auto findingPos = thought.find("FINDING:");
+        if (findingPos == std::string::npos) findingPos = thought.find("Finding:");
+        auto decisionPos = thought.find("DECISION:");
+        if (decisionPos == std::string::npos) decisionPos = thought.find("Decision:");
+
+        if (findingPos != std::string::npos || decisionPos != std::string::npos) {
+            // --- Structured reasoning: parse and color-code ---
+            if (findingPos != std::string::npos) {
+                size_t start = findingPos + 8; // skip "FINDING:"
+                size_t end = (decisionPos != std::string::npos) ? decisionPos : thought.size();
+                std::string text = thought.substr(start, end - start);
+                // Trim whitespace
+                size_t f = text.find_first_not_of(" \t\n\r");
+                size_t l = text.find_last_not_of(" \t\n\r");
+                if (f != std::string::npos) text = text.substr(f, l - f + 1);
+
+                std::cout << color::GREEN << color::BOLD << "  Finding: "
+                          << color::RESET;
+                printWrapped(text, 39, 11);
+            }
+            if (decisionPos != std::string::npos) {
+                size_t start = decisionPos + 9; // skip "DECISION:"
+                std::string text = thought.substr(start);
+                size_t f = text.find_first_not_of(" \t\n\r");
+                size_t l = text.find_last_not_of(" \t\n\r");
+                if (f != std::string::npos) text = text.substr(f, l - f + 1);
+
+                std::cout << color::YELLOW << color::BOLD << "  Decision: "
+                          << color::RESET;
+                printWrapped(text, 38, 12);
+            }
+        } else {
+            // --- Fallback: existing Analysis/Thinking display ---
+            if (toolsRun_ > 0) {
+                std::cout << color::BLUE << color::BOLD << "  Analysis: "
+                          << color::RESET;
+            } else {
+                std::cout << color::MAGENTA << "  Thinking: " << color::RESET;
+            }
+            printWrapped(thought, 38, 12);
         }
     }
 
-    void printGoal(const std::string& /*goal*/) override {}
+    void printGoal(const std::string& goal) override {
+        if (goal.empty() || goal == lastGoal_) return;
+        lastGoal_ = goal;
+        std::cout << std::endl;
+        std::cout << color::CYAN << color::ITALIC
+                  << "  Goal: " << color::RESET;
+        printWrapped(goal, 42, 8);
+    }
 
     void printPlan(const gaia::json& plan, int /*currentStep*/) override {
         if (planShown_ || !plan.is_array()) return;
         planShown_ = true;
-        std::cout << BOLD << "  Plan: " << RESET;
+        std::cout << color::BOLD << color::CYAN << "  Plan: " << color::RESET;
         for (size_t i = 0; i < plan.size(); ++i) {
-            if (i > 0) std::cout << DIM << " -> " << RESET;
+            if (i > 0) std::cout << color::GRAY << " -> " << color::RESET;
             if (plan[i].is_object() && plan[i].contains("tool")) {
-                std::cout << CYAN << plan[i]["tool"].get<std::string>() << RESET;
+                std::cout << color::CYAN
+                          << plan[i]["tool"].get<std::string>()
+                          << color::RESET;
             }
         }
         std::cout << std::endl;
     }
 
     void printToolUsage(const std::string& toolName) override {
-        std::cout << YELLOW << "  [" << stepNum_ << "/" << stepLimit_ << "] "
-                  << BOLD << toolName << RESET
-                  << DIM << " ..." << RESET << std::flush;
+        lastToolName_ = toolName;
+        std::cout << std::endl;
+        std::cout << color::YELLOW << color::BOLD
+                  << "  [" << stepNum_ << "/" << stepLimit_ << "] "
+                  << toolName << color::RESET << std::endl;
     }
 
     void printToolComplete() override {
-        std::cout << GREEN << " done" << RESET << std::endl;
+        ++toolsRun_;
     }
 
-    void prettyPrintJson(const gaia::json& /*data*/,
-                         const std::string& /*title*/) override {
-        // Suppress raw JSON dumps — the LLM reads them, the user doesn't need to
+    void prettyPrintJson(const gaia::json& data,
+                         const std::string& title) override {
+        // Show tool arguments (the command being sent)
+        if (title == "Tool Args" && data.is_object() && !data.empty()) {
+            std::string argsStr;
+            bool first = true;
+            for (auto& [key, val] : data.items()) {
+                if (!first) argsStr += ", ";
+                argsStr += key + "=";
+                if (val.is_string()) argsStr += val.get<std::string>();
+                else argsStr += val.dump();
+                first = false;
+            }
+            std::cout << color::GRAY << "      Args: ";
+            printWrapped(argsStr, 39, 12);
+            std::cout << color::RESET;
+            return;
+        }
+
+        if (title != "Tool Result" || !data.is_object()) return;
+
+        // Show the command that was executed
+        if (data.contains("command")) {
+            std::string cmd = data["command"].get<std::string>();
+            std::cout << color::CYAN << "      Cmd: " << color::RESET
+                      << color::GRAY;
+            printWrapped(cmd, 39, 11);
+            std::cout << color::RESET;
+        }
+
+        // Show error if present
+        if (data.contains("error")) {
+            std::cout << color::RED << color::BOLD << "      Error: "
+                      << color::RESET << color::RED
+                      << data["error"].get<std::string>()
+                      << color::RESET << std::endl;
+            return;
+        }
+
+        // Show tool output preview
+        if (data.contains("output")) {
+            std::string output = data["output"].get<std::string>();
+            if (output.empty() || output.find("(no output)") != std::string::npos) {
+                std::cout << color::GREEN << "      Result: "
+                          << color::RESET << color::GRAY << "(no output)"
+                          << color::RESET << std::endl;
+                return;
+            }
+            std::cout << color::GREEN << "      Output:" << color::RESET
+                      << std::endl;
+            printOutputPreview(output);
+        }
+
+        // Show status for fix tools
+        if (data.contains("status")) {
+            auto status = data["status"].get<std::string>();
+            const char* statusColor = (status == "completed")
+                ? color::GREEN : color::YELLOW;
+            std::cout << statusColor << "      Status: " << status
+                      << color::RESET << std::endl;
+        }
     }
 
     void printError(const std::string& message) override {
-        std::cout << RED << "  ERROR: " << RESET << message << std::endl;
+        std::cout << color::RED << color::BOLD << "  ERROR: " << color::RESET
+                  << color::RED;
+        printWrapped(message, 41, 9);
+        std::cout << color::RESET;
     }
 
     void printWarning(const std::string& message) override {
-        std::cout << YELLOW << "  WARNING: " << RESET << message << std::endl;
+        std::cout << color::YELLOW << "  WARNING: " << color::RESET
+                  << message << std::endl;
     }
 
     void printInfo(const std::string& /*message*/) override {}
 
-    void startProgress(const std::string& message) override {
-        std::cout << DIM << "  " << message << "..." << RESET << std::flush;
-    }
+    void startProgress(const std::string& /*message*/) override {}
 
-    void stopProgress() override {
+    void stopProgress() override {}
+
+    void printFinalAnswer(const std::string& answer) override {
+        if (answer.empty()) return;
+
+        // Extract clean text — the LLM sometimes returns raw JSON instead
+        // of plain text. Try to extract "answer" or "thought" fields.
+        std::string cleanAnswer = answer;
+        if (!answer.empty() && answer.front() == '{') {
+            try {
+                auto j = gaia::json::parse(answer);
+                if (j.is_object()) {
+                    if (j.contains("answer") && j["answer"].is_string()) {
+                        cleanAnswer = j["answer"].get<std::string>();
+                    } else if (j.contains("thought") && j["thought"].is_string()) {
+                        cleanAnswer = j["thought"].get<std::string>();
+                    }
+                }
+            } catch (...) {
+                // Not valid JSON — use as-is
+            }
+        }
+
         std::cout << std::endl;
-    }
-
-    void printFinalAnswer(const std::string& /*answer*/) override {
-        // Suppress — main() prints the final answer with "Agent:" prefix
+        std::cout << color::GREEN
+                  << "  ============================================"
+                  << color::RESET << std::endl;
+        std::cout << color::GREEN << color::BOLD
+                  << "  Conclusion" << color::RESET << std::endl;
+        std::cout << color::GREEN
+                  << "  ============================================"
+                  << color::RESET << std::endl;
+        // Print each line of the answer word-wrapped
+        std::string line;
+        std::istringstream stream(cleanAnswer);
+        while (std::getline(stream, line)) {
+            if (line.empty()) {
+                std::cout << std::endl;
+            } else {
+                std::cout << "  ";
+                printWrapped(line, 46, 2);
+            }
+        }
+        std::cout << color::GREEN
+                  << "  ============================================"
+                  << color::RESET << std::endl;
     }
 
     void printCompletion(int stepsTaken, int /*stepsLimit*/) override {
-        std::cout << DIM << "  (" << stepsTaken << " steps)" << RESET
-                  << std::endl;
+        std::cout << color::GRAY << "  Completed in " << stepsTaken
+                  << " steps" << color::RESET << std::endl;
     }
 
 private:
-    static std::string truncate(const std::string& s, size_t maxLen) {
-        if (s.size() <= maxLen) return s;
-        return s.substr(0, maxLen) + "...";
+    // Print text with word-wrapping at the given width, indented by indent spaces
+    static void printWrapped(const std::string& text, size_t width, size_t indent) {
+        std::string indentStr(indent, ' ');
+        std::istringstream words(text);
+        std::string word;
+        size_t col = 0;
+        bool firstWord = true;
+        while (words >> word) {
+            if (!firstWord && col + 1 + word.size() > width) {
+                std::cout << std::endl << indentStr;
+                col = 0;
+            } else if (!firstWord) {
+                std::cout << ' ';
+                ++col;
+            }
+            std::cout << word;
+            col += word.size();
+            firstWord = false;
+        }
+        std::cout << color::RESET << std::endl;
+    }
+
+    // Print a compact preview of command output (up to kMaxPreviewLines lines)
+    void printOutputPreview(const std::string& output) {
+        constexpr int kMaxPreviewLines = 10;
+        std::istringstream stream(output);
+        std::string line;
+        int lineCount = 0;
+        int totalLines = 0;
+
+        // Count total non-empty lines
+        {
+            std::istringstream counter(output);
+            std::string tmp;
+            while (std::getline(counter, tmp)) {
+                if (!tmp.empty() && tmp.find_first_not_of(" \t\r\n") != std::string::npos)
+                    ++totalLines;
+            }
+        }
+
+        std::cout << color::GRAY << "      .------------------------------------"
+                  << color::RESET << std::endl;
+        while (std::getline(stream, line) && lineCount < kMaxPreviewLines) {
+            // Skip empty lines
+            if (line.empty() || line.find_first_not_of(" \t\r\n") == std::string::npos)
+                continue;
+            // Trim trailing \r
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            // Truncate long lines
+            if (line.size() > 42) line = line.substr(0, 39) + "...";
+            std::cout << color::GRAY << "      | " << line << color::RESET
+                      << std::endl;
+            ++lineCount;
+        }
+        if (totalLines > kMaxPreviewLines) {
+            std::cout << color::GRAY << "      | ... ("
+                      << (totalLines - kMaxPreviewLines)
+                      << " more lines)" << color::RESET << std::endl;
+        }
+        std::cout << color::GRAY << "      '------------------------------------"
+                  << color::RESET << std::endl;
     }
 
     int stepNum_ = 0;
     int stepLimit_ = 0;
+    int toolsRun_ = 0;
     bool planShown_ = false;
+    std::string lastToolName_;
+    std::string lastGoal_;
 };
 
 // ---------------------------------------------------------------------------
@@ -174,31 +405,71 @@ public:
 
 protected:
     std::string getSystemPrompt() const override {
-        return R"(You are an expert Windows network troubleshooter. You diagnose and fix Wi-Fi connectivity issues using PowerShell commands via your registered tools.
+        return R"(You are an expert Windows network troubleshooter running locally on AMD hardware via the GAIA framework. You diagnose and fix Wi-Fi connectivity issues using PowerShell commands via your registered tools.
 
-## DIAGNOSTIC PROTOCOL (follow this order)
+You are an intelligent agent. Given a user's question, decide which tools are relevant, run them one at a time, reason about each result, adapt your approach based on what you find, and continue until the question is answered or the issue is resolved.
 
-1. **Adapter Check** — call `check_adapter` to verify the Wi-Fi adapter is present and connected
-2. **IP Configuration** — call `check_ip_config` to verify IP address, subnet mask, gateway, and DHCP status
-3. **Gateway Ping** — call `ping_host` with the default gateway IP from step 2
-4. **DNS Resolution** — call `test_dns_resolution` to verify DNS is working
-5. **Internet Connectivity** — call `test_internet` to verify end-to-end internet access
+## REASONING PROTOCOL
 
-## FIX PROTOCOL (apply only if diagnostics reveal issues)
+After EVERY tool result, structure your thought using these exact prefixes:
 
-- **No IP address / DHCP failure** → call `renew_dhcp_lease`
-- **DNS resolution failure** → call `flush_dns_cache`, then re-test; if still failing, call `set_dns_servers` with Google DNS (8.8.8.8 / 8.8.4.4)
-- **Adapter disconnected / hardware issue** → call `restart_wifi_adapter` with the adapter name from step 1
-- After applying any fix, re-run the relevant diagnostic to confirm the fix worked
+FINDING: <what the data shows — key facts, values, status from the output>
+DECISION: <what to do next and WHY — especially when skipping steps, pivoting, applying a fix, or re-verifying>
 
-## OUTPUT FORMAT
+The user sees FINDING and DECISION highlighted in the UI. Use them to make your reasoning visible.
 
-End every response with one of:
-- **RESOLVED** — all diagnostics pass or issue was fixed
-- **PARTIALLY RESOLVED** — some issues fixed but others remain
-- **NEEDS MANUAL ACTION** — issue requires user intervention (driver update, hardware problem, router issue, etc.)
+## HOW TO APPROACH A QUERY
 
-Always explain what you found, what you did, and what the user should do next (if anything).)";
+1. Read the user's question and decide which tools are relevant
+2. Create a plan showing the tools you intend to run (include it in your first response)
+3. Execute the first tool
+4. After each result: analyze it (FINDING), decide what to do next (DECISION)
+5. Update your plan as needed — skip steps that are no longer relevant, add fix/verify steps
+6. When you have enough information to answer, provide your final answer
+
+Your approach should be entirely driven by the query:
+- "Run a full diagnostic" → run all relevant diagnostic tools, summarize everything
+- "Check my DNS" → just run DNS test, report result, stop
+- "Why can't I connect?" → start with adapter check, follow the evidence
+- "Fix my internet" → diagnose first, apply fixes, verify fixes worked
+
+## AVAILABLE DIAGNOSTIC SEQUENCE
+
+For a full network diagnostic, the typical sequence is:
+1. `check_adapter` — adapter present and connected?
+2. `check_ip_config` — valid IP, gateway, DNS servers?
+3. `ping_host` — gateway reachable?
+4. `test_dns_resolution` — name resolution working?
+5. `test_internet` — end-to-end connectivity?
+
+But adapt based on what you find. If the adapter is disconnected, skip IP/DNS/internet checks — they will fail. If everything passes early, you can stop early.
+
+## FIXING ISSUES
+
+When you find a problem, fix it and verify:
+1. Apply the fix (e.g. `flush_dns_cache`, `renew_dhcp_lease`, `enable_wifi_adapter`)
+2. Re-run the diagnostic that failed to verify the fix worked
+3. Report the before/after in your FINDING
+4. If the fix failed, escalate (e.g. `flush_dns_cache` didn't work → try `set_dns_servers`)
+
+Available fix tools:
+- `flush_dns_cache` — clear stale DNS entries
+- `set_dns_servers` — switch to Google DNS (8.8.8.8/8.8.4.4)
+- `renew_dhcp_lease` — get a fresh IP address
+- `enable_wifi_adapter` — re-enable a disabled adapter
+- `restart_wifi_adapter` — full disable+enable cycle (last resort)
+
+## FINAL ANSWER
+
+When done, provide a summary with:
+- What you checked and what you found
+- Any fixes applied and whether they worked
+- Current status: RESOLVED, PARTIALLY RESOLVED, or NEEDS MANUAL ACTION
+- Next steps if not fully resolved, or a follow-up question if you need more info
+
+## GOAL TRACKING
+
+Always set a `goal` field describing your current objective. Update it as your focus changes.)";
     }
 
     void registerTools() override {
@@ -210,8 +481,20 @@ Always explain what you found, what you did, and what the user should do next (i
             "check_adapter",
             "Show Wi-Fi adapter status including SSID, signal strength, radio type, and connection state. Returns the output of 'netsh wlan show interfaces'.",
             [](const gaia::json& /*args*/) -> gaia::json {
-                std::string output = runShell("netsh wlan show interfaces");
-                return {{"tool", "check_adapter"}, {"output", output}};
+                std::string cmd = "netsh wlan show interfaces";
+                std::string output = runShell(cmd);
+                return {{"tool", "check_adapter"}, {"command", cmd}, {"output", output}};
+            },
+            {}  // no parameters
+        );
+
+        toolRegistry().registerTool(
+            "check_wifi_drivers",
+            "Show Wi-Fi driver information including driver name, version, vendor, supported radio types, and whether hosted network is supported. Returns the output of 'netsh wlan show drivers'.",
+            [](const gaia::json& /*args*/) -> gaia::json {
+                std::string cmd = "netsh wlan show drivers";
+                std::string output = runShell(cmd);
+                return {{"tool", "check_wifi_drivers"}, {"command", cmd}, {"output", output}};
             },
             {}  // no parameters
         );
@@ -220,8 +503,9 @@ Always explain what you found, what you did, and what the user should do next (i
             "check_ip_config",
             "Show full IP configuration for all network adapters including IP address, subnet mask, default gateway, DNS servers, and DHCP status. Returns the output of 'ipconfig /all'.",
             [](const gaia::json& /*args*/) -> gaia::json {
-                std::string output = runShell("ipconfig /all");
-                return {{"tool", "check_ip_config"}, {"output", output}};
+                std::string cmd = "ipconfig /all";
+                std::string output = runShell(cmd);
+                return {{"tool", "check_ip_config"}, {"command", cmd}, {"output", output}};
             },
             {}  // no parameters
         );
@@ -235,7 +519,7 @@ Always explain what you found, what you did, and what the user should do next (i
                     + " -Type A -ErrorAction Stop | Select-Object Name, IPAddress, QueryType"
                     + " | ConvertTo-Json";
                 std::string output = runShell(cmd);
-                return {{"tool", "test_dns_resolution"}, {"hostname", hostname}, {"output", output}};
+                return {{"tool", "test_dns_resolution"}, {"command", cmd}, {"hostname", hostname}, {"output", output}};
             },
             {
                 {"hostname", gaia::ToolParamType::STRING, /*required=*/false,
@@ -253,7 +537,7 @@ Always explain what you found, what you did, and what the user should do next (i
                     " PingReplyDetails"
                     " | ConvertTo-Json";
                 std::string output = runShell(cmd);
-                return {{"tool", "test_internet"}, {"output", output}};
+                return {{"tool", "test_internet"}, {"command", cmd}, {"output", output}};
             },
             {}  // no parameters
         );
@@ -275,7 +559,7 @@ Always explain what you found, what you did, and what the user should do next (i
                     + " | Select-Object ComputerName, RemoteAddress, PingSucceeded, PingReplyDetails"
                     + " | ConvertTo-Json";
                 std::string output = runShell(cmd);
-                return {{"tool", "ping_host"}, {"host", host}, {"output", output}};
+                return {{"tool", "ping_host"}, {"command", cmd}, {"host", host}, {"output", output}};
             },
             {
                 {"host", gaia::ToolParamType::STRING, /*required=*/true,
@@ -291,8 +575,9 @@ Always explain what you found, what you did, and what the user should do next (i
             "flush_dns_cache",
             "Clear the local DNS resolver cache. Use this when DNS resolution fails to remove stale or corrupted cache entries.",
             [](const gaia::json& /*args*/) -> gaia::json {
-                std::string output = runShell("Clear-DnsClientCache");
-                return {{"tool", "flush_dns_cache"}, {"status", "completed"}, {"output", output}};
+                std::string cmd = "Clear-DnsClientCache";
+                std::string output = runShell(cmd);
+                return {{"tool", "flush_dns_cache"}, {"command", cmd}, {"status", "completed"}, {"output", output}};
             },
             {}  // no parameters
         );
@@ -320,6 +605,7 @@ Always explain what you found, what you did, and what the user should do next (i
                 std::string output = runShell(cmd);
                 return {
                     {"tool", "set_dns_servers"},
+                    {"command", cmd},
                     {"adapter_name", adapter},
                     {"primary_dns", primary},
                     {"secondary_dns", secondary},
@@ -341,10 +627,9 @@ Always explain what you found, what you did, and what the user should do next (i
             "renew_dhcp_lease",
             "Release and renew the DHCP lease for all network adapters. Use this when the adapter has no IP address or an APIPA (169.254.x.x) address.",
             [](const gaia::json& /*args*/) -> gaia::json {
-                std::string output = runShell(
-                    "ipconfig /release; Start-Sleep -Seconds 1; ipconfig /renew"
-                );
-                return {{"tool", "renew_dhcp_lease"}, {"status", "completed"}, {"output", output}};
+                std::string cmd = "ipconfig /release; Start-Sleep -Seconds 1; ipconfig /renew";
+                std::string output = runShell(cmd);
+                return {{"tool", "renew_dhcp_lease"}, {"command", cmd}, {"status", "completed"}, {"output", output}};
             },
             {}  // no parameters
         );
@@ -366,6 +651,7 @@ Always explain what you found, what you did, and what the user should do next (i
                 std::string output = runShell(cmd);
                 return {
                     {"tool", "restart_wifi_adapter"},
+                    {"command", cmd},
                     {"adapter_name", adapter},
                     {"status", "completed"},
                     {"output", output}
@@ -374,6 +660,30 @@ Always explain what you found, what you did, and what the user should do next (i
             {
                 {"adapter_name", gaia::ToolParamType::STRING, /*required=*/true,
                  "The network adapter name to restart (e.g. 'Wi-Fi')"}
+            }
+        );
+
+        toolRegistry().registerTool(
+            "enable_wifi_adapter",
+            "Enable a disabled Wi-Fi adapter without a full restart cycle. Use when the adapter is administratively disabled but hardware radio is on.",
+            [](const gaia::json& args) -> gaia::json {
+                std::string adapter = args.value("adapter_name", "");
+                if (adapter.empty()) {
+                    return {{"error", "adapter_name is required"}};
+                }
+                std::string cmd = "Enable-NetAdapter -Name '" + adapter + "' -Confirm:$false";
+                std::string output = runShell(cmd);
+                return {
+                    {"tool", "enable_wifi_adapter"},
+                    {"command", cmd},
+                    {"adapter_name", adapter},
+                    {"status", "completed"},
+                    {"output", output}
+                };
+            },
+            {
+                {"adapter_name", gaia::ToolParamType::STRING, /*required=*/true,
+                 "The adapter name to enable (e.g. 'Wi-Fi')"}
             }
         );
     }
@@ -395,6 +705,8 @@ static const std::pair<std::string, std::string> kDiagnosticMenu[] = {
      "Run a full network diagnostic following the complete diagnostic protocol."},
     {"Check Wi-Fi adapter",
      "Check the Wi-Fi adapter status and report the connection state, signal strength, and SSID."},
+    {"Check Wi-Fi drivers",
+     "Check the Wi-Fi driver information including driver name, version, vendor, and supported radio types."},
     {"Check IP configuration",
      "Check the IP configuration and report IP addresses, default gateway, DNS servers, and DHCP status."},
     {"Test DNS resolution",
@@ -409,12 +721,24 @@ static const std::pair<std::string, std::string> kDiagnosticMenu[] = {
 static constexpr size_t kMenuSize = sizeof(kDiagnosticMenu) / sizeof(kDiagnosticMenu[0]);
 
 static void printDiagnosticMenu() {
-    std::cout << "--------------------------------------------------" << std::endl;
+    std::cout << color::CYAN
+              << "  ============================================"
+              << color::RESET << std::endl;
     for (size_t i = 0; i < kMenuSize; ++i) {
-        std::cout << "  [" << (i + 1) << "] " << kDiagnosticMenu[i].first << std::endl;
+        std::cout << color::YELLOW << "  [" << (i + 1) << "] "
+                  << color::RESET << color::WHITE
+                  << kDiagnosticMenu[i].first
+                  << color::RESET << std::endl;
     }
-    std::cout << "--------------------------------------------------" << std::endl;
-    std::cout << "  Or type your own question. Type 'quit' to exit." << std::endl;
+    std::cout << color::CYAN
+              << "  ============================================"
+              << color::RESET << std::endl;
+    std::cout << color::GRAY
+              << "  Type a number, a question,"
+              << color::RESET << std::endl;
+    std::cout << color::GRAY
+              << "  or 'quit' to exit."
+              << color::RESET << std::endl;
     std::cout << std::endl;
 }
 
@@ -423,14 +747,65 @@ static void printDiagnosticMenu() {
 // ---------------------------------------------------------------------------
 int main() {
     try {
-        std::cout << "\n=== Wi-Fi Troubleshooter | GAIA C++ | Local inference ===" << std::endl;
+        // --- Admin check ---
+#ifdef _WIN32
+        {
+            bool isAdmin = false;
+            HANDLE token = nullptr;
+            if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+                TOKEN_ELEVATION elevation{};
+                DWORD size = sizeof(elevation);
+                if (GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size)) {
+                    isAdmin = elevation.TokenIsElevated != 0;
+                }
+                CloseHandle(token);
+            }
+            if (!isAdmin) {
+                std::cout << std::endl;
+                std::cout << color::YELLOW << color::BOLD
+                          << "  WARNING: " << color::RESET
+                          << color::YELLOW
+                          << "Not running as admin."
+                          << color::RESET << std::endl;
+                std::cout << color::GRAY
+                          << "  Fix tools (restart adapter,"
+                          << std::endl
+                          << "  flush DNS, etc.) need elevated"
+                          << std::endl
+                          << "  privileges. Right-click your"
+                          << std::endl
+                          << "  terminal -> Run as administrator."
+                          << color::RESET << std::endl;
+            }
+        }
+#endif
+
+        // --- Banner ---
+        std::cout << std::endl;
+        std::cout << color::CYAN << color::BOLD
+                  << "  ============================================"
+                  << color::RESET << std::endl;
+        std::cout << color::CYAN << color::BOLD
+                  << "   Wi-Fi Agent  |  GAIA C++  |  Local"
+                  << color::RESET << std::endl;
+        std::cout << color::CYAN << color::BOLD
+                  << "  ============================================"
+                  << color::RESET << std::endl;
 
         // --- Model selection ---
-        std::cout << "\nSelect inference backend:" << std::endl;
-        std::cout << "  [1] GPU  - Qwen3-4B-Instruct-2507-GGUF" << std::endl;
-        std::cout << "  [2] NPU  - Qwen3-4B-Instruct-2507-FLM" << std::endl;
         std::cout << std::endl;
-        std::cout << "> " << std::flush;
+        std::cout << color::BOLD << "  Select inference backend:"
+                  << color::RESET << std::endl;
+        std::cout << color::YELLOW << "  [1] " << color::RESET
+                  << color::GREEN << "GPU" << color::RESET
+                  << color::GRAY << "  Qwen3-4B-GGUF"
+                  << color::RESET << std::endl;
+        std::cout << color::YELLOW << "  [2] " << color::RESET
+                  << color::MAGENTA << "NPU" << color::RESET
+                  << color::GRAY << "  Qwen3-4B-FLM"
+                  << color::RESET << std::endl;
+        std::cout << std::endl;
+        std::cout << color::BOLD << "  > " << color::RESET << std::flush;
 
         std::string modelChoice;
         std::getline(std::cin, modelChoice);
@@ -438,21 +813,26 @@ int main() {
         std::string modelId;
         if (modelChoice == "2") {
             modelId = "Qwen3-4B-Instruct-2507-FLM";
-            std::cout << "Using NPU backend: " << modelId << std::endl;
+            std::cout << color::MAGENTA << "  Using NPU backend: "
+                      << color::BOLD << modelId << color::RESET << std::endl;
         } else {
             modelId = "Qwen3-4B-Instruct-2507-GGUF";
-            std::cout << "Using GPU backend: " << modelId << std::endl;
+            std::cout << color::GREEN << "  Using GPU backend: "
+                      << color::BOLD << modelId << color::RESET << std::endl;
         }
 
         WiFiTroubleshooterAgent agent(modelId);
 
-        std::cout << "\nReady!\n" << std::endl;
+        std::cout << std::endl;
+        std::cout << color::GREEN << color::BOLD << "  Ready!"
+                  << color::RESET << std::endl;
+        std::cout << std::endl;
 
         // --- Interactive loop with diagnostic menu ---
         std::string userInput;
         while (true) {
             printDiagnosticMenu();
-            std::cout << "> " << std::flush;
+            std::cout << color::BOLD << "  > " << color::RESET << std::flush;
             std::getline(std::cin, userInput);
 
             if (userInput.empty()) continue;
@@ -463,19 +843,26 @@ int main() {
             if (userInput.size() == 1 && userInput[0] >= '1' && userInput[0] <= '0' + static_cast<char>(kMenuSize)) {
                 size_t idx = static_cast<size_t>(userInput[0] - '1');
                 query = kDiagnosticMenu[idx].second;
-                std::cout << "\n> " << kDiagnosticMenu[idx].first << std::endl;
+                std::cout << color::CYAN << "  > "
+                          << kDiagnosticMenu[idx].first
+                          << color::RESET << std::endl;
             } else {
                 query = userInput;
             }
 
             auto result = agent.processQuery(query);
-            if (result.contains("result") && !result["result"].get<std::string>().empty()) {
-                std::cout << "\nAgent: " << result["result"].get<std::string>() << "\n" << std::endl;
-            }
+            // Final answer is now printed by CleanConsole::printFinalAnswer()
+            // Only print here if printFinalAnswer was somehow skipped
+            (void)result;
         }
 
+        std::cout << std::endl;
+        std::cout << color::GRAY << "  Goodbye!" << color::RESET << std::endl;
+
     } catch (const std::exception& e) {
-        std::cerr << "Fatal error: " << e.what() << std::endl;
+        std::cerr << color::RED << color::BOLD << "Fatal error: "
+                  << color::RESET << color::RED << e.what()
+                  << color::RESET << std::endl;
         return 1;
     }
 
