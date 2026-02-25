@@ -217,20 +217,23 @@ jobs:
           key: fetchcontent-integration-windows-${{ hashFiles('cpp/CMakeLists.txt') }}
 
       - name: Configure and build integration tests
-        shell: bash
+        shell: powershell
         run: |
-          # Use MinGW Makefiles if g++ is available (no MSVC on STX runners)
-          GEN_FLAG=""
-          if command -v g++ &>/dev/null && ! command -v cl &>/dev/null; then
-            GEN_FLAG="-G \"MinGW Makefiles\""
-          fi
-          eval cmake -B cpp/build-integration -S cpp \
-                $GEN_FLAG \
-                -DCMAKE_BUILD_TYPE=Release \
-                -DGAIA_BUILD_INTEGRATION_TESTS=ON \
-                -DGAIA_BUILD_TESTS=OFF \
+          # Auto-detect generator: MinGW Makefiles when using w64devkit
+          $gen = @()
+          if (Get-Command g++ -ErrorAction SilentlyContinue) {
+              if (-not (Get-Command cl -ErrorAction SilentlyContinue)) {
+                  $gen = @("-G", "MinGW Makefiles")
+              }
+          }
+          cmake -B cpp/build-integration -S cpp @gen `
+                -DCMAKE_BUILD_TYPE=Release `
+                -DGAIA_BUILD_INTEGRATION_TESTS=ON `
+                -DGAIA_BUILD_TESTS=OFF `
                 -DGAIA_BUILD_EXAMPLES=OFF
+          if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
           cmake --build cpp/build-integration --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
 
       - name: Start Lemonade Server and run integration tests
         shell: powershell
