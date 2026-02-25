@@ -150,7 +150,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           $ProgressPreference = 'SilentlyContinue'
           $cmakeVer = "3.31.4"
-          $mgwVer   = "2.0.0"
+          $mgwVer   = "2.5.0"
 
           # --- CMake ---
           # Check PATH, then previously downloaded location, then VS, then download
@@ -198,11 +198,12 @@ jobs:
                   Write-Host "w64devkit found at cached location"
                   echo "$mgwCached" >> $env:GITHUB_PATH
               } else {
-                  $url = "https://github.com/skeeto/w64devkit/releases/download/v${mgwVer}/w64devkit-x64-${mgwVer}.zip"
+                  $url = "https://github.com/skeeto/w64devkit/releases/download/v${mgwVer}/w64devkit-x64-${mgwVer}.7z.exe"
                   Write-Host "Downloading w64devkit (MinGW-w64) v${mgwVer}..."
-                  Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\w64devkit.zip" -UseBasicParsing
-                  Expand-Archive "$env:TEMP\w64devkit.zip" "$env:TEMP" -Force
-                  Remove-Item "$env:TEMP\w64devkit.zip"
+                  Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\w64devkit.exe" -UseBasicParsing
+                  Write-Host "Extracting w64devkit..."
+                  & "$env:TEMP\w64devkit.exe" -o"$env:TEMP" -y | Out-Null
+                  Remove-Item "$env:TEMP\w64devkit.exe"
                   echo "$mgwCached" >> $env:GITHUB_PATH
               }
           }
