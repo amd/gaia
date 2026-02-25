@@ -238,7 +238,9 @@ ParsedResponse parseLlmResponse(const std::string& response) {
             parsed.goal = j.value("goal", "");
 
             if (j.contains("answer")) {
-                parsed.answer = j["answer"].get<std::string>();
+                parsed.answer = j["answer"].is_string()
+                    ? j["answer"].get<std::string>()
+                    : j["answer"].dump();
             }
             if (j.contains("tool")) {
                 parsed.toolName = j["tool"].get<std::string>();
@@ -265,7 +267,9 @@ ParsedResponse parseLlmResponse(const std::string& response) {
         parsed.goal = j.value("goal", "");
 
         if (j.contains("answer")) {
-            parsed.answer = j["answer"].get<std::string>();
+            parsed.answer = j["answer"].is_string()
+                    ? j["answer"].get<std::string>()
+                    : j["answer"].dump();
         }
         if (j.contains("tool")) {
             parsed.toolName = j["tool"].get<std::string>();

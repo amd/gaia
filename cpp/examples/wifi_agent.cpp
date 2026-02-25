@@ -514,21 +514,21 @@ Available fix tools: `toggle_wifi_radio`, `flush_dns_cache`, `set_dns_servers`, 
 
 ## FINAL ANSWER
 
-Only provide an "answer" after ALL tool calls are complete. Format as a bulleted summary:
+Only provide an "answer" after ALL tool calls are complete. Format as a bulleted summary.
+IMPORTANT: Use only ASCII characters. Do NOT use em-dashes, en-dashes, or unicode symbols. Use a hyphen (-) or colon (:) instead.
 
-- **Adapter:** OK/FAIL — SSID name, signal strength %
-- **IP Config:** OK/FAIL — IP address, gateway
-- **DNS:** OK/FAIL — resolver working/not
-- **Internet:** OK/FAIL — connectivity status
-- **Download:** XX Mbps
-- **Upload:** XX Mbps
-- **Fixes Applied:** list any, with before/after result (or "None")
-- **Status:** RESOLVED / PARTIALLY RESOLVED / NEEDS MANUAL ACTION
-- **Summary:** one sentence overall assessment
+- Adapter: OK/FAIL - SSID name, signal strength %
+- IP Config: OK/FAIL - IP address, gateway
+- DNS: OK/FAIL - resolver working/not
+- Internet: OK/FAIL - connectivity status
+- Speed: download XX Mbps / upload XX Mbps
+- Fixes Applied: list any with result, or "None"
+- Status: RESOLVED / PARTIALLY RESOLVED / NEEDS MANUAL ACTION
+- Summary: one sentence overall assessment
 
 Use ** around key values (speeds, signal %, SSID names, IP addresses) to highlight them.
 In FINDING/DECISION too, wrap important numbers and values in ** for emphasis.
-Do NOT use markdown tables — use bullet points only.
+Do NOT use markdown tables, em-dashes, or special unicode characters. Use bullet points and hyphens only.
 
 ## GOAL TRACKING
 
