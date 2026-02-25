@@ -147,7 +147,7 @@ The agent will:
 | `test_dns_resolution` | Diagnostic | DNS name resolution test |
 | `test_internet` | Diagnostic | End-to-end connectivity test |
 | `ping_host` | Diagnostic | Ping a specific host |
-| `test_bandwidth` | Diagnostic | Quick download speed test (~1MB from Cloudflare CDN) |
+| `test_bandwidth` | Diagnostic | Download + upload speed test (10MB down, 2MB up via Cloudflare CDN) |
 | `toggle_wifi_radio` | Fix | Turn Wi-Fi radio ON/OFF (Windows Radio API) |
 | `enable_wifi_adapter` | Fix | Enable a disabled adapter interface |
 | `restart_wifi_adapter` | Fix | Full disable+enable cycle |
@@ -204,6 +204,75 @@ gaia/                           # repo root
         ├── test_console.cpp
         └── test_types.cpp
 ```
+
+---
+
+## Architecture
+
+### The Reactive Agent Loop
+
+The core of every GAIA agent is a **reactive loop** in `agent.cpp`. Unlike a script that runs a fixed sequence of commands, the agent calls the LLM after *every* tool result, letting the model reason about what happened and decide what to do next.
+
+```
+User query
+    │
+    ▼
+┌──────────────────────┐
+│  Call LLM             │◄──────────────────┐
+│  (system prompt +     │                   │
+│   conversation so far)│                   │
+└──────────┬───────────┘                    │
+           │                                │
+           ▼                                │
+   ┌──── Parse JSON ────┐                  │
+   │                     │                  │
+   │  Has "answer"?      │── yes ──► Done   │
+   │                     │                  │
+   │  Has "tool"?        │── yes ──► Execute tool ──► Feed result back
+   │                     │                  │
+   │  Neither?           │── conversational response ──► Done
+   └─────────────────────┘
+```
+
+Each iteration: **LLM thinks → agent executes → result goes back → LLM thinks again**. The LLM can change its plan at any point based on what it observes.
+
+### How Tools Work
+
+Tools are C++ lambda functions registered with the `ToolRegistry`. Each tool has a name, description (sent to the LLM), a callback, and a parameter schema:
+
+```cpp
+toolRegistry().registerTool(
+    "check_adapter",                          // name (LLM uses this)
+    "Check Wi-Fi adapter status and signal",  // description (LLM reads this)
+    [](const gaia::json& args) -> gaia::json { ... },  // callback
+    { /* parameter definitions */ }
+);
+```
+
+When the LLM returns `{"tool": "check_adapter", "tool_args": {...}}`, the agent looks up the callback and invokes it. The return value (JSON) is fed back to the LLM as the next message.
+
+### Shell Execution (`runShell`)
+
+Most Wi-Fi agent tools delegate to PowerShell via a `runShell()` helper that wraps `_popen()`:
+
+```cpp
+std::string runShell(const std::string& cmd) {
+    std::string full = "powershell -NoProfile -Command \"& { " + cmd + " } 2>&1\"";
+    FILE* pipe = _popen(full.c_str(), "r");
+    // ... read stdout into string, return it
+}
+```
+
+The agent is pure C++ — PowerShell is just the subprocess that runs system commands (`netsh`, `ipconfig`, `Test-NetConnection`, etc.). For complex scripts (like the WinRT Radio API), the tool writes a temp `.ps1` file and executes it via `powershell -File`.
+
+### Custom TUI (`CleanConsole`)
+
+The `wifi_agent` overrides the default `OutputHandler` with a custom `CleanConsole` that parses the LLM's structured reasoning output:
+
+- **`FINDING:`** prefix → green label — what the data shows
+- **`DECISION:`** prefix → yellow label — what the agent will do next and why
+
+This makes the agent's adaptive behavior visible. A script would just dump command output; the agent shows *why* it's skipping a step, applying a fix, or re-running a check.
 
 ---
 

@@ -289,22 +289,54 @@ public:
 
 private:
     // Print text with word-wrapping at the given width, indented by indent spaces
-    static void printWrapped(const std::string& text, size_t width, size_t indent) {
+    // Render **bold** markers as ANSI bold+white, then restore prevColor.
+    static void printStyledWord(const std::string& word, const char* prevColor) {
+        size_t pos = 0;
+        while (pos < word.size()) {
+            auto boldStart = word.find("**", pos);
+            if (boldStart == std::string::npos) {
+                std::cout << word.substr(pos);
+                break;
+            }
+            // Print text before **
+            std::cout << word.substr(pos, boldStart - pos);
+            auto boldEnd = word.find("**", boldStart + 2);
+            if (boldEnd == std::string::npos) {
+                // Unmatched ** — print literally
+                std::cout << word.substr(boldStart);
+                break;
+            }
+            // Print bold content
+            std::cout << color::BOLD << color::WHITE
+                      << word.substr(boldStart + 2, boldEnd - boldStart - 2)
+                      << color::RESET << prevColor;
+            pos = boldEnd + 2;
+        }
+    }
+
+    static void printWrapped(const std::string& text, size_t width, size_t indent,
+                             const char* prevColor = color::RESET) {
         std::string indentStr(indent, ' ');
         std::istringstream words(text);
         std::string word;
         size_t col = 0;
         bool firstWord = true;
         while (words >> word) {
-            if (!firstWord && col + 1 + word.size() > width) {
+            // Strip ** for length calculation
+            std::string plain = word;
+            size_t p;
+            while ((p = plain.find("**")) != std::string::npos)
+                plain.erase(p, 2);
+
+            if (!firstWord && col + 1 + plain.size() > width) {
                 std::cout << std::endl << indentStr;
                 col = 0;
             } else if (!firstWord) {
                 std::cout << ' ';
                 ++col;
             }
-            std::cout << word;
-            col += word.size();
+            printStyledWord(word, prevColor);
+            col += plain.size();
             firstWord = false;
         }
         std::cout << color::RESET << std::endl;
@@ -446,7 +478,7 @@ For a full network diagnostic, the typical sequence is:
 3. `ping_host` — gateway reachable?
 4. `test_dns_resolution` — name resolution working?
 5. `test_internet` — end-to-end connectivity?
-6. `test_bandwidth` — download speed acceptable?
+6. `test_bandwidth` — download and upload speed acceptable?
 
 Adapt based on what you find. If the adapter is disconnected, try to enable it first, then continue. If everything passes early, you can stop early for targeted queries (but NOT for a full diagnostic).
 
@@ -468,18 +500,21 @@ Available fix tools: `toggle_wifi_radio`, `flush_dns_cache`, `set_dns_servers`, 
 
 ## FINAL ANSWER
 
-Only provide an "answer" after ALL tool calls are complete. Format your summary as:
+Only provide an "answer" after ALL tool calls are complete. Format as a bulleted summary:
 
-1. A results table showing each check and its status:
-   - Adapter: OK / FAIL (details)
-   - IP Config: OK / FAIL (details)
-   - DNS: OK / FAIL (details)
-   - Internet: OK / FAIL (details)
-   - Speed: X Mbps (if tested)
+- **Adapter:** OK/FAIL — SSID name, signal strength %
+- **IP Config:** OK/FAIL — IP address, gateway
+- **DNS:** OK/FAIL — resolver working/not
+- **Internet:** OK/FAIL — connectivity status
+- **Download:** XX Mbps
+- **Upload:** XX Mbps
+- **Fixes Applied:** list any, with before/after result (or "None")
+- **Status:** RESOLVED / PARTIALLY RESOLVED / NEEDS MANUAL ACTION
+- **Summary:** one sentence overall assessment
 
-2. Any fixes applied and whether they worked
-3. Overall status: RESOLVED, PARTIALLY RESOLVED, or NEEDS MANUAL ACTION
-4. One sentence summary of the situation
+Use ** around key values (speeds, signal %, SSID names, IP addresses) to highlight them.
+In FINDING/DECISION too, wrap important numbers and values in ** for emphasis.
+Do NOT use markdown tables — use bullet points only.
 
 ## GOAL TRACKING
 
@@ -558,25 +593,89 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
 
         toolRegistry().registerTool(
             "test_bandwidth",
-            "Run a quick download speed test by fetching a small file from a CDN and measuring throughput. Returns download speed in Mbps. This is a rough estimate, not a full speed test.",
+            "Run a download and upload speed test using Cloudflare CDN with parallel connections. Returns speeds in Mbps.",
             [](const gaia::json& /*args*/) -> gaia::json {
-                // Download a ~1MB file from Cloudflare's speed test endpoint and measure time
-                std::string cmd =
-                    "$url = 'https://speed.cloudflare.com/__down?bytes=1000000'; "
-                    "$sw = [System.Diagnostics.Stopwatch]::StartNew(); "
-                    "$response = Invoke-WebRequest -Uri $url -UseBasicParsing; "
-                    "$sw.Stop(); "
-                    "$bytes = $response.Content.Length; "
-                    "$seconds = $sw.Elapsed.TotalSeconds; "
-                    "$mbps = [math]::Round(($bytes * 8) / ($seconds * 1000000), 2); "
-                    "@{ "
-                    "  download_mbps = $mbps; "
-                    "  bytes = $bytes; "
-                    "  seconds = [math]::Round($seconds, 2); "
-                    "  source = 'speed.cloudflare.com' "
-                    "} | ConvertTo-Json";
-                std::string output = runShell(cmd);
-                return {{"tool", "test_bandwidth"}, {"command", "Download speed test (1MB from Cloudflare CDN)"}, {"output", output}};
+                // Use parallel .NET HttpClient streams to saturate the link — same technique
+                // real speed tests use.  4 parallel 10MB downloads + 4 parallel 2MB uploads.
+                std::string script = R"PS(
+$ProgressPreference = 'SilentlyContinue'
+Add-Type -AssemblyName System.Net.Http
+$nStreams = 4
+
+# --- Download test: 4 x 10MB parallel ---
+$dUrl = 'https://speed.cloudflare.com/__down?bytes=10000000'
+$dTasks = @()
+$handler = [System.Net.Http.HttpClientHandler]::new()
+$handler.AutomaticDecompression = [System.Net.DecompressionMethods]::None
+$http = [System.Net.Http.HttpClient]::new($handler)
+$http.Timeout = [TimeSpan]::FromSeconds(30)
+$dSw = [System.Diagnostics.Stopwatch]::StartNew()
+for ($i = 0; $i -lt $nStreams; $i++) {
+    $dTasks += $http.GetByteArrayAsync($dUrl)
+}
+[System.Threading.Tasks.Task]::WaitAll($dTasks)
+$dSw.Stop()
+$dTotalBytes = 0
+foreach ($t in $dTasks) { $dTotalBytes += $t.Result.Length }
+$dSec = $dSw.Elapsed.TotalSeconds
+$dMbps = [math]::Round(($dTotalBytes * 8) / ($dSec * 1000000), 2)
+
+# --- Upload test: 4 x 2MB parallel ---
+$uUrl = 'https://speed.cloudflare.com/__up'
+$uPayload = [byte[]]::new(2000000)
+$uTasks = @()
+$uSw = [System.Diagnostics.Stopwatch]::StartNew()
+for ($i = 0; $i -lt $nStreams; $i++) {
+    $content = [System.Net.Http.ByteArrayContent]::new($uPayload)
+    $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::new('application/octet-stream')
+    $uTasks += $http.PostAsync($uUrl, $content)
+}
+[System.Threading.Tasks.Task]::WaitAll($uTasks)
+$uSw.Stop()
+$uTotalBytes = $nStreams * 2000000
+$uSec = $uSw.Elapsed.TotalSeconds
+$uMbps = [math]::Round(($uTotalBytes * 8) / ($uSec * 1000000), 2)
+$http.Dispose()
+
+@{
+    download_mbps    = $dMbps
+    upload_mbps      = $uMbps
+    streams          = $nStreams
+    download_mb      = [math]::Round($dTotalBytes / 1MB, 1)
+    upload_mb        = [math]::Round($uTotalBytes / 1MB, 1)
+    download_seconds = [math]::Round($dSec, 2)
+    upload_seconds   = [math]::Round($uSec, 2)
+    source           = 'speed.cloudflare.com'
+} | ConvertTo-Json
+)PS";
+                // Write to temp file and execute directly (not via runShell which
+                // would double-wrap in PowerShell).
+                std::string tempPath;
+#ifdef _WIN32
+                const char* tmp = std::getenv("TEMP");
+                tempPath = (tmp ? std::string(tmp) : "C:\\Temp") + "\\gaia_speedtest.ps1";
+#else
+                tempPath = "/tmp/gaia_speedtest.ps1";
+#endif
+                { std::ofstream f(tempPath); f << script; }
+
+                std::string execCmd = "powershell -NoProfile -ExecutionPolicy Bypass -File \""
+                                      + tempPath + "\"";
+                std::string output;
+                std::array<char, 4096> buffer;
+#ifdef _WIN32
+                std::unique_ptr<FILE, decltype(&_pclose)> pipe(
+                    _popen((execCmd + " 2>&1").c_str(), "r"), _pclose);
+#else
+                std::unique_ptr<FILE, decltype(&pclose)> pipe(
+                    popen((execCmd + " 2>&1").c_str(), "r"), pclose);
+#endif
+                if (pipe) {
+                    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe.get()))
+                        output += buffer.data();
+                }
+                std::remove(tempPath.c_str());
+                return {{"tool", "test_bandwidth"}, {"command", "Speed test (4-stream parallel, Cloudflare CDN)"}, {"output", output}};
             },
             {}  // no parameters
         );
@@ -823,7 +922,7 @@ private:
 // ---------------------------------------------------------------------------
 static const std::pair<std::string, std::string> kDiagnosticMenu[] = {
     {"Full network diagnostic",
-     "Run a full network diagnostic following the complete diagnostic protocol."},
+     "Run a full network diagnostic following the complete diagnostic protocol. Check adapter, IP config, DNS, internet connectivity, and bandwidth speed."},
     {"Check Wi-Fi adapter",
      "Check the Wi-Fi adapter status and report the connection state, signal strength, and SSID."},
     {"Check Wi-Fi drivers",
@@ -835,7 +934,7 @@ static const std::pair<std::string, std::string> kDiagnosticMenu[] = {
     {"Test internet connectivity",
      "Test internet connectivity and report whether the internet is reachable."},
     {"Test bandwidth",
-     "Run a quick download speed test and report the approximate Wi-Fi speed in Mbps."},
+     "Run a download and upload speed test and report the Wi-Fi speeds in Mbps."},
     {"Flush DNS cache",
      "Flush the DNS cache to clear any stale or corrupted entries, then verify DNS is working."},
     {"Renew DHCP lease",

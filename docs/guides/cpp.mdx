@@ -146,6 +146,59 @@ The `wifi_agent` demonstrates **adaptive reasoning** without MCP — all tools a
 - **GPU/NPU selection** — choose between GGUF (GPU) and FLM (NPU) model backends at startup
 - **Admin detection** — warns on startup if fix tools won't work without elevation
 
+## Under the Hood
+
+### Reactive Agent Loop
+
+The agent is **not a script**. After every tool execution, the LLM is called again with the full conversation so far — including the tool's output. This lets the model reason about results and change course.
+
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'16px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff'}, 'flowchart': {'curve': 'basis'}}}%%
+graph LR
+    A["Call LLM"] --> B{"Parse JSON"}
+    B -->|"has tool"| C["Execute tool"]
+    C --> D["Feed result back"]
+    D --> A
+    B -->|"has answer"| E["Done"]
+
+    style A fill:#ED1C24,stroke:#F4484D,stroke-width:2px,color:#fff
+    style B fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style C fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style D fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style E fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    linkStyle default stroke:#ED1C24,stroke-width:2px
+```
+
+Each loop iteration: **LLM reasons → agent executes → result fed back → LLM reasons again**. The LLM can skip steps, add new ones, or pivot strategy at any point.
+
+### How Tools Are Implemented
+
+Tools are C++ lambdas registered with `ToolRegistry`. The Wi-Fi agent's tools wrap PowerShell commands via a `runShell()` helper that uses `_popen()` to spawn a PowerShell subprocess:
+
+```cpp
+// Simplified — each tool follows this pattern:
+toolRegistry().registerTool(
+    "check_adapter",                          // name the LLM sees
+    "Check Wi-Fi adapter status and signal",  // description the LLM reads
+    [](const gaia::json& args) -> gaia::json {
+        std::string output = runShell("netsh wlan show interfaces");
+        return {{"tool", "check_adapter"}, {"output", output}};
+    },
+    {}  // parameter schema
+);
+```
+
+The agent itself is pure C++. PowerShell is just the shell subprocess that executes system commands (`netsh`, `ipconfig`, `Test-NetConnection`). For complex operations like the WinRT Radio API, the tool writes a temporary `.ps1` script and runs it via `powershell -File`.
+
+### Structured Reasoning Display
+
+The system prompt instructs the LLM to prefix its reasoning with `FINDING:` and `DECISION:`. The custom `CleanConsole` output handler parses these and displays them with color-coded labels:
+
+- **Finding** (green) — what the diagnostic data shows
+- **Decision** (yellow) — what the agent will do next and *why*
+
+This is what distinguishes an agent from a script: the decision points are visible. When the agent skips a step ("adapter is disconnected — IP checks would fail"), applies a fix, or re-runs a diagnostic to verify, you can see the reasoning that drove that choice.
+
 ## Writing Your Own Agent
 
 Subclass `gaia::Agent`, override `getSystemPrompt()` and optionally `registerTools()`, then call `init()` at the end of your constructor:
