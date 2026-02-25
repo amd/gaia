@@ -144,6 +144,38 @@ jobs:
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
 
+      - name: Ensure CMake is available
+        shell: powershell
+        run: |
+          # Check if cmake is already in PATH
+          if (Get-Command cmake -ErrorAction SilentlyContinue) {
+              Write-Host "CMake found: $(cmake --version | Select-Object -First 1)"
+              return
+          }
+
+          # Try Visual Studio bundled CMake
+          $vsCmake = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+              -latest -requires Microsoft.VisualStudio.Component.VC.CMake.Project `
+              -find "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin" 2>$null
+          if ($vsCmake -and (Test-Path "$vsCmake\cmake.exe")) {
+              Write-Host "Adding VS-bundled CMake to PATH: $vsCmake"
+              echo "$vsCmake" >> $env:GITHUB_PATH
+              return
+          }
+
+          # Install CMake via winget (available on Windows 10+)
+          Write-Host "CMake not found — installing via winget..."
+          winget install --id Kitware.CMake --accept-package-agreements --accept-source-agreements --silent
+          # winget installs to Program Files; add to PATH
+          $cmakeBin = "${env:ProgramFiles}\CMake\bin"
+          if (Test-Path "$cmakeBin\cmake.exe") {
+              echo "$cmakeBin" >> $env:GITHUB_PATH
+              Write-Host "CMake installed: $cmakeBin"
+          } else {
+              Write-Host "::error::Failed to install CMake"
+              exit 1
+          }
+
       - name: Restore FetchContent cache
         uses: actions/cache@v4
         with:
