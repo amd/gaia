@@ -144,51 +144,54 @@ jobs:
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
 
-      - name: Ensure CMake is available
+      - name: Ensure C++ build tools are available
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
+          $ProgressPreference = 'SilentlyContinue'
 
-          # 1. Already in PATH?
-          if (Get-Command cmake -ErrorAction SilentlyContinue) {
-              Write-Host "CMake found: $(cmake --version | Select-Object -First 1)"
-              return
-          }
-
-          # 2. Visual Studio bundled CMake?
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          if (Test-Path $vswhere) {
-              $vsCmake = & $vswhere -latest `
-                  -requires Microsoft.VisualStudio.Component.VC.CMake.Project `
-                  -find "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin" 2>$null
-              if ($vsCmake -and (Test-Path "$vsCmake\cmake.exe")) {
-                  Write-Host "Adding VS-bundled CMake to PATH: $vsCmake"
-                  echo "$vsCmake" >> $env:GITHUB_PATH
-                  return
+          # --- CMake ---
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+              # Try VS-bundled CMake first
+              $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+              if (Test-Path $vswhere) {
+                  $vsCmake = & $vswhere -latest `
+                      -requires Microsoft.VisualStudio.Component.VC.CMake.Project `
+                      -find "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin" 2>$null
+                  if ($vsCmake -and (Test-Path "$vsCmake\cmake.exe")) {
+                      echo "$vsCmake" >> $env:GITHUB_PATH
+                  }
               }
           }
-
-          # 3. Download CMake directly from GitHub releases
-          $cmakeVer = "3.31.4"
-          $url = "https://github.com/Kitware/CMake/releases/download/v${cmakeVer}/cmake-${cmakeVer}-windows-x86_64.zip"
-          $zip = "$env:TEMP\cmake.zip"
-          $dest = "$env:TEMP\cmake"
-
-          Write-Host "CMake not found -- downloading v${cmakeVer}..."
-          $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
-          Expand-Archive -Path $zip -DestinationPath $dest -Force
-          Remove-Item $zip
-
-          $cmakeBin = "$dest\cmake-${cmakeVer}-windows-x86_64\bin"
-          if (Test-Path "$cmakeBin\cmake.exe") {
-              echo "$cmakeBin" >> $env:GITHUB_PATH
-              Write-Host "CMake installed: $cmakeBin"
-              & "$cmakeBin\cmake.exe" --version | Select-Object -First 1
-          } else {
-              Write-Host "::error::CMake download or extraction failed"
-              exit 1
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+              $cmakeVer = "3.31.4"
+              $url = "https://github.com/Kitware/CMake/releases/download/v${cmakeVer}/cmake-${cmakeVer}-windows-x86_64.zip"
+              Write-Host "Downloading CMake v${cmakeVer}..."
+              Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\cmake.zip" -UseBasicParsing
+              Expand-Archive "$env:TEMP\cmake.zip" "$env:TEMP\cmake" -Force
+              Remove-Item "$env:TEMP\cmake.zip"
+              echo "$env:TEMP\cmake\cmake-${cmakeVer}-windows-x86_64\bin" >> $env:GITHUB_PATH
           }
+
+          # --- C++ compiler (MinGW-w64 via w64devkit if no cl.exe) ---
+          $hasMSVC = $false
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+              $vsPath = & $vswhere -latest -property installationPath 2>$null
+              if ($vsPath) { $hasMSVC = $true }
+          }
+          if (-not $hasMSVC -and -not (Get-Command g++ -ErrorAction SilentlyContinue)) {
+              $mgwVer = "2.0.0"
+              $url = "https://github.com/skeeto/w64devkit/releases/download/v${mgwVer}/w64devkit-x64-${mgwVer}.zip"
+              Write-Host "Downloading w64devkit (MinGW-w64) v${mgwVer}..."
+              Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\w64devkit.zip" -UseBasicParsing
+              Expand-Archive "$env:TEMP\w64devkit.zip" "$env:TEMP" -Force
+              Remove-Item "$env:TEMP\w64devkit.zip"
+              echo "$env:TEMP\w64devkit\bin" >> $env:GITHUB_PATH
+          }
+
+          # Verify (new PATH takes effect in subsequent steps, so just report)
+          Write-Host "Build tools configured for subsequent steps"
 
       - name: Restore FetchContent cache
         uses: actions/cache@v4
@@ -199,7 +202,13 @@ jobs:
       - name: Configure and build integration tests
         shell: bash
         run: |
-          cmake -B cpp/build-integration -S cpp \
+          # Use MinGW Makefiles if g++ is available (no MSVC on STX runners)
+          GEN_FLAG=""
+          if command -v g++ &>/dev/null && ! command -v cl &>/dev/null; then
+            GEN_FLAG="-G \"MinGW Makefiles\""
+          fi
+          eval cmake -B cpp/build-integration -S cpp \
+                $GEN_FLAG \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DGAIA_BUILD_INTEGRATION_TESTS=ON \
                 -DGAIA_BUILD_TESTS=OFF \
