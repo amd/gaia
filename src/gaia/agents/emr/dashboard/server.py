@@ -1773,24 +1773,23 @@ def create_app(
         if not file_path:
             raise HTTPException(status_code=400, detail="No file_path provided")
 
-        source_path = Path(file_path).resolve()
-
-        # Validate path doesn't contain traversal
-        if ".." in Path(file_path).parts:
+        # Validate path doesn't contain traversal before resolving
+        raw_path = Path(file_path)
+        if ".." in raw_path.parts:
             raise HTTPException(status_code=400, detail="Invalid file path")
 
-        if not source_path.exists():
-            raise HTTPException(status_code=400, detail="File not found")
+        source_path = raw_path.resolve()
 
-        # Validate file type
+        # Validate file type before checking existence (prevents probing)
         allowed_extensions = {".png", ".jpg", ".jpeg", ".pdf", ".tiff", ".bmp"}
-        suffix = source_path.suffix.lower()
-
-        if suffix not in allowed_extensions:
+        if source_path.suffix.lower() not in allowed_extensions:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unsupported file type: {suffix}. Allowed: {', '.join(allowed_extensions)}",
+                detail=f"Unsupported file type. Allowed: {', '.join(allowed_extensions)}",
             )
+
+        if not source_path.is_file():
+            raise HTTPException(status_code=400, detail="File not found")
 
         try:
             import shutil

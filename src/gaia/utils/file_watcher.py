@@ -94,21 +94,23 @@ def compute_file_hash(
             processed_hashes.add(file_hash)
     """
     try:
-        file_path = Path(path).resolve()
-        # Reject paths with traversal components
-        if ".." in Path(path).parts:
-            logger.warning(f"Rejected path with traversal: {path}")
+        # Reject paths with traversal components before resolving
+        raw_path = Path(path)
+        if ".." in raw_path.parts:
+            logger.warning("Rejected path with traversal components")
             return None
-        if not file_path.exists() or not file_path.is_file():
+
+        file_path = raw_path.resolve()
+        if not file_path.is_file():
             return None
 
         hasher = hashlib.new(algorithm)
-        with open(file_path, "rb") as f:
+        with file_path.open("rb") as f:
             while chunk := f.read(chunk_size):
                 hasher.update(chunk)
         return hasher.hexdigest()
     except (OSError, IOError, ValueError) as e:
-        logger.warning(f"Could not compute hash for {path}: {e}")
+        logger.warning(f"Could not compute hash: {e}")
         return None
 
 

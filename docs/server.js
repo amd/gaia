@@ -252,8 +252,11 @@ app.post('/auth/login', loginLimiter, (req, res) => {
       maxAge: COOKIE_MAX_AGE,
       sameSite: 'lax'
     });
-    // Redirect to the original URL the user was trying to access (local paths only)
-    res.redirect(303, safeRedirect);
+    // Redirect to the original URL - only allow local paths starting with /
+    // Use a hardcoded default to avoid open redirect
+    const target = (safeRedirect && safeRedirect.startsWith('/') && !safeRedirect.startsWith('//'))
+      ? safeRedirect : '/';
+    res.redirect(303, target);
   } else {
     // Preserve the redirect URL even on error so user can retry
     res.redirect(`/auth/login-error?redirect=${encodeURIComponent(safeRedirect)}`);
