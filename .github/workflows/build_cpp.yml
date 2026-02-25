@@ -149,49 +149,65 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $ProgressPreference = 'SilentlyContinue'
+          $cmakeVer = "3.31.4"
+          $mgwVer   = "2.0.0"
 
           # --- CMake ---
-          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
-              # Try VS-bundled CMake first
+          # Check PATH, then previously downloaded location, then VS, then download
+          $cmakeCached = "$env:TEMP\cmake\cmake-${cmakeVer}-windows-x86_64\bin"
+          if (Get-Command cmake -ErrorAction SilentlyContinue) {
+              Write-Host "CMake found in PATH"
+          } elseif (Test-Path "$cmakeCached\cmake.exe") {
+              Write-Host "CMake found at cached location"
+              echo "$cmakeCached" >> $env:GITHUB_PATH
+          } else {
               $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
               if (Test-Path $vswhere) {
                   $vsCmake = & $vswhere -latest `
                       -requires Microsoft.VisualStudio.Component.VC.CMake.Project `
                       -find "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin" 2>$null
                   if ($vsCmake -and (Test-Path "$vsCmake\cmake.exe")) {
+                      Write-Host "Using VS-bundled CMake"
                       echo "$vsCmake" >> $env:GITHUB_PATH
                   }
               }
           }
-          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
-              $cmakeVer = "3.31.4"
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue) -and
+              -not (Test-Path "$cmakeCached\cmake.exe")) {
               $url = "https://github.com/Kitware/CMake/releases/download/v${cmakeVer}/cmake-${cmakeVer}-windows-x86_64.zip"
               Write-Host "Downloading CMake v${cmakeVer}..."
               Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\cmake.zip" -UseBasicParsing
               Expand-Archive "$env:TEMP\cmake.zip" "$env:TEMP\cmake" -Force
               Remove-Item "$env:TEMP\cmake.zip"
-              echo "$env:TEMP\cmake\cmake-${cmakeVer}-windows-x86_64\bin" >> $env:GITHUB_PATH
+              echo "$cmakeCached" >> $env:GITHUB_PATH
           }
 
-          # --- C++ compiler (MinGW-w64 via w64devkit if no cl.exe) ---
+          # --- C++ compiler ---
+          # Check for MSVC, then g++ in PATH, then cached w64devkit, then download
           $hasMSVC = $false
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           if (Test-Path $vswhere) {
               $vsPath = & $vswhere -latest -property installationPath 2>$null
-              if ($vsPath) { $hasMSVC = $true }
+              if ($vsPath) { $hasMSVC = $true; Write-Host "MSVC found" }
           }
-          if (-not $hasMSVC -and -not (Get-Command g++ -ErrorAction SilentlyContinue)) {
-              $mgwVer = "2.0.0"
-              $url = "https://github.com/skeeto/w64devkit/releases/download/v${mgwVer}/w64devkit-x64-${mgwVer}.zip"
-              Write-Host "Downloading w64devkit (MinGW-w64) v${mgwVer}..."
-              Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\w64devkit.zip" -UseBasicParsing
-              Expand-Archive "$env:TEMP\w64devkit.zip" "$env:TEMP" -Force
-              Remove-Item "$env:TEMP\w64devkit.zip"
-              echo "$env:TEMP\w64devkit\bin" >> $env:GITHUB_PATH
+          $mgwCached = "$env:TEMP\w64devkit\bin"
+          if (-not $hasMSVC) {
+              if (Get-Command g++ -ErrorAction SilentlyContinue) {
+                  Write-Host "g++ found in PATH"
+              } elseif (Test-Path "$mgwCached\g++.exe") {
+                  Write-Host "w64devkit found at cached location"
+                  echo "$mgwCached" >> $env:GITHUB_PATH
+              } else {
+                  $url = "https://github.com/skeeto/w64devkit/releases/download/v${mgwVer}/w64devkit-x64-${mgwVer}.zip"
+                  Write-Host "Downloading w64devkit (MinGW-w64) v${mgwVer}..."
+                  Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\w64devkit.zip" -UseBasicParsing
+                  Expand-Archive "$env:TEMP\w64devkit.zip" "$env:TEMP" -Force
+                  Remove-Item "$env:TEMP\w64devkit.zip"
+                  echo "$mgwCached" >> $env:GITHUB_PATH
+              }
           }
 
-          # Verify (new PATH takes effect in subsequent steps, so just report)
-          Write-Host "Build tools configured for subsequent steps"
+          Write-Host "Build tools ready"
 
       - name: Restore FetchContent cache
         uses: actions/cache@v4
