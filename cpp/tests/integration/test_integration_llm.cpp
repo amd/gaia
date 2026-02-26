@@ -26,12 +26,12 @@
 // ---------------------------------------------------------------------------
 
 static std::string testModel() {
-    const char* env = std::getenv("GAIA_CPP_TEST_MODEL");  // NOLINT(concurrency-mt-unsafe)
+    const char* env = std::getenv("GAIA_CPP_TEST_MODEL");
     return env ? std::string(env) : "Qwen3-4B-Instruct-2507-GGUF";
 }
 
 static std::string testBaseUrl() {
-    const char* env = std::getenv("GAIA_CPP_BASE_URL");  // NOLINT(concurrency-mt-unsafe)
+    const char* env = std::getenv("GAIA_CPP_BASE_URL");
     return env ? std::string(env) : "http://localhost:8000/api/v1";
 }
 

@@ -24,9 +24,9 @@ endif()
 option(GAIA_BUILD_INTEGRATION_TESTS
     "Build LLM integration tests (requires lemonade-server with Qwen3-4B-GGUF loaded)" OFF)
 
-# HTTPS support for LLM endpoints -- OFF by default (HTTP sufficient for local Lemonade).
+# HTTPS support for LLM endpoints -- ON by default (required for remote/cloud Lemonade).
 option(GAIA_ENABLE_SSL
-    "Enable HTTPS support for LLM endpoints (requires OpenSSL)" OFF)
+    "Enable HTTPS support for LLM endpoints (requires OpenSSL)" ON)
 
 # ---------------------------------------------------------------------------
 # Dependencies -- prefer system packages, fall back to FetchContent
@@ -148,12 +148,17 @@ if(WIN32)
     target_link_libraries(gaia_core PRIVATE ws2_32)
 endif()
 
-# Optional HTTPS support for LLM endpoints (off by default; local Lemonade uses HTTP)
+# HTTPS support for LLM endpoints (on by default; disable with -DGAIA_ENABLE_SSL=OFF)
 if(GAIA_ENABLE_SSL)
-    find_package(OpenSSL REQUIRED)
-    target_compile_definitions(gaia_core PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
-    target_link_libraries(gaia_core PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-    message(STATUS "GAIA SSL: enabled -- HTTPS LLM endpoints supported")
+    find_package(OpenSSL QUIET)
+    if(OpenSSL_FOUND)
+        target_compile_definitions(gaia_core PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+        target_link_libraries(gaia_core PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+        message(STATUS "GAIA SSL: enabled -- HTTPS LLM endpoints supported")
+    else()
+        message(WARNING "GAIA SSL: OpenSSL not found -- HTTPS disabled. "
+                        "Install libssl-dev (Linux) or OpenSSL (Windows) for HTTPS support.")
+    endif()
 else()
     message(STATUS "GAIA SSL: disabled -- HTTP only (set -DGAIA_ENABLE_SSL=ON for HTTPS)")
 endif()
@@ -161,7 +166,7 @@ endif()
 # ---------------------------------------------------------------------------
 # Examples
 # ---------------------------------------------------------------------------
-if(GAIA_BUILD_EXAMPLES)
+if(GAIA_BUILD_EXAMPLES AND WIN32)
     add_executable(simple_agent examples/simple_agent.cpp)
     target_link_libraries(simple_agent PRIVATE gaia::gaia_core)
 

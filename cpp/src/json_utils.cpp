@@ -230,6 +230,12 @@ ParsedResponse parseLlmResponse(const std::string& response) {
         return parsed;
     }
 
+    // Coerce a JSON value to string (handles number/bool answers from LLMs)
+    auto jsonToString = [](const json& v) -> std::string {
+        if (v.is_string()) return v.get<std::string>();
+        return v.dump();
+    };
+
     // Try direct JSON parsing
     try {
         json j = json::parse(trimmed);
@@ -238,9 +244,7 @@ ParsedResponse parseLlmResponse(const std::string& response) {
             parsed.goal = j.value("goal", "");
 
             if (j.contains("answer")) {
-                parsed.answer = j["answer"].is_string()
-                    ? j["answer"].get<std::string>()
-                    : j["answer"].dump();
+                parsed.answer = jsonToString(j["answer"]);
             }
             if (j.contains("tool")) {
                 parsed.toolName = j["tool"].get<std::string>();
@@ -267,9 +271,7 @@ ParsedResponse parseLlmResponse(const std::string& response) {
         parsed.goal = j.value("goal", "");
 
         if (j.contains("answer")) {
-            parsed.answer = j["answer"].is_string()
-                    ? j["answer"].get<std::string>()
-                    : j["answer"].dump();
+            parsed.answer = jsonToString(j["answer"]);
         }
         if (j.contains("tool")) {
             parsed.toolName = j["tool"].get<std::string>();
