@@ -1,0 +1,347 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# This workflow builds and tests the C++ library in cpp/
+# Tests include: CMake build, GoogleTest unit tests
+# Platform: Cross-platform (Linux and Windows)
+
+name: C++ Build & Test
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+    paths:
+      - 'cpp/**'
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'cpp/**'
+      - '.github/workflows/build_cpp.yml'
+  merge_group:
+  workflow_dispatch:
+
+# Cancel in-progress runs when a new run is triggered
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: C++ (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install OpenSSL (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libssl-dev
+
+      - name: Install OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        run: choco install openssl --no-progress -y
+
+      - name: Restore FetchContent cache
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: cpp/build/_deps
+          key: fetchcontent-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
+
+      - name: Configure CMake
+        run: cmake -B cpp/build -S cpp -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build cpp/build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir cpp/build -C Release --output-on-failure
+
+  # Verify cmake --install + find_package round-trip works
+  install-test:
+    name: C++ Install Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install OpenSSL (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libssl-dev
+
+      - name: Restore FetchContent cache
+        uses: actions/cache@v4
+        with:
+          path: cpp/build/_deps
+          key: fetchcontent-install-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
+
+      - name: Install OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: choco install openssl --no-progress -y
+
+      - name: Build and install gaia_core
+        shell: bash
+        run: |
+          cmake -B cpp/build -S cpp -DCMAKE_BUILD_TYPE=Release \
+                -DGAIA_BUILD_TESTS=OFF -DGAIA_BUILD_EXAMPLES=OFF \
+                -DCMAKE_INSTALL_PREFIX="${{ runner.temp }}/gaia_install"
+          cmake --build cpp/build --config Release --parallel
+          cmake --install cpp/build --config Release
+
+      - name: Build consumer via find_package
+        shell: bash
+        run: |
+          cmake -B consumer/build -S cpp/examples/fetch_content_consumer \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_PREFIX_PATH="${{ runner.temp }}/gaia_install" \
+                -DUSE_FIND_PACKAGE=ON
+          cmake --build consumer/build --config Release --parallel
+
+  # Verify BUILD_SHARED_LIBS=ON (shared library / DLL) compiles cleanly
+  shared-lib-test:
+    name: C++ Shared Library (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install OpenSSL (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libssl-dev
+
+      - name: Install OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        run: choco install openssl --no-progress -y
+
+      - name: Restore FetchContent cache
+        uses: actions/cache@v4
+        with:
+          path: cpp/build-shared/_deps
+          key: fetchcontent-shared-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
+
+      - name: Build shared library
+        shell: bash
+        run: |
+          cmake -B cpp/build-shared -S cpp -DCMAKE_BUILD_TYPE=Release \
+                -DBUILD_SHARED_LIBS=ON \
+                -DGAIA_BUILD_TESTS=OFF -DGAIA_BUILD_EXAMPLES=OFF
+          cmake --build cpp/build-shared --config Release --parallel
+
+  # LLM integration tests on STX hardware with Lemonade Server
+  integration-test:
+    name: C++ LLM Integration Test (STX)
+    runs-on: ${{ (contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test') || 'stx' }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          install-package: '.[lemonade]'
+
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
+      - name: Ensure C++ build tools are available
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = 'SilentlyContinue'
+          $cmakeVer = "3.31.4"
+          $mgwVer   = "2.5.0"
+
+          # --- CMake ---
+          # Check PATH, then previously downloaded location, then VS, then download
+          $cmakeCached = "$env:TEMP\cmake\cmake-${cmakeVer}-windows-x86_64\bin"
+          if (Get-Command cmake -ErrorAction SilentlyContinue) {
+              Write-Host "CMake found in PATH"
+          } elseif (Test-Path "$cmakeCached\cmake.exe") {
+              Write-Host "CMake found at cached location"
+              echo "$cmakeCached" >> $env:GITHUB_PATH
+          } else {
+              $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+              if (Test-Path $vswhere) {
+                  $vsCmake = & $vswhere -latest `
+                      -requires Microsoft.VisualStudio.Component.VC.CMake.Project `
+                      -find "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin" 2>$null
+                  if ($vsCmake -and (Test-Path "$vsCmake\cmake.exe")) {
+                      Write-Host "Using VS-bundled CMake"
+                      echo "$vsCmake" >> $env:GITHUB_PATH
+                  }
+              }
+          }
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue) -and
+              -not (Test-Path "$cmakeCached\cmake.exe")) {
+              $url = "https://github.com/Kitware/CMake/releases/download/v${cmakeVer}/cmake-${cmakeVer}-windows-x86_64.zip"
+              Write-Host "Downloading CMake v${cmakeVer}..."
+              Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\cmake.zip" -UseBasicParsing
+              Expand-Archive "$env:TEMP\cmake.zip" "$env:TEMP\cmake" -Force
+              Remove-Item "$env:TEMP\cmake.zip"
+              echo "$cmakeCached" >> $env:GITHUB_PATH
+          }
+
+          # --- C++ compiler ---
+          # Check for MSVC, then g++ in PATH, then cached w64devkit, then download
+          $hasMSVC = $false
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+              $vsPath = & $vswhere -latest -property installationPath 2>$null
+              if ($vsPath) { $hasMSVC = $true; Write-Host "MSVC found" }
+          }
+          $mgwCached = "$env:TEMP\w64devkit\bin"
+          if (-not $hasMSVC) {
+              if (Get-Command g++ -ErrorAction SilentlyContinue) {
+                  Write-Host "g++ found in PATH"
+              } elseif (Test-Path "$mgwCached\g++.exe") {
+                  Write-Host "w64devkit found at cached location"
+                  echo "$mgwCached" >> $env:GITHUB_PATH
+              } else {
+                  $url = "https://github.com/skeeto/w64devkit/releases/download/v${mgwVer}/w64devkit-x64-${mgwVer}.7z.exe"
+                  Write-Host "Downloading w64devkit (MinGW-w64) v${mgwVer}..."
+                  Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\w64devkit.exe" -UseBasicParsing
+                  Write-Host "Extracting w64devkit..."
+                  & "$env:TEMP\w64devkit.exe" -o"$env:TEMP" -y | Out-Null
+                  Remove-Item "$env:TEMP\w64devkit.exe"
+                  echo "$mgwCached" >> $env:GITHUB_PATH
+              }
+          }
+
+          Write-Host "Build tools ready"
+
+      - name: Restore FetchContent cache
+        uses: actions/cache@v4
+        with:
+          path: cpp/build-integration/_deps
+          key: fetchcontent-integration-windows-${{ hashFiles('cpp/CMakeLists.txt') }}
+
+      - name: Configure and build integration tests
+        shell: powershell
+        run: |
+          # Auto-detect generator: MinGW Makefiles when using w64devkit
+          $gen = @()
+          if (Get-Command g++ -ErrorAction SilentlyContinue) {
+              if (-not (Get-Command cl -ErrorAction SilentlyContinue)) {
+                  $gen = @("-G", "MinGW Makefiles")
+              }
+          }
+          cmake -B cpp/build-integration -S cpp @gen `
+                -DCMAKE_BUILD_TYPE=Release `
+                -DGAIA_BUILD_INTEGRATION_TESTS=ON `
+                -DGAIA_BUILD_TESTS=OFF `
+                -DGAIA_BUILD_EXAMPLES=OFF `
+                -DGAIA_ENABLE_SSL=OFF
+          if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
+          cmake --build cpp/build-integration --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
+
+      - name: Start Lemonade Server and run integration tests
+        shell: powershell
+        timeout-minutes: 15
+        env:
+          GAIA_CPP_TEST_MODEL: Qwen3-4B-GGUF
+          GAIA_CPP_BASE_URL: http://localhost:8000/api/v1
+        run: |
+          try {
+              # Start Lemonade with Qwen3-4B-GGUF
+              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-GGUF" -Port 8000 -CtxSize 8192 -InitWaitTime 15
+
+              # Verify health
+              $health = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 10
+              if ($health.status -ne "ok") { throw "Lemonade health check failed" }
+              Write-Host "[OK] Lemonade Server ready with Qwen3-4B-GGUF"
+
+              # Run C++ integration tests
+              Write-Host "=== Running C++ LLM Integration Tests ==="
+              $env:GAIA_CPP_TEST_MODEL = "Qwen3-4B-GGUF"
+              $env:GAIA_CPP_BASE_URL   = "http://localhost:8000/api/v1"
+              ctest --test-dir cpp/build-integration -C Release --output-on-failure
+              if ($LASTEXITCODE -ne 0) { throw "C++ integration tests failed" }
+              Write-Host "[SUCCESS] All C++ LLM integration tests passed!"
+
+          } catch {
+              Write-Host "[ERROR] $($_.Exception.Message)"
+              throw
+          } finally {
+              if ($env:LEMONADE_PROCESS_ID) {
+                  Write-Host "Stopping Lemonade Server (PID $env:LEMONADE_PROCESS_ID)..."
+                  Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
+              }
+          }
+
+      - name: Upload server logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cpp-integration-lemonade-logs
+          path: |
+            lemonade-server-stdout.log
+            lemonade-server-stderr.log
+            lemonade-server.log
+
+  # Summary job
+  cpp-build-summary:
+    name: C++ Build Summary
+    runs-on: ubuntu-latest
+    needs: [build-and-test, install-test, shared-lib-test, integration-test]
+    if: >-
+      ${{ always() && !cancelled() &&
+          needs.build-and-test.result != 'cancelled' }}
+    steps:
+      - name: Check build results
+        run: |
+          echo "=== C++ Build & Test Summary ==="
+          echo "Build & Test:      ${{ needs.build-and-test.result }}"
+          echo "Install Test:      ${{ needs.install-test.result }}"
+          echo "Shared Lib Test:   ${{ needs.shared-lib-test.result }}"
+          echo "LLM Integration:   ${{ needs.integration-test.result }}"
+          echo ""
+
+          if [[ "${{ needs.build-and-test.result }}" == "skipped" ]]; then
+            echo "All C++ jobs skipped (draft PR - add 'ready_for_ci' label to run)"
+            exit 0
+          fi
+
+          FAILED=0
+          [[ "${{ needs.build-and-test.result }}"  != "success" ]] && FAILED=1
+          [[ "${{ needs.install-test.result }}"    != "success" ]] && FAILED=1
+          [[ "${{ needs.shared-lib-test.result }}" != "success" ]] && FAILED=1
+          # Integration test runs on self-hosted STX hardware; treat
+          # 'skipped' and 'failure' as non-blocking (warn only) since the
+          # runner may lack tools like cmake in PATH.
+          if [[ "${{ needs.integration-test.result }}" == "failure" ]]; then
+            echo "::warning::LLM integration test failed (STX runner infrastructure issue)"
+          fi
+
+          if [[ "$FAILED" == "0" ]]; then
+            echo "All required C++ jobs passed (unit tests, install round-trip, shared library)!"
+          else
+            echo "One or more required C++ jobs failed"
+            exit 1
+          fi

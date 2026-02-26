@@ -51,6 +51,16 @@
                   "guides/mcp/client",
                   "guides/mcp/windows-system-health"
                 ]
+              },
+              {
+                "group": "C++ Framework",
+                "pages": [
+                  "guides/cpp",
+                  "guides/cpp/overview",
+                  "guides/cpp/integration",
+                  "guides/cpp/custom-agent",
+                  "guides/cpp/wifi-agent"
+                ]
               }
             ]
           },

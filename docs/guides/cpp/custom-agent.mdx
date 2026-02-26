@@ -1,0 +1,666 @@
+---
+title: "Customizing Your C++ Agent"
+description: "Step-by-step walkthrough: custom system prompts, typed tool parameters, MCP server connections, output capture, and AgentConfig tuning"
+icon: "sliders"
+---
+
+<Info>
+  **Prerequisites:** Read the [C++ Framework Overview](/guides/cpp/overview) and [Integration Guide](/guides/cpp/integration) first. Your project should already link against `gaia::gaia_core`.
+</Info>
+
+---
+
+## What You Can Customize
+
+`gaia::Agent` is designed to be subclassed. All domain-specific behavior lives in two virtual methods:
+
+| Override | Purpose |
+|----------|---------|
+| `getSystemPrompt()` | Control how the LLM thinks and responds — persona, constraints, output format |
+| `registerTools()` | Register native C++ callbacks and/or connect MCP servers |
+
+Two additional hooks are available without subclassing:
+
+| API | Purpose |
+|-----|---------|
+| `setOutputHandler()` | Replace the console with a custom output capture |
+| `AgentConfig` fields | Tune step limits, debug verbosity, silent mode |
+
+---
+
+## Step 1 — Custom System Prompt
+
+`getSystemPrompt()` returns a string that is injected into the LLM system message before the auto-generated tool list. Use it to:
+
+- Define the agent's persona and constraints
+- Specify the output format you expect
+- Guide reasoning style (chain-of-thought, step-by-step, etc.)
+
+```cpp
+#include <gaia/agent.h>
+
+class WeatherAgent : public gaia::Agent {
+public:
+    WeatherAgent() : Agent(makeConfig()) { init(); }
+
+protected:
+    std::string getSystemPrompt() const override {
+        return
+            "You are a meteorology assistant. "
+            "Always answer in concise bullet points. "
+            "Never speculate — if you do not have data, say so explicitly. "
+            "When reporting temperatures always use both Celsius and Fahrenheit.";
+    }
+
+    // ... registerTools() below ...
+
+private:
+    static gaia::AgentConfig makeConfig() {
+        gaia::AgentConfig cfg;
+        cfg.modelId = "Qwen3-4B-GGUF";
+        return cfg;
+    }
+};
+```
+
+<Note>
+The framework automatically appends the tool list and response-format schema after your system prompt. You do not need to describe tools in `getSystemPrompt()` — they are injected automatically.
+</Note>
+
+---
+
+## Step 2 — Register Tools with Typed Parameters
+
+`registerTools()` is called by `init()` once, at construction time. Each tool has:
+
+- A **name** — used by the LLM to call it
+- A **description** — shown in the LLM system prompt
+- A **callback** — `std::function<json(const json&)>`
+- An optional list of **typed parameters** — passed as `std::vector<gaia::ToolParameter>`
+
+### Parameter Types
+
+| `ToolParamType` | JSON Schema type | C++ usage |
+|-----------------|-----------------|-----------|
+| `STRING` | `"string"` | Text, identifiers, paths |
+| `INTEGER` | `"integer"` | Counts, indices |
+| `NUMBER` | `"number"` | Floats, measurements |
+| `BOOLEAN` | `"boolean"` | Flags, toggles |
+| `ARRAY` | `"array"` | Lists of values |
+| `OBJECT` | `"object"` | Nested structures |
+
+### Example: Multiple Tools with Typed Parameters
+
+```cpp
+#include <gaia/agent.h>
+#include <gaia/types.h>
+#include <stdexcept>
+
+class WeatherAgent : public gaia::Agent {
+protected:
+    void registerTools() override {
+
+        // Tool 1: no parameters
+        toolRegistry().registerTool(
+            "get_supported_cities",
+            "Return the list of cities for which weather data is available.",
+            [](const gaia::json& /*args*/) -> gaia::json {
+                return {{"cities", {"Seattle", "Austin", "London", "Tokyo"}}};
+            },
+            {}  // no parameters
+        );
+
+        // Tool 2: one required STRING parameter
+        toolRegistry().registerTool(
+            "get_current_weather",
+            "Return the current weather conditions for a given city.",
+            [](const gaia::json& args) -> gaia::json {
+                std::string city = args.value("city", "");
+                if (city.empty()) throw std::runtime_error("city is required");
+
+                // Replace with real API call in production
+                return {
+                    {"city",        city},
+                    {"temperature", "18°C / 64°F"},
+                    {"conditions",  "Partly cloudy"},
+                    {"humidity",    "72%"}
+                };
+            },
+            {
+                {"city", gaia::ToolParamType::STRING, /*required=*/true,
+                 "The city name to get weather for (e.g. 'Seattle')"}
+            }
+        );
+
+        // Tool 3: mixed required + optional parameters
+        toolRegistry().registerTool(
+            "get_weather_forecast",
+            "Return a multi-day weather forecast for a city.",
+            [](const gaia::json& args) -> gaia::json {
+                std::string city = args.value("city", "");
+                int days        = args.value("days", 3);  // optional, defaults to 3
+
+                if (city.empty()) throw std::runtime_error("city is required");
+                if (days < 1 || days > 7) throw std::runtime_error("days must be 1-7");
+
+                gaia::json forecast = gaia::json::array();
+                for (int i = 1; i <= days; ++i) {
+                    forecast.push_back({
+                        {"day",         "Day " + std::to_string(i)},
+                        {"high",        "20°C / 68°F"},
+                        {"low",         "12°C / 54°F"},
+                        {"conditions",  "Mostly sunny"}
+                    });
+                }
+                return {{"city", city}, {"forecast", forecast}};
+            },
+            {
+                {"city", gaia::ToolParamType::STRING,  /*required=*/true,
+                 "The city name to forecast"},
+                {"days", gaia::ToolParamType::INTEGER, /*required=*/false,
+                 "Number of forecast days (1-7, default 3)"}
+            }
+        );
+    }
+};
+```
+
+<Note>
+The `ToolParameter` aggregate is `{name, type, required, description}`. Optional parameters should have a matching default in your callback (use `args.value("key", default_value)` from nlohmann/json).
+</Note>
+
+---
+
+## Step 3 — Connect a Custom MCP Server
+
+Call `connectMcpServer()` **after** `init()` to register tools from an external MCP server. This works with any stdio-based MCP server — your own, a third-party package, or a local script.
+
+```cpp
+class WeatherAgent : public gaia::Agent {
+public:
+    WeatherAgent() : Agent(makeConfig()) {
+        init();  // registers native tools first
+
+        // Connect a custom MCP server for extended data sources
+        connectMcpServer("weather_data", {
+            {"command", "uvx"},
+            {"args",    {"my-weather-mcp-server", "--api-key", "YOUR_KEY"}}
+        });
+    }
+    // ...
+};
+```
+
+All tools from `weather_data` are automatically prefixed as `mcp_weather_data_<tool_name>` and injected into the LLM system prompt alongside your native tools.
+
+### Connecting a Local Script
+
+```cpp
+// Python MCP server
+connectMcpServer("alerts", {
+    {"command", "python"},
+    {"args",    {"/path/to/alert_server.py"}}
+});
+
+// Node.js MCP server
+connectMcpServer("maps", {
+    {"command", "node"},
+    {"args",    {"/path/to/maps_server.js"}}
+});
+
+// Pre-built package via uvx
+connectMcpServer("filesystem", {
+    {"command", "uvx"},
+    {"args",    {"mcp-server-filesystem", "/tmp"}}
+});
+```
+
+<Note>
+MCP connections use stdio transport (JSON-RPC 2.0 over stdin/stdout). The server subprocess is spawned at `connectMcpServer()` time and cleaned up when the agent is destroyed.
+</Note>
+
+### Disconnect when Done
+
+```cpp
+agent.disconnectMcpServer("weather_data");   // disconnect one server
+agent.disconnectAllMcp();                    // disconnect all servers
+```
+
+---
+
+## Step 4 — Combine Native Tools and MCP Tools
+
+Here is a complete agent that uses both native C++ tools and an MCP server in one class:
+
+```cpp title="combined_agent.cpp"
+#include <gaia/agent.h>
+#include <gaia/types.h>
+#include <ctime>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+
+class WeatherAgent : public gaia::Agent {
+public:
+    WeatherAgent() : Agent(makeConfig()) {
+        init();
+
+        // Native tools are already registered by init().
+        // Now attach an MCP server for additional data.
+        connectMcpServer("weather_data", {
+            {"command", "uvx"},
+            {"args",    {"my-weather-mcp-server"}}
+        });
+    }
+
+protected:
+    std::string getSystemPrompt() const override {
+        return
+            "You are a professional meteorology assistant. "
+            "Answer in clear, structured bullet points. "
+            "Always check current conditions before giving a forecast. "
+            "If a city is not supported, say so rather than guessing.";
+    }
+
+    void registerTools() override {
+        // Native: fast, no subprocess needed
+        toolRegistry().registerTool(
+            "get_supported_cities",
+            "Return the list of cities for which weather data is available.",
+            [](const gaia::json&) -> gaia::json {
+                return {{"cities", {"Seattle", "Austin", "London", "Tokyo"}}};
+            },
+            {}
+        );
+
+        toolRegistry().registerTool(
+            "get_current_weather",
+            "Return current weather for a city.",
+            [](const gaia::json& args) -> gaia::json {
+                std::string city = args.value("city", "");
+                if (city.empty()) throw std::runtime_error("city parameter required");
+                return {{"city", city}, {"temperature", "18°C / 64°F"}, {"conditions", "Partly cloudy"}};
+            },
+            {{"city", gaia::ToolParamType::STRING, true, "City name"}}
+        );
+
+        // MCP tools from "weather_data" will be added automatically by
+        // connectMcpServer() after init() completes.
+    }
+
+private:
+    static gaia::AgentConfig makeConfig() {
+        gaia::AgentConfig cfg;
+        cfg.maxSteps = 15;
+        cfg.debug    = false;
+        return cfg;
+    }
+};
+
+int main() {
+    try {
+        WeatherAgent agent;
+        auto result = agent.processQuery(
+            "What is the current weather in Seattle, and what is the 3-day forecast?"
+        );
+        std::cout << result["result"].get<std::string>() << "\n";
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << "\n";
+        return 1;
+    }
+}
+```
+
+---
+
+## Step 5 — Tune AgentConfig
+
+Adjust `AgentConfig` in your `makeConfig()` static method to match your use case:
+
+```cpp
+static gaia::AgentConfig makeConfig() {
+    gaia::AgentConfig cfg;
+
+    // LLM backend
+    cfg.baseUrl = "http://localhost:8000/api/v1";   // default; override for remote server
+    cfg.modelId = "Qwen3-4B-GGUF";
+
+    // Loop limits
+    cfg.maxSteps              = 15;  // max agent loop iterations
+    cfg.maxPlanIterations     = 3;   // max replan cycles before forcing completion
+    cfg.maxConsecutiveRepeats = 4;   // repeated identical responses trigger loop detection
+
+    // Debugging
+    cfg.debug       = true;   // verbose step-by-step output
+    cfg.showPrompts = true;   // print full system prompt and LLM responses
+
+    // Output suppression (see Step 6)
+    cfg.silentMode  = false;  // set true to suppress all console output
+
+    return cfg;
+}
+```
+
+| Field | When to change |
+|-------|----------------|
+| `maxSteps` | Increase for complex multi-tool queries; decrease for latency-sensitive paths |
+| `maxPlanIterations` | Increase if the agent frequently replans on large tasks |
+| `debug = true` | During development to trace every LLM call and tool result |
+| `showPrompts = true` | To inspect the exact system prompt sent to the model |
+| `silentMode = true` | For library/service use where you only want the JSON result |
+
+---
+
+## Step 6 — Capture Output Programmatically
+
+By default the agent prints to the terminal using `TerminalConsole`. You can replace it with `SilentConsole` (built-in) or a fully custom `OutputHandler` subclass.
+
+### Silent Mode (JSON result only)
+
+```cpp
+// Option A: set in config (suppresses all output including final answer)
+cfg.silentMode = true;
+
+// Option B: SilentConsole — suppresses progress but still prints the final answer
+agent.setOutputHandler(std::make_unique<gaia::SilentConsole>(/*silenceFinalAnswer=*/false));
+
+// Option C: full silence including the final answer
+agent.setOutputHandler(std::make_unique<gaia::SilentConsole>(/*silenceFinalAnswer=*/true));
+```
+
+### Custom Output Capture
+
+Override `OutputHandler` to route output to a log file, a UI widget, or any other sink:
+
+```cpp title="capturing_console.h"
+#include <gaia/console.h>
+#include <string>
+#include <vector>
+
+/// Captures all agent output in memory for programmatic inspection.
+class CapturingConsole : public gaia::OutputHandler {
+public:
+    // Implement required pure-virtual methods
+    void printProcessingStart(const std::string& query, int, const std::string&) override {
+        log("QUERY: " + query);
+    }
+    void printStepHeader(int step, int limit) override {
+        log("--- Step " + std::to_string(step) + "/" + std::to_string(limit) + " ---");
+    }
+    void printStateInfo(const std::string& msg) override  { log("[state] " + msg); }
+    void printThought(const std::string& msg) override    { log("[thought] " + msg); }
+    void printGoal(const std::string& msg) override       { log("[goal] " + msg); }
+    void printPlan(const gaia::json& plan, int) override  { log("[plan] " + plan.dump()); }
+    void printToolUsage(const std::string& name) override { log("[tool] calling " + name); }
+    void printToolComplete() override                     { log("[tool] done"); }
+    void prettyPrintJson(const gaia::json& data, const std::string& title) override {
+        log("[json:" + title + "] " + data.dump(2));
+    }
+    void printError(const std::string& msg) override   { log("[error] " + msg); }
+    void printWarning(const std::string& msg) override { log("[warn] " + msg); }
+    void printInfo(const std::string& msg) override    { log("[info] " + msg); }
+    void startProgress(const std::string& msg) override { log("[progress] " + msg); }
+    void stopProgress() override                        { log("[progress] done"); }
+    void printFinalAnswer(const std::string& answer) override {
+        log("[answer] " + answer);
+        finalAnswer_ = answer;
+    }
+    void printCompletion(int steps, int limit) override {
+        log("[done] " + std::to_string(steps) + "/" + std::to_string(limit) + " steps");
+    }
+
+    // Accessors
+    const std::vector<std::string>& lines() const { return lines_; }
+    const std::string& finalAnswer() const         { return finalAnswer_; }
+
+private:
+    void log(const std::string& line) { lines_.push_back(line); }
+    std::vector<std::string> lines_;
+    std::string finalAnswer_;
+};
+```
+
+Attach it to your agent after construction:
+
+```cpp
+auto console = std::make_unique<CapturingConsole>();
+CapturingConsole* consolePtr = console.get();  // keep raw pointer before move
+
+agent.setOutputHandler(std::move(console));
+
+auto result = agent.processQuery("What is the weather in Seattle?");
+
+// Inspect all captured lines
+for (const auto& line : consolePtr->lines()) {
+    std::cout << line << "\n";
+}
+
+// Or just the final answer
+std::cout << consolePtr->finalAnswer() << "\n";
+```
+
+---
+
+## Complete Working Example
+
+Below is a self-contained agent combining all six customization points. Copy it as a starting point for your own agent:
+
+```cpp title="my_custom_agent.cpp"
+#include <gaia/agent.h>
+#include <gaia/types.h>
+#include <gaia/console.h>
+
+#include <cstdlib>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+
+#ifdef _WIN32
+#  include <windows.h>
+#else
+#  include <unistd.h>
+#endif
+
+// --- Step 6: custom output capture ---
+class LoggingConsole : public gaia::OutputHandler {
+public:
+    void printProcessingStart(const std::string& q, int, const std::string&) override { log("query: " + q); }
+    void printStepHeader(int s, int l) override { log("step " + std::to_string(s) + "/" + std::to_string(l)); }
+    void printStateInfo(const std::string& m)  override { log("state: " + m); }
+    void printThought(const std::string& m)    override { log("thought: " + m); }
+    void printGoal(const std::string& m)       override { log("goal: " + m); }
+    void printPlan(const gaia::json& p, int)   override { log("plan: " + p.dump()); }
+    void printToolUsage(const std::string& n)  override { log("call: " + n); }
+    void printToolComplete()                   override { log("call: done"); }
+    void prettyPrintJson(const gaia::json& d, const std::string& t) override { log(t + ": " + d.dump()); }
+    void printError(const std::string& m)      override { log("ERROR: " + m); }
+    void printWarning(const std::string& m)    override { log("WARN: " + m); }
+    void printInfo(const std::string& m)       override { log("info: " + m); }
+    void startProgress(const std::string& m)   override { log("progress: " + m); }
+    void stopProgress()                        override { log("progress: done"); }
+    void printFinalAnswer(const std::string& a) override {
+        std::cout << "\n=== Answer ===\n" << a << "\n";
+    }
+    void printCompletion(int s, int l) override {
+        std::cout << "[done: " << s << "/" << l << " steps]\n";
+    }
+private:
+    void log(const std::string& m) { std::cout << "[agent] " << m << "\n"; }
+};
+
+// --- The custom agent ---
+class MyCustomAgent : public gaia::Agent {
+public:
+    MyCustomAgent() : Agent(makeConfig()) {
+        // Step 6: attach custom console before init()
+        setOutputHandler(std::make_unique<LoggingConsole>());
+
+        // Steps 1-3 happen inside init()
+        init();
+
+        // Step 3: connect MCP server AFTER init()
+        connectMcpServer("system_info", {
+            {"command", "uvx"},
+            {"args",    {"mcp-server-system-info"}}
+        });
+    }
+
+protected:
+    // Step 1: custom persona and constraints
+    std::string getSystemPrompt() const override {
+        return
+            "You are a helpful system information assistant. "
+            "Provide concise, accurate answers using only the data from your tools. "
+            "If you cannot find data for a request, say so explicitly.";
+    }
+
+    // Step 2: native tools with typed parameters
+    void registerTools() override {
+        // Tool with no parameters
+        toolRegistry().registerTool(
+            "get_hostname",
+            "Return the hostname of the current machine.",
+            [](const gaia::json&) -> gaia::json {
+                char buf[256] = {};
+#ifdef _WIN32
+                DWORD sz = sizeof(buf);
+                GetComputerNameA(buf, &sz);
+#else
+                gethostname(buf, sizeof(buf));
+#endif
+                return {{"hostname", std::string(buf)}};
+            },
+            {}
+        );
+
+        // Tool with a required STRING parameter
+        toolRegistry().registerTool(
+            "get_env_variable",
+            "Return the value of an environment variable.",
+            [](const gaia::json& args) -> gaia::json {
+                std::string name = args.value("name", "");
+                if (name.empty()) throw std::runtime_error("name is required");
+                const char* val = std::getenv(name.c_str());
+                if (!val) return {{"name", name}, {"value", nullptr}, {"found", false}};
+                return {{"name", name}, {"value", std::string(val)}, {"found", true}};
+            },
+            {
+                {"name", gaia::ToolParamType::STRING, /*required=*/true,
+                 "The environment variable name (e.g. 'PATH', 'HOME')"}
+            }
+        );
+
+        // Tool with required + optional parameters
+        toolRegistry().registerTool(
+            "repeat_message",
+            "Repeat a message a given number of times.",
+            [](const gaia::json& args) -> gaia::json {
+                std::string msg = args.value("message", "");
+                int count       = args.value("count", 1);
+                if (msg.empty()) throw std::runtime_error("message is required");
+                gaia::json out = gaia::json::array();
+                for (int i = 0; i < count; ++i) out.push_back(msg);
+                return {{"repetitions", out}};
+            },
+            {
+                {"message", gaia::ToolParamType::STRING,  /*required=*/true,  "The message to repeat"},
+                {"count",   gaia::ToolParamType::INTEGER, /*required=*/false, "How many times (default 1)"}
+            }
+        );
+    }
+
+private:
+    // Step 5: tune AgentConfig
+    static gaia::AgentConfig makeConfig() {
+        gaia::AgentConfig cfg;
+        cfg.baseUrl              = "http://localhost:8000/api/v1";
+        cfg.modelId              = "Qwen3-Coder-30B-A3B-Instruct-GGUF";
+        cfg.maxSteps             = 15;
+        cfg.maxPlanIterations    = 3;
+        cfg.maxConsecutiveRepeats = 4;
+        cfg.debug                = false;  // set true during development
+        cfg.silentMode           = false;  // false: use our LoggingConsole
+        return cfg;
+    }
+};
+
+int main() {
+    try {
+        MyCustomAgent agent;
+        auto result = agent.processQuery("What is the machine hostname and the value of the PATH variable?");
+        // Final answer was already printed by LoggingConsole::printFinalAnswer()
+        (void)result;
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << "\n";
+        return 1;
+    }
+}
+```
+
+```cmake title="CMakeLists.txt"
+cmake_minimum_required(VERSION 3.14)
+project(my_custom_agent LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+
+include(FetchContent)
+FetchContent_Declare(
+    gaia_core
+    GIT_REPOSITORY https://github.com/amd/gaia.git
+    GIT_TAG        main
+    SOURCE_SUBDIR  cpp
+)
+FetchContent_MakeAvailable(gaia_core)
+
+add_executable(my_custom_agent my_custom_agent.cpp)
+target_link_libraries(my_custom_agent PRIVATE gaia::gaia_core)
+```
+
+---
+
+## Summary
+
+| Customization | Where | Notes |
+|--------------|-------|-------|
+| Persona, constraints, output format | `getSystemPrompt()` | Injected before tool list |
+| Native C++ tools | `registerTools()` via `toolRegistry().registerTool()` | Typed params improve LLM tool-calling accuracy |
+| External MCP server tools | `connectMcpServer()` after `init()` | Prefixed as `mcp_<server>_<tool>` |
+| Step limits, replanning, debug verbosity | `AgentConfig` in `makeConfig()` | Tune per use-case |
+| Console output routing | `setOutputHandler()` | Call before or after `init()` |
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="C++ Framework Overview" icon="code" href="/guides/cpp/overview">
+    AgentConfig reference and full project structure
+  </Card>
+
+  <Card title="Integration Guide" icon="puzzle-piece" href="/guides/cpp/integration">
+    FetchContent, find_package, and shared library integration methods
+  </Card>
+
+  <Card title="MCP Client Guide" icon="plug" href="/guides/mcp/client">
+    How the MCP stdio transport works under the hood
+  </Card>
+
+  <Card title="Wi-Fi Troubleshooter Agent" icon="wifi" href="/guides/cpp/wifi-agent">
+    Full network diagnostic and auto-fix using only registered C++ tools — no Python, no MCP
+  </Card>
+
+  <Card title="C++ Source Code" icon="github" href="https://github.com/amd/gaia/tree/main/cpp">
+    Browse the full implementation on GitHub
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>
