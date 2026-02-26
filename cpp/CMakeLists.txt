@@ -256,6 +256,13 @@ else()
     set(GAIA_REQUIRE_FIND_JSON TRUE)
 endif()
 
+# Record whether OpenSSL was found so the config template can require it.
+if(GAIA_ENABLE_SSL AND OpenSSL_FOUND)
+    set(GAIA_REQUIRE_FIND_OPENSSL TRUE)
+else()
+    set(GAIA_REQUIRE_FIND_OPENSSL FALSE)
+endif()
+
 configure_package_config_file(
     cmake/gaia_coreConfig.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/gaia_coreConfig.cmake
