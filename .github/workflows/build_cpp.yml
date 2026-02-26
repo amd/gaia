@@ -48,6 +48,10 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libssl-dev
 
+      - name: Install OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        run: choco install openssl --no-progress -y
+
       - name: Restore FetchContent cache
         id: cache-deps
         uses: actions/cache@v4
@@ -88,6 +92,11 @@ jobs:
           path: cpp/build/_deps
           key: fetchcontent-install-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
 
+      - name: Install OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: choco install openssl --no-progress -y
+
       - name: Build and install gaia_core
         shell: bash
         run: |
@@ -123,6 +132,10 @@ jobs:
       - name: Install OpenSSL (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libssl-dev
+
+      - name: Install OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        run: choco install openssl --no-progress -y
 
       - name: Restore FetchContent cache
         uses: actions/cache@v4
@@ -222,13 +235,6 @@ jobs:
 
           Write-Host "Build tools ready"
 
-      - name: Install OpenSSL (Windows)
-        shell: powershell
-        run: |
-          if (-not (Get-Command openssl -ErrorAction SilentlyContinue)) {
-              choco install openssl --no-progress -y
-          }
-
       - name: Restore FetchContent cache
         uses: actions/cache@v4
         with:
@@ -249,7 +255,8 @@ jobs:
                 -DCMAKE_BUILD_TYPE=Release `
                 -DGAIA_BUILD_INTEGRATION_TESTS=ON `
                 -DGAIA_BUILD_TESTS=OFF `
-                -DGAIA_BUILD_EXAMPLES=OFF
+                -DGAIA_BUILD_EXAMPLES=OFF `
+                -DGAIA_ENABLE_SSL=OFF
           if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
           cmake --build cpp/build-integration --config Release --parallel
           if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
