@@ -26,21 +26,13 @@
 // ---------------------------------------------------------------------------
 
 static std::string testModel() {
-    char* env = nullptr;
-    size_t len = 0;
-    _dupenv_s(&env, &len, "GAIA_CPP_TEST_MODEL");
-    std::string result = env ? std::string(env) : "Qwen3-4B-Instruct-2507-GGUF";
-    free(env);
-    return result;
+    const char* env = std::getenv("GAIA_CPP_TEST_MODEL");
+    return env ? std::string(env) : "Qwen3-4B-Instruct-2507-GGUF";
 }
 
 static std::string testBaseUrl() {
-    char* env = nullptr;
-    size_t len = 0;
-    _dupenv_s(&env, &len, "GAIA_CPP_BASE_URL");
-    std::string result = env ? std::string(env) : "http://localhost:8000/api/v1";
-    free(env);
-    return result;
+    const char* env = std::getenv("GAIA_CPP_BASE_URL");
+    return env ? std::string(env) : "http://localhost:8000/api/v1";
 }
 
 static std::string toLower(std::string s) {

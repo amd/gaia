@@ -44,6 +44,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Install OpenSSL (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libssl-dev
+
       - name: Restore FetchContent cache
         id: cache-deps
         uses: actions/cache@v4
@@ -73,6 +77,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Install OpenSSL (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libssl-dev
 
       - name: Restore FetchContent cache
         uses: actions/cache@v4
@@ -111,6 +119,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Install OpenSSL (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libssl-dev
 
       - name: Restore FetchContent cache
         uses: actions/cache@v4
@@ -209,6 +221,13 @@ jobs:
           }
 
           Write-Host "Build tools ready"
+
+      - name: Install OpenSSL (Windows)
+        shell: powershell
+        run: |
+          if (-not (Get-Command openssl -ErrorAction SilentlyContinue)) {
+              choco install openssl --no-progress -y
+          }
 
       - name: Restore FetchContent cache
         uses: actions/cache@v4
