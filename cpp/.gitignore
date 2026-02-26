@@ -3,6 +3,7 @@
 
 # ---- CMake build output ----
 build/
+build-*/
 out/
 cmake-build-*/
 
