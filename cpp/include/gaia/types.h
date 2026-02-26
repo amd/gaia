@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <functional>
 #include <map>
 #include <optional>
@@ -139,8 +140,15 @@ struct ParsedResponse {
 
 // ---- Agent Configuration ----
 
+/// Return the default LLM base URL, honoring the LEMONADE_BASE_URL
+/// environment variable if set (matching the Python CLI behavior).
+inline std::string defaultBaseUrl() {
+    const char* env = std::getenv("LEMONADE_BASE_URL");  // NOLINT(concurrency-mt-unsafe)
+    return env ? std::string(env) : "http://localhost:8000/api/v1";
+}
+
 struct AgentConfig {
-    std::string baseUrl = "http://localhost:8000/api/v1";
+    std::string baseUrl = defaultBaseUrl();
     std::string modelId = "Qwen3-4B-GGUF";
     int maxSteps = 20;
     int maxPlanIterations = 3;

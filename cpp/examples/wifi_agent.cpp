@@ -408,11 +408,22 @@ static std::string runShell(const std::string& command) {
     std::string result;
     std::array<char, 4096> buffer;
 
+    struct PipeCloser {
+        void operator()(FILE* f) const {
 #ifdef _WIN32
-    std::unique_ptr<FILE, decltype(&_pclose)> pipe(_popen(fullCmd.c_str(), "r"), _pclose);
+            if (f) _pclose(f);
 #else
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(fullCmd.c_str(), "r"), pclose);
+            if (f) pclose(f);
 #endif
+        }
+    };
+    std::unique_ptr<FILE, PipeCloser> pipe(
+#ifdef _WIN32
+        _popen(fullCmd.c_str(), "r")
+#else
+        popen(fullCmd.c_str(), "r")
+#endif
+    );
 
     if (!pipe) {
         return "{\"error\": \"Failed to execute command\"}";
