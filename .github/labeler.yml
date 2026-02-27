@@ -94,6 +94,11 @@ electron:
   - changed-files:
     - any-glob-to-any-file: ['src/gaia/apps/**/*.html', 'src/gaia/apps/**/*.js', 'src/gaia/apps/**/*.css']
 
+# Website changes
+website:
+  - changed-files:
+    - any-glob-to-any-file: ['website/**/*']
+
 # Dependencies
 dependencies:
   - changed-files:
