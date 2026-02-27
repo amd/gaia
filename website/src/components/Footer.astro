@@ -1,0 +1,46 @@
+---
+// Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+const currentYear = new Date().getFullYear();
+---
+
+<footer class="py-12 px-4 sm:px-6 lg:px-8 border-t border-gaia-border">
+  <div class="max-w-6xl mx-auto">
+    <!-- Links -->
+    <div class="flex flex-wrap justify-center gap-8 mb-8 text-sm">
+      <a href="https://docs.gaia.amd.com" target="_blank" rel="noopener noreferrer" class="text-gaia-muted hover:text-white transition-colors">
+        Docs
+      </a>
+      <a href="https://docs.gaia.amd.com/quickstart" target="_blank" rel="noopener noreferrer" class="text-gaia-muted hover:text-white transition-colors">
+        Quick Start
+      </a>
+      <a href="https://github.com/amd/gaia" target="_blank" rel="noopener noreferrer" class="text-gaia-muted hover:text-white transition-colors">
+        GitHub
+      </a>
+      <a href="https://docs.gaia.amd.com/examples" target="_blank" rel="noopener noreferrer" class="text-gaia-muted hover:text-white transition-colors">
+        Examples
+      </a>
+      <a href="https://pypi.org/project/amd-gaia" target="_blank" rel="noopener noreferrer" class="text-gaia-muted hover:text-white transition-colors">
+        PyPI
+      </a>
+      <a href="https://discord.gg/amd-gaia" target="_blank" rel="noopener noreferrer" class="text-gaia-muted hover:text-white transition-colors">
+        Discord
+      </a>
+    </div>
+
+    <!-- Legal -->
+    <div class="text-center text-gaia-muted text-sm mb-6">
+      <p>
+        MIT License &bull; &copy; 2024-{currentYear} Advanced Micro Devices, Inc.
+      </p>
+    </div>
+
+    <!-- Platform note -->
+    <div class="text-center">
+      <p class="text-gaia-muted text-sm">
+        Works on most Windows and Linux AI PCs. <span class="text-white">AMD Ryzen™ AI for best performance.</span>
+      </p>
+    </div>
+  </div>
+</footer>

@@ -1,0 +1,762 @@
+---
+// Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+import Layout from '../layouts/Layout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { loadAllSnippets } from '../utils/codeSnippets';
+
+// Load actual code snippets from GAIA examples at build time
+const snippets = loadAllSnippets();
+---
+
+<Layout title="GAIA - Stop Renting AI. Start Owning It.">
+  <!-- Neural Network / Circuit Background -->
+  <div class="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
+    <div class="circuit-bg"></div>
+    <div class="neural-network"></div>
+    <div class="data-stream stream-1"></div>
+    <div class="data-stream stream-2"></div>
+    <div class="data-stream stream-3"></div>
+    <div class="processor-glow glow-1"></div>
+    <div class="processor-glow glow-2"></div>
+  </div>
+
+  <Header />
+  <main id="main-content">
+    <!-- Hero Section - Bun-style layout -->
+    <section class="min-h-[80vh] flex items-center px-4 sm:px-6 lg:px-8 pt-24 pb-16">
+      <div class="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
+
+        <!-- Left Column: Hero Content -->
+        <div class="overflow-visible">
+          <h1 class="text-5xl lg:text-6xl font-bold text-white mb-8">
+            GAIA is your <span class="text-gaia-accent" id="dynamic-text-wrapper">free<span class="cursor">|</span></span><br />
+            Agent SDK for Ryzen AI
+          </h1>
+
+          <p class="text-xl text-gaia-muted mb-10 max-w-lg leading-relaxed">
+            Build AI agents that run <strong class="text-white">100% locally</strong> on AMD Ryzen AI PCs. Pythonic toolkit includes Chat, RAG, Voice, Vision, Image Gen, MCP, Docker, and Database—built for local agents.
+          </p>
+
+          <!-- Install Command with Folder Tabs -->
+          <div class="mb-6">
+            <!-- OS Folder Tabs -->
+            <div class="flex gap-1">
+              <button class="os-tab active" data-os="windows">
+                Windows
+              </button>
+              <button class="os-tab" data-os="linux">
+                Linux
+              </button>
+            </div>
+
+            <div class="bg-gaia-card rounded-xl rounded-tl-none border border-gaia-border overflow-hidden">
+
+            <!-- Install Commands -->
+            <div class="p-4">
+              <!-- Windows Command -->
+              <div id="install-windows" class="install-cmd flex items-center justify-between gap-4">
+                <code class="font-mono text-sm text-gaia-text flex-1">
+                  irm https://amd-gaia.ai/install.ps1 | iex
+                </code>
+                <button
+                  class="copy-install-btn flex-shrink-0 p-2 bg-transparent hover:bg-gaia-muted/10 rounded text-gaia-muted hover:text-white transition-all"
+                  data-copy="irm https://amd-gaia.ai/install.ps1 | iex"
+                  title="Copy to clipboard"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                </button>
+              </div>
+
+              <!-- Linux Command -->
+              <div id="install-linux" class="install-cmd hidden flex items-center justify-between gap-4">
+                <code class="font-mono text-sm text-gaia-text flex-1">
+                  curl -fsSL https://amd-gaia.ai/install.sh | sh
+                </code>
+                <button
+                  class="copy-install-btn flex-shrink-0 p-2 bg-transparent hover:bg-gaia-muted/10 rounded text-gaia-muted hover:text-white transition-all"
+                  data-copy="curl -fsSL https://amd-gaia.ai/install.sh | sh"
+                  title="Copy to clipboard"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+            </div>
+          </div>
+
+          <!-- Used For -->
+          <div class="mt-10">
+            <p class="text-xs text-gaia-muted uppercase tracking-wider mb-4">Built for</p>
+            <div class="flex flex-nowrap gap-x-6 text-sm whitespace-nowrap">
+              <a href="https://amd-gaia.ai/guides/chat" class="text-gaia-muted hover:text-white transition-colors">Document Q&A</a>
+              <a href="https://amd-gaia.ai/guides/talk" class="text-gaia-muted hover:text-white transition-colors">Voice Assistants</a>
+              <a href="https://amd-gaia.ai/guides/code" class="text-gaia-muted hover:text-white transition-colors">Code Generation</a>
+              <a href="https://amd-gaia.ai/guides/jira" class="text-gaia-muted hover:text-white transition-colors">Workflow Automation</a>
+              <a href="https://amd-gaia.ai/integrations/mcp" class="text-gaia-muted hover:text-white transition-colors">MCP Integration</a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Column: Code Demo with Tabs -->
+        <div>
+          <!-- Folder Tabs - Match "Built For" section -->
+          <div class="flex gap-1 px-4 pt-4 flex-wrap">
+            <button class="folder-tab active" data-tab="docs" data-file="rag_doc_agent.py">
+              Document Q&A
+            </button>
+            <button class="folder-tab" data-tab="voice" data-file="voice_agent.py">
+              Voice
+            </button>
+            <button class="folder-tab" data-tab="code" data-file="code_agent.py">
+              Code Gen
+            </button>
+            <button class="folder-tab" data-tab="workflow" data-file="file_watcher_agent.py">
+              Automation
+            </button>
+            <button class="folder-tab" data-tab="mcp" data-file="weather_agent.py">
+              MCP
+            </button>
+          </div>
+
+          <div class="bg-gaia-card rounded-xl rounded-tl-none border border-gaia-border overflow-hidden relative">
+            <!-- Code Display with Cursor -->
+            <pre class="p-8 overflow-x-auto h-[420px] flex items-start"><code id="code-display" class="font-mono text-sm text-gaia-text leading-relaxed"><span class="cursor-code">|</span></code></pre>
+
+            <!-- Copy Button for Code Examples -->
+            <button
+              id="copy-code-btn"
+              class="absolute bottom-4 right-4 p-2 bg-transparent hover:bg-gaia-muted/10 rounded text-gaia-muted hover:text-white transition-all"
+              title="Copy code"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+  <Footer />
+</Layout>
+
+<style>
+  #dynamic-text-wrapper {
+    display: inline-block;
+    min-width: 3.2em;
+    text-align: left;
+  }
+
+  .cursor, .cursor-code {
+    animation: blink 1s step-end infinite;
+  }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  /* Circuit Board / Neural Network Background */
+  .circuit-bg {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(90deg, rgba(237, 28, 36, 0.03) 1px, transparent 1px),
+      linear-gradient(0deg, rgba(237, 28, 36, 0.03) 1px, transparent 1px),
+      radial-gradient(circle at 15% 25%, rgba(237, 28, 36, 0.08) 0%, transparent 40%),
+      radial-gradient(circle at 85% 75%, rgba(237, 28, 36, 0.08) 0%, transparent 40%);
+    background-size: 60px 60px, 60px 60px, 100% 100%, 100% 100%;
+    animation: circuitPulse 8s ease-in-out infinite;
+  }
+
+  @keyframes circuitPulse {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 0.5; }
+  }
+
+  /* Neural Network Connections */
+  .neural-network {
+    position: absolute;
+    inset: 0;
+    background-image:
+      radial-gradient(2px 2px at 20% 20%, rgba(237, 28, 36, 0.6), transparent),
+      radial-gradient(2px 2px at 80% 30%, rgba(237, 28, 36, 0.5), transparent),
+      radial-gradient(2px 2px at 30% 70%, rgba(237, 28, 36, 0.6), transparent),
+      radial-gradient(2px 2px at 70% 80%, rgba(237, 28, 36, 0.5), transparent),
+      radial-gradient(2px 2px at 50% 50%, rgba(237, 28, 36, 0.7), transparent),
+      radial-gradient(1px 1px at 40% 40%, rgba(255, 255, 255, 0.4), transparent),
+      radial-gradient(1px 1px at 60% 60%, rgba(255, 255, 255, 0.4), transparent);
+    animation: nodePulse 4s ease-in-out infinite;
+  }
+
+  @keyframes nodePulse {
+    0%, 100% { opacity: 0.7; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.05); }
+  }
+
+  /* Data Streams */
+  .data-stream {
+    position: absolute;
+    width: 100%;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, rgba(237, 28, 36, 0.6), transparent);
+    filter: blur(1px);
+    box-shadow: 0 0 10px rgba(237, 28, 36, 0.4);
+  }
+
+  .stream-1 {
+    top: 25%;
+    animation: streamFlow1 6s linear infinite;
+  }
+
+  .stream-2 {
+    top: 50%;
+    animation: streamFlow2 8s linear infinite 2s;
+  }
+
+  .stream-3 {
+    top: 75%;
+    animation: streamFlow3 7s linear infinite 4s;
+  }
+
+  @keyframes streamFlow1 {
+    0% { transform: translateX(-100%); opacity: 0; }
+    10% { opacity: 0.8; }
+    90% { opacity: 0.8; }
+    100% { transform: translateX(100%); opacity: 0; }
+  }
+
+  @keyframes streamFlow2 {
+    0% { transform: translateX(100%); opacity: 0; }
+    10% { opacity: 0.8; }
+    90% { opacity: 0.8; }
+    100% { transform: translateX(-100%); opacity: 0; }
+  }
+
+  @keyframes streamFlow3 {
+    0% { transform: translateX(-100%); opacity: 0; }
+    10% { opacity: 0.8; }
+    90% { opacity: 0.8; }
+    100% { transform: translateX(100%); opacity: 0; }
+  }
+
+  /* Processor Glow (AMD NPU/iGPU activity) */
+  .processor-glow {
+    position: absolute;
+    width: 600px;
+    height: 600px;
+    filter: blur(80px);
+    opacity: 0.08;
+  }
+
+  .glow-1 {
+    top: 20%;
+    left: 10%;
+    background: radial-gradient(circle, rgba(237, 28, 36, 0.4) 0%, transparent 60%);
+    animation: processorPulse1 10s ease-in-out infinite;
+  }
+
+  .glow-2 {
+    bottom: 20%;
+    right: 10%;
+    background: radial-gradient(circle, rgba(237, 28, 36, 0.3) 0%, rgba(100, 50, 150, 0.2) 40%, transparent 60%);
+    animation: processorPulse2 12s ease-in-out infinite 3s;
+  }
+
+  @keyframes processorPulse1 {
+    0%, 100% {
+      transform: scale(1);
+      opacity: 0.08;
+    }
+    50% {
+      transform: scale(1.3);
+      opacity: 0.12;
+    }
+  }
+
+  @keyframes processorPulse2 {
+    0%, 100% {
+      transform: scale(1);
+      opacity: 0.08;
+    }
+    50% {
+      transform: scale(1.2);
+      opacity: 0.1;
+    }
+  }
+
+  /* 3D Popup Effects */
+  h1, .bg-gaia-card {
+    transform: translateZ(20px);
+    box-shadow:
+      0 10px 30px rgba(0, 0, 0, 0.5),
+      0 0 60px rgba(237, 28, 36, 0.15);
+  }
+
+  h1 {
+    text-shadow:
+      0 0 20px rgba(237, 28, 36, 0.2),
+      0 0 40px rgba(237, 28, 36, 0.1),
+      0 4px 8px rgba(0, 0, 0, 0.8);
+    filter: drop-shadow(0 0 30px rgba(237, 28, 36, 0.15));
+    line-height: 1.3;
+    overflow: visible;
+  }
+
+  .bg-gaia-card {
+    position: relative;
+    border: 1px solid rgba(237, 28, 36, 0.2);
+  }
+
+  .bg-gaia-card::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    background: linear-gradient(135deg,
+      rgba(237, 28, 36, 0.1) 0%,
+      transparent 50%,
+      rgba(237, 28, 36, 0.05) 100%);
+    border-radius: inherit;
+    pointer-events: none;
+  }
+
+  .bg-gaia-card::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(600px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+      rgba(237, 28, 36, 0.1),
+      transparent 40%);
+    border-radius: inherit;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+  }
+
+  .bg-gaia-card:hover::after {
+    opacity: 1;
+  }
+
+  /* Folder Tab Styling - Clean and Simple */
+  .folder-tab, .os-tab {
+    position: relative;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.7rem;
+    font-weight: 500;
+    border: 1px solid #3f3f46;
+    border-bottom: none;
+    border-radius: 0.5rem 0.5rem 0 0;
+    background: rgba(30, 30, 46, 0.5);
+    color: #a1a1aa;
+    transition: all 0.2s ease;
+    margin-bottom: -1px;
+    box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.3);
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+
+  .folder-tab:hover, .os-tab:hover {
+    background: rgba(30, 30, 46, 0.8);
+    color: #fff;
+    box-shadow: 0 -6px 16px rgba(237, 28, 36, 0.2);
+  }
+
+  .folder-tab.active, .os-tab.active {
+    background: #1e1e2e;
+    color: #fff;
+    border-color: #3f3f46;
+    z-index: 1;
+    box-shadow:
+      0 -6px 20px rgba(237, 28, 36, 0.3),
+      0 0 30px rgba(237, 28, 36, 0.15);
+  }
+
+  .folder-tab.active::after, .os-tab.active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: #1e1e2e;
+    z-index: 2;
+  }
+</style>
+
+<script is:inline>
+  // Typewriter effect
+  const words = ['free', 'local', 'private', 'open'];
+  let wordIndex = 0;
+  let charIndex = 0;
+  let isDeleting = false;
+  const dynamicTextWrapper = document.getElementById('dynamic-text-wrapper');
+
+  function typeWriter() {
+    const currentWord = words[wordIndex];
+
+    if (isDeleting) {
+      // Erase characters
+      const text = currentWord.substring(0, charIndex - 1);
+      dynamicTextWrapper.innerHTML = text + '<span class="cursor">|</span>';
+      charIndex--;
+
+      if (charIndex === 0) {
+        isDeleting = false;
+        wordIndex = (wordIndex + 1) % words.length;
+        setTimeout(typeWriter, 500); // Pause before typing next word
+        return;
+      }
+    } else {
+      // Type characters
+      const text = currentWord.substring(0, charIndex + 1);
+      dynamicTextWrapper.innerHTML = text + '<span class="cursor">|</span>';
+      charIndex++;
+
+      if (charIndex === currentWord.length) {
+        isDeleting = true;
+        setTimeout(typeWriter, 2000); // Pause at end of word
+        return;
+      }
+    }
+
+    setTimeout(typeWriter, isDeleting ? 50 : 100); // Faster when deleting
+  }
+
+  // Start animation after a brief delay
+  setTimeout(typeWriter, 1000);
+
+  // OS tab switching for install commands
+  const osTabs = document.querySelectorAll('.os-tab');
+  const installCmds = document.querySelectorAll('.install-cmd');
+
+  osTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const targetOS = tab.getAttribute('data-os');
+
+      // Update tab states
+      osTabs.forEach(t => {
+        t.classList.remove('active', 'bg-gaia-accent', 'text-white');
+        t.classList.add('bg-gaia-border', 'text-gaia-muted');
+      });
+      tab.classList.add('active', 'bg-gaia-accent', 'text-white');
+      tab.classList.remove('bg-gaia-border', 'text-gaia-muted');
+
+      // Show/hide install commands
+      installCmds.forEach(cmd => {
+        if (cmd.id === `install-${targetOS}`) {
+          cmd.classList.remove('hidden');
+        } else {
+          cmd.classList.add('hidden');
+        }
+      });
+    });
+  });
+
+  // Copy buttons for install commands
+  const copyInstallBtns = document.querySelectorAll('.copy-install-btn');
+  copyInstallBtns.forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const text = btn.getAttribute('data-copy') || '';
+      await navigator.clipboard.writeText(text);
+
+      // Change to checkmark icon
+      const originalIcon = btn.innerHTML;
+      btn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+      </svg>`;
+      btn.classList.add('text-green-400');
+
+      setTimeout(() => {
+        btn.innerHTML = originalIcon;
+        btn.classList.remove('text-green-400');
+      }, 2000);
+    });
+  });
+
+  // Code examples - match "Built For" section
+  const codeExamples = {
+    docs: `<span class="text-purple-400">from</span> <span class="text-yellow-400">gaia.rag.sdk</span> <span class="text-purple-400">import</span> RAGSDK, RAGConfig
+
+<span class="text-gaia-muted"># Initialize RAG with your documents</span>
+rag = RAGSDK(RAGConfig())
+rag.index_document(<span class="text-green-400">"company_policies.pdf"</span>)
+rag.index_document(<span class="text-green-400">"technical_manual.pdf"</span>)
+
+<span class="text-gaia-muted"># Ask questions about your documents</span>
+response = rag.query(<span class="text-green-400">"What's our Q4 revenue policy?"</span>)
+<span class="text-blue-400">print</span>(response.text)
+
+<span class="text-gaia-muted"># ✅ 100% local - HIPAA compliant</span>
+<span class="text-gaia-muted"># ✅ Private data never leaves your machine</span>`,
+
+    voice: `<span class="text-purple-400">from</span> <span class="text-yellow-400">gaia.talk.sdk</span> <span class="text-purple-400">import</span> TalkSDK, TalkConfig, TalkMode
+
+<span class="text-gaia-muted"># Configure voice assistant</span>
+config = TalkConfig(
+    mode=TalkMode.VOICE_AND_TEXT,
+    enable_tts=<span class="text-purple-400">True</span>,
+    whisper_model_size=<span class="text-green-400">"base"</span>
+)
+
+talk = TalkSDK(config)
+<span class="text-purple-400">await</span> talk.start_voice_session()
+
+<span class="text-gaia-muted"># ✅ Whisper ASR - speech to text</span>
+<span class="text-gaia-muted"># ✅ Kokoro TTS - text to speech</span>
+<span class="text-gaia-muted"># ✅ All running locally on your hardware</span>`,
+
+    code: `<span class="text-purple-400">from</span> <span class="text-yellow-400">gaia</span> <span class="text-purple-400">import</span> Agent, tool
+
+<span class="text-purple-400">class</span> <span class="text-yellow-400">CodeGenerator</span>(Agent):
+    <span class="text-green-400">"""AI-powered code generation agent."""</span>
+
+    <span class="text-purple-400">def</span> <span class="text-blue-400">_register_tools</span>(<span class="text-purple-400">self</span>):
+        <span class="text-gaia-muted">@tool</span>
+        <span class="text-purple-400">def</span> <span class="text-blue-400">generate_code</span>(description: <span class="text-yellow-400">str</span>, language: <span class="text-yellow-400">str</span>):
+            <span class="text-green-400">"""Generate code from natural language."""</span>
+            <span class="text-purple-400">return</span> generated_code
+
+agent = CodeGenerator()
+agent.process_query(<span class="text-green-400">"Write a REST API endpoint for user login"</span>)
+
+<span class="text-gaia-muted"># ✅ Generates production-ready code</span>
+<span class="text-gaia-muted"># ✅ Supports Python, TypeScript, React</span>`,
+
+    workflow: `<span class="text-purple-400">from</span> <span class="text-yellow-400">gaia</span> <span class="text-purple-400">import</span> Agent, FileWatcherMixin
+
+<span class="text-purple-400">class</span> <span class="text-yellow-400">InvoiceProcessor</span>(Agent, FileWatcherMixin):
+    <span class="text-green-400">"""Automated invoice processing."""</span>
+
+    <span class="text-purple-400">def</span> <span class="text-blue-400">__init__</span>(<span class="text-purple-400">self</span>):
+        <span class="text-blue-400">super</span>().__init__()
+        <span class="text-purple-400">self</span>.watch_directory(
+            <span class="text-green-400">"~/invoices"</span>,
+            on_created=<span class="text-purple-400">self</span>.process_invoice
+        )
+
+    <span class="text-purple-400">def</span> <span class="text-blue-400">process_invoice</span>(<span class="text-purple-400">self</span>, path):
+        <span class="text-purple-400">self</span>.process_query(<span class="text-green-400">f"Extract and save data from </span>{path}<span class="text-green-400">"</span>)
+
+agent = InvoiceProcessor()
+<span class="text-gaia-muted"># ✅ Runs 24/7 automatically</span>`,
+
+    mcp: `<span class="text-purple-400">from</span> <span class="text-yellow-400">gaia</span> <span class="text-purple-400">import</span> Agent, MCPClientMixin
+
+<span class="text-purple-400">class</span> <span class="text-yellow-400">WeatherAgent</span>(Agent, MCPClientMixin):
+    <span class="text-green-400">"""Connect to any MCP server."""</span>
+
+    <span class="text-purple-400">def</span> <span class="text-blue-400">__init__</span>(<span class="text-purple-400">self</span>):
+        Agent.__init__(<span class="text-purple-400">self</span>)
+        MCPClientMixin.__init__(<span class="text-purple-400">self</span>)
+
+        <span class="text-gaia-muted"># Connect to MCP server</span>
+        <span class="text-purple-400">self</span>.connect_mcp_server(
+            <span class="text-green-400">"weather"</span>,
+            {<span class="text-green-400">"command"</span>: <span class="text-green-400">"uvx"</span>, <span class="text-green-400">"args"</span>: [<span class="text-green-400">"mcp-server-weather"</span>]}
+        )
+
+agent = WeatherAgent()
+agent.process_query(<span class="text-green-400">"What's the weather in Austin?"</span>)
+
+<span class="text-gaia-muted"># ✅ Access 100+ MCP servers</span>
+<span class="text-gaia-muted"># ✅ GitHub, Slack, databases, and more</span>`
+  };
+
+  // Plain text versions for copying
+  const codePlainText = {
+    docs: `from gaia.rag.sdk import RAGSDK, RAGConfig
+
+# Initialize RAG with your documents
+rag = RAGSDK(RAGConfig())
+rag.index_document("company_policies.pdf")
+rag.index_document("technical_manual.pdf")
+
+# Ask questions about your documents
+response = rag.query("What's our Q4 revenue policy?")
+print(response.text)
+
+# ✅ 100% local - HIPAA compliant
+# ✅ Private data never leaves your machine`,
+
+    voice: `from gaia.talk.sdk import TalkSDK, TalkConfig, TalkMode
+
+# Configure voice assistant
+config = TalkConfig(
+    mode=TalkMode.VOICE_AND_TEXT,
+    enable_tts=True,
+    whisper_model_size="base"
+)
+
+talk = TalkSDK(config)
+await talk.start_voice_session()
+
+# ✅ Whisper ASR - speech to text
+# ✅ Kokoro TTS - text to speech
+# ✅ All running locally on your hardware`,
+
+    code: `from gaia import Agent, tool
+
+class CodeGenerator(Agent):
+    """AI-powered code generation agent."""
+
+    def _register_tools(self):
+        @tool
+        def generate_code(description: str, language: str):
+            """Generate code from natural language."""
+            return generated_code
+
+agent = CodeGenerator()
+agent.process_query("Write a REST API endpoint for user login")
+
+# ✅ Generates production-ready code
+# ✅ Supports Python, TypeScript, React`,
+
+    workflow: `from gaia import Agent, FileWatcherMixin
+
+class InvoiceProcessor(Agent, FileWatcherMixin):
+    """Automated invoice processing."""
+
+    def __init__(self):
+        super().__init__()
+        self.watch_directory(
+            "~/invoices",
+            on_created=self.process_invoice
+        )
+
+    def process_invoice(self, path):
+        self.process_query(f"Extract and save data from {path}")
+
+agent = InvoiceProcessor()
+# ✅ Runs 24/7 automatically`,
+
+    mcp: `from gaia import Agent, MCPClientMixin
+
+class WeatherAgent(Agent, MCPClientMixin):
+    """Connect to any MCP server."""
+
+    def __init__(self):
+        Agent.__init__(self)
+        MCPClientMixin.__init__(self)
+
+        # Connect to MCP server
+        self.connect_mcp_server(
+            "weather",
+            {"command": "uvx", "args": ["mcp-server-weather"]}
+        )
+
+agent = WeatherAgent()
+agent.process_query("What's the weather in Austin?")
+
+# ✅ Access 100+ MCP servers
+# ✅ GitHub, Slack, databases, and more`
+  };
+
+  // Copy button for code examples
+  const copyCodeBtn = document.getElementById('copy-code-btn');
+  if (copyCodeBtn) {
+    copyCodeBtn.addEventListener('click', async () => {
+      const text = codePlainText[currentTab] || '';
+      await navigator.clipboard.writeText(text);
+
+      // Change to checkmark icon
+      const originalIcon = copyCodeBtn.innerHTML;
+      copyCodeBtn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+      </svg>`;
+      copyCodeBtn.classList.add('text-green-400');
+
+      setTimeout(() => {
+        copyCodeBtn.innerHTML = originalIcon;
+        copyCodeBtn.classList.remove('text-green-400');
+      }, 2000);
+    });
+  }
+
+  // Code typing animation
+  let currentCodeIndex = 0;
+  let typingTimeoutId = null;
+  const codeDisplay = document.getElementById('code-display');
+  let currentTab = 'docs';
+
+  function typeCode(code, callback) {
+    // Cancel any ongoing typing animation
+    if (typingTimeoutId) {
+      clearTimeout(typingTimeoutId);
+      typingTimeoutId = null;
+    }
+
+    // Clear current code
+    codeDisplay.innerHTML = '<span class="cursor-code">|</span>';
+    currentCodeIndex = 0;
+
+    // Strip HTML to get plain text for character counting
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = code;
+    const plainText = tempDiv.textContent || tempDiv.innerText;
+
+    function type() {
+      if (currentCodeIndex < plainText.length) {
+        // Get the HTML substring up to current position
+        let htmlSoFar = '';
+        let charCount = 0;
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(code, 'text/html');
+
+        // Simple approach: show progressively more of the HTML
+        const percentage = currentCodeIndex / plainText.length;
+        const htmlLength = code.length;
+        const showUpTo = Math.floor(htmlLength * percentage);
+        htmlSoFar = code.substring(0, showUpTo);
+
+        codeDisplay.innerHTML = htmlSoFar + '<span class="cursor-code">|</span>';
+        currentCodeIndex++;
+        typingTimeoutId = setTimeout(type, 10); // Fast typing speed
+      } else {
+        codeDisplay.innerHTML = code + '<span class="cursor-code">|</span>';
+        typingTimeoutId = null;
+        if (callback) callback();
+      }
+    }
+
+    type();
+  }
+
+  // Tab switching with code animation
+  const tabButtons = document.querySelectorAll('.folder-tab');
+
+  tabButtons.forEach(button => {
+    button.addEventListener('click', () => {
+      const targetTab = button.getAttribute('data-tab');
+      const fileName = button.getAttribute('data-file');
+
+      if (targetTab === currentTab) return; // Don't re-type same tab
+
+      currentTab = targetTab;
+
+      // Update button states
+      tabButtons.forEach(btn => {
+        btn.classList.remove('active');
+      });
+      button.classList.add('active');
+
+      // Type the new code (this will cancel any ongoing animation)
+      typeCode(codeExamples[targetTab]);
+    });
+  });
+
+  // Type initial code on load
+  setTimeout(() => {
+    typeCode(codeExamples['docs']);
+  }, 500);
+</script>

@@ -1,0 +1,154 @@
+---
+// Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+---
+
+<section id="examples" class="py-20 px-4 sm:px-6 lg:px-8">
+  <div class="max-w-4xl mx-auto">
+    <h2 class="text-3xl font-bold text-white text-center mb-12">
+      Show, Don't Tell
+    </h2>
+
+    <!-- Tab Navigation -->
+    <div class="flex justify-center mb-8">
+      <div class="inline-flex bg-gaia-card rounded-lg p-1 border border-gaia-border">
+        <button
+          class="tab-btn px-4 py-2 rounded-md text-sm font-medium transition-colors bg-gaia-accent text-white"
+          data-tab="docs"
+        >
+          Chat with Docs
+        </button>
+        <button
+          class="tab-btn px-4 py-2 rounded-md text-sm font-medium transition-colors text-gaia-muted hover:text-white"
+          data-tab="code"
+        >
+          Code Agent
+        </button>
+        <button
+          class="tab-btn px-4 py-2 rounded-md text-sm font-medium transition-colors text-gaia-muted hover:text-white"
+          data-tab="voice"
+        >
+          Voice Assistant
+        </button>
+      </div>
+    </div>
+
+    <!-- Tab Content -->
+    <div class="bg-gaia-card rounded-lg border border-gaia-border overflow-hidden">
+      <!-- Chat with Docs -->
+      <div id="tab-docs" class="tab-content p-6">
+        <div class="space-y-4">
+          <p class="text-gaia-muted text-sm mb-4"># Ask questions about your codebase</p>
+          <pre class="bg-gaia-bg rounded-lg p-4 overflow-x-auto"><code class="font-mono text-sm"><span class="text-gaia-accent">$</span> gaia chat --docs ./src
+
+<span class="text-gaia-muted">You:</span> "How does the authentication flow work?"
+<span class="text-green-400">GAIA:</span> "Based on src/auth/login.py, authentication uses..."</code></pre>
+
+          <div class="border-t border-gaia-border my-6"></div>
+
+          <p class="text-gaia-muted text-sm mb-4"># Or use it programmatically</p>
+          <pre class="bg-gaia-bg rounded-lg p-4 overflow-x-auto"><code class="font-mono text-sm"><span class="text-purple-400">from</span> <span class="text-yellow-400">gaia</span> <span class="text-purple-400">import</span> Agent
+
+agent = Agent()
+agent.load_docs(<span class="text-green-400">"./docs"</span>)
+answer = agent.ask(<span class="text-green-400">"What's our API rate limit?"</span>)
+<span class="text-blue-400">print</span>(answer)  <span class="text-gaia-muted"># "The rate limit is 100 req/min per..."</span></code></pre>
+        </div>
+      </div>
+
+      <!-- Code Agent -->
+      <div id="tab-code" class="tab-content p-6 hidden">
+        <div class="space-y-4">
+          <p class="text-gaia-muted text-sm mb-4"># Let GAIA write and explain code</p>
+          <pre class="bg-gaia-bg rounded-lg p-4 overflow-x-auto"><code class="font-mono text-sm"><span class="text-gaia-accent">$</span> gaia code
+
+<span class="text-gaia-muted">You:</span> "Write a function to parse JSON with error handling"
+<span class="text-green-400">GAIA:</span> "Here's a robust JSON parser with proper error handling..."
+
+<span class="text-purple-400">def</span> <span class="text-blue-400">safe_parse_json</span>(text: <span class="text-yellow-400">str</span>) -> <span class="text-yellow-400">dict</span> | <span class="text-yellow-400">None</span>:
+    <span class="text-purple-400">try</span>:
+        <span class="text-purple-400">return</span> json.loads(text)
+    <span class="text-purple-400">except</span> json.JSONDecodeError <span class="text-purple-400">as</span> e:
+        logger.error(<span class="text-green-400">f"Failed to parse JSON: &#123;e&#125;"</span>)
+        <span class="text-purple-400">return</span> <span class="text-yellow-400">None</span></code></pre>
+
+          <div class="border-t border-gaia-border my-6"></div>
+
+          <p class="text-gaia-muted text-sm mb-4"># Explain existing code</p>
+          <pre class="bg-gaia-bg rounded-lg p-4 overflow-x-auto"><code class="font-mono text-sm"><span class="text-gaia-accent">$</span> gaia code --explain ./src/auth/oauth.py
+
+<span class="text-green-400">GAIA:</span> "This module implements OAuth 2.0 flow with PKCE...
+      The main entry point is `start_auth_flow()` which..."</code></pre>
+        </div>
+      </div>
+
+      <!-- Voice Assistant -->
+      <div id="tab-voice" class="tab-content p-6 hidden">
+        <div class="space-y-4">
+          <p class="text-gaia-muted text-sm mb-4"># Hands-free AI with voice</p>
+          <pre class="bg-gaia-bg rounded-lg p-4 overflow-x-auto"><code class="font-mono text-sm"><span class="text-gaia-accent">$</span> gaia talk
+
+<span class="text-gaia-muted">Listening...</span> <span class="text-blue-400">[Hold SPACE to speak]</span>
+
+<span class="text-gaia-muted">You:</span> <span class="text-yellow-400">"What files were changed in the last commit?"</span>
+<span class="text-green-400">GAIA:</span> <span class="text-blue-400">[Speaking]</span> "The last commit modified three files:
+      login.py, auth_utils.py, and the test file..."</code></pre>
+
+          <div class="border-t border-gaia-border my-6"></div>
+
+          <p class="text-gaia-muted text-sm mb-4"># Powered by Whisper ASR + Kokoro TTS</p>
+          <pre class="bg-gaia-bg rounded-lg p-4 overflow-x-auto"><code class="font-mono text-sm"><span class="text-purple-400">from</span> <span class="text-yellow-400">gaia</span> <span class="text-purple-400">import</span> TalkAgent
+
+agent = TalkAgent()
+agent.start()  <span class="text-gaia-muted"># Starts voice interaction loop</span>
+
+<span class="text-gaia-muted"># Uses:</span>
+<span class="text-gaia-muted"># - Whisper for speech-to-text</span>
+<span class="text-gaia-muted"># - Kokoro for natural text-to-speech</span>
+<span class="text-gaia-muted"># - All running locally on your hardware</span></code></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- CTA -->
+    <div class="text-center mt-8">
+      <a
+        href="https://docs.gaia.amd.com/examples"
+        class="inline-flex items-center gap-2 text-gaia-accent hover:text-gaia-accent-hover transition-colors font-medium"
+      >
+        See more examples
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
+        </svg>
+      </a>
+    </div>
+  </div>
+</section>
+
+<script>
+  const tabBtns = document.querySelectorAll('.tab-btn');
+  const tabContents = document.querySelectorAll('.tab-content');
+
+  tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.getAttribute('data-tab');
+
+      // Update button styles
+      tabBtns.forEach(b => {
+        b.classList.remove('bg-gaia-accent', 'text-white');
+        b.classList.add('text-gaia-muted', 'hover:text-white');
+      });
+      btn.classList.remove('text-gaia-muted', 'hover:text-white');
+      btn.classList.add('bg-gaia-accent', 'text-white');
+
+      // Show/hide content
+      tabContents.forEach(content => {
+        if (content.id === `tab-${tab}`) {
+          content.classList.remove('hidden');
+        } else {
+          content.classList.add('hidden');
+        }
+      });
+    });
+  });
+</script>

@@ -1,0 +1,97 @@
+---
+// Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+---
+
+<section id="comparison" class="py-20 px-4 sm:px-6 lg:px-8 bg-gaia-card/30">
+  <div class="max-w-4xl mx-auto">
+    <!-- Ollama Section -->
+    <div class="mb-12">
+      <h2 class="text-2xl font-bold text-white mb-6 text-center">
+        "I already use Ollama..."
+      </h2>
+      <div class="bg-gaia-card rounded-lg border border-gaia-border p-6">
+        <p class="text-gaia-muted mb-6">
+          Ollama is great for running models. GAIA adds:
+        </p>
+        <ul class="space-y-3 mb-6">
+          <li class="flex items-start gap-3">
+            <svg class="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+            <span class="text-gaia-text"><strong class="text-white">Agents that use tools</strong> (search files, run code, call APIs)</span>
+          </li>
+          <li class="flex items-start gap-3">
+            <svg class="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+            <span class="text-gaia-text"><strong class="text-white">RAG built-in</strong> (chat with your docs, not just the model)</span>
+          </li>
+          <li class="flex items-start gap-3">
+            <svg class="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+            <span class="text-gaia-text"><strong class="text-white">MCP support</strong> (connect to VS Code, Blender, Jira, etc.)</span>
+          </li>
+          <li class="flex items-start gap-3">
+            <svg class="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+            <span class="text-gaia-text"><strong class="text-white">Voice I/O</strong> (talk to your agents with Whisper + Kokoro)</span>
+          </li>
+        </ul>
+        <p class="text-gaia-muted text-sm border-t border-gaia-border pt-4">
+          Think of it as: <span class="text-white">Ollama handles models, GAIA handles agents.</span>
+        </p>
+      </div>
+    </div>
+
+    <!-- LangChain Section -->
+    <div>
+      <h2 class="text-2xl font-bold text-white mb-6 text-center">
+        "Why not LangChain?"
+      </h2>
+      <div class="bg-gaia-card rounded-lg border border-gaia-border p-6">
+        <p class="text-gaia-muted mb-6">
+          LangChain is cloud-first. GAIA is local-first.
+        </p>
+        <ul class="space-y-3 mb-6">
+          <li class="flex items-start gap-3">
+            <svg class="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+            <span class="text-gaia-text"><strong class="text-white">No API keys</strong> to manage or leak</span>
+          </li>
+          <li class="flex items-start gap-3">
+            <svg class="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+            <span class="text-gaia-text"><strong class="text-white">No per-token costs</strong> ($0 forever)</span>
+          </li>
+          <li class="flex items-start gap-3">
+            <svg class="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+            <span class="text-gaia-text"><strong class="text-white">No data leaving</strong> your machine</span>
+          </li>
+          <li class="flex items-start gap-3">
+            <svg class="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+            <span class="text-gaia-text"><strong class="text-white">Works offline</strong> (airplane mode? no problem)</span>
+          </li>
+          <li class="flex items-start gap-3">
+            <svg class="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+            <span class="text-gaia-text"><strong class="text-white">Sub-50ms latency</strong> (vs 200-500ms cloud roundtrips)</span>
+          </li>
+        </ul>
+        <p class="text-gaia-muted text-sm border-t border-gaia-border pt-4">
+          Use LangChain when you need GPT-4. Use GAIA when you need
+          <span class="text-white">privacy, speed, or just want to stop paying OpenAI.</span>
+        </p>
+      </div>
+    </div>
+  </div>
+</section>

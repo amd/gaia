@@ -1,0 +1,72 @@
+---
+// Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+---
+
+<section id="benchmarks" class="py-20 px-4 sm:px-6 lg:px-8 bg-gaia-card/30">
+  <div class="max-w-4xl mx-auto">
+    <h2 class="text-3xl font-bold text-white text-center mb-4">
+      Benchmarks (Honest Ones)
+    </h2>
+    <p class="text-gaia-muted text-center mb-12">
+      Tested on Ryzen AI 9 HX 370, Qwen2.5-7B-Instruct
+    </p>
+
+    <!-- Benchmark Table -->
+    <div class="bg-gaia-card rounded-lg border border-gaia-border overflow-hidden">
+      <table class="w-full">
+        <thead>
+          <tr class="border-b border-gaia-border">
+            <th class="text-left py-4 px-6 text-gaia-muted font-medium">Metric</th>
+            <th class="text-left py-4 px-6 text-gaia-accent font-medium">GAIA (Local)</th>
+            <th class="text-left py-4 px-6 text-gaia-muted font-medium">GPT-4o API</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="border-b border-gaia-border">
+            <td class="py-4 px-6 text-gaia-text">Time to first token</td>
+            <td class="py-4 px-6 text-white font-mono">0.4s</td>
+            <td class="py-4 px-6 text-gaia-muted font-mono">0.8-2.0s</td>
+          </tr>
+          <tr class="border-b border-gaia-border">
+            <td class="py-4 px-6 text-gaia-text">Tokens per second</td>
+            <td class="py-4 px-6 text-white font-mono">45 tps</td>
+            <td class="py-4 px-6 text-gaia-muted font-mono">~80 tps</td>
+          </tr>
+          <tr class="border-b border-gaia-border">
+            <td class="py-4 px-6 text-gaia-text">Cost per 1M tokens</td>
+            <td class="py-4 px-6 text-green-400 font-mono font-bold">$0</td>
+            <td class="py-4 px-6 text-gaia-muted font-mono">$5-15</td>
+          </tr>
+          <tr>
+            <td class="py-4 px-6 text-gaia-text">Data sent to cloud</td>
+            <td class="py-4 px-6 text-green-400 font-mono font-bold">0 bytes</td>
+            <td class="py-4 px-6 text-gaia-muted font-mono">Everything</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Honest Trade-off -->
+    <div class="mt-8 p-6 bg-gaia-bg rounded-lg border border-gaia-border">
+      <p class="text-gaia-muted text-center">
+        <span class="text-white font-medium">Honest trade-off:</span> Cloud models are smarter.
+        Local models are faster, cheaper, and private.
+        <span class="text-white">Pick based on your task.</span>
+      </p>
+    </div>
+
+    <!-- CTA -->
+    <div class="text-center mt-8">
+      <a
+        href="https://docs.gaia.amd.com/benchmarks"
+        class="inline-flex items-center gap-2 text-gaia-accent hover:text-gaia-accent-hover transition-colors font-medium"
+      >
+        See full benchmarks
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
+        </svg>
+      </a>
+    </div>
+  </div>
+</section>
