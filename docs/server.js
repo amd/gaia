@@ -20,6 +20,7 @@ const rateLimit = require('express-rate-limit');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
+const url = require('url');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -284,11 +285,12 @@ app.post('/auth/login', loginLimiter, (req, res) => {
       maxAge: COOKIE_MAX_AGE,
       sameSite: 'lax'
     });
-    // Retrieve redirect URL from server-side storage
+    // Retrieve redirect URL from server-side storage and validate with url.parse()
     const target = consumeRedirect(nonce);
-    // Validate redirect target: must be a relative path (starts with / but not //)
-    if (typeof target === 'string' && target.startsWith('/') && !target.startsWith('//')) {
-      res.redirect(303, target);
+    const parsed = url.parse(target || '');
+    // Only redirect to relative paths (no host/protocol) to prevent open redirects
+    if (!parsed.host && !parsed.protocol && parsed.pathname) {
+      res.redirect(303, parsed.pathname);
     } else {
       res.redirect(303, '/');
     }
