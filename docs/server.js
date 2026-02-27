@@ -16,9 +16,11 @@
 
 require('dotenv').config();
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
+const url = require('url');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -30,6 +32,11 @@ const MINTLIFY_URL = process.env.MINTLIFY_URL || 'https://amd-gaia.ai';
 const COOKIE_SECRET = process.env.COOKIE_SECRET || crypto.randomBytes(32).toString('hex');
 const COOKIE_NAME = 'gaia_docs_auth';
 const COOKIE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+// Server-side redirect storage (nonce -> { url, expires })
+// Redirect URLs are stored server-side to prevent user-controlled data in redirects
+const pendingRedirects = new Map();
+const NONCE_MAX_AGE = 10 * 60 * 1000; // 10 minutes
 
 // Middleware
 app.use(cookieParser(COOKIE_SECRET));
@@ -50,8 +57,35 @@ function verifyToken(token) {
 // Sanitize redirect URL to prevent open redirect attacks
 function sanitizeRedirect(url) {
   // Must start with / but not // (protocol-relative URLs)
-  if (url && url.startsWith('/') && !url.startsWith('//')) {
+  if (url && typeof url === 'string' && url.startsWith('/') && !url.startsWith('//')) {
     return url;
+  }
+  return '/';
+}
+
+// Store a redirect URL server-side and return a nonce for form submission
+function storeRedirect(redirectUrl) {
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const safeUrl = sanitizeRedirect(redirectUrl);
+  pendingRedirects.set(nonce, { url: safeUrl, expires: Date.now() + NONCE_MAX_AGE });
+
+  // Clean up expired nonces
+  for (const [key, value] of pendingRedirects) {
+    if (Date.now() > value.expires) {
+      pendingRedirects.delete(key);
+    }
+  }
+
+  return nonce;
+}
+
+// Retrieve and consume a stored redirect URL by nonce
+function consumeRedirect(nonce) {
+  if (!nonce || typeof nonce !== 'string') return '/';
+  const entry = pendingRedirects.get(nonce);
+  if (entry && Date.now() <= entry.expires) {
+    pendingRedirects.delete(nonce);
+    return entry.url;
   }
   return '/';
 }
@@ -66,9 +100,9 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;');
 }
 
-// Login page HTML ({{REDIRECT}} placeholder for original URL)
-function getLoginPage(redirectUrl) {
-  const safeRedirect = escapeHtml(sanitizeRedirect(redirectUrl));
+// Login page HTML - uses nonce (not redirect URL) in form to prevent open redirect
+function getLoginPage(nonce) {
+  const safeNonce = escapeHtml(nonce);
 
   return `
 <!DOCTYPE html>
@@ -184,7 +218,7 @@ function getLoginPage(redirectUrl) {
     <p class="subtitle">This documentation is access-restricted. Please enter the access code to continue.</p>
     {{ERROR}}
     <form method="POST" action="/auth/login">
-      <input type="hidden" name="redirect" value="${safeRedirect}">
+      <input type="hidden" name="nonce" value="${safeNonce}">
       <div class="form-group">
         <input type="password" name="code" placeholder="Enter access code" required autofocus>
       </div>
@@ -222,15 +256,24 @@ function authMiddleware(req, res, next) {
     return next();
   }
 
-  // Show login page with original URL preserved for redirect after login
+  // Store redirect URL server-side and use nonce in form
   const originalUrl = req.originalUrl || req.url || '/';
-  res.status(401).send(getLoginPage(originalUrl).replace('{{ERROR}}', ''));
+  const nonce = storeRedirect(originalUrl);
+  res.status(401).send(getLoginPage(nonce).replace('{{ERROR}}', ''));
 }
 
+// Rate limit login attempts
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // limit each IP to 10 login attempts per windowMs
+  message: 'Too many login attempts. Please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // Login handler
-app.post('/auth/login', (req, res) => {
-  const { code, redirect } = req.body;
-  const safeRedirect = sanitizeRedirect(redirect);
+app.post('/auth/login', loginLimiter, (req, res) => {
+  const { code, nonce } = req.body;
 
   if (code === ACCESS_CODE) {
     // Set signed cookie
@@ -242,19 +285,30 @@ app.post('/auth/login', (req, res) => {
       maxAge: COOKIE_MAX_AGE,
       sameSite: 'lax'
     });
-    // Redirect to the original URL the user was trying to access
-    res.redirect(safeRedirect);
+    // Retrieve redirect URL from server-side storage and validate with url.parse()
+    const target = consumeRedirect(nonce);
+    const parsed = url.parse(target || '');
+    // Only redirect to relative paths (no host/protocol) to prevent open redirects
+    if (!parsed.host && !parsed.protocol && parsed.pathname) {
+      res.redirect(303, parsed.pathname);
+    } else {
+      res.redirect(303, '/');
+    }
   } else {
-    // Preserve the redirect URL even on error so user can retry
-    res.redirect(`/auth/login-error?redirect=${encodeURIComponent(safeRedirect)}`);
+    // Retrieve the original redirect URL and re-store with a new nonce for retry
+    const originalRedirect = consumeRedirect(nonce);
+    const newNonce = storeRedirect(originalRedirect);
+    res.redirect(`/auth/login-error?nonce=${newNonce}`);
   }
 });
 
-// Login error handler (preserves redirect URL)
+// Login error handler (uses nonce to retrieve redirect URL)
 app.get('/auth/login-error', (req, res) => {
-  const safeRedirect = sanitizeRedirect(req.query.redirect);
+  // Retrieve redirect URL from server-side storage and re-store for the form
+  const originalRedirect = consumeRedirect(req.query.nonce);
+  const newNonce = storeRedirect(originalRedirect);
   const errorHtml = '<div class="error">Invalid access code. Please try again.</div>';
-  res.status(401).send(getLoginPage(safeRedirect).replace('{{ERROR}}', errorHtml));
+  res.status(401).send(getLoginPage(newNonce).replace('{{ERROR}}', errorHtml));
 });
 
 // Logout handler
