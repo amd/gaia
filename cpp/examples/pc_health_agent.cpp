@@ -4,7 +4,8 @@
 // PC Health Agent — LLM-driven PC diagnostician.
 // The LLM decides which diagnostic tools to use based on the user's question.
 // Tier 1: quick_health_scan (context), Tier 2: deep dives (logs, power,
-// processes, disk/registry, network), Tier 3: actions (power plan, gaming).
+// processes, disk/registry, network, storage SMART, boot perf),
+// Tier 3: actions (power plan, gaming, terminate process).
 // No Python, no MCP dependency. Windows-only (Win32 APIs + PowerShell).
 //
 // Usage:
@@ -709,7 +710,19 @@ static gaia::json enumRegValues(HKEY hRoot, const wchar_t* subKey,
             auto* wstr = reinterpret_cast<wchar_t*>(dataBuffer);
             size_t wlen = dataSize / sizeof(wchar_t);
             if (wlen > 0 && wstr[wlen - 1] == L'\0') --wlen;
-            entry["value"] = wstringToUtf8(std::wstring(wstr, wlen));
+            if (type == REG_EXPAND_SZ) {
+                wchar_t expanded[2048];
+                DWORD len = ExpandEnvironmentStringsW(
+                    std::wstring(wstr, wlen).c_str(), expanded, 2048);
+                if (len > 0 && len < 2048)
+                    entry["value"] = wstringToUtf8(
+                        std::wstring(expanded, len - 1));
+                else
+                    entry["value"] = wstringToUtf8(
+                        std::wstring(wstr, wlen));
+            } else {
+                entry["value"] = wstringToUtf8(std::wstring(wstr, wlen));
+            }
         }
         entries.push_back(std::move(entry));
     }
@@ -760,6 +773,13 @@ static std::string readRegString(HKEY hRoot, const wchar_t* subKey,
         return {};
     size_t wlen = dataSize / sizeof(wchar_t);
     if (wlen > 0 && data[wlen - 1] == L'\0') --wlen;
+    if (type == REG_EXPAND_SZ) {
+        wchar_t expanded[2048];
+        DWORD len = ExpandEnvironmentStringsW(
+            std::wstring(data, wlen).c_str(), expanded, 2048);
+        if (len > 0 && len < 2048)
+            return wstringToUtf8(std::wstring(expanded, len - 1));
+    }
     return wstringToUtf8(std::wstring(data, wlen));
 }
 
@@ -770,6 +790,45 @@ static bool fileExistsW(const std::wstring& path) {
     DWORD attrs = GetFileAttributesW(path.c_str());
     return (attrs != INVALID_FILE_ATTRIBUTES &&
             !(attrs & FILE_ATTRIBUTE_DIRECTORY));
+}
+
+// ---------------------------------------------------------------------------
+// Extract executable path from a registry command line value.
+// Handles: "C:\Program Files\app.exe" /args, C:\simple.exe /args,
+// and unquoted paths with spaces (tries full string first).
+// ---------------------------------------------------------------------------
+static std::string extractExePath(const std::string& cmdLine) {
+    if (cmdLine.empty()) return {};
+    // Trim leading whitespace
+    size_t start = cmdLine.find_first_not_of(" \t");
+    if (start == std::string::npos) return {};
+    std::string cmd = cmdLine.substr(start);
+
+    if (cmd.front() == '"') {
+        // Quoted path — extract content between quotes
+        auto endQuote = cmd.find('"', 1);
+        if (endQuote != std::string::npos)
+            return cmd.substr(1, endQuote - 1);
+        return cmd.substr(1);
+    }
+
+    // Unquoted — try the full string as a path first (handles
+    // paths with spaces like C:\Program Files\app.exe)
+    if (fileExistsW(utf8ToWstring(cmd)))
+        return cmd;
+
+    // Try progressively shorter prefixes up to each space
+    // (handles C:\Program Files\app.exe /flag)
+    size_t pos = 0;
+    while ((pos = cmd.find(' ', pos + 1)) != std::string::npos) {
+        std::string candidate = cmd.substr(0, pos);
+        if (fileExistsW(utf8ToWstring(candidate)))
+            return candidate;
+    }
+
+    // Fallback: split on first space
+    auto sp = cmd.find(' ');
+    return (sp != std::string::npos) ? cmd.substr(0, sp) : cmd;
 }
 
 // ---------------------------------------------------------------------------
@@ -1088,12 +1147,12 @@ static gaia::json scanBrowserCaches() {
             {"grand_total_human", formatBytes(grandTotal)}};
 }
 
-// Scan registry health across 7 categories
+// Scan registry health across 9 categories (CCleaner-inspired)
 static gaia::json scanRegistryHealth() {
     gaia::json categoriesArr = gaia::json::array();
     int totalInvalid = 0;
 
-    // 1. SharedDLLs
+    // 1. SharedDLLs — orphaned DLL references
     {
         auto values = enumRegValues(HKEY_LOCAL_MACHINE,
             L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs", 500);
@@ -1117,7 +1176,7 @@ static gaia::json scanRegistryHealth() {
         });
     }
 
-    // 2. App Paths
+    // 2. App Paths — orphaned application registrations
     {
         auto subkeys = enumRegSubkeys(HKEY_LOCAL_MACHINE,
             L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths", 500);
@@ -1126,8 +1185,10 @@ static gaia::json scanRegistryHealth() {
         for (auto& sk : subkeys) {
             std::wstring fullKey =
                 L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\" + sk;
-            std::string exePath = readRegString(
+            std::string rawPath = readRegString(
                 HKEY_LOCAL_MACHINE, fullKey.c_str(), nullptr);
+            if (rawPath.empty()) continue;
+            std::string exePath = extractExePath(rawPath);
             if (exePath.empty()) continue;
             if (!fileExistsW(utf8ToWstring(exePath))) {
                 ++invalid;
@@ -1147,9 +1208,9 @@ static gaia::json scanRegistryHealth() {
         });
     }
 
-    // 3. COM/CLSID (sample first 200)
+    // 3. COM/CLSID — orphaned ActiveX/COM components (sample 1000)
     {
-        auto subkeys = enumRegSubkeys(HKEY_CLASSES_ROOT, L"CLSID", 200);
+        auto subkeys = enumRegSubkeys(HKEY_CLASSES_ROOT, L"CLSID", 1000);
         int invalid = 0;
         gaia::json invalidEntries = gaia::json::array();
         for (auto& clsid : subkeys) {
@@ -1162,20 +1223,14 @@ static gaia::json scanRegistryHealth() {
                     HKEY_CLASSES_ROOT, localKey.c_str(), nullptr);
             }
             if (dllPath.empty()) continue;
-            if (dllPath.size() >= 2 && dllPath.front() == '"') {
-                auto endQuote = dllPath.find('"', 1);
-                if (endQuote != std::string::npos)
-                    dllPath = dllPath.substr(1, endQuote - 1);
-            }
-            auto spacePos = dllPath.find(' ');
-            if (spacePos != std::string::npos)
-                dllPath = dllPath.substr(0, spacePos);
-            if (!fileExistsW(utf8ToWstring(dllPath))) {
+            std::string exePath = extractExePath(dllPath);
+            if (exePath.empty()) continue;
+            if (!fileExistsW(utf8ToWstring(exePath))) {
                 ++invalid;
-                if (invalid <= 10)
+                if (invalid <= 20)
                     invalidEntries.push_back({
                         {"clsid", wstringToUtf8(clsid)},
-                        {"path", dllPath}
+                        {"path", exePath}
                     });
             }
         }
@@ -1184,12 +1239,12 @@ static gaia::json scanRegistryHealth() {
             {"name", "COM/CLSID"},
             {"total_entries", subkeys.size()},
             {"invalid_entries", invalid},
-            {"note", "Sampled first 200 CLSIDs"},
+            {"note", "Sampled first 1000 CLSIDs"},
             {"sample_invalid", invalidEntries}
         });
     }
 
-    // 4. Uninstall
+    // 4. Uninstall/Installer — orphaned install dirs + broken uninstallers
     {
         const wchar_t* uninstallPaths[] = {
             L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
@@ -1203,35 +1258,60 @@ static gaia::json scanRegistryHealth() {
             for (auto& sk : subkeys) {
                 ++totalEntries;
                 std::wstring fullKey = std::wstring(uPath) + L"\\" + sk;
+                std::string displayName = readRegString(
+                    HKEY_LOCAL_MACHINE, fullKey.c_str(), L"DisplayName");
+                std::string label = displayName.empty()
+                    ? wstringToUtf8(sk) : displayName;
+                bool flagged = false;
+
+                // Check InstallLocation directory
                 std::string installLoc = readRegString(
                     HKEY_LOCAL_MACHINE, fullKey.c_str(), L"InstallLocation");
                 if (!installLoc.empty()) {
                     DWORD attrs = GetFileAttributesW(
                         utf8ToWstring(installLoc).c_str());
                     if (attrs == INVALID_FILE_ATTRIBUTES) {
+                        flagged = true;
                         ++invalid;
-                        std::string displayName = readRegString(
-                            HKEY_LOCAL_MACHINE, fullKey.c_str(), L"DisplayName");
                         if (invalid <= 20)
                             invalidEntries.push_back({
-                                {"app", displayName.empty()
-                                    ? wstringToUtf8(sk) : displayName},
-                                {"install_location", installLoc}
+                                {"app", label},
+                                {"issue", "missing install directory"},
+                                {"path", installLoc}
                             });
+                    }
+                }
+
+                // Check UninstallString exe
+                if (!flagged) {
+                    std::string uninstStr = readRegString(
+                        HKEY_LOCAL_MACHINE, fullKey.c_str(), L"UninstallString");
+                    if (!uninstStr.empty()) {
+                        std::string exePath = extractExePath(uninstStr);
+                        if (!exePath.empty() &&
+                            !fileExistsW(utf8ToWstring(exePath))) {
+                            ++invalid;
+                            if (invalid <= 20)
+                                invalidEntries.push_back({
+                                    {"app", label},
+                                    {"issue", "missing uninstaller"},
+                                    {"path", exePath}
+                                });
+                        }
                     }
                 }
             }
         }
         totalInvalid += invalid;
         categoriesArr.push_back({
-            {"name", "Uninstall"},
+            {"name", "Uninstall/Installer"},
             {"total_entries", totalEntries},
             {"invalid_entries", invalid},
             {"sample_invalid", invalidEntries}
         });
     }
 
-    // 5. Run keys
+    // 5. Run Keys — orphaned startup entries (incl. WOW6432Node)
     {
         const std::pair<HKEY, const wchar_t*> runPaths[] = {
             {HKEY_CURRENT_USER,
@@ -1242,6 +1322,8 @@ static gaia::json scanRegistryHealth() {
              L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"},
             {HKEY_LOCAL_MACHINE,
              L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce"},
+            {HKEY_LOCAL_MACHINE,
+             L"SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run"},
         };
         int totalEntries = 0;
         int invalid = 0;
@@ -1252,16 +1334,7 @@ static gaia::json scanRegistryHealth() {
                 ++totalEntries;
                 if (!entry.contains("value")) continue;
                 std::string cmdLine = entry["value"].get<std::string>();
-                std::string exePath;
-                if (!cmdLine.empty() && cmdLine.front() == '"') {
-                    auto endQuote = cmdLine.find('"', 1);
-                    if (endQuote != std::string::npos)
-                        exePath = cmdLine.substr(1, endQuote - 1);
-                } else {
-                    auto spPos = cmdLine.find(' ');
-                    exePath = (spPos != std::string::npos)
-                        ? cmdLine.substr(0, spPos) : cmdLine;
-                }
+                std::string exePath = extractExePath(cmdLine);
                 if (exePath.empty()) continue;
                 if (!fileExistsW(utf8ToWstring(exePath))) {
                     ++invalid;
@@ -1282,70 +1355,180 @@ static gaia::json scanRegistryHealth() {
         });
     }
 
-    // 6. Fonts
+    // 6. File Extensions — orphaned file type associations (NEW)
     {
-        auto values = enumRegValues(HKEY_LOCAL_MACHINE,
-            L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts", 500);
-        std::wstring fontsDir = getEnvWide(L"WINDIR");
-        if (!fontsDir.empty()) fontsDir += L"\\Fonts\\";
+        auto extKeys = enumRegSubkeys(HKEY_CLASSES_ROOT, L"", 500);
+        int totalEntries = 0;
         int invalid = 0;
         gaia::json invalidEntries = gaia::json::array();
-        for (auto& entry : values) {
-            if (!entry.contains("value")) continue;
-            std::string fontFile = entry["value"].get<std::string>();
-            if (fontFile.empty()) continue;
-            std::wstring wFontFile = utf8ToWstring(fontFile);
-            std::wstring fullPath;
-            if (wFontFile.size() >= 2 && wFontFile[1] == L':') {
-                fullPath = wFontFile;
-            } else {
-                fullPath = fontsDir + wFontFile;
-            }
-            if (!fileExistsW(fullPath)) {
+        for (auto& ext : extKeys) {
+            if (ext.empty() || ext[0] != L'.') continue;
+            // Read the ProgID (default value of the extension key)
+            std::string progId = readRegString(
+                HKEY_CLASSES_ROOT, ext.c_str(), nullptr);
+            if (progId.empty()) continue;
+            ++totalEntries;
+            // Check if ProgID's shell\open\command points to an existing exe
+            std::wstring cmdKey = utf8ToWstring(progId) +
+                L"\\shell\\open\\command";
+            std::string cmdLine = readRegString(
+                HKEY_CLASSES_ROOT, cmdKey.c_str(), nullptr);
+            if (cmdLine.empty()) continue;
+            std::string exePath = extractExePath(cmdLine);
+            if (exePath.empty()) continue;
+            // Skip system executables that definitely exist
+            std::string lower = exePath;
+            for (auto& ch : lower)
+                ch = static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(ch)));
+            if (lower.find("\\windows\\") != std::string::npos) continue;
+            if (!fileExistsW(utf8ToWstring(exePath))) {
                 ++invalid;
                 if (invalid <= 20)
                     invalidEntries.push_back({
-                        {"font", entry.value("name", "")},
-                        {"file", fontFile}
+                        {"extension", wstringToUtf8(ext)},
+                        {"progId", progId},
+                        {"path", exePath}
                     });
             }
         }
         totalInvalid += invalid;
         categoriesArr.push_back({
-            {"name", "Fonts"},
-            {"total_entries", values.size()},
+            {"name", "File Extensions"},
+            {"total_entries", totalEntries},
             {"invalid_entries", invalid},
             {"sample_invalid", invalidEntries}
         });
     }
 
-    // 7. Sound Events
+    // 7. Type Libraries — orphaned COM type library registrations (NEW)
     {
-        auto subkeys = enumRegSubkeys(HKEY_CURRENT_USER,
-            L"AppEvents\\Schemes\\Apps\\.Default", 200);
+        auto tlbGuids = enumRegSubkeys(HKEY_CLASSES_ROOT, L"TypeLib", 500);
         int totalEntries = 0;
         int invalid = 0;
         gaia::json invalidEntries = gaia::json::array();
-        for (auto& eventName : subkeys) {
-            std::wstring currentKey =
-                L"AppEvents\\Schemes\\Apps\\.Default\\" +
-                eventName + L"\\.Current";
-            std::string wavPath = readRegString(
-                HKEY_CURRENT_USER, currentKey.c_str(), nullptr);
-            if (wavPath.empty()) continue;
+        for (auto& guid : tlbGuids) {
+            std::wstring guidKey = L"TypeLib\\" + guid;
+            auto versions = enumRegSubkeys(HKEY_CLASSES_ROOT,
+                guidKey.c_str(), 10);
+            if (versions.empty()) continue;
+            // Check the latest version
+            auto& ver = versions.back();
             ++totalEntries;
-            if (!fileExistsW(utf8ToWstring(wavPath))) {
+            // Try win64 then win32 under LCID 0
+            std::string tlbPath;
+            std::wstring base = guidKey + L"\\" + ver + L"\\0\\";
+            tlbPath = readRegString(
+                HKEY_CLASSES_ROOT, (base + L"win64").c_str(), nullptr);
+            if (tlbPath.empty())
+                tlbPath = readRegString(
+                    HKEY_CLASSES_ROOT, (base + L"win32").c_str(), nullptr);
+            if (tlbPath.empty()) continue;
+            std::string filePath = extractExePath(tlbPath);
+            if (filePath.empty()) continue;
+            if (!fileExistsW(utf8ToWstring(filePath))) {
                 ++invalid;
-                if (invalid <= 10)
+                if (invalid <= 20)
                     invalidEntries.push_back({
-                        {"event", wstringToUtf8(eventName)},
-                        {"path", wavPath}
+                        {"typelib", wstringToUtf8(guid)},
+                        {"version", wstringToUtf8(ver)},
+                        {"path", filePath}
                     });
             }
         }
         totalInvalid += invalid;
         categoriesArr.push_back({
-            {"name", "Sound Events"},
+            {"name", "Type Libraries"},
+            {"total_entries", totalEntries},
+            {"invalid_entries", invalid},
+            {"sample_invalid", invalidEntries}
+        });
+    }
+
+    // 8. Windows Services — orphaned service registrations (NEW)
+    {
+        auto svcKeys = enumRegSubkeys(HKEY_LOCAL_MACHINE,
+            L"SYSTEM\\CurrentControlSet\\Services", 500);
+        int totalEntries = 0;
+        int invalid = 0;
+        gaia::json invalidEntries = gaia::json::array();
+        for (auto& svcName : svcKeys) {
+            std::wstring fullKey =
+                L"SYSTEM\\CurrentControlSet\\Services\\" + svcName;
+            // Read service Type to filter out kernel drivers
+            HKEY hKey = nullptr;
+            if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, fullKey.c_str(),
+                              0, KEY_READ, &hKey) != ERROR_SUCCESS)
+                continue;
+            DWORD svcType = 0;
+            DWORD dataSize = sizeof(svcType);
+            RegQueryValueExW(hKey, L"Type", nullptr, nullptr,
+                             reinterpret_cast<BYTE*>(&svcType), &dataSize);
+            RegCloseKey(hKey);
+            // Only check user-mode services (type >= 16), skip kernel
+            // drivers which use relative paths resolved by the kernel
+            if (svcType < 16) continue;
+            std::string imagePath = readRegString(
+                HKEY_LOCAL_MACHINE, fullKey.c_str(), L"ImagePath");
+            if (imagePath.empty()) continue;
+            ++totalEntries;
+            std::string exePath = extractExePath(imagePath);
+            if (exePath.empty()) continue;
+            if (!fileExistsW(utf8ToWstring(exePath))) {
+                ++invalid;
+                std::string displayName = readRegString(
+                    HKEY_LOCAL_MACHINE, fullKey.c_str(), L"DisplayName");
+                if (invalid <= 20)
+                    invalidEntries.push_back({
+                        {"service", wstringToUtf8(svcName)},
+                        {"display_name", displayName},
+                        {"path", exePath}
+                    });
+            }
+        }
+        totalInvalid += invalid;
+        categoriesArr.push_back({
+            {"name", "Windows Services"},
+            {"total_entries", totalEntries},
+            {"invalid_entries", invalid},
+            {"sample_invalid", invalidEntries}
+        });
+    }
+
+    // 9. MUI Cache — stale application display name cache (NEW)
+    {
+        auto values = enumRegValues(HKEY_CURRENT_USER,
+            L"Software\\Classes\\Local Settings\\Software\\Microsoft"
+            L"\\Windows\\Shell\\MuiCache", 500);
+        int totalEntries = 0;
+        int invalid = 0;
+        gaia::json invalidEntries = gaia::json::array();
+        for (auto& entry : values) {
+            if (!entry.contains("name")) continue;
+            std::string name = entry["name"].get<std::string>();
+            // MUI cache keys end with .FriendlyAppName or .ApplicationCompany
+            // The exe path is everything before the last known suffix
+            auto dotFA = name.rfind(".FriendlyAppName");
+            auto dotAC = name.rfind(".ApplicationCompany");
+            size_t suffixPos = std::string::npos;
+            if (dotFA != std::string::npos) suffixPos = dotFA;
+            else if (dotAC != std::string::npos) suffixPos = dotAC;
+            if (suffixPos == std::string::npos) continue;
+            std::string exePath = name.substr(0, suffixPos);
+            if (exePath.empty()) continue;
+            ++totalEntries;
+            if (!fileExistsW(utf8ToWstring(exePath))) {
+                ++invalid;
+                if (invalid <= 20)
+                    invalidEntries.push_back({
+                        {"path", exePath},
+                        {"cached_name", entry.value("value", "")}
+                    });
+            }
+        }
+        totalInvalid += invalid;
+        categoriesArr.push_back({
+            {"name", "MUI Cache"},
             {"total_entries", totalEntries},
             {"invalid_entries", invalid},
             {"sample_invalid", invalidEntries}
@@ -1560,7 +1743,7 @@ YOU DECIDE what tools to use based on the user's question:
 - Specific questions ("why is my WiFi slow?", "my fan is loud"):
   Go directly to the relevant tool(s). Skip the quick scan.
 - Full health checkup requests:
-  Run quick_health_scan(), then ALL Tier 2 tools, then provide a grade.
+  Run quick_health_scan(), then ALL Tier 2 tools (including storage_health and boot_performance), then provide a grade.
 - Action requests ("optimize for gaming", "switch to high performance"):
   Check current state first, explain what you will change, then act.
 
@@ -1574,11 +1757,13 @@ Tier 1 — Context Scan (always safe, fast):
   quick_health_scan — System snapshot: power, CPU, memory, disk, WiFi, uptime, event log summary
 
 Tier 2 — Deep Dives (read-only, safe):
-  scan_recent_logs(focus) — Windows Event Logs. focus: all, wifi, disk, crashes
-  power_and_thermal_analysis — Power plan, CPU freq, thermal throttling, battery health
+  scan_recent_logs(focus) — Windows Event Logs. focus: all, wifi, disk, crashes. Crashes mode includes minidump files, MEMORY.DMP, and WER reports.
+  power_and_thermal_analysis — Power plan, CPU freq, thermal throttling, GPU info, battery health trending (design vs full capacity, cycle count, wear %)
   process_analysis — Top processes by CPU/RAM, startup programs, background apps
-  disk_and_registry_health — Storage breakdown, junk files, caches, registry health
+  disk_and_registry_health — Storage breakdown, junk files, caches, bloatware, registry health (9 categories: SharedDLLs, App Paths, COM/CLSID, Installer, Run Keys, File Extensions, TypeLibs, Services, MUI Cache)
   network_diagnostics — WiFi signal/speed, DNS latency, ping, VPN detection
+  storage_health — SMART-like data: read/write errors, SSD wear level, temperature, power-on hours, health status per physical disk
+  boot_performance — Boot timeline: recent boot durations, degradation sources (slow drivers/services), uptime
 
 Tier 3 — Actions (modifies system state):
   set_power_plan(plan) — Switch: balanced, high_performance, battery_saver
@@ -1598,6 +1783,10 @@ Tier 3 — Actions (modifies system state):
 - RAM at 90% + Chrome 40 processes -> "Chrome using most RAM across 40 tabs"
 - 12 WiFi disconnects in logs -> "WiFi keeps dropping — 12 disconnects in 2 hours"
 - High CPU load + loud fan -> check which process is driving CPU, check thermal throttling
+- SSD wear at 85% + read errors increasing -> "SSD showing early signs of degradation"
+- Boot time 45s + 3 degradation sources -> "Slow boot caused by X, Y, Z drivers"
+- Battery at 60% design capacity + 800 cycles -> "Battery significantly degraded"
+- 5 minidumps in last week -> "Frequent BSODs — investigate crash patterns"
 
 == CROSS-CORRELATION ==
 After gathering data, connect the dots:
@@ -1605,6 +1794,10 @@ After gathering data, connect the dots:
 - Link disk usage to junk totals and large files
 - Link memory pressure to top processes
 - Link startup items to bloatware
+- Link SSD health to disk errors in event logs
+- Link boot degradation sources to startup programs
+- Link battery wear to battery drain complaints
+- Link crash dumps to recent BSOD event log entries
 - Explain how issues compound (e.g., battery + hotel WiFi + VPN = slow)
 
 == FINAL ANSWER ==
@@ -1755,13 +1948,34 @@ Calm, knowledgeable, never alarmist. Like a good mechanic who explains what they
                         "@{focus='disk';events=$r;count=$r.Count}|ConvertTo-Json -Depth 3 -Compress";
                 } else if (focus == "crashes") {
                     psCmd =
+                        "$o=@{focus='crashes'}; "
+                        // Crash events from event log
                         "$evts=Get-WinEvent -FilterHashtable @{LogName='System';"
                         "Id=41,1001,6008;StartTime=(Get-Date).AddHours(-24)} "
                         "-MaxEvents 20 -EA 0; "
-                        "$r=@($evts|ForEach-Object{@{time=$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss');"
+                        "$o.events=@($evts|ForEach-Object{@{time=$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss');"
                         "id=$_.Id;level=$_.LevelDisplayName;"
-                        "msg=$_.Message.Substring(0,[Math]::Min(200,$_.Message.Length))}});"
-                        "@{focus='crashes';events=$r;count=$r.Count}|ConvertTo-Json -Depth 3 -Compress";
+                        "msg=$_.Message.Substring(0,[Math]::Min(200,$_.Message.Length))}}); "
+                        "$o.eventCount=$o.events.Count; "
+                        // Minidump files
+                        "$dumps=Get-ChildItem 'C:\\Windows\\Minidump\\*.dmp' -EA 0|"
+                        "Sort-Object LastWriteTime -Descending|Select-Object -First 10; "
+                        "$o.minidumps=@($dumps|ForEach-Object{@{file=$_.Name;"
+                        "date=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss');"
+                        "sizeMB=[math]::Round($_.Length/1MB,1)}}); "
+                        "$o.minidumpCount=$o.minidumps.Count; "
+                        // Full memory dump
+                        "$mem=Get-Item 'C:\\Windows\\MEMORY.DMP' -EA 0; "
+                        "if($mem){$o.memoryDump=@{sizeMB=[math]::Round($mem.Length/1MB);"
+                        "date=$mem.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')}} "
+                        "else{$o.memoryDump=$null}; "
+                        // WER recent reports
+                        "$wer=Get-ChildItem 'C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportArchive' "
+                        "-Directory -EA 0|Sort-Object LastWriteTime -Descending|"
+                        "Select-Object -First 5; "
+                        "$o.werReports=@($wer|ForEach-Object{@{name=$_.Name;"
+                        "date=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')}}); "
+                        "$o|ConvertTo-Json -Depth 3 -Compress";
                 } else {
                     // "all" — System + Application errors/warnings
                     psCmd =
@@ -1791,10 +2005,12 @@ Calm, knowledgeable, never alarmist. Like a good mechanic who explains what they
         // ==================================================================
         toolRegistry().registerTool(
             "power_and_thermal_analysis",
-            "Deep dive into power management: active power plan, CPU frequency "
-            "vs maximum (throttle detection), thermal zone temperature, battery "
-            "health and charge status. Use when investigating slow performance "
-            "or overheating.",
+            "Deep dive into power management and thermals: active power plan, "
+            "CPU frequency vs maximum (throttle detection), thermal zone "
+            "temperatures, GPU info (name, driver, adapter RAM), battery "
+            "health trending (design vs full capacity, cycle count, wear %), "
+            "and charge status. Use when investigating slow performance, "
+            "overheating, or battery degradation.",
             [](const gaia::json& /*args*/) -> gaia::json {
                 std::string psCmd =
                     "$o=@{}; "
@@ -1805,19 +2021,41 @@ Calm, knowledgeable, never alarmist. Like a good mechanic who explains what they
                     "load=$c.LoadPercentage}; "
                     "try{$t=Get-CimInstance -Namespace root/wmi "
                     "-ClassName MSAcpi_ThermalZoneTemperature -EA Stop; "
-                    "$o.thermal=@{tempC=[math]::Round(($t[0].CurrentTemperature-2732)/10,1);"
-                    "critC=[math]::Round(($t[0].CriticalTripPoint-2732)/10,1)}}"
+                    "$o.thermal=@($t|ForEach-Object{@{"
+                    "tempC=[math]::Round(($_.CurrentTemperature-2732)/10,1);"
+                    "critC=[math]::Round(($_.CriticalTripPoint-2732)/10,1);"
+                    "instance=$_.InstanceName}})}"
                     "catch{$o.thermal=@{error='Requires admin or not supported'}}; "
+                    // GPU info
+                    "$gpu=Get-CimInstance Win32_VideoController -EA 0; "
+                    "$o.gpu=@($gpu|ForEach-Object{@{name=$_.Name;"
+                    "driver=$_.DriverVersion;"
+                    "ramMB=[math]::Round($_.AdapterRAM/1MB);"
+                    "status=$_.Status}}); "
+                    // Battery basic
                     "$b=Get-CimInstance Win32_Battery -EA 0; "
                     "if($b){$o.battery=@{pct=$b.EstimatedChargeRemaining;"
                     "status=$b.BatteryStatus;estMin=$b.EstimatedRunTime}}; "
+                    // Battery health trending (WMI)
+                    "try{ "
+                    "  $design=(Get-CimInstance -Namespace root/WMI "
+                    "BatteryStaticData -EA Stop).DesignedCapacity; "
+                    "  $full=(Get-CimInstance -Namespace root/WMI "
+                    "BatteryFullChargedCapacity -EA Stop).FullChargedCapacity; "
+                    "  $cycle=(Get-CimInstance -Namespace root/WMI "
+                    "BatteryCycleCount -EA Stop).CycleCount; "
+                    "  $o.batteryHealth=@{designMWh=$design;fullMWh=$full;"
+                    "wearPct=[math]::Round((1-$full/$design)*100,1);"
+                    "cycles=$cycle} "
+                    "}catch{$o.batteryHealth=@{error='Not available'}}; "
+                    // CPU throttle detection
                     "try{$perf=(Get-Counter "
                     "'\\Processor Information(_Total)\\% Processor Performance' "
                     "-EA Stop).CounterSamples[0].CookedValue; "
                     "$o.throttled=$perf -lt 90;"
                     "$o.perfPct=[math]::Round($perf)}"
                     "catch{$o.throttled=$null}; "
-                    "$o|ConvertTo-Json -Depth 3 -Compress";
+                    "$o|ConvertTo-Json -Depth 4 -Compress";
 
                 auto psData = parsePsJson(runShell(psCmd));
                 psData["tool"] = "power_and_thermal_analysis";
@@ -1871,8 +2109,10 @@ Calm, knowledgeable, never alarmist. Like a good mechanic who explains what they
             "disk_and_registry_health",
             "Comprehensive storage and registry analysis: disk usage per drive, "
             "junk files across 11 categories, browser cache sizes, top 10 largest "
-            "files over 50 MB, registry health across 7 categories, and bloatware "
-            "detection. Use when investigating disk space or system cleanup.",
+            "files over 50 MB, registry health across 9 categories (SharedDLLs, "
+            "App Paths, COM/CLSID, Uninstall/Installer, Run Keys, File Extensions, "
+            "Type Libraries, Windows Services, MUI Cache), and bloatware detection. "
+            "Use when investigating disk space or system cleanup.",
             [](const gaia::json& /*args*/) -> gaia::json {
                 gaia::json result;
                 result["tool"] = "disk_and_registry_health";
@@ -1948,6 +2188,100 @@ Calm, knowledgeable, never alarmist. Like a good mechanic who explains what they
 
                 auto psData = parsePsJson(runShell(psCmd));
                 psData["tool"] = "network_diagnostics";
+                return psData;
+            }, {} );
+
+        // ==================================================================
+        // TIER 2: storage_health — SMART data and predictive failure
+        // ==================================================================
+        toolRegistry().registerTool(
+            "storage_health",
+            "Predictive storage health: SMART-like data from "
+            "Get-StorageReliabilityCounter (read errors, write errors, wear "
+            "level, temperature, power-on hours) plus physical disk info "
+            "(media type SSD/HDD, health status, bus type, size). Detects "
+            "drives trending toward failure. Use when investigating disk "
+            "reliability, slow I/O, or as part of a full checkup.",
+            [](const gaia::json& /*args*/) -> gaia::json {
+                std::string psCmd =
+                    "$disks=Get-PhysicalDisk -EA 0; "
+                    "$r=@(); "
+                    "foreach($d in $disks){ "
+                    "  $info=@{name=$d.FriendlyName;media=$d.MediaType;"
+                    "health=$d.HealthStatus;opStatus=$d.OperationalStatus;"
+                    "bus=$d.BusType;sizeGB=[math]::Round($d.Size/1GB)}; "
+                    "  try{ "
+                    "    $s=$d|Get-StorageReliabilityCounter -EA Stop; "
+                    "    $info.smart=@{readErrors=$s.ReadErrorsTotal;"
+                    "writeErrors=$s.WriteErrorsTotal;"
+                    "wear=$s.Wear;tempK=$s.Temperature;"
+                    "powerOnHrs=$s.PowerOnHours;"
+                    "startStopCycles=$s.StartStopCycleCount} "
+                    "  }catch{$info.smart=@{error='Not supported or requires admin'}}; "
+                    "  $r+=,$info "
+                    "}; "
+                    "@{disks=$r;count=$r.Count}|ConvertTo-Json -Depth 4 -Compress";
+
+                auto psData = parsePsJson(runShell(psCmd));
+                psData["tool"] = "storage_health";
+                return psData;
+            }, {} );
+
+        // ==================================================================
+        // TIER 2: boot_performance — Boot timeline and degradation sources
+        // ==================================================================
+        toolRegistry().registerTool(
+            "boot_performance",
+            "Boot performance analysis: recent boot durations from "
+            "Diagnostics-Performance event log (Event ID 100), boot "
+            "degradation sources (IDs 101-110) that slow startup, last "
+            "boot time, and uptime. Detects slow boot trends. Use when "
+            "investigating slow startup or as part of a full checkup.",
+            [](const gaia::json& /*args*/) -> gaia::json {
+                std::string psCmd =
+                    "$o=@{}; "
+                    // Last boot time and uptime
+                    "$os=Get-CimInstance Win32_OperatingSystem; "
+                    "$o.lastBoot=$os.LastBootUpTime.ToString('yyyy-MM-dd HH:mm:ss'); "
+                    "$o.uptimeHrs=[math]::Round(((Get-Date)-$os.LastBootUpTime).TotalHours,1); "
+                    // Boot durations from Diagnostics-Performance (ID 100)
+                    "try{ "
+                    "  $boots=Get-WinEvent -FilterHashtable @{"
+                    "LogName='Microsoft-Windows-Diagnostics-Performance/Operational';"
+                    "Id=100} -MaxEvents 10 -EA Stop; "
+                    "  $o.bootTimes=@($boots|ForEach-Object{ "
+                    "    $xml=[xml]$_.ToXml(); "
+                    "    $ms=$xml.Event.EventData.Data|"
+                    "Where-Object{$_.Name -eq 'BootTime'}|"
+                    "Select-Object -ExpandProperty '#text'; "
+                    "    @{date=$_.TimeCreated.ToString('yyyy-MM-dd');"
+                    "bootMs=[int64]$ms;"
+                    "bootSec=[math]::Round([int64]$ms/1000,1)} "
+                    "  }) "
+                    "}catch{$o.bootTimes=@();$o.bootError='Log not available or requires admin'}; "
+                    // Boot degradation sources (IDs 101-110)
+                    "try{ "
+                    "  $deg=Get-WinEvent -FilterHashtable @{"
+                    "LogName='Microsoft-Windows-Diagnostics-Performance/Operational';"
+                    "Id=101,102,103,104,105,106,107,108,109,110} "
+                    "-MaxEvents 20 -EA Stop; "
+                    "  $o.degradation=@($deg|ForEach-Object{ "
+                    "    $xml=[xml]$_.ToXml(); "
+                    "    $name=($xml.Event.EventData.Data|"
+                    "Where-Object{$_.Name -eq 'Name'}|"
+                    "Select-Object -ExpandProperty '#text'); "
+                    "    $ms=($xml.Event.EventData.Data|"
+                    "Where-Object{$_.Name -eq 'TotalTime'}|"
+                    "Select-Object -ExpandProperty '#text'); "
+                    "    @{date=$_.TimeCreated.ToString('yyyy-MM-dd');"
+                    "id=$_.Id;source=$name;"
+                    "delayMs=$(if($ms){[int64]$ms}else{0})} "
+                    "  }) "
+                    "}catch{$o.degradation=@()}; "
+                    "$o|ConvertTo-Json -Depth 4 -Compress";
+
+                auto psData = parsePsJson(runShell(psCmd));
+                psData["tool"] = "boot_performance";
                 return psData;
             }, {} );
 
