@@ -80,6 +80,9 @@ public:
     /// Rebuild system prompt (call after adding tools dynamically).
     void rebuildSystemPrompt();
 
+    /// Clear conversation history (start a fresh topic).
+    void clearHistory() { conversationHistory_.clear(); }
+
     /// Get a mutable reference to the tool registry (for subclass tool registration).
     ToolRegistry& toolRegistry() { return tools_; }
 

@@ -161,12 +161,15 @@ endif()
 # ---------------------------------------------------------------------------
 # Examples
 # ---------------------------------------------------------------------------
-if(GAIA_BUILD_EXAMPLES)
+if(GAIA_BUILD_EXAMPLES AND WIN32)
     add_executable(simple_agent examples/simple_agent.cpp)
     target_link_libraries(simple_agent PRIVATE gaia::gaia_core)
 
     add_executable(wifi_agent examples/wifi_agent.cpp)
     target_link_libraries(wifi_agent PRIVATE gaia::gaia_core)
+
+    add_executable(pc_health_agent examples/pc_health_agent.cpp)
+    target_link_libraries(pc_health_agent PRIVATE gaia::gaia_core psapi shell32 ole32 advapi32)
 endif()
 
 # ---------------------------------------------------------------------------
