@@ -100,4 +100,4 @@ Before launch, add these assets to `public/`:
 
 ## License
 
-MIT License - Copyright (C) 2024-2025 Advanced Micro Devices, Inc.
+MIT License - Copyright (C) 2024-2026 Advanced Micro Devices, Inc.

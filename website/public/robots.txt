@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://gaia.amd.com/sitemap.xml
+Sitemap: https://amd-gaia.ai/sitemap.xml
