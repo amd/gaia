@@ -9,6 +9,11 @@ documentation:
   - changed-files:
     - any-glob-to-any-file: ['docs/**/*', 'README.md', 'CONTRIBUTING.md']
 
+# C++ agent framework changes
+cpp:
+  - changed-files:
+    - any-glob-to-any-file: ['cpp/**/*', 'docs/guides/cpp.mdx', '.github/workflows/build_cpp.yml']
+
 # Agent system changes (base agent or multiple agents)
 agents:
   - changed-files:
