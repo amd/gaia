@@ -284,9 +284,14 @@ app.post('/auth/login', loginLimiter, (req, res) => {
       maxAge: COOKIE_MAX_AGE,
       sameSite: 'lax'
     });
-    // Retrieve redirect URL from server-side storage (not from user input)
+    // Retrieve redirect URL from server-side storage
     const target = consumeRedirect(nonce);
-    res.redirect(303, target);
+    // Validate redirect target: must be a relative path (starts with / but not //)
+    if (typeof target === 'string' && target.startsWith('/') && !target.startsWith('//')) {
+      res.redirect(303, target);
+    } else {
+      res.redirect(303, '/');
+    }
   } else {
     // Retrieve the original redirect URL and re-store with a new nonce for retry
     const originalRedirect = consumeRedirect(nonce);
