@@ -441,6 +441,134 @@ std::cout << consolePtr->finalAnswer() << "\n";
 
 ---
 
+## Step 7 — Embedding in Your Application
+
+When integrating the agent into a desktop application (WPF, Qt, Electron), you need to run it headless, capture its output programmatically, and keep your UI responsive.
+
+### Headless Pattern
+
+Use `SilentConsole` to suppress all terminal output. The only interface is the JSON return value from `processQuery()`:
+
+```cpp
+#include <gaia/agent.h>
+#include <gaia/console.h>
+
+gaia::AgentConfig cfg;
+cfg.silentMode = true;  // uses SilentConsole automatically
+
+MyAgent agent;
+// No terminal output — agent runs silently
+gaia::json result = agent.processQuery("diagnose network issues");
+
+std::string answer = result["result"].get<std::string>();
+int steps = result["steps_taken"].get<int>();
+```
+
+### Background Thread Pattern
+
+Since `processQuery()` blocks, run it on a background thread and post results to your UI:
+
+```cpp
+#include <thread>
+#include <future>
+
+// Launch agent on background thread
+std::future<gaia::json> future = std::async(std::launch::async, [&agent]() {
+    return agent.processQuery("run full diagnostic");
+});
+
+// UI thread can check if done or wait
+if (future.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+    gaia::json result = future.get();
+    // Update UI with result
+}
+```
+
+### Custom OutputHandler for UI Integration
+
+For real-time progress updates in a GUI, implement a custom `OutputHandler` that forwards events to your UI framework:
+
+```cpp
+class UIOutputHandler : public gaia::OutputHandler {
+public:
+    // Callback types — set these to your UI update functions
+    std::function<void(int step, int total)> onStepStart;
+    std::function<void(const std::string&)>  onThought;
+    std::function<void(const std::string&)>  onToolCall;
+    std::function<void(const gaia::json&)>   onToolResult;
+    std::function<void(const std::string&)>  onAnswer;
+    std::function<void(const std::string&)>  onError;
+
+    void printStepHeader(int step, int limit) override {
+        if (onStepStart) onStepStart(step, limit);
+    }
+    void printThought(const std::string& t) override {
+        if (onThought) onThought(t);
+    }
+    void printToolUsage(const std::string& name) override {
+        if (onToolCall) onToolCall(name);
+    }
+    void prettyPrintJson(const gaia::json& data, const std::string&) override {
+        if (onToolResult) onToolResult(data);
+    }
+    void printFinalAnswer(const std::string& answer) override {
+        if (onAnswer) onAnswer(answer);
+    }
+    void printError(const std::string& msg) override {
+        if (onError) onError(msg);
+    }
+
+    // Minimal no-op implementations for remaining required methods
+    void printProcessingStart(const std::string&, int, const std::string&) override {}
+    void printStateInfo(const std::string&) override {}
+    void printGoal(const std::string&) override {}
+    void printPlan(const gaia::json&, int) override {}
+    void printToolComplete() override {}
+    void printWarning(const std::string&) override {}
+    void printInfo(const std::string&) override {}
+    void startProgress(const std::string&) override {}
+    void stopProgress() override {}
+    void printCompletion(int, int) override {}
+};
+```
+
+Wire it up:
+
+```cpp
+auto ui = std::make_unique<UIOutputHandler>();
+ui->onStepStart = [](int step, int total) {
+    // Update progress bar: step / total
+};
+ui->onThought = [](const std::string& thought) {
+    // Display agent reasoning in a text panel
+};
+ui->onAnswer = [](const std::string& answer) {
+    // Show final answer in result area
+};
+
+agent.setOutputHandler(std::move(ui));
+```
+
+<Note>
+**Thread safety:** The `OutputHandler` methods are called from the thread running `processQuery()`. If your callbacks update a GUI, you must post to the UI thread (e.g., `QMetaObject::invokeMethod` in Qt, `Dispatcher.Invoke` in WPF, `PostMessage` in Win32).
+</Note>
+
+### Multiple Agents
+
+Each `Agent` instance is independent. You can run multiple agents concurrently on separate threads — each with its own tools, MCP connections, and output handler:
+
+```cpp
+// Each agent gets its own config, tools, and output handler
+MyDiagnosticAgent diagAgent;
+MyReportAgent reportAgent;
+
+// Safe to run in parallel — no shared state
+auto f1 = std::async(std::launch::async, [&] { return diagAgent.processQuery("check health"); });
+auto f2 = std::async(std::launch::async, [&] { return reportAgent.processQuery("generate report"); });
+```
+
+---
+
 ## Complete Working Example
 
 Below is a self-contained agent combining all six customization points. Copy it as a starting point for your own agent:

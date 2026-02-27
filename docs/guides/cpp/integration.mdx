@@ -276,7 +276,7 @@ target_link_libraries(time_agent PRIVATE gaia::gaia_core)
 
 ## Using Alternative LLM Backends
 
-The GAIA C++ agent framework is **not tied to Lemonade or any specific LLM provider**. It talks to a standard HTTP endpoint — any server that implements the OpenAI chat completions API works out of the box. Switch backends by changing two fields:
+The GAIA C++ agent framework is **not tied to [Lemonade](https://lemonade-server.ai) or any specific LLM provider**. It talks to a standard HTTP endpoint — any server that implements the OpenAI chat completions API works out of the box. Switch backends by changing two fields:
 
 ```cpp
 gaia::AgentConfig cfg;
@@ -360,7 +360,7 @@ That is the entire API surface. No embeddings endpoint, no streaming (unless `cf
   </Tab>
 
   <Tab title="Lemonade (default)">
-    [Lemonade Server](https://github.com/amd/lemonade) is the default backend, optimized for AMD Ryzen AI NPU and GPU acceleration.
+    [Lemonade Server](https://lemonade-server.ai) is the default backend, optimized for AMD Ryzen AI NPU and GPU acceleration.
 
     ```bash
     lemonade-server serve

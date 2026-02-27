@@ -10,7 +10,7 @@ icon: "wifi"
 
 <Note>
 **Platform:** Windows (PowerShell network commands). Compiles on Linux/macOS for CI but tools require Windows to return real data.
-**Prerequisite:** [Lemonade Server](/setup) running with a model loaded.
+**Prerequisite:** [Lemonade Server](https://lemonade-server.ai) running with a model loaded.
 </Note>
 
 ---
@@ -24,7 +24,7 @@ Here's what makes it interesting:
 1. **It runs real commands** — not simulated. Every tool executes an actual PowerShell command on your machine and returns the real output.
 2. **The LLM decides what to do** — the agent doesn't follow a hardcoded if/else tree. The LLM reads each tool's output, reasons about it, and decides the next step.
 3. **It's pure C++** — no Python interpreter, no MCP server subprocess, no external dependencies. Just a compiled binary talking to a local LLM.
-4. **Everything is local** — the LLM runs on your AMD hardware via Lemonade Server. No data leaves your machine.
+4. **Everything is local** — the LLM runs on your AMD hardware via [Lemonade Server](https://lemonade-server.ai). No data leaves your machine.
 
 ---
 
@@ -317,17 +317,17 @@ The system prompt instructs the LLM to follow this decision tree. The LLM doesn'
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'14px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
 flowchart TD
-    A["1. check_adapter\nWi-Fi adapter present?"] -->|Yes| B["2. check_ip_config\nIP address via DHCP?"]
+    A["1. check_adapter<br/>Wi-Fi adapter present?"] -->|Yes| B["2. check_ip_config<br/>IP address via DHCP?"]
     A -->|"Radio Off"| F4["FIX: toggle_wifi_radio"]
     A -->|"Disabled"| F5["FIX: enable_wifi_adapter"]
     A -->|"Stuck"| F1["FIX: restart_wifi_adapter"]
-    B -->|Valid IP| C["3. ping_host\nGateway reachable?"]
+    B -->|Valid IP| C["3. ping_host<br/>Gateway reachable?"]
     B -->|No IP / APIPA| F2["FIX: renew_dhcp_lease"]
-    C -->|Reachable| D["4. test_dns_resolution\nDNS resolving?"]
+    C -->|Reachable| D["4. test_dns_resolution<br/>DNS resolving?"]
     C -->|Unreachable| F1
-    D -->|Resolving| E["5. test_internet\nPort 443 open?"]
-    D -->|Failing| F3["FIX: flush_dns_cache\nthen set_dns_servers"]
-    E -->|Connected| BW["6. test_bandwidth\nSpeed test"]
+    D -->|Resolving| E["5. test_internet<br/>Port 443 open?"]
+    D -->|Failing| F3["FIX: flush_dns_cache<br/>then set_dns_servers"]
+    E -->|Connected| BW["6. test_bandwidth<br/>Speed test"]
     E -->|Failed| M["NEEDS MANUAL ACTION"]
     BW --> R["RESOLVED"]
     F1 --> A
