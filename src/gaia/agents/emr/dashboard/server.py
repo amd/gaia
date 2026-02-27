@@ -10,6 +10,7 @@
 import asyncio
 import json
 import logging
+import os
 import threading
 import time
 from datetime import datetime
@@ -373,7 +374,10 @@ def create_app(
                 try:
                     from gaia.utils import compute_file_hash
 
-                    current_file_hash = compute_file_hash(Path(file_path))
+                    current_file_hash = compute_file_hash(
+                        Path(file_path),
+                        allowed_dir=str(_agent_instance._watch_dir),
+                    )
                 except Exception:
                     pass
 
@@ -1523,7 +1527,10 @@ def create_app(
 
                 try:
                     stat = file_path.stat()
-                    file_hash = compute_file_hash(str(file_path))
+                    file_hash = compute_file_hash(
+                        str(file_path),
+                        allowed_dir=str(_agent_instance._watch_dir),
+                    )
 
                     # Determine status
                     if file_path.name == current_file:
@@ -1693,7 +1700,10 @@ def create_app(
             # Check if file is a duplicate before processing
             from gaia.utils import compute_file_hash
 
-            file_hash = compute_file_hash(str(file_path))
+            file_hash = compute_file_hash(
+                str(file_path),
+                allowed_dir=str(_agent_instance._watch_dir),
+            )
             if file_hash:
                 existing = _agent_instance.query(
                     "SELECT id, first_name, last_name FROM patients WHERE file_hash = ?",
@@ -1773,12 +1783,18 @@ def create_app(
         if not file_path:
             raise HTTPException(status_code=400, detail="No file_path provided")
 
-        # Validate path doesn't contain traversal before resolving
-        raw_path = Path(file_path)
-        if ".." in raw_path.parts:
-            raise HTTPException(status_code=400, detail="Invalid file path")
+        # Resolve to canonical path using os.path.realpath
+        source_path_str = os.path.realpath(str(file_path))
 
-        source_path = raw_path.resolve()
+        # Validate: source must be within user's home directory
+        home_dir = os.path.realpath(os.path.expanduser("~"))
+        if not source_path_str.startswith(home_dir + os.sep):
+            raise HTTPException(
+                status_code=400,
+                detail="File must be within user home directory",
+            )
+
+        source_path = Path(source_path_str)
 
         # Validate file type before checking existence (prevents probing)
         allowed_extensions = {".png", ".jpg", ".jpeg", ".pdf", ".tiff", ".bmp"}
@@ -1817,7 +1833,10 @@ def create_app(
             # Check if file is a duplicate before processing
             from gaia.utils import compute_file_hash
 
-            file_hash = compute_file_hash(str(dest_path))
+            file_hash = compute_file_hash(
+                str(dest_path),
+                allowed_dir=str(_agent_instance._watch_dir),
+            )
             if file_hash:
                 existing = _agent_instance.query(
                     "SELECT id, first_name, last_name FROM patients WHERE file_hash = ?",

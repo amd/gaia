@@ -27,6 +27,7 @@ Example:
 
 import hashlib
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Union
@@ -66,6 +67,7 @@ def compute_file_hash(
     path: Union[str, Path],
     algorithm: str = "sha256",
     chunk_size: int = HASH_CHUNK_SIZE,
+    allowed_dir: Optional[Union[str, Path]] = None,
 ) -> Optional[str]:
     """
     Compute a hash of a file's contents.
@@ -78,6 +80,8 @@ def compute_file_hash(
         algorithm: Hash algorithm to use (default: sha256).
                    Supports any algorithm from hashlib.
         chunk_size: Size of chunks to read at a time (default: 64KB).
+        allowed_dir: If provided, validates that the resolved file path
+                     is within this directory (prevents path traversal).
 
     Returns:
         Hex-encoded hash string, or None if file cannot be read.
@@ -94,18 +98,21 @@ def compute_file_hash(
             processed_hashes.add(file_hash)
     """
     try:
-        # Reject paths with traversal components before resolving
-        raw_path = Path(path)
-        if ".." in raw_path.parts:
-            logger.warning("Rejected path with traversal components")
-            return None
+        # Resolve to canonical absolute path
+        file_path = os.path.realpath(str(path))
 
-        file_path = raw_path.resolve()
-        if not file_path.is_file():
+        # Validate path is within allowed directory
+        if allowed_dir is not None:
+            real_base = os.path.realpath(str(allowed_dir))
+            if not file_path.startswith(real_base + os.sep) and file_path != real_base:
+                logger.warning("Path is outside allowed directory")
+                return None
+
+        if not os.path.isfile(file_path):
             return None
 
         hasher = hashlib.new(algorithm)
-        with file_path.open("rb") as f:
+        with open(file_path, "rb") as f:
             while chunk := f.read(chunk_size):
                 hasher.update(chunk)
         return hasher.hexdigest()

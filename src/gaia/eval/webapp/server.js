@@ -2,54 +2,23 @@
 // SPDX-License-Identifier: MIT
 
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const fs = require('fs');
 const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Rate limiting for API endpoints
-const requestCounts = new Map();
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
-const RATE_LIMIT_MAX = 100; // requests per window
+// Rate limiting for API endpoints using express-rate-limit
+const apiLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 100, // limit each IP to 100 requests per windowMs
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests. Please try again later.' }
+});
 
-function rateLimiter(req, res, next) {
-    const ip = req.ip;
-    const now = Date.now();
-    const windowStart = now - RATE_LIMIT_WINDOW;
-
-    if (!requestCounts.has(ip)) {
-        requestCounts.set(ip, []);
-    }
-
-    const requests = requestCounts.get(ip).filter(t => t > windowStart);
-    requests.push(now);
-    requestCounts.set(ip, requests);
-
-    if (requests.length > RATE_LIMIT_MAX) {
-        return res.status(429).json({ error: 'Too many requests. Please try again later.' });
-    }
-    next();
-}
-
-app.use('/api/', rateLimiter);
-
-/**
- * Safely read a JSON file within a base directory.
- * Returns null if the path escapes the base directory.
- */
-function safeReadJson(basePath, userInput) {
-    const resolvedBase = path.resolve(basePath);
-    const resolvedPath = path.resolve(basePath, userInput);
-    // Ensure the resolved path is within the base directory
-    if (resolvedPath !== resolvedBase && !resolvedPath.startsWith(resolvedBase + path.sep)) {
-        return { error: 'Invalid file path', status: 400 };
-    }
-    if (!fs.existsSync(resolvedPath)) {
-        return { error: 'File not found', status: 404 };
-    }
-    return { data: JSON.parse(fs.readFileSync(resolvedPath, 'utf8')), resolvedPath };
-}
+app.use('/api/', apiLimiter);
 
 // Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
@@ -150,9 +119,16 @@ app.get('/api/files', (req, res) => {
 // API endpoint to load experiment data
 app.get('/api/experiment/:filename', (req, res) => {
     try {
-        const result = safeReadJson(EXPERIMENTS_PATH, req.params.filename);
-        if (result.error) return res.status(result.status).json({ error: result.error });
-        res.json(result.data);
+        const resolvedBase = path.resolve(EXPERIMENTS_PATH);
+        const resolvedPath = path.resolve(EXPERIMENTS_PATH, req.params.filename);
+        if (resolvedPath !== resolvedBase && !resolvedPath.startsWith(resolvedBase + path.sep)) {
+            return res.status(400).json({ error: 'Invalid file path' });
+        }
+        if (!fs.existsSync(resolvedPath)) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+        const data = JSON.parse(fs.readFileSync(resolvedPath, 'utf8'));
+        res.json(data);
     } catch (error) {
         res.status(500).json({ error: 'Failed to load experiment', details: error.message });
     }
@@ -161,9 +137,16 @@ app.get('/api/experiment/:filename', (req, res) => {
 // API endpoint to load evaluation data (supports subdirectories)
 app.get('/api/evaluation/*', (req, res) => {
     try {
-        const result = safeReadJson(EVALUATIONS_PATH, req.params[0]);
-        if (result.error) return res.status(result.status).json({ error: result.error });
-        res.json(result.data);
+        const resolvedBase = path.resolve(EVALUATIONS_PATH);
+        const resolvedPath = path.resolve(EVALUATIONS_PATH, req.params[0]);
+        if (resolvedPath !== resolvedBase && !resolvedPath.startsWith(resolvedBase + path.sep)) {
+            return res.status(400).json({ error: 'Invalid file path' });
+        }
+        if (!fs.existsSync(resolvedPath)) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+        const data = JSON.parse(fs.readFileSync(resolvedPath, 'utf8'));
+        res.json(data);
     } catch (error) {
         res.status(500).json({ error: 'Failed to load evaluation', details: error.message });
     }
@@ -216,20 +199,30 @@ app.get('/api/agent-output/:filename(*)', (req, res) => {
 // API endpoint to get combined report (experiment + evaluation)
 app.get('/api/report/:experimentFile/:evaluationFile?', (req, res) => {
     try {
-        // Load experiment data
-        const expResult = safeReadJson(EXPERIMENTS_PATH, req.params.experimentFile);
-        if (expResult.error) return res.status(expResult.status).json({ error: expResult.error });
+        // Load experiment data - inline path validation
+        const expResolvedBase = path.resolve(EXPERIMENTS_PATH);
+        const expResolvedPath = path.resolve(EXPERIMENTS_PATH, req.params.experimentFile);
+        if (expResolvedPath !== expResolvedBase && !expResolvedPath.startsWith(expResolvedBase + path.sep)) {
+            return res.status(400).json({ error: 'Invalid experiment file path' });
+        }
+        if (!fs.existsSync(expResolvedPath)) {
+            return res.status(404).json({ error: 'Experiment file not found' });
+        }
+        const experimentData = JSON.parse(fs.readFileSync(expResolvedPath, 'utf8'));
 
         let evaluationData = null;
         if (req.params.evaluationFile) {
-            const evalResult = safeReadJson(EVALUATIONS_PATH, req.params.evaluationFile);
-            if (!evalResult.error) {
-                evaluationData = evalResult.data;
+            const evalResolvedBase = path.resolve(EVALUATIONS_PATH);
+            const evalResolvedPath = path.resolve(EVALUATIONS_PATH, req.params.evaluationFile);
+            if (evalResolvedPath === evalResolvedBase || evalResolvedPath.startsWith(evalResolvedBase + path.sep)) {
+                if (fs.existsSync(evalResolvedPath)) {
+                    evaluationData = JSON.parse(fs.readFileSync(evalResolvedPath, 'utf8'));
+                }
             }
         }
 
         res.json({
-            experiment: expResult.data,
+            experiment: experimentData,
             evaluation: evaluationData,
             combined: true
         });
@@ -430,9 +423,16 @@ app.get('/api/groundtruth', (req, res) => {
 // API endpoint to load groundtruth file content
 app.get('/api/groundtruth/:filename(*)', (req, res) => {
     try {
-        const result = safeReadJson(GROUNDTRUTH_PATH, req.params.filename);
-        if (result.error) return res.status(result.status).json({ error: result.error });
-        res.json(result.data);
+        const resolvedBase = path.resolve(GROUNDTRUTH_PATH);
+        const resolvedPath = path.resolve(GROUNDTRUTH_PATH, req.params.filename);
+        if (resolvedPath !== resolvedBase && !resolvedPath.startsWith(resolvedBase + path.sep)) {
+            return res.status(400).json({ error: 'Invalid file path' });
+        }
+        if (!fs.existsSync(resolvedPath)) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+        const data = JSON.parse(fs.readFileSync(resolvedPath, 'utf8'));
+        res.json(data);
     } catch (error) {
         res.status(500).json({ error: 'Failed to load groundtruth file', details: error.message });
     }
