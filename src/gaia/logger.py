@@ -45,9 +45,14 @@ def configure_console_encoding():
 
 
 class GaiaLogger:
-    def __init__(self, log_file="gaia.log"):
+    def __init__(self, log_file=None):
         # Configure console encoding for Unicode support first
         configure_console_encoding()
+
+        # Default to user's .gaia directory (not current working directory)
+        if log_file is None:
+            log_file = Path.home() / ".gaia" / "gaia.log"
+            log_file.parent.mkdir(parents=True, exist_ok=True)
 
         self.log_file = Path(log_file)
         self.loggers = {}
@@ -86,9 +91,22 @@ class GaiaLogger:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(console_formatter)
 
-        # Configure file handler with UTF-8 encoding
-        file_handler = logging.FileHandler(self.log_file, encoding="utf-8")
-        file_handler.setFormatter(file_formatter)
+        # Configure file handler with UTF-8 encoding and error handling
+        try:
+            file_handler = logging.FileHandler(self.log_file, encoding="utf-8")
+            file_handler.setFormatter(file_formatter)
+        except PermissionError:
+            # Fallback to user's home directory if current dir is not writable
+            fallback_log = Path.home() / ".gaia" / "gaia.log"
+            fallback_log.parent.mkdir(parents=True, exist_ok=True)
+
+            print(f"⚠️  Cannot write to {self.log_file} (permission denied)", file=sys.stderr)
+            print(f"    Writing logs to: {fallback_log}", file=sys.stderr)
+            print(f"    Tip: Run commands from your home directory to avoid this warning\n", file=sys.stderr)
+
+            file_handler = logging.FileHandler(fallback_log, encoding="utf-8")
+            file_handler.setFormatter(file_formatter)
+            self.log_file = str(fallback_log)  # Update log_file path
 
         # Configure root logger
         root_logger = logging.getLogger()
