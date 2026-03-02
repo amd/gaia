@@ -37,6 +37,13 @@ You must respond ONLY in valid JSON. No text before { or after }.
 Agent::Agent(const AgentConfig& config)
     : config_(config) {
 
+    // Override baseUrl from GAIA_CPP_BASE_URL environment variable if set.
+    // This mirrors how the Python Lemonade client respects its env var.
+    std::string envUrl = getEnvVar("GAIA_CPP_BASE_URL");
+    if (!envUrl.empty()) {
+        config_.baseUrl = envUrl;
+    }
+
     // Create console based on config
     if (config_.silentMode) {
         console_ = std::make_unique<SilentConsole>();

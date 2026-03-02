@@ -18,7 +18,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstdlib>
 #include <string>
 
 // ---------------------------------------------------------------------------
@@ -26,13 +25,11 @@
 // ---------------------------------------------------------------------------
 
 static std::string testModel() {
-    const char* env = std::getenv("GAIA_CPP_TEST_MODEL");
-    return env ? std::string(env) : "Qwen3-4B-Instruct-2507-GGUF";
+    return gaia::getEnvVar("GAIA_CPP_TEST_MODEL", "Qwen3-4B-Instruct-2507-GGUF");
 }
 
 static std::string testBaseUrl() {
-    const char* env = std::getenv("GAIA_CPP_BASE_URL");
-    return env ? std::string(env) : "http://localhost:8000/api/v1";
+    return gaia::getEnvVar("GAIA_CPP_BASE_URL", "http://localhost:8000/api/v1");
 }
 
 static std::string toLower(std::string s) {

@@ -282,6 +282,48 @@
             }
         },
         {
+            "name": "C++ PC Health Agent Debug",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/cpp/build/Release/pc_health_agent.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [
+                { "name": "GAIA_CPP_BASE_URL", "value": "${input:gaiaCppBaseUrl}" }
+            ],
+            "console": "integratedTerminal",
+            "preLaunchTask": "C++: Build"
+        },
+        {
+            "name": "C++ Wi-Fi Agent Debug",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/cpp/build/Release/wifi_agent.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [
+                { "name": "GAIA_CPP_BASE_URL", "value": "${input:gaiaCppBaseUrl}" }
+            ],
+            "console": "integratedTerminal",
+            "preLaunchTask": "C++: Build"
+        },
+        {
+            "name": "C++ Simple Agent Debug",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/cpp/build/Release/simple_agent.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [
+                { "name": "GAIA_CPP_BASE_URL", "value": "${input:gaiaCppBaseUrl}" }
+            ],
+            "console": "integratedTerminal",
+            "preLaunchTask": "C++: Build"
+        },
+        {
             "name": "GAIA VSCode Extension (API)",
             "type": "extensionHost",
             "request": "launch",
@@ -329,6 +371,12 @@
             "type": "promptString",
             "description": "CLI arguments (e.g., 'api start', 'chat --debug', 'mcp start')",
             "default": "api start"
+        },
+        {
+            "id": "gaiaCppBaseUrl",
+            "type": "promptString",
+            "description": "Lemonade/LLM server base URL for C++ agents (GAIA_CPP_BASE_URL)",
+            "default": "http://localhost:8000/api/v1"
         }
     ]
 }

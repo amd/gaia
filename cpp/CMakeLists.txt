@@ -2,6 +2,11 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.14)
+
+# Auto-detect or bootstrap vcpkg for optional OpenSSL support.
+# Must be included before project() so the toolchain is set in time.
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/vcpkg-auto-setup.cmake)
+
 project(gaia-cpp VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -24,7 +29,7 @@ endif()
 option(GAIA_BUILD_INTEGRATION_TESTS
     "Build LLM integration tests (requires lemonade-server with Qwen3-4B-GGUF loaded)" OFF)
 
-# HTTPS support for LLM endpoints -- ON by default (required for remote/cloud Lemonade).
+# HTTPS support for LLM endpoints -- ON by default (vcpkg provides OpenSSL automatically).
 option(GAIA_ENABLE_SSL
     "Enable HTTPS support for LLM endpoints (requires OpenSSL)" ON)
 

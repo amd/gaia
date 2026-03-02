@@ -102,6 +102,24 @@ inline std::string paramTypeToString(ToolParamType t) {
     return "unknown";
 }
 
+// Cross-platform environment variable helper.
+// On MSVC uses _dupenv_s (safe); on GCC/Clang (including MinGW) uses std::getenv.
+inline std::string getEnvVar(const char* name, const std::string& defaultValue = "") {
+#ifdef _MSC_VER
+    char* value = nullptr;
+    size_t len = 0;
+    if (_dupenv_s(&value, &len, name) == 0 && value) {
+        std::string result(value);
+        free(value);
+        return result;
+    }
+    return defaultValue;
+#else
+    const char* value = std::getenv(name);
+    return value ? std::string(value) : defaultValue;
+#endif
+}
+
 struct ToolParameter {
     std::string name;
     ToolParamType type = ToolParamType::UNKNOWN;
