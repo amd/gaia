@@ -495,7 +495,11 @@ int main() {
       <Tab title="Windows (MSVC)">
         ```bat
         cd cpp
+        ```
+        ```bat
         cmake -B build -G "Visual Studio 17 2022" -A x64
+        ```
+        ```bat
         cmake --build build --config Release
         ```
         Binary: `cpp\build\Release\wifi_agent.exe`
@@ -503,14 +507,22 @@ int main() {
       <Tab title="Windows (Ninja)">
         ```bat
         cd cpp
+        ```
+        ```bat
         cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        ```
+        ```bat
         cmake --build build
         ```
       </Tab>
       <Tab title="Linux / macOS">
         ```bash
         cd cpp
+        ```
+        ```bash
         cmake -B build -DCMAKE_BUILD_TYPE=Release
+        ```
+        ```bash
         cmake --build build
         ```
         <Note>

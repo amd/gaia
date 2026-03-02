@@ -132,7 +132,11 @@ That gives you `#include <gaia/agent.h>`, the full agent loop, tool registry, MC
       <Step title="Build and install gaia_core">
         ```bash
         cmake -B build -S cpp -DCMAKE_BUILD_TYPE=Release
+        ```
+        ```bash
         cmake --build build --config Release
+        ```
+        ```bash
         cmake --install build --prefix /usr/local
         ```
 
@@ -169,6 +173,8 @@ That gives you `#include <gaia/agent.h>`, the full agent loop, tool registry, MC
 
     ```bash
     cmake -B build -S cpp -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release
+    ```
+    ```bash
     cmake --build build --config Release
     ```
 
