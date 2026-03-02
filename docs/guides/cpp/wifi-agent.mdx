@@ -102,13 +102,22 @@ static std::string runShell(const std::string& command) {
     std::string result;
     std::array<char, 4096> buffer;
 
+    struct PipeCloser {
+        void operator()(FILE* f) const {
 #ifdef _WIN32
-    std::unique_ptr<FILE, decltype(&_pclose)> pipe(
-        _popen(fullCmd.c_str(), "r"), _pclose);
+            if (f) _pclose(f);
 #else
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(
-        popen(fullCmd.c_str(), "r"), pclose);
+            if (f) pclose(f);
 #endif
+        }
+    };
+    std::unique_ptr<FILE, PipeCloser> pipe(
+#ifdef _WIN32
+        _popen(fullCmd.c_str(), "r")
+#else
+        popen(fullCmd.c_str(), "r")
+#endif
+    );
 
     if (!pipe) {
         return "{\"error\": \"Failed to execute command\"}";
@@ -129,7 +138,7 @@ static std::string runShell(const std::string& command) {
 
 **Why `_popen` / `popen`?** These are the C runtime functions for spawning a child process and reading its stdout as a file stream. The `#ifdef _WIN32` blocks keep the code cross-platform — it compiles on Linux for CI, even though the PowerShell commands only work on Windows.
 
-**Why `std::unique_ptr` with a custom deleter?** This ensures the pipe is always closed properly, even if an exception occurs. The deleter (`_pclose` or `pclose`) runs automatically when the `unique_ptr` goes out of scope.
+**Why a `PipeCloser` struct?** The `std::unique_ptr` with a custom deleter ensures the pipe is always closed properly, even if an exception occurs. The `PipeCloser` functor calls `_pclose` (Windows) or `pclose` (POSIX) automatically when the `unique_ptr` goes out of scope.
 
 ---
 
@@ -171,13 +180,16 @@ toolRegistry().registerTool(
         if (host.empty()) {
             return {{"error", "host parameter is required"}};
         }
+        if (!isSafeShellArg(host)) {                // reject shell metacharacters
+            return {{"error", "Invalid host — contains disallowed characters"}};
+        }
         std::string cmd =
             "Test-NetConnection -ComputerName " + host
             + " | Select-Object ComputerName, RemoteAddress, "
             "PingSucceeded, PingReplyDetails"
             + " | ConvertTo-Json";
         std::string output = runShell(cmd);
-        return {{"tool", "ping_host"}, {"host", host}, {"output", output}};
+        return {{"tool", "ping_host"}, {"command", cmd}, {"host", host}, {"output", output}};
     },
     {
         {"host", gaia::ToolParamType::STRING, /*required=*/true,
@@ -235,6 +247,25 @@ toolRegistry().registerTool(
 
 **Pattern:** Use `args.value("key", "")` from nlohmann/json — it returns the default if the key is missing, which handles optional parameters cleanly.
 
+#### Input Validation: Preventing Shell Injection
+
+Since tool arguments come from the LLM (which could hallucinate or be prompt-injected), the agent validates all string arguments before passing them to shell commands:
+
+```cpp
+static bool isSafeShellArg(const std::string& arg) {
+    for (char c : arg) {
+        if (c == ';' || c == '|' || c == '&' || c == '`' || c == '$'
+            || c == '(' || c == ')' || c == '{' || c == '}' || c == '<'
+            || c == '>' || c == '"' || c == '\n' || c == '\r') {
+            return false;
+        }
+    }
+    return !arg.empty();
+}
+```
+
+This rejects shell metacharacters that could escape the intended command. Every tool that accepts LLM-provided arguments (`ping_host`, `test_dns_resolution`, `set_dns_servers`, `restart_wifi_adapter`, `enable_wifi_adapter`) calls `isSafeShellArg()` before constructing the shell command. **Always validate LLM-provided arguments before passing them to shell commands.**
+
 ---
 
 ### 3. The System Prompt: Teaching the Agent How to Think
@@ -245,28 +276,33 @@ The system prompt is where you define the agent's behavior. Without it, the LLM 
 std::string getSystemPrompt() const override {
     return R"(You are an expert Windows network troubleshooter...
 
-## DIAGNOSTIC PROTOCOL (follow this order)
+## AVAILABLE DIAGNOSTIC SEQUENCE
 
-1. **Adapter Check** — call `check_adapter`
-2. **IP Configuration** — call `check_ip_config`
-3. **Gateway Ping** — call `ping_host` with the gateway IP from step 2
-4. **DNS Resolution** — call `test_dns_resolution`
-5. **Internet Connectivity** — call `test_internet`
+For a full network diagnostic, the typical sequence is:
+1. `check_adapter` — adapter present and connected?
+2. `check_ip_config` — valid IP, gateway, DNS servers?
+3. `ping_host` — gateway reachable?
+4. `test_dns_resolution` — name resolution working?
+5. `test_internet` — end-to-end connectivity?
+6. `test_bandwidth` — download and upload speed acceptable?
 
-## FIX PROTOCOL (apply only if diagnostics reveal issues)
+## FIXING ISSUES
 
-- **No IP / DHCP failure** → call `renew_dhcp_lease`
-- **DNS failure** → call `flush_dns_cache`, re-test; if still failing,
-  call `set_dns_servers` with Google DNS (8.8.8.8 / 8.8.4.4)
-- **Adapter disconnected** → call `restart_wifi_adapter`
-- After any fix, re-run the relevant diagnostic to confirm
+When you find a problem, fix it and verify:
+1. Apply the fix
+2. Re-run the diagnostic that failed to verify the fix worked
+3. If the fix failed, try the next option
 
-## OUTPUT FORMAT
+## FINAL ANSWER
 
-End every response with one of:
-- **RESOLVED** — all diagnostics pass or issue was fixed
-- **PARTIALLY RESOLVED** — some issues fixed but others remain
-- **NEEDS MANUAL ACTION** — requires user intervention
+Only provide an "answer" after ALL tool calls are complete.
+Format as a bulleted summary:
+- Adapter: OK/FAIL - SSID name, signal strength %
+- IP Config: OK/FAIL - IP address, gateway
+- DNS: OK/FAIL - resolver working/not
+- Internet: OK/FAIL - connectivity status
+- Speed: download XX Mbps / upload XX Mbps
+- Status: RESOLVED / PARTIALLY RESOLVED / NEEDS MANUAL ACTION
 ...)";
 }
 ```
@@ -408,18 +444,33 @@ int main() {
 
         WiFiTroubleshooterAgent agent(modelId);
 
-        // Interactive loop with diagnostic menu
+        // Predefined menu options (number → prompt)
+        const std::vector<std::pair<std::string, std::string>> kDiagnosticMenu = {
+            {"Full network diagnostic",  "Run a full network diagnostic."},
+            {"Check Wi-Fi adapter",      "Check my Wi-Fi adapter status."},
+            // ... more options ...
+        };
+
         std::string userInput;
         while (true) {
-            // Show numbered menu: [1] Full diagnostic, [2] Check adapter, ...
-            printDiagnosticMenu();
+            // Show numbered menu
+            for (size_t i = 0; i < kDiagnosticMenu.size(); ++i)
+                std::cout << "  [" << i+1 << "] " << kDiagnosticMenu[i].first << "\n";
             std::cout << "  > " << std::flush;
             std::getline(std::cin, userInput);
 
             if (userInput == "quit" || userInput == "exit" || userInput == "q") break;
+            if (userInput.empty()) continue;
 
-            // Map numbered selection to pre-written prompt, or use free-text
-            std::string query = mapMenuSelection(userInput);
+            // Map numbered selection to prompt, or use free-text input directly
+            std::string query;
+            if (userInput.size() == 1 && userInput[0] >= '1'
+                && userInput[0] <= '0' + static_cast<char>(kDiagnosticMenu.size())) {
+                query = kDiagnosticMenu[userInput[0] - '1'].second;
+            } else {
+                query = userInput;
+            }
+
             auto result = agent.processQuery(query);
             // Final answer is printed by CleanConsole::printFinalAnswer()
             (void)result;
