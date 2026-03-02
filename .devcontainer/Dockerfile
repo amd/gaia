@@ -1,4 +1,5 @@
-FROM python:3.12-slim
+# Stage 1: Base image with system dependencies
+FROM python:3.12-slim AS base
 
 ARG TZ
 ENV TZ="$TZ"
@@ -41,7 +42,7 @@ RUN useradd -m -s /bin/bash $USERNAME && \
   echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME && \
   chmod 0440 /etc/sudoers.d/$USERNAME
 
-# Persist bash history.
+# Persist bash history
 RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
   && mkdir /commandhistory \
   && touch /commandhistory/.bash_history \
@@ -56,14 +57,24 @@ RUN mkdir -p /workspace /home/$USERNAME/.claude && \
 
 WORKDIR /workspace
 
+# Stage 2: Development tools
+FROM base AS devtools
+
 ARG GIT_DELTA_VERSION=0.18.2
 RUN ARCH=$(dpkg --print-architecture) && \
   wget "https://github.com/dandavison/delta/releases/download/${GIT_DELTA_VERSION}/git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
   dpkg -i "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
   rm "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb"
 
-# Set up non-root user
-USER $USERNAME
+USER gaia
+
+# Add ~/.local/bin and ~/.claude/local to PATH so gaia CLI and claude binary are discoverable
+ENV PATH=$PATH:/home/gaia/.local/bin:/home/gaia/.claude/local
+
+# Stage 3: Final image with shell configuration
+FROM devtools AS final
+
+USER gaia
 
 # Set the default shell to zsh rather than sh
 ENV SHELL=/bin/zsh
@@ -81,5 +92,5 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
   -a "source /usr/share/doc/fzf/examples/key-bindings.zsh" \
   -a "source /usr/share/doc/fzf/examples/completion.zsh" \
   -a "export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
-  -a "export PATH=\"\$HOME/.local/bin:\$PATH\"" \
+  -a "export PATH=\"\$HOME/.local/bin:\$HOME/.claude/local:\$PATH\"" \
   -x

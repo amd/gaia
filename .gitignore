@@ -172,6 +172,9 @@ config.ini
 src/gaia/apps/**/.env
 !src/gaia/apps/**/.env.development
 
+# Claude Code local settings (personal, not committed)
+.claude/settings.local.json
+
 # MCP Configuration and runtime files
 .env
 .env.*
@@ -180,6 +183,7 @@ mcp_server.log
 atlassian_config.json
 *.mcp.json
 .mcp.json
+!.devcontainer/.mcp.json
 
 # version files
 version.txt
