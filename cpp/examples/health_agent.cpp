@@ -209,6 +209,7 @@ private:
         gaia::AgentConfig config;
         config.maxSteps = 75;
         config.modelId = modelId;
+        config.contextSize = 32768; // 32K needed for "Run ALL diagnostics" (12+ tool calls)
         return config;
     }
 };

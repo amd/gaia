@@ -538,9 +538,9 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
             toolMsg.role = MessageRole::TOOL;
             toolMsg.name = toolName;
             std::string resultStr = toolResult.dump();
-            if (resultStr.size() > 20000) {
-                resultStr = resultStr.substr(0, 10000) + "\n...[truncated]...\n" +
-                            resultStr.substr(resultStr.size() - 5000);
+            if (resultStr.size() > 4000) {
+                resultStr = resultStr.substr(0, 2000) + "\n...[truncated]...\n" +
+                            resultStr.substr(resultStr.size() - 1500);
             }
             toolMsg.content = resultStr;
             messages.push_back(toolMsg);
