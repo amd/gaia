@@ -264,7 +264,7 @@ jobs:
           cmake --build cpp/build-integration --config Release --parallel
           if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
 
-      - name: Verify uvx available (for MCP tests)
+      - name: Verify uvx and pre-warm windows-mcp environment
         shell: powershell
         run: |
           # uvx is provided by uv (installed by setup-venv)
@@ -274,7 +274,19 @@ jobs:
           } else {
               Write-Host "[WARN] uvx not found -- MCP and Health integration tests will fail"
               Write-Host "       uvx should be available via uv (installed by setup-venv)"
+              exit 0
           }
+
+          # Pre-install windows-mcp so tests don't each spend ~30s downloading packages
+          Write-Host "Pre-warming windows-mcp environment..."
+          uvx --help | Out-Null 2>&1
+          $proc = Start-Process -FilePath uvx -ArgumentList "windows-mcp" -PassThru -NoNewWindow -RedirectStandardOutput "$env:TEMP\mcp-warmup-stdout.log" -RedirectStandardError "$env:TEMP\mcp-warmup-stderr.log"
+          # Wait for it to start and install packages, then kill it
+          Start-Sleep -Seconds 30
+          if (-not $proc.HasExited) {
+              Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+          Write-Host "[OK] windows-mcp environment pre-warmed (packages cached)"
 
       - name: Start Lemonade Server and run integration tests
         shell: powershell
