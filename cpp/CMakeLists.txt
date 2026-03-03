@@ -91,6 +91,7 @@ add_library(gaia_core
     src/tool_registry.cpp
     src/console.cpp
     src/json_utils.cpp
+    src/lemonade_client.cpp
     src/agent.cpp
     src/mcp_client.cpp
 )
@@ -195,6 +196,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_agent.cpp
         tests/test_mcp_client.cpp
         tests/test_console.cpp
+        tests/test_lemonade_client.cpp
     )
 
     target_link_libraries(gaia_tests PRIVATE

@@ -19,6 +19,7 @@
 
 #include "console.h"
 #include "json_utils.h"
+#include "lemonade_client.h"
 #include "mcp_client.h"
 #include "tool_registry.h"
 #include "types.h"
@@ -86,6 +87,9 @@ public:
     /// Get a mutable reference to the tool registry (for subclass tool registration).
     ToolRegistry& toolRegistry() { return tools_; }
 
+    /// Get the Lemonade client (for explicit model loading at startup).
+    LemonadeClient& lemonade() { return lemonade_; }
+
 protected:
     /// Initialize the agent after construction.
     /// Call this at the end of subclass constructors to register tools.
@@ -131,6 +135,8 @@ private:
     AgentConfig config_;
     ToolRegistry tools_;
     std::unique_ptr<OutputHandler> console_;
+    LemonadeClient lemonade_;
+    bool modelEnsured_ = false;
 
     AgentState executionState_ = AgentState::PLANNING;
     json currentPlan_;

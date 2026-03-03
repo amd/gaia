@@ -2671,6 +2671,20 @@ int main() {
 
         PCHealthAgent agent(modelId);
 
+        std::cout << color::GRAY << "  Loading model..." << color::RESET << std::endl;
+        try {
+            agent.lemonade().loadModel(modelId, 32768);
+            auto health = agent.lemonade().healthCheck();
+            std::cout << color::GREEN << "  Model ready: " << color::BOLD << modelId
+                      << color::RESET << color::GRAY << " (ctx=" << health.contextSize << ")"
+                      << color::RESET << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << color::YELLOW << "  Warning: Could not load model: " << e.what()
+                      << color::RESET << std::endl;
+            std::cout << color::YELLOW << "  Ensure lemonade-server is running."
+                      << color::RESET << std::endl;
+        }
+
         std::cout << std::endl;
         std::cout << color::GREEN << color::BOLD << "  Ready!"
                   << color::RESET << std::endl;

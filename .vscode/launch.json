@@ -290,7 +290,8 @@
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "environment": [
-                { "name": "GAIA_CPP_BASE_URL", "value": "${input:gaiaCppBaseUrl}" }
+                { "name": "GAIA_CPP_BASE_URL", "value": "${input:gaiaCppBaseUrl}" },
+                { "name": "GAIA_CPP_CTX_SIZE", "value": "32768" }
             ],
             "console": "integratedTerminal",
             "preLaunchTask": "C++: Build"
@@ -304,7 +305,8 @@
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "environment": [
-                { "name": "GAIA_CPP_BASE_URL", "value": "${input:gaiaCppBaseUrl}" }
+                { "name": "GAIA_CPP_BASE_URL", "value": "${input:gaiaCppBaseUrl}" },
+                { "name": "GAIA_CPP_CTX_SIZE", "value": "32768" }
             ],
             "console": "integratedTerminal",
             "preLaunchTask": "C++: Build"
@@ -318,7 +320,8 @@
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "environment": [
-                { "name": "GAIA_CPP_BASE_URL", "value": "${input:gaiaCppBaseUrl}" }
+                { "name": "GAIA_CPP_BASE_URL", "value": "${input:gaiaCppBaseUrl}" },
+                { "name": "GAIA_CPP_CTX_SIZE", "value": "32768" }
             ],
             "console": "integratedTerminal",
             "preLaunchTask": "C++: Build"

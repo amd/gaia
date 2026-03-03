@@ -8,8 +8,6 @@
 #include <sstream>
 #include <stdexcept>
 
-#include <httplib.h>
-
 namespace gaia {
 
 // Response format template (mirrors Python Agent._response_format_template)
@@ -35,13 +33,26 @@ You must respond ONLY in valid JSON. No text before { or after }.
 )";
 
 Agent::Agent(const AgentConfig& config)
-    : config_(config) {
+    : config_(config),
+      lemonade_(LemonadeClientConfig{config.baseUrl, config.modelId, config.contextSize, config.debug}) {
 
     // Override baseUrl from GAIA_CPP_BASE_URL environment variable if set.
     // This mirrors how the Python Lemonade client respects its env var.
     std::string envUrl = getEnvVar("GAIA_CPP_BASE_URL");
     if (!envUrl.empty()) {
         config_.baseUrl = envUrl;
+        lemonade_.setBaseUrl(config_.baseUrl);
+    }
+
+    // Override context size from GAIA_CPP_CTX_SIZE environment variable if set.
+    std::string envCtx = getEnvVar("GAIA_CPP_CTX_SIZE");
+    if (!envCtx.empty()) {
+        try {
+            config_.contextSize = std::stoi(envCtx);
+            lemonade_.setContextSize(config_.contextSize); // propagate to client
+        } catch (const std::exception&) {
+            // Ignore malformed value, keep default
+        }
     }
 
     // Create console based on config
@@ -104,11 +115,12 @@ std::string Agent::composeSystemPrompt() const {
 // ---- LLM Communication ----
 
 std::string Agent::callLlm(const std::vector<Message>& messages, const std::string& sysPrompt) {
-    // Build OpenAI-compatible request
+    // Build OpenAI-compatible request.
+    // NOTE: n_ctx is intentionally omitted — context size is set at model load
+    // time via LemonadeClient::loadModel() / ensureModelLoaded(), not per-request.
     json requestBody;
     requestBody["model"] = config_.modelId;
     requestBody["max_tokens"] = 4096;
-    requestBody["n_ctx"] = config_.contextSize;
 
     json msgArray = json::array();
 
@@ -124,93 +136,42 @@ std::string Agent::callLlm(const std::vector<Message>& messages, const std::stri
 
     requestBody["messages"] = msgArray;
 
-    // Parse base URL
-    std::string baseUrl = config_.baseUrl;
-    std::string host, path;
-    int port = 80;
-    bool useSSL = false;
-
-    // Extract scheme
-    if (baseUrl.substr(0, 8) == "https://") {
-        useSSL = true;
-        baseUrl = baseUrl.substr(8);
-        port = 443;
-    } else if (baseUrl.substr(0, 7) == "http://") {
-        baseUrl = baseUrl.substr(7);
-    }
-
-    // Extract host:port and path
-    auto slashPos = baseUrl.find('/');
-    if (slashPos != std::string::npos) {
-        host = baseUrl.substr(0, slashPos);
-        path = baseUrl.substr(slashPos);
-    } else {
-        host = baseUrl;
-        path = "";
-    }
-
-    // Extract port from host
-    auto colonPos = host.find(':');
-    if (colonPos != std::string::npos) {
-        try {
-            port = std::stoi(host.substr(colonPos + 1));
-        } catch (const std::exception&) {
-            throw std::runtime_error("Invalid port in baseUrl: " + config_.baseUrl);
-        }
-        host = host.substr(0, colonPos);
-    }
-
-    // Append /chat/completions endpoint
-    if (path.empty() || path.back() != '/') {
-        path += "/chat/completions";
-    } else {
-        path += "chat/completions";
-    }
-
     if (config_.debug) {
-        std::cerr << "[LLM] Calling " << host << ":" << port << path << std::endl;
-        std::cerr << "[LLM] Messages: " << msgArray.size() << std::endl;
+        std::cerr << "[LLM] POST /chat/completions, messages=" << msgArray.size() << std::endl;
     }
 
-    // Make HTTP request
-    std::string responseBody;
-    if (useSSL) {
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-        httplib::SSLClient cli(host, port);
-        cli.set_connection_timeout(30);
-        cli.set_read_timeout(120);
-        auto res = cli.Post(path, requestBody.dump(), "application/json");
-        if (!res) {
-            throw std::runtime_error("LLM HTTP request failed (SSL): connection error to " +
-                                     host + ":" + std::to_string(port));
-        }
-        if (res->status != 200) {
-            throw std::runtime_error("LLM HTTP request failed (SSL) with status " +
-                                     std::to_string(res->status) + ": " + res->body);
-        }
-        responseBody = res->body;
-#else
-        throw std::runtime_error("SSL not supported. Use http:// base URL.");
-#endif
-    } else {
-        httplib::Client cli(host, port);
-        cli.set_connection_timeout(30);
-        cli.set_read_timeout(120);
-        auto res = cli.Post(path, requestBody.dump(), "application/json");
-        if (!res) {
-            throw std::runtime_error("LLM HTTP request failed: connection error to " +
-                                     host + ":" + std::to_string(port));
-        }
-        if (res->status != 200) {
-            throw std::runtime_error("LLM HTTP request failed with status " +
-                                     std::to_string(res->status) + ": " + res->body);
-        }
-        responseBody = res->body;
-    }
+    // Delegate HTTP to LemonadeClient
+    std::string responseBody = lemonade_.chatCompletions(requestBody);
 
     // Parse response
     try {
         json responseJson = json::parse(responseBody);
+
+        // Lemonade returns HTTP 200 even for server-side errors -- check before
+        // treating the body as a chat completion.
+        if (responseJson.contains("error")) {
+            std::string errMsg = "LLM server error";
+            try {
+                const auto& inner = responseJson["error"]["details"]["response"]["error"];
+                std::string msg = inner.value("message", "");
+                if (msg.find("exceeds the available context size") != std::string::npos) {
+                    int nCtx    = inner.value("n_ctx", 0);
+                    int nPrompt = inner.value("n_prompt_tokens", 0);
+                    errMsg =
+                        "Server context window too small: prompt is " +
+                        std::to_string(nPrompt) + " tokens but server n_ctx=" +
+                        std::to_string(nCtx) + ".\n" +
+                        "  Restart Lemonade with a larger context:\n" +
+                        "    lemonade-server serve --ctx-size 32768\n" +
+                        "  or via the helper script:\n" +
+                        "    .\\scripts\\start-lemonade.ps1 -CtxSize 32768";
+                } else if (!msg.empty()) {
+                    errMsg = msg;
+                }
+            } catch (...) {}
+            throw std::runtime_error(errMsg);
+        }
+
         if (responseJson.contains("choices") && !responseJson["choices"].empty()) {
             auto& choice = responseJson["choices"][0];
             if (choice.contains("message") && choice["message"].contains("content")) {
@@ -400,6 +361,17 @@ void Agent::disconnectAllMcp() {
 
 json Agent::processQuery(const std::string& userInput, int maxSteps) {
     int stepsLimit = (maxSteps > 0) ? maxSteps : config_.maxSteps;
+
+    // Ensure the model is loaded with the requested context size (once per agent lifetime).
+    // Context size is a server-side setting applied at load time, not per-request.
+    if (!modelEnsured_ && !config_.modelId.empty()) {
+        try {
+            lemonade_.ensureModelLoaded(); // uses stored model_ and contextSize_
+            modelEnsured_ = true;
+        } catch (const std::exception& e) {
+            console_->printWarning(std::string("Could not ensure model loaded: ") + e.what());
+        }
+    }
 
     // Reset state
     executionState_ = AgentState::PLANNING;
