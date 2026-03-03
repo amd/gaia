@@ -264,7 +264,7 @@ jobs:
           cmake --build cpp/build-integration --config Release --parallel
           if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
 
-      - name: Verify uvx and pre-warm windows-mcp environment
+      - name: Verify uvx is available
         shell: powershell
         run: |
           # uvx is provided by uv (installed by setup-venv)
@@ -277,21 +277,11 @@ jobs:
               exit 0
           }
 
-          # Install windows-mcp as a persistent tool so uvx doesn't re-create
-          # a temporary environment (117 packages) on every test invocation
-          Write-Host "Installing windows-mcp as a persistent tool..."
-          # uv writes progress to stderr; PowerShell 5.1 treats any stderr
-          # as a terminating NativeCommandError, so discard it and check exit code
+          # Remove any broken persistent installation that may interfere with uvx
           $ErrorActionPreference = "SilentlyContinue"
-          uv tool install windows-mcp 2>$null
-          $installExit = $LASTEXITCODE
+          uv tool uninstall windows-mcp 2>$null
           $ErrorActionPreference = "Stop"
-          if ($installExit -ne 0) {
-              Write-Host "[WARN] uv tool install windows-mcp failed (exit code $installExit)"
-              Write-Host "       MCP and Health integration tests may fail"
-              exit 0
-          }
-          Write-Host "[OK] windows-mcp installed permanently"
+          Write-Host "[OK] uvx ready (windows-mcp will run via temporary uvx environments)"
 
       - name: Start Lemonade Server and run integration tests
         shell: powershell
