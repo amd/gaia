@@ -280,7 +280,15 @@ jobs:
           # Install windows-mcp as a persistent tool so uvx doesn't re-create
           # a temporary environment (117 packages) on every test invocation
           Write-Host "Installing windows-mcp as a persistent tool..."
-          uv tool install windows-mcp 2>&1
+          # uv writes progress to stderr which PowerShell treats as errors;
+          # redirect stderr to stdout and check $LASTEXITCODE instead
+          $output = (uv tool install windows-mcp 2>&1) | Out-String
+          Write-Host $output
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "[WARN] uv tool install windows-mcp failed (exit code $LASTEXITCODE)"
+              Write-Host "       MCP and Health integration tests may fail"
+              exit 0
+          }
           Write-Host "[OK] windows-mcp installed permanently"
 
       - name: Start Lemonade Server and run integration tests
