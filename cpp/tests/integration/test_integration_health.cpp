@@ -68,7 +68,7 @@ static std::string toLower(std::string s) {
     return s;
 }
 
-static gaia::AgentConfig healthTestConfig(int maxSteps = 10) {
+static gaia::AgentConfig healthTestConfig(int maxSteps = 3) {
     gaia::AgentConfig cfg;
     cfg.baseUrl    = testBaseUrl();
     cfg.modelId    = testModel();
@@ -85,7 +85,7 @@ static gaia::AgentConfig healthTestConfig(int maxSteps = 10) {
 
 class HealthTestAgent : public gaia::Agent {
 public:
-    explicit HealthTestAgent(int maxSteps = 10)
+    explicit HealthTestAgent(int maxSteps = 3)
         : Agent(healthTestConfig(maxSteps)) {
         init();
 

@@ -108,7 +108,7 @@ static std::string toLower(std::string s) {
     return s;
 }
 
-static gaia::AgentConfig wifiTestConfig(int maxSteps = 10) {
+static gaia::AgentConfig wifiTestConfig(int maxSteps = 3) {
     gaia::AgentConfig cfg;
     cfg.baseUrl    = testBaseUrl();
     cfg.modelId    = testModel();
@@ -126,7 +126,7 @@ public:
     int toolCallCount = 0;
     std::string lastToolCalled;
 
-    explicit WiFiTestAgent(int maxSteps = 10)
+    explicit WiFiTestAgent(int maxSteps = 3)
         : Agent(wifiTestConfig(maxSteps)) { init(); }
 
 protected:
