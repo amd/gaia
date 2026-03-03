@@ -26,7 +26,7 @@
 // ---------------------------------------------------------------------------
 
 static std::string testModel() {
-#ifdef _WIN32
+#ifdef _MSC_VER
     char* env = nullptr;
     size_t len = 0;
     _dupenv_s(&env, &len, "GAIA_CPP_TEST_MODEL");
@@ -40,7 +40,7 @@ static std::string testModel() {
 }
 
 static std::string testBaseUrl() {
-#ifdef _WIN32
+#ifdef _MSC_VER
     char* env = nullptr;
     size_t len = 0;
     _dupenv_s(&env, &len, "GAIA_CPP_BASE_URL");
