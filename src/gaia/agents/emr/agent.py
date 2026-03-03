@@ -853,7 +853,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
                 "id = :id",
                 {"id": patient_id},
             )
-            logger.info(f"Updated patient record ID: {patient_id}")
+            logger.info("Updated patient record")
             return patient_id
 
         except Exception as e:
@@ -1136,7 +1136,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
                 )
 
             patient_id = self.insert("patients", insert_data)
-            logger.info(f"Stored patient record ID: {patient_id}")
+            logger.info("Stored new patient record")
             return patient_id
 
         except Exception as e:

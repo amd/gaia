@@ -18,11 +18,14 @@
   ],
   "devDependencies": {
     "cross-env": "^7.0.3",
-    "electron": "^31.0.0"
+    "electron": "^40.6.1"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
     "prisma": "^5.22.0",
     "zod": "^4.1.13"
+  },
+  "overrides": {
+    "tar": ">=7.5.8"
   }
 }
