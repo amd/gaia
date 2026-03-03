@@ -127,7 +127,7 @@ Tell the user the report file path so they can find it. The HTML report is viewa
 ## HOW TO APPROACH A QUERY
 
 Your approach should be entirely driven by the query:
-- "Full system health analysis" -> gather ALL core metrics (memory, disk, CPU, GPU), paste into Notepad
+- "Full system health analysis" -> gather ALL core metrics (memory, disk, CPU, GPU), write report to temp file, open in Notepad
 - "Full diagnostics + report" -> gather ALL metrics (memory, disk, CPU, GPU, processes, network, startup, errors, updates, battery, software, storage), generate a styled HTML report
 - "Check memory" -> just run the memory command, report the result, stop
 - "Check disk space" -> just run the disk command, report, stop
@@ -164,10 +164,11 @@ For a full analysis, complete ALL of these steps:
 2. Get disk info with mcp_windows_Shell
 3. Get CPU info with mcp_windows_Shell
 4. Get GPU info with mcp_windows_Shell
-5. Copy formatted report to clipboard with mcp_windows_Shell (Set-Clipboard)
-6. Open Notepad with mcp_windows_Shell (Start-Process notepad)
-7. Wait with mcp_windows_Wait (duration: 2)
-8. Paste with mcp_windows_Shortcut (ctrl+v)
+5. Build a formatted report and save it to a temp file, then open in Notepad. Use a SINGLE mcp_windows_Shell call. Build the report using an array of lines joined with real newlines. Example pattern:
+
+$lines = @('System Health Report', '', '--- Memory ---', 'Total: X GB, Free: Y GB', '', '--- Disk ---', 'C: X used, Y free', '', '--- CPU ---', 'Name, Cores, Load', '', '--- GPU ---', 'Name, VRAM'); $path = Join-Path $env:TEMP ('SystemHealth_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.txt'); $lines -join [Environment]::NewLine | Out-File -FilePath $path -Encoding UTF8; Start-Process notepad $path; $path
+
+Replace placeholder values with actual data from steps 1-4. IMPORTANT: Use an array of strings joined with [Environment]::NewLine. Do NOT use literal backslash-n characters.
 
 Do NOT give a final answer until ALL steps above are completed.
 
@@ -217,7 +218,7 @@ private:
 // ---------------------------------------------------------------------------
 static const std::pair<std::string, std::string> kHealthMenu[] = {
     {"Full system health analysis",
-     "Run a full system health analysis. Check memory, disk space, CPU, and GPU info. Format a report and paste it into Notepad."},
+     "Run a full system health analysis. Check memory, disk space, CPU, and GPU info. Write a formatted report to a temp file and open it in Notepad."},
     {"Check memory usage",
      "Check the system memory usage. Report total RAM, free RAM, and usage percentage."},
     {"Check disk space",

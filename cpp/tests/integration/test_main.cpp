@@ -61,10 +61,10 @@ static const MenuItem kTestMenu[] = {
 static constexpr size_t kMenuSize = sizeof(kTestMenu) / sizeof(kTestMenu[0]);
 
 // ---------------------------------------------------------------------------
-// MSVC-safe setenv
+// Windows-safe setenv (works with both MSVC and MinGW)
 // ---------------------------------------------------------------------------
 static void setEnvVar(const char* name, const std::string& value) {
-#ifdef _MSC_VER
+#ifdef _WIN32
     _putenv_s(name, value.c_str());
 #else
     setenv(name, value.c_str(), 1);
