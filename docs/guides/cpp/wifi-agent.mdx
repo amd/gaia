@@ -433,7 +433,7 @@ private:
 
 ## The Interactive Loop
 
-The `main()` function follows the same pattern as the `simple_agent` example:
+The `main()` function follows the same pattern as the `health_agent` example:
 
 ```cpp
 int main() {
@@ -617,7 +617,7 @@ int main() {
 
 ### Why registered tools instead of MCP?
 
-The `simple_agent` example uses MCP — it connects to `uvx windows-mcp` which runs as a separate subprocess and exposes PowerShell as an MCP tool. That works, but adds a dependency on `uvx`, Python, and the MCP server package.
+The `health_agent` example uses MCP — it connects to `uvx windows-mcp` which runs as a separate subprocess and exposes PowerShell as an MCP tool. That works, but adds a dependency on `uvx`, Python, and the MCP server package.
 
 The Wi-Fi agent takes the opposite approach: every tool is a C++ lambda registered directly with the agent. The PowerShell commands are hardcoded strings. This means:
 

@@ -89,7 +89,7 @@ Each loop iteration: **LLM reasons → agent executes → result fed back → LL
 
 ## How It Works
 
-The `simple_agent` demo is a C++ port of the [Windows System Health Agent](/guides/mcp/windows-system-health). It subclasses `gaia::Agent`, connects to the Windows MCP server on startup, then enters the same planning loop as the Python version.
+The `health_agent` demo is a C++ port of the [Windows System Health Agent](/guides/mcp/windows-system-health). It subclasses `gaia::Agent`, connects to the Windows MCP server on startup, then enters the same planning loop as the Python version.
 
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'18px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
@@ -106,10 +106,10 @@ graph TB
 
     MCP --> Shell1("mcp_windows_Shell<br/>Get-CimInstance (Memory)")
     MCP --> Shell2("mcp_windows_Shell<br/>Get-PSDrive (Disk)")
-    MCP --> Shell3("mcp_windows_Shell<br/>Get-WmiObject (CPU)")
-    MCP --> Clipboard("mcp_windows_Shell<br/>Set-Clipboard")
+    MCP --> Shell3("mcp_windows_Shell<br/>Get-CimInstance (CPU)")
+    MCP --> Shell4("mcp_windows_Shell<br/>Get-CimInstance (GPU)")
+    MCP --> FileWrite("mcp_windows_Shell<br/>Out-File report.txt")
     MCP --> Notepad("mcp_windows_Shell<br/>Start-Process notepad")
-    MCP --> Paste("mcp_windows_Shortcut<br/>ctrl+v")
 
     style User fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
     style Agent fill:#ED1C24,stroke:#F4484D,stroke-width:3px,color:#fff
@@ -118,9 +118,9 @@ graph TB
     style Shell1 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
     style Shell2 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
     style Shell3 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Clipboard fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Shell4 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style FileWrite fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
     style Notepad fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Paste fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
 
     linkStyle default stroke:#ED1C24,stroke-width:2px
 ```
@@ -269,14 +269,16 @@ cpp/
     mcp_client.h            # MCP JSON-RPC client (stdio transport)
     json_utils.h            # JSON extraction with multi-strategy fallback
     console.h               # TerminalConsole / SilentConsole output handlers
+    clean_console.h         # CleanConsole — polished TUI with colors and word-wrap
   src/
     agent.cpp               # Agent loop state machine
     tool_registry.cpp
     mcp_client.cpp          # Cross-platform subprocess + pipes
     json_utils.cpp
     console.cpp
+    clean_console.cpp
   examples/
-    simple_agent.cpp        # Windows System Health Agent (CUA demo)
+    health_agent.cpp        # Windows System Health Agent (CUA demo)
     wifi_agent.cpp          # Wi-Fi Troubleshooter Agent (registered tools)
   tests/
     test_agent.cpp
@@ -284,6 +286,8 @@ cpp/
     test_json_utils.cpp
     test_mcp_client.cpp
     test_console.cpp
+    test_clean_console.cpp
+    test_tool_integration.cpp
     test_types.cpp
 ```
 

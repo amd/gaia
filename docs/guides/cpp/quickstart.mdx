@@ -86,9 +86,9 @@ icon: "rocket"
       <Tab title="Windows">
         **Option A: Windows CUA demo** (requires MCP server + `uv`):
         ```bat
-        cpp\build\Release\simple_agent.exe
+        cpp\build\Release\health_agent.exe
         ```
-        The agent connects to the Windows MCP server, gathers CPU/memory/disk metrics via PowerShell, and pastes a formatted report into Notepad.
+        The agent connects to the Windows MCP server, gathers CPU/memory/disk/GPU metrics via PowerShell, and presents results in the console or writes a full report to Notepad.
 
         **Option B: Wi-Fi Troubleshooter** (no dependencies, run as admin for fix tools):
         ```bat
@@ -98,9 +98,9 @@ icon: "rocket"
       </Tab>
       <Tab title="Linux / macOS">
         ```bash
-        ./cpp/build/simple_agent
+        ./cpp/build/health_agent
         ```
-        The `simple_agent` demo compiles but requires the Windows MCP server to function. Try the [Wi-Fi Troubleshooter Agent](/guides/cpp/wifi-agent) instead, or write your own agent with platform-appropriate tools.
+        The `health_agent` demo compiles but requires the Windows MCP server to function. Try the [Wi-Fi Troubleshooter Agent](/guides/cpp/wifi-agent) instead, or write your own agent with platform-appropriate tools.
       </Tab>
     </Tabs>
 
@@ -136,7 +136,7 @@ Or run the test binary directly:
   </Tab>
 </Tabs>
 
-The test suite covers all six modules: agent loop, tool registry, JSON utilities, MCP client, console output, and types.
+The test suite covers all eight modules: agent loop, tool registry, JSON utilities, MCP client, console output, clean console, tool integration, and types.
 
 ## Next Steps
 
