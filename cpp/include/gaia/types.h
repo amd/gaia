@@ -143,7 +143,7 @@ struct ParsedResponse {
 /// Return the default LLM base URL, honoring the LEMONADE_BASE_URL
 /// environment variable if set (matching the Python CLI behavior).
 inline std::string defaultBaseUrl() {
-#ifdef _WIN32
+#ifdef _MSC_VER
     char* env = nullptr;
     size_t len = 0;
     _dupenv_s(&env, &len, "LEMONADE_BASE_URL");
