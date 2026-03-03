@@ -277,16 +277,11 @@ jobs:
               exit 0
           }
 
-          # Pre-install windows-mcp so tests don't each spend ~30s downloading packages
-          Write-Host "Pre-warming windows-mcp environment..."
-          uvx --help | Out-Null 2>&1
-          $proc = Start-Process -FilePath uvx -ArgumentList "windows-mcp" -PassThru -NoNewWindow -RedirectStandardOutput "$env:TEMP\mcp-warmup-stdout.log" -RedirectStandardError "$env:TEMP\mcp-warmup-stderr.log"
-          # Wait for it to start and install packages, then kill it
-          Start-Sleep -Seconds 30
-          if (-not $proc.HasExited) {
-              Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-          }
-          Write-Host "[OK] windows-mcp environment pre-warmed (packages cached)"
+          # Install windows-mcp as a persistent tool so uvx doesn't re-create
+          # a temporary environment (117 packages) on every test invocation
+          Write-Host "Installing windows-mcp as a persistent tool..."
+          uv tool install windows-mcp 2>&1
+          Write-Host "[OK] windows-mcp installed permanently"
 
       - name: Start Lemonade Server and run integration tests
         shell: powershell
