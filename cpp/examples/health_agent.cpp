@@ -111,24 +111,11 @@ Installed Software: Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVer
 
 Storage Health (SMART): Get-PhysicalDisk | Select-Object FriendlyName, MediaType, @{N='SizeGB';E={[math]::Round($_.Size/1GB,1)}}, HealthStatus, OperationalStatus | ConvertTo-Json
 
-## HTML REPORT GENERATION
-
-When asked to generate a report, use this PowerShell pattern to create a styled HTML file:
-
-1. Gather all requested data into PowerShell variables
-2. Build an HTML string with inline CSS styling (professional look: font-family Segoe UI, tables with borders, color-coded status, a header with date/hostname)
-3. Write the HTML to a temp file: $htmlPath = "$env:TEMP\SystemHealthReport_$(Get-Date -Format 'yyyyMMdd_HHmmss').html"
-4. Set-Content -Path $htmlPath -Value $htmlContent
-5. Open the report in the default browser: Start-Process $htmlPath
-6. Copy the file path to clipboard: Set-Clipboard -Value $htmlPath
-
-Tell the user the report file path so they can find it. The HTML report is viewable in any browser and can be printed to PDF via the browser's print dialog (Ctrl+P).
-
 ## HOW TO APPROACH A QUERY
 
 Your approach should be entirely driven by the query:
-- "Full system health analysis" -> gather ALL core metrics (memory, disk, CPU, GPU), write report to temp file, open in Notepad
-- "Full diagnostics + report" -> gather ALL metrics (memory, disk, CPU, GPU, processes, network, startup, errors, updates, battery, software, storage), generate a styled HTML report
+- "Quick health check" -> gather 4 core metrics (memory, disk, CPU, GPU) and give a concise text summary in chat. Do NOT open Notepad or write files.
+- "Full diagnostics + report" -> gather ALL metrics (memory, disk, CPU, GPU, processes, network, startup, errors, updates, battery, software, storage), write report to temp file, open in Notepad
 - "Check memory" -> just run the memory command, report the result, stop
 - "Check disk space" -> just run the disk command, report, stop
 - "Check CPU info" -> just run the CPU command, report, stop
@@ -157,20 +144,16 @@ Use this reference when recommending models. RAM = system RAM, VRAM = GPU dedica
 
 Recommend Lemonade Server (lemonade-server) as the inference backend for AMD hardware. GGUF models run on GPU, FLM models run on NPU.
 
-## FULL ANALYSIS PROTOCOL (only for "full analysis" requests)
+## QUICK HEALTH CHECK PROTOCOL (for "quick health check" requests)
 
-For a full analysis, complete ALL of these steps:
+Gather 4 core metrics, then give a concise text summary. Do NOT open Notepad.
 1. Get memory info with mcp_windows_Shell
 2. Get disk info with mcp_windows_Shell
 3. Get CPU info with mcp_windows_Shell
 4. Get GPU info with mcp_windows_Shell
-5. Build a formatted report and save it to a temp file, then open in Notepad. Use a SINGLE mcp_windows_Shell call. Build the report using an array of lines joined with real newlines. Example pattern:
+5. Provide a concise text summary as your final answer. No file, no Notepad.
 
-$lines = @('System Health Report', '', '--- Memory ---', 'Total: X GB, Free: Y GB', '', '--- Disk ---', 'C: X used, Y free', '', '--- CPU ---', 'Name, Cores, Load', '', '--- GPU ---', 'Name, VRAM'); $path = Join-Path $env:TEMP ('SystemHealth_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.txt'); $lines -join [Environment]::NewLine | Out-File -FilePath $path -Encoding UTF8; Start-Process notepad $path; $path
-
-Replace placeholder values with actual data from steps 1-4. IMPORTANT: Use an array of strings joined with [Environment]::NewLine. Do NOT use literal backslash-n characters.
-
-Do NOT give a final answer until ALL steps above are completed.
+Do NOT give a final answer until ALL 4 tool calls are completed.
 
 ## COMPREHENSIVE DIAGNOSTICS + REPORT PROTOCOL
 
@@ -187,10 +170,13 @@ For a comprehensive diagnostics report, gather ALL of these in order:
 10. Battery health (if laptop)
 11. Installed software (top 20)
 12. Storage health (SMART)
-13. Build a styled HTML report with all results and save it
-14. Open the HTML report in the default browser
+13. Build a formatted report and save it to a temp file, then open in Notepad. Use a SINGLE mcp_windows_Shell call. Build the report using an array of lines joined with real newlines. Example pattern:
 
-Do NOT give a final answer until ALL data is gathered and the report is generated.
+$lines = @('System Health Report', '', '--- Memory ---', 'Total: X GB, Free: Y GB', '', '--- Disk ---', 'C: X used, Y free', '', '--- CPU ---', 'Name, Cores, Load', '', '--- GPU ---', 'Name, VRAM'); $path = Join-Path $env:TEMP ('SystemHealth_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.txt'); $lines -join [Environment]::NewLine | Out-File -FilePath $path -Encoding UTF8; Start-Process notepad $path; $path
+
+Replace placeholder values with actual data from steps 1-12. IMPORTANT: Use an array of strings joined with [Environment]::NewLine. Do NOT use literal backslash-n characters.
+
+Do NOT give a final answer until ALL data is gathered and the report is opened in Notepad.
 
 ## FINAL ANSWER
 
@@ -218,8 +204,8 @@ private:
 // Health-check menu — maps numbered selections to pre-written prompts
 // ---------------------------------------------------------------------------
 static const std::pair<std::string, std::string> kHealthMenu[] = {
-    {"Full system health analysis",
-     "Run a full system health analysis. Check memory, disk space, CPU, and GPU info. Write a formatted report to a temp file and open it in Notepad."},
+    {"Quick health check (console summary)",
+     "Run a quick health check. Check memory, disk space, CPU, and GPU info. Give a concise text summary. Do NOT open Notepad or write any files."},
     {"Check memory usage",
      "Check the system memory usage. Report total RAM, free RAM, and usage percentage."},
     {"Check disk space",
@@ -247,7 +233,7 @@ static const std::pair<std::string, std::string> kHealthMenu[] = {
     {"What LLM models can my system run?",
      "Analyze the system specs (RAM, disk, CPU, GPU) and recommend which LLM models this machine can run locally. Consider models like Qwen3, Llama, and Phi."},
     {"Run ALL diagnostics + generate report",
-     "Run a comprehensive system diagnostic. Gather ALL system information: memory, disk, CPU, GPU, top processes, network config, startup programs, recent system errors, Windows Update status, battery health, installed software, and storage health. Then generate a detailed styled HTML report and open it in the browser."},
+     "Run a comprehensive system diagnostic. Gather ALL system information: memory, disk, CPU, GPU, top processes, network config, startup programs, recent system errors, Windows Update status, battery health, installed software, and storage health. Then write a formatted report to a temp file and open it in Notepad."},
 };
 static constexpr size_t kMenuSize = sizeof(kHealthMenu) / sizeof(kHealthMenu[0]);
 
