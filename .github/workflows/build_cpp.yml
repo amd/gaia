@@ -278,14 +278,14 @@ jobs:
 
       - name: Start Lemonade Server and run integration tests
         shell: powershell
-        timeout-minutes: 30
+        timeout-minutes: 20
         env:
           GAIA_CPP_TEST_MODEL: Qwen3-4B-Instruct-2507-GGUF
           GAIA_CPP_BASE_URL: http://localhost:8000/api/v1
         run: |
           try {
               # Start Lemonade with Qwen3-4B-GGUF
-              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-Instruct-2507-GGUF" -Port 8000 -CtxSize 32768 -InitWaitTime 15
+              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-Instruct-2507-GGUF" -Port 8000 -CtxSize 16384 -InitWaitTime 15
 
               # Verify health
               $health = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 10
