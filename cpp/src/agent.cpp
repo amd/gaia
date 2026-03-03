@@ -503,16 +503,17 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
             std::string toolName = parsed.toolName.value();
             json toolArgs = parsed.toolArgs.value_or(json::object());
 
-            // Loop detection
-            if (toolCallHistory.size() >= 4) {
+            // Loop detection — same tool name AND same args repeated 4+ times
+            if (toolCallHistory.size() >= 3) {
                 bool allSame = true;
                 for (size_t i = toolCallHistory.size() - 3; i < toolCallHistory.size(); ++i) {
-                    if (toolCallHistory[i].first != toolName) {
+                    if (toolCallHistory[i].first != toolName ||
+                        toolCallHistory[i].second != toolArgs) {
                         allSame = false;
                         break;
                     }
                 }
-                if (allSame && toolCallHistory.back().first == toolName) {
+                if (allSame) {
                     console_->printWarning("Detected repeated tool call loop. Breaking out.");
                     finalAnswer = "Task stopped due to repeated tool call loop.";
                     break;
