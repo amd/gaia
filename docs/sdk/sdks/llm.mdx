@@ -1,5 +1,6 @@
 ---
 title: "LLM Integration"
+icon: "brain"
 ---
 
 <Info>
@@ -19,21 +20,18 @@ title: "LLM Integration"
 
 ## LLM Client
 
-```python
-from gaia.llm import LLMClient
+`LLMClient` is an abstract base class. Use `create_client()` to get the right provider:
 
-# Local LLM (Lemonade server)
-llm = LLMClient(
-    base_url="http://localhost:8000/api/v1",
-    system_prompt="You are a helpful assistant"
-)
+```python
+from gaia.llm import create_client
+
+# Local LLM (Lemonade server — default)
+llm = create_client()
 
 # Generate response
 response = llm.generate(
     prompt="What is AI?",
-    model="Qwen3-0.6B-GGUF",
-    max_tokens=200,
-    temperature=0.7
+    model="Qwen3-0.6B-GGUF"
 )
 print(response)
 
@@ -48,16 +46,11 @@ messages = [
     {"role": "user", "content": "Tell me about Python"}
 ]
 
-response = llm.chat_completions(
+response = llm.chat(
     messages=messages,
     model="Qwen3-0.6B-GGUF"
 )
 print(response)
-
-# List available models
-models = llm.get_available_models()
-for model in models:
-    print(f"- {model}")
 ```
 
 ---
@@ -65,20 +58,13 @@ for model in models:
 ## Cloud Providers
 
 ```python
-from gaia.llm import LLMClient
+from gaia.llm import create_client
 
 # Claude API
-llm_claude = LLMClient(
-    use_claude=True,
-    claude_model="claude-sonnet-4-20250514",
-    system_prompt="You are an expert coder"
-)
+llm_claude = create_client(use_claude=True)
 
 # OpenAI API
-llm_openai = LLMClient(
-    use_openai=True,
-    system_prompt="You are a helpful assistant"
-)
+llm_openai = create_client(use_openai=True)
 
 # Use same interface
 response = llm_claude.generate("Explain Python decorators")

@@ -1,5 +1,6 @@
 ---
 title: "Creating Tools: Giving Agents Superpowers"
+icon: "screwdriver-wrench"
 ---
 
 <Note>
@@ -850,11 +851,9 @@ def query_users(
             "suggestion": "Check your filter values and try again"
         }
 
-# Example usage in an agent:
-class UserQueryAgent(Agent):
-    def _register_tools(self):
-        # Register the tool we defined above
-        self.tools["query_users"] = query_users
+# Tools decorated with @tool are automatically registered
+# and available to any Agent subclass via the global tool registry.
+# No manual registration is needed in _register_tools().
 ```
 
 **Why this solution works:**
@@ -919,8 +918,13 @@ def tool(func):
         else:
             schema["parameters"]["properties"][name]["default"] = param.default
 
-    # Attach schema to function
-    func._tool_schema = schema
+    # Register in global tool registry
+    _TOOL_REGISTRY[func.__name__] = {
+        "name": func.__name__,
+        "description": func.__doc__ or "",
+        "parameters": schema["parameters"],
+        "function": func,
+    }
     return func
 
 def python_to_json_type(python_type):

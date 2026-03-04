@@ -1,5 +1,6 @@
 ---
 title: "Understanding the Agent System"
+icon: "robot"
 ---
 
 <Note>
@@ -56,7 +57,7 @@ The LLM can only tell you it doesn't know.
 <Tab title="With Agent">
 ```python
 # Agent with weather tool - can take action
-from gaia.agents import Agent
+from gaia import Agent
 
 class WeatherAgent(Agent):
     # ... (with weather tool)
@@ -116,12 +117,10 @@ During processing, agents transition through different states:
 You can check the current state in your tools if you need conditional behavior:
 
 ```python
-from gaia.agents.base.agent import STATE_PLANNING, STATE_ERROR_RECOVERY
-
 @tool
-def my_tool() -> dict:
+def my_tool(self) -> dict:
     """A tool that behaves differently during error recovery."""
-    if self.current_state == STATE_ERROR_RECOVERY:
+    if self.execution_state == self.STATE_ERROR_RECOVERY:
         # Be more conservative during error recovery
         return {"status": "skipped", "reason": "In recovery mode"}
     # Normal execution
@@ -363,7 +362,7 @@ agent = MyAgent(
     # API keys are read from environment: ANTHROPIC_API_KEY, OPENAI_API_KEY
 
     # === Agent Behavior ===
-    max_steps=10,                  # Max reasoning loop iterations
+    max_steps=20,                  # Max reasoning loop iterations
     streaming=True,                # Stream responses token-by-token
     silent_mode=False,             # Suppress console output
 
@@ -783,7 +782,7 @@ print(result["answer"])
 When you call `agent.process_query(user_input)`, here's the detailed flow:
 
 ```python
-def process_query(self, user_input, max_steps=10):
+def process_query(self, user_input, max_steps=None):  # defaults to self.max_steps (20)
     # 1. Add user message to conversation history
     self.conversation_history.append({
         "role": "user",
@@ -900,8 +899,8 @@ Deep dive into creating effective tools
 <Card title="Console Output" icon="terminal" href="./console">
 Customize how your agent displays output
 </Card>
-<Card title="Specialized Agents" icon="robot" href="../agents/specialized">
-See pre-built agents for code, Jira, Blender
+<Card title="User Guides" icon="robot" href="/guides/index">
+See pre-built agents for chat, code, Jira, Blender
 </Card>
 </CardGroup>
 

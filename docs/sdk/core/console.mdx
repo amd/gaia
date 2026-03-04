@@ -1,5 +1,6 @@
 ---
 title: "Output Handlers"
+icon: "terminal"
 ---
 
 <Info>
@@ -64,7 +65,7 @@ from gaia.api.sse_handler import SSEOutputHandler
 
 # For API endpoints
 handler = SSEOutputHandler()
-agent = MyAgent(console=handler)
+agent = MyAgent(output_handler=handler)
 
 # Output is formatted as Server-Sent Events
 # Compatible with OpenAI streaming API
@@ -85,7 +86,7 @@ agent = MyAgent(console=handler)
 ## Related Topics
 
 - **[Agent System](./agent-system)** - Learn about the agent foundation
-- **[API Server](../infrastructure/api-server)** - Using agents in web applications
+- **[API Server](/reference/api)** - Using agents in web applications
 - **[Testing](../testing)** - Testing agents with SilentConsole
 
 ---
