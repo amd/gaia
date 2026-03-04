@@ -285,7 +285,7 @@ jobs:
 
       - name: Start Lemonade Server and run integration tests
         shell: powershell
-        timeout-minutes: 20
+        timeout-minutes: 30
         env:
           GAIA_CPP_TEST_MODEL: Qwen3-4B-Instruct-2507-GGUF
           GAIA_CPP_BASE_URL: http://localhost:8000/api/v1
@@ -303,7 +303,8 @@ jobs:
               Write-Host "=== Running C++ Integration Tests (LLM + MCP + WiFi + Health) ==="
               $env:GAIA_CPP_TEST_MODEL = "Qwen3-4B-Instruct-2507-GGUF"
               $env:GAIA_CPP_BASE_URL   = "http://localhost:8000/api/v1"
-              ctest --test-dir cpp/build-integration -C Release --output-on-failure
+              # -j 1: run tests sequentially so they don't compete for the single LLM server
+              ctest --test-dir cpp/build-integration -C Release --output-on-failure -j 1
               if ($LASTEXITCODE -ne 0) { throw "C++ integration tests failed" }
               Write-Host "[SUCCESS] All C++ integration tests passed!"
 
