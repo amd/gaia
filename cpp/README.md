@@ -7,7 +7,7 @@ A C++ port of the [GAIA](https://github.com/amd/gaia) Python base agent framewor
 
 Included demos:
 
-- **`simple_agent`** — Windows System Health Agent that connects to the [Windows MCP server](https://github.com/microsoft/windows-mcp), gathers memory/disk/CPU metrics via PowerShell, and pastes a formatted report into Notepad — demonstrating the full computer-use (CUA) flow over the MCP client-server interface.
+- **`health_agent`** — Windows System Health Agent that connects to the [Windows MCP server](https://github.com/microsoft/windows-mcp), gathers memory/disk/CPU metrics via PowerShell, and pastes a formatted report into Notepad — demonstrating the full computer-use (CUA) flow over the MCP client-server interface.
 - **`wifi_agent`** — Wi-Fi Troubleshooter that diagnoses and fixes network connectivity issues using registered PowerShell tools. Demonstrates adaptive reasoning: the agent decides which tools to run based on the query, interprets results, skips irrelevant steps, applies fixes, and verifies fixes worked — all driven by real LLM reasoning with no hard-coded sequences.
 
 ---
@@ -41,7 +41,7 @@ Default model: `Qwen3-4B-GGUF` (configurable via `AgentConfig::modelId`)
 
 ### 3. Windows MCP Server (for the demo)
 
-The `simple_agent` demo launches the Windows MCP server via `uvx`. Install `uv` first:
+The `health_agent` demo launches the Windows MCP server via `uvx`. Install `uv` first:
 
 ```bash
 pip install uv
@@ -64,7 +64,7 @@ cmake --build build --config Release
 ```
 
 Binaries are placed in `build\Release\`:
-- `simple_agent.exe` — System Health Agent (MCP demo)
+- `health_agent.exe` — System Health Agent (MCP demo)
 - `wifi_agent.exe` — Wi-Fi Troubleshooter (registered-tool demo)
 - `gaia_tests.exe` — unit test suite
 
@@ -83,7 +83,7 @@ cmake --build build
 ```
 
 Binaries are placed in `build/`:
-- `simple_agent`
+- `health_agent`
 - `wifi_agent`
 - `gaia_tests`
 
@@ -94,7 +94,7 @@ Binaries are placed in `build/`:
 Make sure the Lemonade server is running, then launch the agent:
 
 ```bat
-build\Release\simple_agent.exe
+build\Release\health_agent.exe
 ```
 
 The agent will attempt to connect to the Windows MCP server on startup. Once connected, try one of these prompts:
@@ -186,15 +186,17 @@ gaia/                           # repo root
     │   ├── tool_registry.h     # Tool registration and execution
     │   ├── mcp_client.h        # MCP JSON-RPC client (stdio transport)
     │   ├── json_utils.h        # JSON extraction with multi-strategy fallback
-    │   └── console.h           # TerminalConsole / SilentConsole output handlers
+    │   ├── console.h           # TerminalConsole / SilentConsole output handlers
+    │   └── clean_console.h     # CleanConsole — polished TUI with colors and word-wrap
     ├── src/
     │   ├── agent.cpp           # Agent loop state machine
     │   ├── tool_registry.cpp
     │   ├── mcp_client.cpp      # Cross-platform subprocess + pipes (Win32 / POSIX)
     │   ├── json_utils.cpp
-    │   └── console.cpp
+    │   ├── console.cpp
+    │   └── clean_console.cpp
     ├── examples/
-    │   ├── simple_agent.cpp    # Windows System Health Agent (MCP/CUA demo)
+    │   ├── health_agent.cpp    # Windows System Health Agent (MCP/CUA demo)
     │   └── wifi_agent.cpp      # Wi-Fi Troubleshooter (registered-tool demo)
     └── tests/
         ├── test_agent.cpp
@@ -202,6 +204,8 @@ gaia/                           # repo root
         ├── test_json_utils.cpp
         ├── test_mcp_client.cpp
         ├── test_console.cpp
+        ├── test_clean_console.cpp
+        ├── test_tool_integration.cpp
         └── test_types.cpp
 ```
 
@@ -267,7 +271,9 @@ The agent is pure C++ — PowerShell is just the subprocess that runs system com
 
 ### Custom TUI (`CleanConsole`)
 
-The `wifi_agent` overrides the default `OutputHandler` with a custom `CleanConsole` that parses the LLM's structured reasoning output:
+Both example agents use `gaia::CleanConsole` (from `<gaia/clean_console.h>`) for polished terminal output: ANSI colors, word-wrapping, bordered tool output previews, and a bordered final answer section.
+
+The base `CleanConsole` parses structured reasoning prefixes from the LLM output:
 
 - **`FINDING:`** prefix → green label — what the data shows
 - **`DECISION:`** prefix → yellow label — what the agent will do next and why

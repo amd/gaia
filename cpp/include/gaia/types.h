@@ -161,8 +161,17 @@ struct ParsedResponse {
 /// Return the default LLM base URL, honoring the LEMONADE_BASE_URL
 /// environment variable if set (matching the Python CLI behavior).
 inline std::string defaultBaseUrl() {
+#ifdef _MSC_VER
+    char* env = nullptr;
+    size_t len = 0;
+    _dupenv_s(&env, &len, "LEMONADE_BASE_URL");
+    std::string result = env ? std::string(env) : "http://localhost:8000/api/v1";
+    free(env);
+    return result;
+#else
     const char* env = std::getenv("LEMONADE_BASE_URL");  // NOLINT(concurrency-mt-unsafe)
     return env ? std::string(env) : "http://localhost:8000/api/v1";
+#endif
 }
 
 struct AgentConfig {

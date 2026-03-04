@@ -27,7 +27,7 @@ endif()
 
 # Integration tests require a running Lemonade server -- always OFF by default.
 option(GAIA_BUILD_INTEGRATION_TESTS
-    "Build LLM integration tests (requires lemonade-server with Qwen3-4B-GGUF loaded)" OFF)
+    "Build LLM integration tests (requires lemonade-server with Qwen3-4B-GGUF loaded)" ON)
 
 # HTTPS support for LLM endpoints -- ON by default (vcpkg provides OpenSSL automatically).
 option(GAIA_ENABLE_SSL
@@ -90,6 +90,7 @@ endif()
 add_library(gaia_core
     src/tool_registry.cpp
     src/console.cpp
+    src/clean_console.cpp
     src/json_utils.cpp
     src/lemonade_client.cpp
     src/agent.cpp
@@ -173,8 +174,8 @@ endif()
 # Examples
 # ---------------------------------------------------------------------------
 if(GAIA_BUILD_EXAMPLES AND WIN32)
-    add_executable(simple_agent examples/simple_agent.cpp)
-    target_link_libraries(simple_agent PRIVATE gaia::gaia_core)
+    add_executable(health_agent examples/health_agent.cpp)
+    target_link_libraries(health_agent PRIVATE gaia::gaia_core)
 
     add_executable(wifi_agent examples/wifi_agent.cpp)
     target_link_libraries(wifi_agent PRIVATE gaia::gaia_core)
@@ -189,7 +190,7 @@ endif()
 if(GAIA_BUILD_TESTS)
     enable_testing()
 
-    add_executable(gaia_tests
+    add_executable(tests_mock
         tests/test_types.cpp
         tests/test_tool_registry.cpp
         tests/test_json_utils.cpp
@@ -197,15 +198,17 @@ if(GAIA_BUILD_TESTS)
         tests/test_mcp_client.cpp
         tests/test_console.cpp
         tests/test_lemonade_client.cpp
+        tests/test_clean_console.cpp
+        tests/test_tool_integration.cpp
     )
 
-    target_link_libraries(gaia_tests PRIVATE
+    target_link_libraries(tests_mock PRIVATE
         gaia::gaia_core
         GTest::gtest_main
     )
 
     include(GoogleTest)
-    gtest_discover_tests(gaia_tests)
+    gtest_discover_tests(tests_mock)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -215,18 +218,22 @@ endif()
 if(GAIA_BUILD_INTEGRATION_TESTS)
     enable_testing()
 
-    add_executable(gaia_integration_tests
+    add_executable(tests_integration
+        tests/integration/test_main.cpp
         tests/integration/test_integration_llm.cpp
+        tests/integration/test_integration_mcp.cpp
+        tests/integration/test_integration_wifi.cpp
+        tests/integration/test_integration_health.cpp
     )
 
-    target_link_libraries(gaia_integration_tests PRIVATE
+    target_link_libraries(tests_integration PRIVATE
         gaia::gaia_core
-        GTest::gtest_main
+        GTest::gtest
     )
 
     include(GoogleTest)
-    gtest_discover_tests(gaia_integration_tests
-        PROPERTIES TIMEOUT 120
+    gtest_discover_tests(tests_integration
+        PROPERTIES TIMEOUT 300
     )
 endif()
 
