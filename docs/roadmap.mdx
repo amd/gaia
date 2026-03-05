@@ -1,6 +1,7 @@
 ---
 title: Roadmap
 description: Upcoming priorities for GAIA
+icon: "map"
 ---
 
 # Roadmap
@@ -118,7 +119,8 @@ Key capabilities:
 An MCP Client Mixin that enables GAIA agents to connect to external MCP servers, transforming them into Computer Use Agents (CUA):
 
 ```python
-from gaia.agents.base import Agent, MCPClientMixin
+from gaia.agents.base import Agent
+from gaia.mcp import MCPClientMixin
 
 class DesktopAgent(MCPClientMixin, Agent):
     def __init__(self):
@@ -262,7 +264,7 @@ Key capabilities:
 
 **Make the native C++ agent framework ready for third-party integration**
 
-The [C++ Agent Framework](/guides/cpp) shipped in Q1 2026 as a native C++17 port of the base agent — same agent loop, tool registry, and MCP support, compiled to a standalone binary with no Python runtime. The next phase focuses on production readiness:
+The [C++ Agent Framework](/cpp) shipped in Q1 2026 as a native C++17 port of the base agent — same agent loop, tool registry, and MCP support, compiled to a standalone binary with no Python runtime. The next phase focuses on production readiness:
 
 ```cpp
 // Cancellation support
@@ -288,7 +290,7 @@ Key deliverables:
 - **Streaming responses** — SSE parsing, token-by-token callbacks for responsive UIs
 - **Runtime configuration** — JSON config files, environment variables, dynamic model switching
 
-→ [View C++ framework docs](/guides/cpp) • [View milestone on GitHub](https://github.com/amd/gaia/milestone/10)
+→ [View C++ framework docs](/cpp) • [View milestone on GitHub](https://github.com/amd/gaia/milestone/10)
 
 ### Q2 2026: MCP Docs Server
 

@@ -1,0 +1,225 @@
+---
+title: "Setup"
+description: "Install prerequisites for GAIA C++ agent development"
+icon: "wrench"
+---
+
+<Note>
+  **Looking for Python?** This page covers C++ prerequisites. For Python prerequisites (uv, Node.js), see the [Python Setup](/setup).
+</Note>
+
+## System Requirements
+
+| Requirement | Supported |
+|-------------|-----------|
+| **OS** | Windows 11, Ubuntu 24.04+ |
+| **CPU** | Any x86_64 processor |
+| **RAM** | 8GB minimum, 16GB+ recommended |
+| **Disk** | ~500MB for build artifacts and fetched dependencies |
+
+---
+
+## Install Prerequisites
+
+<Tabs>
+  <Tab title="Windows">
+    ### Step 1: Install a C++ Compiler
+
+    You need a compiler with C++17 support. **Visual Studio 2019 or later** is recommended.
+
+    Install the free **Visual Studio Community** edition with the "Desktop development with C++" workload:
+
+    1. Download from [visualstudio.microsoft.com](https://visualstudio.microsoft.com/downloads/)
+    2. In the installer, select **Desktop development with C++**
+    3. Click Install
+
+    Verify the compiler is available (open **Developer Command Prompt**):
+    ```bat
+    cl
+    ```
+
+    <Tip>
+      **Already have Visual Studio?** Make sure the "Desktop development with C++" workload is installed via the Visual Studio Installer.
+    </Tip>
+
+    ### Step 2: Install CMake
+
+    CMake 3.14 or later is required.
+
+    ```powershell
+    winget install Kitware.CMake
+    ```
+
+    Verify (restart your terminal if needed):
+    ```powershell
+    cmake --version
+    ```
+
+    <Tip>
+      CMake is also bundled with Visual Studio. If you selected the C++ workload, you may already have it — check with `cmake --version` first.
+    </Tip>
+
+    ### Step 3: Install Git
+
+    Git is required by CMake FetchContent to download dependencies automatically.
+
+    ```powershell
+    winget install Git.Git
+    ```
+
+    Verify (restart your terminal if needed):
+    ```powershell
+    git --version
+    ```
+
+    ### Step 4: Install Lemonade Server
+
+    The agent needs an OpenAI-compatible LLM server. [Lemonade Server](https://lemonade-server.ai) is recommended (optimized for AMD hardware):
+
+    ```powershell
+    pip install lemonade-server
+    ```
+
+    Start the server and download a model:
+    ```powershell
+    lemonade-server serve
+    ```
+
+    <Note>
+      **Not using Lemonade?** Any OpenAI-compatible server works — llama.cpp, Ollama, vLLM, or a cloud endpoint. See the [Integration Guide](/cpp/integration#using-alternative-llm-backends) for configuration examples.
+    </Note>
+
+    ### Optional: Install uvx (for MCP demos)
+
+    The System Health Agent demo requires `uvx` to launch the Windows MCP server. If you only plan to use the Wi-Fi Troubleshooter or build your own agent, you can skip this.
+
+    ```powershell
+    pip install uv
+    ```
+
+    Verify:
+    ```powershell
+    uvx --version
+    ```
+
+    <Success>
+      You're ready to build! Continue to the [Quickstart](/cpp/quickstart).
+    </Success>
+
+    <Tip>
+      **Having issues?** Check the [Troubleshooting](/reference/troubleshooting) guide, [create an issue](https://github.com/amd/gaia/issues) on GitHub, or contact us at gaia@amd.com.
+    </Tip>
+  </Tab>
+
+  <Tab title="Linux">
+    ### Step 1: Install a C++ Compiler
+
+    You need a compiler with C++17 support. **GCC 9 or later** is recommended.
+
+    ```bash
+    sudo apt update
+    sudo apt install build-essential
+    ```
+
+    Verify:
+    ```bash
+    g++ --version
+    ```
+
+    ### Step 2: Install CMake
+
+    CMake 3.14 or later is required.
+
+    ```bash
+    sudo apt install cmake
+    ```
+
+    Verify:
+    ```bash
+    cmake --version
+    ```
+
+    <Tip>
+      If your distribution ships an older CMake, install a newer version from [cmake.org/download](https://cmake.org/download/) or via `pip install cmake`.
+    </Tip>
+
+    ### Step 3: Install Git
+
+    Git is required by CMake FetchContent to download dependencies automatically.
+
+    ```bash
+    sudo apt install git
+    ```
+
+    Verify:
+    ```bash
+    git --version
+    ```
+
+    ### Step 4: Install Lemonade Server
+
+    The agent needs an OpenAI-compatible LLM server. [Lemonade Server](https://lemonade-server.ai) is recommended (optimized for AMD hardware):
+
+    ```bash
+    pip install lemonade-server
+    ```
+
+    Start the server and download a model:
+    ```bash
+    lemonade-server serve
+    ```
+
+    <Note>
+      **Not using Lemonade?** Any OpenAI-compatible server works — llama.cpp, Ollama, vLLM, or a cloud endpoint. See the [Integration Guide](/cpp/integration#using-alternative-llm-backends) for configuration examples.
+    </Note>
+
+    ### Optional: Install uvx (for MCP demos)
+
+    The System Health Agent demo requires `uvx` to launch the Windows MCP server. If you only plan to use the Wi-Fi Troubleshooter or build your own agent, you can skip this.
+
+    ```bash
+    pip install uv
+    ```
+
+    Verify:
+    ```bash
+    uvx --version
+    ```
+
+    <Success>
+      You're ready to build! Continue to the [Quickstart](/cpp/quickstart).
+    </Success>
+
+    <Tip>
+      **Having issues?** Check the [Troubleshooting](/reference/troubleshooting) guide, [create an issue](https://github.com/amd/gaia/issues) on GitHub, or contact us at gaia@amd.com.
+    </Tip>
+  </Tab>
+</Tabs>
+
+---
+
+## Prerequisites Summary
+
+| Tool | Minimum Version | How to Verify |
+|------|----------------|---------------|
+| C++ Compiler | C++17 support (MSVC 2019+ or GCC 9+) | `cl` (Windows) or `g++ --version` (Linux) |
+| CMake | 3.14+ | `cmake --version` |
+| Git | any | `git --version` |
+| [Lemonade Server](https://lemonade-server.ai) | latest | `lemonade-server --version` |
+| uvx | any (optional) | `uvx --version` |
+
+<Note>
+  All C++ library dependencies (nlohmann/json, cpp-httplib, Google Test) are fetched automatically by CMake during the build — no manual installs required.
+</Note>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>
