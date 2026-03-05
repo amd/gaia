@@ -1,0 +1,20 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# When nlohmann_json was fetched at build time its headers are bundled in
+# the install prefix -- no find_dependency needed.  When it came from the
+# system package manager, consumers must have it installed too.
+if(@GAIA_REQUIRE_FIND_JSON@)
+    find_dependency(nlohmann_json REQUIRED)
+endif()
+
+# When gaia_core was built with SSL support, consumers need OpenSSL too
+# (it appears in the exported link interface).
+if(@GAIA_REQUIRE_FIND_OPENSSL@)
+    find_dependency(OpenSSL REQUIRED)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/gaia_coreTargets.cmake")
+
+check_required_components(gaia_core)

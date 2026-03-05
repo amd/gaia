@@ -51,6 +51,17 @@
                   "guides/mcp/client",
                   "guides/mcp/windows-system-health"
                 ]
+              },
+              {
+                "group": "C++ Framework",
+                "pages": [
+                  "guides/cpp",
+                  "guides/cpp/quickstart",
+                  "guides/cpp/overview",
+                  "guides/cpp/integration",
+                  "guides/cpp/custom-agent",
+                  "guides/cpp/wifi-agent"
+                ]
               }
             ]
           },
@@ -342,6 +353,7 @@
           {
             "group": "Release Notes",
             "pages": [
+              "releases/v0.15.4.1",
               "releases/v0.15.4",
               "releases/v0.15.3.2",
               "releases/v0.15.3.1",
@@ -382,7 +394,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.15.4 · Lemonade 9.3.0",
+        "label": "v0.15.4.1 · Lemonade 9.3.0",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

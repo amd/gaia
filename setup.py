@@ -95,6 +95,9 @@ setup(
         "pillow>=9.0.0",
     ],
     extras_require={
+        "image": [
+            "term-image>=0.7.0,<0.8",
+        ],
         "api": [
             "fastapi>=0.115.0",
             "uvicorn>=0.32.0",
@@ -141,12 +144,11 @@ setup(
             "reportlab",
         ],
         "talk": [
-            "pyaudio",
+            "sounddevice",
             "openai-whisper",
-            "numpy==1.26.4",
             "kokoro>=0.3.1",
             "soundfile",
-            "sounddevice",
+            "psutil",
             "pip",  # Required: spacy model download needs pip in venv (uv omits it)
         ],
         "youtube": [

@@ -33,6 +33,7 @@ class TalkConfig:
     whisper_model_size: str = "base"
     audio_device_index: Optional[int] = None  # Use default input device
     silence_threshold: float = 0.5
+    mic_threshold: float = 0.003  # Microphone amplitude threshold for voice detection
     enable_tts: bool = True
     mode: TalkMode = TalkMode.VOICE_AND_TEXT
 
@@ -128,6 +129,7 @@ class TalkSDK:
             whisper_model_size=self.config.whisper_model_size,
             audio_device_index=self.config.audio_device_index,
             silence_threshold=self.config.silence_threshold,
+            mic_threshold=self.config.mic_threshold,
             enable_tts=self.config.enable_tts,
             logging_level=self.config.logging_level,
             use_claude=self.config.use_claude,

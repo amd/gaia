@@ -1204,6 +1204,7 @@ class TestTalkSDK:
         assert hasattr(config, "audio_device_index")
         assert hasattr(config, "enable_tts")
         assert hasattr(config, "mode")
+        assert hasattr(config, "mic_threshold")
 
     def test_talk_sdk_exists(self):
         """Verify TalkSDK can be imported and instantiated."""

@@ -67,6 +67,25 @@ print(result)
 
 ---
 
+## C++ Framework
+
+A C++17 port of the GAIA base agent framework is available under [`cpp/`](cpp/README.md). It implements the same agent loop, tool registry, and MCP client interface without any Python dependency — suitable for embedding in native applications or resource-constrained environments.
+
+```cpp
+#include <gaia/agent.h>
+
+class MyAgent : public gaia::Agent {
+protected:
+    std::string getSystemPrompt() const override {
+        return "You are a helpful assistant.";
+    }
+};
+```
+
+**[C++ build and usage instructions →](cpp/README.md)**
+
+---
+
 ## Quick Install
 
 ```bash

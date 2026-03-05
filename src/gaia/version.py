@@ -6,7 +6,7 @@ import os
 import subprocess
 from importlib.metadata import version as get_package_version_metadata
 
-__version__ = "0.15.4"
+__version__ = "0.15.4.1"
 
 # Lemonade version used across CI and installer
 LEMONADE_VERSION = "9.3.0"

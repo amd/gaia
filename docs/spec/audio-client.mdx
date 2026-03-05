@@ -245,12 +245,11 @@ class KokoroTTS:
 [project.optional-dependencies]
 talk = [
     "openai-whisper>=20231117",  # ASR
-    "pyaudio>=0.2.14",           # Audio recording
+    "sounddevice>=0.4.6",        # Audio recording & playback
     "torch>=2.0.0",              # Whisper backend
     "kokoro>=0.3.1",             # TTS
-    "sounddevice>=0.4.6",        # Audio playback
     "soundfile>=0.12.1",         # Audio file I/O
-    "numpy>=1.24.0",             # Audio processing
+    "psutil",                    # Process management
 ]
 ```
 

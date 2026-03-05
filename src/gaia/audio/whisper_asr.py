@@ -11,9 +11,9 @@ import time
 import numpy as np
 
 try:
-    import pyaudio
+    import sounddevice as sd
 except ImportError:
-    pyaudio = None
+    sd = None
 
 try:
     import torch
@@ -45,8 +45,8 @@ class WhisperAsr(AudioRecorder):
     ):
         # Check for required dependencies
         missing = []
-        if pyaudio is None:
-            missing.append("pyaudio")
+        if sd is None:
+            missing.append("sounddevice")
         if torch is None:
             missing.append("torch")
         if whisper is None:
@@ -96,28 +96,26 @@ class WhisperAsr(AudioRecorder):
 
     def _record_audio_streaming(self):
         """Record audio for streaming mode - puts chunks directly into queue."""
-        pa = pyaudio.PyAudio()
-
         try:
             # Log device info
             if self.device_index is not None:
-                device_info = pa.get_device_info_by_index(self.device_index)
+                device_info = sd.query_devices(self.device_index)
             else:
-                device_info = pa.get_default_input_device_info()
+                device_info = sd.query_devices(kind="input")
                 self.device_index = device_info["index"]
 
             self.log.debug(
                 f"Using audio device [{self.device_index}]: {device_info['name']}"
             )
 
-            self.stream = pa.open(
-                format=self.FORMAT,
+            self.stream = sd.InputStream(
+                samplerate=self.RATE,
                 channels=self.CHANNELS,
-                rate=self.RATE,
-                input=True,
-                input_device_index=self.device_index,
-                frames_per_buffer=self.CHUNK,
+                dtype=self.DTYPE,
+                device=self.device_index,
+                blocksize=self.CHUNK,
             )
+            self.stream.start()
 
             self.log.debug("Streaming recording started...")
             audio_buffer = np.array([], dtype=np.float32)
@@ -135,10 +133,8 @@ class WhisperAsr(AudioRecorder):
 
             while self.is_recording:
                 try:
-                    data = np.frombuffer(
-                        self.stream.read(self.CHUNK, exception_on_overflow=False),
-                        dtype=np.float32,
-                    )
+                    frames, _ = self.stream.read(self.CHUNK)
+                    data = frames[:, 0].copy()  # Extract mono channel
                     audio_buffer = np.concatenate((audio_buffer, data))
 
                     # Process when we have enough audio (3 seconds)
@@ -172,9 +168,8 @@ class WhisperAsr(AudioRecorder):
 
         finally:
             if self.stream:
-                self.stream.stop_stream()
+                self.stream.stop()
                 self.stream.close()
-            pa.terminate()
 
     def start_recording_streaming(self):
         """Start recording in streaming mode."""
