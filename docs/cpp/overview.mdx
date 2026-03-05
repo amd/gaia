@@ -5,7 +5,7 @@ icon: "code"
 ---
 
 <Info>
-  **Source Code:** [`cpp/`](https://github.com/amd/gaia/tree/main/cpp) — lives alongside the Python package in the GAIA repository.
+  **Source Code:** [`cpp/`](https://github.com/amd/gaia/tree/main/cpp) in the GAIA repository.
 </Info>
 
 <Note>
@@ -30,7 +30,7 @@ The GAIA C++17 framework is a native implementation of the core agent system. It
 - Console output with ANSI colors (`TerminalConsole`, `CleanConsole`) and silent mode (`SilentConsole`)
 
 <Info>
-The C++ framework focuses on the core agent loop and tool execution. Specialized agents (Code, Docker, Jira, Blender), the REST API server, RAG, and audio remain in the Python SDK. See the [Quickstart](/quickstart) for the full feature set.
+The C++ framework focuses on the core agent loop and tool execution. Specialized agents (Code, Docker, Jira, Blender), the REST API server, RAG, and audio are available in the [Python SDK](/quickstart).
 </Info>
 
 ---
@@ -92,7 +92,7 @@ Each loop iteration: **LLM reasons → agent executes → result fed back → LL
 
 ## How It Works
 
-The `health_agent` demo implements the same functionality as the [Windows System Health Agent](/guides/mcp/windows-system-health). It subclasses `gaia::Agent`, connects to the Windows MCP server on startup, then enters the planning loop.
+The `health_agent` demo is a [Windows System Health Agent](/guides/mcp/windows-system-health). It subclasses `gaia::Agent`, connects to the Windows MCP server on startup, then enters the planning loop.
 
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'18px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
@@ -281,7 +281,7 @@ cpp/
     console.cpp
     clean_console.cpp
   examples/
-    health_agent.cpp        # Windows System Health Agent (CUA demo)
+    health_agent.cpp        # Windows System Health Agent (MCP demo)
     wifi_agent.cpp          # Wi-Fi Troubleshooter Agent (registered tools)
   tests/
     test_agent.cpp
