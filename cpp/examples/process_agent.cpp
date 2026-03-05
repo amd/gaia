@@ -373,6 +373,7 @@ public:
 
         std::istringstream stream(cleanAnswer);
         std::string line;
+        bool lastWasBlank = true;  // treat start as blank so first header gets no extra line
         while (std::getline(stream, line)) {
             // Trim trailing \r
             if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -389,8 +390,8 @@ public:
             }
 
             if (section) {
-                // Extra blank line before heading
-                std::cout << std::endl;
+                // Exactly one blank line before heading (absorb any LLM-emitted blank)
+                if (!lastWasBlank) std::cout << std::endl;
                 // Bold heading
                 std::cout << "  " << color::BOLD << color::WHITE
                           << section->label << color::RESET << std::endl;
@@ -399,11 +400,25 @@ public:
                           << section->description << color::RESET << std::endl;
                 // Blank line after description
                 std::cout << std::endl;
+                lastWasBlank = true;
             } else if (line.empty()) {
-                std::cout << std::endl;
+                // Suppress consecutive blank lines
+                if (!lastWasBlank) {
+                    std::cout << std::endl;
+                    lastWasBlank = true;
+                }
+            } else if (line.rfind("System Health:", 0) == 0) {
+                // Bold "System Health:" label, rest in normal white
+                if (!lastWasBlank) std::cout << std::endl;
+                std::string rest = line.substr(14); // after "System Health:"
+                std::cout << "  " << color::BOLD << color::WHITE
+                          << "System Health:" << color::RESET
+                          << color::WHITE << rest << color::RESET << std::endl;
+                lastWasBlank = false;
             } else {
                 std::cout << "  ";
                 printWrapped(line, 88, 2);
+                lastWasBlank = false;
             }
         }
         std::cout << color::GREEN
