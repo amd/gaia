@@ -132,7 +132,9 @@ class TestChatSDKIntegration(unittest.TestCase):
         chat = ChatSDK(config)
 
         # Establish context
-        response1 = chat.send("My name is TestUser. Please confirm you remember my name.")
+        response1 = chat.send(
+            "My name is TestUser. Please confirm you remember my name."
+        )
         self.assertIsNotNone(response1.text)
         print(f"✅ Context established: {response1.text[:50]}...")
 
