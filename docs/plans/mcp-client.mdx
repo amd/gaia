@@ -72,7 +72,8 @@ Meanwhile, the MCP ecosystem offers ready-to-use servers for:
 An `MCPClientMixin` that agents can inherit to connect to external MCP servers:
 
 ```python
-from gaia.agents.base import Agent, MCPClientMixin
+from gaia.agents.base import Agent
+from gaia.mcp import MCPClientMixin
 from gaia.agents.base.tools import tool
 
 class DesktopAutomationAgent(MCPClientMixin, Agent):
@@ -121,7 +122,8 @@ class DesktopAutomationAgent(MCPClientMixin, Agent):
 The primary use case: agents that can see and interact with the desktop.
 
 ```python
-from gaia.agents.base import Agent, MCPClientMixin
+from gaia.agents.base import Agent
+from gaia.mcp import MCPClientMixin
 from gaia.agents.base.tools import tool
 
 class ComputerUseAgent(MCPClientMixin, Agent):
@@ -159,7 +161,8 @@ class ComputerUseAgent(MCPClientMixin, Agent):
 Agents can connect to multiple MCP servers simultaneously:
 
 ```python
-from gaia.agents.base import Agent, MCPClientMixin
+from gaia.agents.base import Agent
+from gaia.mcp import MCPClientMixin
 from gaia.agents.base.tools import tool
 
 class FullStackAgent(MCPClientMixin, Agent):
@@ -335,7 +338,8 @@ class MyAgent(MCPClientMixin, Agent):
 The mixin can automatically register external MCP tools as agent tools, making them directly callable by the LLM:
 
 ```python
-from gaia.agents.base import Agent, MCPClientMixin
+from gaia.agents.base import Agent
+from gaia.mcp import MCPClientMixin
 
 class SmartAgent(MCPClientMixin, Agent):
     def __init__(self):
@@ -424,7 +428,8 @@ The primary CUA target. [Windows-MCP](https://github.com/CursorTouch/Windows-MCP
 
 ```python
 from typing import Dict
-from gaia.agents.base import Agent, MCPClientMixin
+from gaia.agents.base import Agent
+from gaia.mcp import MCPClientMixin
 from gaia.agents.base.tools import tool
 
 class FormFillerAgent(MCPClientMixin, Agent):

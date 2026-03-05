@@ -119,7 +119,8 @@ Key capabilities:
 An MCP Client Mixin that enables GAIA agents to connect to external MCP servers, transforming them into Computer Use Agents (CUA):
 
 ```python
-from gaia.agents.base import Agent, MCPClientMixin
+from gaia.agents.base import Agent
+from gaia.mcp import MCPClientMixin
 
 class DesktopAgent(MCPClientMixin, Agent):
     def __init__(self):

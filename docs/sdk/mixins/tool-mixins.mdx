@@ -109,12 +109,12 @@ result = agent.process_query("List files in the current directory")
 
 ## 9.4 File Search Mixin
 
-**Import:** `from gaia.agents.tools.file_search import FileSearchToolsMixin`
+**Import:** `from gaia.agents.tools.file_tools import FileSearchToolsMixin`
 **Detailed Spec:** [FileSearchToolsMixin](/spec/file-search-mixin)
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.tools.file_search import FileSearchToolsMixin
+from gaia.agents.tools.file_tools import FileSearchToolsMixin
 
 class MyAgent(Agent, FileSearchToolsMixin):
     """Agent with file search capabilities."""
