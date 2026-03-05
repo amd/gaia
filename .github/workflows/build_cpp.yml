@@ -279,8 +279,9 @@ jobs:
 
           # Remove any broken persistent installation that may interfere with uvx.
           # Swallow all output/errors — the tool may not be installed and that's fine.
-          # Use 2>&1 to merge stderr into stdout (prevents NativeCommandError in PS 5.1).
-          uv tool uninstall windows-mcp 2>&1 | Out-Null
+          # Run via cmd /c so native stderr never reaches PowerShell's error stream
+          # (PS 5.1 -Command mode generates NativeCommandError from any native stderr).
+          cmd /c "uv tool uninstall windows-mcp 2>NUL" 2>$null
           $global:LASTEXITCODE = 0
           Write-Host "[OK] uvx ready (windows-mcp will run via temporary uvx environments)"
 
