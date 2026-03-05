@@ -201,6 +201,9 @@ static std::string showMenu() {
 // main
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv) {
+    // Check for GTest flags BEFORE InitGoogleTest consumes them from argv
+    bool gtestFlagsPresent = hasGtestFlags(argc, argv);
+
     ::testing::InitGoogleTest(&argc, argv);
 
     // Parse our custom flags (after GTest consumes --gtest_*)
@@ -217,8 +220,8 @@ int main(int argc, char** argv) {
     // Determine filter
     std::string filter;
 
-    if (hasGtestFlags(argc, argv)) {
-        // User passed --gtest_filter or --gtest_list_tests — don't override
+    if (gtestFlagsPresent) {
+        // User/CTest passed --gtest_filter or --gtest_list_tests — don't override
         filter = "";
     } else if (opts.hasSection) {
         // CLI flags: --llm, --mcp, etc.

@@ -1,5 +1,6 @@
 ---
 title: "Tool Mixins"
+icon: "puzzle-piece"
 ---
 
 <Note>
@@ -9,7 +10,7 @@ title: "Tool Mixins"
 </Note>
 
 <Info>
-  **Source Code:** [`src/gaia/agents/mixins/`](https://github.com/amd/gaia/tree/main/src/gaia/agents/mixins/), [`src/gaia/agents/chat/tools/`](https://github.com/amd/gaia/tree/main/src/gaia/agents/chat/tools/)
+  **Source Code:** [`src/gaia/agents/chat/tools/`](https://github.com/amd/gaia/tree/main/src/gaia/agents/chat/tools/), [`src/gaia/agents/code/tools/`](https://github.com/amd/gaia/tree/main/src/gaia/agents/code/tools/)
 </Info>
 
 <Note>
@@ -108,12 +109,12 @@ result = agent.process_query("List files in the current directory")
 
 ## 9.4 File Search Mixin
 
-**Import:** `from gaia.agents.tools.file_search import FileSearchToolsMixin`
+**Import:** `from gaia.agents.tools.file_tools import FileSearchToolsMixin`
 **Detailed Spec:** [FileSearchToolsMixin](/spec/file-search-mixin)
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.tools.file_search import FileSearchToolsMixin
+from gaia.agents.tools.file_tools import FileSearchToolsMixin
 
 class MyAgent(Agent, FileSearchToolsMixin):
     """Agent with file search capabilities."""
@@ -221,7 +222,7 @@ result = agent.process_query("analyze this image: photo.jpg")
 
 - [Core Agent System](../core/agent-system) - Learn about the base Agent class
 - [Code Development Mixins](./code-mixins) - Specialized code development tools
-- [Specialized Agents](../agents/specialized) - Pre-built agent implementations
+- [User Guides](/guides/index) - Pre-built agent implementations
 - [Best Practices](../best-practices) - Agent development guidelines
 
 ---
@@ -230,7 +231,7 @@ result = agent.process_query("analyze this image: photo.jpg")
 
 **License**
 
-Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 
 SPDX-License-Identifier: MIT
 

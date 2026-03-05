@@ -277,15 +277,17 @@ jobs:
               exit 0
           }
 
-          # Remove any broken persistent installation that may interfere with uvx
-          $ErrorActionPreference = "SilentlyContinue"
-          uv tool uninstall windows-mcp 2>$null
-          $ErrorActionPreference = "Stop"
+          # Remove any broken persistent installation that may interfere with uvx.
+          # Swallow all output/errors — the tool may not be installed and that's fine.
+          # Run via cmd /c so native stderr never reaches PowerShell's error stream
+          # (PS 5.1 -Command mode generates NativeCommandError from any native stderr).
+          cmd /c "uv tool uninstall windows-mcp 2>NUL" 2>$null
+          $global:LASTEXITCODE = 0
           Write-Host "[OK] uvx ready (windows-mcp will run via temporary uvx environments)"
 
       - name: Start Lemonade Server and run integration tests
         shell: powershell
-        timeout-minutes: 20
+        timeout-minutes: 30
         env:
           GAIA_CPP_TEST_MODEL: Qwen3-4B-Instruct-2507-GGUF
           GAIA_CPP_BASE_URL: http://localhost:8000/api/v1
@@ -303,7 +305,8 @@ jobs:
               Write-Host "=== Running C++ Integration Tests (LLM + MCP + WiFi + Health) ==="
               $env:GAIA_CPP_TEST_MODEL = "Qwen3-4B-Instruct-2507-GGUF"
               $env:GAIA_CPP_BASE_URL   = "http://localhost:8000/api/v1"
-              ctest --test-dir cpp/build-integration -C Release --output-on-failure
+              # -j 1: run tests sequentially so they don't compete for the single LLM server
+              ctest --test-dir cpp/build-integration -C Release --output-on-failure -j 1
               if ($LASTEXITCODE -ne 0) { throw "C++ integration tests failed" }
               Write-Host "[SUCCESS] All C++ integration tests passed!"
 

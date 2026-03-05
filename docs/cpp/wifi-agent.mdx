@@ -9,7 +9,7 @@ icon: "wifi"
 </Info>
 
 <Note>
-**Platform:** Windows (PowerShell network commands). Compiles on Linux/macOS for CI but tools require Windows to return real data.
+**Platform:** Windows (PowerShell network commands). Compiles on Linux for CI but tools require Windows to return real data.
 **Prerequisite:** [Lemonade Server](https://lemonade-server.ai) running with a model loaded.
 </Note>
 
@@ -372,12 +372,12 @@ flowchart TD
     F4 --> A
     F5 --> A
 
-    style A fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style B fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style C fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style D fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style E fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style BW fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style A fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style B fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style C fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style D fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style E fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style BW fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
     style F1 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style F2 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style F3 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
@@ -515,7 +515,7 @@ int main() {
         cmake --build build
         ```
       </Tab>
-      <Tab title="Linux / macOS">
+      <Tab title="Linux">
         ```bash
         cd cpp
         ```
@@ -526,7 +526,7 @@ int main() {
         cmake --build build
         ```
         <Note>
-        Compiles on Linux/macOS for CI purposes, but the PowerShell-based tools require Windows to return meaningful results.
+        Compiles on Linux for CI purposes, but the PowerShell-based tools require Windows to return meaningful results.
         </Note>
       </Tab>
     </Tabs>
@@ -677,15 +677,15 @@ The framework handles everything else — the new tool appears in the LLM's syst
 ## Next Steps
 
 <CardGroup cols={2}>
-  <Card title="C++ Framework Overview" icon="code" href="/guides/cpp/overview">
+  <Card title="C++ Framework Overview" icon="code" href="/cpp/overview">
     AgentConfig reference, project structure, and how the agent loop works
   </Card>
 
-  <Card title="Customizing Your Agent" icon="sliders" href="/guides/cpp/custom-agent">
+  <Card title="Customizing Your Agent" icon="sliders" href="/cpp/custom-agent">
     Custom prompts, typed tools, MCP servers, output capture, and tuning
   </Card>
 
-  <Card title="Integration Guide" icon="puzzle-piece" href="/guides/cpp/integration">
+  <Card title="Integration Guide" icon="puzzle-piece" href="/cpp/integration">
     Use gaia_core in your own CMake project via FetchContent or find_package
   </Card>
 
