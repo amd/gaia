@@ -272,7 +272,10 @@ def test_query_with_files():
 
         # Use smaller chunks for faster testing
         config = RAGConfig(
-            model="Qwen3-4B-Instruct-2507-GGUF", chunk_size=300, max_chunks=3, show_stats=False
+            model="Qwen3-4B-Instruct-2507-GGUF",
+            chunk_size=300,
+            max_chunks=3,
+            show_stats=False,
         )
         rag = RAGSDK(config)
 
