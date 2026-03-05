@@ -97,7 +97,7 @@ std::optional<json> extractJsonFromResponse(const std::string& response) {
                 json result = json::parse(match);
                 if (result.is_object()) {
                     // Ensure tool_args exists if tool is present
-                    if (result.contains("tool") && !result.contains("tool_args")) {
+                    if (result.contains("tool") && (!result.contains("tool_args") || result["tool_args"].is_null())) {
                         result["tool_args"] = json::object();
                     }
                     return result;
@@ -117,7 +117,7 @@ std::optional<json> extractJsonFromResponse(const std::string& response) {
         try {
             json result = json::parse(fixed);
             if (result.is_object()) {
-                if (result.contains("tool") && !result.contains("tool_args")) {
+                if (result.contains("tool") && (!result.contains("tool_args") || result["tool_args"].is_null())) {
                     result["tool_args"] = json::object();
                 }
                 return result;
@@ -189,9 +189,9 @@ json validateJsonResponse(const std::string& responseText) {
             throw std::runtime_error("Response is missing required field: thought");
         }
     } else if (result.contains("tool")) {
-        if (!result.contains("thought") || !result.contains("tool_args")) {
-            // Auto-fill tool_args if missing
-            if (!result.contains("tool_args")) {
+        if (!result.contains("thought") || !result.contains("tool_args") || result["tool_args"].is_null()) {
+            // Auto-fill tool_args if missing or null
+            if (!result.contains("tool_args") || result["tool_args"].is_null()) {
                 result["tool_args"] = json::object();
             }
             if (!result.contains("thought")) {
@@ -248,7 +248,8 @@ ParsedResponse parseLlmResponse(const std::string& response) {
             }
             if (j.contains("tool")) {
                 parsed.toolName = j["tool"].get<std::string>();
-                parsed.toolArgs = j.value("tool_args", json::object());
+                parsed.toolArgs = (j.contains("tool_args") && j["tool_args"].is_object())
+                    ? j["tool_args"] : json::object();
             }
             if (j.contains("plan")) {
                 parsed.plan = j["plan"];
@@ -275,7 +276,8 @@ ParsedResponse parseLlmResponse(const std::string& response) {
         }
         if (j.contains("tool")) {
             parsed.toolName = j["tool"].get<std::string>();
-            parsed.toolArgs = j.value("tool_args", json::object());
+            parsed.toolArgs = (j.contains("tool_args") && j["tool_args"].is_object())
+                ? j["tool_args"] : json::object();
         }
         if (j.contains("plan")) {
             parsed.plan = j["plan"];

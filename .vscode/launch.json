@@ -282,16 +282,15 @@
             }
         },
         {
-            "name": "C++ PC Health Agent Debug",
+            "name": "C++ Process Agent Debug",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/cpp/build/Release/pc_health_agent.exe",
-            "args": [],
+            "program": "${workspaceFolder}/cpp/build/Release/process_agent.exe",
+            "args": ["${input:cppAgentModel}"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "environment": [
-                { "name": "GAIA_CPP_BASE_URL", "value": "${input:gaiaCppBaseUrl}" },
-                { "name": "GAIA_CPP_CTX_SIZE", "value": "32768" }
+                { "name": "GAIA_CPP_BASE_URL", "value": "${input:gaiaCppBaseUrl}" }
             ],
             "console": "integratedTerminal",
             "preLaunchTask": "C++: Build"
@@ -380,6 +379,16 @@
             "type": "promptString",
             "description": "Lemonade/LLM server base URL for C++ agents (GAIA_CPP_BASE_URL)",
             "default": "http://localhost:8000/api/v1"
+        },
+        {
+            "id": "cppAgentModel",
+            "type": "pickString",
+            "description": "C++ agent model backend",
+            "options": [
+                { "label": "GPU  - Qwen3-4B-Instruct-2507-GGUF", "value": "1" },
+                { "label": "NPU  - Qwen3-4B-Instruct-2507-FLM",  "value": "2" }
+            ],
+            "default": "1"
         }
     ]
 }

@@ -44,19 +44,18 @@ if(DEFINED ENV{VCPKG_INSTALLATION_ROOT} AND NOT "$ENV{VCPKG_INSTALLATION_ROOT}" 
     return()
 endif()
 
-# 4. Windows local dev: vcpkg not found -- fail with actionable instructions.
+# 4. Windows local dev: vcpkg not found -- warn and continue without HTTPS.
 if(WIN32)
-    message(FATAL_ERROR
+    message(WARNING
         "\n"
-        "  vcpkg not found -- required for OpenSSL (GAIA_ENABLE_SSL=ON).\n"
+        "  vcpkg not found -- HTTPS support will be unavailable.\n"
         "\n"
-        "  Install vcpkg once with:\n"
+        "  To enable HTTPS, install vcpkg with:\n"
         "    winget install Microsoft.Vcpkg\n"
         "\n"
         "  Then reopen your terminal and re-run CMake so that VCPKG_ROOT is set.\n"
         "\n"
-        "  Alternatively, disable SSL (HTTP-only, local Lemonade):\n"
-        "    cmake -B cpp/build -S cpp -DGAIA_ENABLE_SSL=OFF\n")
+        "  HTTP-only mode works fine for local Lemonade endpoints.\n")
 endif()
 
 # 5. Non-Windows (Linux / macOS): rely on system OpenSSL via find_package.

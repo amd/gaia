@@ -1,0 +1,1780 @@
+// Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+//
+// System Analyst — PC Narrator & Process Intelligence (GAIA C++ Agent)
+// Two-phase workflow:
+//   DETECT: Auto-analyzes system on startup (processes, services, anomalies)
+//   ACT:    User takes action referencing labeled findings (A1, B2, C1)
+//
+// Tools: system_snapshot, list_processes, kill_process, explain_item,
+//        restart_process, restart_service, quarantine_item
+//
+// Usage:
+//   ./process_agent
+//   [auto-analysis runs, then action menu appears]
+//
+// Requirements:
+//   - Windows (Win32 APIs and PowerShell for system diagnostics)
+//   - LLM server running at http://localhost:8000/api/v1
+
+#define NOMINMAX
+#include <windows.h>
+#include <psapi.h>
+#include <tlhelp32.h>
+
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cstdio>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include <gaia/agent.h>
+#include <gaia/clean_console.h>
+#include <gaia/types.h>
+
+namespace color = gaia::color;
+
+// ---------------------------------------------------------------------------
+// Shell helper — PowerShell wrapper and input validation
+// ---------------------------------------------------------------------------
+static std::string runShell(const std::string& command) {
+    std::string fullCmd = "powershell -NoProfile -NonInteractive -Command \"& { "
+                          + command + " }\" 2>&1";
+    std::array<char, 4096> buffer;
+    std::string result;
+
+    struct PipeCloser {
+        void operator()(FILE* f) const { if (f) _pclose(f); }
+    };
+    std::unique_ptr<FILE, PipeCloser> pipe(_popen(fullCmd.c_str(), "r"));
+
+    if (!pipe) return R"({"error": "Failed to execute command"})";
+    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe.get()) != nullptr) {
+        result += buffer.data();
+    }
+    return result.empty()
+        ? R"json({"status": "completed", "output": "(no output)"})json"
+        : result;
+}
+
+static bool isSafeShellArg(const std::string& arg) {
+    if (arg.empty()) return false;
+    const std::string dangerous = ";|&`$(){}<>\"'\n\r";
+    for (char c : arg) {
+        if (dangerous.find(c) != std::string::npos) return false;
+    }
+    return true;
+}
+
+// Validate a Windows file path for quarantine operations
+static bool isSafePath(const std::string& path) {
+    if (path.size() < 3) return false;
+    if (!std::isalpha(static_cast<unsigned char>(path[0])) ||
+        path[1] != ':' || path[2] != '\\') return false;
+    const std::string dangerous = "\"`;|&{}<>$";
+    for (char c : path) {
+        if (dangerous.find(c) != std::string::npos) return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Format bytes as human-readable string
+// ---------------------------------------------------------------------------
+static std::string formatBytes(uint64_t bytes) {
+    const char* units[] = {"B", "KB", "MB", "GB", "TB"};
+    int unitIdx = 0;
+    auto size = static_cast<double>(bytes);
+    while (size >= 1024.0 && unitIdx < 4) {
+        size /= 1024.0;
+        ++unitIdx;
+    }
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.1f %s", size, units[unitIdx]);
+    return buf;
+}
+
+// ---------------------------------------------------------------------------
+// String conversion helpers
+// ---------------------------------------------------------------------------
+static std::string wstringToUtf8(const std::wstring& wstr) {
+    if (wstr.empty()) return "";
+    int size = WideCharToMultiByte(CP_UTF8, 0, wstr.data(),
+                                    static_cast<int>(wstr.size()),
+                                    nullptr, 0, nullptr, nullptr);
+    if (size <= 0) return "";
+    std::string result(static_cast<size_t>(size), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wstr.data(),
+                        static_cast<int>(wstr.size()),
+                        result.data(), size, nullptr, nullptr);
+    return result;
+}
+
+static std::wstring utf8ToWstring(const std::string& str) {
+    if (str.empty()) return L"";
+    int size = MultiByteToWideChar(CP_UTF8, 0, str.data(),
+                                    static_cast<int>(str.size()),
+                                    nullptr, 0);
+    if (size <= 0) return L"";
+    std::wstring result(static_cast<size_t>(size), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, str.data(),
+                        static_cast<int>(str.size()),
+                        result.data(), size);
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Parse PowerShell JSON output with error handling
+// ---------------------------------------------------------------------------
+static gaia::json parsePsJson(const std::string& output) {
+    if (output.empty()) return {{"error", "Empty PowerShell output"}};
+    try {
+        auto jsonStart = output.find_first_of("{[");
+        if (jsonStart == std::string::npos)
+            return {{"error", "No JSON in output"}, {"raw", output.substr(0, 500)}};
+        return gaia::json::parse(output.substr(jsonStart));
+    } catch (...) {
+        return {{"error", "Failed to parse PowerShell JSON"}, {"raw", output.substr(0, 500)}};
+    }
+}
+
+// ---------------------------------------------------------------------------
+// System data helpers
+// ---------------------------------------------------------------------------
+
+static gaia::json getDiskUsageInfo() {
+    gaia::json drives = gaia::json::array();
+    wchar_t driveStrings[512];
+    DWORD len = GetLogicalDriveStringsW(511, driveStrings);
+    wchar_t* p = driveStrings;
+    while (*p && (p - driveStrings) < static_cast<ptrdiff_t>(len)) {
+        UINT driveType = GetDriveTypeW(p);
+        if (driveType == DRIVE_FIXED || driveType == DRIVE_REMOVABLE) {
+            ULARGE_INTEGER freeAvail, totalBytes, freeBytes;
+            if (GetDiskFreeSpaceExW(p, &freeAvail, &totalBytes, &freeBytes)) {
+                wchar_t label[256] = {0};
+                wchar_t fsName[64] = {0};
+                GetVolumeInformationW(p, label, 255, nullptr, nullptr, nullptr, fsName, 63);
+                uint64_t total  = totalBytes.QuadPart;
+                uint64_t free   = freeBytes.QuadPart;
+                uint64_t used   = total - free;
+                double usedPct  = total > 0 ? (used * 100.0 / total) : 0.0;
+                drives.push_back({
+                    {"drive",        wstringToUtf8(std::wstring(p))},
+                    {"label",        wstringToUtf8(std::wstring(label))},
+                    {"filesystem",   wstringToUtf8(std::wstring(fsName))},
+                    {"total_bytes",  total},
+                    {"free_bytes",   free},
+                    {"used_bytes",   used},
+                    {"used_percent", static_cast<int>(usedPct)},
+                    {"total_human",  formatBytes(total)},
+                    {"free_human",   formatBytes(free)},
+                    {"used_human",   formatBytes(used)},
+                });
+            }
+        }
+        p += wcslen(p) + 1;
+    }
+    return drives;
+}
+
+static gaia::json getMemoryInfo() {
+    MEMORYSTATUSEX memInfo;
+    memInfo.dwLength = sizeof(memInfo);
+    GlobalMemoryStatusEx(&memInfo);
+    return {
+        {"total_bytes",     memInfo.ullTotalPhys},
+        {"available_bytes", memInfo.ullAvailPhys},
+        {"used_bytes",      memInfo.ullTotalPhys - memInfo.ullAvailPhys},
+        {"used_percent",    static_cast<int>(memInfo.dwMemoryLoad)},
+        {"total_human",     formatBytes(memInfo.ullTotalPhys)},
+        {"available_human", formatBytes(memInfo.ullAvailPhys)},
+        {"used_human",      formatBytes(memInfo.ullTotalPhys - memInfo.ullAvailPhys)},
+    };
+}
+
+static gaia::json getTopProcesses(int topN = 20) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
+        return {{"error", "Failed to create process snapshot"}};
+
+    struct ProcInfo { std::string name; DWORD pid; DWORD parentPid; uint64_t memoryBytes; };
+    std::vector<ProcInfo> procs;
+
+    // Build pid->name map for parent resolution (no OpenProcess needed)
+    std::unordered_map<DWORD, std::string> pidNameMap;
+
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(snapshot, &pe)) {
+        do {
+            pidNameMap[pe.th32ProcessID] = wstringToUtf8(pe.szExeFile);
+            HANDLE hProc = OpenProcess(
+                PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pe.th32ProcessID);
+            if (hProc) {
+                PROCESS_MEMORY_COUNTERS pmc;
+                if (K32GetProcessMemoryInfo(hProc, &pmc, sizeof(pmc)))
+                    procs.push_back({wstringToUtf8(pe.szExeFile), pe.th32ProcessID,
+                                     pe.th32ParentProcessID, pmc.WorkingSetSize});
+                CloseHandle(hProc);
+            }
+        } while (Process32NextW(snapshot, &pe));
+    }
+    CloseHandle(snapshot);
+
+    // Group by exe name, accumulating total memory
+    struct GroupedProc {
+        std::string name;
+        uint64_t totalMemory = 0;
+        DWORD parentPid = 0;
+        std::string parentName;
+        gaia::json pids = gaia::json::array();
+    };
+    std::map<std::string, GroupedProc> groups;
+
+    for (const auto& p : procs) {
+        std::string lowerName = p.name;
+        for (auto& ch : lowerName) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+
+        auto& g = groups[lowerName];
+        if (g.name.empty()) {
+            g.name = p.name;
+            g.parentPid = p.parentPid;
+            // Resolve parent name
+            if (p.parentPid == 0) {
+                g.parentName = "System Idle Process";
+            } else if (p.parentPid == 4) {
+                g.parentName = "System";
+            } else {
+                auto it = pidNameMap.find(p.parentPid);
+                g.parentName = (it != pidNameMap.end()) ? it->second : "";
+            }
+        }
+        g.totalMemory += p.memoryBytes;
+        g.pids.push_back(p.pid);
+    }
+
+    // Sort groups by total memory descending
+    std::vector<GroupedProc*> sorted;
+    for (auto& kv : groups) sorted.push_back(&kv.second);
+    std::sort(sorted.begin(), sorted.end(),
+              [](const GroupedProc* a, const GroupedProc* b) { return a->totalMemory > b->totalMemory; });
+
+    gaia::json result = gaia::json::array();
+    int limit = std::min(static_cast<int>(sorted.size()), topN);
+    for (int i = 0; i < limit; ++i) {
+        const auto* g = sorted[i];
+        gaia::json entry = {
+            {"name",               g->name},
+            {"instance_count",     static_cast<int>(g->pids.size())},
+            {"total_memory_bytes", g->totalMemory},
+            {"total_memory_human", formatBytes(g->totalMemory)},
+            {"pids",               g->pids},
+        };
+        if (!g->parentName.empty())
+            entry["parent_name"] = g->parentName;
+        result.push_back(entry);
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Format a JSON process-by-memory array as a human-readable string
+// Handles both grouped format (instance_count, total_memory_human, parent_name)
+// and legacy flat format (memory_human) for backward compatibility.
+// ---------------------------------------------------------------------------
+static std::string formatProcessList(const gaia::json& procs) {
+    std::string out;
+    char buf[160];
+    for (const auto& p : procs) {
+        std::string nm = p.value("name", std::string("?"));
+        if (p.contains("instance_count") && p["instance_count"].is_number()) {
+            int count = p["instance_count"].get<int>();
+            std::string mem = p.value("total_memory_human", std::string("?"));
+            std::string parent = p.value("parent_name", std::string(""));
+            if (count > 1) {
+                if (!parent.empty()) {
+                    std::snprintf(buf, sizeof(buf), "  %-28s x%-3d %s  <- %s\n",
+                        nm.c_str(), count, mem.c_str(), parent.c_str());
+                } else {
+                    std::snprintf(buf, sizeof(buf), "  %-28s x%-3d %s\n",
+                        nm.c_str(), count, mem.c_str());
+                }
+            } else {
+                if (!parent.empty()) {
+                    std::snprintf(buf, sizeof(buf), "  %-28s      %s  <- %s\n",
+                        nm.c_str(), mem.c_str(), parent.c_str());
+                } else {
+                    std::snprintf(buf, sizeof(buf), "  %-28s      %s\n",
+                        nm.c_str(), mem.c_str());
+                }
+            }
+        } else {
+            // Legacy flat format
+            std::string mem = p.value("memory_human", std::string("?"));
+            std::snprintf(buf, sizeof(buf), "  %-30s %s\n", nm.c_str(), mem.c_str());
+        }
+        out += buf;
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// ProcessConsole — CleanConsole with formatted A/B/C section headers
+// ---------------------------------------------------------------------------
+class ProcessConsole : public gaia::CleanConsole {
+public:
+    void printFinalAnswer(const std::string& answer) override {
+        if (answer.empty()) return;
+
+        std::string cleanAnswer = answer;
+        if (!answer.empty() && answer.front() == '{') {
+            try {
+                auto j = nlohmann::json::parse(answer);
+                if (j.is_object()) {
+                    if (j.contains("answer") && j["answer"].is_string())
+                        cleanAnswer = j["answer"].get<std::string>();
+                    else if (j.contains("thought") && j["thought"].is_string())
+                        cleanAnswer = j["thought"].get<std::string>();
+                }
+            } catch (...) {}
+        }
+
+        std::cout << std::endl;
+        std::cout << color::GREEN
+                  << "  ========================================================================================"
+                  << color::RESET << std::endl;
+        std::cout << color::GREEN << color::BOLD
+                  << "  Conclusion" << color::RESET << std::endl;
+        std::cout << color::GREEN
+                  << "  ========================================================================================"
+                  << color::RESET << std::endl;
+
+        struct SectionInfo {
+            const char* prefix;
+            const char* label;
+            const char* description;
+        };
+        static const SectionInfo kSections[] = {
+            {"A.", "A. Processes",
+             "Top resource consumers grouped by name, sorted by memory and CPU usage."},
+            {"B.", "B. Services",
+             "System services with high memory usage (>200 MB) or error/degraded status."},
+            {"C.", "C. Suspicious Items",
+             "Unsigned binaries, unknown publishers, or processes running from unexpected locations."},
+        };
+
+        std::istringstream stream(cleanAnswer);
+        std::string line;
+        while (std::getline(stream, line)) {
+            // Trim trailing \r
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+
+            // Check if this line is a section header
+            const SectionInfo* section = nullptr;
+            for (const auto& s : kSections) {
+                if (line == s.label ||
+                    (line.size() >= 2 && line.substr(0, 2) == s.prefix &&
+                     line.find(s.label) == 0)) {
+                    section = &s;
+                    break;
+                }
+            }
+
+            if (section) {
+                // Extra blank line before heading
+                std::cout << std::endl;
+                // Bold heading
+                std::cout << "  " << color::BOLD << color::WHITE
+                          << section->label << color::RESET << std::endl;
+                // Dimmed description
+                std::cout << "  " << color::GRAY
+                          << section->description << color::RESET << std::endl;
+                // Blank line after description
+                std::cout << std::endl;
+            } else if (line.empty()) {
+                std::cout << std::endl;
+            } else {
+                std::cout << "  ";
+                printWrapped(line, 88, 2);
+            }
+        }
+        std::cout << color::GREEN
+                  << "  ========================================================================================"
+                  << color::RESET << std::endl;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// ProcessAgent — System Analyst
+// ---------------------------------------------------------------------------
+class ProcessAgent : public gaia::Agent {
+public:
+    explicit ProcessAgent(const std::string& modelId)
+        : Agent(makeConfig(modelId)) {
+        setOutputHandler(std::make_unique<ProcessConsole>());
+        init();
+    }
+
+protected:
+    std::string getSystemPrompt() const override {
+        return R"(You are an expert System Analyst running locally on AMD hardware via the GAIA framework. You make every process, service, and network connection on this PC understandable in plain English. You detect problems, explain what is normal vs. suspicious, and take targeted action.
+
+## SECTION DEFINITIONS
+- (A) "Processes" — items labeled A1, A2... = Running processes consuming the most resources
+- (B) "Services" — items labeled B1, B2... = Running services with problems (high memory >200 MB, error state, degraded)
+- (C) "Suspicious Items" — items labeled C1, C2... = Items exhibiting suspicious behavior or security concerns
+
+## ANALYSIS FORMAT
+
+Organize findings under these three headers. Use the exact header names shown. Number items within each group.
+
+A. Processes
+1. chrome.exe (x8) - 2.1 GB RAM - Google Chrome <- explorer.exe [HIGH]
+2. node.exe (x18) - 1.8 GB RAM - Node.js Runtime <- cmd.exe [NORMAL]
+
+B. Services
+1. WSearch (Windows Search) - 312 MB - high memory usage
+
+C. Suspicious Items
+None detected
+
+System Health: Healthy - All systems normal
+
+Section rules:
+- A. Processes: Top resource consumers grouped by name (instance count + parent if >1). Tag each [NORMAL], [HIGH], or [SUSPICIOUS].
+- B. Services: Only problematic services (high memory >200 MB, error/degraded). If none: write "All services running normally".
+- C. Suspicious Items: Unsigned binaries, unknown/empty publisher, unexpected paths (Temp/Downloads/AppData\Local\Temp), unknown parent. If none: write "None detected".
+
+Always print all three group headers (A. Processes, B. Services, C. Suspicious Items). Leave a blank line between groups.
+
+End with: System Health: [Healthy/Warning/Critical] - [one sentence summary]
+
+## REASONING PROTOCOL
+
+After EVERY tool result, structure your thought using these exact prefixes:
+
+FINDING: <1-2 sentences: key facts and values from the output>
+DECISION: <1 sentence: what to do next and WHY>
+
+## ACTION BEHAVIOR
+
+Users reference items by group letter + item number (e.g., "Explain A3", "Stop B1", "Quarantine C2").
+
+- **Explain**: If no item specified, explain ALL items from A, B, and C sections. If specified (e.g. A3), explain just that one. Use explain_item for full details.
+- **Stop**: For A-items use kill_process; for B-items use PowerShell Stop-Service. Explain impact and confirm first.
+- **Restart**: For A-items use restart_process (kills and relaunches). For B-items use restart_service. Confirm first.
+- **Manage resource hogs**: List hogs from analysis with a submenu of actions (explain, stop, restart). Wait for user choice.
+- **Quarantine**: Use quarantine_item with the full file path from explain_item. File is moved to C:\ProgramData\GAIA\quarantine\. Confirm first.
+
+## AVAILABLE TOOLS
+
+- `system_snapshot` — CPU, memory, disk, uptime, top processes (grouped, with parent), problematic/high-memory services, connection count.
+- `list_processes` — Top 20 by memory, top 10 by CPU, background process count.
+- `kill_process` — Terminate a process by name. ONLY after user confirmation.
+- `explain_item` — Full details on any process or service: path, publisher, signer, description, network connections.
+- `restart_process` — Kill and relaunch an application. ONLY after user confirmation.
+- `restart_service` — Restart a Windows service. ONLY after user confirmation.
+- `quarantine_item` — Move a suspicious file to quarantine. ONLY after user confirmation.
+
+## SAFETY
+
+- Destructive tools (kill_process, restart_process, restart_service, quarantine_item) require explicit user confirmation.
+- Never skip the confirmation step.
+- After any destructive action, report exactly what was done.
+
+## FINAL ANSWER FORMAT
+
+Only provide an "answer" after ALL tool calls are complete.
+- Use bullet points; no markdown tables or em-dashes
+- Bold key values: process names, memory amounts, percentages
+- Keep the answer concise and actionable
+
+## GOAL TRACKING
+
+Always set a short `goal` field (3-6 words) describing your current objective.)";
+    }
+
+    void registerTools() override {
+
+        // ==================================================================
+        // system_snapshot — System overview with services and connections
+        // ==================================================================
+        toolRegistry().registerTool(
+            "system_snapshot",
+            "System overview: CPU load, memory, disk, uptime, total process count, "
+            "network connection count, problematic running services (error/degraded or "
+            ">200 MB memory), and top 10 processes by memory. Use first during analysis.",
+            [](const gaia::json& /*args*/) -> gaia::json {
+                gaia::json result;
+                result["tool"]          = "system_snapshot";
+                result["disk"]          = getDiskUsageInfo();
+                result["memory"]        = getMemoryInfo();
+                result["top_processes"] = getTopProcesses(10);
+
+                std::string psCmd =
+                    "$o=@{}; "
+                    "$c=Get-CimInstance Win32_Processor; "
+                    "$o.cpu=@{load=$c.LoadPercentage;name=[string]$c.Name;"
+                    "curMHz=$c.CurrentClockSpeed;maxMHz=$c.MaxClockSpeed}; "
+                    "$os=Get-CimInstance Win32_OperatingSystem; "
+                    "$o.uptimeHrs=[math]::Round(((Get-Date)-$os.LastBootUpTime).TotalHours,1); "
+                    "$o.totalProcessCount=(Get-Process -EA 0).Count; "
+                    "$bg=(Get-Process -EA 0|Where-Object{$_.MainWindowHandle -eq 0}).Count; "
+                    "$o.backgroundProcessCount=$bg; "
+                    "$o.networkConnectionCount=(Get-NetTCPConnection -State Established -EA 0).Count; "
+                    "$psvc=Get-CimInstance Win32_Service -EA 0|Where-Object{"
+                    "$_.State -eq 'Running' -and ($_.Status -ne 'OK' -or $_.ExitCode -ne 0)}"
+                    "|Select-Object Name,DisplayName,Status,ExitCode -First 10; "
+                    "$o.problematicServices=@($psvc|ForEach-Object{@{name=$_.Name;"
+                    "displayName=[string]$_.DisplayName;status=[string]$_.Status;"
+                    "exitCode=$_.ExitCode}}); "
+                    "$hmem=Get-CimInstance Win32_Service -EA 0|Where-Object{"
+                    "$_.State -eq 'Running' -and $_.ProcessId -gt 0}|ForEach-Object{"
+                    "$proc=Get-Process -Id $_.ProcessId -EA 0; "
+                    "if($proc -and $proc.WorkingSet64 -gt 200MB){"
+                    "@{name=$_.Name;displayName=[string]$_.DisplayName;"
+                    "pid=$_.ProcessId;memMB=[math]::Round($proc.WorkingSet64/1MB)}}}; "
+                    "$o.highMemoryServices=@($hmem|Where-Object{$_}|Select-Object -First 10); "
+                    "$o|ConvertTo-Json -Depth 3 -Compress";
+
+                auto psData = parsePsJson(runShell(psCmd));
+                if (!psData.contains("error")) {
+                    result["cpu"]                      = psData.value("cpu", gaia::json::object());
+                    result["uptime_hours"]             = psData.value("uptimeHrs", 0.0);
+                    result["total_process_count"]      = psData.value("totalProcessCount", 0);
+                    result["background_process_count"] = psData.value("backgroundProcessCount", 0);
+                    result["network_connection_count"] = psData.value("networkConnectionCount", 0);
+                    result["problematic_services"]     = psData.value("problematicServices", gaia::json::array());
+                    result["high_memory_services"]     = psData.value("highMemoryServices", gaia::json::array());
+                } else {
+                    result["powershell_error"] = psData;
+                }
+
+                // Build command/output for CleanConsole
+                result["command"] = "Win32 API: memory, disk, processes + PowerShell: CPU, services, connections";
+                {
+                    std::string out;
+                    char buf[512];
+
+                    if (result.contains("cpu") && result["cpu"].is_object()) {
+                        auto& cpu = result["cpu"];
+                        std::snprintf(buf, sizeof(buf), "CPU: %d%% load  |  %s  |  %d / %d MHz\n",
+                            cpu.value("load", 0),
+                            cpu.value("name", std::string("?")).c_str(),
+                            cpu.value("curMHz", 0),
+                            cpu.value("maxMHz", 0));
+                        out += buf;
+                    }
+
+                    {
+                        auto& mem = result["memory"];
+                        std::snprintf(buf, sizeof(buf), "Memory: %s / %s  (%d%% used)\n",
+                            mem.value("used_human", std::string("?")).c_str(),
+                            mem.value("total_human", std::string("?")).c_str(),
+                            mem.value("used_percent", 0));
+                        out += buf;
+                    }
+
+                    if (result.contains("uptime_hours")) {
+                        std::snprintf(buf, sizeof(buf),
+                            "Uptime: %.1f hrs  |  Processes: %d  |  Connections: %d\n",
+                            result["uptime_hours"].get<double>(),
+                            result.value("total_process_count", 0),
+                            result.value("network_connection_count", 0));
+                        out += buf;
+                    }
+
+                    out += "\nDisk:\n";
+                    for (const auto& d : result["disk"]) {
+                        std::snprintf(buf, sizeof(buf), "  %s  %d%% used  |  %s free of %s\n",
+                            d.value("drive", std::string("?")).c_str(),
+                            d.value("used_percent", 0),
+                            d.value("free_human", std::string("?")).c_str(),
+                            d.value("total_human", std::string("?")).c_str());
+                        out += buf;
+                    }
+
+                    out += "\nTop 10 by memory:\n";
+                    out += formatProcessList(result["top_processes"]);
+
+                    bool hasProblematic = result.contains("problematic_services") &&
+                        result["problematic_services"].is_array() &&
+                        !result["problematic_services"].empty();
+                    bool hasHighMem = result.contains("high_memory_services") &&
+                        result["high_memory_services"].is_array() &&
+                        !result["high_memory_services"].empty();
+
+                    if (hasProblematic) {
+                        out += "\nProblematic services:\n";
+                        for (const auto& svc : result["problematic_services"]) {
+                            std::snprintf(buf, sizeof(buf), "  %s (%s) - Status: %s, ExitCode: %d\n",
+                                svc.value("name", std::string("?")).c_str(),
+                                svc.value("displayName", std::string("?")).c_str(),
+                                svc.value("status", std::string("?")).c_str(),
+                                svc.value("exitCode", 0));
+                            out += buf;
+                        }
+                    }
+                    if (hasHighMem) {
+                        out += "\nHigh-memory services:\n";
+                        for (const auto& svc : result["high_memory_services"]) {
+                            std::snprintf(buf, sizeof(buf), "  %s (%s) - PID %d - %d MB\n",
+                                svc.value("name", std::string("?")).c_str(),
+                                svc.value("displayName", std::string("?")).c_str(),
+                                svc.value("pid", 0),
+                                svc.value("memMB", 0));
+                            out += buf;
+                        }
+                    }
+                    if (!hasProblematic && !hasHighMem) {
+                        out += "\nServices: all running normally\n";
+                    }
+
+                    result["output"] = out;
+                }
+                return result;
+            }, {});
+
+        // ==================================================================
+        // list_processes — Full process list by memory and CPU
+        // ==================================================================
+        toolRegistry().registerTool(
+            "list_processes",
+            "Full process list: top 20 by memory (Win32 API) and top 10 by CPU time "
+            "(PowerShell). Also reports total memory state and background process count.",
+            [](const gaia::json& /*args*/) -> gaia::json {
+                gaia::json result;
+                result["tool"]          = "list_processes";
+                result["top_by_memory"] = getTopProcesses(20);
+                result["memory"]        = getMemoryInfo();
+
+                std::string psCmd =
+                    "$procs=Get-Process -EA 0|Sort-Object CPU -Descending|"
+                    "Select-Object -First 10 Name,Id,"
+                    "@{N='CpuSec';E={[math]::Round($_.CPU,1)}},"
+                    "@{N='MemMB';E={[math]::Round($_.WorkingSet64/1MB)}}; "
+                    "$bg=(Get-Process -EA 0|Where-Object{$_.MainWindowHandle -eq 0}).Count; "
+                    "@{topCpu=@($procs|ForEach-Object{@{name=$_.Name;pid=$_.Id;"
+                    "cpuSec=$_.CpuSec;memMB=$_.MemMB}});"
+                    "backgroundCount=$bg}|ConvertTo-Json -Depth 3 -Compress";
+
+                auto psData = parsePsJson(runShell(psCmd));
+                if (!psData.contains("error")) {
+                    result["top_by_cpu"]       = psData.value("topCpu", gaia::json::array());
+                    result["background_count"] = psData.value("backgroundCount", 0);
+                }
+
+                // Build command/output for CleanConsole
+                result["command"] = "Win32 API: top 20 by memory + PowerShell: top 10 by CPU time";
+                {
+                    std::string out;
+                    char buf[256];
+
+                    {
+                        auto& mem = result["memory"];
+                        std::snprintf(buf, sizeof(buf), "Memory: %s / %s  (%d%% used)",
+                            mem.value("used_human", std::string("?")).c_str(),
+                            mem.value("total_human", std::string("?")).c_str(),
+                            mem.value("used_percent", 0));
+                        out += buf;
+                    }
+                    if (result.contains("background_count")) {
+                        std::snprintf(buf, sizeof(buf), "  |  Background: %d\n",
+                            result["background_count"].get<int>());
+                        out += buf;
+                    } else {
+                        out += "\n";
+                    }
+
+                    out += "\nTop 20 by memory:\n";
+                    out += formatProcessList(result["top_by_memory"]);
+
+                    if (result.contains("top_by_cpu") && result["top_by_cpu"].is_array()) {
+                        out += "\nTop 10 by CPU time:\n";
+                        for (const auto& p : result["top_by_cpu"]) {
+                            std::snprintf(buf, sizeof(buf), "  %-28s  %.1f sec  |  %d MB\n",
+                                p.value("name", std::string("?")).c_str(),
+                                p.value("cpuSec", 0.0),
+                                p.value("memMB", 0));
+                            out += buf;
+                        }
+                    }
+
+                    result["output"] = out;
+                }
+                return result;
+            }, {});
+
+        // ==================================================================
+        // kill_process — Terminate a process by name
+        // ==================================================================
+        toolRegistry().registerTool(
+            "kill_process",
+            "Terminate a running process by name. Reports instances found, terminated "
+            "count, and memory freed. ONLY use after explicit user confirmation.",
+            [](const gaia::json& args) -> gaia::json {
+                std::string name = args.value("name", "");
+                if (name.empty()) {
+                    return {{"error",   "Process name is required"},
+                            {"tool",    "kill_process"},
+                            {"command", "Win32 API: TerminateProcess(?)"},
+                            {"output",  "Error: process name is required"}};
+                }
+
+                for (char c : name) {
+                    if (!std::isalnum(static_cast<unsigned char>(c)) &&
+                        c != '.' && c != '-' && c != '_') {
+                        return {{"error",   "Invalid process name: " + name},
+                                {"tool",    "kill_process"},
+                                {"command", "Win32 API: TerminateProcess(" + name + ")"},
+                                {"output",  "Error: invalid process name '" + name + "'"}};
+                    }
+                }
+
+                std::string target = name;
+                {
+                    std::string lower = target;
+                    for (auto& ch : lower)
+                        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                    if (lower.size() < 4 || lower.substr(lower.size() - 4) != ".exe")
+                        target += ".exe";
+                }
+
+                DWORD selfPid = GetCurrentProcessId();
+                HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+                if (snapshot == INVALID_HANDLE_VALUE) {
+                    return {{"error",   "Failed to create process snapshot"},
+                            {"tool",    "kill_process"},
+                            {"command", "Win32 API: TerminateProcess(" + target + ")"},
+                            {"output",  "Error: failed to create process snapshot"}};
+                }
+
+                struct MatchInfo { DWORD pid; uint64_t memBytes; };
+                std::vector<MatchInfo> matches;
+                PROCESSENTRY32W pe;
+                pe.dwSize = sizeof(pe);
+                if (Process32FirstW(snapshot, &pe)) {
+                    do {
+                        std::string exeName = wstringToUtf8(pe.szExeFile);
+                        if (_stricmp(exeName.c_str(), target.c_str()) == 0 &&
+                            pe.th32ProcessID != selfPid) {
+                            uint64_t mem = 0;
+                            HANDLE hProc = OpenProcess(
+                                PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pe.th32ProcessID);
+                            if (hProc) {
+                                PROCESS_MEMORY_COUNTERS pmc;
+                                if (K32GetProcessMemoryInfo(hProc, &pmc, sizeof(pmc)))
+                                    mem = pmc.WorkingSetSize;
+                                CloseHandle(hProc);
+                            }
+                            matches.push_back({pe.th32ProcessID, mem});
+                        }
+                    } while (Process32NextW(snapshot, &pe));
+                }
+                CloseHandle(snapshot);
+
+                if (matches.empty()) {
+                    return {{"tool",    "kill_process"},
+                            {"process", name},
+                            {"error",   "Process not found: " + name},
+                            {"command", "Win32 API: TerminateProcess(" + target + ")"},
+                            {"output",  "Process not found: " + name}};
+                }
+
+                int      terminated = 0;
+                int      failed     = 0;
+                uint64_t totalFreed = 0;
+                for (auto& m : matches) {
+                    HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, m.pid);
+                    if (hProc) {
+                        if (TerminateProcess(hProc, 1)) { ++terminated; totalFreed += m.memBytes; }
+                        else                             { ++failed; }
+                        CloseHandle(hProc);
+                    } else {
+                        ++failed;
+                    }
+                }
+
+                std::string killCmd = "Win32 API: TerminateProcess(" + target + ")";
+                std::string killOut = "Found " +
+                    std::to_string(static_cast<int>(matches.size())) +
+                    (matches.size() == 1 ? " instance" : " instances") +
+                    " of " + target + ", terminated " + std::to_string(terminated);
+                if (failed > 0)
+                    killOut += " (" + std::to_string(failed) + " failed)";
+                killOut += ", freed " + formatBytes(totalFreed);
+
+                return {
+                    {"tool",               "kill_process"},
+                    {"process",            name},
+                    {"instances_found",    static_cast<int>(matches.size())},
+                    {"terminated",         terminated},
+                    {"failed",             failed},
+                    {"memory_freed_bytes", totalFreed},
+                    {"memory_freed_human", formatBytes(totalFreed)},
+                    {"status",             failed == 0 ? "completed" : "partial"},
+                    {"command",            killCmd},
+                    {"output",             killOut}
+                };
+            },
+            {{"name", gaia::ToolParamType::STRING, true,
+              "Process name to terminate (e.g., 'chrome.exe')"}});
+
+        // ==================================================================
+        // explain_item — Explain any process or service in plain English
+        // ==================================================================
+        toolRegistry().registerTool(
+            "explain_item",
+            "Get full details on any process or service: path, publisher/signer, "
+            "description, parent process, memory and CPU usage, and active network "
+            "connections. The LLM uses this to explain what an item is and whether "
+            "it is normal.",
+            [](const gaia::json& args) -> gaia::json {
+                std::string name = args.value("name", "");
+                if (name.empty()) {
+                    return {{"error",   "Name is required"},
+                            {"tool",    "explain_item"},
+                            {"command", "explain_item(?)"},
+                            {"output",  "Error: name is required"}};
+                }
+                // Validate: alphanumeric, dots, hyphens, underscores (service names are clean)
+                for (char c : name) {
+                    if (!std::isalnum(static_cast<unsigned char>(c)) &&
+                        c != '.' && c != '-' && c != '_') {
+                        return {{"error",   "Invalid name: " + name},
+                                {"tool",    "explain_item"},
+                                {"command", "explain_item(" + name + ")"},
+                                {"output",  "Error: invalid name '" + name + "'"}};
+                    }
+                }
+
+                // Ensure .exe for process lookup
+                std::string target = name;
+                {
+                    std::string lower = target;
+                    for (auto& ch : lower)
+                        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                    if (lower.size() < 4 || lower.substr(lower.size() - 4) != ".exe")
+                        target += ".exe";
+                }
+
+                gaia::json result;
+                result["tool"]    = "explain_item";
+                result["name"]    = name;
+
+                // Try to find as a process via Toolhelp snapshot
+                struct MatchInfo { DWORD pid; DWORD parentPid; uint64_t memBytes; };
+                std::vector<MatchInfo> matches;
+                std::string parentName;
+
+                {
+                    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+                    if (snapshot != INVALID_HANDLE_VALUE) {
+                        // Pass 1: find matching processes
+                        PROCESSENTRY32W pe;
+                        pe.dwSize = sizeof(pe);
+                        if (Process32FirstW(snapshot, &pe)) {
+                            do {
+                                std::string exeName = wstringToUtf8(pe.szExeFile);
+                                if (_stricmp(exeName.c_str(), target.c_str()) == 0) {
+                                    uint64_t mem = 0;
+                                    HANDLE hProc = OpenProcess(
+                                        PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+                                        FALSE, pe.th32ProcessID);
+                                    if (hProc) {
+                                        PROCESS_MEMORY_COUNTERS pmc;
+                                        if (K32GetProcessMemoryInfo(hProc, &pmc, sizeof(pmc)))
+                                            mem = pmc.WorkingSetSize;
+                                        CloseHandle(hProc);
+                                    }
+                                    matches.push_back({pe.th32ProcessID, pe.th32ParentProcessID, mem});
+                                }
+                            } while (Process32NextW(snapshot, &pe));
+                        }
+
+                        // Pass 2: look up parent process name from snapshot
+                        if (!matches.empty()) {
+                            DWORD parentPid = matches[0].parentPid;
+                            // Special PIDs
+                            if (parentPid == 0) {
+                                parentName = "System Idle Process";
+                            } else if (parentPid == 4) {
+                                parentName = "System";
+                            } else {
+                                pe.dwSize = sizeof(pe);
+                                if (Process32FirstW(snapshot, &pe)) {
+                                    do {
+                                        if (pe.th32ProcessID == parentPid) {
+                                            parentName = wstringToUtf8(pe.szExeFile);
+                                            break;
+                                        }
+                                    } while (Process32NextW(snapshot, &pe));
+                                }
+                            }
+                        }
+                        CloseHandle(snapshot);
+                    }
+                }
+
+                // Tier 3: CIM fallback for recently-exited parents
+                if (!matches.empty() && parentName.empty()) {
+                    DWORD parentPid = matches[0].parentPid;
+                    std::string cimCmd =
+                        "$p=Get-CimInstance Win32_Process -Filter 'ProcessId=" +
+                        std::to_string(parentPid) + "' -EA 0; "
+                        "if($p){$p.Name}else{''}";
+                    std::string cimOut = runShell(cimCmd);
+                    // Trim whitespace/newlines
+                    while (!cimOut.empty() &&
+                           (cimOut.back() == '\r' || cimOut.back() == '\n' || cimOut.back() == ' '))
+                        cimOut.pop_back();
+                    parentName = cimOut.empty() ? "(exited)" : cimOut;
+                }
+
+                // Get full path if found as a process
+                std::string processPath;
+                if (!matches.empty()) {
+                    HANDLE hProc = OpenProcess(
+                        PROCESS_QUERY_LIMITED_INFORMATION, FALSE, matches[0].pid);
+                    if (hProc) {
+                        wchar_t pathBuf[MAX_PATH];
+                        DWORD pathLen = MAX_PATH;
+                        if (QueryFullProcessImageNameW(hProc, 0, pathBuf, &pathLen))
+                            processPath = wstringToUtf8(std::wstring(pathBuf, pathLen));
+                        CloseHandle(hProc);
+                    }
+
+                    uint64_t totalMem = 0;
+                    for (auto& m : matches) totalMem += m.memBytes;
+                    result["type"]               = "process";
+                    result["instances"]          = static_cast<int>(matches.size());
+                    result["pid"]                = matches[0].pid;
+                    result["parent_pid"]         = matches[0].parentPid;
+                    result["parent_name"]        = parentName.empty() ? "(exited)" : parentName;
+                    result["path"]               = processPath.empty() ? "unknown" : processPath;
+                    result["memory_bytes"]       = matches[0].memBytes;
+                    result["memory_human"]       = formatBytes(matches[0].memBytes);
+                    result["total_memory_bytes"] = totalMem;
+                    result["total_memory_human"] = formatBytes(totalMem);
+
+                    // Build PID list for network connections
+                    std::string pidList;
+                    for (size_t i = 0; i < matches.size() && i < 10; ++i) {
+                        if (i > 0) pidList += ",";
+                        pidList += std::to_string(matches[i].pid);
+                    }
+
+                    // PowerShell: file info, signer, CPU, connections
+                    std::string pathEscaped = processPath;
+                    // Escape single quotes for PowerShell
+                    for (size_t pos = 0; (pos = pathEscaped.find('\'', pos)) != std::string::npos; pos += 2)
+                        pathEscaped.replace(pos, 1, "''");
+
+                    std::string psCmd =
+                        "$o=@{}; "
+                        "$path='" + pathEscaped + "'; "
+                        "if($path -and (Test-Path $path -EA 0)) {"
+                        "  try {"
+                        "    $vi=[System.Diagnostics.FileVersionInfo]::GetVersionInfo($path); "
+                        "    $o.description=$vi.FileDescription; "
+                        "    $o.company=$vi.CompanyName; "
+                        "    $o.product=$vi.ProductName; "
+                        "    $o.version=$vi.FileVersion"
+                        "  } catch {}; "
+                        "  try {"
+                        "    $sig=Get-AuthenticodeSignature $path -EA 0; "
+                        "    if($sig) {"
+                        "      $o.signer=[string]$sig.SignerCertificate.Subject; "
+                        "      $o.signatureStatus=[string]$sig.Status"
+                        "    }"
+                        "  } catch {}"
+                        "}; "
+                        "try {"
+                        "  $proc=Get-Process -Id " + std::to_string(matches[0].pid) + " -EA 0; "
+                        "  if($proc) { $o.cpuSeconds=[math]::Round($proc.CPU,1); "
+                        "  $o.startTime=$proc.StartTime.ToString('yyyy-MM-dd HH:mm:ss') }"
+                        "} catch {}; "
+                        "try {"
+                        "  $pids=@(" + pidList + "); "
+                        "  $conns=Get-NetTCPConnection -OwningProcess $pids -EA 0 | "
+                        "  Select-Object LocalPort,RemoteAddress,RemotePort,State; "
+                        "  $o.connections=@($conns|ForEach-Object{"
+                        "    @{localPort=$_.LocalPort;remoteAddr=[string]$_.RemoteAddress;"
+                        "    remotePort=$_.RemotePort;state=[string]$_.State}})"
+                        "} catch { $o.connections=@() }; "
+                        "$o|ConvertTo-Json -Depth 3 -Compress";
+
+                    auto psData = parsePsJson(runShell(psCmd));
+                    if (!psData.contains("error")) {
+                        // Use safe getter: psData.value() throws if field exists but is null
+                        auto safeStr = [&](const char* key) -> std::string {
+                            return (psData.contains(key) && psData[key].is_string())
+                                ? psData[key].get<std::string>() : "";
+                        };
+                        auto safeArr = [&](const char* key) -> gaia::json {
+                            return (psData.contains(key) && psData[key].is_array())
+                                ? psData[key] : gaia::json::array();
+                        };
+                        result["description"]      = safeStr("description");
+                        result["company"]          = safeStr("company");
+                        result["product"]          = safeStr("product");
+                        result["version"]          = safeStr("version");
+                        result["signer"]           = safeStr("signer");
+                        result["signature_status"] = safeStr("signatureStatus");
+                        result["cpu_seconds"]      = psData.contains("cpuSeconds") && psData["cpuSeconds"].is_number()
+                                                       ? psData["cpuSeconds"].get<double>() : 0.0;
+                        result["start_time"]       = safeStr("startTime");
+                        result["connections"]      = safeArr("connections");
+                    }
+                } else {
+                    // Not found as a process — try as a service
+                    std::string psCmd =
+                        "$svc=Get-Service -Name '" + name + "' -EA 0; "
+                        "if($svc) {"
+                        "  $wmi=Get-WmiObject Win32_Service -Filter \"Name='" + name + "'\" -EA 0; "
+                        "  @{type='service';name=$svc.Name;"
+                        "  displayName=[string]$svc.DisplayName;"
+                        "  status=[string]$svc.Status;"
+                        "  startType=[string]$svc.StartType;"
+                        "  pathName=if($wmi){$wmi.PathName}else{'unknown'};"
+                        "  description=if($wmi){$wmi.Description}else{''};"
+                        "  startName=if($wmi){$wmi.StartName}else{'unknown'}"
+                        "  }|ConvertTo-Json -Compress"
+                        "} else { @{error='Not found as process or service'}|ConvertTo-Json -Compress }";
+
+                    auto psData = parsePsJson(runShell(psCmd));
+                    if (!psData.contains("error")) {
+                        result["type"]         = "service";
+                        result["display_name"] = psData.value("displayName",  std::string(""));
+                        result["status"]       = psData.value("status",       std::string(""));
+                        result["start_type"]   = psData.value("startType",    std::string(""));
+                        result["path"]         = psData.value("pathName",     std::string("unknown"));
+                        result["description"]  = psData.value("description",  std::string(""));
+                        result["start_name"]   = psData.value("startName",    std::string("unknown"));
+                        processPath = result["path"].get<std::string>();
+                    } else {
+                        return {{"tool",    "explain_item"},
+                                {"name",    name},
+                                {"error",   "'" + name + "' not found as a process or service"},
+                                {"command", "Win32 API + PowerShell: explain " + name},
+                                {"output",  "Not found: " + name}};
+                    }
+                }
+
+                // Build command/output for CleanConsole
+                result["command"] = "Win32 API + PowerShell: explain " + target;
+                {
+                    std::string out;
+                    char buf[512];
+
+                    if (result.value("type", std::string("")) == "service") {
+                        std::snprintf(buf, sizeof(buf), "%s (%s)\n",
+                            name.c_str(),
+                            result.value("display_name", std::string("")).c_str());
+                        out += buf;
+                        out += "  Type:        Service\n";
+                        if (!result.value("description", std::string("")).empty())
+                            out += "  Description: " + result["description"].get<std::string>() + "\n";
+                        out += "  Status:      " + result.value("status",     std::string("?")) + "\n";
+                        out += "  Start type:  " + result.value("start_type", std::string("?")) + "\n";
+                        out += "  Path:        " + result.value("path",       std::string("?")) + "\n";
+                        out += "  Account:     " + result.value("start_name", std::string("?")) + "\n";
+                    } else {
+                        int instCount = result.value("instances", 1);
+                        std::snprintf(buf, sizeof(buf), "%s  (PID %d, %d instance%s)\n",
+                            target.c_str(),
+                            result.value("pid", 0),
+                            instCount,
+                            instCount == 1 ? "" : "s");
+                        out += buf;
+
+                        if (!result.value("description", std::string("")).empty())
+                            out += "  Description: " + result["description"].get<std::string>() + "\n";
+                        if (!result.value("company", std::string("")).empty())
+                            out += "  Company:     " + result["company"].get<std::string>() + "\n";
+                        out += "  Path:        " + result.value("path",        std::string("?")) + "\n";
+                        out += "  Parent:      " + result.value("parent_name", std::string("?")) + "\n";
+
+                        if (!result.value("signer", std::string("")).empty()) {
+                            out += "  Signer:      " + result["signer"].get<std::string>() + "\n";
+                            out += "  Signature:   " + result.value("signature_status", std::string("?")) + "\n";
+                        }
+
+                        std::snprintf(buf, sizeof(buf), "  Memory:      %s",
+                            formatBytes(result.value("memory_bytes", uint64_t(0))).c_str());
+                        out += buf;
+                        if (instCount > 1) {
+                            out += "  (total: " + result.value("total_memory_human", std::string("?")) + ")";
+                        }
+                        out += "\n";
+
+                        if (result.contains("cpu_seconds")) {
+                            std::snprintf(buf, sizeof(buf), "  CPU time:    %.1f sec\n",
+                                result["cpu_seconds"].get<double>());
+                            out += buf;
+                        }
+
+                        if (result.contains("start_time") &&
+                            !result["start_time"].get<std::string>().empty()) {
+                            out += "  Started:     " + result["start_time"].get<std::string>() + "\n";
+                        }
+
+                        if (result.contains("connections") && result["connections"].is_array()) {
+                            auto& conns = result["connections"];
+                            if (conns.empty()) {
+                                out += "  Network:     no active connections\n";
+                            } else {
+                                std::snprintf(buf, sizeof(buf), "  Network:     %d connection%s\n",
+                                    static_cast<int>(conns.size()),
+                                    conns.size() == 1 ? "" : "s");
+                                out += buf;
+                                int shown = 0;
+                                for (const auto& c : conns) {
+                                    if (shown >= 5) {
+                                        std::snprintf(buf, sizeof(buf), "    ... and %d more\n",
+                                            static_cast<int>(conns.size()) - 5);
+                                        out += buf;
+                                        break;
+                                    }
+                                    std::snprintf(buf, sizeof(buf), "    :%d -> %s:%d  (%s)\n",
+                                        c.value("localPort", 0),
+                                        c.value("remoteAddr", std::string("?")).c_str(),
+                                        c.value("remotePort", 0),
+                                        c.value("state", std::string("?")).c_str());
+                                    out += buf;
+                                    ++shown;
+                                }
+                            }
+                        }
+                    }
+                    result["output"] = out;
+                }
+                return result;
+            },
+            {{"name", gaia::ToolParamType::STRING, true,
+              "Process or service name to explain (e.g., 'audiodg.exe', 'Audiosrv')"}});
+
+        // ==================================================================
+        // restart_process — Kill and relaunch an application
+        // ==================================================================
+        toolRegistry().registerTool(
+            "restart_process",
+            "Force-restart a hung application: terminates all instances and relaunches "
+            "from the same executable path. ONLY after explicit user confirmation.",
+            [](const gaia::json& args) -> gaia::json {
+                std::string name = args.value("name", "");
+                if (name.empty()) {
+                    return {{"error",   "Process name is required"},
+                            {"tool",    "restart_process"},
+                            {"command", "restart_process(?)"},
+                            {"output",  "Error: process name is required"}};
+                }
+                for (char c : name) {
+                    if (!std::isalnum(static_cast<unsigned char>(c)) &&
+                        c != '.' && c != '-' && c != '_') {
+                        return {{"error",   "Invalid process name: " + name},
+                                {"tool",    "restart_process"},
+                                {"command", "restart_process(" + name + ")"},
+                                {"output",  "Error: invalid process name"}};
+                    }
+                }
+
+                std::string target = name;
+                {
+                    std::string lower = target;
+                    for (auto& ch : lower)
+                        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                    if (lower.size() < 4 || lower.substr(lower.size() - 4) != ".exe")
+                        target += ".exe";
+                }
+
+                DWORD selfPid = GetCurrentProcessId();
+                HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+                if (snapshot == INVALID_HANDLE_VALUE) {
+                    return {{"error",   "Failed to create process snapshot"},
+                            {"tool",    "restart_process"},
+                            {"command", "restart_process(" + target + ")"},
+                            {"output",  "Error: failed to create process snapshot"}};
+                }
+
+                struct MatchInfo { DWORD pid; uint64_t memBytes; };
+                std::vector<MatchInfo> matches;
+                std::string processPath;
+
+                PROCESSENTRY32W pe;
+                pe.dwSize = sizeof(pe);
+                if (Process32FirstW(snapshot, &pe)) {
+                    do {
+                        std::string exeName = wstringToUtf8(pe.szExeFile);
+                        if (_stricmp(exeName.c_str(), target.c_str()) == 0 &&
+                            pe.th32ProcessID != selfPid) {
+                            uint64_t mem = 0;
+                            HANDLE hProc = OpenProcess(
+                                PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+                                FALSE, pe.th32ProcessID);
+                            if (hProc) {
+                                PROCESS_MEMORY_COUNTERS pmc;
+                                if (K32GetProcessMemoryInfo(hProc, &pmc, sizeof(pmc)))
+                                    mem = pmc.WorkingSetSize;
+                                CloseHandle(hProc);
+                            }
+                            // Get path from the first match
+                            if (processPath.empty()) {
+                                HANDLE hPath = OpenProcess(
+                                    PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+                                if (hPath) {
+                                    wchar_t pathBuf[MAX_PATH];
+                                    DWORD pathLen = MAX_PATH;
+                                    if (QueryFullProcessImageNameW(hPath, 0, pathBuf, &pathLen))
+                                        processPath = wstringToUtf8(std::wstring(pathBuf, pathLen));
+                                    CloseHandle(hPath);
+                                }
+                            }
+                            matches.push_back({pe.th32ProcessID, mem});
+                        }
+                    } while (Process32NextW(snapshot, &pe));
+                }
+                CloseHandle(snapshot);
+
+                if (matches.empty()) {
+                    return {{"tool",    "restart_process"},
+                            {"process", name},
+                            {"error",   "Process not found: " + name},
+                            {"command", "restart_process(" + target + ")"},
+                            {"output",  "Process not found: " + name}};
+                }
+
+                if (processPath.empty()) {
+                    return {{"tool",    "restart_process"},
+                            {"process", name},
+                            {"error",   "Could not determine process path for: " + name},
+                            {"command", "restart_process(" + target + ")"},
+                            {"output",  "Error: cannot determine executable path for " + name}};
+                }
+
+                // Kill all instances
+                int      terminated = 0;
+                uint64_t totalFreed = 0;
+                for (auto& m : matches) {
+                    HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, m.pid);
+                    if (hProc) {
+                        if (TerminateProcess(hProc, 1)) { ++terminated; totalFreed += m.memBytes; }
+                        CloseHandle(hProc);
+                    }
+                }
+
+                // Relaunch
+                bool relaunched = false;
+                {
+                    std::wstring wpath = utf8ToWstring(processPath);
+                    STARTUPINFOW si    = {};
+                    si.cb             = sizeof(si);
+                    si.dwFlags        = STARTF_USESHOWWINDOW;
+                    si.wShowWindow    = SW_SHOWNORMAL;
+                    PROCESS_INFORMATION pi = {};
+                    if (CreateProcessW(
+                            wpath.c_str(), nullptr, nullptr, nullptr,
+                            FALSE, DETACHED_PROCESS | CREATE_NEW_CONSOLE,
+                            nullptr, nullptr, &si, &pi)) {
+                        CloseHandle(pi.hProcess);
+                        CloseHandle(pi.hThread);
+                        relaunched = true;
+                    }
+                }
+
+                std::string cmd = "Win32 API: TerminateProcess + CreateProcessW(" + target + ")";
+                std::string out = "Terminated: " + target +
+                    " (" + std::to_string(terminated) + " instance" +
+                    (terminated == 1 ? "" : "s") + ", " +
+                    formatBytes(totalFreed) + " freed)\n";
+                if (relaunched)
+                    out += "Relaunched: " + processPath;
+                else
+                    out += "Relaunch failed: could not start " + processPath;
+
+                return {
+                    {"tool",               "restart_process"},
+                    {"process",            name},
+                    {"path",               processPath},
+                    {"instances_killed",   terminated},
+                    {"memory_freed_human", formatBytes(totalFreed)},
+                    {"relaunched",         relaunched},
+                    {"status",             relaunched ? "restarted" : "killed_only"},
+                    {"command",            cmd},
+                    {"output",             out}
+                };
+            },
+            {{"name", gaia::ToolParamType::STRING, true,
+              "Application name to restart (e.g., 'explorer.exe')"}});
+
+        // ==================================================================
+        // restart_service — Restart a Windows service
+        // ==================================================================
+        toolRegistry().registerTool(
+            "restart_service",
+            "Restart a Windows service by its service name. Reports previous status "
+            "and new status. ONLY after explicit user confirmation.",
+            [](const gaia::json& args) -> gaia::json {
+                std::string name = args.value("name", "");
+                if (name.empty()) {
+                    return {{"error",   "Service name is required"},
+                            {"tool",    "restart_service"},
+                            {"command", "Restart-Service(?)"},
+                            {"output",  "Error: service name is required"}};
+                }
+                if (!isSafeShellArg(name)) {
+                    return {{"error",   "Invalid service name: " + name},
+                            {"tool",    "restart_service"},
+                            {"command", "Restart-Service(" + name + ")"},
+                            {"output",  "Error: invalid service name '" + name + "'"}};
+                }
+
+                std::string psCmd =
+                    "$n='" + name + "'; "
+                    "$svc=Get-Service -Name $n -EA 0; "
+                    "if(-not $svc) { @{error='Service not found: ' + $n}|ConvertTo-Json -Compress; exit }; "
+                    "$prev=[string]$svc.Status; "
+                    "try { Restart-Service -Name $n -Force -ErrorAction Stop; "
+                    "  $new=[string](Get-Service -Name $n).Status; "
+                    "  @{name=$n;displayName=[string]$svc.DisplayName;"
+                    "  previousStatus=$prev;newStatus=$new;success=$true}"
+                    "} catch { "
+                    "  @{name=$n;displayName=[string]$svc.DisplayName;"
+                    "  previousStatus=$prev;newStatus='Failed';success=$false;"
+                    "  error=$_.Exception.Message}"
+                    "}|ConvertTo-Json -Compress";
+
+                auto psData = parsePsJson(runShell(psCmd));
+
+                if (psData.contains("error")) {
+                    std::string errMsg = psData["error"].get<std::string>();
+                    return {{"tool",    "restart_service"},
+                            {"service", name},
+                            {"error",   errMsg},
+                            {"command", "PowerShell: Restart-Service " + name},
+                            {"output",  "Error: " + errMsg}};
+                }
+
+                bool success     = psData.value("success", false);
+                std::string disp = psData.value("displayName",    std::string(name));
+                std::string prev = psData.value("previousStatus", std::string("?"));
+                std::string next = psData.value("newStatus",      std::string("?"));
+
+                std::string out = "Service: " + name + " (" + disp + ")\n"
+                                + "Previous: " + prev + "\n"
+                                + "Current:  " + next;
+
+                return {
+                    {"tool",            "restart_service"},
+                    {"service",         name},
+                    {"display_name",    disp},
+                    {"previous_status", prev},
+                    {"new_status",      next},
+                    {"success",         success},
+                    {"command",         "PowerShell: Restart-Service -Name " + name + " -Force"},
+                    {"output",          out}
+                };
+            },
+            {{"name", gaia::ToolParamType::STRING, true,
+              "Service name to restart (e.g., 'Audiosrv', 'wuauserv')"}});
+
+        // ==================================================================
+        // quarantine_item — Move suspicious file to quarantine folder
+        // ==================================================================
+        toolRegistry().registerTool(
+            "quarantine_item",
+            "Move a suspicious executable to the GAIA quarantine folder "
+            "(C:\\ProgramData\\GAIA\\quarantine\\). Renames it with .quarantined "
+            "extension to block execution. ONLY after explicit user confirmation.",
+            [](const gaia::json& args) -> gaia::json {
+                std::string path = args.value("path", "");
+                if (path.empty()) {
+                    return {{"error",   "File path is required"},
+                            {"tool",    "quarantine_item"},
+                            {"command", "quarantine_item(?)"},
+                            {"output",  "Error: file path is required"}};
+                }
+                if (!isSafePath(path)) {
+                    return {{"error",   "Invalid or unsafe file path"},
+                            {"tool",    "quarantine_item"},
+                            {"command", "quarantine_item(...)"},
+                            {"output",  "Error: invalid file path"}};
+                }
+
+                // Check file exists
+                std::wstring wpath = utf8ToWstring(path);
+                DWORD attrs = GetFileAttributesW(wpath.c_str());
+                if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+                    return {{"tool",    "quarantine_item"},
+                            {"path",    path},
+                            {"error",   "File not found or is a directory: " + path},
+                            {"command", "Win32 API: MoveFileExW(" + path + ")"},
+                            {"output",  "File not found: " + path}};
+                }
+
+                // Get file size
+                WIN32_FILE_ATTRIBUTE_DATA fad;
+                uint64_t fileSize = 0;
+                if (GetFileAttributesExW(wpath.c_str(), GetFileExInfoStandard, &fad)) {
+                    fileSize = (static_cast<uint64_t>(fad.nFileSizeHigh) << 32) | fad.nFileSizeLow;
+                }
+
+                // Extract filename
+                std::string filename = path;
+                auto lastSlash = filename.rfind('\\');
+                if (lastSlash != std::string::npos) filename = filename.substr(lastSlash + 1);
+
+                // Create quarantine directory
+                std::wstring quarantineDir = L"C:\\ProgramData\\GAIA\\quarantine";
+                CreateDirectoryW(quarantineDir.c_str(), nullptr);
+                // Ignore error — if it already exists that's fine
+
+                // Build destination path (filename + timestamp + .quarantined)
+                SYSTEMTIME st;
+                GetLocalTime(&st);
+                char dateBuf[16];
+                std::snprintf(dateBuf, sizeof(dateBuf), "%04d%02d%02d",
+                    st.wYear, st.wMonth, st.wDay);
+
+                std::string destName = filename + "." + dateBuf + ".quarantined";
+                std::string destPath = "C:\\ProgramData\\GAIA\\quarantine\\" + destName;
+                std::wstring wdest   = utf8ToWstring(destPath);
+
+                if (!MoveFileExW(wpath.c_str(), wdest.c_str(), MOVEFILE_COPY_ALLOWED)) {
+                    DWORD err = GetLastError();
+                    char errBuf[64];
+                    std::snprintf(errBuf, sizeof(errBuf), "Win32 error %lu", err);
+                    return {{"tool",    "quarantine_item"},
+                            {"path",    path},
+                            {"error",   std::string("Failed to move file: ") + errBuf},
+                            {"command", "Win32 API: MoveFileExW(" + path + ")"},
+                            {"output",  std::string("Failed to quarantine: ") + errBuf}};
+                }
+
+                std::string out = "Quarantined: " + path + "\n"
+                                + "Moved to:    " + destPath + "\n"
+                                + "File size:   " + formatBytes(fileSize);
+
+                return {
+                    {"tool",            "quarantine_item"},
+                    {"original_path",   path},
+                    {"quarantine_path", destPath},
+                    {"filename",        filename},
+                    {"file_size_bytes", fileSize},
+                    {"file_size_human", formatBytes(fileSize)},
+                    {"status",          "quarantined"},
+                    {"command",         "Win32 API: MoveFileExW(" + path + " -> " + destPath + ")"},
+                    {"output",          out}
+                };
+            },
+            {{"path", gaia::ToolParamType::STRING, true,
+              "Full path to the suspicious file (e.g., 'C:\\Users\\user\\Temp\\unknown.exe')"}});
+    }
+
+private:
+    static gaia::AgentConfig makeConfig(const std::string& modelId) {
+        gaia::AgentConfig config;
+        config.maxSteps = 20;
+        config.modelId  = modelId;
+        return config;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Action menu
+// ---------------------------------------------------------------------------
+struct ActionEntry {
+    const char* label;
+    const char* description;
+    const char* prompt;
+};
+
+static const ActionEntry kActions[] = {
+    {
+        "Explain",
+        "Get details on a process or service  (e.g. 'Explain A3' or just 'Explain' for all)",
+        "The user wants to explain items from the analysis. "
+        "If no specific item was mentioned, explain ALL items from the A, B, and C sections "
+        "by calling explain_item for each one. "
+        "If a specific item was mentioned (e.g. A3, B1, C2), explain just that one. "
+        "For each item use explain_item to provide full details: what it is, who made it, "
+        "where it runs from, its parent process, and whether it is normal or suspicious."
+    },
+    {
+        "Stop",
+        "Kill a process or stop a service  (e.g. 'Stop A3' or 'Stop B1')",
+        "The user wants to stop something. Ask which item from the analysis (A1, B2, etc.). "
+        "For a process or application (A-label), use kill_process. "
+        "For a service (B-label), stop it via PowerShell (Stop-Service). "
+        "Explain the impact clearly and confirm before proceeding."
+    },
+    {
+        "Restart",
+        "Restart an app or service  (e.g. 'Restart B1')",
+        "The user wants to restart something. Ask which item — A-label for application, "
+        "B-label for service. For an application, use restart_process to kill and relaunch it. "
+        "For a service, use restart_service. Explain what will happen and confirm before proceeding."
+    },
+    {
+        "Manage resource hogs",
+        "Review and manage top resource consumers",
+        "The user wants to manage resource hogs. Do the following:\n"
+        "1. List the top resource consumers from the 'A. Processes' section, "
+        "showing their reference (A1, A2...), name, memory, and CPU usage.\n"
+        "2. Present these actions the user can take:\n"
+        "   - Explain: Get details on a resource hog (e.g. 'Explain A2')\n"
+        "   - Stop: Kill a resource hog (e.g. 'Stop A1')\n"
+        "   - Restart: Restart a resource hog (e.g. 'Restart A3')\n"
+        "3. Ask the user what they would like to do.\n"
+        "Do NOT batch-kill anything automatically. Wait for the user to choose."
+    },
+    {
+        "Quarantine",
+        "Move a suspicious file to C:\\ProgramData\\GAIA\\quarantine  (e.g. 'Quarantine C1')",
+        "The user wants to quarantine suspicious items. List all items from the "
+        "C. Suspicious Items section with their anomaly signals and file paths. "
+        "Ask if they want to quarantine all or specific ones. Confirm, then use "
+        "quarantine_item for each one."
+    },
+    {
+        "Reanalyze",
+        "Run a fresh system analysis",
+        ""  // handled specially in main
+    },
+};
+static constexpr size_t kActionsSize = sizeof(kActions) / sizeof(kActions[0]);
+
+static const char* kAutoAnalysisPrompt =
+    "Analyze this system now. No user interaction needed - just run the tools and report.\n\n"
+    "Steps:\n"
+    "1. Run system_snapshot (overview: CPU, memory, disk, services, processes).\n"
+    "2. Run list_processes (detailed memory and CPU data).\n\n"
+    "Output findings using this EXACT layout:\n\n"
+    "A. Processes\n"
+    "1. chrome.exe (x8) - 2.1 GB RAM - Google Chrome <- explorer.exe [NORMAL]\n"
+    "2. node.exe (x4) - 900 MB RAM - Node.js Runtime <- cmd.exe [NORMAL]\n\n"
+    "B. Services\n"
+    "1. WSearch (Windows Search) - 312 MB - high memory usage\n"
+    "(or if none: 'All services running normally')\n\n"
+    "C. Suspicious Items\n"
+    "1. unknown.exe - C:\\Temp\\unknown.exe - unsigned, running from Temp\n"
+    "(or if none: 'None detected')\n\n"
+    "Replace the example items with REAL data from the tools.\n"
+    "Always print all three headers (A. Processes, B. Services, C. Suspicious Items). "
+    "Leave a blank line between groups.\n\n"
+    "System Health: [Healthy/Warning/Critical] - [one sentence]\n"
+    "Maximum 8 items per section. Keep each item to 1 line.";
+
+static void printActionMenu() {
+    std::cout << color::CYAN
+              << "  ========================================================================================"
+              << color::RESET << std::endl;
+    std::cout << color::BOLD << "  Available Actions:"
+              << color::RESET << std::endl;
+    std::cout << std::endl;
+    for (size_t i = 0; i < kActionsSize; ++i) {
+        std::cout << color::YELLOW << "  [" << (i + 1) << "] "
+                  << color::RESET << color::WHITE
+                  << kActions[i].label
+                  << color::RESET;
+        std::cout << color::GRAY << "  — " << kActions[i].description
+                  << color::RESET << std::endl;
+    }
+    std::cout << color::CYAN
+              << "  ========================================================================================"
+              << color::RESET << std::endl;
+    std::cout << color::GRAY
+              << "  Or type your own question. Examples: 'Explain A3', 'Stop B1', 'Quarantine C2'"
+              << color::RESET << std::endl;
+    std::cout << std::endl;
+}
+
+// ---------------------------------------------------------------------------
+// main — model selection, auto-analysis, then action loop
+// Pass model as first arg to skip the interactive prompt:
+//   process_agent.exe 1        → GPU (Qwen3-4B-Instruct-2507-GGUF)
+//   process_agent.exe 2        → NPU (Qwen3-4B-Instruct-2507-FLM)
+//   process_agent.exe <model>  → exact model ID
+// ---------------------------------------------------------------------------
+int main(int argc, char* argv[]) {
+    try {
+        // Ensure UTF-8 output so em dashes and other Unicode render correctly
+        SetConsoleOutputCP(CP_UTF8);
+        SetConsoleCP(CP_UTF8);
+
+        // --- Admin check ---
+        {
+            bool isAdmin = false;
+            HANDLE token = nullptr;
+            if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+                TOKEN_ELEVATION elevation{};
+                DWORD size = sizeof(elevation);
+                if (GetTokenInformation(token, TokenElevation, &elevation,
+                                        sizeof(elevation), &size)) {
+                    isAdmin = elevation.TokenIsElevated != 0;
+                }
+                CloseHandle(token);
+            }
+            if (!isAdmin) {
+                std::cout << std::endl;
+                std::cout << color::YELLOW << color::BOLD
+                          << "  WARNING: " << color::RESET
+                          << color::YELLOW
+                          << "Not running as admin."
+                          << color::RESET << std::endl;
+                std::cout << color::GRAY
+                          << "  Some processes may not be"
+                          << std::endl
+                          << "  accessible. Right-click your"
+                          << std::endl
+                          << "  terminal -> Run as administrator"
+                          << std::endl
+                          << "  for full access."
+                          << color::RESET << std::endl;
+            }
+        }
+
+        // --- Banner ---
+        std::cout << std::endl;
+        std::cout << color::CYAN << color::BOLD
+                  << "  ========================================================================================"
+                  << color::RESET << std::endl;
+        std::cout << color::CYAN << color::BOLD
+                  << "   System Analyst  |  GAIA C++ Agent Framework  |  Local Inference"
+                  << color::RESET << std::endl;
+        std::cout << color::CYAN << color::BOLD
+                  << "  ========================================================================================"
+                  << color::RESET << std::endl;
+
+        // --- Model selection ---
+        std::string modelChoice;
+        if (argc > 1) {
+            modelChoice = argv[1];
+        } else {
+            std::cout << std::endl;
+            std::cout << color::BOLD << "  Select inference backend:"
+                      << color::RESET << std::endl;
+            std::cout << color::YELLOW << "  [1] " << color::RESET
+                      << color::GREEN << "GPU" << color::RESET
+                      << color::GRAY << "  - Qwen3-4B-Instruct-2507-GGUF"
+                      << color::RESET << std::endl;
+            std::cout << color::YELLOW << "  [2] " << color::RESET
+                      << color::MAGENTA << "NPU" << color::RESET
+                      << color::GRAY << "  - Qwen3-4B-Instruct-2507-FLM"
+                      << color::RESET << std::endl;
+            std::cout << std::endl;
+            std::cout << color::BOLD << "  > " << color::RESET << std::flush;
+            if (!std::getline(std::cin, modelChoice)) return 1;
+        }
+
+        std::string modelId;
+        if (modelChoice == "2" || modelChoice == "npu" || modelChoice == "NPU") {
+            modelId = "Qwen3-4B-Instruct-2507-FLM";
+            std::cout << color::MAGENTA << "  Using NPU backend: "
+                      << color::BOLD << modelId << color::RESET << std::endl;
+        } else if (modelChoice == "1" || modelChoice == "gpu" || modelChoice == "GPU"
+                   || modelChoice.empty()) {
+            modelId = "Qwen3-4B-Instruct-2507-GGUF";
+            std::cout << color::GREEN << "  Using GPU backend: "
+                      << color::BOLD << modelId << color::RESET << std::endl;
+        } else {
+            modelId = modelChoice;
+            std::cout << color::GREEN << "  Using model: "
+                      << color::BOLD << modelId << color::RESET << std::endl;
+        }
+
+        ProcessAgent agent(modelId);
+
+        // =====================================================================
+        // Phase 1: DETECT — Auto-analyze system on startup
+        // =====================================================================
+        std::cout << std::endl;
+        std::cout << color::CYAN << color::BOLD
+                  << "  Analyzing your system..."
+                  << color::RESET << std::endl;
+        std::cout << std::endl;
+        {
+            auto r = agent.processQuery(kAutoAnalysisPrompt);
+            (void)r;
+        }
+
+        // =====================================================================
+        // Phase 2: ACT — Action menu loop
+        // History is preserved across actions so the LLM retains analysis context.
+        // clearHistory() is called ONLY on reanalyze.
+        // =====================================================================
+        std::string userInput;
+        while (true) {
+            printActionMenu();
+            std::cout << color::BOLD << "  > " << color::RESET << std::flush;
+            if (!std::getline(std::cin, userInput)) break;
+
+            if (userInput.empty()) continue;
+            if (userInput == "quit" || userInput == "exit" || userInput == "q") break;
+
+            std::string query;
+            bool isNumber = !userInput.empty() &&
+                std::all_of(userInput.begin(), userInput.end(),
+                            [](unsigned char c) { return std::isdigit(c); });
+
+            if (isNumber) {
+                int choice = 0;
+                try { choice = std::stoi(userInput); }
+                catch (const std::out_of_range&) { choice = -1; }
+
+                if (choice < 1 || choice > static_cast<int>(kActionsSize)) {
+                    std::cout << color::RED << "  Invalid selection. Enter 1-"
+                              << kActionsSize << " or type a question."
+                              << color::RESET << std::endl;
+                    continue;
+                }
+
+                size_t idx = static_cast<size_t>(choice - 1);
+
+                if (choice == static_cast<int>(kActionsSize)) {
+                    // Last action: Reanalyze — clear history and re-run analysis
+                    agent.clearHistory();
+                    std::cout << std::endl;
+                    std::cout << color::CYAN << color::BOLD
+                              << "  Reanalyzing your system..."
+                              << color::RESET << std::endl;
+                    std::cout << std::endl;
+                    auto r = agent.processQuery(kAutoAnalysisPrompt);
+                    (void)r;
+                    continue;
+                }
+
+                // Actions 1–5: send the action prompt, keep history
+                query = kActions[idx].prompt;
+                std::cout << color::CYAN << "  > " << kActions[idx].label
+                          << color::RESET << std::endl;
+
+            } else {
+                // Free-form question — keep history, LLM has full context
+                query = userInput;
+            }
+
+            auto r = agent.processQuery(query);
+            (void)r;
+        }
+
+        std::cout << std::endl;
+        std::cout << color::GRAY << "  Goodbye!" << color::RESET << std::endl;
+
+    } catch (const std::exception& e) {
+        std::cerr << color::RED << color::BOLD << "Fatal error: "
+                  << color::RESET << color::RED << e.what()
+                  << color::RESET << std::endl;
+        return 1;
+    }
+
+    return 0;
+}

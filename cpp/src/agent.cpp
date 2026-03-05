@@ -481,6 +481,7 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
         if (parsed.toolName.has_value()) {
             std::string toolName = parsed.toolName.value();
             json toolArgs = parsed.toolArgs.value_or(json::object());
+            if (toolArgs.is_null()) toolArgs = json::object();
 
             // Loop detection — same tool name AND same args repeated 4+ times
             if (toolCallHistory.size() >= 3) {
