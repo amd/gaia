@@ -327,7 +327,19 @@ static std::string formatProcessList(const gaia::json& procs) {
 }
 
 // ---------------------------------------------------------------------------
-// ProcessConsole — CleanConsole with formatted A/B/C section headers
+// ProcessConsole — unified Conclusion formatter
+// ---------------------------------------------------------------------------
+// Line detection rules (first match wins):
+//   1. Blank line          — suppress consecutive blanks
+//   2. Section header      — "A. Processes", "B. Services", "C. Suspicious Items"
+//                            → bold heading + gray description + blank line
+//   3. Item reference      — ^[A-C]\d+: … (e.g. "A4: cpptools-srv.exe")
+//                            → bold cyan tag, bold white name
+//   4. Key: Value          — first ":" within 20 chars, alpha key
+//                            → bold white key, normal white value
+//   5. Numbered item       — ^#. … (e.g. "1. chrome.exe …")
+//                            → normal printWrapped (inherits **bold** from LLM)
+//   6. Default paragraph   — everything else → gray (dimmed) prose
 // ---------------------------------------------------------------------------
 class ProcessConsole : public gaia::CleanConsole {
 public:
@@ -347,6 +359,7 @@ public:
             } catch (...) {}
         }
 
+        // ---- Conclusion banner ----
         std::cout << std::endl;
         std::cout << color::GREEN
                   << "  ========================================================================================"
@@ -357,73 +370,124 @@ public:
                   << "  ========================================================================================"
                   << color::RESET << std::endl;
 
+        // ---- Section header table ----
         struct SectionInfo {
-            const char* prefix;
             const char* label;
             const char* description;
         };
         static const SectionInfo kSections[] = {
-            {"A.", "A. Processes",
+            {"A. Processes",
              "Top resource consumers grouped by name, sorted by memory and CPU usage."},
-            {"B.", "B. Services",
+            {"B. Services",
              "System services with high memory usage (>200 MB) or error/degraded status."},
-            {"C.", "C. Suspicious Items",
+            {"C. Suspicious Items",
              "Unsigned binaries, unknown publishers, or processes running from unexpected locations."},
         };
 
+        // ---- Line-by-line rendering ----
         std::istringstream stream(cleanAnswer);
         std::string line;
-        bool lastWasBlank = true;  // treat start as blank so first header gets no extra line
+        bool lastWasBlank = true;
+
         while (std::getline(stream, line)) {
-            // Trim trailing \r
             if (!line.empty() && line.back() == '\r') line.pop_back();
 
-            // Check if this line is a section header
+            // --- Rule 1: Blank line (suppress consecutive) ---
+            if (line.empty()) {
+                if (!lastWasBlank) { std::cout << std::endl; lastWasBlank = true; }
+                continue;
+            }
+
+            // --- Rule 2: Section header ---
             const SectionInfo* section = nullptr;
             for (const auto& s : kSections) {
-                if (line == s.label ||
-                    (line.size() >= 2 && line.substr(0, 2) == s.prefix &&
-                     line.find(s.label) == 0)) {
-                    section = &s;
-                    break;
+                if (line.rfind(s.label, 0) == 0) { section = &s; break; }
+            }
+            if (section) {
+                if (!lastWasBlank) std::cout << std::endl;
+                std::cout << "  " << color::BOLD << color::WHITE
+                          << section->label << color::RESET << std::endl;
+                std::cout << "  " << color::GRAY
+                          << section->description << color::RESET << std::endl;
+                std::cout << std::endl;
+                lastWasBlank = true;
+                continue;
+            }
+
+            // --- Rule 3: Item reference title  (A4: cpptools-srv.exe) ---
+            if (line.size() >= 4 && line[0] >= 'A' && line[0] <= 'C' &&
+                std::isdigit(static_cast<unsigned char>(line[1]))) {
+                auto colon = line.find(": ");
+                if (colon != std::string::npos && colon <= 4) {
+                    if (!lastWasBlank) std::cout << std::endl;
+                    std::string tag  = line.substr(0, colon);
+                    std::string rest = line.substr(colon + 2);
+                    std::cout << "  " << color::BOLD << color::CYAN
+                              << tag << color::RESET << "  "
+                              << color::BOLD << color::WHITE
+                              << rest << color::RESET << std::endl;
+                    lastWasBlank = false;
+                    continue;
                 }
             }
 
-            if (section) {
-                // Exactly one blank line before heading (absorb any LLM-emitted blank)
-                if (!lastWasBlank) std::cout << std::endl;
-                // Bold heading
+            // --- Rule 4: Key: Value line ---
+            if (isKeyValueLine(line)) {
+                auto colon = line.find(':');
+                std::string key = line.substr(0, colon + 1);   // includes ':'
+                std::string val = (colon + 1 < line.size()) ? line.substr(colon + 1) : "";
                 std::cout << "  " << color::BOLD << color::WHITE
-                          << section->label << color::RESET << std::endl;
-                // Dimmed description
-                std::cout << "  " << color::GRAY
-                          << section->description << color::RESET << std::endl;
-                // Blank line after description
-                std::cout << std::endl;
-                lastWasBlank = true;
-            } else if (line.empty()) {
-                // Suppress consecutive blank lines
-                if (!lastWasBlank) {
+                          << key << color::RESET;
+                if (!val.empty()) {
+                    printWrapped(val, 88 - key.size(), 2 + key.size());
+                } else {
                     std::cout << std::endl;
-                    lastWasBlank = true;
                 }
-            } else if (line.rfind("System Health:", 0) == 0) {
-                // Bold "System Health:" label, rest in normal white
-                if (!lastWasBlank) std::cout << std::endl;
-                std::string rest = line.substr(14); // after "System Health:"
-                std::cout << "  " << color::BOLD << color::WHITE
-                          << "System Health:" << color::RESET
-                          << color::WHITE << rest << color::RESET << std::endl;
                 lastWasBlank = false;
-            } else {
-                std::cout << "  ";
-                printWrapped(line, 88, 2);
-                lastWasBlank = false;
+                continue;
             }
+
+            // --- Rule 5: Numbered item  (1. chrome.exe …) ---
+            if (std::isdigit(static_cast<unsigned char>(line[0]))) {
+                auto dot = line.find(". ");
+                if (dot != std::string::npos && dot <= 3) {
+                    std::cout << "  ";
+                    printWrapped(line, 88, 2);
+                    lastWasBlank = false;
+                    continue;
+                }
+            }
+
+            // --- Rule 6: Default paragraph (dimmed) ---
+            std::cout << "  ";
+            printWrapped(line, 88, 2, color::GRAY);
+            lastWasBlank = false;
         }
+
+        // ---- Bottom border ----
         std::cout << color::GREEN
                   << "  ========================================================================================"
                   << color::RESET << std::endl;
+    }
+
+private:
+    /// Detect "Key: Value" lines — first colon within 20 chars, key is
+    /// alpha/digits/spaces, char after colon is space or end-of-line.
+    static bool isKeyValueLine(const std::string& line) {
+        auto p = line.find(':');
+        if (p == std::string::npos || p == 0 || p > 20) return false;
+        // char after colon must be space or end
+        if (p + 1 < line.size() && line[p + 1] != ' ') return false;
+        // first char must be alpha
+        if (!std::isalpha(static_cast<unsigned char>(line[0]))) return false;
+        // key must be only alpha, digit, space
+        for (size_t i = 0; i < p; ++i) {
+            char c = line[i];
+            if (!std::isalpha(static_cast<unsigned char>(c)) &&
+                !std::isdigit(static_cast<unsigned char>(c)) && c != ' ')
+                return false;
+        }
+        return true;
     }
 };
 
@@ -507,10 +571,29 @@ Users reference items by group letter + item number (e.g., "Explain A3", "Stop B
 
 ## FINAL ANSWER FORMAT
 
-Only provide an "answer" after ALL tool calls are complete.
-- Use bullet points; no markdown tables or em-dashes
-- Bold key values: process names, memory amounts, percentages
-- Keep the answer concise and actionable
+Only provide an "answer" after ALL tool calls are complete. Use Key: Value lines for structured data (not bullet points or tables).
+
+When explaining an item, use this format:
+[Label]: [name]
+Description: [what it does]
+Company: [publisher]
+Path: [full path]
+Parent: [parent process]
+Signer: [certificate info]
+Signature: [Valid/Invalid/Unsigned]
+Memory: [amount]
+CPU time: [seconds]
+Started: [timestamp]
+Network: [connection summary or "No active connections"]
+
+[1-2 sentence plain-text assessment]
+
+When reporting action results (kill, restart, quarantine), use:
+Action: [what was done]
+Target: [process/service name]
+Result: [Success/Failed]
+
+[1 sentence summary of what happened]
 
 ## GOAL TRACKING
 
