@@ -1,24 +1,24 @@
 ---
 title: "Quickstart"
-description: "Build and run GAIA agents natively in C++17 — same agent loop and MCP integration, no Python runtime required"
+description: "Build and run GAIA C++ agents — full agent loop and MCP integration"
 icon: "rocket"
 ---
 
-**A C++17 port of the GAIA base agent framework.** Drop AI agent capabilities into any C++ project — three lines of CMake, zero manual dependencies, any OpenAI-compatible LLM backend.
+**The GAIA C++ agent framework.** Drop AI agent capabilities into any C++ project — three lines of CMake, zero manual dependencies, any OpenAI-compatible LLM backend.
 
-- **Native performance** — compiled binary, no interpreter overhead, no Python runtime
+- **Native performance** — compiled binary, no interpreter overhead
 - **Easy integration** — add to any CMake project via FetchContent, git submodule, or find_package ([Integration Guide](/cpp/integration))
 - **Any LLM backend** — works with [Lemonade](https://lemonade-server.ai), llama.cpp, Ollama, vLLM, OpenAI, or any OpenAI-compatible server ([details](/cpp/integration#using-alternative-llm-backends))
 - **Full MCP support** — connects to any MCP server via stdio transport
-- **Same agent loop** — planning, tool execution, error recovery, multi-step plans
+- **Full agent loop** — planning, tool execution, error recovery, multi-step plans
 
 <Info>
 **Source Code:** [`cpp/`](https://github.com/amd/gaia/tree/main/cpp) — lives alongside the Python package in this repository.
 </Info>
 
-<Note>
-The C++ framework targets the base agent only. Specialized agents (Code, Docker, Jira, etc.), the REST API server, RAG, and audio are Python-only. See the [Python quickstart](/quickstart) for the full feature set.
-</Note>
+<Info>
+The C++ framework focuses on the core agent loop and tool execution. Specialized agents (Code, Docker, Jira, Blender), the REST API server, RAG, and audio are available in the [Python SDK](/quickstart).
+</Info>
 
 ---
 
@@ -27,7 +27,7 @@ The C++ framework targets the base agent only. Specialized agents (Code, Docker,
 | Tool | Minimum Version | Notes |
 |------|----------------|-------|
 | CMake | 3.14+ | `cmake --version` |
-| C++ Compiler | C++17 | MSVC 2019+, GCC 9+, or Clang 10+ |
+| C++ Compiler | C++17 support | MSVC 2019+ or GCC 9+ |
 | Git | any | Required by CMake FetchContent |
 | [Lemonade Server](https://lemonade-server.ai) | latest | OpenAI-compatible LLM backend |
 
@@ -41,7 +41,7 @@ The C++ framework targets the base agent only. Specialized agents (Code, Docker,
   <Step title="Clone the repository">
     ```bash
     git clone https://github.com/amd/gaia.git
-    cd gaia
+    cd gaia/cpp
     ```
   </Step>
 
@@ -49,20 +49,14 @@ The C++ framework targets the base agent only. Specialized agents (Code, Docker,
     <Tabs>
       <Tab title="Windows (MSVC)">
         ```bat
-        cd cpp
-        ```
-        ```bat
         cmake -B build -G "Visual Studio 17 2022" -A x64
         ```
         ```bat
         cmake --build build --config Release
         ```
-        Binaries land in `cpp\build\Release\`.
+        Binaries land in `build\Release\`.
       </Tab>
       <Tab title="Windows (Ninja)">
-        ```bat
-        cd cpp
-        ```
         ```bat
         cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
         ```
@@ -70,17 +64,14 @@ The C++ framework targets the base agent only. Specialized agents (Code, Docker,
         cmake --build build
         ```
       </Tab>
-      <Tab title="Linux / macOS">
-        ```bash
-        cd cpp
-        ```
+      <Tab title="Linux">
         ```bash
         cmake -B build -DCMAKE_BUILD_TYPE=Release
         ```
         ```bash
         cmake --build build
         ```
-        Binaries land in `cpp/build/`.
+        Binaries land in `build/`.
       </Tab>
     </Tabs>
 
@@ -100,61 +91,52 @@ The C++ framework targets the base agent only. Specialized agents (Code, Docker,
   </Step>
 
   <Step title="Run a demo agent">
-    <Tabs>
-      <Tab title="Windows">
-        **Option A: Windows System Health** (requires MCP server + `uv`):
-        ```bat
-        cpp\build\Release\health_agent.exe
-        ```
-        The agent connects to the Windows MCP server, gathers CPU/memory/disk/GPU metrics via PowerShell, and presents results in the console or writes a full report to Notepad.
+    Both demo agents are Windows-only (they use PowerShell for system interaction).
 
-        **Option B: Wi-Fi Troubleshooter** (no dependencies, run as admin for fix tools):
-        ```bat
-        cpp\build\Release\wifi_agent.exe
-        ```
-        Select GPU or NPU backend, then try "Full network diagnostic" or ask a specific question. The agent reasons about each result and adapts its approach in real-time.
-      </Tab>
-      <Tab title="Linux / macOS">
-        ```bash
-        ./cpp/build/health_agent
-        ```
-        The `health_agent` demo compiles but requires the Windows MCP server to function. Try the [Wi-Fi Troubleshooter Agent](/cpp/wifi-agent) instead, or write your own agent with platform-appropriate tools.
-      </Tab>
-    </Tabs>
+    **Windows System Health Agent** (requires MCP server + `uv`):
+    ```bat
+    build\Release\health_agent.exe
+    ```
+    The agent connects to the Windows MCP server, gathers CPU/memory/disk/GPU metrics via PowerShell, and presents results in the console or writes a full report to Notepad.
+
+    **Wi-Fi Troubleshooter** (no extra dependencies, run as admin for fix tools):
+    ```bat
+    build\Release\wifi_agent.exe
+    ```
+    Select GPU or NPU backend, then try "Full network diagnostic" or ask a specific question. The agent reasons about each result and adapts its approach in real-time.
 
     Type `quit` to exit.
-
-    <Note>
-    Also try the [Wi-Fi Troubleshooter Agent](/cpp/wifi-agent) — a pure registered-tool agent that diagnoses and fixes network issues without MCP.
-    </Note>
   </Step>
 </Steps>
 
 ## Running Tests
 
-```bat
-cd cpp/build
-```
-```bat
-ctest -C Release --output-on-failure
-```
-
-Or run the test binary directly:
+Unit tests run without an LLM server:
 
 <Tabs>
   <Tab title="Windows">
     ```bat
-    cpp\build\Release\gaia_tests.exe --gtest_color=yes
+    build\Release\tests_mock.exe --gtest_color=yes
     ```
   </Tab>
-  <Tab title="Linux / macOS">
+  <Tab title="Linux">
     ```bash
-    ./cpp/build/gaia_tests --gtest_color=yes
+    ./build/tests_mock --gtest_color=yes
     ```
   </Tab>
 </Tabs>
 
 The test suite covers all eight modules: agent loop, tool registry, JSON utilities, MCP client, console output, clean console, tool integration, and types.
+
+<Note>
+You can also run tests via CTest:
+
+```bat
+ctest --test-dir build -C Release --output-on-failure
+```
+
+This works because integration tests are not built by default. If you enable them with `-DGAIA_BUILD_INTEGRATION_TESTS=ON`, run the `tests_integration` binary separately with an LLM server running — otherwise CTest will hang on those tests.
+</Note>
 
 ## Next Steps
 
@@ -173,6 +155,14 @@ The test suite covers all eight modules: agent loop, tool registry, JSON utiliti
 
   <Card title="API Reference" icon="book-open" href="/cpp/api-reference">
     Error handling, thread safety, security, deployment, and complete class API
+  </Card>
+
+  <Card title="Wi-Fi Troubleshooter" icon="wifi" href="/cpp/wifi-agent">
+    Full network diagnostic and auto-fix using registered C++ tools
+  </Card>
+
+  <Card title="System Health Agent" icon="desktop" href="/cpp/health-agent">
+    MCP-based system diagnostics — CPU, memory, disk, GPU via PowerShell
   </Card>
 </CardGroup>
 

@@ -1,6 +1,6 @@
 ---
 title: "Overview"
-description: "Native C++17 port of the GAIA base agent — agent loop, tool registry, MCP client, and cross-platform stdio, no Python runtime required"
+description: "The GAIA C++17 agent framework — agent loop, tool registry, MCP client, and cross-platform stdio"
 icon: "code"
 ---
 
@@ -19,39 +19,40 @@ icon: "code"
 
 ## Overview
 
-The GAIA C++ framework is a native C++17 port of the Python base agent (`src/gaia/agents/base/agent.py`). It compiles to a standalone binary with no Python runtime, interpreter overhead, or pip dependencies at runtime.
+The GAIA C++17 framework is a native implementation of the core agent system. It compiles to a standalone binary with no interpreter overhead or runtime dependencies.
 
-**What it implements:**
+**What it provides:**
 
 - Agent execution loop with state machine (planning, tool execution, error recovery, completion)
-- Tool registry with explicit `registerTool()` calls (C++ equivalent of the Python `@tool` decorator)
-- MCP client with cross-platform stdio transport (Win32 `CreateProcess`/pipes on Windows, `fork`/`exec`/pipes on POSIX)
+- Tool registry with `registerTool()` for defining agent capabilities
+- MCP client with cross-platform stdio transport
 - JSON response parsing with multi-strategy fallback (code-block extraction, bracket matching, syntax fixing)
-- Console output with ANSI colors (`TerminalConsole`) and silent mode (`SilentConsole`)
+- Console output with ANSI colors (`TerminalConsole`, `CleanConsole`) and silent mode (`SilentConsole`)
 
-**What it does NOT port:**
-
-Specialized agents (Code, Docker, Jira, Blender), the REST API server, RAG, audio (ASR/TTS), and Stable Diffusion remain Python-only. See the [Python quickstart](/quickstart) for the full feature set.
+<Info>
+The C++ framework focuses on the core agent loop and tool execution. Specialized agents (Code, Docker, Jira, Blender), the REST API server, RAG, and audio remain in the Python SDK. See the [Quickstart](/quickstart) for the full feature set.
+</Info>
 
 ---
 
 ## Agent Execution Flow
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'16px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'16px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis', 'nodeSpacing': 40, 'rankSpacing': 50}}}%%
 flowchart TD
-    A["User Query"] --> B["gaia::Agent<br/>processQuery()"]
-    B -->|"HTTP POST<br/>chat/completions"| C["LLM Server<br/>(Lemonade)"]
-    C -->|"JSON response<br/>plan + tool calls"| B
-    B -->|"JSON-RPC 2.0<br/>stdio"| D["MCP Server<br/>(subprocess)"]
-    D -->|"tool result"| B
-    B --> E["Final Answer"]
+    A["&nbsp;&nbsp;User Query&nbsp;&nbsp;"] --> B["&nbsp;&nbsp;gaia::Agent&nbsp;&nbsp;<br/>processQuery()"]
+    B -->|"chat/completions"| C["&nbsp;&nbsp;LLM Server&nbsp;&nbsp;<br/>(Lemonade)"]
+    C -->|"plan + tool calls"| D{"&nbsp;&nbsp;Tools needed?&nbsp;&nbsp;"}
+    D -->|"Yes"| E["&nbsp;&nbsp;Execute Tool&nbsp;&nbsp;<br/>(C++ or MCP)"]
+    E -->|"result"| B
+    D -->|"No"| F["&nbsp;&nbsp;Final Answer&nbsp;&nbsp;"]
 
-    style A fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style A fill:#ED1C24,stroke:#F4484D,stroke-width:2px,color:#fff
     style B fill:#ED1C24,stroke:#F4484D,stroke-width:3px,color:#fff
     style C fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style D fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style E fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style D fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style E fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style F fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     linkStyle default stroke:#ED1C24,stroke-width:2px
 ```
 
@@ -67,19 +68,21 @@ flowchart TD
 The agent is **not a script**. After every tool execution, the LLM is called again with the full conversation so far — including the tool's output. This lets the model reason about results and change course.
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'16px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff'}, 'flowchart': {'curve': 'basis'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'16px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff'}, 'flowchart': {'curve': 'basis', 'nodeSpacing': 40}}}%%
 graph LR
-    A["Call LLM"] --> B{"Parse JSON"}
-    B -->|"has tool"| C["Execute tool"]
-    C --> D["Feed result back"]
+    S["&nbsp;&nbsp;Start&nbsp;&nbsp;"] --> A["&nbsp;&nbsp;Call LLM&nbsp;&nbsp;"]
+    A --> B{"&nbsp;&nbsp;Parse JSON&nbsp;&nbsp;"}
+    B -->|"has tool"| C["&nbsp;&nbsp;Execute tool&nbsp;&nbsp;"]
+    C --> D["&nbsp;&nbsp;Feed result back&nbsp;&nbsp;"]
     D --> A
-    B -->|"has answer"| E["Done"]
+    B -->|"has answer"| E["&nbsp;&nbsp;Done&nbsp;&nbsp;"]
 
+    style S fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style A fill:#ED1C24,stroke:#F4484D,stroke-width:2px,color:#fff
-    style B fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style B fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
     style C fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style D fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style E fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style E fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     linkStyle default stroke:#ED1C24,stroke-width:2px
 ```
 
@@ -89,7 +92,7 @@ Each loop iteration: **LLM reasons → agent executes → result fed back → LL
 
 ## How It Works
 
-The `health_agent` demo is a C++ port of the [Windows System Health Agent](/guides/mcp/windows-system-health). It subclasses `gaia::Agent`, connects to the Windows MCP server on startup, then enters the same planning loop as the Python version.
+The `health_agent` demo implements the same functionality as the [Windows System Health Agent](/guides/mcp/windows-system-health). It subclasses `gaia::Agent`, connects to the Windows MCP server on startup, then enters the planning loop.
 
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'18px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
@@ -111,16 +114,16 @@ graph TB
     MCP --> FileWrite("mcp_windows_Shell<br/>Out-File report.txt")
     MCP --> Notepad("mcp_windows_Shell<br/>Start-Process notepad")
 
-    style User fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style User fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style Agent fill:#ED1C24,stroke:#F4484D,stroke-width:3px,color:#fff
     style LLM fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style MCP fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell1 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell2 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell3 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell4 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style FileWrite fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Notepad fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Shell1 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Shell2 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Shell3 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Shell4 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style FileWrite fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Notepad fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
 
     linkStyle default stroke:#ED1C24,stroke-width:2px
 ```
@@ -289,23 +292,31 @@ cpp/
     test_clean_console.cpp
     test_tool_integration.cpp
     test_types.cpp
+    integration/
+      test_main.cpp
+      test_integration_llm.cpp
+      test_integration_mcp.cpp
+      test_integration_wifi.cpp
+      test_integration_health.cpp
+  cmake/
+    gaia_coreConfig.cmake.in  # Package config for find_package consumers
 ```
 
 ---
 
-## Comparison with Python GAIA
+## Comparison with GAIA Python SDK
 
 | Feature | Python | C++ |
-|---------|--------|-----|
+|---------|--------|-------|
 | Agent loop (plan, tool, answer) | Yes | Yes |
 | Tool registration | Yes | Yes |
 | MCP client (stdio) | Yes | Yes |
 | JSON parsing with fallbacks | Yes | Yes |
 | OpenAI-compatible LLM backend | Yes | Yes |
 | Multiple LLM providers (Claude, OpenAI) | Yes | Planned |
-| Specialized agents (Code, Docker, Jira) | Yes | Not ported |
-| REST API server | Yes | Not ported |
-| Audio / RAG / Stable Diffusion | Yes | Not ported |
+| Specialized agents (Code, Docker, Jira) | Yes | — |
+| REST API server | Yes | — |
+| Audio / RAG / Stable Diffusion | Yes | — |
 
 ---
 

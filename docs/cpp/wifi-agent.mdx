@@ -9,7 +9,7 @@ icon: "wifi"
 </Info>
 
 <Note>
-**Platform:** Windows (PowerShell network commands). Compiles on Linux/macOS for CI but tools require Windows to return real data.
+**Platform:** Windows (PowerShell network commands). Compiles on Linux for CI but tools require Windows to return real data.
 **Prerequisite:** [Lemonade Server](https://lemonade-server.ai) running with a model loaded.
 </Note>
 
@@ -372,12 +372,12 @@ flowchart TD
     F4 --> A
     F5 --> A
 
-    style A fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style B fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style C fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style D fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style E fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style BW fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style A fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style B fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style C fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style D fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style E fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style BW fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
     style F1 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style F2 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style F3 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
@@ -515,7 +515,7 @@ int main() {
         cmake --build build
         ```
       </Tab>
-      <Tab title="Linux / macOS">
+      <Tab title="Linux">
         ```bash
         cd cpp
         ```
@@ -526,7 +526,7 @@ int main() {
         cmake --build build
         ```
         <Note>
-        Compiles on Linux/macOS for CI purposes, but the PowerShell-based tools require Windows to return meaningful results.
+        Compiles on Linux for CI purposes, but the PowerShell-based tools require Windows to return meaningful results.
         </Note>
       </Tab>
     </Tabs>

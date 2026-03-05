@@ -64,7 +64,7 @@ That gives you `#include <gaia/agent.h>`, the full agent loop, tool registry, MC
     ```
 
     <Note>
-    `SOURCE_SUBDIR cpp` tells CMake to use only the `cpp/` subdirectory of the GAIA repository. This skips the Python package entirely — your build tree contains only the C++ library and its dependencies.
+    `SOURCE_SUBDIR cpp` tells CMake to use only the `cpp/` subdirectory of the GAIA repository. Your build tree contains only the C++ library and its dependencies.
     </Note>
 
     <Note>
@@ -180,7 +180,6 @@ That gives you `#include <gaia/agent.h>`, the full agent loop, tool registry, MC
 
     This produces:
     - **Linux:** `libgaia_core.so`
-    - **macOS:** `libgaia_core.dylib`
     - **Windows:** `gaia_core.dll` + `gaia_core.lib` (import library)
 
     <Warning>
@@ -432,7 +431,7 @@ This requires OpenSSL to be installed on your system.
 All public classes and functions in `gaia_core` are annotated with the `GAIA_API` macro, which is generated automatically by CMake's `GenerateExportHeader`. When building as a shared library:
 
 - **Windows (MSVC):** `GAIA_API` expands to `__declspec(dllexport)` when building the library, and `__declspec(dllimport)` when consuming it.
-- **Linux / macOS:** `GAIA_API` expands to `__attribute__((visibility("default")))`.
+- **Linux:** `GAIA_API` expands to `__attribute__((visibility("default")))`.
 - **Static library:** `GAIA_API` expands to nothing.
 
 No manual annotation is needed in consumer code. Linking against the `gaia::gaia_core` CMake target sets all required compile definitions automatically.

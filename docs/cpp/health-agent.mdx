@@ -17,7 +17,7 @@ icon: "desktop"
 
 ## What This Agent Does
 
-The System Health Agent is a C++ port of the [Python Windows System Health Agent](/guides/mcp/windows-system-health). It connects to the Windows MCP server via stdio, then uses PowerShell commands to gather system metrics and generate health reports.
+The System Health Agent connects to the Windows MCP server via stdio, then uses PowerShell commands to gather system metrics and generate health reports. See the [Windows System Health guide](/guides/mcp/windows-system-health) for a walkthrough of the approach.
 
 Key differences from the [Wi-Fi Troubleshooter](/cpp/wifi-agent):
 
@@ -48,14 +48,14 @@ graph TB
     MCP --> Shell3("mcp_windows_Shell<br/>Get-CimInstance (CPU)")
     MCP --> Shell4("mcp_windows_Shell<br/>Get-CimInstance (GPU)")
 
-    style User fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style User fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style Agent fill:#ED1C24,stroke:#F4484D,stroke-width:3px,color:#fff
     style LLM fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style MCP fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell1 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell2 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell3 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell4 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Shell1 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Shell2 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Shell3 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Shell4 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
 
     linkStyle default stroke:#ED1C24,stroke-width:2px
 ```
@@ -263,8 +263,8 @@ Choose MCP when you need access to a wide range of system capabilities. Choose r
     Compare with the registered-tools approach for network diagnostics
   </Card>
 
-  <Card title="Python System Health Agent" icon="python" href="/guides/mcp/windows-system-health">
-    The Python version of this agent using MCPClientMixin
+  <Card title="Windows System Health Guide" icon="desktop" href="/guides/mcp/windows-system-health">
+    Walkthrough of the MCP-based system health approach
   </Card>
 
   <Card title="Customizing Your Agent" icon="sliders" href="/cpp/custom-agent">
