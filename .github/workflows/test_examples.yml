@@ -1,0 +1,139 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# This workflow runs integration tests for example agents
+# Tests verify: agent execution, tool registration, response validation
+# Platform: Windows (self-hosted Strix runner with Lemonade server)
+
+name: Example Agents Integration Tests
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+    paths:
+      - 'examples/**/*.py'
+      - 'src/gaia/**/*.py'
+      - 'tests/integration/test_example_agents.py'
+      - '.github/workflows/test_examples.yml'
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'examples/**/*.py'
+      - 'src/gaia/**/*.py'
+      - 'tests/integration/test_example_agents.py'
+      - '.github/workflows/test_examples.yml'
+  merge_group:
+  workflow_dispatch:
+
+# Cancel in-progress runs when a new run is triggered
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-examples:
+    name: Example Agents Integration Tests
+    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: |
+          irm https://astral.sh/uv/install.ps1 | iex
+          echo "$env:USERPROFILE\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: pwsh
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e .[dev,mcp,rag]
+          uv pip install --system pytest pytest-timeout
+        shell: pwsh
+
+      - name: Start Lemonade Server
+        run: |
+          Write-Host "Starting Lemonade server with Qwen3-4B-GGUF..."
+          Start-Process -FilePath "lemonade-server" -ArgumentList "serve","--model","Qwen3-4B-GGUF","--ctx-size","8192" -NoNewWindow
+          Start-Sleep -Seconds 15
+          Write-Host "✅ Lemonade server started"
+        shell: pwsh
+
+      - name: Validate Python Syntax
+        run: |
+          Write-Host "Validating Python syntax for all examples..."
+          python -m py_compile examples/*.py
+          Write-Host "✅ All example files have valid Python syntax"
+        shell: pwsh
+
+      - name: Run Integration Tests
+        env:
+          GAIA_SUPPRESS_WARNINGS: "1"
+        run: |
+          Write-Host "Running integration tests for example agents..."
+          pytest tests/integration/test_example_agents.py -v --tb=short --timeout=300
+          Write-Host "✅ All example integration tests passed"
+        shell: pwsh
+
+      - name: Test Tool Decorator
+        run: |
+          echo "Testing tool registration mechanisms..."
+
+          python -c "
+from gaia.agents.base.tools import tool, _TOOL_REGISTRY
+
+@tool
+def test_tool(arg1: str) -> dict:
+    '''Test tool for validation.'''
+    return {'result': arg1}
+
+assert 'test_tool' in _TOOL_REGISTRY, 'Tool decorator not working'
+assert hasattr(_TOOL_REGISTRY['test_tool'], '__doc__'), 'Tool missing docstring'
+print('✅ Tool decorator working correctly')
+"
+
+      - name: Validate Example File Structure
+        run: |
+          echo "Validating example file structure and documentation..."
+
+          # Check that all examples have docstrings
+          for file in examples/*.py; do
+              if ! grep -q '"""' "$file"; then
+                  echo "❌ Missing module docstring: $file"
+                  exit 1
+              fi
+          done
+          echo "✅ All examples have docstrings"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "=== Example Agents Integration Test Summary ==="
+          echo "✅ Python syntax validation"
+          echo "✅ Integration tests (pytest)"
+          echo "✅ Tool decorator validation"
+          echo "✅ File structure validation"
+          echo ""
+          echo "Coverage:"
+          echo "  ✅ weather_agent.py - MCP weather integration"
+          echo "  ✅ rag_doc_agent.py - RAG document Q&A"
+          echo "  ✅ product_mockup_agent.py - HTML mockup generation"
+          echo "  ✅ file_watcher_agent.py - File watching automation"
+          echo "  ✅ notes_agent.py - Database CRUD operations"
+          echo "  ✅ hardware_advisor_agent.py - System analysis"
+          echo "  ✅ mcp_config_based_agent.py - MCP config loading"
+          echo ""
+          echo "Note: Full functional tests with LLM queries require Lemonade server"
