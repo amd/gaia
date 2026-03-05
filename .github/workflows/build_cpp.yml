@@ -279,13 +279,10 @@ jobs:
 
           # Remove any broken persistent installation that may interfere with uvx.
           # Swallow all output/errors — the tool may not be installed and that's fine.
-          uv tool uninstall windows-mcp 2>$null | Out-Null
-          Write-Host "[OK] uvx ready (windows-mcp will run via temporary uvx environments)"
-          # PowerShell 5.1 -Command mode (used by GHA shell: powershell) propagates
-          # $LASTEXITCODE from the last native command as the process exit code,
-          # even through explicit exit 0.  Reset it first.
+          # Use 2>&1 to merge stderr into stdout (prevents NativeCommandError in PS 5.1).
+          uv tool uninstall windows-mcp 2>&1 | Out-Null
           $global:LASTEXITCODE = 0
-          exit 0
+          Write-Host "[OK] uvx ready (windows-mcp will run via temporary uvx environments)"
 
       - name: Start Lemonade Server and run integration tests
         shell: powershell
