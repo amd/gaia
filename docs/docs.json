@@ -126,9 +126,26 @@
                     "group": "SDKs",
                     "pages": [
                       "sdk/sdks/chat",
+                      "sdk/sdks/rag",
                       "sdk/sdks/mcp",
                       "sdk/sdks/llm",
-                      "sdk/sdks/vlm"
+                      "sdk/sdks/vlm",
+                      "sdk/sdks/audio"
+                    ]
+                  },
+                  {
+                    "group": "Infrastructure",
+                    "pages": [
+                      "sdk/infrastructure/api-server",
+                      "sdk/infrastructure/mcp"
+                    ]
+                  },
+                  {
+                    "group": "Agents",
+                    "pages": [
+                      "sdk/agents/routing",
+                      "sdk/agents/specialized",
+                      "sdk/agents/talk"
                     ]
                   },
                   {
