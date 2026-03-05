@@ -50,7 +50,7 @@ def ensure_models_downloaded():
 
         # Required models for RAG testing
         required_models = [
-            "Qwen3-0.6B-GGUF",  # LLM model used in tests
+            "Qwen3-4B-Instruct-2507-GGUF",  # LLM model used in tests
             "nomic-embed-text-v2-moe-GGUF",  # Embedding model (RAG default)
             "Qwen3-VL-4B-Instruct-GGUF",  # VLM model (for PDFs with images)
         ]
@@ -127,7 +127,7 @@ def test_basic_functionality():
     # Test configuration
     try:
         config = RAGConfig(
-            model="Qwen3-0.6B-GGUF",
+            model="Qwen3-4B-Instruct-2507-GGUF",
             chunk_size=200,
             max_chunks=2,
             show_stats=True,
@@ -176,7 +176,7 @@ def test_document_processing():
 
         # Initialize RAG with reasonable settings for large document
         config = RAGConfig(
-            model="Qwen3-0.6B-GGUF",  # Use lightweight Qwen model for testing
+            model="Qwen3-4B-Instruct-2507-GGUF",  # Qwen3-4B: good balance of quality and speed
             chunk_size=500,  # Reasonable chunk size
             max_chunks=5,  # Get top 5 most relevant chunks
             show_stats=True,  # Show progress
@@ -272,7 +272,7 @@ def test_query_with_files():
 
         # Use smaller chunks for faster testing
         config = RAGConfig(
-            model="Qwen3-0.6B-GGUF", chunk_size=300, max_chunks=3, show_stats=False
+            model="Qwen3-4B-Instruct-2507-GGUF", chunk_size=300, max_chunks=3, show_stats=False
         )
         rag = RAGSDK(config)
 
@@ -295,6 +295,10 @@ def test_query_with_files():
 
         print("🔍 Testing multiple queries:\n")
         for i, query in enumerate(test_queries, 1):
+            # Clear conversation history between queries to prevent context overflow
+            # Each RAG query injects chunk context, which accumulates across calls
+            if hasattr(rag, "chat") and hasattr(rag.chat, "clear_history"):
+                rag.chat.clear_history()
             print(f"   {i}. Query: '{query}'")
             try:
                 response = rag.query(query)
