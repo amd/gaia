@@ -200,12 +200,50 @@ static gaia::json getMemoryInfo() {
     };
 }
 
+// Query FileVersionInfo description + company for an exe path (pure Win32, no PowerShell).
+static void getFileVersionStrings(const std::wstring& path,
+                                  std::string& description, std::string& company) {
+    DWORD dummy = 0;
+    DWORD size = GetFileVersionInfoSizeW(path.c_str(), &dummy);
+    if (size == 0) return;
+    std::vector<BYTE> buf(size);
+    if (!GetFileVersionInfoW(path.c_str(), 0, size, buf.data())) return;
+    // Try common English code page first, then neutral
+    const wchar_t* subBlocks[] = {
+        L"\\StringFileInfo\\040904B0\\FileDescription",
+        L"\\StringFileInfo\\040904E4\\FileDescription",
+        L"\\StringFileInfo\\000004B0\\FileDescription",
+    };
+    const wchar_t* companyBlocks[] = {
+        L"\\StringFileInfo\\040904B0\\CompanyName",
+        L"\\StringFileInfo\\040904E4\\CompanyName",
+        L"\\StringFileInfo\\000004B0\\CompanyName",
+    };
+    for (auto* sb : subBlocks) {
+        wchar_t* val = nullptr; UINT len = 0;
+        if (VerQueryValueW(buf.data(), sb, reinterpret_cast<void**>(&val), &len) && len > 1) {
+            description = wstringToUtf8(std::wstring(val, len - 1));
+            break;
+        }
+    }
+    for (auto* sb : companyBlocks) {
+        wchar_t* val = nullptr; UINT len = 0;
+        if (VerQueryValueW(buf.data(), sb, reinterpret_cast<void**>(&val), &len) && len > 1) {
+            company = wstringToUtf8(std::wstring(val, len - 1));
+            break;
+        }
+    }
+}
+
 static gaia::json getTopProcesses(int topN = 20) {
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE)
         return {{"error", "Failed to create process snapshot"}};
 
-    struct ProcInfo { std::string name; DWORD pid; DWORD parentPid; uint64_t memoryBytes; };
+    struct ProcInfo {
+        std::string name; DWORD pid; DWORD parentPid;
+        uint64_t memoryBytes; std::wstring path;
+    };
     std::vector<ProcInfo> procs;
 
     // Build pid->name map for parent resolution (no OpenProcess needed)
@@ -220,9 +258,15 @@ static gaia::json getTopProcesses(int topN = 20) {
                 PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pe.th32ProcessID);
             if (hProc) {
                 PROCESS_MEMORY_COUNTERS pmc;
-                if (K32GetProcessMemoryInfo(hProc, &pmc, sizeof(pmc)))
+                if (K32GetProcessMemoryInfo(hProc, &pmc, sizeof(pmc))) {
+                    std::wstring procPath;
+                    wchar_t pathBuf[MAX_PATH];
+                    DWORD pathLen = MAX_PATH;
+                    if (QueryFullProcessImageNameW(hProc, 0, pathBuf, &pathLen))
+                        procPath.assign(pathBuf, pathLen);
                     procs.push_back({wstringToUtf8(pe.szExeFile), pe.th32ProcessID,
-                                     pe.th32ParentProcessID, pmc.WorkingSetSize});
+                                     pe.th32ParentProcessID, pmc.WorkingSetSize, procPath});
+                }
                 CloseHandle(hProc);
             }
         } while (Process32NextW(snapshot, &pe));
@@ -235,6 +279,7 @@ static gaia::json getTopProcesses(int topN = 20) {
         uint64_t totalMemory = 0;
         DWORD parentPid = 0;
         std::string parentName;
+        std::wstring path;          // path of first instance (for version info)
         gaia::json pids = gaia::json::array();
     };
     std::map<std::string, GroupedProc> groups;
@@ -247,6 +292,7 @@ static gaia::json getTopProcesses(int topN = 20) {
         if (g.name.empty()) {
             g.name = p.name;
             g.parentPid = p.parentPid;
+            g.path = p.path;
             // Resolve parent name
             if (p.parentPid == 0) {
                 g.parentName = "System Idle Process";
@@ -280,6 +326,30 @@ static gaia::json getTopProcesses(int topN = 20) {
         };
         if (!g->parentName.empty())
             entry["parent_name"] = g->parentName;
+        // Add description + company from file version info
+        std::string desc, company;
+        if (!g->path.empty()) {
+            getFileVersionStrings(g->path, desc, company);
+        }
+        entry["description"] = desc.empty() ? "Unknown" : desc;
+        entry["company"]     = company.empty() ? "Unknown" : company;
+        entry["path"]        = g->path.empty() ? "" : wstringToUtf8(g->path);
+
+        // Factual flags for LLM classification
+        gaia::json flags = gaia::json::array();
+        if (desc.empty() || entry["description"] == "Unknown")
+            flags.push_back("unknown_description");
+        if (company.empty() || entry["company"] == "Unknown")
+            flags.push_back("unknown_company");
+        std::string lowerPath = entry["path"].get<std::string>();
+        for (auto& c : lowerPath)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (lowerPath.find("\\temp\\") != std::string::npos ||
+            lowerPath.find("\\downloads\\") != std::string::npos ||
+            lowerPath.find("\\appdata\\local\\temp\\") != std::string::npos)
+            flags.push_back("temp_path");
+        entry["flags"] = flags;
+
         result.push_back(entry);
     }
     return result;
@@ -322,6 +392,41 @@ static std::string formatProcessList(const gaia::json& procs) {
             std::snprintf(buf, sizeof(buf), "  %-30s %s\n", nm.c_str(), mem.c_str());
         }
         out += buf;
+
+        // Show path on a second line
+        if (p.contains("path") && p["path"].is_string()) {
+            std::string path = p["path"].get<std::string>();
+            if (!path.empty())
+                out += "    path: " + path + "\n";
+        }
+
+        // Show company and description on a second line
+        if (p.contains("company") || p.contains("description")) {
+            std::string co = p.value("company", "");
+            std::string de = p.value("description", "");
+            if (!co.empty() || !de.empty()) {
+                std::string detail;
+                if (!de.empty() && de != "Unknown") detail += de;
+                if (!co.empty() && co != "Unknown") {
+                    if (!detail.empty()) detail += " | ";
+                    detail += co;
+                }
+                if (!detail.empty())
+                    out += "    " + detail + "\n";
+            }
+        }
+
+        // Show flags if present
+        if (p.contains("flags") && p["flags"].is_array() && !p["flags"].empty()) {
+            out += "    flags: ";
+            bool first = true;
+            for (const auto& f : p["flags"]) {
+                if (!first) out += ", ";
+                out += f.get<std::string>();
+                first = false;
+            }
+            out += "\n";
+        }
     }
     return out;
 }
@@ -506,35 +611,46 @@ protected:
     std::string getSystemPrompt() const override {
         return R"(You are an expert System Analyst running locally on AMD hardware via the GAIA framework. You make every process, service, and network connection on this PC understandable in plain English. You detect problems, explain what is normal vs. suspicious, and take targeted action.
 
-## SECTION DEFINITIONS
-- (A) "Processes" — items labeled A1, A2... = Running processes consuming the most resources
-- (B) "Services" — items labeled B1, B2... = Running services with problems (high memory >200 MB, error state, degraded)
-- (C) "Suspicious Items" — items labeled C1, C2... = Items exhibiting suspicious behavior or security concerns
+## ANALYSIS CRITERIA
 
-## ANALYSIS FORMAT
+You receive system data pre-filtered by resource usage (top consumers by memory/CPU). Each process includes factual metadata: company, description, path, and a flags array. YOU classify each item.
 
-Organize findings under these three headers. Use the exact header names shown. Number items within each group.
+### A. Processes (resource consumers)
+Select the most significant resource consumers from the data. Consider:
+- Memory usage relative to total system RAM
+- Instance count (many instances of the same exe = noteworthy)
+- Whether the resource usage is expected for that application type
+Tag each: [NORMAL] expected usage, [HIGH] unexpectedly high, [SUSPICIOUS] see C
+
+### B. Services (problematic)
+Report services that need attention:
+- Status is not "OK" (Degraded, Error, etc.)
+- Memory > 200 MB for a background service
+If no services are problematic: "All services running normally"
+
+### C. Suspicious Items
+Flag processes with security concerns. The flags array provides factual signals — use them as INPUT to your reasoning, not as final verdicts:
+- unknown_company + unknown_description together = STRONG signal
+- temp_path (running from Temp/Downloads) = STRONG signal for non-installers
+- unknown_company alone for a non-system process = moderate signal
+- EXCEPTIONS: svchost.exe, csrss.exe, smss.exe, lsass.exe, System may show empty company — this is NORMAL for Windows system processes
+- A process with NO flags can still be suspicious if its behavior is unusual
+If no items are suspicious: "None detected"
+
+## OUTPUT FORMAT
+
+Always print all three headers. Number items. Leave a blank line between groups.
 
 A. Processes
-1. chrome.exe (x8) - 2.1 GB RAM - Google Chrome <- explorer.exe [HIGH]
-2. node.exe (x18) - 1.8 GB RAM - Node.js Runtime <- cmd.exe [NORMAL]
+1. name.exe (xN) - X.X GB RAM - Description <- parent.exe [TAG]
 
 B. Services
-1. WSearch (Windows Search) - 312 MB - high memory usage
+1. ServiceName (Display Name) - X MB - reason
 
 C. Suspicious Items
-None detected
+1. name.exe - C:\path\to\exe - flags: unknown_company, unknown_description
 
-System Health: Healthy - All systems normal
-
-Section rules:
-- A. Processes: Top resource consumers grouped by name (instance count + parent if >1). Tag each [NORMAL], [HIGH], or [SUSPICIOUS].
-- B. Services: Only problematic services (high memory >200 MB, error/degraded). If none: write "All services running normally".
-- C. Suspicious Items: Unsigned binaries, unknown/empty publisher, unexpected paths (Temp/Downloads/AppData\Local\Temp), unknown parent. If none: write "None detected".
-
-Always print all three group headers (A. Processes, B. Services, C. Suspicious Items). Leave a blank line between groups.
-
-End with: System Health: [Healthy/Warning/Critical] - [one sentence summary]
+System Health: [Healthy/Warning/Critical] - [one sentence]
 
 ## REASONING PROTOCOL
 
@@ -555,8 +671,8 @@ Users reference items by group letter + item number (e.g., "Explain A3", "Stop B
 
 ## AVAILABLE TOOLS
 
-- `system_snapshot` — CPU, memory, disk, uptime, top processes (grouped, with parent), problematic/high-memory services, connection count.
-- `list_processes` — Top 20 by memory, top 10 by CPU, background process count.
+- `system_snapshot` — CPU, memory, disk, uptime, top 30 processes by memory (with company, description, path, flags), problematic/high-memory services, connection count.
+- `list_processes` — Top 30 by memory (with company, description, flags), top 10 by CPU, background process count.
 - `kill_process` — Terminate a process by name. ONLY after user confirmation.
 - `explain_item` — Full details on any process or service: path, publisher, signer, description, network connections.
 - `restart_process` — Kill and relaunch an application. ONLY after user confirmation.
@@ -607,15 +723,15 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
         // ==================================================================
         toolRegistry().registerTool(
             "system_snapshot",
-            "System overview: CPU load, memory, disk, uptime, total process count, "
-            "network connection count, problematic running services (error/degraded or "
-            ">200 MB memory), and top 10 processes by memory. Use first during analysis.",
+            "System overview: CPU load, memory, disk, uptime, top processes by memory "
+            "(with company, description, path, and factual flags), problematic services, "
+            "and network connection count. Use first during analysis.",
             [](const gaia::json& /*args*/) -> gaia::json {
                 gaia::json result;
                 result["tool"]          = "system_snapshot";
                 result["disk"]          = getDiskUsageInfo();
                 result["memory"]        = getMemoryInfo();
-                result["top_processes"] = getTopProcesses(10);
+                result["top_processes"] = getTopProcesses(30);
 
                 std::string psCmd =
                     "$o=@{}; "
@@ -700,7 +816,7 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
                         out += buf;
                     }
 
-                    out += "\nTop 10 by memory:\n";
+                    out += "\nTop 30 by memory:\n";
                     out += formatProcessList(result["top_processes"]);
 
                     bool hasProblematic = result.contains("problematic_services") &&
@@ -746,12 +862,12 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
         // ==================================================================
         toolRegistry().registerTool(
             "list_processes",
-            "Full process list: top 20 by memory (Win32 API) and top 10 by CPU time "
-            "(PowerShell). Also reports total memory state and background process count.",
+            "Full process list: top 30 by memory (with company, description, flags) "
+            "and top 10 by CPU time. Also reports total memory state and background process count.",
             [](const gaia::json& /*args*/) -> gaia::json {
                 gaia::json result;
                 result["tool"]          = "list_processes";
-                result["top_by_memory"] = getTopProcesses(20);
+                result["top_by_memory"] = getTopProcesses(30);
                 result["memory"]        = getMemoryInfo();
 
                 std::string psCmd =
@@ -771,7 +887,7 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
                 }
 
                 // Build command/output for CleanConsole
-                result["command"] = "Win32 API: top 20 by memory + PowerShell: top 10 by CPU time";
+                result["command"] = "Win32 API: top 30 by memory + PowerShell: top 10 by CPU time";
                 {
                     std::string out;
                     char buf[256];
@@ -792,7 +908,7 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
                         out += "\n";
                     }
 
-                    out += "\nTop 20 by memory:\n";
+                    out += "\nTop 30 by memory:\n";
                     out += formatProcessList(result["top_by_memory"]);
 
                     if (result.contains("top_by_cpu") && result["top_by_cpu"].is_array()) {
@@ -1651,25 +1767,18 @@ static const ActionEntry kActions[] = {
 static constexpr size_t kActionsSize = sizeof(kActions) / sizeof(kActions[0]);
 
 static const char* kAutoAnalysisPrompt =
-    "Analyze this system now. No user interaction needed - just run the tools and report.\n\n"
+    "Analyze this system now. No user interaction needed.\n\n"
     "Steps:\n"
-    "1. Run system_snapshot (overview: CPU, memory, disk, services, processes).\n"
-    "2. Run list_processes (detailed memory and CPU data).\n\n"
-    "Output findings using this EXACT layout:\n\n"
-    "A. Processes\n"
-    "1. chrome.exe (x8) - 2.1 GB RAM - Google Chrome <- explorer.exe [NORMAL]\n"
-    "2. node.exe (x4) - 900 MB RAM - Node.js Runtime <- cmd.exe [NORMAL]\n\n"
-    "B. Services\n"
-    "1. WSearch (Windows Search) - 312 MB - high memory usage\n"
-    "(or if none: 'All services running normally')\n\n"
-    "C. Suspicious Items\n"
-    "1. unknown.exe - C:\\Temp\\unknown.exe - unsigned, running from Temp\n"
-    "(or if none: 'None detected')\n\n"
-    "Replace the example items with REAL data from the tools.\n"
-    "Always print all three headers (A. Processes, B. Services, C. Suspicious Items). "
-    "Leave a blank line between groups.\n\n"
-    "System Health: [Healthy/Warning/Critical] - [one sentence]\n"
-    "Maximum 8 items per section. Keep each item to 1 line.";
+    "1. Run system_snapshot (system specs, top processes with company/description/flags, services).\n"
+    "2. Run list_processes (detailed memory and CPU data with flags).\n\n"
+    "Review the data and classify each process yourself:\n"
+    "- Check the 'company', 'description', 'path', and 'flags' fields\n"
+    "- Processes with flags like 'unknown_company' or 'temp_path' deserve scrutiny\n"
+    "- Use your judgment — not all flagged processes are suspicious\n"
+    "- Windows system processes (svchost, csrss, smss, lsass) with empty company are NORMAL\n\n"
+    "Output format: A/B/C sections as specified in your instructions.\n"
+    "Maximum 8 items per section. 1 line each.\n"
+    "System Health: [Healthy/Warning/Critical] - [one sentence]";
 
 static void printActionMenu() {
     std::cout << color::CYAN
