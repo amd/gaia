@@ -1,0 +1,37 @@
+{
+  "name": "chat",
+  "displayName": "GAIA Chat",
+  "version": "0.1.0",
+  "description": "Privacy-first AI chat with document Q&A - runs 100% locally on AMD Ryzen AI",
+  "author": "AMD AI Group",
+  "license": "MIT",
+  "window": {
+    "width": 1400,
+    "height": 900,
+    "minWidth": 900,
+    "minHeight": 700
+  },
+  "backend": {
+    "command": "gaia",
+    "args": ["chat", "--ui", "--ui-port", "4200"],
+    "port": 4200,
+    "healthCheck": "/api/health",
+    "startupTimeout": 15000
+  },
+  "devServer": {
+    "port": 4200,
+    "vitePort": 5174
+  },
+  "installer": {
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico"
+    },
+    "appId": "com.amd.gaia.chat",
+    "productName": "GAIA Chat",
+    "copyright": "Copyright (C) 2025-2026 Advanced Micro Devices, Inc."
+  }
+}

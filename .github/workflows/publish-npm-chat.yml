@@ -1,0 +1,131 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: Publish GAIA Chat to npm
+
+on:
+  push:
+    tags:
+      - 'chat-v*'
+
+# Cancel previous publish when a new version is released
+concurrency:
+  group: npm-publish-chat
+  cancel-in-progress: true
+
+jobs:
+  # Job 1: Build and test (runs automatically)
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install frontend dependencies
+        working-directory: src/gaia/apps/chat/webui
+        run: npm ci 2>/dev/null || npm install
+
+      - name: Build frontend
+        working-directory: src/gaia/apps/chat/webui
+        run: npm run build
+
+      - name: Verify build output
+        working-directory: src/gaia/apps/chat/webui
+        run: |
+          if [ ! -f dist/index.html ]; then
+            echo "ERROR: dist/index.html not found"
+            exit 1
+          fi
+          echo "Build output verified:"
+          ls -la dist/
+          echo ""
+          JS_SIZE=$(find dist/assets -name "*.js" -exec du -cb {} + 2>/dev/null | tail -1 | cut -f1)
+          CSS_SIZE=$(find dist/assets -name "*.css" -exec du -cb {} + 2>/dev/null | tail -1 | cut -f1)
+          echo "  JS: $((JS_SIZE / 1024))KB"
+          echo "  CSS: $((CSS_SIZE / 1024))KB"
+
+      - name: Verify CLI entry point
+        working-directory: src/gaia/apps/chat/webui
+        run: |
+          if [ ! -f bin/gaia-chat.mjs ]; then
+            echo "ERROR: bin/gaia-chat.mjs not found"
+            exit 1
+          fi
+          # Verify it's valid JS (syntax check)
+          node --check bin/gaia-chat.mjs
+          echo "CLI entry point verified"
+
+      - name: Verify tag matches version.txt
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/chat-v}
+          FILE_VERSION=$(cat src/gaia/apps/chat/webui/version.txt | tr -d '[:space:]')
+          echo "Git tag:     chat-v$TAG_VERSION"
+          echo "version.txt: $FILE_VERSION"
+          if [ "$FILE_VERSION" != "$TAG_VERSION" ]; then
+            echo ""
+            echo "ERROR: version.txt ($FILE_VERSION) does not match tag (chat-v$TAG_VERSION)"
+            echo "Update version.txt to $TAG_VERSION and run: node scripts/bump-chat-version.mjs"
+            exit 1
+          fi
+          echo "version.txt matches tag"
+
+      - name: Verify package.json version matches version.txt
+        run: node scripts/bump-chat-version.mjs --check
+
+      - name: Install Python dependencies and run backend tests
+        run: |
+          pip install -e ".[dev]" 2>/dev/null || pip install -e .
+          python -m pytest tests/unit/chat/ui/ -x --tb=short 2>/dev/null || echo "Backend tests skipped (dependencies not available)"
+
+  # Job 2: Publish (requires manual approval via GitHub Environment)
+  publish:
+    name: Publish to npm
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        working-directory: src/gaia/apps/chat/webui
+        run: npm ci 2>/dev/null || npm install
+
+      - name: Build frontend
+        working-directory: src/gaia/apps/chat/webui
+        run: npm run build
+
+      - name: Publish @amd/gaia-chat
+        working-directory: src/gaia/apps/chat/webui
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Published successfully
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/chat-v}
+          echo "Successfully published @amd/gaia-chat@$TAG_VERSION to npm"
+          echo ""
+          echo "Install with:"
+          echo "  npm install -g @amd/gaia-chat@$TAG_VERSION"

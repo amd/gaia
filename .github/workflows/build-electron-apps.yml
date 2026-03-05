@@ -85,7 +85,7 @@ jobs:
       fail-fast: false
       matrix:
         # os: [windows-latest, ubuntu-latest, macos-latest]
-        os: [windows-latest]
+        os: [windows-latest, ubuntu-latest]
         app: ${{ fromJson(needs.discover-apps.outputs.matrix).app }}
 
     steps:

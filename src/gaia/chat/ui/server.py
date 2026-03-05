@@ -1,0 +1,633 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+"""FastAPI server for GAIA Chat UI.
+
+Provides REST API endpoints for the chat desktop application:
+- System status and health
+- Session management (CRUD)
+- Chat with streaming (SSE)
+- Document library management
+"""
+
+import asyncio
+import hashlib
+import json
+import logging
+import os
+import shutil
+from pathlib import Path
+from typing import Optional
+
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
+
+from .database import ChatDatabase
+from .models import (
+    AttachDocumentRequest,
+    ChatRequest,
+    ChatResponse,
+    CreateSessionRequest,
+    DocumentListResponse,
+    DocumentResponse,
+    DocumentUploadRequest,
+    MessageListResponse,
+    MessageResponse,
+    SessionListResponse,
+    SessionResponse,
+    SourceInfo,
+    SystemStatus,
+    UpdateSessionRequest,
+)
+
+logger = logging.getLogger(__name__)
+
+# Default port for chat UI server
+DEFAULT_PORT = 4200
+
+
+def create_app(db_path: str = None) -> FastAPI:
+    """Create and configure the FastAPI application.
+
+    Args:
+        db_path: Path to SQLite database. None for default, ":memory:" for testing.
+
+    Returns:
+        Configured FastAPI application.
+    """
+    app = FastAPI(
+        title="GAIA Chat UI API",
+        description="Privacy-first local chat application API",
+        version="0.1.0",
+    )
+
+    # CORS - allow local connections
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # Initialize database
+    db = ChatDatabase(db_path)
+
+    # Store db on app state so it's accessible
+    app.state.db = db
+
+    # ── System Endpoints ────────────────────────────────────────────────
+
+    @app.get("/api/system/status", response_model=SystemStatus)
+    async def system_status():
+        """Check system readiness (Lemonade, models, disk space)."""
+        status = SystemStatus()
+
+        # Check Lemonade Server
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                base_url = os.environ.get(
+                    "LEMONADE_BASE_URL", "http://localhost:8000/api/v1"
+                )
+                resp = await client.get(f"{base_url}/models")
+                if resp.status_code == 200:
+                    status.lemonade_running = True
+                    data = resp.json()
+                    models = data.get("data", [])
+                    if models:
+                        status.model_loaded = models[0].get("id", "unknown")
+                    # Check for embedding model
+                    for m in models:
+                        if "embed" in m.get("id", "").lower():
+                            status.embedding_model_loaded = True
+                            break
+        except Exception:
+            status.lemonade_running = False
+
+        # Disk space
+        try:
+            usage = shutil.disk_usage(Path.home())
+            status.disk_space_gb = round(usage.free / (1024**3), 1)
+        except Exception:
+            pass
+
+        # Memory
+        try:
+            import psutil
+
+            mem = psutil.virtual_memory()
+            status.memory_available_gb = round(mem.available / (1024**3), 1)
+        except ImportError:
+            pass
+
+        # Initialized check
+        init_marker = Path.home() / ".gaia" / "chat" / "initialized"
+        status.initialized = init_marker.exists()
+
+        return status
+
+    @app.get("/api/health")
+    async def health():
+        """Health check endpoint."""
+        stats = db.get_stats()
+        return {
+            "status": "ok",
+            "service": "gaia-chat-ui",
+            "stats": stats,
+        }
+
+    # ── Session Endpoints ───────────────────────────────────────────────
+
+    @app.get("/api/sessions", response_model=SessionListResponse)
+    async def list_sessions(limit: int = 50, offset: int = 0):
+        """List all chat sessions."""
+        sessions = db.list_sessions(limit=limit, offset=offset)
+        total = db.count_sessions()
+        return SessionListResponse(
+            sessions=[_session_to_response(s) for s in sessions],
+            total=total,
+        )
+
+    @app.post("/api/sessions", response_model=SessionResponse)
+    async def create_session(request: CreateSessionRequest):
+        """Create a new chat session."""
+        session = db.create_session(
+            title=request.title,
+            model=request.model,
+            system_prompt=request.system_prompt,
+            document_ids=request.document_ids,
+        )
+        return _session_to_response(session)
+
+    @app.get("/api/sessions/{session_id}", response_model=SessionResponse)
+    async def get_session(session_id: str):
+        """Get session details."""
+        session = db.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return _session_to_response(session)
+
+    @app.put("/api/sessions/{session_id}", response_model=SessionResponse)
+    async def update_session(session_id: str, request: UpdateSessionRequest):
+        """Update session title or system prompt."""
+        session = db.update_session(
+            session_id, title=request.title, system_prompt=request.system_prompt
+        )
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return _session_to_response(session)
+
+    @app.delete("/api/sessions/{session_id}")
+    async def delete_session(session_id: str):
+        """Delete a session and its messages."""
+        if not db.delete_session(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        return {"deleted": True}
+
+    @app.get("/api/sessions/{session_id}/messages", response_model=MessageListResponse)
+    async def get_messages(session_id: str, limit: int = 100, offset: int = 0):
+        """Get messages for a session."""
+        session = db.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        messages = db.get_messages(session_id, limit=limit, offset=offset)
+        total = db.count_messages(session_id)
+
+        return MessageListResponse(
+            messages=[_message_to_response(m) for m in messages],
+            total=total,
+        )
+
+    @app.get("/api/sessions/{session_id}/export")
+    async def export_session(session_id: str, format: str = "markdown"):
+        """Export session to markdown."""
+        session = db.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        messages = db.get_messages(session_id, limit=10000)
+
+        if format == "markdown":
+            lines = [f"# {session['title']}\n"]
+            lines.append(f"*Created: {session['created_at']}*\n")
+            lines.append(f"*Model: {session['model']}*\n\n---\n")
+
+            for msg in messages:
+                role_label = "User" if msg["role"] == "user" else "Assistant"
+                lines.append(f"**{role_label}:**\n\n{msg['content']}\n\n---\n")
+
+            content = "\n".join(lines)
+            return {"content": content, "format": "markdown"}
+        elif format == "json":
+            return {"session": session, "messages": messages, "format": "json"}
+        else:
+            raise HTTPException(
+                status_code=400, detail=f"Unsupported format: {format}"
+            )
+
+    # ── Chat Endpoint ───────────────────────────────────────────────────
+
+    @app.post("/api/chat/send")
+    async def send_message(request: ChatRequest):
+        """Send a message and get a response (streaming or non-streaming)."""
+        # Verify session exists
+        session = db.get_session(request.session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        # Save user message
+        db.add_message(request.session_id, "user", request.message)
+
+        if request.stream:
+            return StreamingResponse(
+                _stream_chat_response(db, session, request),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+        else:
+            # Non-streaming response
+            response_text = await _get_chat_response(db, session, request)
+            msg_id = db.add_message(
+                request.session_id, "assistant", response_text
+            )
+            return ChatResponse(
+                message_id=msg_id,
+                content=response_text,
+                sources=[],
+            )
+
+    # ── Document Endpoints ──────────────────────────────────────────────
+
+    @app.get("/api/documents", response_model=DocumentListResponse)
+    async def list_documents():
+        """List all documents in the library."""
+        docs = db.list_documents()
+        total_size = sum(d.get("file_size", 0) for d in docs)
+        total_chunks = sum(d.get("chunk_count", 0) for d in docs)
+
+        return DocumentListResponse(
+            documents=[_doc_to_response(d) for d in docs],
+            total=len(docs),
+            total_size_bytes=total_size,
+            total_chunks=total_chunks,
+        )
+
+    @app.post("/api/documents/upload-path", response_model=DocumentResponse)
+    async def upload_by_path(request: DocumentUploadRequest):
+        """Index a document by file path (for Electron/local use)."""
+        filepath = Path(request.filepath)
+
+        if not filepath.exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {filepath}")
+
+        if not filepath.is_file():
+            raise HTTPException(status_code=400, detail="Path is not a file")
+
+        # Compute file hash
+        file_hash = _compute_file_hash(filepath)
+        file_size = filepath.stat().st_size
+
+        # Index the document with RAG
+        chunk_count = await _index_document(filepath)
+
+        doc = db.add_document(
+            filename=filepath.name,
+            filepath=str(filepath),
+            file_hash=file_hash,
+            file_size=file_size,
+            chunk_count=chunk_count,
+        )
+
+        return _doc_to_response(doc)
+
+    @app.delete("/api/documents/{doc_id}")
+    async def delete_document(doc_id: str):
+        """Remove a document from the library."""
+        if not db.delete_document(doc_id):
+            raise HTTPException(status_code=404, detail="Document not found")
+        return {"deleted": True}
+
+    # ── Session-Document Attachments ────────────────────────────────────
+
+    @app.post("/api/sessions/{session_id}/documents")
+    async def attach_document(session_id: str, request: AttachDocumentRequest):
+        """Attach a document to a session."""
+        session = db.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        doc = db.get_document(request.document_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        db.attach_document(session_id, request.document_id)
+        return {"attached": True}
+
+    @app.delete("/api/sessions/{session_id}/documents/{doc_id}")
+    async def detach_document(session_id: str, doc_id: str):
+        """Detach a document from a session."""
+        db.detach_document(session_id, doc_id)
+        return {"detached": True}
+
+    # ── Serve Frontend Static Files ──────────────────────────────────────
+    # Look for built frontend assets in the webui dist directory
+    _webui_dist = Path(__file__).resolve().parent.parent.parent / "apps" / "chat" / "webui" / "dist"
+    if _webui_dist.is_dir():
+        logger.info("Serving frontend from %s", _webui_dist)
+
+        from fastapi.responses import FileResponse
+
+        # Mount static assets (JS, CSS, etc.)
+        app.mount(
+            "/assets",
+            StaticFiles(directory=str(_webui_dist / "assets")),
+            name="static-assets",
+        )
+
+        # Serve index.html for all non-API routes (SPA fallback)
+        @app.get("/{full_path:path}")
+        async def serve_spa(full_path: str):
+            """Serve the React SPA for all non-API routes."""
+            # Check if the requested file exists in dist
+            file_path = _webui_dist / full_path
+            if full_path and file_path.is_file():
+                return FileResponse(str(file_path))
+            # Default to index.html for SPA routing
+            return FileResponse(str(_webui_dist / "index.html"))
+    else:
+        logger.info("No frontend build found at %s. Run 'npm run build' in the webui directory.", _webui_dist)
+
+        @app.get("/")
+        async def no_frontend():
+            """Inform user that frontend needs to be built."""
+            return {
+                "message": "GAIA Chat API is running. Frontend not built yet.",
+                "hint": "Run 'npm run build' in src/gaia/apps/chat/webui/ to build the frontend.",
+            }
+
+    return app
+
+
+# ── Helper Functions ────────────────────────────────────────────────────────
+
+
+def _session_to_response(session: dict) -> SessionResponse:
+    """Convert database session dict to response model."""
+    return SessionResponse(
+        id=session["id"],
+        title=session["title"],
+        created_at=session["created_at"],
+        updated_at=session["updated_at"],
+        model=session["model"],
+        system_prompt=session.get("system_prompt"),
+        message_count=session.get("message_count", 0),
+        document_ids=session.get("document_ids", []),
+    )
+
+
+def _message_to_response(msg: dict) -> MessageResponse:
+    """Convert database message dict to response model."""
+    sources = None
+    if msg.get("rag_sources"):
+        try:
+            raw_sources = msg["rag_sources"]
+            if isinstance(raw_sources, str):
+                raw_sources = json.loads(raw_sources)
+            sources = [SourceInfo(**s) for s in raw_sources]
+        except (json.JSONDecodeError, TypeError, KeyError):
+            sources = None
+
+    return MessageResponse(
+        id=msg["id"],
+        session_id=msg["session_id"],
+        role=msg["role"],
+        content=msg["content"],
+        created_at=msg["created_at"],
+        rag_sources=sources,
+    )
+
+
+def _doc_to_response(doc: dict) -> DocumentResponse:
+    """Convert database document dict to response model."""
+    return DocumentResponse(
+        id=doc["id"],
+        filename=doc["filename"],
+        filepath=doc["filepath"],
+        file_size=doc.get("file_size", 0),
+        chunk_count=doc.get("chunk_count", 0),
+        indexed_at=doc["indexed_at"],
+        last_accessed_at=doc.get("last_accessed_at"),
+        sessions_using=doc.get("sessions_using", 0),
+    )
+
+
+def _compute_file_hash(filepath: Path) -> str:
+    """Compute SHA-256 hash of file contents."""
+    sha256 = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for block in iter(lambda: f.read(8192), b""):
+            sha256.update(block)
+    return sha256.hexdigest()
+
+
+async def _index_document(filepath: Path) -> int:
+    """Index a document using RAG SDK. Returns chunk count."""
+    try:
+        from gaia.rag.sdk import RAGSDK, RAGConfig
+
+        config = RAGConfig()
+        rag = RAGSDK(config)
+        result = rag.index_file(str(filepath))
+        return result.get("chunk_count", 0) if isinstance(result, dict) else 0
+    except Exception as e:
+        logger.warning("Failed to index document %s: %s", filepath, e)
+        return 0
+
+
+async def _get_chat_response(
+    db: ChatDatabase, session: dict, request: ChatRequest
+) -> str:
+    """Get a non-streaming chat response from the LLM."""
+    try:
+        from gaia.chat.sdk import ChatConfig, ChatSDK
+
+        # Build conversation history from database
+        messages = db.get_messages(request.session_id, limit=20)
+        history_pairs = []
+        for i in range(0, len(messages) - 1, 2):
+            if (
+                i + 1 < len(messages)
+                and messages[i]["role"] == "user"
+                and messages[i + 1]["role"] == "assistant"
+            ):
+                history_pairs.append(
+                    (messages[i]["content"], messages[i + 1]["content"])
+                )
+
+        config = ChatConfig(
+            model=session.get("model", "Qwen3-Coder-30B-A3B-Instruct-GGUF"),
+            system_prompt=session.get("system_prompt"),
+        )
+        chat = ChatSDK(config)
+
+        # Restore history
+        for user_msg, assistant_msg in history_pairs[-4:]:
+            chat.chat_history.append(f"user: {user_msg}")
+            chat.chat_history.append(f"assistant: {assistant_msg}")
+
+        response = chat.send(request.message)
+        return response.text
+
+    except Exception as e:
+        logger.error("Chat error: %s", e)
+        return f"Error: Could not get response from LLM. Is Lemonade Server running? ({e})"
+
+
+async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRequest):
+    """Stream chat response as Server-Sent Events."""
+    try:
+        from gaia.chat.sdk import ChatConfig, ChatSDK
+
+        # Build conversation history
+        messages = db.get_messages(request.session_id, limit=20)
+        history_pairs = []
+        for i in range(0, len(messages) - 1, 2):
+            if (
+                i + 1 < len(messages)
+                and messages[i]["role"] == "user"
+                and messages[i + 1]["role"] == "assistant"
+            ):
+                history_pairs.append(
+                    (messages[i]["content"], messages[i + 1]["content"])
+                )
+
+        config = ChatConfig(
+            model=session.get("model", "Qwen3-Coder-30B-A3B-Instruct-GGUF"),
+            system_prompt=session.get("system_prompt"),
+        )
+        chat = ChatSDK(config)
+
+        # Restore history
+        for user_msg, assistant_msg in history_pairs[-4:]:
+            chat.chat_history.append(f"user: {user_msg}")
+            chat.chat_history.append(f"assistant: {assistant_msg}")
+
+        # Stream response
+        full_response = ""
+
+        def _stream_sync():
+            """Run streaming in sync context for thread executor."""
+            nonlocal full_response
+            chunks = []
+            for chunk in chat.send_stream(request.message):
+                if not chunk.is_complete:
+                    chunks.append(chunk.text)
+                    full_response += chunk.text
+            return chunks
+
+        # Run streaming in executor to not block event loop
+        loop = asyncio.get_event_loop()
+
+        # Use a queue-based approach for real-time streaming
+        import queue
+
+        chunk_queue = queue.Queue()
+        done_event = asyncio.Event()
+
+        def _produce_chunks():
+            nonlocal full_response
+            try:
+                for chunk in chat.send_stream(request.message):
+                    if not chunk.is_complete:
+                        chunk_queue.put(chunk.text)
+                        full_response += chunk.text
+            except Exception as e:
+                chunk_queue.put(None)  # Signal error
+                logger.error("Streaming error: %s", e)
+            finally:
+                chunk_queue.put(None)  # Signal done
+
+        # Start producer in thread
+        import threading
+
+        producer = threading.Thread(target=_produce_chunks, daemon=True)
+        producer.start()
+
+        # Yield SSE events as chunks arrive
+        while True:
+            try:
+                text = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: chunk_queue.get(timeout=0.1)
+                )
+                if text is None:
+                    break
+                event_data = json.dumps({"type": "chunk", "content": text})
+                yield f"data: {event_data}\n\n"
+            except Exception:
+                # Queue timeout - check if producer is still alive
+                if not producer.is_alive():
+                    break
+                continue
+
+        # Save complete assistant response
+        if full_response:
+            msg_id = db.add_message(
+                request.session_id, "assistant", full_response
+            )
+            done_data = json.dumps(
+                {"type": "done", "message_id": msg_id, "content": full_response}
+            )
+            yield f"data: {done_data}\n\n"
+        else:
+            error_msg = "No response received from LLM. Is Lemonade Server running?"
+            db.add_message(request.session_id, "assistant", error_msg)
+            error_data = json.dumps({"type": "error", "content": error_msg})
+            yield f"data: {error_data}\n\n"
+
+    except Exception as e:
+        logger.error("Chat streaming error: %s", e)
+        error_msg = f"Error: {e}"
+        db.add_message(request.session_id, "assistant", error_msg)
+        error_data = json.dumps({"type": "error", "content": error_msg})
+        yield f"data: {error_data}\n\n"
+
+
+# ── Standalone runner ───────────────────────────────────────────────────────
+
+
+def main():
+    """Run the Chat UI server."""
+    import argparse
+
+    import uvicorn
+
+    parser = argparse.ArgumentParser(description="GAIA Chat UI Server")
+    parser.add_argument("--host", default="localhost", help="Host (default: localhost)")
+    parser.add_argument(
+        "--port", type=int, default=DEFAULT_PORT, help=f"Port (default: {DEFAULT_PORT})"
+    )
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    args = parser.parse_args()
+
+    log_level = "debug" if args.debug else "info"
+    print(f"Starting GAIA Chat UI server on http://{args.host}:{args.port}")
+    server_app = create_app()
+    uvicorn.run(
+        server_app,
+        host=args.host,
+        port=args.port,
+        log_level=log_level,
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -4,31 +4,28 @@ icon: "desktop"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/apps/`](https://github.com/amd/gaia/blob/main/src/gaia/apps/) | [RAUX Repository](https://github.com/aigdat/raux)
+  **Source Code:** [`src/gaia/apps/`](https://github.com/amd/gaia/blob/main/src/gaia/apps/) | [`src/gaia/chat/ui/`](https://github.com/amd/gaia/blob/main/src/gaia/chat/ui/) | [RAUX Repository](https://github.com/aigdat/raux)
 </Info>
-
-<Badge text="development" color="orange" />
-
-## Table of Contents
-- [GAIA UI Documentation](#gaia-ui-documentation)
-  - [Table of Contents](#table-of-contents)
-- [UI Overview](#ui-overview)
-- [Qt Interface](#qt-interface)
-  - [Prerequisites](#prerequisites)
-  - [Using Qt Designer](#using-qt-designer)
-    - [Launching Qt Designer](#launching-qt-designer)
-    - [Editing the UI](#editing-the-ui)
-    - [Working with Assets](#working-with-assets)
-  - [Compiling Changes](#compiling-changes)
-  - [Troubleshooting](#troubleshooting)
-- [GAIA UI Interface](#raux-interface)
-  - [New in GAIA UI (RAUX)](#new-in-gaia-beta-raux)
-- [License](#license)
 
 # UI Overview
 
-GAIA provides a single modern user interface:
-- **GAIA UI (RAUX)** - A modern Electron-based desktop application providing an intuitive interface for GAIA
+GAIA provides two desktop interfaces:
+
+| UI | Focus | Technology | Status |
+|----|-------|------------|--------|
+| **GAIA Chat** | Privacy-first chat with document Q&A | FastAPI + Vanilla JS/Electron | Active Development |
+| **GAIA UI (RAUX)** | Full-featured AI platform interface | OpenWebUI + Electron | Stable |
+
+<CardGroup cols={2}>
+  <Card title="GAIA Chat Desktop" icon="comments" href="/guides/chat-ui">
+    Lightweight, privacy-first chat with document Q&A. Drag-and-drop files, session management, and streaming responses.
+  </Card>
+  <Card title="GAIA Chat SDK" icon="code" href="/sdk/sdks/chat-ui">
+    Python backend API: FastAPI server, SQLite database, Pydantic models, and SSE streaming.
+  </Card>
+</CardGroup>
+
+---
 
 # Installation
 
@@ -60,6 +57,57 @@ sudo apt install ./gaia-ui-setup.deb
 ```bash
 sudo apt remove gaiaui
 ```
+
+# GAIA Chat (Lightweight Desktop)
+
+GAIA Chat is a lightweight, privacy-first desktop chat application built with a Python FastAPI backend and a minimal web frontend. It is designed as a lighter alternative to RAUX, focused specifically on chat and document Q&A.
+
+## Key Features
+
+- **Privacy-first**: All data stays local -- no cloud, no telemetry
+- **Document Q&A**: Drag-and-drop 50+ file formats for RAG-powered search
+- **Session management**: Create, rename, export, and delete conversations
+- **Streaming responses**: Real-time SSE streaming from local LLMs
+- **Shared CLI/UI state**: Same SQLite database as `gaia chat` CLI
+- **Lightweight**: Vanilla JS frontend, no heavy framework dependencies
+
+## Architecture
+
+```
+GAIA Chat Desktop
+  Electron Shell (optional) or Browser
+    |
+    v
+  FastAPI Backend (Python, port 4200)
+    - REST API + SSE streaming
+    - SQLite database (WAL mode)
+    |
+    v
+  GAIA Core SDKs
+    - ChatSDK, RAGSDK, LemonadeClient
+    |
+    v
+  Lemonade Server (port 8000)
+```
+
+## Developer Quick Start
+
+```bash
+# 1. Start Lemonade Server
+lemonade-server serve
+
+# 2. Start Chat UI backend
+python -m gaia.chat.ui.server
+
+# 3. Open http://localhost:4200 in your browser
+```
+
+For full documentation, see:
+- [GAIA Chat Desktop Guide](/guides/chat-ui) -- User guide with features and troubleshooting
+- [Chat UI SDK Reference](/sdk/sdks/chat-ui) -- Python backend API documentation
+- [Chat UI Server Spec](/spec/chat-ui-server) -- Technical specification
+
+---
 
 # GAIA UI (RAUX) Interface
 
