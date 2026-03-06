@@ -1,0 +1,174 @@
+---
+title: "v0.16.0"
+description: "C++17 Agent Framework — build native AI agents without Python"
+---
+
+# GAIA v0.16.0 Release Notes
+
+**Major release** introducing the **C++17 Agent Framework** — a native port of the GAIA agent system that lets you build AI PC agents in pure C++ with no Python runtime required. Also includes security hardening across the Python codebase and a comprehensive documentation site reorganization.
+
+**TL;DR:**
+- **New: C++17 Agent Framework** — Full native agent framework with MCP support, tool registry, and state machine — no Python needed
+- **New: Health Agent & WiFi Agent** — Two production-ready C++ example agents for Windows system diagnostics
+- **New: CleanConsole** — Polished terminal UI for C++ agents with ANSI colors and word-wrap
+- **New: C++ CI/CD Pipeline** — Cross-platform build + STX hardware integration tests
+- **Security: 37 alerts resolved** — 15 Dependabot + 22 code scanning alerts fixed across Python and JavaScript
+- **Docs: Site reorganization** — C++ Framework gets dedicated top-level section, SDK accuracy fixes, sidebar icons, 17+ broken links repaired
+
+---
+
+## What's New
+
+### C++17 Agent Framework
+
+A complete native port of the GAIA base agent framework under `cpp/`. Build AI agents in pure C++17 with the same agent loop semantics as the Python `src/gaia/agents/base/` — no Python runtime required.
+
+**Key capabilities:**
+- **Agent state machine** — `PLANNING -> EXECUTING_PLAN -> DIRECT_EXECUTION -> ERROR_RECOVERY -> COMPLETION`
+- **ToolRegistry** with tool name resolution (unprefixed MCP name suffix match, case-insensitive fallback)
+- **MCP client** with cross-platform stdio transport (Win32 `CreateProcess` + POSIX `fork`/`exec`), JSON-RPC 2.0, `mcp_<server>_<tool>` naming convention
+- **JSON parsing** with 4-strategy fallback: direct parse, code-block extraction, bracket-matching, regex field extraction
+- **Parameter substitution** — `$PREV.field` / `$STEP_N.field` across plan steps
+- **OpenAI-compatible HTTP client** via `cpp-httplib`
+
+```cpp
+#include <gaia/agent.h>
+
+int main() {
+    gaia::AgentConfig config;
+    config.baseUrl = "http://localhost:8000/api/v1";
+    config.modelId = "Qwen3-4B-Instruct-2507-GGUF";
+
+    gaia::Agent agent(config);
+    agent.processQuery("Check system health");
+    return 0;
+}
+```
+
+**Build requirements:** CMake 3.14+, C++17 compiler. All dependencies fetched automatically via `FetchContent` (`nlohmann/json` 3.11.3, `cpp-httplib` 0.15.3, `googletest` 1.14.0).
+
+```bash
+cd cpp
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
+```
+
+See the [C++ Framework documentation](/cpp/quickstart) for the full setup guide and API reference.
+
+### Health Agent (C++)
+
+A Windows system health agent that uses the MCP Windows server for PowerShell-based diagnostics. Two modes of operation:
+
+| Mode | Description |
+|------|-------------|
+| Quick summary (option 1) | Console-only output — 4 key metrics, no Notepad |
+| Full diagnostics (option 15) | Comprehensive report with 12+ tool calls, written to file and opened in Notepad |
+
+Uses direct file-write + `Start-Process notepad` approach for reliable report delivery. Runs with 32K context to support comprehensive multi-tool diagnostics.
+
+### WiFi Agent (C++)
+
+A network diagnostic agent that performs WiFi troubleshooting through MCP tool calls. Includes shell injection prevention and safe argument validation.
+
+### CleanConsole (C++)
+
+New `CleanConsole` class providing a polished terminal UI for C++ agents with ANSI color output and automatic word-wrapping — a native equivalent of Python's `AgentConsole`.
+
+### C++ CI/CD Pipeline
+
+Full cross-platform CI via `.github/workflows/build_cpp.yml`:
+- **Cloud CI:** Ubuntu + Windows builds with mock unit tests, install verification, shared library builds
+- **STX hardware integration tests:** LLM, MCP, WiFi, and Health agent tests on real AMD hardware
+- Uses `Qwen3-4B-Instruct-2507-GGUF` model for integration testing
+- Sequential test execution (`-j 1`) to prevent LLM server contention
+
+---
+
+## Security
+
+### Dependabot & Code Scanning Fixes
+
+Resolved **37 security alerts** across the codebase (PR #352):
+
+**Dependabot (15 alerts):**
+
+| Package | Severity | Fix |
+|---------|----------|-----|
+| `tar` | High | Force `>=7.5.8` — fixes path traversal and symlink vulnerabilities |
+| `qs` | Low | Update to 6.14.2 — fixes arrayLimit bypass DoS |
+| `lodash` | Medium | Update to 4.17.23 — fixes prototype pollution |
+
+**Code Scanning (22 alerts):**
+
+| Category | Count | Fix |
+|----------|-------|-----|
+| Stack trace exposure | 6 | Replace `str(e)` in HTTP responses with generic messages |
+| Path injection | 8 | Add path traversal validation and `..` checks |
+| Clear-text logging | 4 | Remove patient IDs from log messages |
+| Missing workflow permissions | 2 | Add `permissions: contents: read` to CI jobs |
+| URL redirect | 1 | Use explicit HTTP 303 redirect status |
+| Missing rate limiting | 1 | Add `express-rate-limit` to login endpoint |
+
+---
+
+## Documentation
+
+### Site Reorganization
+
+Major documentation restructuring for better navigation and accuracy (PR #427):
+
+- **C++ Framework promoted** — Dedicated top-level "C++ Framework" section in the Documentation tab with setup, quickstart, overview, integration guides, user guides, and API reference
+- **SDK Reference reorganized** — Split hybrid Chat guide into User Guide and SDK Reference; merged MCP Client guide into SDK Reference
+- **Welcome page improved** — Get Started section before Capabilities; Python/C++ tabs with distinct feature cards
+- **Sidebar icons** — 48 documentation pages now have Font Awesome sidebar icons
+- **SDK accuracy** — Fixed 13 code examples to match actual source code (`quick_chat()` return type, `create_client()` factory pattern, `process_query()` method name, `execution_state` attribute, `max_steps` default, `@tool` decorator behavior)
+- **Broken links** — 17+ broken internal links repaired; redirects added for all moved pages
+- **Copyright updated** — 2024-2026 across all pages
+
+### C++ Documentation
+
+Complete documentation suite for the C++ framework:
+- [`docs/cpp/setup.mdx`](/cpp/setup) — Build requirements and installation
+- [`docs/cpp/quickstart.mdx`](/cpp/quickstart) — Build your first C++ agent
+- [`docs/cpp/overview.mdx`](/cpp/overview) — Architecture and components
+- [`docs/cpp/integration.mdx`](/cpp/integration) — Integrating gaia_core into your project
+- [`docs/cpp/custom-agent.mdx`](/cpp/custom-agent) — Building custom agents
+- [`docs/cpp/health-agent.mdx`](/cpp/health-agent) — Windows system health monitoring
+- [`docs/cpp/wifi-agent.mdx`](/cpp/wifi-agent) — Network diagnostic agent
+- [`docs/cpp/api-reference.mdx`](/cpp/api-reference) — Complete API reference
+
+---
+
+## Bug Fixes
+
+- **C++ agent loop detection** — Compare both tool name AND arguments to prevent false positives on consecutive `mcp_windows_Shell` calls with different args
+- **C++ tool result truncation** — Reduce from 20K to 4K chars to prevent context overflow with small models
+- **C++ CI integration tests** — Run with `-j 1` to prevent tests from competing for the single LLM server; increase timeout from 20 to 30 minutes
+- **PowerShell API** — Fix `Get-WmiObject` to `Get-CimInstance` in health agent
+
+---
+
+## Upgrade
+
+```bash
+# Install/upgrade GAIA (Python)
+pip install --upgrade amd-gaia
+
+# Build C++ framework
+cd cpp
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
+```
+
+---
+
+## Full Changelog
+
+**4 commits** since v0.15.4.1:
+
+- `99394d3` - Add C++17 agent framework port (#351)
+- `fdaa0cb` - Fix Dependabot and code scanning security alerts (#352)
+- `1ed7c00` - C++ framework: docs, CI integration tests, health agent improvements (#425)
+- `5fac5a9` - Reorganize documentation site and fix SDK accuracy issues (#427)
+
+Full Changelog: [v0.15.4.1...v0.16.0](https://github.com/amd/gaia/compare/v0.15.4.1...v0.16.0)
