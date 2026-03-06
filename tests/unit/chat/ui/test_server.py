@@ -17,7 +17,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from gaia.chat.ui.server import _compute_file_hash, _validate_file_path, create_app
+from gaia.chat.ui.server import (
+    _compute_file_hash,
+    _sanitize_document_path,
+    _sanitize_static_path,
+    _validate_file_path,
+    create_app,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -719,3 +725,94 @@ class TestValidateFilePath:
             assert "Unsupported file type" in resp.json()["detail"]
         finally:
             os.unlink(tmp_path)
+
+
+class TestSanitizeDocumentPath:
+    """Tests for _sanitize_document_path security sanitization."""
+
+    def test_returns_resolved_path(self):
+        from pathlib import Path
+        result = _sanitize_document_path("/home/user/doc.pdf")
+        assert result.is_absolute()
+        assert result == Path("/home/user/doc.pdf").resolve()
+
+    def test_rejects_null_bytes(self):
+        with pytest.raises(Exception) as exc_info:
+            _sanitize_document_path("/home/user/file\x00.pdf")
+        assert exc_info.value.status_code == 400
+
+    def test_rejects_unsafe_extension(self):
+        with pytest.raises(Exception) as exc_info:
+            _sanitize_document_path("/home/user/malware.exe")
+        assert exc_info.value.status_code == 400
+        assert "Unsupported file type" in exc_info.value.detail
+
+    def test_accepts_valid_extensions(self):
+        for ext in [".pdf", ".txt", ".md", ".json", ".py", ".csv"]:
+            result = _sanitize_document_path(f"/home/user/file{ext}")
+            assert result.suffix == ext
+
+    def test_resolves_traversal_in_path(self):
+        from pathlib import Path
+        # Path with .. should be resolved
+        result = _sanitize_document_path("/home/user/../user/doc.txt")
+        assert ".." not in str(result)
+        assert result == Path("/home/user/doc.txt").resolve()
+
+
+class TestSanitizeStaticPath:
+    """Tests for _sanitize_static_path security sanitization."""
+
+    def test_valid_path_within_base(self):
+        from pathlib import Path
+        base = Path(tempfile.mkdtemp())
+        try:
+            # Create a test file
+            test_file = base / "test.html"
+            test_file.write_text("hello")
+
+            result = _sanitize_static_path(base, "test.html")
+            assert result is not None
+            assert result == test_file.resolve()
+        finally:
+            import shutil
+            shutil.rmtree(base)
+
+    def test_rejects_traversal_with_dotdot(self):
+        from pathlib import Path
+        base = Path(tempfile.mkdtemp())
+        try:
+            result = _sanitize_static_path(base, "../../../etc/passwd")
+            assert result is None
+        finally:
+            import shutil
+            shutil.rmtree(base)
+
+    def test_rejects_null_bytes(self):
+        from pathlib import Path
+        base = Path(tempfile.mkdtemp())
+        try:
+            result = _sanitize_static_path(base, "file\x00.html")
+            assert result is None
+        finally:
+            import shutil
+            shutil.rmtree(base)
+
+    def test_returns_none_for_empty_path(self):
+        from pathlib import Path
+        result = _sanitize_static_path(Path("/tmp"), "")
+        assert result is None
+
+    def test_rejects_absolute_path_escape(self):
+        from pathlib import Path
+        base = Path(tempfile.mkdtemp())
+        try:
+            # Even if resolved, must be within base
+            result = _sanitize_static_path(base, "/etc/passwd")
+            # On Windows this resolves differently, but the relative_to check
+            # should still reject paths outside base
+            if result is not None:
+                assert str(result).startswith(str(base.resolve()))
+        finally:
+            import shutil
+            shutil.rmtree(base)

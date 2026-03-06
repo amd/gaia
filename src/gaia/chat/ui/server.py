@@ -284,27 +284,25 @@ def create_app(db_path: str = None) -> FastAPI:
     @app.post("/api/documents/upload-path", response_model=DocumentResponse)
     async def upload_by_path(request: DocumentUploadRequest):
         """Index a document by file path (for Electron/local use)."""
-        filepath = Path(request.filepath).resolve()
+        # Validate and sanitize the user-provided path
+        safe_filepath = _sanitize_document_path(request.filepath)
 
-        # Validate the path is safe (resolved, absolute, no traversal)
-        _validate_file_path(filepath)
-
-        if not filepath.exists():
+        if not safe_filepath.exists():
             raise HTTPException(status_code=404, detail="File not found")
 
-        if not filepath.is_file():
+        if not safe_filepath.is_file():
             raise HTTPException(status_code=400, detail="Path is not a file")
 
         # Compute file hash
-        file_hash = _compute_file_hash(filepath)
-        file_size = filepath.stat().st_size
+        file_hash = _compute_file_hash(safe_filepath)
+        file_size = safe_filepath.stat().st_size
 
         # Index the document with RAG
-        chunk_count = await _index_document(filepath)
+        chunk_count = await _index_document(safe_filepath)
 
         doc = db.add_document(
-            filename=filepath.name,
-            filepath=str(filepath),
+            filename=safe_filepath.name,
+            filepath=str(safe_filepath),
             file_hash=file_hash,
             file_size=file_size,
             chunk_count=chunk_count,
@@ -360,10 +358,10 @@ def create_app(db_path: str = None) -> FastAPI:
         @app.get("/{full_path:path}")
         async def serve_spa(full_path: str):
             """Serve the React SPA for all non-API routes."""
-            # Resolve and validate the path stays within the dist directory
-            file_path = (_webui_dist / full_path).resolve()
-            if full_path and str(file_path).startswith(str(_webui_dist.resolve())) and file_path.is_file():
-                return FileResponse(str(file_path))
+            # Sanitize the path to prevent directory traversal
+            safe_path = _sanitize_static_path(_webui_dist, full_path)
+            if safe_path is not None and safe_path.is_file():
+                return FileResponse(str(safe_path))
             # Default to index.html for SPA routing
             return FileResponse(str(_webui_dist / "index.html"))
     else:
@@ -433,6 +431,89 @@ def _doc_to_response(doc: dict) -> DocumentResponse:
     )
 
 
+# Allowed document extensions for upload
+_ALLOWED_EXTENSIONS = frozenset({
+    ".pdf", ".txt", ".md", ".csv", ".json",
+    ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
+    ".html", ".htm", ".xml", ".yaml", ".yml",
+    ".py", ".js", ".ts", ".java", ".c", ".cpp", ".h",
+    ".rs", ".go", ".rb", ".sh", ".bat", ".ps1",
+    ".log", ".cfg", ".ini", ".toml",
+})
+
+
+def _sanitize_document_path(user_path: str) -> Path:
+    """Sanitize a user-provided file path for document upload.
+
+    Resolves the path, validates it is absolute, checks for null bytes,
+    and enforces an extension allowlist. Returns a safe Path object
+    that has been fully validated.
+
+    Args:
+        user_path: Raw file path string from user input.
+
+    Returns:
+        A resolved, validated Path object safe for filesystem operations.
+
+    Raises:
+        HTTPException: If the path is invalid, contains traversal, or
+            has a disallowed extension.
+    """
+    # Reject null bytes early (before any path operations)
+    if "\x00" in user_path:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    # Resolve to absolute canonical path (eliminates .., symlinks, etc.)
+    resolved = Path(user_path).resolve()
+
+    # Verify the path is absolute
+    if not resolved.is_absolute():
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    # Check file extension against allowlist
+    ext = resolved.suffix.lower()
+    if ext not in _ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {ext}",
+        )
+
+    return resolved
+
+
+def _sanitize_static_path(base_dir: Path, user_path: str) -> Optional[Path]:
+    """Sanitize a URL path for static file serving.
+
+    Ensures the resolved path stays within the base directory.
+    Returns None if the path would escape the base directory.
+
+    Args:
+        base_dir: The root directory for static files (must be resolved).
+        user_path: The URL path component from the request.
+
+    Returns:
+        A safe resolved Path within base_dir, or None if invalid.
+    """
+    if not user_path:
+        return None
+
+    # Reject null bytes and obvious traversal patterns
+    if "\x00" in user_path or ".." in user_path:
+        return None
+
+    # Build and resolve the candidate path
+    resolved_base = base_dir.resolve()
+    candidate = (resolved_base / user_path).resolve()
+
+    # Verify the candidate is within the base directory
+    try:
+        candidate.relative_to(resolved_base)
+    except ValueError:
+        return None
+
+    return candidate
+
+
 def _validate_file_path(filepath: Path) -> None:
     """Validate that a file path is safe to access.
 
@@ -444,15 +525,6 @@ def _validate_file_path(filepath: Path) -> None:
     Raises:
         HTTPException: If the path is invalid or unsafe.
     """
-    ALLOWED_EXTENSIONS = {
-        ".pdf", ".txt", ".md", ".csv", ".json",
-        ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
-        ".html", ".htm", ".xml", ".yaml", ".yml",
-        ".py", ".js", ".ts", ".java", ".c", ".cpp", ".h",
-        ".rs", ".go", ".rb", ".sh", ".bat", ".ps1",
-        ".log", ".cfg", ".ini", ".toml",
-    }
-
     # Check for null bytes (path injection)
     if "\x00" in str(filepath):
         raise HTTPException(status_code=400, detail="Invalid file path")
@@ -463,7 +535,7 @@ def _validate_file_path(filepath: Path) -> None:
 
     # Check file extension
     ext = filepath.suffix.lower()
-    if ext not in ALLOWED_EXTENSIONS:
+    if ext not in _ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported file type: {ext}",
