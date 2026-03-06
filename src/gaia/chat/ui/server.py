@@ -433,6 +433,43 @@ def _doc_to_response(doc: dict) -> DocumentResponse:
     )
 
 
+def _validate_file_path(filepath: Path) -> None:
+    """Validate that a file path is safe to access.
+
+    Checks:
+    - Path is absolute (after resolve)
+    - Path does not contain null bytes
+    - File extension is in allowed set
+
+    Raises:
+        HTTPException: If the path is invalid or unsafe.
+    """
+    ALLOWED_EXTENSIONS = {
+        ".pdf", ".txt", ".md", ".csv", ".json",
+        ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
+        ".html", ".htm", ".xml", ".yaml", ".yml",
+        ".py", ".js", ".ts", ".java", ".c", ".cpp", ".h",
+        ".rs", ".go", ".rb", ".sh", ".bat", ".ps1",
+        ".log", ".cfg", ".ini", ".toml",
+    }
+
+    # Check for null bytes (path injection)
+    if "\x00" in str(filepath):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    # Verify the path is absolute (resolve() makes it absolute)
+    if not filepath.is_absolute():
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    # Check file extension
+    ext = filepath.suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {ext}",
+        )
+
+
 def _compute_file_hash(filepath: Path) -> str:
     """Compute SHA-256 hash of file contents."""
     sha256 = hashlib.sha256()

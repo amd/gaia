@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from gaia.chat.ui.server import _compute_file_hash, create_app
+from gaia.chat.ui.server import _compute_file_hash, _validate_file_path, create_app
 
 logger = logging.getLogger(__name__)
 
@@ -647,5 +647,75 @@ class TestHelperFunctions:
             result = _compute_file_hash(Path(tmp_path))
             expected = hashlib.sha256(b"").hexdigest()
             assert result == expected
+        finally:
+            os.unlink(tmp_path)
+
+
+class TestValidateFilePath:
+    """Tests for _validate_file_path security validation."""
+
+    def test_valid_pdf_path(self):
+        from pathlib import Path
+        # Should not raise for a valid absolute path with allowed extension
+        _validate_file_path(Path("/home/user/document.pdf").resolve())
+
+    def test_valid_txt_path(self):
+        from pathlib import Path
+        _validate_file_path(Path("/home/user/notes.txt").resolve())
+
+    def test_valid_md_path(self):
+        from pathlib import Path
+        _validate_file_path(Path("/home/user/readme.md").resolve())
+
+    def test_rejects_null_bytes(self):
+        from pathlib import Path
+        with pytest.raises(Exception) as exc_info:
+            _validate_file_path(Path("/home/user/file\x00.pdf"))
+        assert exc_info.value.status_code == 400
+
+    def test_rejects_unsupported_extension(self):
+        from pathlib import Path
+        with pytest.raises(Exception) as exc_info:
+            _validate_file_path(Path("/home/user/malware.exe").resolve())
+        assert exc_info.value.status_code == 400
+        assert "Unsupported file type" in exc_info.value.detail
+
+    def test_rejects_no_extension(self):
+        from pathlib import Path
+        with pytest.raises(Exception) as exc_info:
+            _validate_file_path(Path("/home/user/noextension").resolve())
+        assert exc_info.value.status_code == 400
+
+    def test_rejects_binary_extensions(self):
+        from pathlib import Path
+        for ext in [".exe", ".dll", ".so", ".bin", ".dat"]:
+            with pytest.raises(Exception) as exc_info:
+                _validate_file_path(Path(f"/home/user/file{ext}").resolve())
+            assert exc_info.value.status_code == 400
+
+    def test_allows_code_extensions(self):
+        from pathlib import Path
+        for ext in [".py", ".js", ".ts", ".java", ".c", ".cpp"]:
+            # Should not raise
+            _validate_file_path(Path(f"/home/user/file{ext}").resolve())
+
+    def test_allows_document_extensions(self):
+        from pathlib import Path
+        for ext in [".pdf", ".doc", ".docx", ".csv", ".json", ".yaml"]:
+            # Should not raise
+            _validate_file_path(Path(f"/home/user/file{ext}").resolve())
+
+    @patch("gaia.chat.ui.server._index_document")
+    def test_upload_rejects_unsafe_extension(self, mock_index, client):
+        """Integration test: upload endpoint rejects unsafe file types."""
+        with tempfile.NamedTemporaryFile(suffix=".exe", delete=False) as f:
+            f.write(b"fake executable")
+            tmp_path = f.name
+
+        try:
+            resp = client.post("/api/documents/upload-path",
+                              json={"filepath": tmp_path})
+            assert resp.status_code == 400
+            assert "Unsupported file type" in resp.json()["detail"]
         finally:
             os.unlink(tmp_path)
