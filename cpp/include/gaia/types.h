@@ -174,6 +174,15 @@ inline std::string defaultBaseUrl() {
 #endif
 }
 
+// ---- Decision Support ----
+
+/// A user-facing choice presented after an LLM yes/no confirmation prompt.
+struct Decision {
+    std::string label;       // display text: "Yes", "No"
+    std::string value;       // sent to LLM: "yes", "no"
+    std::string description; // hint: "Confirm and proceed"
+};
+
 struct AgentConfig {
     std::string baseUrl = defaultBaseUrl();
     std::string modelId = "Qwen3-4B-GGUF";

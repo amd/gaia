@@ -81,6 +81,12 @@ public:
     /// Rebuild system prompt (call after adding tools dynamically).
     void rebuildSystemPrompt();
 
+    /// Detect if the LLM's answer requires a user decision.
+    /// Default: scans the tail of the answer for yes/no patterns.
+    /// Override for custom decisions.
+    virtual std::vector<Decision> detectPendingDecisions(
+        const std::string& answer) const;
+
     /// Clear conversation history (start a fresh topic).
     void clearHistory() { conversationHistory_.clear(); }
 

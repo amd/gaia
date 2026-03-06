@@ -581,4 +581,23 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
     };
 }
 
+std::vector<Decision> Agent::detectPendingDecisions(const std::string& answer) const {
+    // Scan the tail of the answer for yes/no prompt patterns
+    size_t tailStart = answer.size() > 300 ? answer.size() - 300 : 0;
+    std::string tail = answer.substr(tailStart);
+    for (auto& c : tail)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    if (tail.find("yes / no") != std::string::npos ||
+        tail.find("yes/no")   != std::string::npos ||
+        tail.find("(y/n)")    != std::string::npos ||
+        tail.find("yes or no") != std::string::npos) {
+        return {
+            {"Yes", "yes", "Confirm and proceed"},
+            {"No",  "no",  "Cancel"}
+        };
+    }
+    return {};
+}
+
 } // namespace gaia

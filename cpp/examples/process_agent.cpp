@@ -131,6 +131,129 @@ static std::wstring utf8ToWstring(const std::string& str) {
 }
 
 // ---------------------------------------------------------------------------
+// Process kill helpers — shared by kill_process, restart_process, quarantine_item
+// ---------------------------------------------------------------------------
+struct KillResult {
+    int      found       = 0;
+    int      terminated  = 0;
+    int      failed      = 0;
+    uint64_t memoryFreed = 0;
+    std::string firstPath;   // exe path of first match (for restart_process relaunch)
+};
+
+// Kill all processes matching exeName (case-insensitive, skips self).
+// Captures exe path of the first match during the snapshot phase.
+static KillResult killProcessesByName(const std::string& exeName) {
+    KillResult kr{};
+    DWORD selfPid = GetCurrentProcessId();
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return kr;
+
+    struct MatchInfo { DWORD pid; uint64_t memBytes; };
+    std::vector<MatchInfo> matches;
+
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(snapshot, &pe)) {
+        do {
+            std::string nm = wstringToUtf8(pe.szExeFile);
+            if (_stricmp(nm.c_str(), exeName.c_str()) == 0 &&
+                pe.th32ProcessID != selfPid) {
+                uint64_t mem = 0;
+                HANDLE hProc = OpenProcess(
+                    PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pe.th32ProcessID);
+                if (hProc) {
+                    PROCESS_MEMORY_COUNTERS pmc;
+                    if (K32GetProcessMemoryInfo(hProc, &pmc, sizeof(pmc)))
+                        mem = pmc.WorkingSetSize;
+                    if (kr.firstPath.empty()) {
+                        wchar_t pathBuf[MAX_PATH];
+                        DWORD pathLen = MAX_PATH;
+                        if (QueryFullProcessImageNameW(hProc, 0, pathBuf, &pathLen))
+                            kr.firstPath = wstringToUtf8(std::wstring(pathBuf, pathLen));
+                    }
+                    CloseHandle(hProc);
+                }
+                matches.push_back({pe.th32ProcessID, mem});
+            }
+        } while (Process32NextW(snapshot, &pe));
+    }
+    CloseHandle(snapshot);
+
+    kr.found = static_cast<int>(matches.size());
+    for (auto& m : matches) {
+        HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, m.pid);
+        if (hProc) {
+            if (TerminateProcess(hProc, 1)) { ++kr.terminated; kr.memoryFreed += m.memBytes; }
+            else                             { ++kr.failed; }
+            CloseHandle(hProc);
+        } else {
+            ++kr.failed;
+        }
+    }
+    return kr;
+}
+
+// Kill all processes whose full exe path matches filePath (case-insensitive).
+// More precise than by-name: only kills the specific file being quarantined.
+static KillResult killProcessesByPath(const std::string& filePath) {
+    KillResult kr{};
+    std::string lowerTarget = filePath;
+    for (auto& c : lowerTarget)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    DWORD selfPid = GetCurrentProcessId();
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return kr;
+
+    struct MatchInfo { DWORD pid; uint64_t memBytes; };
+    std::vector<MatchInfo> matches;
+
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(snapshot, &pe)) {
+        do {
+            if (pe.th32ProcessID == selfPid) continue;
+            HANDLE hProc = OpenProcess(
+                PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pe.th32ProcessID);
+            if (hProc) {
+                wchar_t pathBuf[MAX_PATH];
+                DWORD pathLen = MAX_PATH;
+                if (QueryFullProcessImageNameW(hProc, 0, pathBuf, &pathLen)) {
+                    std::string procPath = wstringToUtf8(std::wstring(pathBuf, pathLen));
+                    std::string lowerProc = procPath;
+                    for (auto& c : lowerProc)
+                        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    if (lowerProc == lowerTarget) {
+                        uint64_t mem = 0;
+                        PROCESS_MEMORY_COUNTERS pmc;
+                        if (K32GetProcessMemoryInfo(hProc, &pmc, sizeof(pmc)))
+                            mem = pmc.WorkingSetSize;
+                        matches.push_back({pe.th32ProcessID, mem});
+                        if (kr.firstPath.empty()) kr.firstPath = procPath;
+                    }
+                }
+                CloseHandle(hProc);
+            }
+        } while (Process32NextW(snapshot, &pe));
+    }
+    CloseHandle(snapshot);
+
+    kr.found = static_cast<int>(matches.size());
+    for (auto& m : matches) {
+        HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, m.pid);
+        if (hProc) {
+            if (TerminateProcess(hProc, 1)) { ++kr.terminated; kr.memoryFreed += m.memBytes; }
+            else                             { ++kr.failed; }
+            CloseHandle(hProc);
+        } else {
+            ++kr.failed;
+        }
+    }
+    return kr;
+}
+
+// ---------------------------------------------------------------------------
 // Parse PowerShell JSON output with error handling
 // ---------------------------------------------------------------------------
 static gaia::json parsePsJson(const std::string& output) {
@@ -667,7 +790,12 @@ Users reference items by group letter + item number (e.g., "Explain A3", "Stop B
 - **Stop**: For A-items use kill_process; for B-items use PowerShell Stop-Service. Explain impact and confirm first.
 - **Restart**: For A-items use restart_process (kills and relaunches). For B-items use restart_service. Confirm first.
 - **Manage resource hogs**: List hogs from analysis with a submenu of actions (explain, stop, restart). Wait for user choice.
-- **Quarantine**: Use quarantine_item with the full file path from explain_item. File is moved to C:\ProgramData\GAIA\quarantine\. Confirm first.
+- **Quarantine**: Before calling quarantine_item, you MUST show the user a confirmation summary and wait for explicit YES:
+  1. Call explain_item to get full details if not already available.
+  2. Present in Key: Value format: Process, Path, Memory, Publisher, Reason (why suspicious).
+  3. Ask: Kill [name] and move it to quarantine? This will terminate the process immediately. Reply yes or no.
+  4. Wait for user response. If NO, abort. If YES, call quarantine_item with the full file path.
+  After the tool runs, report exactly which processes were killed and the quarantine destination path.
 
 ## AVAILABLE TOOLS
 
@@ -962,40 +1090,9 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
                         target += ".exe";
                 }
 
-                DWORD selfPid = GetCurrentProcessId();
-                HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-                if (snapshot == INVALID_HANDLE_VALUE) {
-                    return {{"error",   "Failed to create process snapshot"},
-                            {"tool",    "kill_process"},
-                            {"command", "Win32 API: TerminateProcess(" + target + ")"},
-                            {"output",  "Error: failed to create process snapshot"}};
-                }
+                KillResult kr = killProcessesByName(target);
 
-                struct MatchInfo { DWORD pid; uint64_t memBytes; };
-                std::vector<MatchInfo> matches;
-                PROCESSENTRY32W pe;
-                pe.dwSize = sizeof(pe);
-                if (Process32FirstW(snapshot, &pe)) {
-                    do {
-                        std::string exeName = wstringToUtf8(pe.szExeFile);
-                        if (_stricmp(exeName.c_str(), target.c_str()) == 0 &&
-                            pe.th32ProcessID != selfPid) {
-                            uint64_t mem = 0;
-                            HANDLE hProc = OpenProcess(
-                                PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pe.th32ProcessID);
-                            if (hProc) {
-                                PROCESS_MEMORY_COUNTERS pmc;
-                                if (K32GetProcessMemoryInfo(hProc, &pmc, sizeof(pmc)))
-                                    mem = pmc.WorkingSetSize;
-                                CloseHandle(hProc);
-                            }
-                            matches.push_back({pe.th32ProcessID, mem});
-                        }
-                    } while (Process32NextW(snapshot, &pe));
-                }
-                CloseHandle(snapshot);
-
-                if (matches.empty()) {
+                if (kr.found == 0) {
                     return {{"tool",    "kill_process"},
                             {"process", name},
                             {"error",   "Process not found: " + name},
@@ -1003,24 +1100,14 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
                             {"output",  "Process not found: " + name}};
                 }
 
-                int      terminated = 0;
-                int      failed     = 0;
-                uint64_t totalFreed = 0;
-                for (auto& m : matches) {
-                    HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, m.pid);
-                    if (hProc) {
-                        if (TerminateProcess(hProc, 1)) { ++terminated; totalFreed += m.memBytes; }
-                        else                             { ++failed; }
-                        CloseHandle(hProc);
-                    } else {
-                        ++failed;
-                    }
-                }
+                int      terminated = kr.terminated;
+                int      failed     = kr.failed;
+                uint64_t totalFreed = kr.memoryFreed;
 
                 std::string killCmd = "Win32 API: TerminateProcess(" + target + ")";
                 std::string killOut = "Found " +
-                    std::to_string(static_cast<int>(matches.size())) +
-                    (matches.size() == 1 ? " instance" : " instances") +
+                    std::to_string(kr.found) +
+                    (kr.found == 1 ? " instance" : " instances") +
                     " of " + target + ", terminated " + std::to_string(terminated);
                 if (failed > 0)
                     killOut += " (" + std::to_string(failed) + " failed)";
@@ -1029,7 +1116,7 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
                 return {
                     {"tool",               "kill_process"},
                     {"process",            name},
-                    {"instances_found",    static_cast<int>(matches.size())},
+                    {"instances_found",    kr.found},
                     {"terminated",         terminated},
                     {"failed",             failed},
                     {"memory_freed_bytes", totalFreed},
@@ -1410,55 +1497,9 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
                         target += ".exe";
                 }
 
-                DWORD selfPid = GetCurrentProcessId();
-                HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-                if (snapshot == INVALID_HANDLE_VALUE) {
-                    return {{"error",   "Failed to create process snapshot"},
-                            {"tool",    "restart_process"},
-                            {"command", "restart_process(" + target + ")"},
-                            {"output",  "Error: failed to create process snapshot"}};
-                }
+                KillResult kr = killProcessesByName(target);
 
-                struct MatchInfo { DWORD pid; uint64_t memBytes; };
-                std::vector<MatchInfo> matches;
-                std::string processPath;
-
-                PROCESSENTRY32W pe;
-                pe.dwSize = sizeof(pe);
-                if (Process32FirstW(snapshot, &pe)) {
-                    do {
-                        std::string exeName = wstringToUtf8(pe.szExeFile);
-                        if (_stricmp(exeName.c_str(), target.c_str()) == 0 &&
-                            pe.th32ProcessID != selfPid) {
-                            uint64_t mem = 0;
-                            HANDLE hProc = OpenProcess(
-                                PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
-                                FALSE, pe.th32ProcessID);
-                            if (hProc) {
-                                PROCESS_MEMORY_COUNTERS pmc;
-                                if (K32GetProcessMemoryInfo(hProc, &pmc, sizeof(pmc)))
-                                    mem = pmc.WorkingSetSize;
-                                CloseHandle(hProc);
-                            }
-                            // Get path from the first match
-                            if (processPath.empty()) {
-                                HANDLE hPath = OpenProcess(
-                                    PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
-                                if (hPath) {
-                                    wchar_t pathBuf[MAX_PATH];
-                                    DWORD pathLen = MAX_PATH;
-                                    if (QueryFullProcessImageNameW(hPath, 0, pathBuf, &pathLen))
-                                        processPath = wstringToUtf8(std::wstring(pathBuf, pathLen));
-                                    CloseHandle(hPath);
-                                }
-                            }
-                            matches.push_back({pe.th32ProcessID, mem});
-                        }
-                    } while (Process32NextW(snapshot, &pe));
-                }
-                CloseHandle(snapshot);
-
-                if (matches.empty()) {
+                if (kr.found == 0) {
                     return {{"tool",    "restart_process"},
                             {"process", name},
                             {"error",   "Process not found: " + name},
@@ -1466,6 +1507,7 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
                             {"output",  "Process not found: " + name}};
                 }
 
+                std::string processPath = kr.firstPath;
                 if (processPath.empty()) {
                     return {{"tool",    "restart_process"},
                             {"process", name},
@@ -1474,16 +1516,8 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
                             {"output",  "Error: cannot determine executable path for " + name}};
                 }
 
-                // Kill all instances
-                int      terminated = 0;
-                uint64_t totalFreed = 0;
-                for (auto& m : matches) {
-                    HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, m.pid);
-                    if (hProc) {
-                        if (TerminateProcess(hProc, 1)) { ++terminated; totalFreed += m.memBytes; }
-                        CloseHandle(hProc);
-                    }
-                }
+                int      terminated = kr.terminated;
+                uint64_t totalFreed = kr.memoryFreed;
 
                 // Relaunch
                 bool relaunched = false;
@@ -1606,8 +1640,9 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
         toolRegistry().registerTool(
             "quarantine_item",
             "Move a suspicious executable to the GAIA quarantine folder "
-            "(C:\\ProgramData\\GAIA\\quarantine\\). Renames it with .quarantined "
-            "extension to block execution. ONLY after explicit user confirmation.",
+            "(C:\\ProgramData\\GAIA\\quarantine\\). Automatically kills all running "
+            "instances first, then renames with .quarantined extension to block "
+            "re-execution. ONLY after explicit user confirmation.",
             [](const gaia::json& args) -> gaia::json {
                 std::string path = args.value("path", "");
                 if (path.empty()) {
@@ -1646,10 +1681,11 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
                 auto lastSlash = filename.rfind('\\');
                 if (lastSlash != std::string::npos) filename = filename.substr(lastSlash + 1);
 
-                // Create quarantine directory
+                // Create quarantine directory (ensure both levels exist)
+                CreateDirectoryW(L"C:\\ProgramData\\GAIA", nullptr);
                 std::wstring quarantineDir = L"C:\\ProgramData\\GAIA\\quarantine";
                 CreateDirectoryW(quarantineDir.c_str(), nullptr);
-                // Ignore error — if it already exists that's fine
+                // Ignore errors — directories may already exist
 
                 // Build destination path (filename + timestamp + .quarantined)
                 SYSTEMTIME st;
@@ -1662,6 +1698,15 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
                 std::string destPath = "C:\\ProgramData\\GAIA\\quarantine\\" + destName;
                 std::wstring wdest   = utf8ToWstring(destPath);
 
+                // Kill any processes using this file before moving it
+                KillResult kr = killProcessesByPath(path);
+                std::string killSummary;
+                if (kr.terminated > 0) {
+                    killSummary = std::to_string(kr.terminated) + " instance" +
+                        (kr.terminated == 1 ? "" : "s") + ", " + formatBytes(kr.memoryFreed) + " freed";
+                    Sleep(300);  // let OS release file handles
+                }
+
                 if (!MoveFileExW(wpath.c_str(), wdest.c_str(), MOVEFILE_COPY_ALLOWED)) {
                     DWORD err = GetLastError();
                     char errBuf[64];
@@ -1673,9 +1718,16 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
                             {"output",  std::string("Failed to quarantine: ") + errBuf}};
                 }
 
-                std::string out = "Quarantined: " + path + "\n"
-                                + "Moved to:    " + destPath + "\n"
-                                + "File size:   " + formatBytes(fileSize);
+                std::string out;
+                if (!killSummary.empty())
+                    out += "Killed:      " + filename + " (" + killSummary + ")\n";
+                out += "Quarantined: " + path + "\n"
+                     + "Moved to:    " + destPath + "\n"
+                     + "File size:   " + formatBytes(fileSize);
+
+                std::string cmd = kr.terminated > 0
+                    ? "Win32 API: TerminateProcess + MoveFileExW(" + path + " -> " + destPath + ")"
+                    : "Win32 API: MoveFileExW(" + path + " -> " + destPath + ")";
 
                 return {
                     {"tool",            "quarantine_item"},
@@ -1684,8 +1736,9 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
                     {"filename",        filename},
                     {"file_size_bytes", fileSize},
                     {"file_size_human", formatBytes(fileSize)},
+                    {"killed_summary",  killSummary},
                     {"status",          "quarantined"},
-                    {"command",         "Win32 API: MoveFileExW(" + path + " -> " + destPath + ")"},
+                    {"command",         cmd},
                     {"output",          out}
                 };
             },
@@ -1753,10 +1806,21 @@ static const ActionEntry kActions[] = {
     {
         "Quarantine",
         "Move a suspicious file to C:\\ProgramData\\GAIA\\quarantine  (e.g. 'Quarantine C1')",
-        "The user wants to quarantine suspicious items. List all items from the "
-        "C. Suspicious Items section with their anomaly signals and file paths. "
-        "Ask if they want to quarantine all or specific ones. Confirm, then use "
-        "quarantine_item for each one."
+        "The user wants to quarantine suspicious items. For each item in C. Suspicious Items:\n"
+        "1. Call explain_item to get full details if not already available.\n"
+        "2. Present a confirmation block in Key: Value format:\n"
+        "   Process: [name]\n"
+        "   Path: [full executable path]\n"
+        "   Memory: [RAM usage]\n"
+        "   Publisher: [company name or 'Unknown']\n"
+        "   Reason: [why this is suspicious — flags, unknown publisher, unusual path, etc.]\n"
+        "3. Ask: 'Kill [name] and quarantine this file? "
+        "This will terminate the process immediately and move the file to "
+        "C:\\ProgramData\\GAIA\\quarantine\\. (yes / no)'\n"
+        "4. Wait for user response before proceeding.\n"
+        "5. If YES: call quarantine_item with the full path. "
+        "Report which processes were killed and where the file was moved.\n"
+        "6. If NO: skip this item and move to the next."
     },
     {
         "Reanalyze",
@@ -1799,7 +1863,10 @@ static void printActionMenu() {
               << "  ========================================================================================"
               << color::RESET << std::endl;
     std::cout << color::GRAY
-              << "  Or type your own question. Examples: 'Explain A3', 'Stop B1', 'Quarantine C2'"
+              << "  Shortcuts: '1 A3' = Explain A3,  '2 B1' = Stop B1,  '5 C1' = Quarantine C1"
+              << color::RESET << std::endl;
+    std::cout << color::GRAY
+              << "  Or type any question directly."
               << color::RESET << std::endl;
     std::cout << std::endl;
 }
@@ -1919,8 +1986,13 @@ int main(int argc, char* argv[]) {
         // clearHistory() is called ONLY on reanalyze.
         // =====================================================================
         std::string userInput;
+        std::vector<gaia::Decision> decisions;  // non-empty when LLM awaits yes/no
         while (true) {
-            printActionMenu();
+            if (!decisions.empty())
+                agent.console().printDecisionMenu(decisions);
+            else
+                printActionMenu();
+
             std::cout << color::BOLD << "  > " << color::RESET << std::flush;
             if (!std::getline(std::cin, userInput)) break;
 
@@ -1928,49 +2000,130 @@ int main(int argc, char* argv[]) {
             if (userInput == "quit" || userInput == "exit" || userInput == "q") break;
 
             std::string query;
-            bool isNumber = !userInput.empty() &&
-                std::all_of(userInput.begin(), userInput.end(),
-                            [](unsigned char c) { return std::isdigit(c); });
 
-            if (isNumber) {
-                int choice = 0;
-                try { choice = std::stoi(userInput); }
-                catch (const std::out_of_range&) { choice = -1; }
+            if (!decisions.empty()) {
+                // Map "1"/"2" to decision values, or accept the text directly
+                std::string lower = userInput;
+                for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
-                if (choice < 1 || choice > static_cast<int>(kActionsSize)) {
-                    std::cout << color::RED << "  Invalid selection. Enter 1-"
-                              << kActionsSize << " or type a question."
-                              << color::RESET << std::endl;
-                    continue;
+                bool mapped = false;
+                // Numeric selection
+                if (userInput.size() <= 2) {
+                    try {
+                        int choice = std::stoi(userInput);
+                        if (choice >= 1 && choice <= static_cast<int>(decisions.size())) {
+                            query = decisions[static_cast<size_t>(choice - 1)].value;
+                            mapped = true;
+                        }
+                    } catch (...) {}
                 }
-
-                size_t idx = static_cast<size_t>(choice - 1);
-
-                if (choice == static_cast<int>(kActionsSize)) {
-                    // Last action: Reanalyze — clear history and re-run analysis
-                    agent.clearHistory();
-                    std::cout << std::endl;
-                    std::cout << color::CYAN << color::BOLD
-                              << "  Reanalyzing your system..."
-                              << color::RESET << std::endl;
-                    std::cout << std::endl;
-                    auto r = agent.processQuery(kAutoAnalysisPrompt);
-                    (void)r;
-                    continue;
+                // Text match: "yes", "no", or first-char shorthand "y"/"n"
+                if (!mapped) {
+                    for (const auto& d : decisions) {
+                        std::string dval = d.value;
+                        for (auto& c : dval) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        if (lower == dval || (!dval.empty() && lower.size() == 1 && lower[0] == dval[0])) {
+                            query = d.value;
+                            mapped = true;
+                            break;
+                        }
+                    }
                 }
+                if (!mapped) query = userInput;  // free-form fallback
 
-                // Actions 1–5: send the action prompt, keep history
-                query = kActions[idx].prompt;
-                std::cout << color::CYAN << "  > " << kActions[idx].label
-                          << color::RESET << std::endl;
+                std::cout << color::CYAN << "  > " << query << color::RESET << std::endl;
+                decisions.clear();
 
             } else {
-                // Free-form question — keep history, LLM has full context
-                query = userInput;
+                // Normal action menu input
+
+                // Check for "N item" shorthand (e.g. "5 C1" → sends "Quarantine C1")
+                auto spacePos = userInput.find(' ');
+                bool isShorthand    = false;
+                int  shorthandChoice = 0;
+                std::string shorthandItem;
+                if (spacePos != std::string::npos) {
+                    std::string numPart = userInput.substr(0, spacePos);
+                    bool allDigits = !numPart.empty() &&
+                        std::all_of(numPart.begin(), numPart.end(),
+                                    [](unsigned char c) { return std::isdigit(c); });
+                    if (allDigits) {
+                        try {
+                            shorthandChoice = std::stoi(numPart);
+                            shorthandItem   = userInput.substr(spacePos + 1);
+                            isShorthand     = !shorthandItem.empty() &&
+                                              shorthandChoice >= 1 &&
+                                              shorthandChoice <= static_cast<int>(kActionsSize);
+                        } catch (...) {}
+                    }
+                }
+
+                bool isNumber = !userInput.empty() &&
+                    std::all_of(userInput.begin(), userInput.end(),
+                                [](unsigned char c) { return std::isdigit(c); });
+
+                if (isShorthand) {
+                    size_t idx = static_cast<size_t>(shorthandChoice - 1);
+                    if (shorthandChoice == static_cast<int>(kActionsSize)) {
+                        // Reanalyze shorthand — ignore item, clear and rerun
+                        agent.clearHistory();
+                        std::cout << std::endl;
+                        std::cout << color::CYAN << color::BOLD
+                                  << "  Reanalyzing your system..."
+                                  << color::RESET << std::endl;
+                        std::cout << std::endl;
+                        auto r = agent.processQuery(kAutoAnalysisPrompt);
+                        (void)r;
+                        decisions.clear();
+                        continue;
+                    }
+                    // Send "Label item" as free-form query (e.g. "Quarantine C1")
+                    query = std::string(kActions[idx].label) + " " + shorthandItem;
+                    std::cout << color::CYAN << "  > " << query
+                              << color::RESET << std::endl;
+
+                } else if (isNumber) {
+                    int choice = 0;
+                    try { choice = std::stoi(userInput); }
+                    catch (const std::out_of_range&) { choice = -1; }
+
+                    if (choice < 1 || choice > static_cast<int>(kActionsSize)) {
+                        std::cout << color::RED << "  Invalid selection. Enter 1-"
+                                  << kActionsSize << " or type a question."
+                                  << color::RESET << std::endl;
+                        continue;
+                    }
+
+                    size_t idx = static_cast<size_t>(choice - 1);
+
+                    if (choice == static_cast<int>(kActionsSize)) {
+                        // Last action: Reanalyze — clear history and re-run analysis
+                        agent.clearHistory();
+                        std::cout << std::endl;
+                        std::cout << color::CYAN << color::BOLD
+                                  << "  Reanalyzing your system..."
+                                  << color::RESET << std::endl;
+                        std::cout << std::endl;
+                        auto r = agent.processQuery(kAutoAnalysisPrompt);
+                        (void)r;
+                        decisions.clear();
+                        continue;
+                    }
+
+                    // Actions 1–5: send the action prompt, keep history
+                    query = kActions[idx].prompt;
+                    std::cout << color::CYAN << "  > " << kActions[idx].label
+                              << color::RESET << std::endl;
+
+                } else {
+                    // Free-form question — keep history, LLM has full context
+                    query = userInput;
+                }
             }
 
             auto r = agent.processQuery(query);
-            (void)r;
+            std::string answer = r.value("result", "");
+            decisions = agent.detectPendingDecisions(answer);
         }
 
         std::cout << std::endl;

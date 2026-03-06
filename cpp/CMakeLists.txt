@@ -197,6 +197,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_lemonade_client.cpp
         tests/test_clean_console.cpp
         tests/test_tool_integration.cpp
+        tests/test_decision.cpp
     )
 
     target_link_libraries(tests_mock PRIVATE

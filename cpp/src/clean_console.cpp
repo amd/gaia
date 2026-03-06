@@ -236,6 +236,25 @@ void CleanConsole::printCompletion(int stepsTaken, int /*stepsLimit*/) {
               << " steps" << color::RESET << std::endl;
 }
 
+void CleanConsole::printDecisionMenu(const std::vector<Decision>& decisions) {
+    std::cout << color::CYAN
+              << "  ========================================================================================"
+              << color::RESET << std::endl;
+    for (size_t i = 0; i < decisions.size(); ++i) {
+        std::cout << color::YELLOW << "  [" << (i + 1) << "] "
+                  << color::RESET << color::WHITE << color::BOLD
+                  << decisions[i].label << color::RESET;
+        if (!decisions[i].description.empty())
+            std::cout << color::GRAY << "  \xe2\x80\x94 " << decisions[i].description
+                      << color::RESET;
+        std::cout << std::endl;
+    }
+    std::cout << color::CYAN
+              << "  ========================================================================================"
+              << color::RESET << std::endl;
+    std::cout << std::endl;
+}
+
 // ---------------------------------------------------------------------------
 // Protected helpers
 // ---------------------------------------------------------------------------
