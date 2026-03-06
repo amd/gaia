@@ -210,27 +210,48 @@ async function serveFrontend(port) {
     ".ttf": "font/ttf",
   };
 
+  /**
+   * Sanitize a URL path and return a safe file path within distDir.
+   * Returns the index.html path for invalid or non-file requests (SPA fallback).
+   */
+  function safeLookup(urlPath) {
+    const indexPath = join(distDir, "index.html");
+
+    // Reject null bytes
+    if (urlPath.includes("\0")) return indexPath;
+
+    // Reject path traversal patterns before any path operations
+    if (urlPath.includes("..")) return indexPath;
+
+    // Only allow safe characters in URL path
+    if (!/^[a-zA-Z0-9._\-/]+$/.test(urlPath)) return indexPath;
+
+    const candidate = resolve(distDir, "." + urlPath);
+    const resolvedDistDir = resolve(distDir);
+
+    // Verify the resolved path is within the dist directory
+    if (!candidate.startsWith(resolvedDistDir + "/") && candidate !== resolvedDistDir) {
+      return indexPath;
+    }
+
+    // Check the file exists and has an extension (not a directory)
+    if (!existsSync(candidate) || !extname(candidate)) {
+      return indexPath;
+    }
+
+    return candidate;
+  }
+
   const server = createServer(async (req, res) => {
     // Strip query strings
     const urlPath = req.url.split("?")[0];
-    // Resolve the path and validate it stays within distDir to prevent path traversal
-    let filePath = resolve(distDir, urlPath === "/" ? "index.html" : "." + urlPath);
-    const resolvedDistDir = resolve(distDir);
 
-    if (!filePath.startsWith(resolvedDistDir)) {
-      res.writeHead(403);
-      res.end("Forbidden");
-      return;
-    }
-
-    // SPA fallback: serve index.html for non-file routes
-    if (!existsSync(filePath) || !extname(filePath)) {
-      filePath = join(distDir, "index.html");
-    }
+    // Resolve to a safe file path within distDir (never returns paths outside distDir)
+    const safePath = urlPath === "/" ? join(distDir, "index.html") : safeLookup(urlPath);
 
     try {
-      const data = await readFile(filePath);
-      const ext = extname(filePath);
+      const data = await readFile(safePath);
+      const ext = extname(safePath);
       res.writeHead(200, {
         "Content-Type": MIME_TYPES[ext] || "application/octet-stream",
       });
