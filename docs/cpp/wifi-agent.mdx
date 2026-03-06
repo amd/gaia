@@ -9,8 +9,8 @@ icon: "wifi"
 </Info>
 
 <Note>
-**Platform:** Windows (PowerShell network commands). Compiles on Linux/macOS for CI but tools require Windows to return real data.
-**Prerequisite:** [Lemonade Server](/setup) running with a model loaded.
+**Platform:** Windows (PowerShell network commands). Compiles on Linux for CI but tools require Windows to return real data.
+**Prerequisite:** [Lemonade Server](https://lemonade-server.ai) running with a model loaded.
 </Note>
 
 ---
@@ -24,7 +24,7 @@ Here's what makes it interesting:
 1. **It runs real commands** — not simulated. Every tool executes an actual PowerShell command on your machine and returns the real output.
 2. **The LLM decides what to do** — the agent doesn't follow a hardcoded if/else tree. The LLM reads each tool's output, reasons about it, and decides the next step.
 3. **It's pure C++** — no Python interpreter, no MCP server subprocess, no external dependencies. Just a compiled binary talking to a local LLM.
-4. **Everything is local** — the LLM runs on your AMD hardware via Lemonade Server. No data leaves your machine.
+4. **Everything is local** — the LLM runs on your AMD hardware via [Lemonade Server](https://lemonade-server.ai). No data leaves your machine.
 
 ---
 
@@ -102,13 +102,22 @@ static std::string runShell(const std::string& command) {
     std::string result;
     std::array<char, 4096> buffer;
 
+    struct PipeCloser {
+        void operator()(FILE* f) const {
 #ifdef _WIN32
-    std::unique_ptr<FILE, decltype(&_pclose)> pipe(
-        _popen(fullCmd.c_str(), "r"), _pclose);
+            if (f) _pclose(f);
 #else
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(
-        popen(fullCmd.c_str(), "r"), pclose);
+            if (f) pclose(f);
 #endif
+        }
+    };
+    std::unique_ptr<FILE, PipeCloser> pipe(
+#ifdef _WIN32
+        _popen(fullCmd.c_str(), "r")
+#else
+        popen(fullCmd.c_str(), "r")
+#endif
+    );
 
     if (!pipe) {
         return "{\"error\": \"Failed to execute command\"}";
@@ -129,7 +138,7 @@ static std::string runShell(const std::string& command) {
 
 **Why `_popen` / `popen`?** These are the C runtime functions for spawning a child process and reading its stdout as a file stream. The `#ifdef _WIN32` blocks keep the code cross-platform — it compiles on Linux for CI, even though the PowerShell commands only work on Windows.
 
-**Why `std::unique_ptr` with a custom deleter?** This ensures the pipe is always closed properly, even if an exception occurs. The deleter (`_pclose` or `pclose`) runs automatically when the `unique_ptr` goes out of scope.
+**Why a `PipeCloser` struct?** The `std::unique_ptr` with a custom deleter ensures the pipe is always closed properly, even if an exception occurs. The `PipeCloser` functor calls `_pclose` (Windows) or `pclose` (POSIX) automatically when the `unique_ptr` goes out of scope.
 
 ---
 
@@ -171,13 +180,16 @@ toolRegistry().registerTool(
         if (host.empty()) {
             return {{"error", "host parameter is required"}};
         }
+        if (!isSafeShellArg(host)) {                // reject shell metacharacters
+            return {{"error", "Invalid host — contains disallowed characters"}};
+        }
         std::string cmd =
             "Test-NetConnection -ComputerName " + host
             + " | Select-Object ComputerName, RemoteAddress, "
             "PingSucceeded, PingReplyDetails"
             + " | ConvertTo-Json";
         std::string output = runShell(cmd);
-        return {{"tool", "ping_host"}, {"host", host}, {"output", output}};
+        return {{"tool", "ping_host"}, {"command", cmd}, {"host", host}, {"output", output}};
     },
     {
         {"host", gaia::ToolParamType::STRING, /*required=*/true,
@@ -235,6 +247,25 @@ toolRegistry().registerTool(
 
 **Pattern:** Use `args.value("key", "")` from nlohmann/json — it returns the default if the key is missing, which handles optional parameters cleanly.
 
+#### Input Validation: Preventing Shell Injection
+
+Since tool arguments come from the LLM (which could hallucinate or be prompt-injected), the agent validates all string arguments before passing them to shell commands:
+
+```cpp
+static bool isSafeShellArg(const std::string& arg) {
+    for (char c : arg) {
+        if (c == ';' || c == '|' || c == '&' || c == '`' || c == '$'
+            || c == '(' || c == ')' || c == '{' || c == '}' || c == '<'
+            || c == '>' || c == '"' || c == '\n' || c == '\r') {
+            return false;
+        }
+    }
+    return !arg.empty();
+}
+```
+
+This rejects shell metacharacters that could escape the intended command. Every tool that accepts LLM-provided arguments (`ping_host`, `test_dns_resolution`, `set_dns_servers`, `restart_wifi_adapter`, `enable_wifi_adapter`) calls `isSafeShellArg()` before constructing the shell command. **Always validate LLM-provided arguments before passing them to shell commands.**
+
 ---
 
 ### 3. The System Prompt: Teaching the Agent How to Think
@@ -245,28 +276,33 @@ The system prompt is where you define the agent's behavior. Without it, the LLM 
 std::string getSystemPrompt() const override {
     return R"(You are an expert Windows network troubleshooter...
 
-## DIAGNOSTIC PROTOCOL (follow this order)
+## AVAILABLE DIAGNOSTIC SEQUENCE
 
-1. **Adapter Check** — call `check_adapter`
-2. **IP Configuration** — call `check_ip_config`
-3. **Gateway Ping** — call `ping_host` with the gateway IP from step 2
-4. **DNS Resolution** — call `test_dns_resolution`
-5. **Internet Connectivity** — call `test_internet`
+For a full network diagnostic, the typical sequence is:
+1. `check_adapter` — adapter present and connected?
+2. `check_ip_config` — valid IP, gateway, DNS servers?
+3. `ping_host` — gateway reachable?
+4. `test_dns_resolution` — name resolution working?
+5. `test_internet` — end-to-end connectivity?
+6. `test_bandwidth` — download and upload speed acceptable?
 
-## FIX PROTOCOL (apply only if diagnostics reveal issues)
+## FIXING ISSUES
 
-- **No IP / DHCP failure** → call `renew_dhcp_lease`
-- **DNS failure** → call `flush_dns_cache`, re-test; if still failing,
-  call `set_dns_servers` with Google DNS (8.8.8.8 / 8.8.4.4)
-- **Adapter disconnected** → call `restart_wifi_adapter`
-- After any fix, re-run the relevant diagnostic to confirm
+When you find a problem, fix it and verify:
+1. Apply the fix
+2. Re-run the diagnostic that failed to verify the fix worked
+3. If the fix failed, try the next option
 
-## OUTPUT FORMAT
+## FINAL ANSWER
 
-End every response with one of:
-- **RESOLVED** — all diagnostics pass or issue was fixed
-- **PARTIALLY RESOLVED** — some issues fixed but others remain
-- **NEEDS MANUAL ACTION** — requires user intervention
+Only provide an "answer" after ALL tool calls are complete.
+Format as a bulleted summary:
+- Adapter: OK/FAIL - SSID name, signal strength %
+- IP Config: OK/FAIL - IP address, gateway
+- DNS: OK/FAIL - resolver working/not
+- Internet: OK/FAIL - connectivity status
+- Speed: download XX Mbps / upload XX Mbps
+- Status: RESOLVED / PARTIALLY RESOLVED / NEEDS MANUAL ACTION
 ...)";
 }
 ```
@@ -317,17 +353,17 @@ The system prompt instructs the LLM to follow this decision tree. The LLM doesn'
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'14px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
 flowchart TD
-    A["1. check_adapter\nWi-Fi adapter present?"] -->|Yes| B["2. check_ip_config\nIP address via DHCP?"]
+    A["1. check_adapter<br/>Wi-Fi adapter present?"] -->|Yes| B["2. check_ip_config<br/>IP address via DHCP?"]
     A -->|"Radio Off"| F4["FIX: toggle_wifi_radio"]
     A -->|"Disabled"| F5["FIX: enable_wifi_adapter"]
     A -->|"Stuck"| F1["FIX: restart_wifi_adapter"]
-    B -->|Valid IP| C["3. ping_host\nGateway reachable?"]
+    B -->|Valid IP| C["3. ping_host<br/>Gateway reachable?"]
     B -->|No IP / APIPA| F2["FIX: renew_dhcp_lease"]
-    C -->|Reachable| D["4. test_dns_resolution\nDNS resolving?"]
+    C -->|Reachable| D["4. test_dns_resolution<br/>DNS resolving?"]
     C -->|Unreachable| F1
-    D -->|Resolving| E["5. test_internet\nPort 443 open?"]
-    D -->|Failing| F3["FIX: flush_dns_cache\nthen set_dns_servers"]
-    E -->|Connected| BW["6. test_bandwidth\nSpeed test"]
+    D -->|Resolving| E["5. test_internet<br/>Port 443 open?"]
+    D -->|Failing| F3["FIX: flush_dns_cache<br/>then set_dns_servers"]
+    E -->|Connected| BW["6. test_bandwidth<br/>Speed test"]
     E -->|Failed| M["NEEDS MANUAL ACTION"]
     BW --> R["RESOLVED"]
     F1 --> A
@@ -336,12 +372,12 @@ flowchart TD
     F4 --> A
     F5 --> A
 
-    style A fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style B fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style C fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style D fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style E fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style BW fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style A fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style B fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style C fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style D fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style E fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style BW fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
     style F1 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style F2 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style F3 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
@@ -397,7 +433,7 @@ private:
 
 ## The Interactive Loop
 
-The `main()` function follows the same pattern as the `simple_agent` example:
+The `main()` function follows the same pattern as the `health_agent` example:
 
 ```cpp
 int main() {
@@ -408,18 +444,33 @@ int main() {
 
         WiFiTroubleshooterAgent agent(modelId);
 
-        // Interactive loop with diagnostic menu
+        // Predefined menu options (number → prompt)
+        const std::vector<std::pair<std::string, std::string>> kDiagnosticMenu = {
+            {"Full network diagnostic",  "Run a full network diagnostic."},
+            {"Check Wi-Fi adapter",      "Check my Wi-Fi adapter status."},
+            // ... more options ...
+        };
+
         std::string userInput;
         while (true) {
-            // Show numbered menu: [1] Full diagnostic, [2] Check adapter, ...
-            printDiagnosticMenu();
+            // Show numbered menu
+            for (size_t i = 0; i < kDiagnosticMenu.size(); ++i)
+                std::cout << "  [" << i+1 << "] " << kDiagnosticMenu[i].first << "\n";
             std::cout << "  > " << std::flush;
             std::getline(std::cin, userInput);
 
             if (userInput == "quit" || userInput == "exit" || userInput == "q") break;
+            if (userInput.empty()) continue;
 
-            // Map numbered selection to pre-written prompt, or use free-text
-            std::string query = mapMenuSelection(userInput);
+            // Map numbered selection to prompt, or use free-text input directly
+            std::string query;
+            if (userInput.size() == 1 && userInput[0] >= '1'
+                && userInput[0] <= '0' + static_cast<char>(kDiagnosticMenu.size())) {
+                query = kDiagnosticMenu[userInput[0] - '1'].second;
+            } else {
+                query = userInput;
+            }
+
             auto result = agent.processQuery(query);
             // Final answer is printed by CleanConsole::printFinalAnswer()
             (void)result;
@@ -444,7 +495,11 @@ int main() {
       <Tab title="Windows (MSVC)">
         ```bat
         cd cpp
+        ```
+        ```bat
         cmake -B build -G "Visual Studio 17 2022" -A x64
+        ```
+        ```bat
         cmake --build build --config Release
         ```
         Binary: `cpp\build\Release\wifi_agent.exe`
@@ -452,18 +507,26 @@ int main() {
       <Tab title="Windows (Ninja)">
         ```bat
         cd cpp
+        ```
+        ```bat
         cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        ```
+        ```bat
         cmake --build build
         ```
       </Tab>
-      <Tab title="Linux / macOS">
+      <Tab title="Linux">
         ```bash
         cd cpp
+        ```
+        ```bash
         cmake -B build -DCMAKE_BUILD_TYPE=Release
+        ```
+        ```bash
         cmake --build build
         ```
         <Note>
-        Compiles on Linux/macOS for CI purposes, but the PowerShell-based tools require Windows to return meaningful results.
+        Compiles on Linux for CI purposes, but the PowerShell-based tools require Windows to return meaningful results.
         </Note>
       </Tab>
     </Tabs>
@@ -554,7 +617,7 @@ int main() {
 
 ### Why registered tools instead of MCP?
 
-The `simple_agent` example uses MCP — it connects to `uvx windows-mcp` which runs as a separate subprocess and exposes PowerShell as an MCP tool. That works, but adds a dependency on `uvx`, Python, and the MCP server package.
+The `health_agent` example uses MCP — it connects to `uvx windows-mcp` which runs as a separate subprocess and exposes PowerShell as an MCP tool. That works, but adds a dependency on `uvx`, Python, and the MCP server package.
 
 The Wi-Fi agent takes the opposite approach: every tool is a C++ lambda registered directly with the agent. The PowerShell commands are hardcoded strings. This means:
 
@@ -614,15 +677,15 @@ The framework handles everything else — the new tool appears in the LLM's syst
 ## Next Steps
 
 <CardGroup cols={2}>
-  <Card title="C++ Framework Overview" icon="code" href="/guides/cpp/overview">
+  <Card title="C++ Framework Overview" icon="code" href="/cpp/overview">
     AgentConfig reference, project structure, and how the agent loop works
   </Card>
 
-  <Card title="Customizing Your Agent" icon="sliders" href="/guides/cpp/custom-agent">
+  <Card title="Customizing Your Agent" icon="sliders" href="/cpp/custom-agent">
     Custom prompts, typed tools, MCP servers, output capture, and tuning
   </Card>
 
-  <Card title="Integration Guide" icon="puzzle-piece" href="/guides/cpp/integration">
+  <Card title="Integration Guide" icon="puzzle-piece" href="/cpp/integration">
     Use gaia_core in your own CMake project via FetchContent or find_package
   </Card>
 

@@ -3,11 +3,11 @@
 <!-- Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. -->
 <!-- SPDX-License-Identifier: MIT -->
 
-A C++ port of the [GAIA](https://github.com/amd/gaia) Python base agent framework. Implements the core agentic loop — LLM reasoning, tool execution, multi-step planning, and MCP (Model Context Protocol) client integration — as a lightweight, header-friendly C++17 library.
+The [GAIA](https://github.com/amd/gaia) C++ agent framework. Implements the core agentic loop — LLM reasoning, tool execution, multi-step planning, and MCP (Model Context Protocol) client integration — as a lightweight, header-friendly C++ library.
 
 Included demos:
 
-- **`simple_agent`** — Windows System Health Agent that connects to the [Windows MCP server](https://github.com/microsoft/windows-mcp), gathers memory/disk/CPU metrics via PowerShell, and pastes a formatted report into Notepad — demonstrating the full computer-use (CUA) flow over the MCP client-server interface.
+- **`health_agent`** — Windows System Health Agent that connects to the [Windows MCP server](https://github.com/microsoft/windows-mcp), gathers memory/disk/CPU metrics via PowerShell, and pastes a formatted report into Notepad — demonstrating the full computer-use (CUA) flow over the MCP client-server interface.
 - **`wifi_agent`** — Wi-Fi Troubleshooter that diagnoses and fixes network connectivity issues using registered PowerShell tools. Demonstrates adaptive reasoning: the agent decides which tools to run based on the query, interprets results, skips irrelevant steps, applies fixes, and verifies fixes worked — all driven by real LLM reasoning with no hard-coded sequences.
 
 ---
@@ -19,7 +19,7 @@ Included demos:
 | Tool | Minimum Version | Notes |
 |------|----------------|-------|
 | CMake | 3.14 | `cmake --version` |
-| C++ Compiler | C++17 | MSVC 2019+, GCC 9+, or Clang 10+ |
+| C++ Compiler | C++17 support | MSVC 2019+ or GCC 9+ |
 | Git | any | Required by CMake FetchContent |
 
 > **Windows**: Install [Visual Studio 2022](https://visualstudio.microsoft.com/) (Desktop C++ workload) or the standalone [Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022). CMake is bundled with Visual Studio, or install it separately from [cmake.org](https://cmake.org/download/).
@@ -37,11 +37,11 @@ lemonade-server serve
 
 Default model: `Qwen3-4B-GGUF` (configurable via `AgentConfig::modelId`)
 
-> **Any OpenAI-compatible server works.** The agent talks to a standard `/v1/chat/completions` endpoint. You can use [llama.cpp server](https://github.com/ggerganov/llama.cpp), [Ollama](https://ollama.com/), [vLLM](https://github.com/vllm-project/vllm), or any other OpenAI-compatible backend — just set `AgentConfig::baseUrl` and `AgentConfig::modelId` to match your endpoint. See the [Integration Guide](docs/guides/cpp/integration.mdx) for details.
+> **Any OpenAI-compatible server works.** The agent talks to a standard `/v1/chat/completions` endpoint. You can use [llama.cpp server](https://github.com/ggerganov/llama.cpp), [Ollama](https://ollama.com/), [vLLM](https://github.com/vllm-project/vllm), or any other OpenAI-compatible backend — just set `AgentConfig::baseUrl` and `AgentConfig::modelId` to match your endpoint. See the [Integration Guide](../docs/cpp/integration.mdx) for details.
 
 ### 3. Windows MCP Server (for the demo)
 
-The `simple_agent` demo launches the Windows MCP server via `uvx`. Install `uv` first:
+The `health_agent` demo launches the Windows MCP server via `uvx`. Install `uv` first:
 
 ```bash
 pip install uv
@@ -64,9 +64,9 @@ cmake --build build --config Release
 ```
 
 Binaries are placed in `build\Release\`:
-- `simple_agent.exe` — System Health Agent (MCP demo)
+- `health_agent.exe` — System Health Agent (MCP demo)
 - `wifi_agent.exe` — Wi-Fi Troubleshooter (registered-tool demo)
-- `gaia_tests.exe` — unit test suite
+- `tests_mock.exe` — unit test suite
 
 ### Windows (Ninja / faster builds)
 
@@ -75,7 +75,7 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-### Linux / macOS
+### Linux
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -83,9 +83,9 @@ cmake --build build
 ```
 
 Binaries are placed in `build/`:
-- `simple_agent`
-- `wifi_agent`
-- `gaia_tests`
+- `tests_mock` — unit test suite
+
+> **Note:** The example agents (`health_agent`, `wifi_agent`) are Windows-only and will not be built on Linux.
 
 ---
 
@@ -94,7 +94,7 @@ Binaries are placed in `build/`:
 Make sure the Lemonade server is running, then launch the agent:
 
 ```bat
-build\Release\simple_agent.exe
+build\Release\health_agent.exe
 ```
 
 The agent will attempt to connect to the Windows MCP server on startup. Once connected, try one of these prompts:
@@ -161,16 +161,19 @@ The agent will:
 
 ## Running Tests
 
-```bat
-cd build
-ctest -C Release --output-on-failure
-```
-
-Or run the test binary directly for verbose output:
+Run the unit test binary directly (no LLM server required):
 
 ```bat
-build\Release\gaia_tests.exe --gtest_color=yes
+build\Release\tests_mock.exe --gtest_color=yes
 ```
+
+Or via CTest:
+
+```bat
+ctest --test-dir build -C Release --output-on-failure
+```
+
+> **Note:** Integration tests are not built by default. If you enable them with `-DGAIA_BUILD_INTEGRATION_TESTS=ON`, run the `tests_integration` binary separately with an LLM server running — otherwise CTest will hang on those tests.
 
 ---
 
@@ -186,23 +189,35 @@ gaia/                           # repo root
     │   ├── tool_registry.h     # Tool registration and execution
     │   ├── mcp_client.h        # MCP JSON-RPC client (stdio transport)
     │   ├── json_utils.h        # JSON extraction with multi-strategy fallback
-    │   └── console.h           # TerminalConsole / SilentConsole output handlers
+    │   ├── console.h           # TerminalConsole / SilentConsole output handlers
+    │   └── clean_console.h     # CleanConsole — polished TUI with colors and word-wrap
     ├── src/
     │   ├── agent.cpp           # Agent loop state machine
     │   ├── tool_registry.cpp
     │   ├── mcp_client.cpp      # Cross-platform subprocess + pipes (Win32 / POSIX)
     │   ├── json_utils.cpp
-    │   └── console.cpp
+    │   ├── console.cpp
+    │   └── clean_console.cpp
     ├── examples/
-    │   ├── simple_agent.cpp    # Windows System Health Agent (MCP/CUA demo)
+    │   ├── health_agent.cpp    # Windows System Health Agent (MCP/CUA demo)
     │   └── wifi_agent.cpp      # Wi-Fi Troubleshooter (registered-tool demo)
-    └── tests/
-        ├── test_agent.cpp
-        ├── test_tool_registry.cpp
-        ├── test_json_utils.cpp
-        ├── test_mcp_client.cpp
-        ├── test_console.cpp
-        └── test_types.cpp
+    ├── tests/
+    │   ├── test_agent.cpp
+    │   ├── test_tool_registry.cpp
+    │   ├── test_json_utils.cpp
+    │   ├── test_mcp_client.cpp
+    │   ├── test_console.cpp
+    │   ├── test_clean_console.cpp
+    │   ├── test_tool_integration.cpp
+    │   ├── test_types.cpp
+    │   └── integration/
+    │       ├── test_main.cpp
+    │       ├── test_integration_llm.cpp
+    │       ├── test_integration_mcp.cpp
+    │       ├── test_integration_wifi.cpp
+    │       └── test_integration_health.cpp
+    └── cmake/
+        └── gaia_coreConfig.cmake.in  # Package config for find_package consumers
 ```
 
 ---
@@ -267,7 +282,9 @@ The agent is pure C++ — PowerShell is just the subprocess that runs system com
 
 ### Custom TUI (`CleanConsole`)
 
-The `wifi_agent` overrides the default `OutputHandler` with a custom `CleanConsole` that parses the LLM's structured reasoning output:
+Both example agents use `gaia::CleanConsole` (from `<gaia/clean_console.h>`) for polished terminal output: ANSI colors, word-wrapping, bordered tool output previews, and a bordered final answer section.
+
+The base `CleanConsole` parses structured reasoning prefixes from the LLM output:
 
 - **`FINDING:`** prefix → green label — what the data shows
 - **`DECISION:`** prefix → yellow label — what the agent will do next and why
@@ -349,23 +366,23 @@ All fetched automatically by CMake — no manual installation needed.
 
 ## Relationship to Python GAIA
 
-This C++ library is a port of `src/gaia/agents/base/` from the [GAIA Python package](https://github.com/amd/gaia), and lives alongside it in the same repository under `cpp/`. It targets the same agent loop semantics and MCP integration, without pulling in Python-only features (audio, RAG, Stable Diffusion, REST API server, etc.).
+This C++ library implements the core agent from `src/gaia/agents/base/` of the [GAIA Python package](https://github.com/amd/gaia), and lives alongside it in the same repository under `cpp/`. It targets the same agent loop semantics and MCP integration, without pulling in Python-only features (audio, RAG, Stable Diffusion, REST API server, etc.).
 
-| Feature | Python GAIA | C++ port |
-|---------|------------|----------|
+| Feature | Python | C++ |
+|---------|--------|-----|
 | Agent loop (plan → tool → answer) | ✓ | ✓ |
 | Tool registration | ✓ | ✓ |
 | MCP client (stdio) | ✓ | ✓ |
 | JSON parsing with fallbacks | ✓ | ✓ |
 | OpenAI-compatible LLM backend | ✓ | ✓ |
 | Multiple LLM providers (Claude, OpenAI) | ✓ | planned |
-| Specialized agents (Code, Docker, Jira…) | ✓ | not ported |
-| REST API server | ✓ | not ported |
-| Audio / RAG / Stable Diffusion | ✓ | not ported |
+| Specialized agents (Code, Docker, Jira…) | ✓ | Python-only |
+| REST API server | ✓ | Python-only |
+| Audio / RAG / Stable Diffusion | ✓ | Python-only |
 
 ---
 
 ## License
 
 MIT License — see [LICENSE.md](../LICENSE.md).
-Copyright (C) 2024-2026 Advanced Micro Devices, Inc.
+Copyright (C) 2025-2026 Advanced Micro Devices, Inc.

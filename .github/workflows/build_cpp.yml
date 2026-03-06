@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT
 
 # This workflow builds and tests the C++ library in cpp/
-# Tests include: CMake build, GoogleTest unit tests
-# Platform: Cross-platform (Linux and Windows)
+# Tests include: CMake build, GoogleTest mock tests (cloud), integration tests (STX)
+# Integration tests: LLM chat/tool-calling, MCP connection, WiFi diagnostics, Health monitoring
+# Platform: Cross-platform (Linux and Windows cloud), Windows STX (self-hosted AMD hardware)
 
 name: C++ Build & Test
 
@@ -60,7 +61,7 @@ jobs:
           key: fetchcontent-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
 
       - name: Configure CMake
-        run: cmake -B cpp/build -S cpp -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B cpp/build -S cpp -DCMAKE_BUILD_TYPE=Release -DGAIA_BUILD_INTEGRATION_TESTS=OFF
 
       - name: Build
         run: cmake --build cpp/build --config Release --parallel
@@ -102,6 +103,7 @@ jobs:
         run: |
           cmake -B cpp/build -S cpp -DCMAKE_BUILD_TYPE=Release \
                 -DGAIA_BUILD_TESTS=OFF -DGAIA_BUILD_EXAMPLES=OFF \
+                -DGAIA_BUILD_INTEGRATION_TESTS=OFF \
                 -DCMAKE_INSTALL_PREFIX="${{ runner.temp }}/gaia_install"
           cmake --build cpp/build --config Release --parallel
           cmake --install cpp/build --config Release
@@ -148,12 +150,13 @@ jobs:
         run: |
           cmake -B cpp/build-shared -S cpp -DCMAKE_BUILD_TYPE=Release \
                 -DBUILD_SHARED_LIBS=ON \
-                -DGAIA_BUILD_TESTS=OFF -DGAIA_BUILD_EXAMPLES=OFF
+                -DGAIA_BUILD_TESTS=OFF -DGAIA_BUILD_EXAMPLES=OFF \
+                -DGAIA_BUILD_INTEGRATION_TESTS=OFF
           cmake --build cpp/build-shared --config Release --parallel
 
-  # LLM integration tests on STX hardware with Lemonade Server
+  # Integration tests on STX hardware: LLM + MCP + WiFi + Health
   integration-test:
-    name: C++ LLM Integration Test (STX)
+    name: C++ Integration Tests (STX)
     runs-on: ${{ (contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test') || 'stx' }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
@@ -261,29 +264,51 @@ jobs:
           cmake --build cpp/build-integration --config Release --parallel
           if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
 
+      - name: Verify uvx is available
+        shell: powershell
+        run: |
+          # uvx is provided by uv (installed by setup-venv)
+          $uvx = Get-Command uvx -ErrorAction SilentlyContinue
+          if ($uvx) {
+              Write-Host "[OK] uvx found at: $($uvx.Source)"
+          } else {
+              Write-Host "[WARN] uvx not found -- MCP and Health integration tests will fail"
+              Write-Host "       uvx should be available via uv (installed by setup-venv)"
+              exit 0
+          }
+
+          # Remove any broken persistent installation that may interfere with uvx.
+          # Swallow all output/errors — the tool may not be installed and that's fine.
+          # Run via cmd /c so native stderr never reaches PowerShell's error stream
+          # (PS 5.1 -Command mode generates NativeCommandError from any native stderr).
+          cmd /c "uv tool uninstall windows-mcp 2>NUL" 2>$null
+          $global:LASTEXITCODE = 0
+          Write-Host "[OK] uvx ready (windows-mcp will run via temporary uvx environments)"
+
       - name: Start Lemonade Server and run integration tests
         shell: powershell
-        timeout-minutes: 15
+        timeout-minutes: 30
         env:
-          GAIA_CPP_TEST_MODEL: Qwen3-4B-GGUF
+          GAIA_CPP_TEST_MODEL: Qwen3-4B-Instruct-2507-GGUF
           GAIA_CPP_BASE_URL: http://localhost:8000/api/v1
         run: |
           try {
               # Start Lemonade with Qwen3-4B-GGUF
-              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-GGUF" -Port 8000 -CtxSize 8192 -InitWaitTime 15
+              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-Instruct-2507-GGUF" -Port 8000 -CtxSize 16384 -InitWaitTime 15
 
               # Verify health
               $health = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 10
               if ($health.status -ne "ok") { throw "Lemonade health check failed" }
-              Write-Host "[OK] Lemonade Server ready with Qwen3-4B-GGUF"
+              Write-Host "[OK] Lemonade Server ready with Qwen3-4B-Instruct-2507-GGUF"
 
-              # Run C++ integration tests
-              Write-Host "=== Running C++ LLM Integration Tests ==="
-              $env:GAIA_CPP_TEST_MODEL = "Qwen3-4B-GGUF"
+              # Run all C++ integration tests (LLM + MCP + WiFi + Health)
+              Write-Host "=== Running C++ Integration Tests (LLM + MCP + WiFi + Health) ==="
+              $env:GAIA_CPP_TEST_MODEL = "Qwen3-4B-Instruct-2507-GGUF"
               $env:GAIA_CPP_BASE_URL   = "http://localhost:8000/api/v1"
-              ctest --test-dir cpp/build-integration -C Release --output-on-failure
+              # -j 1: run tests sequentially so they don't compete for the single LLM server
+              ctest --test-dir cpp/build-integration -C Release --output-on-failure -j 1
               if ($LASTEXITCODE -ne 0) { throw "C++ integration tests failed" }
-              Write-Host "[SUCCESS] All C++ LLM integration tests passed!"
+              Write-Host "[SUCCESS] All C++ integration tests passed!"
 
           } catch {
               Write-Host "[ERROR] $($_.Exception.Message)"
@@ -320,7 +345,7 @@ jobs:
           echo "Build & Test:      ${{ needs.build-and-test.result }}"
           echo "Install Test:      ${{ needs.install-test.result }}"
           echo "Shared Lib Test:   ${{ needs.shared-lib-test.result }}"
-          echo "LLM Integration:   ${{ needs.integration-test.result }}"
+          echo "Integration Tests: ${{ needs.integration-test.result }}"
           echo ""
 
           if [[ "${{ needs.build-and-test.result }}" == "skipped" ]]; then
@@ -336,7 +361,7 @@ jobs:
           # 'skipped' and 'failure' as non-blocking (warn only) since the
           # runner may lack tools like cmake in PATH.
           if [[ "${{ needs.integration-test.result }}" == "failure" ]]; then
-            echo "::warning::LLM integration test failed (STX runner infrastructure issue)"
+            echo "::warning::Integration tests failed (STX runner infrastructure issue)"
           fi
 
           if [[ "$FAILED" == "0" ]]; then

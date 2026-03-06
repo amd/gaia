@@ -3,13 +3,13 @@ title: "DatabaseMixin"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/core/database_mixin.py`](https://github.com/amd/gaia/blob/main/src/gaia/core/database_mixin.py)
+  **Source Code:** [`src/gaia/database/mixin.py`](https://github.com/amd/gaia/blob/main/src/gaia/database/mixin.py)
 </Info>
 
 <Note>
 **Component:** DatabaseMixin
-**Module:** `gaia.core.database_mixin` (planned location)
-**Import:** `from gaia import DatabaseMixin` (after v1.0.0 restructure)
+**Module:** `gaia.database.mixin`
+**Import:** `from gaia.database.mixin import DatabaseMixin`
 </Note>
 ---
 
@@ -86,7 +86,7 @@ DatabaseMixin provides database connectivity for GAIA agents using SQLAlchemy Co
 ### File Location
 
 ```
-src/gaia/core/database_mixin.py
+src/gaia/database/mixin.py
 ```
 
 ### Public Interface
@@ -835,7 +835,7 @@ Replace all temporary database code in SDK.md with DatabaseMixin usage.
 ## Implementation Checklist
 
 ### Step 1: Create File
-- [ ] Create `src/gaia/core/database_mixin.py`
+- [x] Create `src/gaia/database/mixin.py`
 - [ ] Add copyright header
 - [ ] Add module docstring
 
@@ -891,7 +891,7 @@ Replace all temporary database code in SDK.md with DatabaseMixin usage.
 
 **License**
 
-Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 
 SPDX-License-Identifier: MIT
 

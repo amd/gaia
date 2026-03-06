@@ -1,6 +1,7 @@
 ---
 title: "Medical Intake Agent"
 description: "Automate patient intake form processing with VLM extraction and local database storage"
+icon: "hospital"
 ---
 
 <Info>
@@ -321,10 +322,10 @@ This command:
   <Tab title="CLI App">
     ### Download sample forms
 
-    [Download sample intake forms from GitHub](https://github.com/amd/gaia/tree/main/data/img/intake-forms) and save them to a local directory (e.g., `./intake-forms/`).
+    [Download sample intake forms from GitHub](https://github.com/amd/gaia/tree/main/src/gaia/agents/emr) and save them to a local directory (e.g., `./intake-forms/`).
 
     <Note>
-      **Dev Install:** Sample forms are already included in the repository at `data/img/intake-forms/`.
+      **Dev Install:** See the EMR agent source at `src/gaia/agents/emr/` for sample forms and configuration.
     </Note>
 
     ### Start watching for forms
@@ -448,7 +449,7 @@ This command:
     Drag and drop intake form images or PDFs directly onto the **Watch Folder** panel in the dashboard. The agent will process them automatically.
 
     <Tip>
-      [Download sample intake forms from GitHub](https://github.com/amd/gaia/tree/main/data/img/intake-forms) to test the agent.
+      [Download sample intake forms from GitHub](https://github.com/amd/gaia/tree/main/src/gaia/agents/emr) to test the agent.
     </Tip>
 
     <Accordion title="Dev Install: Build the frontend (first time only)">
@@ -684,7 +685,7 @@ If `gaia-emr init` fails repeatedly or the agent won't start due to model errors
 
 **License**
 
-Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 
 SPDX-License-Identifier: MIT
 

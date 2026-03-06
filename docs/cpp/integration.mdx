@@ -1,5 +1,5 @@
 ---
-title: "C++ Integration Guide"
+title: "Integration Guide"
 description: "Add AI agent capabilities to any C++ project — three lines of CMake, zero manual dependencies"
 icon: "puzzle-piece"
 ---
@@ -9,7 +9,7 @@ icon: "puzzle-piece"
 </Info>
 
 <Note>
-**Prerequisites:** Familiarity with CMake and C++17. See the [C++ Framework Overview](/guides/cpp/overview) for build instructions and the `AgentConfig` reference.
+**Prerequisites:** Familiarity with CMake and C++17. See the [C++ Framework Overview](/cpp/overview) for build instructions and the `AgentConfig` reference.
 </Note>
 
 ---
@@ -64,7 +64,7 @@ That gives you `#include <gaia/agent.h>`, the full agent loop, tool registry, MC
     ```
 
     <Note>
-    `SOURCE_SUBDIR cpp` tells CMake to use only the `cpp/` subdirectory of the GAIA repository. This skips the Python package entirely — your build tree contains only the C++ library and its dependencies.
+    `SOURCE_SUBDIR cpp` tells CMake to use only the `cpp/` subdirectory of the GAIA repository. Your build tree contains only the C++ library and its dependencies.
     </Note>
 
     <Note>
@@ -132,7 +132,11 @@ That gives you `#include <gaia/agent.h>`, the full agent loop, tool registry, MC
       <Step title="Build and install gaia_core">
         ```bash
         cmake -B build -S cpp -DCMAKE_BUILD_TYPE=Release
+        ```
+        ```bash
         cmake --build build --config Release
+        ```
+        ```bash
         cmake --install build --prefix /usr/local
         ```
 
@@ -169,12 +173,13 @@ That gives you `#include <gaia/agent.h>`, the full agent loop, tool registry, MC
 
     ```bash
     cmake -B build -S cpp -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release
+    ```
+    ```bash
     cmake --build build --config Release
     ```
 
     This produces:
     - **Linux:** `libgaia_core.so`
-    - **macOS:** `libgaia_core.dylib`
     - **Windows:** `gaia_core.dll` + `gaia_core.lib` (import library)
 
     <Warning>
@@ -276,7 +281,7 @@ target_link_libraries(time_agent PRIVATE gaia::gaia_core)
 
 ## Using Alternative LLM Backends
 
-The GAIA C++ agent framework is **not tied to Lemonade or any specific LLM provider**. It talks to a standard HTTP endpoint — any server that implements the OpenAI chat completions API works out of the box. Switch backends by changing two fields:
+The GAIA C++ agent framework is **not tied to [Lemonade](https://lemonade-server.ai) or any specific LLM provider**. It talks to a standard HTTP endpoint — any server that implements the OpenAI chat completions API works out of the box. Switch backends by changing two fields:
 
 ```cpp
 gaia::AgentConfig cfg;
@@ -360,7 +365,7 @@ That is the entire API surface. No embeddings endpoint, no streaming (unless `cf
   </Tab>
 
   <Tab title="Lemonade (default)">
-    [Lemonade Server](https://github.com/amd/lemonade) is the default backend, optimized for AMD Ryzen AI NPU and GPU acceleration.
+    [Lemonade Server](https://lemonade-server.ai) is the default backend, optimized for AMD Ryzen AI NPU and GPU acceleration.
 
     ```bash
     lemonade-server serve
@@ -426,7 +431,7 @@ This requires OpenSSL to be installed on your system.
 All public classes and functions in `gaia_core` are annotated with the `GAIA_API` macro, which is generated automatically by CMake's `GenerateExportHeader`. When building as a shared library:
 
 - **Windows (MSVC):** `GAIA_API` expands to `__declspec(dllexport)` when building the library, and `__declspec(dllimport)` when consuming it.
-- **Linux / macOS:** `GAIA_API` expands to `__attribute__((visibility("default")))`.
+- **Linux:** `GAIA_API` expands to `__attribute__((visibility("default")))`.
 - **Static library:** `GAIA_API` expands to nothing.
 
 No manual annotation is needed in consumer code. Linking against the `gaia::gaia_core` CMake target sets all required compile definitions automatically.
@@ -461,7 +466,7 @@ No manual annotation is needed in consumer code. Linking against the `gaia::gaia
 ## Next Steps
 
 <CardGroup cols={2}>
-  <Card title="C++ Framework Overview" icon="code" href="/guides/cpp/overview">
+  <Card title="C++ Framework Overview" icon="code" href="/cpp/overview">
     Prerequisites, AgentConfig reference, and the full project structure
   </Card>
 
@@ -469,20 +474,16 @@ No manual annotation is needed in consumer code. Linking against the `gaia::gaia
     Browse the implementation on GitHub
   </Card>
 
-  <Card title="Customizing Your Agent" icon="sliders" href="/guides/cpp/custom-agent">
+  <Card title="Customizing Your Agent" icon="sliders" href="/cpp/custom-agent">
     Custom prompts, typed tools, MCP servers, output capture, and AgentConfig tuning
   </Card>
 
-  <Card title="Wi-Fi Troubleshooter Agent" icon="wifi" href="/guides/cpp/wifi-agent">
-    Full network diagnostic and auto-fix using only registered C++ tools — no Python, no MCP
+  <Card title="Wi-Fi Troubleshooter Agent" icon="wifi" href="/cpp/wifi-agent">
+    Full network diagnostic and auto-fix using registered C++ tools
   </Card>
 
-  <Card title="MCP Client Guide" icon="plug" href="/guides/mcp/client">
+  <Card title="MCP Client" icon="plug" href="/sdk/sdks/mcp">
     How MCP client-server integration works in GAIA
-  </Card>
-
-  <Card title="Python Quickstart" icon="rocket" href="/quickstart">
-    Full-featured Python framework with specialized agents, RAG, audio, and more
   </Card>
 </CardGroup>
 
