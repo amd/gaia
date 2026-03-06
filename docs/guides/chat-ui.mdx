@@ -83,7 +83,7 @@ Install GAIA Chat as a global npm package for instant access from any terminal:
   </Tab>
   <Tab title="Manual">
     ```bash
-    npm install -g @amd/gaia-chat
+    npm install -g @amd-gaia/chat
     ```
   </Tab>
 </Tabs>
@@ -160,19 +160,24 @@ Send messages and receive streaming responses powered by your local LLM. The int
 Drop files into the chat to ask questions about their content:
 
 <Tabs>
-  <Tab title="Supported Documents">
+  <Tab title="Documents">
     - PDF (with VLM support for images)
+    - Microsoft Office: Word (.doc, .docx), PowerPoint (.ppt, .pptx), Excel (.xls, .xlsx)
     - TXT, LOG
-    - Markdown (.md, .markdown)
+    - Markdown (.md)
     - CSV, JSON
-    - ReStructuredText (.rst)
+    - HTML, XML, YAML, TOML
   </Tab>
   <Tab title="Code Files">
-    - Python, Java, C++, Go, Rust, Ruby, PHP
-    - JavaScript, TypeScript, JSX, TSX
-    - Vue, Svelte, Astro
-    - HTML, CSS, SCSS
-    - SQL, YAML, XML, TOML
+    - Python, Java, C/C++ (.c, .cpp, .h)
+    - JavaScript, TypeScript
+    - Go, Rust, Ruby
+    - Shell scripts (.sh, .bat, .ps1)
+  </Tab>
+  <Tab title="Config Files">
+    - INI, CFG, TOML
+    - YAML (.yaml, .yml)
+    - JSON, XML
   </Tab>
 </Tabs>
 

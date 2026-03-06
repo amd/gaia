@@ -87,6 +87,9 @@ data: {"type": "error", "content": "error description"}
 | `_session_to_response(session)` | Convert DB dict to `SessionResponse` |
 | `_message_to_response(msg)` | Convert DB dict to `MessageResponse` (parses JSON `rag_sources`) |
 | `_doc_to_response(doc)` | Convert DB dict to `DocumentResponse` |
+| `_sanitize_document_path(user_path)` | Validate and sanitize user-provided file paths (null bytes, extension allowlist, path resolution) |
+| `_sanitize_static_path(base_dir, user_path)` | Validate URL paths for static file serving stay within base directory |
+| `_validate_file_path(filepath)` | Check path is absolute, no null bytes, and has allowed extension |
 | `_compute_file_hash(filepath)` | SHA-256 hash for document deduplication |
 | `_index_document(filepath)` | Index file via RAG SDK, returns chunk count |
 | `_get_chat_response(db, session, request)` | Non-streaming LLM response |
@@ -199,9 +202,14 @@ All 14 Pydantic models:
 
 ## Security Considerations
 
-- **CORS:** Allows all origins (`*`). This is safe because the server only binds to `localhost` by default
-- **No authentication:** Designed for single-user local use
-- **File access:** The `upload-path` endpoint accesses arbitrary file paths. This is intentional for the local Electron app but should not be exposed to untrusted networks
+- **CORS:** Allows all origins (`*`). The standalone server (`python -m gaia.chat.ui.server`) binds to `localhost` by default. Note: `gaia chat --ui` binds to `0.0.0.0` for Electron/browser access
+- **No authentication:** Designed for single-user local use. Do not expose to untrusted networks
+- **File path validation:** The `upload-path` endpoint sanitizes all user-provided paths:
+  - Null byte rejection (prevents path injection)
+  - Path resolution to absolute canonical paths (eliminates `..` traversal)
+  - File extension allowlist (only document/code file types accepted)
+  - See `_sanitize_document_path()` in `server.py`
+- **Static file serving:** URL paths are validated to stay within the `dist/` directory via `_sanitize_static_path()`, preventing directory traversal
 - **SQL injection:** Prevented by parameterized queries throughout
 - **No telemetry:** No data is sent externally
 

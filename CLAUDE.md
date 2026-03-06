@@ -181,9 +181,9 @@ gaia/
 │   │   ├── emr/        # MedicalIntakeAgent for healthcare
 │   │   └── routing/    # RoutingAgent for intelligent agent selection
 │   ├── api/            # OpenAI-compatible REST API server
-│   ├── apps/           # Standalone applications (jira, llm, summarize, docker)
+│   ├── apps/           # Standalone applications (chat/webui, jira, llm, summarize, docker)
 │   ├── audio/          # Audio processing (Whisper ASR, Kokoro TTS)
-│   ├── chat/           # Chat SDK
+│   ├── chat/           # Chat SDK and Chat UI backend (ui/server.py, ui/database.py, ui/models.py)
 │   ├── database/       # DatabaseMixin and DatabaseAgent
 │   ├── electron/       # Electron app integration
 │   ├── eval/           # Evaluation framework
@@ -223,6 +223,7 @@ gaia/
 - **API Server** (`src/gaia/api/`): OpenAI-compatible REST API for agent access
 - **MCP Integration** (`src/gaia/mcp/`): Model Context Protocol for external integrations
 - **RAG System** (`src/gaia/rag/`): Document Q&A with PDF support - see [`docs/guides/chat.mdx`](docs/guides/chat.mdx)
+- **Chat UI** (`src/gaia/chat/ui/`): FastAPI backend for desktop chat app - see [`docs/guides/chat-ui.mdx`](docs/guides/chat-ui.mdx)
 - **Evaluation** (`src/gaia/eval/`): Batch experiments and ground truth - see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)
 
 ### Agent Implementations
@@ -245,7 +246,7 @@ gaia/
 ## CLI Commands
 
 Primary commands available via `gaia`:
-- `gaia chat` - Interactive chat with RAG
+- `gaia chat` - Interactive chat with RAG (`--ui` to launch desktop web UI)
 - `gaia talk` - Voice interaction
 - `gaia prompt` - Single prompt to LLM
 - `gaia llm` - Simple LLM queries
@@ -264,6 +265,7 @@ All documentation uses `.mdx` format (Markdown + JSX for Mintlify).
 
 **User Guides:**
 - [`docs/guides/chat.mdx`](docs/guides/chat.mdx) - Chat with RAG
+- [`docs/guides/chat-ui.mdx`](docs/guides/chat-ui.mdx) - Chat Desktop UI
 - [`docs/guides/talk.mdx`](docs/guides/talk.mdx) - Voice interaction
 - [`docs/guides/code.mdx`](docs/guides/code.mdx) - Code generation
 - [`docs/guides/blender.mdx`](docs/guides/blender.mdx) - 3D automation
@@ -277,6 +279,7 @@ All documentation uses `.mdx` format (Markdown + JSX for Mintlify).
 - [`docs/sdk/core/tools.mdx`](docs/sdk/core/tools.mdx) - Tool decorator
 - [`docs/sdk/core/console.mdx`](docs/sdk/core/console.mdx) - Console output
 - [`docs/sdk/sdks/chat.mdx`](docs/sdk/sdks/chat.mdx) - Chat SDK
+- [`docs/sdk/sdks/chat-ui.mdx`](docs/sdk/sdks/chat-ui.mdx) - Chat UI SDK
 - [`docs/sdk/sdks/rag.mdx`](docs/sdk/sdks/rag.mdx) - RAG SDK
 - [`docs/sdk/sdks/llm.mdx`](docs/sdk/sdks/llm.mdx) - LLM clients
 - [`docs/sdk/sdks/vlm.mdx`](docs/sdk/sdks/vlm.mdx) - Vision LLM clients
