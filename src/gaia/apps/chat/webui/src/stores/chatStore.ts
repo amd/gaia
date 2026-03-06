@@ -94,7 +94,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             document.documentElement.setAttribute('data-theme', next);
             return { theme: next };
         }),
-    sidebarOpen: true,
+    sidebarOpen: typeof window !== 'undefined' ? window.innerWidth > 768 : true,
     isLoadingMessages: false,
     setShowDocLibrary: (show) => set({ showDocLibrary: show }),
     setShowSettings: (show) => set({ showSettings: show }),

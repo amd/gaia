@@ -173,8 +173,7 @@
 
 /* Input */
 .input-area {
-    padding: 14px 24px 18px;
-    border-top: 1px solid var(--border-light);
+    padding: 16px 24px 14px;
     flex-shrink: 0;
 }
 
@@ -184,15 +183,16 @@
     display: flex;
     align-items: flex-end;
     gap: 8px;
-    padding: 8px 14px;
+    padding: 10px 12px 10px 18px;
     border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    background: var(--bg-input);
+    border-radius: var(--radius-xl);
+    background: var(--bg-secondary);
+    box-shadow: var(--shadow-sm);
     transition: border-color var(--duration) var(--ease), box-shadow var(--duration) var(--ease);
 }
 .input-box:focus-within {
-    border-color: var(--amd-red);
-    box-shadow: 0 0 0 3px rgba(237, 28, 36, 0.08);
+    border-color: var(--text-muted);
+    box-shadow: var(--shadow-md);
 }
 
 .msg-input {
@@ -201,7 +201,7 @@
     outline: none;
     resize: none;
     background: transparent;
-    padding: 5px 2px;
+    padding: 6px 2px;
     max-height: 200px;
     line-height: 1.5;
     font-size: 14px;
@@ -211,28 +211,29 @@
 
 .input-btns {
     display: flex;
-    gap: 4px;
+    gap: 2px;
     flex-shrink: 0;
-    padding-bottom: 1px;
+    align-items: center;
 }
 
 .send-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 34px;
-    height: 34px;
+    width: 36px;
+    height: 36px;
     border-radius: var(--radius-full);
     background: var(--amd-red);
     color: white;
     transition: all var(--duration) var(--ease);
 }
-.send-btn:hover { background: var(--amd-red-dark); transform: scale(1.04); }
+.send-btn:hover { background: var(--amd-red-dark); transform: scale(1.05); }
 .send-btn:disabled {
     background: var(--bg-tertiary);
     color: var(--text-muted);
     transform: none;
     cursor: not-allowed;
+    opacity: 0.5;
 }
 
 /* Stop streaming button */
@@ -240,8 +241,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 34px;
-    height: 34px;
+    width: 36px;
+    height: 36px;
     border-radius: var(--radius-full);
     border: 2px solid var(--border);
     color: var(--text-secondary);
@@ -280,8 +281,11 @@
 }
 
 .input-footer {
-    text-align: center;
-    margin-top: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    margin-top: 8px;
     font-size: 11px;
     color: var(--text-muted);
 }
@@ -295,7 +299,7 @@
     .model-badge { display: none; }
 
     .input-area {
-        padding: 10px 12px 14px;
+        padding: 10px 12px 10px;
     }
 
     .empty-chat {
