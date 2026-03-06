@@ -58,7 +58,7 @@ Write-Host ""
 # ── Install ──────────────────────────────────────────────────────────────────
 
 Write-Host "Installing GAIA Chat..." -ForegroundColor Yellow
-& npm.cmd install -g @amd/gaia-chat@latest
+& npm.cmd install -g @amd-gaia/chat@latest
 if ($LASTEXITCODE -ne 0) { throw "Failed to install GAIA Chat" }
 
 Write-Host ""

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare } from 'lucide-react';
+import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
@@ -32,7 +32,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
     const [isDragOver, setIsDragOver] = useState(false);
+    const [showScrollBtn, setShowScrollBtn] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const messagesScrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const abortRef = useRef<AbortController | null>(null);
 
@@ -67,6 +69,39 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     // Focus input
     useEffect(() => { inputRef.current?.focus(); }, [sessionId]);
+
+    // Track scroll position for scroll-to-bottom button
+    const handleScroll = useCallback(() => {
+        const el = messagesScrollRef.current;
+        if (!el) return;
+        const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+        setShowScrollBtn(distFromBottom > 200);
+    }, []);
+
+    const scrollToBottom = useCallback(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, []);
+
+    // Stop streaming
+    const handleStop = useCallback(() => {
+        if (abortRef.current) {
+            abortRef.current.abort();
+            abortRef.current = null;
+        }
+        if (streamingContent) {
+            const assistantMsg: Message = {
+                id: Date.now() + 1,
+                session_id: sessionId,
+                role: 'assistant',
+                content: streamingContent,
+                created_at: new Date().toISOString(),
+                rag_sources: null,
+            };
+            addMessage(assistantMsg);
+        }
+        setStreaming(false);
+        clearStreamContent();
+    }, [sessionId, streamingContent, addMessage, setStreaming, clearStreamContent]);
 
     // Auto-resize textarea
     const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -274,7 +309,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             </header>
 
             {/* Messages */}
-            <div className="messages-scroll">
+            <div className="messages-scroll" ref={messagesScrollRef} onScroll={handleScroll}>
                 {isLoadingMessages && (
                     <div className="loading-spinner" aria-label="Loading messages" />
                 )}
@@ -329,6 +364,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 <div ref={messagesEndRef} />
             </div>
 
+            {/* Scroll to bottom */}
+            {showScrollBtn && !isStreaming && (
+                <button className="scroll-bottom-btn" onClick={scrollToBottom} title="Scroll to bottom" aria-label="Scroll to bottom">
+                    <ArrowDown size={16} />
+                </button>
+            )}
+
             {/* Drag overlay */}
             {isDragOver && (
                 <div className="drag-overlay">
@@ -355,15 +397,26 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Upload document" aria-label="Upload document">
                             <Upload size={15} />
                         </button>
-                        <button
-                            className="send-btn"
-                            onClick={() => sendMessage()}
-                            disabled={isStreaming || !input.trim()}
-                            title="Send (Enter)"
-                            aria-label="Send message"
-                        >
-                            <Send size={16} />
-                        </button>
+                        {isStreaming ? (
+                            <button
+                                className="stop-btn"
+                                onClick={handleStop}
+                                title="Stop generating"
+                                aria-label="Stop generating"
+                            >
+                                <Square size={14} />
+                            </button>
+                        ) : (
+                            <button
+                                className="send-btn"
+                                onClick={() => sendMessage()}
+                                disabled={!input.trim()}
+                                title="Send (Enter)"
+                                aria-label="Send message"
+                            >
+                                <Send size={16} />
+                            </button>
+                        )}
                     </div>
                 </div>
                 <div className="input-footer">

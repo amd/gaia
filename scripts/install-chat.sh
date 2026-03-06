@@ -56,7 +56,7 @@ echo ""
 # ── Install ──────────────────────────────────────────────────────────────────
 
 echo "Installing GAIA Chat..."
-npm install -g @amd/gaia-chat@latest
+npm install -g @amd-gaia/chat@latest
 
 echo ""
 echo "========================================"

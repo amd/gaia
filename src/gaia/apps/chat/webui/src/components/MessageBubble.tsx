@@ -28,12 +28,33 @@ function isErrorContent(content: string): boolean {
 
 export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = useCallback(() => {
+        navigator.clipboard.writeText(message.content);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    }, [message.content]);
 
     return (
         <div className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}`}>
             <div className="msg-inner">
-                <div className={`msg-role ${message.role === 'user' ? 'role-user' : 'role-assistant'}`}>
-                    {message.role === 'user' ? 'You' : 'GAIA'}
+                <div className="msg-header">
+                    <div className={`msg-role ${message.role === 'user' ? 'role-user' : 'role-assistant'}`}>
+                        {message.role === 'user' ? 'You' : 'GAIA'}
+                    </div>
+                    {!isStreaming && (
+                        <div className="msg-actions">
+                            <button
+                                className={`msg-copy ${copied ? 'copied' : ''}`}
+                                onClick={handleCopy}
+                                title={copied ? 'Copied!' : 'Copy message'}
+                                aria-label={copied ? 'Copied to clipboard' : 'Copy message'}
+                            >
+                                {copied ? <Check size={12} /> : <Copy size={12} />}
+                            </button>
+                        </div>
+                    )}
                 </div>
                 <div className="msg-body">
                     {isError && (

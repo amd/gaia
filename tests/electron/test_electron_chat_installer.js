@@ -543,7 +543,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
     it('should have main field pointing to Electron entry', () => {
       expect(pkg.main).toBeDefined();
-      expect(pkg.main).toContain('main.js');
+      // main can be .js or .cjs (CommonJS for Electron compatibility with ESM package)
+      expect(pkg.main).toMatch(/main\.(c?js)$/);
     });
 
     it('should have Electron as devDependency', () => {

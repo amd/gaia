@@ -6,9 +6,9 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './styles/index.css';
 
-// Apply saved theme
+// Apply saved theme (default to dark)
 const savedTheme = localStorage.getItem('gaia-chat-theme');
-if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+if (savedTheme !== 'light') {
     document.documentElement.setAttribute('data-theme', 'dark');
 }
 

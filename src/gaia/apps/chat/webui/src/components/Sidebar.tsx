@@ -5,6 +5,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { Plus, Search, FileText, Settings, Sun, Moon, Trash2 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
+import gaiaRobot from '../assets/gaia-robot.png';
 import './Sidebar.css';
 
 interface SidebarProps {
@@ -94,8 +95,13 @@ export function Sidebar({ onNewChat }: SidebarProps) {
         <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`} role="complementary" aria-label="Chat sidebar">
             <div className="sidebar-top">
                 <div className="sidebar-brand">
-                    <span className="brand-icon" role="img" aria-label="lock">&#x1F512;</span>
-                    <span className="brand-name">GAIA Chat</span>
+                    <div className="brand-icon" aria-hidden="true">
+                        <img src={gaiaRobot} alt="" width={28} height={28} />
+                    </div>
+                    <div className="brand-text">
+                        <span className="brand-name">GAIA</span>
+                        <span className="brand-label">Chat</span>
+                    </div>
                 </div>
                 <button className="new-chat-btn" onClick={onNewChat} title="New Chat" aria-label="New Chat">
                     <Plus size={18} />

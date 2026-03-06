@@ -119,7 +119,7 @@ jobs:
         working-directory: src/gaia/apps/chat/webui
         run: npm run build
 
-      - name: Publish @amd/gaia-chat
+      - name: Publish @amd-gaia/chat
         working-directory: src/gaia/apps/chat/webui
         run: npm publish --access public
         env:
@@ -128,7 +128,7 @@ jobs:
       - name: Published successfully
         run: |
           TAG_VERSION=${GITHUB_REF#refs/tags/chat-v}
-          echo "Successfully published @amd/gaia-chat@$TAG_VERSION to npm"
+          echo "Successfully published @amd-gaia/chat@$TAG_VERSION to npm"
           echo ""
           echo "Install with:"
-          echo "  npm install -g @amd/gaia-chat@$TAG_VERSION"
+          echo "  npm install -g @amd-gaia/chat@$TAG_VERSION"

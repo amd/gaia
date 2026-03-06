@@ -1,5 +1,5 @@
 {
-  "name": "@amd/gaia-chat",
+  "name": "@amd-gaia/chat",
   "version": "0.15.4.1",
   "type": "module",
   "productName": "GAIA Chat",
@@ -27,7 +27,7 @@
     "document-qa",
     "electron"
   ],
-  "main": "main.js",
+  "main": "main.cjs",
   "bin": {
     "gaia-chat": "bin/gaia-chat.mjs"
   },

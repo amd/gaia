@@ -192,7 +192,7 @@ async function serveFrontend(port) {
     console.error(`Expected: ${join(distDir, "index.html")}`);
     console.error("");
     console.error("The npm package may be corrupted. Try reinstalling:");
-    console.error("  npm install -g @amd/gaia-chat@latest");
+    console.error("  npm install -g @amd-gaia/chat@latest");
     process.exit(1);
   }
 

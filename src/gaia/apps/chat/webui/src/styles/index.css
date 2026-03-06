@@ -15,6 +15,7 @@
     --bg-hover: #f0f0f0;
     --bg-active: #e5e7eb;
     --bg-code: #1e1e1e;
+    --bg-user-msg: transparent;
     --bg-modal-overlay: rgba(0, 0, 0, 0.4);
 
     --text-primary: #111827;
@@ -44,21 +45,22 @@
 }
 
 [data-theme="dark"] {
-    --bg-primary: #0f0f0f;
-    --bg-secondary: #1a1a1a;
-    --bg-tertiary: #252525;
-    --bg-sidebar: #141414;
-    --bg-input: #1e1e1e;
+    --bg-primary: #111111;
+    --bg-secondary: #1c1c1c;
+    --bg-tertiary: #272727;
+    --bg-sidebar: #0e0e0e;
+    --bg-input: #1a1a1a;
     --bg-hover: #2a2a2a;
-    --bg-active: #333333;
-    --bg-code: #0d0d0d;
+    --bg-active: #353535;
+    --bg-code: #0a0a0a;
+    --bg-user-msg: #191919;
 
-    --text-primary: #f3f4f6;
+    --text-primary: #ececec;
     --text-secondary: #9ca3af;
     --text-muted: #6b7280;
 
-    --border: #2a2a2a;
-    --border-light: #1f1f1f;
+    --border: #282828;
+    --border-light: #1e1e1e;
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);

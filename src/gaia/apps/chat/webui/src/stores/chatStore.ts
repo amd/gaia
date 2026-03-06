@@ -84,8 +84,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setDocuments: (docs) => set({ documents: docs }),
 
     // UI
-    theme: (localStorage.getItem('gaia-chat-theme') as 'light' | 'dark') ||
-        (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'),
+    theme: (localStorage.getItem('gaia-chat-theme') as 'light' | 'dark') || 'dark',
     showDocLibrary: false,
     showSettings: false,
     toggleTheme: () =>

@@ -1,24 +1,56 @@
 /* Message Bubble */
 .msg {
-    padding: 14px 24px;
+    padding: 16px 24px;
     max-width: 900px;
     margin: 0 auto;
     width: 100%;
+    position: relative;
 }
 
-.msg-assistant { background: var(--bg-secondary); }
+.msg-user { background: var(--bg-user-msg); }
+.msg-assistant {
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-light);
+}
 
 .msg-inner { max-width: 100%; }
+
+.msg-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
 
 .msg-role {
     font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.6px;
-    margin-bottom: 6px;
     color: var(--text-secondary);
 }
 .role-user { color: var(--amd-red); }
+
+.msg-actions {
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 150ms var(--ease);
+}
+.msg:hover .msg-actions { opacity: 1; }
+
+.msg-copy {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+    transition: all 150ms var(--ease);
+}
+.msg-copy:hover { background: var(--bg-hover); color: var(--text-primary); }
+.msg-copy.copied { color: #22c55e; }
 
 .msg-body {
     font-size: 14px;

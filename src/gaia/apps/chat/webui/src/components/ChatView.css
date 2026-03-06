@@ -235,6 +235,50 @@
     cursor: not-allowed;
 }
 
+/* Stop streaming button */
+.stop-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: var(--radius-full);
+    border: 2px solid var(--border);
+    color: var(--text-secondary);
+    background: var(--bg-input);
+    transition: all var(--duration) var(--ease);
+}
+.stop-btn:hover {
+    border-color: var(--amd-red);
+    color: var(--amd-red);
+}
+
+/* Scroll to bottom FAB */
+.scroll-bottom-btn {
+    position: absolute;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 36px;
+    border-radius: var(--radius-full);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--shadow-md);
+    transition: all var(--duration) var(--ease);
+    z-index: 5;
+    animation: fadeIn 150ms var(--ease);
+}
+.scroll-bottom-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--amd-red);
+}
+
 .input-footer {
     text-align: center;
     margin-top: 6px;

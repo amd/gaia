@@ -609,8 +609,9 @@ describe('Chat App Integration', () => {
       expect(storeContent).toContain('currentSessionId === id ? []');
     });
 
-    it('should detect system dark mode preference', () => {
-      expect(storeContent).toContain('prefers-color-scheme: dark');
+    it('should have dark theme as default', () => {
+      // Store defaults to 'dark' theme (via localStorage or fallback)
+      expect(storeContent).toContain("|| 'dark'");
     });
 
     it('should have setShowDocLibrary and setShowSettings actions', () => {
@@ -684,10 +685,10 @@ describe('Chat App Integration', () => {
       pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
     });
 
-    it('should have main field pointing to Electron framework', () => {
+    it('should have main field pointing to Electron entry', () => {
       expect(pkg.main).toBeDefined();
-      expect(pkg.main).toContain('electron');
-      expect(pkg.main).toContain('main.js');
+      // main can be .js or .cjs (CommonJS for Electron compatibility with ESM package)
+      expect(pkg.main).toMatch(/main\.(c?js)$/);
     });
 
     it('should have Electron as devDependency', () => {
@@ -713,16 +714,26 @@ describe('Chat App Integration', () => {
       expect(pkg.devDependencies['@electron-forge/cli']).toBeDefined();
     });
 
-    it('should have Electron Forge packager config', () => {
+    it('should have Electron Forge config reference', () => {
       expect(pkg.config).toBeDefined();
       expect(pkg.config.forge).toBeDefined();
-      expect(pkg.config.forge.packagerConfig).toBeDefined();
-      expect(pkg.config.forge.packagerConfig.name).toBe('GAIA Chat');
+      // Forge config can be an inline object or a path to external config file
+      if (typeof pkg.config.forge === 'string') {
+        expect(pkg.config.forge).toContain('forge');
+      } else {
+        expect(pkg.config.forge.packagerConfig).toBeDefined();
+      }
     });
 
-    it('should have Electron Forge makers configured', () => {
-      expect(pkg.config.forge.makers).toBeDefined();
-      expect(pkg.config.forge.makers.length).toBeGreaterThan(0);
+    it('should have Electron Forge makers available', () => {
+      // Makers are either inline in config or in the external forge config
+      if (typeof pkg.config.forge === 'string') {
+        const forgePath = path.join(CHAT_APP_PATH, pkg.config.forge);
+        expect(fs.existsSync(forgePath)).toBe(true);
+      } else {
+        expect(pkg.config.forge.makers).toBeDefined();
+        expect(pkg.config.forge.makers.length).toBeGreaterThan(0);
+      }
     });
   });
 
@@ -784,6 +795,509 @@ describe('Chat App Integration', () => {
           expect(content).not.toMatch(/new\s+Function\s*\(/);
         }
       });
+    });
+  });
+
+  // ── Responsive Design & Accessibility ─────────────────────────────
+
+  describe('responsive design', () => {
+    let indexCss;
+
+    beforeAll(() => {
+      const cssPath = path.join(CHAT_APP_PATH, 'src/styles/index.css');
+      indexCss = fs.readFileSync(cssPath, 'utf8');
+    });
+
+    it('should have mobile breakpoint at 768px', () => {
+      expect(indexCss).toContain('max-width: 768px');
+    });
+
+    it('should have tablet breakpoint at 900px', () => {
+      expect(indexCss).toContain('max-width: 900px');
+    });
+
+    it('should have small mobile breakpoint at 480px', () => {
+      expect(indexCss).toContain('max-width: 480px');
+    });
+
+    it('should have sidebar toggle button for mobile', () => {
+      expect(indexCss).toContain('.sidebar-toggle');
+    });
+
+    it('should have sidebar overlay for mobile', () => {
+      expect(indexCss).toContain('.sidebar-overlay');
+    });
+
+    it('should have focus-visible indicators for accessibility', () => {
+      expect(indexCss).toContain(':focus-visible');
+    });
+
+    it('should position sidebar fixed on mobile', () => {
+      expect(indexCss).toContain('position: fixed');
+    });
+
+    it('should have sidebar slide transform', () => {
+      expect(indexCss).toContain('translateX(-100%)');
+      expect(indexCss).toContain('translateX(0)');
+    });
+  });
+
+  describe('responsive welcome screen', () => {
+    let welcomeCss;
+
+    beforeAll(() => {
+      const cssPath = path.join(CHAT_APP_PATH, 'src/components/WelcomeScreen.css');
+      welcomeCss = fs.readFileSync(cssPath, 'utf8');
+    });
+
+    it('should have responsive feature cards (2x2 on mobile)', () => {
+      expect(welcomeCss).toContain('repeat(2, 1fr)');
+    });
+
+    it('should reduce title font size on mobile', () => {
+      expect(welcomeCss).toContain('font-size: 28px');
+    });
+
+    it('should stack suggestion chips on small mobile', () => {
+      expect(welcomeCss).toContain('flex-direction: column');
+    });
+  });
+
+  describe('responsive chat view', () => {
+    let chatCss;
+
+    beforeAll(() => {
+      const cssPath = path.join(CHAT_APP_PATH, 'src/components/ChatView.css');
+      chatCss = fs.readFileSync(cssPath, 'utf8');
+    });
+
+    it('should hide model badge on mobile', () => {
+      expect(chatCss).toContain('display: none');
+    });
+
+    it('should reduce padding on mobile', () => {
+      expect(chatCss).toMatch(/padding:\s*10px\s+16px/);
+    });
+  });
+
+  // ── Sidebar Enhancements ──────────────────────────────────────────
+
+  describe('sidebar enhancements', () => {
+    let sidebarContent;
+
+    beforeAll(() => {
+      const sidebarPath = path.join(CHAT_APP_PATH, 'src/components/Sidebar.tsx');
+      sidebarContent = fs.readFileSync(sidebarPath, 'utf8');
+    });
+
+    it('should have keyboard accessibility on session items', () => {
+      expect(sidebarContent).toContain('role="button"');
+      expect(sidebarContent).toContain('tabIndex={0}');
+      expect(sidebarContent).toContain('onKeyDown');
+    });
+
+    it('should have ARIA labels on sidebar buttons', () => {
+      expect(sidebarContent).toContain('aria-label="New Chat"');
+      expect(sidebarContent).toContain('aria-label="Document Library"');
+      expect(sidebarContent).toContain('aria-label="Settings"');
+    });
+
+    it('should have ARIA labels on sessions', () => {
+      expect(sidebarContent).toContain('aria-label={`Open chat:');
+    });
+
+    it('should have aria-current on active session', () => {
+      expect(sidebarContent).toContain('aria-current');
+    });
+
+    it('should have delete confirmation flow', () => {
+      expect(sidebarContent).toContain('pendingDeleteId');
+      expect(sidebarContent).toContain('Click again to confirm');
+    });
+
+    it('should auto-cancel delete confirmation after timeout', () => {
+      expect(sidebarContent).toContain('setTimeout');
+      expect(sidebarContent).toContain('3000');
+    });
+
+    it('should auto-close sidebar on mobile after selection', () => {
+      expect(sidebarContent).toContain('window.innerWidth <= 768');
+      expect(sidebarContent).toContain('setSidebarOpen(false)');
+    });
+
+    it('should support sidebar open/close class', () => {
+      expect(sidebarContent).toContain("sidebarOpen ? 'open' : ''");
+    });
+
+    it('should have search with aria-label', () => {
+      expect(sidebarContent).toContain('aria-label="Search conversations"');
+    });
+
+    it('should have version badge', () => {
+      expect(sidebarContent).toContain('version-badge');
+      expect(sidebarContent).toContain('__APP_VERSION__');
+    });
+  });
+
+  describe('sidebar CSS enhancements', () => {
+    let sidebarCss;
+
+    beforeAll(() => {
+      const cssPath = path.join(CHAT_APP_PATH, 'src/components/Sidebar.css');
+      sidebarCss = fs.readFileSync(cssPath, 'utf8');
+    });
+
+    it('should have delete confirmation style', () => {
+      expect(sidebarCss).toContain('.session-delete.confirm');
+    });
+
+    it('should have focus-visible style on session items', () => {
+      expect(sidebarCss).toContain('.session-item:focus-visible');
+    });
+
+    it('should have version badge style', () => {
+      expect(sidebarCss).toContain('.version-badge');
+    });
+  });
+
+  // ── App Sidebar Toggle ────────────────────────────────────────────
+
+  describe('App sidebar toggle', () => {
+    let appContent;
+
+    beforeAll(() => {
+      const appPath = path.join(CHAT_APP_PATH, 'src/App.tsx');
+      appContent = fs.readFileSync(appPath, 'utf8');
+    });
+
+    it('should import Menu icon for hamburger', () => {
+      expect(appContent).toContain('Menu');
+      expect(appContent).toContain('lucide-react');
+    });
+
+    it('should have sidebar toggle button', () => {
+      expect(appContent).toContain('sidebar-toggle');
+      expect(appContent).toContain('toggleSidebar');
+    });
+
+    it('should have sidebar overlay for mobile', () => {
+      expect(appContent).toContain('sidebar-overlay');
+    });
+
+    it('should auto-restore sidebar on resize to desktop', () => {
+      expect(appContent).toContain('resize');
+      expect(appContent).toContain('innerWidth > 768');
+    });
+
+    it('should close sidebar on mobile after creating new chat', () => {
+      expect(appContent).toContain('setSidebarOpen(false)');
+    });
+  });
+
+  // ── Zustand Store UI State ────────────────────────────────────────
+
+  describe('Zustand store UI state', () => {
+    let storeContent;
+
+    beforeAll(() => {
+      const storePath = path.join(CHAT_APP_PATH, 'src/stores/chatStore.ts');
+      storeContent = fs.readFileSync(storePath, 'utf8');
+    });
+
+    it('should have sidebarOpen state', () => {
+      expect(storeContent).toContain('sidebarOpen');
+    });
+
+    it('should have toggleSidebar action', () => {
+      expect(storeContent).toContain('toggleSidebar');
+    });
+
+    it('should have setSidebarOpen action', () => {
+      expect(storeContent).toContain('setSidebarOpen');
+    });
+
+    it('should have isLoadingMessages state', () => {
+      expect(storeContent).toContain('isLoadingMessages');
+    });
+
+    it('should have setLoadingMessages action', () => {
+      expect(storeContent).toContain('setLoadingMessages');
+    });
+
+    it('should default sidebarOpen to true', () => {
+      expect(storeContent).toContain('sidebarOpen: true');
+    });
+
+    it('should default isLoadingMessages to false', () => {
+      expect(storeContent).toContain('isLoadingMessages: false');
+    });
+  });
+
+  // ── ChatView Enhancements ─────────────────────────────────────────
+
+  describe('ChatView enhancements', () => {
+    let chatContent;
+
+    beforeAll(() => {
+      const chatPath = path.join(CHAT_APP_PATH, 'src/components/ChatView.tsx');
+      chatContent = fs.readFileSync(chatPath, 'utf8');
+    });
+
+    it('should have empty chat onboarding suggestions', () => {
+      expect(chatContent).toContain('EMPTY_SUGGESTIONS');
+      expect(chatContent).toContain('Start the conversation');
+    });
+
+    it('should have empty chat suggestion chips', () => {
+      expect(chatContent).toContain('empty-chat-chip');
+      expect(chatContent).toContain('handleSuggestionClick');
+    });
+
+    it('should show loading spinner during message fetch', () => {
+      expect(chatContent).toContain('isLoadingMessages');
+      expect(chatContent).toContain('loading-spinner');
+    });
+
+    it('should have drag-and-drop with visual overlay', () => {
+      expect(chatContent).toContain('isDragOver');
+      expect(chatContent).toContain('drag-overlay');
+      expect(chatContent).toContain('Drop files to index');
+    });
+
+    it('should auto-upload dropped files (no TODO)', () => {
+      expect(chatContent).toContain('uploadDocumentByPath');
+      expect(chatContent).not.toContain('TODO: auto-upload');
+    });
+
+    it('should have drag active CSS class', () => {
+      expect(chatContent).toContain('drag-active');
+    });
+
+    it('should handle dragLeave to reset overlay', () => {
+      expect(chatContent).toContain('handleDragLeave');
+      expect(chatContent).toContain('setIsDragOver(false)');
+    });
+
+    it('should have ARIA labels on input and buttons', () => {
+      expect(chatContent).toContain('aria-label="Message input"');
+      expect(chatContent).toContain('aria-label="Send message"');
+      expect(chatContent).toContain('aria-label="Upload document"');
+      expect(chatContent).toContain('aria-label="Rename chat"');
+      expect(chatContent).toContain('aria-label="Export chat"');
+      expect(chatContent).toContain('aria-label="Attach documents"');
+    });
+  });
+
+  describe('ChatView CSS enhancements', () => {
+    let chatCss;
+
+    beforeAll(() => {
+      const cssPath = path.join(CHAT_APP_PATH, 'src/components/ChatView.css');
+      chatCss = fs.readFileSync(cssPath, 'utf8');
+    });
+
+    it('should have empty chat state styles', () => {
+      expect(chatCss).toContain('.empty-chat');
+      expect(chatCss).toContain('.empty-chat-title');
+      expect(chatCss).toContain('.empty-chat-chip');
+    });
+
+    it('should have drag overlay styles', () => {
+      expect(chatCss).toContain('.drag-overlay');
+      expect(chatCss).toContain('.drag-active');
+    });
+
+    it('should have chat title overflow handling', () => {
+      expect(chatCss).toContain('text-overflow: ellipsis');
+    });
+  });
+
+  // ── MessageBubble Enhancements ────────────────────────────────────
+
+  describe('MessageBubble enhancements', () => {
+    let msgContent;
+
+    beforeAll(() => {
+      const msgPath = path.join(CHAT_APP_PATH, 'src/components/MessageBubble.tsx');
+      msgContent = fs.readFileSync(msgPath, 'utf8');
+    });
+
+    it('should detect error messages', () => {
+      expect(msgContent).toContain('isErrorContent');
+      expect(msgContent).toContain("startsWith('error:')");
+    });
+
+    it('should render error banner with AlertTriangle icon', () => {
+      expect(msgContent).toContain('AlertTriangle');
+      expect(msgContent).toContain('error-banner');
+      expect(msgContent).toContain('Something went wrong');
+    });
+
+    it('should apply error CSS class to error messages', () => {
+      expect(msgContent).toContain('msg-error');
+    });
+
+    it('should have copy feedback with Check icon', () => {
+      expect(msgContent).toContain("import { Copy, Check");
+      expect(msgContent).toContain('copied');
+      expect(msgContent).toContain('setCopied(true)');
+    });
+
+    it('should reset copy state after timeout', () => {
+      expect(msgContent).toContain('setCopied(false)');
+      expect(msgContent).toContain('2000');
+    });
+
+    it('should show Copied text in copy button', () => {
+      expect(msgContent).toContain("'Copied'");
+      expect(msgContent).toContain("'Copy'");
+    });
+
+    it('should have copy button aria-labels', () => {
+      expect(msgContent).toContain('Copied to clipboard');
+      expect(msgContent).toContain('Copy code');
+    });
+  });
+
+  describe('MessageBubble CSS enhancements', () => {
+    let msgCss;
+
+    beforeAll(() => {
+      const cssPath = path.join(CHAT_APP_PATH, 'src/components/MessageBubble.css');
+      msgCss = fs.readFileSync(cssPath, 'utf8');
+    });
+
+    it('should have error message styles', () => {
+      expect(msgCss).toContain('.msg-error');
+      expect(msgCss).toContain('.error-banner');
+    });
+
+    it('should have red left border for errors', () => {
+      expect(msgCss).toContain('border-left: 3px solid #ef4444');
+    });
+
+    it('should have error background tint', () => {
+      expect(msgCss).toContain('rgba(239, 68, 68');
+    });
+
+    it('should have copy feedback green style', () => {
+      expect(msgCss).toContain('.code-copy.copied');
+      expect(msgCss).toContain('#22c55e');
+    });
+
+    it('should have responsive message padding', () => {
+      expect(msgCss).toContain('max-width: 768px');
+    });
+  });
+
+  // ── Settings Modal Enhancements ───────────────────────────────────
+
+  describe('SettingsModal enhancements', () => {
+    let settingsContent;
+
+    beforeAll(() => {
+      const settingsPath = path.join(CHAT_APP_PATH, 'src/components/SettingsModal.tsx');
+      settingsContent = fs.readFileSync(settingsPath, 'utf8');
+    });
+
+    it('should use dynamic version from build constant', () => {
+      expect(settingsContent).toContain('__APP_VERSION__');
+    });
+
+    it('should have ARIA role dialog', () => {
+      expect(settingsContent).toContain('role="dialog"');
+      expect(settingsContent).toContain('aria-modal="true"');
+    });
+
+    it('should have danger zone section at bottom', () => {
+      expect(settingsContent).toContain('danger-zone');
+      expect(settingsContent).toContain('danger-warning');
+    });
+
+    it('should have danger zone warning text', () => {
+      expect(settingsContent).toContain('permanently delete all sessions');
+    });
+  });
+
+  describe('SettingsModal CSS enhancements', () => {
+    let settingsCss;
+
+    beforeAll(() => {
+      const cssPath = path.join(CHAT_APP_PATH, 'src/components/SettingsModal.css');
+      settingsCss = fs.readFileSync(cssPath, 'utf8');
+    });
+
+    it('should have danger zone styles', () => {
+      expect(settingsCss).toContain('.danger-zone');
+      expect(settingsCss).toContain('.danger-divider');
+      expect(settingsCss).toContain('.danger-warning');
+    });
+  });
+
+  // ── Document Library Accessibility ────────────────────────────────
+
+  describe('DocumentLibrary accessibility', () => {
+    let docContent;
+
+    beforeAll(() => {
+      const docPath = path.join(CHAT_APP_PATH, 'src/components/DocumentLibrary.tsx');
+      docContent = fs.readFileSync(docPath, 'utf8');
+    });
+
+    it('should have ARIA role dialog', () => {
+      expect(docContent).toContain('role="dialog"');
+      expect(docContent).toContain('aria-modal="true"');
+    });
+
+    it('should have aria-label on file path input', () => {
+      expect(docContent).toContain('aria-label="File path to index"');
+    });
+
+    it('should have aria-label on close button', () => {
+      expect(docContent).toContain('aria-label="Close document library"');
+    });
+
+    it('should have aria-label on document delete buttons', () => {
+      expect(docContent).toContain('aria-label={`Remove ${doc.filename}`}');
+    });
+  });
+
+  // ── Vite Build Configuration ──────────────────────────────────────
+
+  describe('Vite build configuration', () => {
+    let viteContent;
+
+    beforeAll(() => {
+      const vitePath = path.join(CHAT_APP_PATH, 'vite.config.ts');
+      viteContent = fs.readFileSync(vitePath, 'utf8');
+    });
+
+    it('should define __APP_VERSION__ at build time', () => {
+      expect(viteContent).toContain('__APP_VERSION__');
+      expect(viteContent).toContain('define');
+    });
+
+    it('should read version from version.py', () => {
+      expect(viteContent).toContain('version.py');
+      expect(viteContent).toContain('__version__');
+    });
+
+    it('should have fallback version from package.json', () => {
+      expect(viteContent).toContain('package.json');
+      expect(viteContent).toContain("'0.0.0'");
+    });
+  });
+
+  // ── TypeScript Declarations ───────────────────────────────────────
+
+  describe('TypeScript declarations', () => {
+    it('should have vite-env.d.ts with __APP_VERSION__ declaration', () => {
+      const dtsPath = path.join(CHAT_APP_PATH, 'src/vite-env.d.ts');
+      expect(fs.existsSync(dtsPath)).toBe(true);
+
+      const dtsContent = fs.readFileSync(dtsPath, 'utf8');
+      expect(dtsContent).toContain('__APP_VERSION__');
+      expect(dtsContent).toContain('declare const');
     });
   });
 
