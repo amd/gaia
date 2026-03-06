@@ -13,6 +13,10 @@ concurrency:
   group: npm-publish-chat
   cancel-in-progress: true
 
+# Restrict default permissions for all jobs
+permissions:
+  contents: read
+
 jobs:
   # Job 1: Build and test (runs automatically)
   build-and-test:

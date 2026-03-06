@@ -11,7 +11,7 @@
 //   gaia-chat --help         Show help
 
 import { spawn, exec, execSync } from "child_process";
-import { dirname, join, extname } from "path";
+import { dirname, join, extname, resolve } from "path";
 import { fileURLToPath } from "url";
 import { existsSync, readFileSync } from "fs";
 import { readFile } from "fs/promises";
@@ -213,7 +213,15 @@ async function serveFrontend(port) {
   const server = createServer(async (req, res) => {
     // Strip query strings
     const urlPath = req.url.split("?")[0];
-    let filePath = join(distDir, urlPath === "/" ? "index.html" : urlPath);
+    // Resolve the path and validate it stays within distDir to prevent path traversal
+    let filePath = resolve(distDir, urlPath === "/" ? "index.html" : "." + urlPath);
+    const resolvedDistDir = resolve(distDir);
+
+    if (!filePath.startsWith(resolvedDistDir)) {
+      res.writeHead(403);
+      res.end("Forbidden");
+      return;
+    }
 
     // SPA fallback: serve index.html for non-file routes
     if (!existsSync(filePath) || !extname(filePath)) {
