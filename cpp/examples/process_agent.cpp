@@ -789,7 +789,6 @@ Users reference items by group letter + item number (e.g., "Explain A3", "Stop B
 - **Explain**: If no item specified, explain ALL items from A, B, and C sections. If specified (e.g. A3), explain just that one. Use explain_item for full details.
 - **Stop**: For A-items use kill_process; for B-items use PowerShell Stop-Service. Explain impact and confirm first.
 - **Restart**: For A-items use restart_process (kills and relaunches). For B-items use restart_service. Confirm first.
-- **Manage resource hogs**: List hogs from analysis with a submenu of actions (explain, stop, restart). Wait for user choice.
 - **Quarantine**: Before calling quarantine_item, you MUST show the user a confirmation summary and wait for explicit YES:
   1. Call explain_item to get full details if not already available.
   2. Present in Key: Value format: Process, Path, Memory, Publisher, Reason (why suspicious).
@@ -1791,19 +1790,6 @@ static const ActionEntry kActions[] = {
         "For a service, use restart_service. Explain what will happen and confirm before proceeding."
     },
     {
-        "Manage resource hogs",
-        "Review and manage top resource consumers",
-        "The user wants to manage resource hogs. Do the following:\n"
-        "1. List the top resource consumers from the 'A. Processes' section, "
-        "showing their reference (A1, A2...), name, memory, and CPU usage.\n"
-        "2. Present these actions the user can take:\n"
-        "   - Explain: Get details on a resource hog (e.g. 'Explain A2')\n"
-        "   - Stop: Kill a resource hog (e.g. 'Stop A1')\n"
-        "   - Restart: Restart a resource hog (e.g. 'Restart A3')\n"
-        "3. Ask the user what they would like to do.\n"
-        "Do NOT batch-kill anything automatically. Wait for the user to choose."
-    },
-    {
         "Quarantine",
         "Move a suspicious file to C:\\ProgramData\\GAIA\\quarantine  (e.g. 'Quarantine C1')",
         "The user wants to quarantine suspicious items. For each item in C. Suspicious Items:\n"
@@ -1863,7 +1849,7 @@ static void printActionMenu() {
               << "  ========================================================================================"
               << color::RESET << std::endl;
     std::cout << color::GRAY
-              << "  Shortcuts: '1 A3' = Explain A3,  '2 B1' = Stop B1,  '5 C1' = Quarantine C1"
+              << "  Shortcuts: '1 A3' = Explain A3,  '2 B1' = Stop B1,  '4 C1' = Quarantine C1"
               << color::RESET << std::endl;
     std::cout << color::GRAY
               << "  Or type any question directly."
