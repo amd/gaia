@@ -5,13 +5,13 @@
 
 /**
  * One-command release for GAIA Chat npm package.
- * Reads version.txt, syncs package.json, commits, tags, and pushes.
+ * Reads version from src/gaia/version.py, syncs package.json, commits, tags, and pushes.
  * The CI pipeline handles the rest (build, test, publish to npm).
  *
  * Usage:
  *   node scripts/release-chat.mjs
  *
- * Just edit version.txt first, then run this.
+ * The version comes from src/gaia/version.py (single source of truth for all of GAIA).
  */
 
 import { readFileSync, writeFileSync } from "fs";
@@ -22,20 +22,19 @@ import { execSync } from "child_process";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(__dirname, "..");
 
-const WEBUI_DIR = resolve(
+const VERSION_PY = resolve(rootDir, "src", "gaia", "version.py");
+const PACKAGE_PATH = resolve(
   rootDir,
   "src",
   "gaia",
   "apps",
   "chat",
-  "webui"
+  "webui",
+  "package.json"
 );
-const PACKAGE_PATH = resolve(WEBUI_DIR, "package.json");
-const VERSION_FILE = resolve(WEBUI_DIR, "version.txt");
 
 // Relative path for git commands
 const PACKAGE_REL = "src/gaia/apps/chat/webui/package.json";
-const VERSION_REL = "src/gaia/apps/chat/webui/version.txt";
 
 function run(cmd, opts = {}) {
   console.log(`  $ ${cmd}`);
@@ -46,18 +45,28 @@ function runCapture(cmd) {
   return execSync(cmd, { cwd: rootDir, encoding: "utf8" }).trim();
 }
 
-// --- Read version.txt ---
-const version = readFileSync(VERSION_FILE, "utf8").trim();
+// --- Read version from version.py ---
+function readVersionPy() {
+  const content = readFileSync(VERSION_PY, "utf8");
+  const match = content.match(/__version__\s*=\s*"([^"]+)"/);
+  if (!match) {
+    console.error(`\nERROR: Could not parse __version__ from version.py`);
+    process.exit(1);
+  }
+  return match[1];
+}
 
-if (!/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(version)) {
-  console.error(`\nERROR: Invalid version in version.txt: "${version}"`);
-  console.error("  Expected format: x.y.z or x.y.z-beta.1");
+const version = readVersionPy();
+
+if (!/^\d+\.\d+\.\d+/.test(version)) {
+  console.error(`\nERROR: Invalid version in version.py: "${version}"`);
+  console.error("  Expected format: x.y.z or x.y.z.w");
   process.exit(1);
 }
 
 const tag = `chat-v${version}`;
 
-console.log(`\nReleasing ${tag}\n`);
+console.log(`\nReleasing ${tag} (from version.py)\n`);
 
 // --- Check working tree is clean (except version changes) ---
 const dirtyFiles = runCapture("git status --porcelain")
@@ -81,7 +90,7 @@ if (dirtyFiles.length > 0) {
 try {
   runCapture(`git rev-parse refs/tags/${tag}`);
   console.error(
-    `ERROR: Tag ${tag} already exists. Bump version.txt to a new version.`
+    `ERROR: Tag ${tag} already exists. Bump version in version.py first.`
   );
   process.exit(1);
 } catch {
@@ -99,7 +108,7 @@ console.log(`  package.json  ${old} -> ${version}`);
 
 // --- Git: stage, commit, tag, push ---
 console.log("\nCommitting...\n");
-run(`git add ${VERSION_REL} ${PACKAGE_REL}`);
+run(`git add ${PACKAGE_REL}`);
 
 // Check if there are staged changes to commit
 const staged = runCapture("git diff --cached --name-only");

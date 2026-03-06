@@ -29,7 +29,7 @@ export function SettingsModal() {
         setShowSettings(false);
     };
 
-    const version = status?.version || '0.1.0';
+    const version = __APP_VERSION__;
 
     return (
         <div className="modal-overlay" onClick={() => setShowSettings(false)} role="dialog" aria-modal="true" aria-label="Settings">

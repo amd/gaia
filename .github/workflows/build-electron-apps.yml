@@ -124,7 +124,7 @@ jobs:
         run: |
           $setupFile = Get-ChildItem -Path "${{ matrix.app.path }}\out\make\squirrel.windows\x64" -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($setupFile) {
-            $fileName = "${{ matrix.app.name }}-${{ matrix.app.version }}-setup.exe"
+            $fileName = "${{ matrix.app.name }}-setup.exe"
             Copy-Item $setupFile.FullName -Destination $fileName
             echo "artifact_path=$fileName" >> $env:GITHUB_OUTPUT
             echo "found=true" >> $env:GITHUB_OUTPUT
@@ -141,7 +141,7 @@ jobs:
         run: |
           deb_file=$(find "${{ matrix.app.path }}/out/make" -name "*.deb" -type f | head -1)
           if [ -n "$deb_file" ]; then
-            filename="${{ matrix.app.name }}-${{ matrix.app.version }}.deb"
+            filename="${{ matrix.app.name }}.deb"
             cp "$deb_file" "$filename"
             echo "artifact_path=$filename" >> $GITHUB_OUTPUT
             echo "found=true" >> $GITHUB_OUTPUT

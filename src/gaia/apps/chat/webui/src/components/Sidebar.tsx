@@ -149,6 +149,7 @@ export function Sidebar({ onNewChat }: SidebarProps) {
                 <div className="privacy-badge">
                     <span className="privacy-dot" aria-hidden="true" />
                     <span>100% Local</span>
+                    <span className="version-badge">v{__APP_VERSION__}</span>
                 </div>
                 <div className="sidebar-actions">
                     <button className="btn-icon" onClick={() => setShowDocLibrary(true)} title="Documents" aria-label="Document Library">

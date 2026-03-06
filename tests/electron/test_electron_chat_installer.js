@@ -524,10 +524,21 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
   describe('Electron packaging configuration', () => {
     let pkg;
+    let forgeConfig;
 
     beforeAll(() => {
       const packagePath = path.join(CHAT_APP_PATH, 'package.json');
       pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+
+      // Forge config can be inline in package.json or in a separate file
+      if (typeof pkg.config?.forge === 'string') {
+        // External forge config file (e.g. "./forge.config.cjs")
+        const forgeConfigPath = path.join(CHAT_APP_PATH, pkg.config.forge);
+        expect(fs.existsSync(forgeConfigPath)).toBe(true);
+        forgeConfig = require(forgeConfigPath);
+      } else {
+        forgeConfig = pkg.config?.forge || {};
+      }
     });
 
     it('should have main field pointing to Electron entry', () => {
@@ -544,7 +555,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     });
 
     it('should have squirrel maker for Windows installer', () => {
-      const makers = pkg.config.forge.makers;
+      const makers = forgeConfig.makers;
       const squirrel = makers.find(m => m.name.includes('squirrel'));
       expect(squirrel).toBeDefined();
     });
@@ -560,11 +571,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     });
 
     it('should have packager config with app name', () => {
-      expect(pkg.config.forge.packagerConfig.name).toBeDefined();
+      expect(forgeConfig.packagerConfig.name).toBeDefined();
     });
 
     it('should include dist in extraResource for packaged app', () => {
-      const extraResource = pkg.config.forge.packagerConfig.extraResource;
+      const extraResource = forgeConfig.packagerConfig.extraResource;
       expect(extraResource).toBeDefined();
       expect(extraResource).toContain('./dist');
     });
@@ -630,18 +641,14 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       expect(content.startsWith('#!/usr/bin/env node')).toBe(true);
     });
 
-    it('should have version.txt for release management', () => {
-      const versionPath = path.join(CHAT_APP_PATH, 'version.txt');
-      expect(fs.existsSync(versionPath)).toBe(true);
+    it('should use version from version.py (single source of truth)', () => {
+      const versionPyPath = path.join(CHAT_APP_PATH, '..', '..', '..', 'version.py');
+      expect(fs.existsSync(versionPyPath)).toBe(true);
 
-      const version = fs.readFileSync(versionPath, 'utf8').trim();
-      expect(version).toMatch(/^\d+\.\d+\.\d+/);
-    });
-
-    it('should have version.txt matching package.json version', () => {
-      const versionPath = path.join(CHAT_APP_PATH, 'version.txt');
-      const version = fs.readFileSync(versionPath, 'utf8').trim();
-      expect(version).toBe(pkg.version);
+      const content = fs.readFileSync(versionPyPath, 'utf8');
+      const match = content.match(/__version__\s*=\s*"([^"]+)"/);
+      expect(match).not.toBeNull();
+      expect(pkg.version).toBe(match[1]);
     });
 
     it('should have .npmignore for clean publishing', () => {

@@ -152,6 +152,13 @@
     animation: pulse 2s infinite;
 }
 
+.version-badge {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--text-muted);
+    opacity: 0.7;
+}
+
 .sidebar-actions { display: flex; gap: 2px; }
 
 .empty-hint {

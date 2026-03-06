@@ -66,21 +66,20 @@ jobs:
           node --check bin/gaia-chat.mjs
           echo "CLI entry point verified"
 
-      - name: Verify tag matches version.txt
+      - name: Verify tag matches version.py
         run: |
           TAG_VERSION=${GITHUB_REF#refs/tags/chat-v}
-          FILE_VERSION=$(cat src/gaia/apps/chat/webui/version.txt | tr -d '[:space:]')
-          echo "Git tag:     chat-v$TAG_VERSION"
-          echo "version.txt: $FILE_VERSION"
-          if [ "$FILE_VERSION" != "$TAG_VERSION" ]; then
+          PY_VERSION=$(python -c "import re; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('src/gaia/version.py').read()).group(1))")
+          echo "Git tag:    chat-v$TAG_VERSION"
+          echo "version.py: $PY_VERSION"
+          if [ "$PY_VERSION" != "$TAG_VERSION" ]; then
             echo ""
-            echo "ERROR: version.txt ($FILE_VERSION) does not match tag (chat-v$TAG_VERSION)"
-            echo "Update version.txt to $TAG_VERSION and run: node scripts/bump-chat-version.mjs"
+            echo "ERROR: version.py ($PY_VERSION) does not match tag (chat-v$TAG_VERSION)"
             exit 1
           fi
-          echo "version.txt matches tag"
+          echo "version.py matches tag"
 
-      - name: Verify package.json version matches version.txt
+      - name: Verify package.json version matches version.py
         run: node scripts/bump-chat-version.mjs --check
 
       - name: Install Python dependencies and run backend tests
