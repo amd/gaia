@@ -354,7 +354,16 @@ class ChatDatabase:
                    (id, filename, filepath, file_hash, file_size, chunk_count,
                     indexed_at, last_accessed_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (doc_id, filename, filepath, file_hash, file_size, chunk_count, now, now),
+                (
+                    doc_id,
+                    filename,
+                    filepath,
+                    file_hash,
+                    file_size,
+                    chunk_count,
+                    now,
+                    now,
+                ),
             )
 
         return self.get_document(doc_id)
@@ -393,9 +402,7 @@ class ChatDatabase:
     def delete_document(self, doc_id: str) -> bool:
         """Delete a document from the library."""
         with self._transaction():
-            cursor = self._conn.execute(
-                "DELETE FROM documents WHERE id = ?", (doc_id,)
-            )
+            cursor = self._conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
         return cursor.rowcount > 0
 
     # ── Session-Document Attachments ────────────────────────────────────

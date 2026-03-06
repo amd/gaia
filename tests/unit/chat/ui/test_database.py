@@ -131,8 +131,11 @@ class TestMessages:
     def test_add_message_with_tokens(self, db):
         session = db.create_session()
         db.add_message(
-            session["id"], "assistant", "Response",
-            tokens_prompt=100, tokens_completion=50,
+            session["id"],
+            "assistant",
+            "Response",
+            tokens_prompt=100,
+            tokens_completion=50,
         )
         messages = db.get_messages(session["id"])
         assert messages[0]["tokens_prompt"] == 100
