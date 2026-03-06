@@ -792,13 +792,13 @@ The npm package includes:
 
 ### Release Management
 
-The package version is managed via `version.txt` in the webui directory:
+The package version is sourced from `src/gaia/version.py` (single source of truth for all of GAIA):
 
 ```bash
-# Check version consistency
+# Check version consistency (package.json matches version.py)
 node scripts/bump-chat-version.mjs --check
 
-# Sync package.json to version.txt
+# Sync package.json to version.py
 node scripts/bump-chat-version.mjs
 
 # Full release (sync, commit, tag, push)
