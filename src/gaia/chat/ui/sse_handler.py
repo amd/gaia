@@ -48,42 +48,52 @@ class SSEOutputHandler(OutputHandler):
         self._start_time = time.time()
         self._step_count = 0
         self._tool_count = 0
-        self._emit({
-            "type": "status",
-            "status": "started",
-            "message": "Processing your request...",
-            "model": model_id,
-        })
+        self._emit(
+            {
+                "type": "status",
+                "status": "started",
+                "message": "Processing your request...",
+                "model": model_id,
+            }
+        )
 
     def print_step_header(self, step_num: int, step_limit: int):
         self._step_count = step_num
-        self._emit({
-            "type": "step",
-            "step": step_num,
-            "total": step_limit,
-            "status": "started",
-        })
+        self._emit(
+            {
+                "type": "step",
+                "step": step_num,
+                "total": step_limit,
+                "status": "started",
+            }
+        )
 
     def print_state_info(self, state_message: str):
-        self._emit({
-            "type": "status",
-            "status": "working",
-            "message": state_message,
-        })
+        self._emit(
+            {
+                "type": "status",
+                "status": "working",
+                "message": state_message,
+            }
+        )
 
     def print_thought(self, thought: str):
-        self._emit({
-            "type": "thinking",
-            "content": thought,
-        })
+        self._emit(
+            {
+                "type": "thinking",
+                "content": thought,
+            }
+        )
 
     def print_goal(self, goal: str):
         # Fold goal into status rather than separate event
-        self._emit({
-            "type": "status",
-            "status": "working",
-            "message": goal,
-        })
+        self._emit(
+            {
+                "type": "status",
+                "status": "working",
+                "message": goal,
+            }
+        )
 
     def print_plan(self, plan: List[Any], current_step: int = None):
         # Convert plan items to strings for JSON serialization
@@ -97,123 +107,155 @@ class SSEOutputHandler(OutputHandler):
             else:
                 plan_strs.append(str(step))
 
-        self._emit({
-            "type": "plan",
-            "steps": plan_strs,
-            "current_step": current_step,
-        })
+        self._emit(
+            {
+                "type": "plan",
+                "steps": plan_strs,
+                "current_step": current_step,
+            }
+        )
 
     # === Tool Execution Methods ===
 
     def print_tool_usage(self, tool_name: str):
         self._tool_count += 1
-        self._emit({
-            "type": "tool_start",
-            "tool": tool_name,
-        })
+        self._emit(
+            {
+                "type": "tool_start",
+                "tool": tool_name,
+            }
+        )
 
     def print_tool_complete(self):
-        self._emit({
-            "type": "tool_end",
-            "success": True,
-        })
+        self._emit(
+            {
+                "type": "tool_end",
+                "success": True,
+            }
+        )
 
     def pretty_print_json(self, data: Dict[str, Any], title: str = None):
         # Summarize tool results for the frontend (don't send raw data)
         summary = _summarize_tool_result(data)
-        self._emit({
-            "type": "tool_result",
-            "title": title,
-            "summary": summary,
-            "success": data.get("status") != "error" if isinstance(data, dict) else True,
-        })
+        self._emit(
+            {
+                "type": "tool_result",
+                "title": title,
+                "summary": summary,
+                "success": (
+                    data.get("status") != "error" if isinstance(data, dict) else True
+                ),
+            }
+        )
 
     # === Status Messages ===
 
     def print_error(self, error_message: str):
-        self._emit({
-            "type": "agent_error",
-            "content": str(error_message) if error_message else "Unknown error",
-        })
+        self._emit(
+            {
+                "type": "agent_error",
+                "content": str(error_message) if error_message else "Unknown error",
+            }
+        )
 
     def print_warning(self, warning_message: str):
-        self._emit({
-            "type": "status",
-            "status": "warning",
-            "message": warning_message,
-        })
+        self._emit(
+            {
+                "type": "status",
+                "status": "warning",
+                "message": warning_message,
+            }
+        )
 
     def print_info(self, message: str):
-        self._emit({
-            "type": "status",
-            "status": "info",
-            "message": message,
-        })
+        self._emit(
+            {
+                "type": "status",
+                "status": "info",
+                "message": message,
+            }
+        )
 
     # === Progress Indicators ===
 
     def start_progress(self, message: str):
-        self._emit({
-            "type": "status",
-            "status": "working",
-            "message": message,
-        })
+        self._emit(
+            {
+                "type": "status",
+                "status": "working",
+                "message": message,
+            }
+        )
 
     def stop_progress(self):
         pass  # No-op for SSE - frontend manages its own spinners
 
     # === Completion Methods ===
 
-    def print_final_answer(self, answer: str, streaming: bool = True):
-        self._emit({
-            "type": "answer",
-            "content": answer,
-            "elapsed": self._elapsed(),
-            "steps": self._step_count,
-            "tools_used": self._tool_count,
-        })
+    def print_final_answer(
+        self, answer: str, streaming: bool = True
+    ):  # pylint: disable=unused-argument
+        self._emit(
+            {
+                "type": "answer",
+                "content": answer,
+                "elapsed": self._elapsed(),
+                "steps": self._step_count,
+                "tools_used": self._tool_count,
+            }
+        )
 
     def print_repeated_tool_warning(self):
-        self._emit({
-            "type": "status",
-            "status": "warning",
-            "message": "Detected repetitive tool call pattern. Execution paused.",
-        })
+        self._emit(
+            {
+                "type": "status",
+                "status": "warning",
+                "message": "Detected repetitive tool call pattern. Execution paused.",
+            }
+        )
 
     def print_completion(self, steps_taken: int, steps_limit: int):
-        self._emit({
-            "type": "status",
-            "status": "complete",
-            "message": f"Completed in {steps_taken} steps",
-            "steps": steps_taken,
-            "elapsed": self._elapsed(),
-        })
+        self._emit(
+            {
+                "type": "status",
+                "status": "complete",
+                "message": f"Completed in {steps_taken} steps",
+                "steps": steps_taken,
+                "elapsed": self._elapsed(),
+            }
+        )
 
     def print_step_paused(self, description: str):
         pass  # Not relevant for web UI
 
     def print_command_executing(self, command: str):
-        self._emit({
-            "type": "tool_start",
-            "tool": "run_shell_command",
-            "detail": command,
-        })
+        self._emit(
+            {
+                "type": "tool_start",
+                "tool": "run_shell_command",
+                "detail": command,
+            }
+        )
 
     def print_agent_selected(self, agent_name: str, language: str, project_type: str):
-        self._emit({
-            "type": "status",
-            "status": "info",
-            "message": f"Agent: {agent_name}",
-        })
+        self._emit(
+            {
+                "type": "status",
+                "status": "info",
+                "message": f"Agent: {agent_name}",
+            }
+        )
 
     # === Optional Methods (with SSE-friendly implementations) ===
 
     def print_streaming_text(self, text_chunk: str, end_of_stream: bool = False):
         if text_chunk:
-            self._emit({
-                "type": "chunk",
-                "content": text_chunk,
-            })
+            self._emit(
+                {
+                    "type": "chunk",
+                    "content": text_chunk,
+                }
+            )
 
     def signal_done(self):
         """Signal that the agent has finished processing."""

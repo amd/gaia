@@ -915,7 +915,8 @@ describe('Chat App Integration', () => {
 
     it('should have delete confirmation flow', () => {
       expect(sidebarContent).toContain('pendingDeleteId');
-      expect(sidebarContent).toContain('Click again to confirm');
+      // Confirmation UI shows "Delete?" label and "Click to confirm delete" title
+      expect(sidebarContent).toMatch(/Click.*confirm.*delete|Delete\?/);
     });
 
     it('should auto-cancel delete confirmation after timeout', () => {

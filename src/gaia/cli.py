@@ -2290,7 +2290,7 @@ Examples:
             log.info(f"Starting Chat Web UI on http://localhost:{port}")
             print(f"🚀 Starting GAIA Chat UI on http://localhost:{port}")
             print(f"   Open your browser to http://localhost:{port}")
-            print(f"   Press Ctrl+C to stop\n")
+            print("   Press Ctrl+C to stop\n")
 
             import uvicorn
 

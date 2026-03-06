@@ -6,8 +6,6 @@
 Tests model validation, defaults, and serialization.
 """
 
-import pytest
-
 from gaia.chat.ui.models import (
     AttachDocumentRequest,
     ChatRequest,
@@ -146,8 +144,11 @@ class TestSessionListResponse:
     def test_with_sessions(self):
         sessions = [
             SessionResponse(
-                id=f"s{i}", title=f"Session {i}",
-                created_at="now", updated_at="now", model="m"
+                id=f"s{i}",
+                title=f"Session {i}",
+                created_at="now",
+                updated_at="now",
+                model="m",
             )
             for i in range(3)
         ]
@@ -312,8 +313,10 @@ class TestDocumentListResponse:
 
     def test_empty(self):
         resp = DocumentListResponse(
-            documents=[], total=0,
-            total_size_bytes=0, total_chunks=0,
+            documents=[],
+            total=0,
+            total_size_bytes=0,
+            total_chunks=0,
         )
         assert resp.documents == []
         assert resp.total_size_bytes == 0
@@ -321,15 +324,20 @@ class TestDocumentListResponse:
     def test_with_documents(self):
         docs = [
             DocumentResponse(
-                id=f"doc{i}", filename=f"file{i}.pdf",
-                filepath=f"/path/{i}", file_size=1000,
-                chunk_count=5, indexed_at="now",
+                id=f"doc{i}",
+                filename=f"file{i}.pdf",
+                filepath=f"/path/{i}",
+                file_size=1000,
+                chunk_count=5,
+                indexed_at="now",
             )
             for i in range(3)
         ]
         resp = DocumentListResponse(
-            documents=docs, total=3,
-            total_size_bytes=3000, total_chunks=15,
+            documents=docs,
+            total=3,
+            total_size_bytes=3000,
+            total_chunks=15,
         )
         assert resp.total == 3
         assert resp.total_size_bytes == 3000

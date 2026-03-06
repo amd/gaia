@@ -19,7 +19,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -100,9 +100,7 @@ def create_app(db_path: str = None) -> FastAPI:
                 if health_resp.status_code == 200:
                     status.lemonade_running = True
                     health_data = health_resp.json()
-                    status.model_loaded = health_data.get(
-                        "model_loaded"
-                    ) or None
+                    status.model_loaded = health_data.get("model_loaded") or None
 
                     # Check loaded models list for embedding model
                     for m in health_data.get("all_models_loaded", []):
@@ -127,9 +125,7 @@ def create_app(db_path: str = None) -> FastAPI:
                         data = resp.json()
                         models = data.get("data", [])
                         if models:
-                            status.model_loaded = models[0].get(
-                                "id", "unknown"
-                            )
+                            status.model_loaded = models[0].get("id", "unknown")
                         for m in models:
                             if "embed" in m.get("id", "").lower():
                                 status.embedding_model_loaded = True
@@ -255,9 +251,7 @@ def create_app(db_path: str = None) -> FastAPI:
         elif format == "json":
             return {"session": session, "messages": messages, "format": "json"}
         else:
-            raise HTTPException(
-                status_code=400, detail=f"Unsupported format: {format}"
-            )
+            raise HTTPException(status_code=400, detail=f"Unsupported format: {format}")
 
     # ── Chat Endpoint ───────────────────────────────────────────────────
 
@@ -285,9 +279,7 @@ def create_app(db_path: str = None) -> FastAPI:
         else:
             # Non-streaming response
             response_text = await _get_chat_response(db, session, request)
-            msg_id = db.add_message(
-                request.session_id, "assistant", response_text
-            )
+            msg_id = db.add_message(request.session_id, "assistant", response_text)
             return ChatResponse(
                 message_id=msg_id,
                 content=response_text,
@@ -370,7 +362,13 @@ def create_app(db_path: str = None) -> FastAPI:
 
     # ── Serve Frontend Static Files ──────────────────────────────────────
     # Look for built frontend assets in the webui dist directory
-    _webui_dist = Path(__file__).resolve().parent.parent.parent / "apps" / "chat" / "webui" / "dist"
+    _webui_dist = (
+        Path(__file__).resolve().parent.parent.parent
+        / "apps"
+        / "chat"
+        / "webui"
+        / "dist"
+    )
     if _webui_dist.is_dir():
         logger.info("Serving frontend from %s", _webui_dist)
 
@@ -393,8 +391,12 @@ def create_app(db_path: str = None) -> FastAPI:
                 return FileResponse(str(safe_path))
             # Default to index.html for SPA routing
             return FileResponse(str(_webui_dist / "index.html"))
+
     else:
-        logger.info("No frontend build found at %s. Run 'npm run build' in the webui directory.", _webui_dist)
+        logger.info(
+            "No frontend build found at %s. Run 'npm run build' in the webui directory.",
+            _webui_dist,
+        )
 
         @app.get("/")
         async def no_frontend():
@@ -461,14 +463,43 @@ def _doc_to_response(doc: dict) -> DocumentResponse:
 
 
 # Allowed document extensions for upload
-_ALLOWED_EXTENSIONS = frozenset({
-    ".pdf", ".txt", ".md", ".csv", ".json",
-    ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
-    ".html", ".htm", ".xml", ".yaml", ".yml",
-    ".py", ".js", ".ts", ".java", ".c", ".cpp", ".h",
-    ".rs", ".go", ".rb", ".sh", ".bat", ".ps1",
-    ".log", ".cfg", ".ini", ".toml",
-})
+_ALLOWED_EXTENSIONS = frozenset(
+    {
+        ".pdf",
+        ".txt",
+        ".md",
+        ".csv",
+        ".json",
+        ".doc",
+        ".docx",
+        ".ppt",
+        ".pptx",
+        ".xls",
+        ".xlsx",
+        ".html",
+        ".htm",
+        ".xml",
+        ".yaml",
+        ".yml",
+        ".py",
+        ".js",
+        ".ts",
+        ".java",
+        ".c",
+        ".cpp",
+        ".h",
+        ".rs",
+        ".go",
+        ".rb",
+        ".sh",
+        ".bat",
+        ".ps1",
+        ".log",
+        ".cfg",
+        ".ini",
+        ".toml",
+    }
+)
 
 
 def _sanitize_document_path(user_path: str) -> Path:
@@ -587,7 +618,7 @@ async def _index_document(filepath: Path) -> int:
 
         config = RAGConfig()
         rag = RAGSDK(config)
-        result = rag.index_file(str(filepath))
+        result = rag.index_file(str(filepath))  # pylint: disable=no-member
         return result.get("chunk_count", 0) if isinstance(result, dict) else 0
     except Exception as e:
         logger.warning("Failed to index document %s: %s", filepath, e)
@@ -677,9 +708,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         # Restore conversation history
         for user_msg, assistant_msg in history_pairs[-4:]:
             if hasattr(agent, "conversation_history"):
-                agent.conversation_history.append(
-                    {"role": "user", "content": user_msg}
-                )
+                agent.conversation_history.append({"role": "user", "content": user_msg})
                 agent.conversation_history.append(
                     {"role": "assistant", "content": assistant_msg}
                 )
@@ -743,9 +772,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
         # Save complete response to DB
         if full_response:
-            msg_id = db.add_message(
-                request.session_id, "assistant", full_response
-            )
+            msg_id = db.add_message(request.session_id, "assistant", full_response)
             done_data = json.dumps(
                 {"type": "done", "message_id": msg_id, "content": full_response}
             )

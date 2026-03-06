@@ -8,11 +8,10 @@ LLM and RAG calls are mocked - these tests validate HTTP layer behavior.
 """
 
 import hashlib
-import json
 import logging
 import os
 import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -99,8 +98,13 @@ class TestSystemStatus:
         resp = client.get("/api/system/status")
         data = resp.json()
         expected_fields = [
-            "lemonade_running", "model_loaded", "embedding_model_loaded",
-            "disk_space_gb", "memory_available_gb", "initialized", "version",
+            "lemonade_running",
+            "model_loaded",
+            "embedding_model_loaded",
+            "disk_space_gb",
+            "memory_available_gb",
+            "initialized",
+            "version",
         ]
         for field in expected_fields:
             assert field in data, f"Missing field: {field}"
@@ -132,11 +136,14 @@ class TestSessionEndpoints:
         assert data["document_ids"] == []
 
     def test_create_session_custom(self, client):
-        resp = client.post("/api/sessions", json={
-            "title": "Test Chat",
-            "model": "Qwen3-0.6B-GGUF",
-            "system_prompt": "You are a test assistant.",
-        })
+        resp = client.post(
+            "/api/sessions",
+            json={
+                "title": "Test Chat",
+                "model": "Qwen3-0.6B-GGUF",
+                "system_prompt": "You are a test assistant.",
+            },
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["title"] == "Test Chat"
@@ -145,9 +152,12 @@ class TestSessionEndpoints:
 
     def test_create_session_with_document_ids(self, client, db):
         doc = db.add_document("test.pdf", "/test.pdf", "hash1", 100, 5)
-        resp = client.post("/api/sessions", json={
-            "document_ids": [doc["id"]],
-        })
+        resp = client.post(
+            "/api/sessions",
+            json={
+                "document_ids": [doc["id"]],
+            },
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert doc["id"] in data["document_ids"]
@@ -164,8 +174,13 @@ class TestSessionEndpoints:
         create_resp = client.post("/api/sessions", json={"title": "Full"})
         data = create_resp.json()
         required_fields = [
-            "id", "title", "created_at", "updated_at", "model",
-            "message_count", "document_ids",
+            "id",
+            "title",
+            "created_at",
+            "updated_at",
+            "model",
+            "message_count",
+            "document_ids",
         ]
         for field in required_fields:
             assert field in data, f"Missing field: {field}"
@@ -178,8 +193,7 @@ class TestSessionEndpoints:
         create_resp = client.post("/api/sessions", json={"title": "Original"})
         session_id = create_resp.json()["id"]
 
-        resp = client.put(f"/api/sessions/{session_id}",
-                         json={"title": "Updated"})
+        resp = client.put(f"/api/sessions/{session_id}", json={"title": "Updated"})
         assert resp.status_code == 200
         assert resp.json()["title"] == "Updated"
 
@@ -187,14 +201,14 @@ class TestSessionEndpoints:
         create_resp = client.post("/api/sessions", json={})
         session_id = create_resp.json()["id"]
 
-        resp = client.put(f"/api/sessions/{session_id}",
-                         json={"system_prompt": "Be concise."})
+        resp = client.put(
+            f"/api/sessions/{session_id}", json={"system_prompt": "Be concise."}
+        )
         assert resp.status_code == 200
         assert resp.json()["system_prompt"] == "Be concise."
 
     def test_update_session_not_found(self, client):
-        resp = client.put("/api/sessions/nonexistent",
-                         json={"title": "Nope"})
+        resp = client.put("/api/sessions/nonexistent", json={"title": "Nope"})
         assert resp.status_code == 404
 
     def test_delete_session(self, client):
@@ -281,8 +295,14 @@ class TestMessageEndpoints:
         create_resp = client.post("/api/sessions", json={})
         session_id = create_resp.json()["id"]
 
-        sources = [{"document_id": "doc1", "filename": "test.pdf",
-                     "chunk": "some text", "score": 0.9}]
+        sources = [
+            {
+                "document_id": "doc1",
+                "filename": "test.pdf",
+                "chunk": "some text",
+                "score": 0.9,
+            }
+        ]
         db.add_message(session_id, "assistant", "Answer", rag_sources=sources)
 
         resp = client.get(f"/api/sessions/{session_id}/messages")
@@ -368,11 +388,14 @@ class TestChatSendEndpoint:
     """Tests for /api/chat/send endpoint."""
 
     def test_send_message_session_not_found(self, client):
-        resp = client.post("/api/chat/send", json={
-            "session_id": "nonexistent",
-            "message": "Hello",
-            "stream": False,
-        })
+        resp = client.post(
+            "/api/chat/send",
+            json={
+                "session_id": "nonexistent",
+                "message": "Hello",
+                "stream": False,
+            },
+        )
         assert resp.status_code == 404
 
     @patch("gaia.chat.ui.server._get_chat_response")
@@ -382,11 +405,14 @@ class TestChatSendEndpoint:
         create_resp = client.post("/api/sessions", json={})
         session_id = create_resp.json()["id"]
 
-        resp = client.post("/api/chat/send", json={
-            "session_id": session_id,
-            "message": "Hello",
-            "stream": False,
-        })
+        resp = client.post(
+            "/api/chat/send",
+            json={
+                "session_id": session_id,
+                "message": "Hello",
+                "stream": False,
+            },
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert "content" in data
@@ -400,11 +426,14 @@ class TestChatSendEndpoint:
         create_resp = client.post("/api/sessions", json={})
         session_id = create_resp.json()["id"]
 
-        client.post("/api/chat/send", json={
-            "session_id": session_id,
-            "message": "User says hi",
-            "stream": False,
-        })
+        client.post(
+            "/api/chat/send",
+            json={
+                "session_id": session_id,
+                "message": "User says hi",
+                "stream": False,
+            },
+        )
 
         messages = db.get_messages(session_id)
         roles = [m["role"] for m in messages]
@@ -418,15 +447,20 @@ class TestChatSendEndpoint:
         # Send with stream=True but we don't consume the stream
         # The user message should still be saved
         with patch("gaia.chat.ui.server._stream_chat_response") as mock_stream:
+
             async def fake_stream(*args, **kwargs):
                 yield 'data: {"type": "done", "content": "test"}\n\n'
+
             mock_stream.return_value = fake_stream()
 
-            resp = client.post("/api/chat/send", json={
-                "session_id": session_id,
-                "message": "Hello from test",
-                "stream": True,
-            })
+            resp = client.post(
+                "/api/chat/send",
+                json={
+                    "session_id": session_id,
+                    "message": "Hello from test",
+                    "stream": True,
+                },
+            )
 
         # User message should be in the database
         messages = db.get_messages(session_id)
@@ -439,16 +473,21 @@ class TestChatSendEndpoint:
         session_id = create_resp.json()["id"]
 
         with patch("gaia.chat.ui.server._stream_chat_response") as mock_stream:
+
             async def fake_stream(*args, **kwargs):
                 yield 'data: {"type": "chunk", "content": "Hi"}\n\n'
                 yield 'data: {"type": "done", "content": "Hi"}\n\n'
+
             mock_stream.return_value = fake_stream()
 
-            resp = client.post("/api/chat/send", json={
-                "session_id": session_id,
-                "message": "Test",
-                "stream": True,
-            })
+            resp = client.post(
+                "/api/chat/send",
+                json={
+                    "session_id": session_id,
+                    "message": "Test",
+                    "stream": True,
+                },
+            )
             assert resp.status_code == 200
             assert "text/event-stream" in resp.headers.get("content-type", "")
 
@@ -466,10 +505,12 @@ class TestDocumentEndpoints:
         assert data["total_chunks"] == 0
 
     def test_list_documents_with_data(self, client, db):
-        db.add_document("test.pdf", "/test.pdf", "hash1",
-                        file_size=5000, chunk_count=10)
-        db.add_document("test2.pdf", "/test2.pdf", "hash2",
-                        file_size=3000, chunk_count=7)
+        db.add_document(
+            "test.pdf", "/test.pdf", "hash1", file_size=5000, chunk_count=10
+        )
+        db.add_document(
+            "test2.pdf", "/test2.pdf", "hash2", file_size=3000, chunk_count=7
+        )
 
         resp = client.get("/api/documents")
         data = resp.json()
@@ -478,18 +519,25 @@ class TestDocumentEndpoints:
         assert data["total_chunks"] == 17
 
     def test_list_documents_response_fields(self, client, db):
-        db.add_document("test.pdf", "/test.pdf", "hash1",
-                        file_size=1000, chunk_count=5)
+        db.add_document("test.pdf", "/test.pdf", "hash1", file_size=1000, chunk_count=5)
         resp = client.get("/api/documents")
         doc = resp.json()["documents"][0]
-        for field in ["id", "filename", "filepath", "file_size",
-                      "chunk_count", "indexed_at", "sessions_using"]:
+        for field in [
+            "id",
+            "filename",
+            "filepath",
+            "file_size",
+            "chunk_count",
+            "indexed_at",
+            "sessions_using",
+        ]:
             assert field in doc, f"Missing field: {field}"
 
     @patch("gaia.chat.ui.server._index_document")
     def test_upload_by_path_file_not_found(self, mock_index, client):
-        resp = client.post("/api/documents/upload-path",
-                          json={"filepath": "/nonexistent/file.pdf"})
+        resp = client.post(
+            "/api/documents/upload-path", json={"filepath": "/nonexistent/file.pdf"}
+        )
         assert resp.status_code == 404
 
     @patch("gaia.chat.ui.server._index_document")
@@ -501,8 +549,9 @@ class TestDocumentEndpoints:
             tmp_path = f.name
 
         try:
-            resp = client.post("/api/documents/upload-path",
-                              json={"filepath": tmp_path})
+            resp = client.post(
+                "/api/documents/upload-path", json={"filepath": tmp_path}
+            )
             assert resp.status_code == 200
             data = resp.json()
             assert data["filename"] == os.path.basename(tmp_path)
@@ -514,8 +563,7 @@ class TestDocumentEndpoints:
     @patch("gaia.chat.ui.server._index_document")
     def test_upload_by_path_directory_returns_400(self, mock_index, client):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            resp = client.post("/api/documents/upload-path",
-                              json={"filepath": tmp_dir})
+            resp = client.post("/api/documents/upload-path", json={"filepath": tmp_dir})
             assert resp.status_code == 400
 
     def test_delete_document(self, client, db):
@@ -539,8 +587,9 @@ class TestSessionDocumentEndpoints:
 
         doc = db.add_document("attach.pdf", "/attach.pdf", "attach_hash")
 
-        resp = client.post(f"/api/sessions/{session_id}/documents",
-                          json={"document_id": doc["id"]})
+        resp = client.post(
+            f"/api/sessions/{session_id}/documents", json={"document_id": doc["id"]}
+        )
         assert resp.status_code == 200
         assert resp.json()["attached"] is True
 
@@ -549,8 +598,9 @@ class TestSessionDocumentEndpoints:
         session_id = create_resp.json()["id"]
 
         doc = db.add_document("visible.pdf", "/visible.pdf", "vis_hash")
-        client.post(f"/api/sessions/{session_id}/documents",
-                    json={"document_id": doc["id"]})
+        client.post(
+            f"/api/sessions/{session_id}/documents", json={"document_id": doc["id"]}
+        )
 
         # Get session and verify doc is attached
         resp = client.get(f"/api/sessions/{session_id}")
@@ -558,16 +608,18 @@ class TestSessionDocumentEndpoints:
         assert doc["id"] in data["document_ids"]
 
     def test_attach_document_session_not_found(self, client):
-        resp = client.post("/api/sessions/nonexistent/documents",
-                          json={"document_id": "doc123"})
+        resp = client.post(
+            "/api/sessions/nonexistent/documents", json={"document_id": "doc123"}
+        )
         assert resp.status_code == 404
 
     def test_attach_document_doc_not_found(self, client):
         create_resp = client.post("/api/sessions", json={})
         session_id = create_resp.json()["id"]
 
-        resp = client.post(f"/api/sessions/{session_id}/documents",
-                          json={"document_id": "nonexistent"})
+        resp = client.post(
+            f"/api/sessions/{session_id}/documents", json={"document_id": "nonexistent"}
+        )
         assert resp.status_code == 404
 
     def test_detach_document(self, client, db):
@@ -577,9 +629,7 @@ class TestSessionDocumentEndpoints:
         doc = db.add_document("detach.pdf", "/detach.pdf", "detach_hash")
         db.attach_document(session_id, doc["id"])
 
-        resp = client.delete(
-            f"/api/sessions/{session_id}/documents/{doc['id']}"
-        )
+        resp = client.delete(f"/api/sessions/{session_id}/documents/{doc['id']}")
         assert resp.status_code == 200
         assert resp.json()["detached"] is True
 
@@ -588,9 +638,7 @@ class TestSessionDocumentEndpoints:
         session_id = create_resp.json()["id"]
 
         # Detach something never attached — should still return 200
-        resp = client.delete(
-            f"/api/sessions/{session_id}/documents/nonexistent-doc"
-        )
+        resp = client.delete(f"/api/sessions/{session_id}/documents/nonexistent-doc")
         assert resp.status_code == 200
         assert resp.json()["detached"] is True
 
@@ -599,10 +647,13 @@ class TestCORSConfiguration:
     """Tests for CORS middleware configuration."""
 
     def test_cors_headers_present(self, client):
-        resp = client.options("/api/health", headers={
-            "Origin": "http://localhost:4200",
-            "Access-Control-Request-Method": "GET",
-        })
+        resp = client.options(
+            "/api/health",
+            headers={
+                "Origin": "http://localhost:4200",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
         # CORS should be configured for local development
         assert resp.status_code in (200, 405)
 
@@ -625,6 +676,7 @@ class TestServerMetadata:
 
     def test_default_port_is_4200(self):
         from gaia.chat.ui.server import DEFAULT_PORT
+
         assert DEFAULT_PORT == 4200
 
 
@@ -638,6 +690,7 @@ class TestHelperFunctions:
 
         try:
             from pathlib import Path
+
             result = _compute_file_hash(Path(tmp_path))
             expected = hashlib.sha256(b"hello world").hexdigest()
             assert result == expected
@@ -650,6 +703,7 @@ class TestHelperFunctions:
 
         try:
             from pathlib import Path
+
             result = _compute_file_hash(Path(tmp_path))
             expected = hashlib.sha256(b"").hexdigest()
             assert result == expected
@@ -662,25 +716,30 @@ class TestValidateFilePath:
 
     def test_valid_pdf_path(self):
         from pathlib import Path
+
         # Should not raise for a valid absolute path with allowed extension
         _validate_file_path(Path("/home/user/document.pdf").resolve())
 
     def test_valid_txt_path(self):
         from pathlib import Path
+
         _validate_file_path(Path("/home/user/notes.txt").resolve())
 
     def test_valid_md_path(self):
         from pathlib import Path
+
         _validate_file_path(Path("/home/user/readme.md").resolve())
 
     def test_rejects_null_bytes(self):
         from pathlib import Path
+
         with pytest.raises(Exception) as exc_info:
             _validate_file_path(Path("/home/user/file\x00.pdf"))
         assert exc_info.value.status_code == 400
 
     def test_rejects_unsupported_extension(self):
         from pathlib import Path
+
         with pytest.raises(Exception) as exc_info:
             _validate_file_path(Path("/home/user/malware.exe").resolve())
         assert exc_info.value.status_code == 400
@@ -688,12 +747,14 @@ class TestValidateFilePath:
 
     def test_rejects_no_extension(self):
         from pathlib import Path
+
         with pytest.raises(Exception) as exc_info:
             _validate_file_path(Path("/home/user/noextension").resolve())
         assert exc_info.value.status_code == 400
 
     def test_rejects_binary_extensions(self):
         from pathlib import Path
+
         for ext in [".exe", ".dll", ".so", ".bin", ".dat"]:
             with pytest.raises(Exception) as exc_info:
                 _validate_file_path(Path(f"/home/user/file{ext}").resolve())
@@ -701,12 +762,14 @@ class TestValidateFilePath:
 
     def test_allows_code_extensions(self):
         from pathlib import Path
+
         for ext in [".py", ".js", ".ts", ".java", ".c", ".cpp"]:
             # Should not raise
             _validate_file_path(Path(f"/home/user/file{ext}").resolve())
 
     def test_allows_document_extensions(self):
         from pathlib import Path
+
         for ext in [".pdf", ".doc", ".docx", ".csv", ".json", ".yaml"]:
             # Should not raise
             _validate_file_path(Path(f"/home/user/file{ext}").resolve())
@@ -719,8 +782,9 @@ class TestValidateFilePath:
             tmp_path = f.name
 
         try:
-            resp = client.post("/api/documents/upload-path",
-                              json={"filepath": tmp_path})
+            resp = client.post(
+                "/api/documents/upload-path", json={"filepath": tmp_path}
+            )
             assert resp.status_code == 400
             assert "Unsupported file type" in resp.json()["detail"]
         finally:
@@ -732,6 +796,7 @@ class TestSanitizeDocumentPath:
 
     def test_returns_resolved_path(self):
         from pathlib import Path
+
         result = _sanitize_document_path("/home/user/doc.pdf")
         assert result.is_absolute()
         assert result == Path("/home/user/doc.pdf").resolve()
@@ -754,6 +819,7 @@ class TestSanitizeDocumentPath:
 
     def test_resolves_traversal_in_path(self):
         from pathlib import Path
+
         # Path with .. should be resolved
         result = _sanitize_document_path("/home/user/../user/doc.txt")
         assert ".." not in str(result)
@@ -765,6 +831,7 @@ class TestSanitizeStaticPath:
 
     def test_valid_path_within_base(self):
         from pathlib import Path
+
         base = Path(tempfile.mkdtemp())
         try:
             # Create a test file
@@ -776,35 +843,42 @@ class TestSanitizeStaticPath:
             assert result == test_file.resolve()
         finally:
             import shutil
+
             shutil.rmtree(base)
 
     def test_rejects_traversal_with_dotdot(self):
         from pathlib import Path
+
         base = Path(tempfile.mkdtemp())
         try:
             result = _sanitize_static_path(base, "../../../etc/passwd")
             assert result is None
         finally:
             import shutil
+
             shutil.rmtree(base)
 
     def test_rejects_null_bytes(self):
         from pathlib import Path
+
         base = Path(tempfile.mkdtemp())
         try:
             result = _sanitize_static_path(base, "file\x00.html")
             assert result is None
         finally:
             import shutil
+
             shutil.rmtree(base)
 
     def test_returns_none_for_empty_path(self):
         from pathlib import Path
+
         result = _sanitize_static_path(Path("/tmp"), "")
         assert result is None
 
     def test_rejects_absolute_path_escape(self):
         from pathlib import Path
+
         base = Path(tempfile.mkdtemp())
         try:
             # Even if resolved, must be within base
@@ -815,4 +889,5 @@ class TestSanitizeStaticPath:
                 assert str(result).startswith(str(base.resolve()))
         finally:
             import shutil
+
             shutil.rmtree(base)

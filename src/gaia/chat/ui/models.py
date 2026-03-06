@@ -3,11 +3,9 @@
 
 """Pydantic models for GAIA Chat UI API."""
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
-
 
 # ── System ──────────────────────────────────────────────────────────────────
 

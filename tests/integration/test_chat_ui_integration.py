@@ -92,11 +92,14 @@ class TestSessionLifecycle:
         mock_chat.return_value = "Hello! I'm the GAIA assistant."
 
         # 1. Create session
-        create_resp = client.post("/api/sessions", json={
-            "title": "Lifecycle Test",
-            "model": "Qwen3-0.6B-GGUF",
-            "system_prompt": "You are a helpful AI assistant.",
-        })
+        create_resp = client.post(
+            "/api/sessions",
+            json={
+                "title": "Lifecycle Test",
+                "model": "Qwen3-0.6B-GGUF",
+                "system_prompt": "You are a helpful AI assistant.",
+            },
+        )
         assert create_resp.status_code == 200
         session = create_resp.json()
         session_id = session["id"]
@@ -106,11 +109,14 @@ class TestSessionLifecycle:
         assert session["message_count"] == 0
 
         # 2. Send a non-streaming message
-        chat_resp = client.post("/api/chat/send", json={
-            "session_id": session_id,
-            "message": "Hello, who are you?",
-            "stream": False,
-        })
+        chat_resp = client.post(
+            "/api/chat/send",
+            json={
+                "session_id": session_id,
+                "message": "Hello, who are you?",
+                "stream": False,
+            },
+        )
         assert chat_resp.status_code == 200
         chat_data = chat_resp.json()
         assert chat_data["content"] == "Hello! I'm the GAIA assistant."
@@ -131,9 +137,7 @@ class TestSessionLifecycle:
         assert session_resp.json()["message_count"] == 2
 
         # 5. Export to markdown
-        export_resp = client.get(
-            f"/api/sessions/{session_id}/export?format=markdown"
-        )
+        export_resp = client.get(f"/api/sessions/{session_id}/export?format=markdown")
         assert export_resp.status_code == 200
         export_data = export_resp.json()
         assert export_data["format"] == "markdown"
@@ -142,9 +146,7 @@ class TestSessionLifecycle:
         assert "Hello! I'm the GAIA assistant." in export_data["content"]
 
         # 6. Export to JSON
-        json_export = client.get(
-            f"/api/sessions/{session_id}/export?format=json"
-        )
+        json_export = client.get(f"/api/sessions/{session_id}/export?format=json")
         assert json_export.status_code == 200
         json_data = json_export.json()
         assert json_data["format"] == "json"
@@ -180,11 +182,13 @@ class TestSessionLifecycle:
     @patch("gaia.chat.ui.server._get_chat_response")
     def test_multi_turn_conversation(self, mock_chat, client):
         """Verify multi-turn conversation history is preserved in order."""
-        responses = iter([
-            "I'm GAIA, a local AI assistant.",
-            "The capital of France is Paris.",
-            "It has about 2.2 million people in the city proper.",
-        ])
+        responses = iter(
+            [
+                "I'm GAIA, a local AI assistant.",
+                "The capital of France is Paris.",
+                "It has about 2.2 million people in the city proper.",
+            ]
+        )
         mock_chat.side_effect = lambda *a, **kw: next(responses)
 
         resp = client.post("/api/sessions", json={"title": "Multi-turn"})
@@ -197,11 +201,14 @@ class TestSessionLifecycle:
         ]
 
         for q in questions:
-            chat_resp = client.post("/api/chat/send", json={
-                "session_id": sid,
-                "message": q,
-                "stream": False,
-            })
+            chat_resp = client.post(
+                "/api/chat/send",
+                json={
+                    "session_id": sid,
+                    "message": q,
+                    "stream": False,
+                },
+            )
             assert chat_resp.status_code == 200
 
         # Check all messages in order
@@ -212,15 +219,18 @@ class TestSessionLifecycle:
         # Verify alternating roles
         for i, msg in enumerate(messages):
             expected_role = "user" if i % 2 == 0 else "assistant"
-            assert msg["role"] == expected_role, (
-                f"Message {i} expected {expected_role}, got {msg['role']}"
-            )
+            assert (
+                msg["role"] == expected_role
+            ), f"Message {i} expected {expected_role}, got {msg['role']}"
 
         # Verify content order
         assert messages[0]["content"] == "Who are you?"
         assert messages[1]["content"] == "I'm GAIA, a local AI assistant."
         assert messages[4]["content"] == "How many people live there?"
-        assert messages[5]["content"] == "It has about 2.2 million people in the city proper."
+        assert (
+            messages[5]["content"]
+            == "It has about 2.2 million people in the city proper."
+        )
 
 
 # ── Document Workflow ───────────────────────────────────────────────────────
@@ -235,9 +245,7 @@ class TestDocumentWorkflow:
         mock_index.return_value = 25
 
         # 1. Create a real temp file to upload
-        with tempfile.NamedTemporaryFile(
-            suffix=".txt", delete=False, mode="w"
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w") as f:
             f.write("This is a test document for integration testing.")
             tmp_path = f.name
 
@@ -264,9 +272,12 @@ class TestDocumentWorkflow:
             assert doc_id in doc_ids
 
             # 4. Create session and attach document
-            sess_resp = client.post("/api/sessions", json={
-                "title": "Doc Test Session",
-            })
+            sess_resp = client.post(
+                "/api/sessions",
+                json={
+                    "title": "Doc Test Session",
+                },
+            )
             session_id = sess_resp.json()["id"]
 
             attach_resp = client.post(
@@ -312,8 +323,11 @@ class TestDocumentWorkflow:
     def test_shared_document_across_sessions(self, client, db):
         """A single document attached to multiple sessions."""
         doc = db.add_document(
-            "shared.pdf", "/tmp/shared.pdf", "shared_hash_1234",
-            file_size=4096, chunk_count=20,
+            "shared.pdf",
+            "/tmp/shared.pdf",
+            "shared_hash_1234",
+            file_size=4096,
+            chunk_count=20,
         )
 
         session_ids = []
@@ -346,10 +360,13 @@ class TestDocumentWorkflow:
         doc1 = db.add_document("a.pdf", "/a.pdf", "hash_a", 100, 5)
         doc2 = db.add_document("b.pdf", "/b.pdf", "hash_b", 200, 10)
 
-        resp = client.post("/api/sessions", json={
-            "title": "Pre-attached",
-            "document_ids": [doc1["id"], doc2["id"]],
-        })
+        resp = client.post(
+            "/api/sessions",
+            json={
+                "title": "Pre-attached",
+                "document_ids": [doc1["id"], doc2["id"]],
+            },
+        )
         assert resp.status_code == 200
         session = resp.json()
         assert doc1["id"] in session["document_ids"]
@@ -360,9 +377,7 @@ class TestDocumentWorkflow:
         """Uploading the same file twice returns the existing document."""
         mock_index.return_value = 10
 
-        with tempfile.NamedTemporaryFile(
-            suffix=".txt", delete=False, mode="w"
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w") as f:
             f.write("Deterministic content for hash test")
             tmp_path = f.name
 
@@ -391,6 +406,7 @@ class TestSSEStreaming:
     def test_streaming_response_format(self, client, session_id):
         """Verify SSE events have correct format: 'data: {...}\\n\\n'."""
         with patch("gaia.chat.ui.server._stream_chat_response") as mock_stream:
+
             async def fake_stream(*args, **kwargs):
                 yield 'data: {"type": "chunk", "content": "Hello"}\n\n'
                 yield 'data: {"type": "chunk", "content": " world"}\n\n'
@@ -398,11 +414,14 @@ class TestSSEStreaming:
 
             mock_stream.return_value = fake_stream()
 
-            resp = client.post("/api/chat/send", json={
-                "session_id": session_id,
-                "message": "Test stream",
-                "stream": True,
-            })
+            resp = client.post(
+                "/api/chat/send",
+                json={
+                    "session_id": session_id,
+                    "message": "Test stream",
+                    "stream": True,
+                },
+            )
 
             assert resp.status_code == 200
             assert "text/event-stream" in resp.headers.get("content-type", "")
@@ -434,16 +453,20 @@ class TestSSEStreaming:
     def test_streaming_error_event(self, client, session_id):
         """Verify error events in SSE stream."""
         with patch("gaia.chat.ui.server._stream_chat_response") as mock_stream:
+
             async def fake_error_stream(*args, **kwargs):
                 yield 'data: {"type": "error", "content": "LLM not available"}\n\n'
 
             mock_stream.return_value = fake_error_stream()
 
-            resp = client.post("/api/chat/send", json={
-                "session_id": session_id,
-                "message": "Test error",
-                "stream": True,
-            })
+            resp = client.post(
+                "/api/chat/send",
+                json={
+                    "session_id": session_id,
+                    "message": "Test error",
+                    "stream": True,
+                },
+            )
 
             body = resp.text
             events = [
@@ -459,16 +482,20 @@ class TestSSEStreaming:
     def test_streaming_headers(self, client, session_id):
         """Verify streaming response has correct cache and connection headers."""
         with patch("gaia.chat.ui.server._stream_chat_response") as mock_stream:
+
             async def fake_stream(*args, **kwargs):
                 yield 'data: {"type": "done", "content": "test"}\n\n'
 
             mock_stream.return_value = fake_stream()
 
-            resp = client.post("/api/chat/send", json={
-                "session_id": session_id,
-                "message": "Test headers",
-                "stream": True,
-            })
+            resp = client.post(
+                "/api/chat/send",
+                json={
+                    "session_id": session_id,
+                    "message": "Test headers",
+                    "stream": True,
+                },
+            )
 
             assert "text/event-stream" in resp.headers.get("content-type", "")
             # Cache-Control and Connection headers may vary in test client
@@ -484,9 +511,12 @@ class TestEdgeCases:
     def test_unicode_session_title(self, client):
         """Session titles support unicode characters (CJK, accented, Cyrillic)."""
         title = "\u4eba\u5de5\u77e5\u80fd\u306e\u4f1a\u8a71 - R\u00e9sum\u00e9 \u041f\u0440\u0438\u0432\u0435\u0442"
-        resp = client.post("/api/sessions", json={
-            "title": title,
-        })
+        resp = client.post(
+            "/api/sessions",
+            json={
+                "title": title,
+            },
+        )
         assert resp.status_code == 200
         assert resp.json()["title"] == title
 
@@ -498,9 +528,12 @@ class TestEdgeCases:
     def test_emoji_in_session_title(self, client):
         """Session titles support emoji and multi-byte characters."""
         title = "\U0001f916 Chat \U0001f4ac \u2728 Session \U0001f30d"
-        resp = client.post("/api/sessions", json={
-            "title": title,
-        })
+        resp = client.post(
+            "/api/sessions",
+            json={
+                "title": title,
+            },
+        )
         assert resp.status_code == 200
         sid = resp.json()["id"]
         assert resp.json()["title"] == title
@@ -514,14 +547,19 @@ class TestEdgeCases:
     def test_unicode_in_messages(self, mock_chat, client, session_id):
         """Messages support unicode and multi-byte characters."""
         user_msg = "\u00bfHablas espa\u00f1ol? \u2014 \u5217\u738b\u7cfb\u5217 \u041c\u0438\u0440"
-        assistant_msg = "\u00a1S\u00ed! Paris est magnifique \U0001f1eb\U0001f1f7 \u2764\ufe0f"
+        assistant_msg = (
+            "\u00a1S\u00ed! Paris est magnifique \U0001f1eb\U0001f1f7 \u2764\ufe0f"
+        )
         mock_chat.return_value = assistant_msg
 
-        resp = client.post("/api/chat/send", json={
-            "session_id": session_id,
-            "message": user_msg,
-            "stream": False,
-        })
+        resp = client.post(
+            "/api/chat/send",
+            json={
+                "session_id": session_id,
+                "message": user_msg,
+                "stream": False,
+            },
+        )
         assert resp.status_code == 200
 
         msgs = client.get(f"/api/sessions/{session_id}/messages").json()
@@ -534,11 +572,14 @@ class TestEdgeCases:
         large_content = "x" * 50_000
         mock_chat.return_value = "Received your large message."
 
-        resp = client.post("/api/chat/send", json={
-            "session_id": session_id,
-            "message": large_content,
-            "stream": False,
-        })
+        resp = client.post(
+            "/api/chat/send",
+            json={
+                "session_id": session_id,
+                "message": large_content,
+                "stream": False,
+            },
+        )
         assert resp.status_code == 200
 
         msgs = client.get(f"/api/sessions/{session_id}/messages").json()
@@ -589,11 +630,14 @@ class TestEdgeCases:
 
         client.delete(f"/api/sessions/{sid}")
 
-        chat_resp = client.post("/api/chat/send", json={
-            "session_id": sid,
-            "message": "Hello?",
-            "stream": False,
-        })
+        chat_resp = client.post(
+            "/api/chat/send",
+            json={
+                "session_id": sid,
+                "message": "Hello?",
+                "stream": False,
+            },
+        )
         assert chat_resp.status_code == 404
 
     def test_export_empty_session(self, client):
@@ -629,16 +673,22 @@ class TestEdgeCases:
     def test_missing_required_field_chat_request(self, client, session_id):
         """Missing required fields in chat request returns 422."""
         # Missing 'message' field
-        resp = client.post("/api/chat/send", json={
-            "session_id": session_id,
-        })
+        resp = client.post(
+            "/api/chat/send",
+            json={
+                "session_id": session_id,
+            },
+        )
         assert resp.status_code == 422
 
     def test_missing_session_id_in_chat(self, client):
         """Missing session_id in chat request returns 422."""
-        resp = client.post("/api/chat/send", json={
-            "message": "Hello",
-        })
+        resp = client.post(
+            "/api/chat/send",
+            json={
+                "message": "Hello",
+            },
+        )
         assert resp.status_code == 422
 
 
@@ -761,9 +811,7 @@ class TestSecurityIntegration:
         # These are NOT in _ALLOWED_EXTENSIONS
         dangerous_exts = [".exe", ".dll", ".msi", ".scr", ".com", ".vbs"]
         for ext in dangerous_exts:
-            with tempfile.NamedTemporaryFile(
-                suffix=ext, delete=False
-            ) as f:
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:
                 f.write(b"test")
                 tmp_path = f.name
 
@@ -772,9 +820,9 @@ class TestSecurityIntegration:
                     "/api/documents/upload-path",
                     json={"filepath": tmp_path},
                 )
-                assert resp.status_code == 400, (
-                    f"Extension {ext} should be rejected but got {resp.status_code}"
-                )
+                assert (
+                    resp.status_code == 400
+                ), f"Extension {ext} should be rejected but got {resp.status_code}"
             finally:
                 os.unlink(tmp_path)
 
@@ -915,7 +963,9 @@ class TestRAGSourcesIntegration:
 
         db.add_message(sid, "user", "How do I install?")
         db.add_message(
-            sid, "assistant", "You need Python 3.10+.",
+            sid,
+            "assistant",
+            "You need Python 3.10+.",
             rag_sources=sources,
         )
 
@@ -967,11 +1017,14 @@ class TestSessionTimestamps:
 
         time.sleep(0.02)
 
-        client.post("/api/chat/send", json={
-            "session_id": sid,
-            "message": "Hello",
-            "stream": False,
-        })
+        client.post(
+            "/api/chat/send",
+            json={
+                "session_id": sid,
+                "message": "Hello",
+                "stream": False,
+            },
+        )
 
         resp2 = client.get(f"/api/sessions/{sid}")
         updated_at = resp2.json()["updated_at"]
@@ -986,9 +1039,7 @@ class TestSessionTimestamps:
 
         time.sleep(0.02)
 
-        resp2 = client.put(
-            f"/api/sessions/{sid}", json={"title": "After"}
-        )
+        resp2 = client.put(f"/api/sessions/{sid}", json={"title": "After"})
         updated = resp2.json()["updated_at"]
         assert updated >= original
 
@@ -1024,7 +1075,10 @@ class TestCORSIntegration:
         )
         assert resp.status_code == 200
         # With allow_origins=["*"], the access-control-allow-origin should be set
-        assert resp.headers.get("access-control-allow-origin") in ("*", "http://localhost:4200")
+        assert resp.headers.get("access-control-allow-origin") in (
+            "*",
+            "http://localhost:4200",
+        )
 
     def test_cors_allows_any_origin(self, client):
         """CORS allows requests from any origin (dev mode)."""
@@ -1049,16 +1103,17 @@ class TestCLIUIFlag:
         sys.argv and verify parse_known_args behavior through source
         inspection and the server's standalone parser.
         """
-        import argparse
-
         # The server module has its own argparse-based main()
         # Verify it accepts --host, --port, --debug
-        from gaia.chat.ui.server import main as server_main, DEFAULT_PORT
+        from gaia.chat.ui.server import DEFAULT_PORT
+
         assert DEFAULT_PORT == 4200
 
         # Verify the CLI source registers --ui and --ui-port on chat_parser
         import inspect
+
         from gaia.cli import main as cli_main
+
         source = inspect.getsource(cli_main)
         assert '"--ui"' in source, "--ui flag not found in CLI main()"
         assert '"--ui-port"' in source, "--ui-port flag not found in CLI main()"
@@ -1119,10 +1174,13 @@ class TestRequestValidation:
 
     def test_create_session_extra_fields_ignored(self, client):
         """Extra unknown fields in request are ignored (Pydantic default)."""
-        resp = client.post("/api/sessions", json={
-            "title": "Normal",
-            "unknown_field": "should be ignored",
-        })
+        resp = client.post(
+            "/api/sessions",
+            json={
+                "title": "Normal",
+                "unknown_field": "should be ignored",
+            },
+        )
         assert resp.status_code == 200
         assert resp.json()["title"] == "Normal"
 
@@ -1134,9 +1192,7 @@ class TestRequestValidation:
 
     def test_document_upload_empty_filepath(self, client):
         """Empty filepath string is rejected."""
-        resp = client.post(
-            "/api/documents/upload-path", json={"filepath": ""}
-        )
+        resp = client.post("/api/documents/upload-path", json={"filepath": ""})
         # Empty path should fail (no extension or file not found)
         assert resp.status_code in (400, 404)
 
@@ -1183,11 +1239,14 @@ class TestExportEdgeCases:
 
     def test_export_json_session_includes_metadata(self, client):
         """JSON export includes session metadata."""
-        resp = client.post("/api/sessions", json={
-            "title": "JSON Meta",
-            "model": "test-model",
-            "system_prompt": "Be brief.",
-        })
+        resp = client.post(
+            "/api/sessions",
+            json={
+                "title": "JSON Meta",
+                "model": "test-model",
+                "system_prompt": "Be brief.",
+            },
+        )
         sid = resp.json()["id"]
 
         export = client.get(f"/api/sessions/{sid}/export?format=json")
@@ -1318,9 +1377,7 @@ class TestMessagePagination:
         assert ids1.isdisjoint(ids2)
 
         # Beyond range
-        page_beyond = client.get(
-            f"/api/sessions/{sid}/messages?limit=5&offset=20"
-        )
+        page_beyond = client.get(f"/api/sessions/{sid}/messages?limit=5&offset=20")
         assert len(page_beyond.json()["messages"]) == 0
         assert page_beyond.json()["total"] == 20
 
@@ -1351,22 +1408,27 @@ class TestStreamingGeneratorEdgeCases:
     def test_streaming_import_error_yields_error_event(self, client, session_id):
         """When ChatSDK import fails, the stream yields an error SSE event."""
         with patch("gaia.chat.ui.server._stream_chat_response") as mock_stream:
+
             async def error_stream(*args, **kwargs):
                 error_msg = (
                     "Error: Could not get response from LLM. "
                     "Is Lemonade Server running? Check server logs for details."
                 )
                 import json as _json
+
                 error_data = _json.dumps({"type": "error", "content": error_msg})
                 yield f"data: {error_data}\n\n"
 
             mock_stream.return_value = error_stream()
 
-            resp = client.post("/api/chat/send", json={
-                "session_id": session_id,
-                "message": "Test import error",
-                "stream": True,
-            })
+            resp = client.post(
+                "/api/chat/send",
+                json={
+                    "session_id": session_id,
+                    "message": "Test import error",
+                    "stream": True,
+                },
+            )
 
             assert resp.status_code == 200
             events = [
@@ -1382,17 +1444,21 @@ class TestStreamingGeneratorEdgeCases:
     def test_streaming_saves_user_message_to_db(self, client, db, session_id):
         """The user message is saved to the DB even for streaming requests."""
         with patch("gaia.chat.ui.server._stream_chat_response") as mock_stream:
+
             async def fake_stream(*args, **kwargs):
                 yield 'data: {"type": "done", "content": "ok"}\n\n'
 
             mock_stream.return_value = fake_stream()
 
             # The send_message endpoint saves the user message BEFORE streaming
-            resp = client.post("/api/chat/send", json={
-                "session_id": session_id,
-                "message": "Should be saved",
-                "stream": True,
-            })
+            resp = client.post(
+                "/api/chat/send",
+                json={
+                    "session_id": session_id,
+                    "message": "Should be saved",
+                    "stream": True,
+                },
+            )
             assert resp.status_code == 200
 
         # Verify user message was persisted
@@ -1406,11 +1472,14 @@ class TestStreamingGeneratorEdgeCases:
         """Non-streaming saves both user and assistant messages to DB."""
         mock_chat.return_value = "The assistant reply."
 
-        resp = client.post("/api/chat/send", json={
-            "session_id": session_id,
-            "message": "The user question.",
-            "stream": False,
-        })
+        resp = client.post(
+            "/api/chat/send",
+            json={
+                "session_id": session_id,
+                "message": "The user question.",
+                "stream": False,
+            },
+        )
         assert resp.status_code == 200
 
         msgs = db.get_messages(session_id)
