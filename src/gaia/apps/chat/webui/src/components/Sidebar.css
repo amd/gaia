@@ -7,7 +7,13 @@
     background: var(--bg-sidebar);
     border-right: 1px solid var(--border);
     user-select: none;
-    transition: transform 250ms var(--ease);
+    transition: width 250ms var(--ease), min-width 250ms var(--ease), transform 250ms var(--ease);
+    position: relative;
+}
+
+/* Disable transition while dragging */
+.sidebar.resizing {
+    transition: none;
 }
 
 .sidebar-top {
@@ -15,12 +21,16 @@
     align-items: center;
     justify-content: space-between;
     padding: 16px 16px 12px;
+    gap: 8px;
 }
 
 .sidebar-brand {
     display: flex;
     align-items: center;
     gap: 10px;
+    overflow: hidden;
+    flex-shrink: 1;
+    min-width: 0;
 }
 
 .brand-icon {
@@ -44,6 +54,8 @@
     display: flex;
     align-items: baseline;
     gap: 5px;
+    white-space: nowrap;
+    overflow: hidden;
 }
 
 .brand-name {
@@ -62,6 +74,14 @@
     color: var(--text-secondary);
 }
 
+/* Top actions (new chat + collapse) */
+.sidebar-top-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
 .new-chat-btn {
     display: flex;
     align-items: center;
@@ -76,6 +96,21 @@
     background: var(--bg-hover);
     border-color: var(--amd-red);
     color: var(--amd-red);
+}
+
+.collapse-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    transition: all var(--duration) var(--ease);
+}
+.collapse-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
 }
 
 .sidebar-search {
@@ -146,6 +181,7 @@
 
 .session-delete {
     display: none;
+    align-items: center;
     position: absolute;
     right: 6px;
     padding: 4px;
@@ -156,14 +192,38 @@
 .session-item:hover .session-delete { display: flex; }
 .session-delete:hover { background: var(--amd-red); color: white; }
 
-/* Delete confirmation state */
+/* Delete confirmation state -- always visible, expanded with label */
 .session-delete.confirm {
     display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
     background: var(--amd-red);
     color: white;
-    animation: pulse 1s infinite;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    animation: confirmPop 200ms var(--ease);
 }
+.session-delete.confirm:hover {
+    background: var(--amd-red-dark);
+}
+
+.confirm-label {
+    line-height: 1;
+}
+
 .session-item:has(.session-delete.confirm) .session-time { opacity: 0; }
+.session-item:has(.session-delete.confirm) .session-title {
+    mask-image: linear-gradient(to right, black 60%, transparent 90%);
+    -webkit-mask-image: linear-gradient(to right, black 60%, transparent 90%);
+}
+
+@keyframes confirmPop {
+    from { opacity: 0; transform: scale(0.8); }
+    to { opacity: 1; transform: scale(1); }
+}
 
 /* Bottom bar */
 .sidebar-bottom {
@@ -180,6 +240,8 @@
     gap: 6px;
     font-size: 12px;
     color: var(--text-secondary);
+    overflow: hidden;
+    white-space: nowrap;
 }
 
 .privacy-dot {
@@ -188,6 +250,7 @@
     border-radius: 50%;
     background: #22c55e;
     animation: pulse 2s infinite;
+    flex-shrink: 0;
 }
 
 .version-badge {
@@ -197,11 +260,73 @@
     opacity: 0.7;
 }
 
-.sidebar-actions { display: flex; gap: 2px; }
+.sidebar-actions { display: flex; gap: 2px; flex-shrink: 0; }
 
 .empty-hint {
     text-align: center;
     padding: 24px 16px;
     font-size: 13px;
     color: var(--text-muted);
+}
+
+/* ── Drag-to-resize handle ─────────────────────────────────────── */
+.sidebar-resize-handle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 4px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 10;
+    transition: background 150ms var(--ease);
+}
+
+.sidebar-resize-handle:hover,
+.sidebar-resize-handle:active {
+    background: var(--amd-red);
+    opacity: 0.5;
+}
+
+/* ── Collapsed state ───────────────────────────────────────────── */
+.sidebar.collapsed .sidebar-brand .brand-text,
+.sidebar.collapsed .sidebar-search,
+.sidebar.collapsed .session-list,
+.sidebar.collapsed .privacy-badge span:not(.privacy-dot),
+.sidebar.collapsed .version-badge,
+.sidebar.collapsed .new-chat-btn {
+    display: none;
+}
+
+.sidebar.collapsed .sidebar-top {
+    padding: 16px 8px 12px;
+    justify-content: center;
+}
+
+.sidebar.collapsed .sidebar-brand {
+    gap: 0;
+}
+
+.sidebar.collapsed .sidebar-top-actions {
+    gap: 0;
+}
+
+.sidebar.collapsed .sidebar-bottom {
+    flex-direction: column;
+    padding: 8px 4px;
+    gap: 4px;
+    align-items: center;
+}
+
+.sidebar.collapsed .sidebar-actions {
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.sidebar.collapsed .privacy-badge {
+    justify-content: center;
+}
+
+.sidebar.collapsed .sidebar-resize-handle {
+    display: none;
 }

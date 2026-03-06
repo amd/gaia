@@ -93,18 +93,47 @@ def create_app(db_path: str = None) -> FastAPI:
                 base_url = os.environ.get(
                     "LEMONADE_BASE_URL", "http://localhost:8000/api/v1"
                 )
-                resp = await client.get(f"{base_url}/models")
-                if resp.status_code == 200:
+
+                # Use /health endpoint to get the actually loaded model
+                # (not /models which returns the full catalog of available models)
+                health_resp = await client.get(f"{base_url}/health")
+                if health_resp.status_code == 200:
                     status.lemonade_running = True
-                    data = resp.json()
-                    models = data.get("data", [])
-                    if models:
-                        status.model_loaded = models[0].get("id", "unknown")
-                    # Check for embedding model
-                    for m in models:
-                        if "embed" in m.get("id", "").lower():
+                    health_data = health_resp.json()
+                    status.model_loaded = health_data.get(
+                        "model_loaded"
+                    ) or None
+
+                    # Check loaded models list for embedding model
+                    for m in health_data.get("all_models_loaded", []):
+                        if m.get("type") == "embedding":
                             status.embedding_model_loaded = True
                             break
+
+                    # If no embedding found in loaded models,
+                    # fall back to checking the model catalog
+                    if not status.embedding_model_loaded:
+                        models_resp = await client.get(f"{base_url}/models")
+                        if models_resp.status_code == 200:
+                            for m in models_resp.json().get("data", []):
+                                if "embed" in m.get("id", "").lower():
+                                    status.embedding_model_loaded = True
+                                    break
+                else:
+                    # Fall back to /models if /health isn't available
+                    resp = await client.get(f"{base_url}/models")
+                    if resp.status_code == 200:
+                        status.lemonade_running = True
+                        data = resp.json()
+                        models = data.get("data", [])
+                        if models:
+                            status.model_loaded = models[0].get(
+                                "id", "unknown"
+                            )
+                        for m in models:
+                            if "embed" in m.get("id", "").lower():
+                                status.embedding_model_loaded = True
+                                break
         except Exception:
             status.lemonade_running = False
 
@@ -605,11 +634,21 @@ async def _get_chat_response(
 
 
 async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRequest):
-    """Stream chat response as Server-Sent Events."""
-    try:
-        from gaia.chat.sdk import ChatConfig, ChatSDK
+    """Stream chat response as Server-Sent Events.
 
-        # Build conversation history
+    Uses ChatAgent with SSEOutputHandler to emit agent activity events
+    (steps, tool calls, thinking) alongside text chunks, giving the
+    frontend visibility into what the agent is doing.
+    """
+    import queue
+    import threading
+
+    from gaia.chat.ui.sse_handler import SSEOutputHandler
+
+    try:
+        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+        # Build conversation history for agent context
         messages = db.get_messages(request.session_id, limit=20)
         history_pairs = []
         for i in range(0, len(messages) - 1, 2):
@@ -622,75 +661,87 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     (messages[i]["content"], messages[i + 1]["content"])
                 )
 
-        config = ChatConfig(
-            model=session.get("model", "Qwen3-Coder-30B-A3B-Instruct-GGUF"),
-            system_prompt=session.get("system_prompt"),
+        # Create SSE output handler to capture agent events
+        sse_handler = SSEOutputHandler()
+
+        # Create ChatAgent with SSE handler
+        config = ChatAgentConfig(
+            model_id=session.get("model"),
+            max_steps=10,
+            silent_mode=False,
+            debug=False,
         )
-        chat = ChatSDK(config)
+        agent = ChatAgent(config)
+        agent.console = sse_handler  # Replace console with SSE handler
 
-        # Restore history
+        # Restore conversation history
         for user_msg, assistant_msg in history_pairs[-4:]:
-            chat.chat_history.append(f"user: {user_msg}")
-            chat.chat_history.append(f"assistant: {assistant_msg}")
+            if hasattr(agent, "conversation_history"):
+                agent.conversation_history.append(
+                    {"role": "user", "content": user_msg}
+                )
+                agent.conversation_history.append(
+                    {"role": "assistant", "content": assistant_msg}
+                )
 
-        # Stream response
-        full_response = ""
+        # Run agent in background thread
+        result_holder = {"answer": "", "error": None}
 
-        def _stream_sync():
-            """Run streaming in sync context for thread executor."""
-            nonlocal full_response
-            chunks = []
-            for chunk in chat.send_stream(request.message):
-                if not chunk.is_complete:
-                    chunks.append(chunk.text)
-                    full_response += chunk.text
-            return chunks
-
-        # Run streaming in executor to not block event loop
-        loop = asyncio.get_event_loop()
-
-        # Use a queue-based approach for real-time streaming
-        import queue
-
-        chunk_queue = queue.Queue()
-        done_event = asyncio.Event()
-
-        def _produce_chunks():
-            nonlocal full_response
+        def _run_agent():
             try:
-                for chunk in chat.send_stream(request.message):
-                    if not chunk.is_complete:
-                        chunk_queue.put(chunk.text)
-                        full_response += chunk.text
+                result = agent.process_query(request.message)
+                if isinstance(result, dict):
+                    result_holder["answer"] = result.get("answer", "")
+                else:
+                    result_holder["answer"] = str(result) if result else ""
             except Exception as e:
-                chunk_queue.put(None)  # Signal error
-                logger.error("Streaming error: %s", e)
+                logger.error("Agent error: %s", e, exc_info=True)
+                result_holder["error"] = str(e)
             finally:
-                chunk_queue.put(None)  # Signal done
+                sse_handler.signal_done()
 
-        # Start producer in thread
-        import threading
-
-        producer = threading.Thread(target=_produce_chunks, daemon=True)
+        producer = threading.Thread(target=_run_agent, daemon=True)
         producer.start()
 
-        # Yield SSE events as chunks arrive
+        # Yield SSE events from the handler's queue
+        full_response = ""
         while True:
             try:
-                text = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: chunk_queue.get(timeout=0.1)
+                event = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: sse_handler.event_queue.get(timeout=0.2)
                 )
-                if text is None:
+                if event is None:
+                    # Sentinel - agent is done
                     break
-                event_data = json.dumps({"type": "chunk", "content": text})
-                yield f"data: {event_data}\n\n"
-            except Exception:
-                # Queue timeout - check if producer is still alive
+
+                # Capture answer content for DB storage
+                if event.get("type") == "answer":
+                    full_response = event.get("content", "")
+                elif event.get("type") == "chunk":
+                    full_response += event.get("content", "")
+
+                yield f"data: {json.dumps(event)}\n\n"
+
+            except queue.Empty:
                 if not producer.is_alive():
                     break
                 continue
 
-        # Save complete assistant response
+        # Check for errors from the agent thread
+        if result_holder["error"]:
+            error_msg = f"Agent error: {result_holder['error']}"
+            if not full_response:
+                full_response = error_msg
+                error_data = json.dumps({"type": "error", "content": error_msg})
+                yield f"data: {error_data}\n\n"
+
+        # Use agent result if no streamed answer was captured
+        if not full_response and result_holder["answer"]:
+            full_response = result_holder["answer"]
+            # Send as answer event since it wasn't streamed
+            yield f"data: {json.dumps({'type': 'answer', 'content': full_response})}\n\n"
+
+        # Save complete response to DB
         if full_response:
             msg_id = db.add_message(
                 request.session_id, "assistant", full_response
@@ -700,7 +751,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             )
             yield f"data: {done_data}\n\n"
         else:
-            error_msg = "No response received from LLM. Is Lemonade Server running?"
+            error_msg = "No response received from agent. Is Lemonade Server running?"
             db.add_message(request.session_id, "assistant", error_msg)
             error_data = json.dumps({"type": "error", "content": error_msg})
             yield f"data: {error_data}\n\n"
@@ -708,7 +759,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
     except Exception as e:
         logger.error("Chat streaming error: %s", e, exc_info=True)
         error_msg = "Error: Could not get response from LLM. Is Lemonade Server running? Check server logs for details."
-        db.add_message(request.session_id, "assistant", error_msg)
+        try:
+            db.add_message(request.session_id, "assistant", error_msg)
+        except Exception:
+            pass
         error_data = json.dumps({"type": "error", "content": error_msg})
         yield f"data: {error_data}\n\n"
 

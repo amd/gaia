@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Plus, Search, FileText, Settings, Sun, Moon, Trash2 } from 'lucide-react';
+import { Plus, Search, FileText, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
+import { log } from '../utils/logger';
 import gaiaRobot from '../assets/gaia-robot.png';
 import './Sidebar.css';
 
@@ -17,10 +18,14 @@ export function Sidebar({ onNewChat }: SidebarProps) {
         sessions, currentSessionId, setCurrentSession, removeSession,
         setMessages, theme, toggleTheme, setShowDocLibrary, setShowSettings,
         sidebarOpen, setSidebarOpen, setLoadingMessages,
+        sidebarCollapsed, toggleSidebarCollapsed,
+        sidebarWidth, setSidebarWidth,
     } = useChatStore();
 
     const [search, setSearch] = useState('');
     const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+    const [isResizing, setIsResizing] = useState(false);
+    const sidebarRef = useRef<HTMLElement>(null);
 
     const filtered = search
         ? sessions.filter((s) => s.title.toLowerCase().includes(search.toLowerCase()))
@@ -28,6 +33,8 @@ export function Sidebar({ onNewChat }: SidebarProps) {
 
     const handleSelect = useCallback(async (id: string) => {
         if (id === currentSessionId) return;
+        const title = sessions.find((s) => s.id === id)?.title || '?';
+        log.nav.info(`Selecting session: "${title}" (${id})`);
         setCurrentSession(id);
         setLoadingMessages(true);
         // Auto-close sidebar on mobile
@@ -35,32 +42,37 @@ export function Sidebar({ onNewChat }: SidebarProps) {
         try {
             const data = await api.getMessages(id);
             setMessages(data.messages || []);
+            log.nav.info(`Loaded ${(data.messages || []).length} message(s) for "${title}"`);
         } catch (err) {
-            console.error('Failed to load messages:', err);
+            log.nav.error(`Failed to load messages for session ${id}`, err);
             setMessages([]);
         } finally {
             setLoadingMessages(false);
         }
-    }, [currentSessionId, setCurrentSession, setMessages, setSidebarOpen, setLoadingMessages]);
+    }, [currentSessionId, sessions, setCurrentSession, setMessages, setSidebarOpen, setLoadingMessages]);
 
     const handleDelete = useCallback(async (e: React.MouseEvent | React.KeyboardEvent, id: string) => {
         e.stopPropagation();
+        e.preventDefault();
+        const title = sessions.find((s) => s.id === id)?.title || '?';
         // If already pending confirm for this id, execute the delete
         if (pendingDeleteId === id) {
-            try {
-                await api.deleteSession(id);
-                removeSession(id);
-            } catch (err) {
-                console.error('Failed to delete session:', err);
-            }
+            log.chat.info(`Deleting session: "${title}" (${id})`);
+            // Remove from UI immediately (optimistic)
+            removeSession(id);
             setPendingDeleteId(null);
+            // Best-effort backend delete
+            api.deleteSession(id)
+                .then(() => log.chat.info(`Session deleted from backend: "${title}"`))
+                .catch((err) => log.chat.warn(`Backend delete failed for "${title}" (may not be running)`, err));
             return;
         }
         // First click: request confirmation
+        log.chat.debug(`Delete pending confirmation for: "${title}" (${id})`);
         setPendingDeleteId(id);
         // Auto-cancel after 3s
         setTimeout(() => setPendingDeleteId((prev) => (prev === id ? null : prev)), 3000);
-    }, [pendingDeleteId, removeSession]);
+    }, [pendingDeleteId, sessions, removeSession]);
 
     // Cancel pending delete on outside click
     useEffect(() => {
@@ -77,6 +89,35 @@ export function Sidebar({ onNewChat }: SidebarProps) {
         }
     }, [handleSelect]);
 
+    // Drag-to-resize handler
+    const handleResizeStart = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        setIsResizing(true);
+        log.ui.debug('Sidebar resize started');
+
+        const startX = e.clientX;
+        const startWidth = sidebarWidth;
+
+        const onMouseMove = (ev: MouseEvent) => {
+            const delta = ev.clientX - startX;
+            setSidebarWidth(startWidth + delta);
+        };
+
+        const onMouseUp = () => {
+            setIsResizing(false);
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            log.ui.debug('Sidebar resize ended');
+        };
+
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+    }, [sidebarWidth, setSidebarWidth]);
+
     const formatTime = (iso: string) => {
         const d = new Date(iso);
         const now = new Date();
@@ -91,8 +132,21 @@ export function Sidebar({ onNewChat }: SidebarProps) {
         return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
     };
 
+    // Compute inline width style (only on desktop)
+    const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
+    const sidebarStyle = isMobile ? undefined : {
+        width: sidebarCollapsed ? 56 : sidebarWidth,
+        minWidth: sidebarCollapsed ? 56 : sidebarWidth,
+    };
+
     return (
-        <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`} role="complementary" aria-label="Chat sidebar">
+        <aside
+            ref={sidebarRef}
+            className={`sidebar ${sidebarOpen ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''} ${isResizing ? 'resizing' : ''}`}
+            style={sidebarStyle}
+            role="complementary"
+            aria-label="Chat sidebar"
+        >
             <div className="sidebar-top">
                 <div className="sidebar-brand">
                     <div className="brand-icon" aria-hidden="true">
@@ -103,9 +157,19 @@ export function Sidebar({ onNewChat }: SidebarProps) {
                         <span className="brand-label">Chat</span>
                     </div>
                 </div>
-                <button className="new-chat-btn" onClick={onNewChat} title="New Chat" aria-label="New Chat">
-                    <Plus size={18} />
-                </button>
+                <div className="sidebar-top-actions">
+                    <button className="new-chat-btn" onClick={onNewChat} title="New Chat" aria-label="New Chat">
+                        <Plus size={18} />
+                    </button>
+                    <button
+                        className="collapse-btn"
+                        onClick={toggleSidebarCollapsed}
+                        title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                        aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                    >
+                        {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+                    </button>
+                </div>
             </div>
 
             <div className="sidebar-search">
@@ -138,15 +202,28 @@ export function Sidebar({ onNewChat }: SidebarProps) {
                     >
                         <span className="session-title">{s.title}</span>
                         <span className="session-time">{formatTime(s.updated_at)}</span>
-                        <button
-                            className={`session-delete ${pendingDeleteId === s.id ? 'confirm' : ''}`}
-                            onClick={(e) => handleDelete(e, s.id)}
-                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleDelete(e, s.id); }}
-                            title={pendingDeleteId === s.id ? 'Click again to confirm' : 'Delete'}
-                            aria-label={pendingDeleteId === s.id ? `Confirm delete: ${s.title}` : `Delete: ${s.title}`}
-                        >
-                            <Trash2 size={13} />
-                        </button>
+                        {pendingDeleteId === s.id ? (
+                            <button
+                                className="session-delete confirm"
+                                onClick={(e) => handleDelete(e, s.id)}
+                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleDelete(e, s.id); }}
+                                title="Click to confirm delete"
+                                aria-label={`Confirm delete: ${s.title}`}
+                            >
+                                <Trash2 size={12} />
+                                <span className="confirm-label">Delete?</span>
+                            </button>
+                        ) : (
+                            <button
+                                className="session-delete"
+                                onClick={(e) => handleDelete(e, s.id)}
+                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleDelete(e, s.id); }}
+                                title="Delete"
+                                aria-label={`Delete: ${s.title}`}
+                            >
+                                <Trash2 size={13} />
+                            </button>
+                        )}
                     </div>
                 ))}
             </nav>
@@ -169,6 +246,16 @@ export function Sidebar({ onNewChat }: SidebarProps) {
                     </button>
                 </div>
             </div>
+
+            {/* Drag-to-resize handle */}
+            {!sidebarCollapsed && (
+                <div
+                    className="sidebar-resize-handle"
+                    onMouseDown={handleResizeStart}
+                    title="Drag to resize sidebar"
+                    aria-hidden="true"
+                />
+            )}
         </aside>
     );
 }

@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
+import { log } from '../utils/logger';
 import type { SystemStatus } from '../types';
 import './SettingsModal.css';
 
@@ -14,18 +15,47 @@ export function SettingsModal() {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
+        log.system.info('Checking system status...');
+        const t = log.system.time();
         api.getSystemStatus()
-            .then(setStatus)
-            .catch(() => setStatus(null))
+            .then((s) => {
+                setStatus(s);
+                log.system.timed('System status received', t, {
+                    lemonade: s.lemonade_running ? 'running' : 'stopped',
+                    model: s.model_loaded || 'none',
+                    embedding: s.embedding_model_loaded ? 'yes' : 'no',
+                    disk: `${s.disk_space_gb}GB free`,
+                    memory: `${s.memory_available_gb}GB available`,
+                });
+                if (!s.lemonade_running) {
+                    log.system.warn('Lemonade Server is NOT running. Chat will not work. Start it with: lemonade-server serve');
+                }
+                if (!s.model_loaded) {
+                    log.system.warn('No model loaded. Download one with: gaia download --agent chat');
+                }
+            })
+            .catch((err) => {
+                log.system.error('Failed to get system status (backend not running?)', err);
+                setStatus(null);
+            })
             .finally(() => setLoading(false));
     }, []);
 
     const clearAll = async () => {
         if (!confirm('Delete ALL sessions, messages, and documents? This cannot be undone.')) return;
+        log.system.warn(`Clearing ALL data: ${sessions.length} session(s)`);
+        const t = log.system.time();
+        let deleted = 0;
         for (const s of sessions) {
-            await api.deleteSession(s.id).catch(() => {});
-            removeSession(s.id);
+            try {
+                await api.deleteSession(s.id);
+                removeSession(s.id);
+                deleted++;
+            } catch (err) {
+                log.system.error(`Failed to delete session ${s.id}`, err);
+            }
         }
+        log.system.timed(`Cleared ${deleted}/${sessions.length} session(s)`, t);
         setShowSettings(false);
     };
 

@@ -303,6 +303,31 @@ textarea:focus-visible {
         box-shadow: var(--shadow-lg);
     }
 
+    /* On mobile, sidebar is never collapsed — use slide-out instead */
+    .sidebar.collapsed {
+        width: var(--sidebar-w) !important;
+        min-width: var(--sidebar-w) !important;
+    }
+    .sidebar.collapsed .sidebar-brand .brand-text,
+    .sidebar.collapsed .sidebar-search,
+    .sidebar.collapsed .session-list,
+    .sidebar.collapsed .privacy-badge span:not(.privacy-dot),
+    .sidebar.collapsed .version-badge,
+    .sidebar.collapsed .new-chat-btn {
+        display: revert;
+    }
+    .sidebar.collapsed .sidebar-top { padding: 16px 16px 12px; justify-content: space-between; }
+    .sidebar.collapsed .sidebar-brand { gap: 10px; }
+    .sidebar.collapsed .sidebar-top-actions { gap: 4px; }
+    .sidebar.collapsed .sidebar-bottom { flex-direction: row; padding: 12px 14px; gap: 0; align-items: center; }
+    .sidebar.collapsed .sidebar-actions { flex-direction: row; gap: 2px; }
+
+    /* Hide collapse button on mobile (use hamburger instead) */
+    .collapse-btn { display: none; }
+
+    /* Hide resize handle on mobile */
+    .sidebar-resize-handle { display: none !important; }
+
     .chat-view,
     .welcome {
         padding-top: 48px;

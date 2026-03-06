@@ -10,6 +10,7 @@ import { DocumentLibrary } from './components/DocumentLibrary';
 import { SettingsModal } from './components/SettingsModal';
 import { useChatStore } from './stores/chatStore';
 import * as api from './services/api';
+import { log, logBanner } from './utils/logger';
 
 function App() {
     const {
@@ -25,11 +26,22 @@ function App() {
         setSidebarOpen,
     } = useChatStore();
 
-    // Load sessions on mount
+    // Startup banner + load sessions on mount
     useEffect(() => {
+        logBanner(__APP_VERSION__);
+        log.system.info('App mounting, loading sessions...');
+        const t = log.system.time();
+
         api.listSessions()
-            .then((data) => setSessions(data.sessions || []))
-            .catch((err) => console.error('Failed to load sessions:', err));
+            .then((data) => {
+                const sessions = data.sessions || [];
+                setSessions(sessions);
+                log.system.timed(`Loaded ${sessions.length} session(s)`, t);
+            })
+            .catch((err) => {
+                log.system.error('Failed to load sessions from backend', err);
+                log.system.warn('Is the Python backend running? Start it with: python -m gaia.chat.ui.server');
+            });
     }, [setSessions]);
 
     // Close sidebar on resize to desktop
@@ -45,24 +57,44 @@ function App() {
 
     // Create new chat
     const handleNewChat = useCallback(async () => {
+        log.chat.info('Creating new chat session...');
         try {
             const session = await api.createSession({ title: 'New Chat' });
+            log.chat.info(`Session created: id=${session.id}, title="${session.title}"`);
             addSession(session);
             setCurrentSession(session.id);
             setMessages([]);
             // Auto-close sidebar on mobile
             if (window.innerWidth <= 768) setSidebarOpen(false);
         } catch (err) {
-            console.error('Failed to create session:', err);
+            log.chat.error('Failed to create session', err);
         }
     }, [addSession, setCurrentSession, setMessages, setSidebarOpen]);
 
     // Create chat with a pre-filled prompt
     const handleNewChatWithPrompt = useCallback(async (prompt: string) => {
+        log.chat.info(`New chat with prompt: "${prompt.slice(0, 60)}..."`);
         await handleNewChat();
         // Dispatch a custom event so ChatView picks up the initial prompt
         window.dispatchEvent(new CustomEvent('gaia:send-prompt', { detail: { prompt } }));
     }, [handleNewChat]);
+
+    // Log view transitions
+    useEffect(() => {
+        if (currentSessionId) {
+            log.nav.info(`Viewing session: ${currentSessionId}`);
+        } else {
+            log.nav.info('Viewing welcome screen (no session selected)');
+        }
+    }, [currentSessionId]);
+
+    useEffect(() => {
+        if (showDocLibrary) log.ui.info('Document Library opened');
+    }, [showDocLibrary]);
+
+    useEffect(() => {
+        if (showSettings) log.ui.info('Settings modal opened');
+    }, [showSettings]);
 
     return (
         <div className="app">

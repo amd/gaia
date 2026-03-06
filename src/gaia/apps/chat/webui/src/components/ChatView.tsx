@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock } from 'lucide-react';
+import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
+import { AgentActivity } from './AgentActivity';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
-import type { Message } from '../types';
+import { log } from '../utils/logger';
+import type { Message, StreamEvent, AgentStep } from '../types';
 import './ChatView.css';
 
 const EMPTY_SUGGESTIONS = [
@@ -16,6 +18,50 @@ const EMPTY_SUGGESTIONS = [
     'Help me brainstorm ideas',
 ];
 
+let stepIdCounter = 0;
+
+/** Map an SSE agent event to an AgentStep for the UI. */
+function agentEventToStep(event: StreamEvent): AgentStep | null {
+    const id = ++stepIdCounter;
+    const ts = Date.now();
+
+    switch (event.type) {
+        case 'thinking':
+            return {
+                id, type: 'thinking', label: 'Thinking',
+                detail: event.content, active: true, timestamp: ts,
+            };
+        case 'tool_start':
+            return {
+                id, type: 'tool',
+                label: event.detail ? `Running command` : `Using tool`,
+                tool: event.tool,
+                detail: event.detail,
+                active: true, timestamp: ts,
+            };
+        case 'plan':
+            return {
+                id, type: 'plan', label: 'Created plan',
+                planSteps: event.steps, active: false,
+                success: true, timestamp: ts,
+            };
+        case 'step':
+            return {
+                id, type: 'status',
+                label: `Step ${event.step}${event.total ? ` of ${event.total}` : ''}`,
+                active: true, timestamp: ts,
+            };
+        case 'agent_error':
+            return {
+                id, type: 'error', label: 'Error',
+                detail: event.content, success: false,
+                active: false, timestamp: ts,
+            };
+        default:
+            return null;
+    }
+}
+
 interface ChatViewProps {
     sessionId: string;
 }
@@ -24,7 +70,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const {
         sessions, messages, setMessages, addMessage, updateSessionInList,
         isStreaming, streamingContent, setStreaming, appendStreamContent, clearStreamContent,
-        setShowDocLibrary, isLoadingMessages, setLoadingMessages,
+        agentSteps, addAgentStep, updateLastAgentStep, clearAgentSteps,
+        documents, setDocuments, setShowDocLibrary, isLoadingMessages, setLoadingMessages,
     } = useChatStore();
 
     const session = sessions.find((s) => s.id === sessionId);
@@ -33,6 +80,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const [titleDraft, setTitleDraft] = useState('');
     const [isDragOver, setIsDragOver] = useState(false);
     const [showScrollBtn, setShowScrollBtn] = useState(false);
+    // Store agent steps snapshot for completed messages
+    const [completedSteps, setCompletedSteps] = useState<AgentStep[]>([]);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesScrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -40,20 +89,36 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     // Load messages on mount
     useEffect(() => {
+        log.chat.info(`ChatView mounted for session=${sessionId}, loading messages...`);
+        const t = log.chat.time();
         setLoadingMessages(true);
         api.getMessages(sessionId)
-            .then((data) => setMessages(data.messages || []))
-            .catch(() => setMessages([]))
+            .then((data) => {
+                const msgs = data.messages || [];
+                setMessages(msgs);
+                log.chat.timed(`Loaded ${msgs.length} message(s) for session=${sessionId}`, t);
+            })
+            .catch((err) => {
+                log.chat.error(`Failed to load messages for session=${sessionId}`, err);
+                setMessages([]);
+            })
             .finally(() => setLoadingMessages(false));
     }, [sessionId, setMessages, setLoadingMessages]);
+
+    // Load indexed documents on mount (so context bar is always up to date)
+    useEffect(() => {
+        api.listDocuments()
+            .then((data) => setDocuments(data.documents || []))
+            .catch(() => {});
+    }, [setDocuments]);
 
     // Listen for external send-prompt events (from WelcomeScreen suggestions)
     useEffect(() => {
         const handler = (e: Event) => {
             const prompt = (e as CustomEvent).detail?.prompt;
             if (prompt) {
+                log.chat.info(`Received gaia:send-prompt event: "${prompt.slice(0, 60)}"`);
                 setInput(prompt);
-                // Trigger send on next tick so input is set
                 setTimeout(() => sendMessage(prompt), 50);
             }
         };
@@ -65,7 +130,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Auto-scroll
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages, streamingContent]);
+    }, [messages, streamingContent, agentSteps]);
 
     // Focus input
     useEffect(() => { inputRef.current?.focus(); }, [sessionId]);
@@ -84,11 +149,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     // Stop streaming
     const handleStop = useCallback(() => {
+        log.stream.warn('User stopped generation');
         if (abortRef.current) {
             abortRef.current.abort();
             abortRef.current = null;
         }
         if (streamingContent) {
+            log.stream.info(`Saving partial response (${streamingContent.length} chars)`);
             const assistantMsg: Message = {
                 id: Date.now() + 1,
                 session_id: sessionId,
@@ -96,12 +163,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 content: streamingContent,
                 created_at: new Date().toISOString(),
                 rag_sources: null,
+                agentSteps: agentSteps.length > 0 ? [...agentSteps] : undefined,
             };
             addMessage(assistantMsg);
         }
         setStreaming(false);
         clearStreamContent();
-    }, [sessionId, streamingContent, addMessage, setStreaming, clearStreamContent]);
+        setCompletedSteps([]);
+        clearAgentSteps();
+    }, [sessionId, streamingContent, agentSteps, addMessage, setStreaming, clearStreamContent, clearAgentSteps]);
 
     // Auto-resize textarea
     const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -114,7 +184,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Send message
     const sendMessage = useCallback(async (overrideText?: string) => {
         const text = (overrideText || input).trim();
-        if (!text || isStreaming) return;
+        if (!text || isStreaming) {
+            if (!text) log.chat.debug('Send blocked: empty message');
+            if (isStreaming) log.chat.debug('Send blocked: already streaming');
+            return;
+        }
+
+        log.chat.info(`Sending message to session=${sessionId}`, { length: text.length, preview: text.slice(0, 80) });
 
         setInput('');
         if (inputRef.current) inputRef.current.style.height = 'auto';
@@ -133,25 +209,61 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // Start streaming
         setStreaming(true);
         clearStreamContent();
+        clearAgentSteps();
+        setCompletedSteps([]);
+        stepIdCounter = 0;
+
+        log.stream.info('Starting agent stream...');
+        const streamStart = log.stream.time();
 
         let fullContent = '';
         let doneHandled = false;
 
-        const controller = api.sendMessageStream(
-            sessionId,
-            text,
-            // onChunk
-            (event) => {
-                if (event.content) {
-                    fullContent += event.content;
-                    appendStreamContent(event.content);
+        const controller = api.sendMessageStream(sessionId, text, {
+            onChunk: (event) => {
+                const content = event.content || '';
+                if (content) {
+                    fullContent += content;
+                    appendStreamContent(content);
                 }
             },
-            // onDone
-            (event) => {
+            onAgentEvent: (event) => {
+                // Tool completion updates the last tool step
+                if (event.type === 'tool_end') {
+                    updateLastAgentStep({ active: false, success: event.success !== false });
+                    return;
+                }
+                if (event.type === 'tool_result') {
+                    updateLastAgentStep({
+                        result: event.summary || event.title || 'Done',
+                        active: false,
+                        success: event.success !== false,
+                    });
+                    return;
+                }
+                // Filter out noisy status events - only show substantive activity
+                if (event.type === 'status') {
+                    return; // Status events are internal bookkeeping, not user-facing
+                }
+                if (event.type === 'step') {
+                    return; // Step headers are redundant with actual tool/thinking steps
+                }
+
+                const step = agentEventToStep(event);
+                if (step) addAgentStep(step);
+            },
+            onDone: (event) => {
                 if (doneHandled) return;
                 doneHandled = true;
+
                 const content = event.content || fullContent;
+                log.chat.timed(`Agent response complete: ${content.length} chars`, streamStart);
+
+                // Snapshot agent steps for the completed message
+                const stepsSnapshot = useChatStore.getState().agentSteps.map((s) => ({
+                    ...s, active: false,
+                }));
+
                 if (content) {
                     const assistantMsg: Message = {
                         id: event.message_id || Date.now() + 1,
@@ -160,22 +272,26 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         content,
                         created_at: new Date().toISOString(),
                         rag_sources: null,
+                        agentSteps: stepsSnapshot.length > 0 ? stepsSnapshot : undefined,
                     };
                     addMessage(assistantMsg);
                 }
+
+                setCompletedSteps(stepsSnapshot);
                 setStreaming(false);
                 clearStreamContent();
+                clearAgentSteps();
 
                 // Auto-title on first message
                 if (session && session.title === 'New Chat') {
                     const autoTitle = text.slice(0, 50) + (text.length > 50 ? '...' : '');
                     api.updateSession(sessionId, { title: autoTitle })
                         .then(() => updateSessionInList(sessionId, { title: autoTitle }))
-                        .catch(() => {});
+                        .catch((err) => log.chat.error('Auto-title failed', err));
                 }
             },
-            // onError
-            (err) => {
+            onError: (err) => {
+                log.chat.error(`Chat error for session=${sessionId}`, err);
                 const errMsg: Message = {
                     id: Date.now() + 2,
                     session_id: sessionId,
@@ -187,11 +303,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 addMessage(errMsg);
                 setStreaming(false);
                 clearStreamContent();
+                clearAgentSteps();
             },
-        );
+        });
 
         abortRef.current = controller;
-    }, [input, isStreaming, sessionId, session, addMessage, setStreaming, appendStreamContent, clearStreamContent, updateSessionInList]);
+    }, [input, isStreaming, sessionId, session, addMessage, setStreaming, appendStreamContent, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, clearAgentSteps]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -226,40 +343,30 @@ export function ChatView({ sessionId }: ChatViewProps) {
             a.click();
             URL.revokeObjectURL(url);
         } catch (err) {
-            console.error('Export failed:', err);
+            log.chat.error('Export failed', err);
         }
     };
 
-    // Drag & drop - upload files directly
+    // Drag & drop
     const handleDrop = useCallback(async (e: React.DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
         setIsDragOver(false);
         if (e.dataTransfer.files.length > 0) {
             setShowDocLibrary(true);
-            // Upload each dropped file by path (works in Electron where file.path is available)
             for (const file of Array.from(e.dataTransfer.files)) {
                 const filepath = (file as any).path || file.name;
                 try {
                     await api.uploadDocumentByPath(filepath);
                 } catch (err) {
-                    console.error('Failed to upload dropped file:', err);
+                    log.doc.error(`Upload failed: ${filepath}`, err);
                 }
             }
         }
     }, [setShowDocLibrary]);
 
-    const handleDragOver = (e: React.DragEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setIsDragOver(true);
-    };
-
-    const handleDragLeave = (e: React.DragEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setIsDragOver(false);
-    };
+    const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
+    const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
 
     const handleSuggestionClick = (text: string) => {
         setInput(text);
@@ -308,6 +415,25 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 </div>
             </header>
 
+            {/* Indexed documents context bar */}
+            {documents.length > 0 && (
+                <button
+                    className="doc-context-bar"
+                    onClick={() => setShowDocLibrary(true)}
+                    title="Click to manage documents"
+                    aria-label={`${documents.length} indexed document${documents.length !== 1 ? 's' : ''}`}
+                >
+                    <FileText size={12} className="doc-context-icon" />
+                    <span className="doc-context-label">
+                        {documents.length} document{documents.length !== 1 ? 's' : ''} indexed
+                    </span>
+                    <span className="doc-context-names">
+                        {documents.slice(0, 3).map((d) => d.filename).join(', ')}
+                        {documents.length > 3 && ` +${documents.length - 3} more`}
+                    </span>
+                </button>
+            )}
+
             {/* Messages */}
             <div className="messages-scroll" ref={messagesScrollRef} onScroll={handleScroll}>
                 {isLoadingMessages && (
@@ -338,28 +464,41 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 )}
 
                 {messages.map((msg) => (
-                    <MessageBubble key={msg.id} message={msg} />
-                ))}
-                {isStreaming && streamingContent && (
-                    <MessageBubble
-                        message={{
-                            id: -1,
-                            session_id: sessionId,
-                            role: 'assistant',
-                            content: streamingContent,
-                            created_at: '',
-                            rag_sources: null,
-                        }}
-                        isStreaming
-                    />
-                )}
-                {isStreaming && !streamingContent && (
-                    <div className="typing-row">
-                        <span className="typing-label">GAIA</span>
-                        <div className="typing-dots">
-                            <span /><span /><span />
-                        </div>
+                    <div key={msg.id}>
+                        {/* Show collapsed agent steps above assistant messages */}
+                        {msg.role === 'assistant' && msg.agentSteps && msg.agentSteps.length > 0 && (
+                            <AgentActivity
+                                steps={msg.agentSteps}
+                                isActive={false}
+                                variant="summary"
+                            />
+                        )}
+                        <MessageBubble message={msg} />
                     </div>
+                ))}
+
+                {/* Active agent activity during streaming */}
+                {isStreaming && (
+                    <>
+                        <AgentActivity
+                            steps={agentSteps}
+                            isActive={true}
+                            variant="inline"
+                        />
+                        {streamingContent && (
+                            <MessageBubble
+                                message={{
+                                    id: -1,
+                                    session_id: sessionId,
+                                    role: 'assistant',
+                                    content: streamingContent,
+                                    created_at: '',
+                                    rag_sources: null,
+                                }}
+                                isStreaming
+                            />
+                        )}
+                    </>
                 )}
                 <div ref={messagesEndRef} />
             </div>

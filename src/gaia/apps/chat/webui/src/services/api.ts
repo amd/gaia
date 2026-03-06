@@ -4,75 +4,143 @@
 /** API client for GAIA Chat UI backend. */
 
 import type { Session, Message, Document, SystemStatus, StreamEvent } from '../types';
+import { log } from '../utils/logger';
 
 const API_BASE = '/api';
 
-// ── System ─────────────────────────────────────────────────────────────────
+// -- Helpers -------------------------------------------------------------------
+
+/** Fetch wrapper with logging, timing, and error handling. */
+async function apiFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const url = `${API_BASE}${path}`;
+    const t = log.api.time();
+
+    log.api.info(`${method} ${url}`, body !== undefined ? { body } : '');
+
+    const init: RequestInit = {
+        method,
+        headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+    };
+
+    let res: Response;
+    try {
+        res = await fetch(url, init);
+    } catch (err) {
+        log.api.error(`${method} ${url} - network error`, err);
+        throw err;
+    }
+
+    if (!res.ok) {
+        const errorText = await res.text().catch(() => 'unable to read response body');
+        log.api.error(`${method} ${url} - HTTP ${res.status} ${res.statusText}`, { errorText });
+        throw new Error(`API ${res.status}: ${errorText}`);
+    }
+
+    // Some endpoints (DELETE) may not return JSON
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+        log.api.timed(`${method} ${url} -> ${res.status} (no body)`, t);
+        return undefined as T;
+    }
+
+    const data = await res.json();
+    log.api.timed(`${method} ${url} -> ${res.status}`, t, data);
+    return data;
+}
+
+// -- System --------------------------------------------------------------------
 
 export async function getSystemStatus(): Promise<SystemStatus> {
-    const res = await fetch(`${API_BASE}/system/status`);
-    return res.json();
+    return apiFetch<SystemStatus>('GET', '/system/status');
 }
 
 export async function getHealth(): Promise<{ status: string; stats: Record<string, number> }> {
-    const res = await fetch(`${API_BASE}/health`);
-    return res.json();
+    return apiFetch('GET', '/health');
 }
 
-// ── Sessions ───────────────────────────────────────────────────────────────
+// -- Sessions ------------------------------------------------------------------
 
 export async function listSessions(): Promise<{ sessions: Session[]; total: number }> {
-    const res = await fetch(`${API_BASE}/sessions`);
-    return res.json();
+    return apiFetch('GET', '/sessions');
 }
 
 export async function createSession(data: Partial<Session> = {}): Promise<Session> {
-    const res = await fetch(`${API_BASE}/sessions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-    });
-    return res.json();
+    return apiFetch('POST', '/sessions', data);
 }
 
 export async function getSession(id: string): Promise<Session> {
-    const res = await fetch(`${API_BASE}/sessions/${id}`);
-    return res.json();
+    return apiFetch('GET', `/sessions/${id}`);
 }
 
 export async function updateSession(id: string, data: { title?: string; system_prompt?: string }): Promise<Session> {
-    const res = await fetch(`${API_BASE}/sessions/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-    });
-    return res.json();
+    return apiFetch('PUT', `/sessions/${id}`, data);
 }
 
 export async function deleteSession(id: string): Promise<void> {
-    await fetch(`${API_BASE}/sessions/${id}`, { method: 'DELETE' });
+    return apiFetch('DELETE', `/sessions/${id}`);
 }
 
 export async function getMessages(sessionId: string): Promise<{ messages: Message[]; total: number }> {
-    const res = await fetch(`${API_BASE}/sessions/${sessionId}/messages`);
-    return res.json();
+    return apiFetch('GET', `/sessions/${sessionId}/messages`);
 }
 
 export async function exportSession(sessionId: string): Promise<{ content: string }> {
-    const res = await fetch(`${API_BASE}/sessions/${sessionId}/export?format=markdown`);
-    return res.json();
+    return apiFetch('GET', `/sessions/${sessionId}/export?format=markdown`);
 }
 
-// ── Chat (Streaming) ──────────────────────────────────────────────────────
+// -- Chat (Streaming with Agent Events) ----------------------------------------
+
+/**
+ * Callbacks for agent streaming events.
+ *
+ * The stream can produce both text chunks (for the response)
+ * and agent activity events (steps, tool calls, thinking).
+ */
+export interface StreamCallbacks {
+    /** Text chunk for the response content. */
+    onChunk: (event: StreamEvent) => void;
+    /** Agent activity event (step, tool, thinking, plan, etc.). */
+    onAgentEvent: (event: StreamEvent) => void;
+    /** Stream complete with final response. */
+    onDone: (event: StreamEvent) => void;
+    /** Error occurred. */
+    onError: (error: Error) => void;
+}
+
+/** Agent event types that represent activity rather than content. */
+const AGENT_EVENT_TYPES = new Set([
+    'status', 'step', 'thinking', 'plan',
+    'tool_start', 'tool_end', 'tool_result', 'agent_error',
+]);
 
 export function sendMessageStream(
     sessionId: string,
     message: string,
-    onChunk: (event: StreamEvent) => void,
-    onDone: (event: StreamEvent) => void,
-    onError: (error: Error) => void,
+    onChunkOrCallbacks: ((event: StreamEvent) => void) | StreamCallbacks,
+    onDone?: (event: StreamEvent) => void,
+    onError?: (error: Error) => void,
 ): AbortController {
+    // Support both old 3-arg style and new callbacks style
+    let callbacks: StreamCallbacks;
+    if (typeof onChunkOrCallbacks === 'function') {
+        callbacks = {
+            onChunk: onChunkOrCallbacks,
+            onAgentEvent: () => {},  // no-op if using old API
+            onDone: onDone!,
+            onError: onError!,
+        };
+    } else {
+        callbacks = onChunkOrCallbacks;
+    }
+
     const controller = new AbortController();
+    const t = log.stream.time();
+    let chunkCount = 0;
+    let totalChars = 0;
+    let agentEventCount = 0;
+
+    log.stream.info(`Starting SSE stream for session=${sessionId}`, { messageLength: message.length });
 
     fetch(`${API_BASE}/chat/send`, {
         method: 'POST',
@@ -85,9 +153,19 @@ export function sendMessageStream(
         signal: controller.signal,
     })
         .then(async (res) => {
+            log.stream.info(`SSE connection opened -> HTTP ${res.status}`);
+
+            if (!res.ok) {
+                const errText = await res.text().catch(() => '');
+                log.stream.error(`SSE connection failed: HTTP ${res.status}`, errText);
+                callbacks.onError(new Error(`HTTP ${res.status}: ${errText}`));
+                return;
+            }
+
             const reader = res.body?.getReader();
             if (!reader) {
-                onError(new Error('No response body'));
+                log.stream.error('No response body reader available');
+                callbacks.onError(new Error('No response body'));
                 return;
             }
 
@@ -96,7 +174,10 @@ export function sendMessageStream(
 
             while (true) {
                 const { done, value } = await reader.read();
-                if (done) break;
+                if (done) {
+                    log.stream.debug('SSE reader done (stream ended)');
+                    break;
+                }
 
                 buffer += decoder.decode(value, { stream: true });
                 const lines = buffer.split('\n');
@@ -108,56 +189,71 @@ export function sendMessageStream(
                         if (!raw) continue;
                         try {
                             const event: StreamEvent = JSON.parse(raw);
-                            if (event.type === 'chunk') onChunk(event);
-                            else if (event.type === 'done') onDone(event);
-                            else if (event.type === 'error') onError(new Error(event.content || 'Unknown error'));
-                        } catch {
-                            // skip malformed
+
+                            if (event.type === 'chunk') {
+                                chunkCount++;
+                                totalChars += (event.content || '').length;
+                                if (chunkCount <= 3 || chunkCount % 50 === 0) {
+                                    log.stream.debug(`Chunk #${chunkCount} (+${(event.content || '').length} chars)`);
+                                }
+                                callbacks.onChunk(event);
+                            } else if (event.type === 'answer') {
+                                // Agent final answer - treat as content
+                                callbacks.onChunk(event);
+                            } else if (event.type === 'done') {
+                                log.stream.timed(`Stream complete: ${chunkCount} chunks, ${totalChars} chars, ${agentEventCount} agent events`, t);
+                                callbacks.onDone(event);
+                            } else if (event.type === 'error') {
+                                log.stream.error(`Stream error event:`, event.content);
+                                callbacks.onError(new Error(event.content || 'Unknown error'));
+                            } else if (AGENT_EVENT_TYPES.has(event.type)) {
+                                agentEventCount++;
+                                log.stream.debug(`Agent event: ${event.type}`, event);
+                                callbacks.onAgentEvent(event);
+                            } else {
+                                log.stream.warn(`Unknown SSE event type: ${event.type}`, event);
+                            }
+                        } catch (parseErr) {
+                            log.stream.warn(`Malformed SSE data, skipping`, { raw: raw.slice(0, 100) });
                         }
                     }
                 }
             }
 
             // If no explicit done event was sent, signal completion
-            onDone({ type: 'done' });
+            log.stream.timed(`SSE connection closed: ${chunkCount} chunks, ${agentEventCount} agent events`, t);
+            callbacks.onDone({ type: 'done' });
         })
         .catch((err) => {
-            if (err.name !== 'AbortError') {
-                onError(err);
+            if (err.name === 'AbortError') {
+                log.stream.warn(`Stream aborted by user after ${chunkCount} chunks`);
+            } else {
+                log.stream.error(`Stream fetch error`, err);
+                callbacks.onError(err);
             }
         });
 
     return controller;
 }
 
-// ── Documents ──────────────────────────────────────────────────────────────
+// -- Documents -----------------------------------------------------------------
 
 export async function listDocuments(): Promise<{ documents: Document[]; total: number; total_size_bytes: number; total_chunks: number }> {
-    const res = await fetch(`${API_BASE}/documents`);
-    return res.json();
+    return apiFetch('GET', '/documents');
 }
 
 export async function uploadDocumentByPath(filepath: string): Promise<Document> {
-    const res = await fetch(`${API_BASE}/documents/upload-path`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filepath }),
-    });
-    return res.json();
+    return apiFetch('POST', '/documents/upload-path', { filepath });
 }
 
 export async function deleteDocument(id: string): Promise<void> {
-    await fetch(`${API_BASE}/documents/${id}`, { method: 'DELETE' });
+    return apiFetch('DELETE', `/documents/${id}`);
 }
 
 export async function attachDocument(sessionId: string, documentId: string): Promise<void> {
-    await fetch(`${API_BASE}/sessions/${sessionId}/documents`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ document_id: documentId }),
-    });
+    return apiFetch('POST', `/sessions/${sessionId}/documents`, { document_id: documentId });
 }
 
 export async function detachDocument(sessionId: string, documentId: string): Promise<void> {
-    await fetch(`${API_BASE}/sessions/${sessionId}/documents/${documentId}`, { method: 'DELETE' });
+    return apiFetch('DELETE', `/sessions/${sessionId}/documents/${documentId}`);
 }

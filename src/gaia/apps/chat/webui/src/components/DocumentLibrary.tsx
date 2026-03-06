@@ -5,6 +5,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { X, Upload, Trash2, FileText, FolderOpen } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
+import { log } from '../utils/logger';
 import type { Document } from '../types';
 import './DocumentLibrary.css';
 
@@ -17,9 +18,18 @@ export function DocumentLibrary() {
 
     // Load documents
     useEffect(() => {
+        log.doc.info('Loading document library...');
+        const t = log.doc.time();
         api.listDocuments()
-            .then((data) => setDocuments(data.documents || []))
-            .catch(() => setDocuments([]));
+            .then((data) => {
+                const docs = data.documents || [];
+                setDocuments(docs);
+                log.doc.timed(`Loaded ${docs.length} document(s), ${data.total_chunks || 0} chunks, ${data.total_size_bytes || 0} bytes total`, t);
+            })
+            .catch((err) => {
+                log.doc.error('Failed to load documents', err);
+                setDocuments([]);
+            });
     }, [setDocuments]);
 
     const totalSize = documents.reduce((sum, d) => sum + d.file_size, 0);
@@ -34,15 +44,18 @@ export function DocumentLibrary() {
     };
 
     const uploadFile = useCallback(async (filepath: string, filename: string) => {
+        log.doc.info(`Indexing document: ${filename} (${filepath})`);
+        const t = log.doc.time();
         setIsUploading(true);
         setUploadStatus(`Indexing ${filename}...`);
         try {
-            await api.uploadDocumentByPath(filepath);
+            const doc = await api.uploadDocumentByPath(filepath);
+            log.doc.timed(`Indexed "${filename}": ${doc?.chunk_count || '?'} chunks`, t);
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
             setUploadStatus('');
         } catch (err) {
-            console.error('Upload failed:', err);
+            log.doc.error(`Failed to index "${filename}"`, err);
             setUploadStatus('Upload failed');
         } finally {
             setIsUploading(false);
@@ -52,24 +65,30 @@ export function DocumentLibrary() {
     const handleDrop = useCallback(async (e: React.DragEvent) => {
         e.preventDefault();
         setIsDragOver(false);
-        for (const file of Array.from(e.dataTransfer.files)) {
+        const files = Array.from(e.dataTransfer.files);
+        log.doc.info(`Dropped ${files.length} file(s) into Document Library`);
+        for (const file of files) {
             const path = (file as any).path || file.name;
             await uploadFile(path, file.name);
         }
     }, [uploadFile]);
 
     const handleDeleteDoc = useCallback(async (id: string) => {
+        const doc = documents.find((d) => d.id === id);
+        log.doc.info(`Deleting document: ${doc?.filename || id}`);
         try {
             await api.deleteDocument(id);
             setDocuments(documents.filter((d) => d.id !== id));
+            log.doc.info(`Deleted document: ${doc?.filename || id}`);
         } catch (err) {
-            console.error('Delete failed:', err);
+            log.doc.error(`Failed to delete document: ${doc?.filename || id}`, err);
         }
     }, [documents, setDocuments]);
 
     const handleFolderSubmit = useCallback(async (e: React.FormEvent) => {
         e.preventDefault();
         if (!folderPath.trim()) return;
+        log.doc.info(`Indexing from path input: ${folderPath.trim()}`);
         await uploadFile(folderPath.trim(), folderPath.trim().split(/[\\/]/).pop() || 'file');
         setFolderPath('');
     }, [folderPath, uploadFile]);

@@ -21,6 +21,8 @@ export interface Message {
     content: string;
     created_at: string;
     rag_sources: SourceInfo[] | null;
+    /** Agent activity that occurred while generating this message. */
+    agentSteps?: AgentStep[];
 }
 
 export interface SourceInfo {
@@ -52,8 +54,62 @@ export interface SystemStatus {
     version: string;
 }
 
+// ── Agent Activity Types ──────────────────────────────────────────────────
+
+/** A single step in the agent's execution. */
+export interface AgentStep {
+    id: number;
+    type: 'thinking' | 'tool' | 'plan' | 'status' | 'error';
+    /** Short label shown in collapsed view. */
+    label: string;
+    /** Detailed content shown when expanded. */
+    detail?: string;
+    /** Tool name (for type='tool'). */
+    tool?: string;
+    /** Tool result summary (for type='tool'). */
+    result?: string;
+    /** Whether this step completed successfully. */
+    success?: boolean;
+    /** Whether this step is currently running. */
+    active?: boolean;
+    /** Plan steps (for type='plan'). */
+    planSteps?: string[];
+    /** Timestamp when this step started. */
+    timestamp: number;
+}
+
+/** Extended SSE event types for agent communication. */
+export type StreamEventType =
+    | 'chunk'       // Text content chunk
+    | 'done'        // Stream complete
+    | 'error'       // Error
+    | 'status'      // Agent state change
+    | 'step'        // Step progress
+    | 'thinking'    // Agent reasoning
+    | 'plan'        // Agent plan
+    | 'tool_start'  // Tool execution started
+    | 'tool_end'    // Tool execution completed
+    | 'tool_result' // Tool result summary
+    | 'answer'      // Final answer from agent
+    | 'agent_error';// Agent-level error (non-fatal)
+
 export interface StreamEvent {
-    type: 'chunk' | 'done' | 'error';
+    type: StreamEventType;
     content?: string;
     message_id?: number;
+    // Agent-specific fields
+    status?: string;
+    message?: string;
+    step?: number;
+    total?: number;
+    tool?: string;
+    summary?: string;
+    success?: boolean;
+    steps?: string[];
+    current_step?: number;
+    title?: string;
+    detail?: string;
+    model?: string;
+    elapsed?: number;
+    tools_used?: number;
 }

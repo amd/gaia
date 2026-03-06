@@ -281,9 +281,12 @@ describe('Chat App Integration', () => {
     });
 
     it('should use proper HTTP methods', () => {
-      expect(apiContent).toContain("method: 'POST'");
-      expect(apiContent).toContain("method: 'PUT'");
-      expect(apiContent).toContain("method: 'DELETE'");
+      // apiFetch uses method as first arg: apiFetch('POST', ...), apiFetch('PUT', ...), etc.
+      // The SSE streaming code also uses method: 'POST' directly in fetch options.
+      expect(apiContent).toContain("'POST'");
+      expect(apiContent).toContain("'PUT'");
+      expect(apiContent).toContain("'DELETE'");
+      expect(apiContent).toContain("'GET'");
     });
 
     it('should have copyright and license header', () => {
@@ -1024,8 +1027,10 @@ describe('Chat App Integration', () => {
       expect(storeContent).toContain('setLoadingMessages');
     });
 
-    it('should default sidebarOpen to true', () => {
-      expect(storeContent).toContain('sidebarOpen: true');
+    it('should default sidebarOpen based on window width', () => {
+      // sidebarOpen uses responsive default: window.innerWidth > 768
+      expect(storeContent).toContain('sidebarOpen:');
+      expect(storeContent).toMatch(/sidebarOpen.*window\.innerWidth.*768|sidebarOpen:\s*true/);
     });
 
     it('should default isLoadingMessages to false', () => {
