@@ -284,10 +284,13 @@ def create_app(db_path: str = None) -> FastAPI:
     @app.post("/api/documents/upload-path", response_model=DocumentResponse)
     async def upload_by_path(request: DocumentUploadRequest):
         """Index a document by file path (for Electron/local use)."""
-        filepath = Path(request.filepath)
+        filepath = Path(request.filepath).resolve()
+
+        # Validate the path is safe (resolved, absolute, no traversal)
+        _validate_file_path(filepath)
 
         if not filepath.exists():
-            raise HTTPException(status_code=404, detail=f"File not found: {filepath}")
+            raise HTTPException(status_code=404, detail="File not found")
 
         if not filepath.is_file():
             raise HTTPException(status_code=400, detail="Path is not a file")
@@ -357,9 +360,9 @@ def create_app(db_path: str = None) -> FastAPI:
         @app.get("/{full_path:path}")
         async def serve_spa(full_path: str):
             """Serve the React SPA for all non-API routes."""
-            # Check if the requested file exists in dist
-            file_path = _webui_dist / full_path
-            if full_path and file_path.is_file():
+            # Resolve and validate the path stays within the dist directory
+            file_path = (_webui_dist / full_path).resolve()
+            if full_path and str(file_path).startswith(str(_webui_dist.resolve())) and file_path.is_file():
                 return FileResponse(str(file_path))
             # Default to index.html for SPA routing
             return FileResponse(str(_webui_dist / "index.html"))
@@ -488,8 +491,8 @@ async def _get_chat_response(
         return response.text
 
     except Exception as e:
-        logger.error("Chat error: %s", e)
-        return f"Error: Could not get response from LLM. Is Lemonade Server running? ({e})"
+        logger.error("Chat error: %s", e, exc_info=True)
+        return "Error: Could not get response from LLM. Is Lemonade Server running? Check server logs for details."
 
 
 async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRequest):
@@ -594,8 +597,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             yield f"data: {error_data}\n\n"
 
     except Exception as e:
-        logger.error("Chat streaming error: %s", e)
-        error_msg = f"Error: {e}"
+        logger.error("Chat streaming error: %s", e, exc_info=True)
+        error_msg = "Error: Could not get response from LLM. Is Lemonade Server running? Check server logs for details."
         db.add_message(request.session_id, "assistant", error_msg)
         error_data = json.dumps({"type": "error", "content": error_msg})
         yield f"data: {error_data}\n\n"
