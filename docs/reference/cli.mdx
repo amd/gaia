@@ -366,6 +366,8 @@ gaia chat [MESSAGE] [OPTIONS]
 | `--show-prompts` | flag | false | Display prompts sent to LLM |
 | `--debug` | flag | false | Enable debug output |
 | `--list-tools` | flag | false | List available tools and exit |
+| `--ui` | flag | false | Launch the Chat Web UI (browser-based interface on port 4200) |
+| `--ui-port` | integer | 4200 | Port for the Chat UI server (used with `--ui`) |
 
 **Examples:**
 
@@ -395,6 +397,14 @@ gaia chat \
   --model Qwen3-Coder-30B-A3B-Instruct-GGUF \
   --streaming \
   --show-stats
+```
+
+```bash Web UI
+gaia chat --ui
+```
+
+```bash Web UI on Custom Port
+gaia chat --ui --ui-port 8080
 ```
 </CodeGroup>
 

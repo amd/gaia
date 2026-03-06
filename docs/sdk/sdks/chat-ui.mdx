@@ -1,0 +1,827 @@
+---
+title: "Chat UI SDK"
+description: "Python backend SDK for the GAIA Chat desktop application - FastAPI server, SQLite database, and Pydantic models"
+icon: "desktop"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/chat/ui/`](https://github.com/amd/gaia/blob/main/src/gaia/chat/ui/)
+</Info>
+
+<Note>
+**Import:**
+```python
+from gaia.chat.ui.server import create_app, DEFAULT_PORT
+from gaia.chat.ui.database import ChatDatabase, DEFAULT_DB_PATH
+from gaia.chat.ui.models import SystemStatus, ChatRequest, SessionResponse, DocumentResponse
+```
+</Note>
+
+**See also:** [User Guide](/guides/chat-ui) | [Chat SDK](/sdk/sdks/chat) | [API Specification](/spec/chat-ui-server)
+
+---
+
+## Overview
+
+The Chat UI SDK is the Python backend that powers GAIA Chat Desktop. It provides:
+
+- **FastAPI REST server** with session, chat, and document endpoints
+- **SQLite database** for persistent sessions, messages, and document metadata
+- **SSE streaming** for real-time chat responses
+- **RAG integration** for document Q&A
+- **Pydantic models** for request/response validation
+
+The backend runs on port `4200` by default and serves both the Electron desktop app and browser-based clients.
+
+---
+
+## Quick Start
+
+### Start the Server
+
+```python
+from gaia.chat.ui.server import create_app
+
+# Create with default database (~/.gaia/chat/gaia_chat.db)
+app = create_app()
+
+# Create with custom database path
+app = create_app(db_path="/path/to/my/chat.db")
+
+# Create with in-memory database (for testing)
+app = create_app(db_path=":memory:")
+```
+
+Run with uvicorn:
+
+```python
+import uvicorn
+from gaia.chat.ui.server import create_app
+
+app = create_app()
+uvicorn.run(app, host="localhost", port=4200)
+```
+
+Or from the command line:
+
+```bash
+python -m gaia.chat.ui.server --port 4200
+```
+
+### Use the Database Directly
+
+```python
+from gaia.chat.ui.database import ChatDatabase
+
+db = ChatDatabase()  # Uses default path ~/.gaia/chat/gaia_chat.db
+
+# Create a session
+session = db.create_session(title="My Chat", model="Qwen3-Coder-30B-A3B-Instruct-GGUF")
+print(f"Session ID: {session['id']}")
+
+# Add messages
+db.add_message(session["id"], "user", "Hello!")
+db.add_message(session["id"], "assistant", "Hi there! How can I help?")
+
+# Retrieve messages
+messages = db.get_messages(session["id"])
+for msg in messages:
+    print(f"{msg['role']}: {msg['content']}")
+
+# Clean up
+db.close()
+```
+
+---
+
+## Core Classes
+
+### ChatDatabase
+
+The persistence layer for all Chat UI data. Uses SQLite with WAL mode for concurrent read access.
+
+```python
+from gaia.chat.ui.database import ChatDatabase, DEFAULT_DB_PATH
+```
+
+**Constructor:**
+
+```python
+class ChatDatabase:
+    def __init__(self, db_path: str = None):
+        """Initialize database connection.
+
+        Args:
+            db_path: Path to SQLite database file.
+                     Defaults to ~/.gaia/chat/gaia_chat.db.
+                     Use ":memory:" for in-memory database (testing).
+        """
+```
+
+#### Session Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `create_session` | `(title?, model?, system_prompt?, document_ids?) -> Dict` | Create a new chat session |
+| `get_session` | `(session_id) -> Optional[Dict]` | Get session by ID with message count and document IDs |
+| `list_sessions` | `(limit=50, offset=0) -> List[Dict]` | List sessions ordered by most recently updated |
+| `count_sessions` | `() -> int` | Count total sessions |
+| `update_session` | `(session_id, title?, system_prompt?) -> Optional[Dict]` | Update session title and/or system prompt |
+| `delete_session` | `(session_id) -> bool` | Delete a session and its messages (cascading) |
+| `touch_session` | `(session_id) -> None` | Update the session's `updated_at` timestamp |
+
+**Example:**
+
+```python
+db = ChatDatabase()
+
+# Create session with attached documents
+session = db.create_session(
+    title="Project Review",
+    model="Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    system_prompt="You are a code review assistant.",
+    document_ids=["doc-abc123"],
+)
+
+# Update title
+db.update_session(session["id"], title="Sprint 42 Review")
+
+# List recent sessions
+for s in db.list_sessions(limit=10):
+    print(f"{s['title']} ({s['message_count']} messages)")
+```
+
+#### Message Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `add_message` | `(session_id, role, content, rag_sources?, tokens_prompt?, tokens_completion?) -> int` | Add a message, returns message ID |
+| `get_messages` | `(session_id, limit=100, offset=0) -> List[Dict]` | Get messages oldest-first |
+| `count_messages` | `(session_id) -> int` | Count messages in a session |
+
+**Example:**
+
+```python
+# Add a user message
+db.add_message(session_id, "user", "What does this function do?")
+
+# Add an assistant message with RAG sources
+db.add_message(
+    session_id,
+    "assistant",
+    "This function initializes the database connection...",
+    rag_sources=[
+        {"document_id": "doc-123", "filename": "main.py", "chunk": "def init_db()...", "score": 0.92}
+    ],
+    tokens_prompt=150,
+    tokens_completion=87,
+)
+
+# Retrieve conversation
+messages = db.get_messages(session_id)
+for msg in messages:
+    print(f"[{msg['role']}] {msg['content'][:80]}...")
+```
+
+#### Document Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `add_document` | `(filename, filepath, file_hash, file_size?, chunk_count?) -> Dict` | Add document to library (deduplicates by hash) |
+| `get_document` | `(doc_id) -> Optional[Dict]` | Get document by ID |
+| `list_documents` | `() -> List[Dict]` | List all documents |
+| `delete_document` | `(doc_id) -> bool` | Delete a document |
+| `attach_document` | `(session_id, document_id) -> bool` | Attach document to session |
+| `detach_document` | `(session_id, document_id) -> bool` | Detach document from session |
+| `get_session_documents` | `(session_id) -> List[Dict]` | Get all documents for a session |
+
+**Example:**
+
+```python
+import hashlib
+
+# Add a document
+doc = db.add_document(
+    filename="manual.pdf",
+    filepath="/home/user/docs/manual.pdf",
+    file_hash=hashlib.sha256(open("manual.pdf", "rb").read()).hexdigest(),
+    file_size=1_234_567,
+    chunk_count=45,
+)
+
+# Attach to a session
+db.attach_document(session_id, doc["id"])
+
+# Check which documents are in a session
+docs = db.get_session_documents(session_id)
+for d in docs:
+    print(f"{d['filename']} ({d['chunk_count']} chunks)")
+```
+
+#### Statistics
+
+```python
+stats = db.get_stats()
+print(f"Sessions: {stats['sessions']}")
+print(f"Messages: {stats['messages']}")
+print(f"Documents: {stats['documents']}")
+print(f"Total chunks: {stats['total_chunks']}")
+print(f"Total size: {stats['total_size_bytes']} bytes")
+```
+
+---
+
+### create_app()
+
+Factory function that creates and configures the FastAPI application with all endpoints.
+
+```python
+from gaia.chat.ui.server import create_app
+
+def create_app(db_path: str = None) -> FastAPI:
+    """Create and configure the FastAPI application.
+
+    Args:
+        db_path: Path to SQLite database.
+                 None for default (~/.gaia/chat/gaia_chat.db).
+                 ":memory:" for testing.
+
+    Returns:
+        Configured FastAPI application with all endpoints registered.
+    """
+```
+
+The database instance is stored on `app.state.db` and is accessible in tests:
+
+```python
+app = create_app(db_path=":memory:")
+db = app.state.db
+```
+
+---
+
+## Pydantic Models
+
+All request and response bodies use Pydantic models from `gaia.chat.ui.models`.
+
+### System
+
+```python
+class SystemStatus(BaseModel):
+    """System readiness status returned by GET /api/system/status."""
+    lemonade_running: bool = False
+    model_loaded: Optional[str] = None
+    embedding_model_loaded: bool = False
+    disk_space_gb: float = 0.0
+    memory_available_gb: float = 0.0
+    initialized: bool = False
+    version: str = "0.1.0"
+```
+
+### Sessions
+
+```python
+class CreateSessionRequest(BaseModel):
+    """POST /api/sessions"""
+    title: Optional[str] = None
+    model: Optional[str] = None
+    system_prompt: Optional[str] = None
+    document_ids: List[str] = []
+
+class UpdateSessionRequest(BaseModel):
+    """PUT /api/sessions/{session_id}"""
+    title: Optional[str] = None
+    system_prompt: Optional[str] = None
+
+class SessionResponse(BaseModel):
+    """Returned by session endpoints."""
+    id: str
+    title: str
+    created_at: str
+    updated_at: str
+    model: str
+    system_prompt: Optional[str] = None
+    message_count: int = 0
+    document_ids: List[str] = []
+
+class SessionListResponse(BaseModel):
+    sessions: List[SessionResponse]
+    total: int
+```
+
+### Chat
+
+```python
+class ChatRequest(BaseModel):
+    """POST /api/chat/send"""
+    session_id: str
+    message: str
+    document_ids: Optional[List[str]] = None
+    stream: bool = True   # SSE streaming by default
+
+class ChatResponse(BaseModel):
+    """Non-streaming response from POST /api/chat/send."""
+    message_id: int
+    content: str
+    sources: List[SourceInfo] = []
+    tokens: Optional[Dict[str, int]] = None
+
+class SourceInfo(BaseModel):
+    """RAG source citation."""
+    document_id: str
+    filename: str
+    chunk: str
+    score: float
+    page: Optional[int] = None
+```
+
+### Messages
+
+```python
+class MessageResponse(BaseModel):
+    """Individual message in a session."""
+    id: int
+    session_id: str
+    role: str             # "user", "assistant", or "system"
+    content: str
+    created_at: str
+    rag_sources: Optional[List[SourceInfo]] = None
+
+class MessageListResponse(BaseModel):
+    messages: List[MessageResponse]
+    total: int
+```
+
+### Documents
+
+```python
+class DocumentResponse(BaseModel):
+    """Document in the global library."""
+    id: str
+    filename: str
+    filepath: str
+    file_size: int
+    chunk_count: int
+    indexed_at: str
+    last_accessed_at: Optional[str] = None
+    sessions_using: int = 0
+
+class DocumentListResponse(BaseModel):
+    documents: List[DocumentResponse]
+    total: int
+    total_size_bytes: int
+    total_chunks: int
+
+class DocumentUploadRequest(BaseModel):
+    """POST /api/documents/upload-path"""
+    filepath: str
+
+class AttachDocumentRequest(BaseModel):
+    """POST /api/sessions/{session_id}/documents"""
+    document_id: str
+```
+
+---
+
+## REST API Endpoints
+
+### System
+
+<AccordionGroup>
+  <Accordion title="GET /api/system/status">
+    Check system readiness for the chat UI.
+
+    **Response:**
+    ```json
+    {
+      "lemonade_running": true,
+      "model_loaded": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+      "embedding_model_loaded": false,
+      "disk_space_gb": 128.5,
+      "memory_available_gb": 12.3,
+      "initialized": true,
+      "version": "0.1.0"
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="GET /api/health">
+    Health check with database statistics.
+
+    **Response:**
+    ```json
+    {
+      "status": "ok",
+      "service": "gaia-chat-ui",
+      "stats": {
+        "sessions": 12,
+        "messages": 245,
+        "documents": 5,
+        "total_chunks": 320,
+        "total_size_bytes": 15234567
+      }
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Sessions
+
+<AccordionGroup>
+  <Accordion title="POST /api/sessions">
+    Create a new chat session.
+
+    **Request:**
+    ```json
+    {
+      "title": "Code Review",
+      "model": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+      "system_prompt": "You are a code reviewer.",
+      "document_ids": ["doc-abc123"]
+    }
+    ```
+
+    **Response:** `SessionResponse`
+  </Accordion>
+
+  <Accordion title="GET /api/sessions">
+    List all sessions, ordered by most recently updated.
+
+    **Query params:** `limit` (default 50), `offset` (default 0)
+
+    **Response:** `SessionListResponse`
+  </Accordion>
+
+  <Accordion title="GET /api/sessions/{session_id}">
+    Get session details including message count and attached document IDs.
+
+    **Response:** `SessionResponse`
+  </Accordion>
+
+  <Accordion title="PUT /api/sessions/{session_id}">
+    Update session title or system prompt.
+
+    **Request:**
+    ```json
+    {
+      "title": "Sprint 42 Review"
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="DELETE /api/sessions/{session_id}">
+    Delete a session and all its messages (cascading delete).
+  </Accordion>
+
+  <Accordion title="GET /api/sessions/{session_id}/messages">
+    Get messages for a session, ordered oldest first.
+
+    **Query params:** `limit` (default 100), `offset` (default 0)
+
+    **Response:** `MessageListResponse`
+  </Accordion>
+
+  <Accordion title="GET /api/sessions/{session_id}/export">
+    Export a session to Markdown or JSON.
+
+    **Query params:** `format` ("markdown" or "json", default "markdown")
+  </Accordion>
+</AccordionGroup>
+
+### Chat
+
+<AccordionGroup>
+  <Accordion title="POST /api/chat/send">
+    Send a message and receive a response. Supports both streaming (SSE) and non-streaming modes.
+
+    **Request:**
+    ```json
+    {
+      "session_id": "abc-123",
+      "message": "What does this code do?",
+      "document_ids": ["doc-456"],
+      "stream": true
+    }
+    ```
+
+    **Streaming response** (SSE events):
+    ```
+    data: {"type": "chunk", "content": "This function"}
+    data: {"type": "chunk", "content": " initializes"}
+    data: {"type": "chunk", "content": " the database..."}
+    data: {"type": "done", "message_id": 42, "content": "This function initializes the database..."}
+    ```
+
+    **Non-streaming response:**
+    ```json
+    {
+      "message_id": 42,
+      "content": "This function initializes the database...",
+      "sources": [],
+      "tokens": null
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Documents
+
+<AccordionGroup>
+  <Accordion title="GET /api/documents">
+    List all documents in the global library.
+
+    **Response:**
+    ```json
+    {
+      "documents": [
+        {
+          "id": "doc-abc123",
+          "filename": "manual.pdf",
+          "filepath": "/home/user/docs/manual.pdf",
+          "file_size": 1234567,
+          "chunk_count": 45,
+          "indexed_at": "2026-03-05T10:00:00Z",
+          "last_accessed_at": "2026-03-05T14:30:00Z",
+          "sessions_using": 3
+        }
+      ],
+      "total": 1,
+      "total_size_bytes": 1234567,
+      "total_chunks": 45
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="POST /api/documents/upload-path">
+    Index a document by file path. The file is hashed for deduplication -- if the same file was already indexed, the existing document is returned.
+
+    **Request:**
+    ```json
+    {
+      "filepath": "/home/user/docs/report.pdf"
+    }
+    ```
+
+    **Response:** `DocumentResponse`
+  </Accordion>
+
+  <Accordion title="DELETE /api/documents/{doc_id}">
+    Remove a document from the library and all session attachments.
+  </Accordion>
+
+  <Accordion title="POST /api/sessions/{session_id}/documents">
+    Attach a document from the library to a session.
+
+    **Request:**
+    ```json
+    {
+      "document_id": "doc-abc123"
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="DELETE /api/sessions/{session_id}/documents/{doc_id}">
+    Detach a document from a session (does not delete the document).
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Database Schema
+
+The Chat UI uses SQLite with four tables:
+
+```sql
+-- Global document library
+CREATE TABLE documents (
+    id TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    filepath TEXT NOT NULL,
+    file_hash TEXT UNIQUE NOT NULL,
+    file_size INTEGER DEFAULT 0,
+    chunk_count INTEGER DEFAULT 0,
+    indexed_at TEXT,
+    last_accessed_at TEXT
+);
+
+-- Sessions (conversations)
+CREATE TABLE sessions (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT 'New Chat',
+    created_at TEXT,
+    updated_at TEXT,
+    model TEXT NOT NULL DEFAULT 'Qwen3-Coder-30B-A3B-Instruct-GGUF',
+    system_prompt TEXT
+);
+
+-- Many-to-many: documents attached to sessions
+CREATE TABLE session_documents (
+    session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+    document_id TEXT REFERENCES documents(id) ON DELETE CASCADE,
+    attached_at TEXT,
+    PRIMARY KEY (session_id, document_id)
+);
+
+-- Messages
+CREATE TABLE messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+    role TEXT CHECK(role IN ('user', 'assistant', 'system')) NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT,
+    rag_sources TEXT,          -- JSON array of source citations
+    tokens_prompt INTEGER,
+    tokens_completion INTEGER
+);
+```
+
+**SQLite settings:** Foreign keys enabled, WAL journal mode for concurrent reads.
+
+---
+
+## Testing
+
+### Unit Testing with In-Memory Database
+
+```python
+import pytest
+from fastapi.testclient import TestClient
+from gaia.chat.ui.server import create_app
+
+@pytest.fixture
+def client():
+    """Create test client with in-memory database."""
+    app = create_app(db_path=":memory:")
+    return TestClient(app)
+
+def test_create_session(client):
+    resp = client.post("/api/sessions", json={"title": "Test Chat"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["title"] == "Test Chat"
+    assert data["message_count"] == 0
+
+def test_send_message(client):
+    # Create session first
+    session = client.post("/api/sessions", json={}).json()
+    session_id = session["id"]
+
+    # Send a non-streaming message
+    resp = client.post("/api/chat/send", json={
+        "session_id": session_id,
+        "message": "Hello",
+        "stream": False,
+    })
+    assert resp.status_code == 200
+
+def test_document_lifecycle(client):
+    # This test requires a real file on disk
+    pass
+
+def test_health_check(client):
+    resp = client.get("/api/health")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+```
+
+### Database Testing
+
+```python
+from gaia.chat.ui.database import ChatDatabase
+
+def test_session_crud():
+    db = ChatDatabase(":memory:")
+
+    # Create
+    session = db.create_session(title="Test")
+    assert session["title"] == "Test"
+
+    # Read
+    fetched = db.get_session(session["id"])
+    assert fetched is not None
+
+    # Update
+    updated = db.update_session(session["id"], title="Updated")
+    assert updated["title"] == "Updated"
+
+    # Delete
+    assert db.delete_session(session["id"]) is True
+    assert db.get_session(session["id"]) is None
+
+    db.close()
+
+def test_message_ordering():
+    db = ChatDatabase(":memory:")
+    session = db.create_session()
+
+    db.add_message(session["id"], "user", "First")
+    db.add_message(session["id"], "assistant", "Second")
+    db.add_message(session["id"], "user", "Third")
+
+    messages = db.get_messages(session["id"])
+    assert len(messages) == 3
+    assert messages[0]["content"] == "First"
+    assert messages[2]["content"] == "Third"
+
+    db.close()
+```
+
+---
+
+## Integration with Chat SDK
+
+The Chat UI server delegates to the core [Chat SDK](/sdk/sdks/chat) for LLM communication:
+
+```python
+from gaia.chat.sdk import ChatSDK, ChatConfig
+
+# The server creates a ChatSDK instance per request
+config = ChatConfig(
+    model=session.get("model", "Qwen3-Coder-30B-A3B-Instruct-GGUF"),
+    system_prompt=session.get("system_prompt"),
+)
+chat = ChatSDK(config)
+
+# Non-streaming
+response = chat.send(message)
+
+# Streaming
+for chunk in chat.send_stream(message):
+    if not chunk.is_complete:
+        yield chunk.text
+```
+
+Document indexing uses the [RAG SDK](/sdk/sdks/rag):
+
+```python
+from gaia.rag.sdk import RAGSDK, RAGConfig
+
+config = RAGConfig()
+rag = RAGSDK(config)
+result = rag.index_file(filepath)
+chunk_count = result.get("chunk_count", 0)
+```
+
+---
+
+## npm Package
+
+GAIA Chat is also available as an npm package for quick installation:
+
+```bash
+npm install -g @amd-gaia/chat
+```
+
+This provides the `gaia-chat` CLI command:
+
+```bash
+gaia-chat              # Start Python backend + open browser
+gaia-chat --serve      # Serve frontend only (Node.js static server)
+gaia-chat --port 8080  # Custom port
+gaia-chat --version    # Show version
+```
+
+### Package Contents
+
+The npm package includes:
+
+| Path | Description |
+|------|-------------|
+| `bin/gaia-chat.mjs` | CLI entry point (Node.js) |
+| `dist/` | Pre-built frontend (React SPA) |
+
+### Release Management
+
+The package version is sourced from `src/gaia/version.py` (single source of truth for all of GAIA):
+
+```bash
+# Check version consistency (package.json matches version.py)
+node scripts/bump-chat-version.mjs --check
+
+# Sync package.json to version.py
+node scripts/bump-chat-version.mjs
+
+# Full release (sync, commit, tag, push)
+node scripts/release-chat.mjs
+```
+
+Tags matching `chat-v*` trigger the automated npm publish workflow.
+
+---
+
+## Related
+
+- **[User Guide](/guides/chat-ui)** -- Desktop app usage, features, and troubleshooting
+- **[Chat SDK](/sdk/sdks/chat)** -- Core conversation SDK with memory and RAG
+- **[RAG SDK](/sdk/sdks/rag)** -- Document indexing and retrieval
+- **[Desktop App Installation](/deployment/ui)** -- Download and install instructions
+
+---
+
+<small style="color: #666;">
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

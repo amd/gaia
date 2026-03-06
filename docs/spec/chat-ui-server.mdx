@@ -1,0 +1,224 @@
+---
+title: "Chat UI Server"
+description: "Technical specification for the GAIA Chat UI FastAPI backend, SQLite database, and REST API"
+icon: "server"
+---
+
+<Note>
+**You are viewing:** API Specification - Complete technical reference
+
+**See also:** [User Guide](/guides/chat-ui) | [SDK Reference](/sdk/sdks/chat-ui)
+</Note>
+
+<Note>
+- **Component:** Chat UI Server - FastAPI backend for the desktop chat application
+- **Module:** `gaia.chat.ui`
+- **Import:** `from gaia.chat.ui.server import create_app`
+- **Source:** [`src/gaia/chat/ui/`](https://github.com/amd/gaia/blob/main/src/gaia/chat/ui/)
+</Note>
+
+---
+
+## Overview
+
+The Chat UI Server is a FastAPI-based backend that powers the GAIA Chat desktop application. It provides REST API endpoints for session management, real-time chat with SSE streaming, document library management, and system health monitoring.
+
+**Key Design Decisions:**
+- **SQLite** for zero-configuration persistence (WAL mode for concurrent reads)
+- **FastAPI** for automatic OpenAPI docs and Pydantic validation
+- **SSE** (Server-Sent Events) for streaming chat responses
+- **Hybrid document model** -- global library with per-session attachment
+- **Shared database** between CLI and desktop app
+
+---
+
+## Module Structure
+
+```
+src/gaia/chat/ui/
+  __init__.py          # Package init
+  server.py            # FastAPI app factory and endpoints
+  database.py          # ChatDatabase class (SQLite)
+  models.py            # Pydantic request/response models
+```
+
+---
+
+## Server (`server.py`)
+
+### App Factory
+
+```python
+def create_app(db_path: str = None) -> FastAPI:
+```
+
+Creates a configured FastAPI application with:
+- CORS middleware (allows all origins for local use)
+- Database initialization
+- All API endpoint registration
+- Static file serving (for web frontend, when `dist/` build exists)
+
+**Default port:** `4200`
+
+### Endpoint Registration
+
+All endpoints are registered as closures within `create_app()`, sharing the `db` instance via closure scope. The database is also stored on `app.state.db` for test access.
+
+### Streaming Implementation
+
+Chat streaming uses a thread-based producer/consumer pattern:
+
+1. A background thread calls `ChatSDK.send_stream()` synchronously
+2. Chunks are placed into a `queue.Queue`
+3. The async generator polls the queue and yields SSE events
+4. On completion, the full response is saved to the database
+
+```python
+# SSE event format
+data: {"type": "chunk", "content": "partial text"}
+data: {"type": "done", "message_id": 42, "content": "full response"}
+data: {"type": "error", "content": "error description"}
+```
+
+### Helper Functions
+
+| Function | Description |
+|----------|-------------|
+| `_session_to_response(session)` | Convert DB dict to `SessionResponse` |
+| `_message_to_response(msg)` | Convert DB dict to `MessageResponse` (parses JSON `rag_sources`) |
+| `_doc_to_response(doc)` | Convert DB dict to `DocumentResponse` |
+| `_sanitize_document_path(user_path)` | Validate and sanitize user-provided file paths (null bytes, extension allowlist, path resolution) |
+| `_sanitize_static_path(base_dir, user_path)` | Validate URL paths for static file serving stay within base directory |
+| `_validate_file_path(filepath)` | Check path is absolute, no null bytes, and has allowed extension |
+| `_compute_file_hash(filepath)` | SHA-256 hash for document deduplication |
+| `_index_document(filepath)` | Index file via RAG SDK, returns chunk count |
+| `_get_chat_response(db, session, request)` | Non-streaming LLM response |
+| `_stream_chat_response(db, session, request)` | SSE streaming generator |
+
+---
+
+## Database (`database.py`)
+
+### Schema
+
+Four tables with foreign key relationships:
+
+```sql
+documents          -- Global document library
+sessions           -- Chat conversations
+session_documents  -- Many-to-many attachment relationship
+messages           -- Conversation messages with optional RAG metadata
+```
+
+### Configuration
+
+- **Foreign keys:** Enabled (`PRAGMA foreign_keys = ON`)
+- **Journal mode:** WAL (`PRAGMA journal_mode = WAL`)
+- **Thread safety:** `check_same_thread=False` (FastAPI runs across threads)
+- **Row factory:** `sqlite3.Row` for dict-like access
+
+### Transaction Management
+
+```python
+@contextmanager
+def _transaction(self):
+    """Execute operations atomically."""
+    try:
+        yield
+        self._conn.commit()
+    except Exception:
+        self._conn.rollback()
+        raise
+```
+
+### Document Deduplication
+
+Documents are deduplicated by SHA-256 file hash. If a document with the same hash already exists, the existing record is returned with an updated `last_accessed_at` timestamp.
+
+### Cascade Deletes
+
+- Deleting a **session** cascades to its messages and session_documents entries
+- Deleting a **document** cascades to session_documents entries
+
+---
+
+## Models (`models.py`)
+
+All 14 Pydantic models:
+
+| Model | Type | Used By |
+|-------|------|---------|
+| `SystemStatus` | Response | `GET /api/system/status` |
+| `CreateSessionRequest` | Request | `POST /api/sessions` |
+| `UpdateSessionRequest` | Request | `PUT /api/sessions/{session_id}` |
+| `SessionResponse` | Response | Session endpoints |
+| `SessionListResponse` | Response | `GET /api/sessions` |
+| `ChatRequest` | Request | `POST /api/chat/send` |
+| `ChatResponse` | Response | `POST /api/chat/send` (non-streaming) |
+| `SourceInfo` | Nested | RAG source citations |
+| `MessageResponse` | Response | `GET /api/sessions/{session_id}/messages` |
+| `MessageListResponse` | Response | `GET /api/sessions/{session_id}/messages` |
+| `DocumentResponse` | Response | Document endpoints |
+| `DocumentListResponse` | Response | `GET /api/documents` |
+| `DocumentUploadRequest` | Request | `POST /api/documents/upload-path` |
+| `AttachDocumentRequest` | Request | `POST /api/sessions/{session_id}/documents` |
+
+---
+
+## Dependencies
+
+### Required
+
+| Package | Purpose |
+|---------|---------|
+| `fastapi` | Web framework |
+| `uvicorn` | ASGI server |
+| `pydantic` | Request/response validation |
+| `httpx` | Async HTTP client (Lemonade health checks) |
+
+### Optional
+
+| Package | Purpose |
+|---------|---------|
+| `psutil` | Memory availability check in system status |
+| `gaia.chat.sdk` | LLM communication (ChatSDK) |
+| `gaia.rag.sdk` | Document indexing (RAGSDK) |
+
+---
+
+## Error Handling
+
+| Error | HTTP Code | Behavior |
+|-------|-----------|----------|
+| Session not found | 404 | `"Session not found"` |
+| Document not found | 404 | `"Document not found"` or `"File not found: {path}"` |
+| Path is not a file | 400 | `"Path is not a file"` |
+| Unsupported export format | 400 | `"Unsupported format: {format}"` |
+| LLM error (non-streaming) | 200 | Error message in response text |
+| LLM error (streaming) | 200 | SSE error event: `{"type": "error", "content": "..."}` |
+| Database locked | 500 | SQLite WAL mode minimizes this |
+
+---
+
+## Security Considerations
+
+- **CORS:** Allows all origins (`*`). The standalone server (`python -m gaia.chat.ui.server`) binds to `localhost` by default. Note: `gaia chat --ui` binds to `0.0.0.0` for Electron/browser access
+- **No authentication:** Designed for single-user local use. Do not expose to untrusted networks
+- **File path validation:** The `upload-path` endpoint sanitizes all user-provided paths:
+  - Null byte rejection (prevents path injection)
+  - Path resolution to absolute canonical paths (eliminates `..` traversal)
+  - File extension allowlist (only document/code file types accepted)
+  - See `_sanitize_document_path()` in `server.py`
+- **Static file serving:** URL paths are validated to stay within the `dist/` directory via `_sanitize_static_path()`, preventing directory traversal
+- **SQL injection:** Prevented by parameterized queries throughout
+- **No telemetry:** No data is sent externally
+
+---
+
+<small style="color: #666;">
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

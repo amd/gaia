@@ -1,0 +1,385 @@
+---
+title: "GAIA Chat Desktop"
+description: "Privacy-first desktop chat application with document Q&A, running 100% locally"
+icon: "desktop"
+---
+
+<Info>
+  **First time here?** Complete the [Setup](/setup) guide first or install the [Desktop App](/deployment/ui) directly.
+</Info>
+
+<Note>
+  **Looking for the API?** See the [Chat UI SDK Reference](/sdk/sdks/chat-ui) for the Python backend classes, REST endpoints, and code examples.
+</Note>
+
+## Overview
+
+GAIA Chat is a privacy-first desktop chat application that runs **100% locally** on your AMD Ryzen AI hardware. Unlike cloud-based alternatives, your conversations and documents never leave your device.
+
+<CardGroup cols={4}>
+  <Card title="Private" icon="lock">
+    Your data stays on YOUR device
+  </Card>
+  <Card title="Fast" icon="bolt">
+    AMD Ryzen AI NPU acceleration
+  </Card>
+  <Card title="Smart" icon="file-lines">
+    RAG-powered document Q&A
+  </Card>
+  <Card title="Free" icon="circle-dollar-to-slot">
+    No API costs, no subscriptions
+  </Card>
+</CardGroup>
+
+---
+
+## Quick Start (Desktop App)
+
+The fastest way to start using GAIA Chat is the desktop installer:
+
+<Steps>
+  <Step title="Download the installer">
+    Download `gaia-ui-setup.exe` (Windows) or `gaia-ui-setup.deb` (Ubuntu) from the [Releases](https://github.com/amd/gaia/releases) page.
+  </Step>
+
+  <Step title="Install and launch">
+    <Tabs>
+      <Tab title="Windows">
+        Double-click `gaia-ui-setup.exe` and follow the prompts. Launch **GAIA Chat** from the Start Menu or desktop shortcut.
+      </Tab>
+      <Tab title="Ubuntu">
+        ```bash
+        sudo apt update && sudo apt install ./gaia-ui-setup.deb
+        ```
+        Launch **GAIA Chat** from your application menu.
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Start chatting">
+    On first launch, the app checks for Lemonade Server and downloads models if needed. Once ready, start a new chat and ask anything.
+  </Step>
+</Steps>
+
+<Tip>
+  Already have GAIA installed via CLI? Run `gaia chat --ui` to launch the web-based chat interface, or use `gaia chat` for the terminal experience.
+</Tip>
+
+---
+
+## Quick Start (npm)
+
+Install GAIA Chat as a global npm package for instant access from any terminal:
+
+<Tabs>
+  <Tab title="One-liner">
+    ```bash
+    # Linux / macOS
+    curl -fsSL https://raw.githubusercontent.com/amd/gaia/main/scripts/install-chat.sh | bash
+
+    # Windows (PowerShell)
+    irm https://raw.githubusercontent.com/amd/gaia/main/scripts/install-chat.ps1 | iex
+    ```
+  </Tab>
+  <Tab title="Manual">
+    ```bash
+    npm install -g @amd-gaia/chat
+    ```
+  </Tab>
+</Tabs>
+
+Then run:
+
+```bash
+gaia-chat              # Start backend + open browser
+gaia-chat --serve      # Serve frontend only (backend running separately)
+gaia-chat --port 8080  # Custom port
+gaia-chat --help       # Show all options
+```
+
+<Note>
+  The `gaia-chat` npm command requires the Python GAIA backend (`pip install amd-gaia`) for full functionality. Use `--serve` mode if running the backend separately.
+</Note>
+
+---
+
+## Quick Start (Developer)
+
+If you have GAIA installed from source, launch the Chat UI server directly:
+
+<Steps>
+  <Step title="Start Lemonade Server">
+    ```bash
+    lemonade-server serve
+    ```
+  </Step>
+
+  <Step title="Start the Chat UI server">
+    ```bash
+    python -m gaia.chat.ui.server
+    ```
+
+    The server starts on `http://localhost:4200` by default.
+  </Step>
+
+  <Step title="Open the web interface">
+    Open `http://localhost:4200` in your browser, or launch via Electron:
+
+    ```bash
+    cd src/gaia/apps/chat/webui
+    npm start
+    ```
+  </Step>
+</Steps>
+
+### Server Options
+
+```bash
+# Custom host and port
+python -m gaia.chat.ui.server --host 0.0.0.0 --port 8080
+
+# Debug mode with verbose logging
+python -m gaia.chat.ui.server --debug
+```
+
+---
+
+## Features
+
+### Chat with Streaming
+
+Send messages and receive streaming responses powered by your local LLM. The interface supports:
+
+- **Real-time streaming** via Server-Sent Events (SSE)
+- **Markdown rendering** with syntax-highlighted code blocks
+- **Conversation memory** that persists across sessions
+- **Copy and export** individual messages or entire conversations
+
+### Document Q&A (RAG)
+
+Drop files into the chat to ask questions about their content:
+
+<Tabs>
+  <Tab title="Documents">
+    - PDF (with VLM support for images)
+    - Microsoft Office: Word (.doc, .docx), PowerPoint (.ppt, .pptx), Excel (.xls, .xlsx)
+    - TXT, LOG
+    - Markdown (.md)
+    - CSV, JSON
+    - HTML, XML, YAML, TOML
+  </Tab>
+  <Tab title="Code Files">
+    - Python, Java, C/C++ (.c, .cpp, .h)
+    - JavaScript, TypeScript
+    - Go, Rust, Ruby
+    - Shell scripts (.sh, .bat, .ps1)
+  </Tab>
+  <Tab title="Config Files">
+    - INI, CFG, TOML
+    - YAML (.yaml, .yml)
+    - JSON, XML
+  </Tab>
+</Tabs>
+
+Documents are indexed into a **global library** and can be attached to any session:
+
+1. Click the **Document Library** button in the sidebar
+2. Drag and drop files or click to browse
+3. Attach indexed documents to your current chat
+4. Ask questions -- the LLM retrieves relevant context automatically
+
+### Session Management
+
+- **Create** new chat sessions with optional document attachments
+- **Rename** sessions for easy organization
+- **Search** across all conversations
+- **Export** sessions to Markdown or JSON
+- **Delete** sessions and their messages
+
+### Privacy Indicators
+
+The interface includes visual privacy indicators:
+
+- **"100% Local"** badge in the sidebar
+- **"Your data never leaves this device"** footer in the chat input
+- **System status** panel showing Lemonade Server connectivity
+- **Data location** display in settings (`~/.gaia/chat/`)
+
+---
+
+## Architecture
+
+GAIA Chat Desktop has three layers:
+
+```
+Desktop App (Electron) or Browser
+        |
+        v
+FastAPI Backend (Python)      <-- port 4200
+  - REST API endpoints
+  - SSE streaming
+  - SQLite database
+        |
+        v
+GAIA Core SDKs
+  - ChatSDK (conversation)
+  - RAGSDK (document indexing)
+  - LemonadeClient (LLM inference)
+        |
+        v
+Lemonade Server               <-- port 8000
+  - Model serving
+  - NPU/iGPU acceleration
+```
+
+### Data Storage
+
+All data is stored locally in `~/.gaia/chat/`:
+
+| File | Description |
+|------|-------------|
+| `gaia_chat.db` | SQLite database with sessions, messages, and document metadata |
+
+Documents are referenced by their original file path on disk and are not copied into the GAIA data directory.
+
+### Shared CLI/UI State
+
+The CLI (`gaia chat`) and the desktop app share the same SQLite database. Sessions started in the terminal can be continued in the desktop app, and vice versa.
+
+```python
+from gaia.chat.ui.database import ChatDatabase, DEFAULT_DB_PATH
+
+# Both CLI and UI use the same database path
+db = ChatDatabase()  # ~/.gaia/chat/gaia_chat.db
+```
+
+---
+
+## REST API
+
+The Chat UI exposes a full REST API on port 4200. For complete endpoint documentation, see the [Chat UI SDK Reference](/sdk/sdks/chat-ui).
+
+### Quick Reference
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/system/status` | System readiness check |
+| `GET` | `/api/health` | Health check with stats |
+| `GET` | `/api/sessions` | List all sessions |
+| `POST` | `/api/sessions` | Create a new session |
+| `GET` | `/api/sessions/{session_id}` | Get session details |
+| `PUT` | `/api/sessions/{session_id}` | Update session |
+| `DELETE` | `/api/sessions/{session_id}` | Delete session |
+| `GET` | `/api/sessions/{session_id}/messages` | Get messages |
+| `GET` | `/api/sessions/{session_id}/export` | Export to Markdown/JSON |
+| `POST` | `/api/chat/send` | Send message (streaming or not) |
+| `GET` | `/api/documents` | List document library |
+| `POST` | `/api/documents/upload-path` | Index document by path |
+| `DELETE` | `/api/documents/{doc_id}` | Remove document |
+| `POST` | `/api/sessions/{session_id}/documents` | Attach document to session |
+| `DELETE` | `/api/sessions/{session_id}/documents/{doc_id}` | Detach document |
+
+---
+
+## Settings
+
+Access settings via the gear icon in the sidebar.
+
+### Privacy & Data
+
+- **Data Storage**: Shows the database location (`~/.gaia/chat/`)
+- **Export All Data**: Export all sessions and documents
+- **Clear All Data**: Securely delete all chat data
+
+### System Status
+
+The settings panel shows:
+- Lemonade Server status (running/stopped)
+- Loaded model name
+- Available disk space
+- Available memory
+
+---
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Lemonade Server not running">
+    The chat UI requires Lemonade Server to be running for LLM inference.
+
+    ```bash
+    # Start Lemonade Server
+    lemonade-server serve
+    ```
+
+    If not installed, follow the [Setup Guide](/setup) or run:
+    ```bash
+    gaia init --profile minimal
+    ```
+  </Accordion>
+
+  <Accordion title="No model loaded">
+    If the system status shows no model loaded:
+
+    ```bash
+    # Download the default chat model
+    gaia download --agent chat
+    ```
+  </Accordion>
+
+  <Accordion title="Port 4200 already in use">
+    Use a different port:
+
+    ```bash
+    python -m gaia.chat.ui.server --port 8080
+    ```
+  </Accordion>
+
+  <Accordion title="Database locked error">
+    This can happen if multiple processes access the database simultaneously. The Chat UI uses WAL mode for concurrent reads, but only one writer at a time is supported. Close any other GAIA Chat instances.
+  </Accordion>
+
+  <Accordion title="Document indexing fails">
+    - Ensure the file is in a supported format (PDF, TXT, MD, code files, etc.)
+    - Check that the file is not password-protected
+    - Verify file size is reasonable (< 100MB recommended)
+    - For PDF image extraction, ensure the VLM model is downloaded:
+      ```bash
+      gaia download --agent chat
+      ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Chat UI SDK Reference" icon="code" href="/sdk/sdks/chat-ui">
+    Python backend API, database schema, and Pydantic models
+  </Card>
+
+  <Card title="Chat SDK Reference" icon="comments" href="/sdk/sdks/chat">
+    Core Chat SDK for conversation memory and RAG
+  </Card>
+
+  <Card title="Document Q&A Guide" icon="file-lines" href="/guides/chat">
+    CLI-based chat with RAG, debug mode, and chunking strategies
+  </Card>
+
+  <Card title="Desktop App Installation" icon="download" href="/deployment/ui">
+    Download and install the GAIA desktop application
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

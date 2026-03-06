@@ -1,0 +1,222 @@
+/* Agent Activity - collapsible step display */
+
+.agent-activity {
+    max-width: 900px;
+    margin: 0 auto;
+    width: 100%;
+    padding: 0 24px;
+}
+
+/* ── Summary bar ──────────────────────────────────────────────── */
+.agent-summary-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    font-size: 12px;
+    color: var(--text-secondary);
+    transition: all var(--duration) var(--ease);
+    cursor: pointer;
+}
+.agent-summary-bar:hover {
+    background: var(--bg-hover);
+    border-color: var(--border);
+}
+
+.agent-summary-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.agent-summary-right {
+    display: flex;
+    align-items: center;
+    color: var(--text-muted);
+}
+
+.agent-summary-text {
+    font-weight: 500;
+}
+
+.agent-icon-done { color: var(--text-muted); }
+.agent-icon-error { color: #ef4444; }
+
+/* Spinner animation */
+.agent-spinner {
+    animation: spin 1s linear infinite;
+    color: var(--amd-red);
+}
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* Active state */
+.agent-activity.active .agent-summary-bar {
+    border-color: rgba(237, 28, 36, 0.2);
+    background: rgba(237, 28, 36, 0.04);
+}
+[data-theme="dark"] .agent-activity.active .agent-summary-bar {
+    background: rgba(237, 28, 36, 0.06);
+}
+
+/* Summary variant (post-completion) */
+.agent-activity.summary {
+    margin-top: -4px;
+    margin-bottom: 4px;
+}
+.agent-activity.summary .agent-summary-bar {
+    background: transparent;
+    border-color: transparent;
+    padding: 4px 0;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.agent-activity.summary .agent-summary-bar:hover {
+    color: var(--text-secondary);
+    background: transparent;
+}
+
+/* ── Step list ────────────────────────────────────────────────── */
+.agent-steps {
+    margin-top: 4px;
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--bg-secondary);
+    animation: slideDown 150ms var(--ease);
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ── Individual step ──────────────────────────────────────────── */
+.agent-step-row {
+    border-bottom: 1px solid var(--border-light);
+}
+.agent-step-row:last-child {
+    border-bottom: none;
+}
+
+.step-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 7px 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    transition: background var(--duration) var(--ease);
+}
+.step-header:hover {
+    background: var(--bg-hover);
+}
+
+.step-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.step-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.step-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.step-tool-name {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+/* Step icons by type */
+.step-icon-thinking { color: #8b5cf6; }
+.step-icon-tool { color: #3b82f6; }
+.step-icon-plan { color: #f59e0b; }
+.step-icon-error { color: #ef4444; }
+.step-icon-status { color: var(--text-muted); }
+
+.step-check { color: #22c55e; }
+.step-error-icon { color: #ef4444; }
+.step-chevron { color: var(--text-muted); }
+
+/* Active step highlight */
+.agent-step-row.active {
+    background: rgba(237, 28, 36, 0.03);
+}
+.agent-step-row.active .step-label {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+/* ── Step detail (expanded) ───────────────────────────────────── */
+.step-detail {
+    padding: 6px 10px 10px 32px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    border-top: 1px solid var(--border-light);
+    background: var(--bg-primary);
+    animation: slideDown 100ms var(--ease);
+}
+
+.step-detail-text {
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.step-detail-result {
+    margin-top: 4px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+
+.result-label {
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.step-plan-list {
+    margin: 4px 0 0 16px;
+    padding: 0;
+}
+.step-plan-item {
+    margin-bottom: 2px;
+    line-height: 1.5;
+}
+
+/* ── Responsive ───────────────────────────────────────────────── */
+@media (max-width: 768px) {
+    .agent-activity {
+        padding: 0 16px;
+    }
+}

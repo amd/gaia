@@ -1,0 +1,115 @@
+// Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+/** Types shared across the GAIA Chat UI frontend. */
+
+export interface Session {
+    id: string;
+    title: string;
+    created_at: string;
+    updated_at: string;
+    model: string;
+    system_prompt: string | null;
+    message_count: number;
+    document_ids: string[];
+}
+
+export interface Message {
+    id: number;
+    session_id: string;
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    created_at: string;
+    rag_sources: SourceInfo[] | null;
+    /** Agent activity that occurred while generating this message. */
+    agentSteps?: AgentStep[];
+}
+
+export interface SourceInfo {
+    document_id: string;
+    filename: string;
+    chunk: string;
+    score: number;
+    page: number | null;
+}
+
+export interface Document {
+    id: string;
+    filename: string;
+    filepath: string;
+    file_size: number;
+    chunk_count: number;
+    indexed_at: string;
+    last_accessed_at: string | null;
+    sessions_using: number;
+}
+
+export interface SystemStatus {
+    lemonade_running: boolean;
+    model_loaded: string | null;
+    embedding_model_loaded: boolean;
+    disk_space_gb: number;
+    memory_available_gb: number;
+    initialized: boolean;
+    version: string;
+}
+
+// ── Agent Activity Types ──────────────────────────────────────────────────
+
+/** A single step in the agent's execution. */
+export interface AgentStep {
+    id: number;
+    type: 'thinking' | 'tool' | 'plan' | 'status' | 'error';
+    /** Short label shown in collapsed view. */
+    label: string;
+    /** Detailed content shown when expanded. */
+    detail?: string;
+    /** Tool name (for type='tool'). */
+    tool?: string;
+    /** Tool result summary (for type='tool'). */
+    result?: string;
+    /** Whether this step completed successfully. */
+    success?: boolean;
+    /** Whether this step is currently running. */
+    active?: boolean;
+    /** Plan steps (for type='plan'). */
+    planSteps?: string[];
+    /** Timestamp when this step started. */
+    timestamp: number;
+}
+
+/** Extended SSE event types for agent communication. */
+export type StreamEventType =
+    | 'chunk'       // Text content chunk
+    | 'done'        // Stream complete
+    | 'error'       // Error
+    | 'status'      // Agent state change
+    | 'step'        // Step progress
+    | 'thinking'    // Agent reasoning
+    | 'plan'        // Agent plan
+    | 'tool_start'  // Tool execution started
+    | 'tool_end'    // Tool execution completed
+    | 'tool_result' // Tool result summary
+    | 'answer'      // Final answer from agent
+    | 'agent_error';// Agent-level error (non-fatal)
+
+export interface StreamEvent {
+    type: StreamEventType;
+    content?: string;
+    message_id?: number;
+    // Agent-specific fields
+    status?: string;
+    message?: string;
+    step?: number;
+    total?: number;
+    tool?: string;
+    summary?: string;
+    success?: boolean;
+    steps?: string[];
+    current_step?: number;
+    title?: string;
+    detail?: string;
+    model?: string;
+    elapsed?: number;
+    tools_used?: number;
+}

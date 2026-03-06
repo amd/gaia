@@ -1,0 +1,70 @@
+{
+  "name": "@amd-gaia/chat",
+  "version": "0.15.4.1",
+  "type": "module",
+  "productName": "GAIA Chat",
+  "description": "Privacy-first AI chat with document Q&A - runs 100% locally on AMD Ryzen AI",
+  "author": "AMD AI Group",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/amd/gaia.git",
+    "directory": "src/gaia/apps/chat/webui"
+  },
+  "homepage": "https://amd-gaia.ai/guides/chat-ui",
+  "bugs": {
+    "url": "https://github.com/amd/gaia/issues"
+  },
+  "keywords": [
+    "gaia",
+    "amd",
+    "ryzen-ai",
+    "chat",
+    "ai",
+    "local-llm",
+    "privacy",
+    "rag",
+    "document-qa",
+    "electron"
+  ],
+  "main": "main.cjs",
+  "bin": {
+    "gaia-chat": "bin/gaia-chat.mjs"
+  },
+  "files": [
+    "bin/",
+    "dist/",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "start": "electron .",
+    "package": "npm run build && electron-forge package",
+    "make": "npm run build && electron-forge make",
+    "prepublishOnly": "npm run build"
+  },
+  "config": {
+    "forge": "./forge.config.cjs"
+  },
+  "dependencies": {
+    "lucide-react": "^0.312.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "zustand": "^4.5.0"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.2.0",
+    "@electron-forge/maker-deb": "^7.2.0",
+    "@electron-forge/maker-squirrel": "^7.2.0",
+    "@types/react": "^18.2.48",
+    "@types/react-dom": "^18.2.18",
+    "@vitejs/plugin-react": "^4.2.1",
+    "electron": "^40.6.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.12"
+  }
+}
