@@ -19,6 +19,7 @@
 
 #include "console.h"
 #include "json_utils.h"
+#include "lemonade_client.h"
 #include "mcp_client.h"
 #include "tool_registry.h"
 #include "types.h"
@@ -80,8 +81,20 @@ public:
     /// Rebuild system prompt (call after adding tools dynamically).
     void rebuildSystemPrompt();
 
+    /// Detect if the LLM's answer requires a user decision.
+    /// Default: scans the tail of the answer for yes/no patterns.
+    /// Override for custom decisions.
+    virtual std::vector<Decision> detectPendingDecisions(
+        const std::string& answer) const;
+
+    /// Clear conversation history (start a fresh topic).
+    void clearHistory() { conversationHistory_.clear(); }
+
     /// Get a mutable reference to the tool registry (for subclass tool registration).
     ToolRegistry& toolRegistry() { return tools_; }
+
+    /// Get the Lemonade client (for explicit model loading at startup).
+    LemonadeClient& lemonade() { return lemonade_; }
 
 protected:
     /// Initialize the agent after construction.
@@ -128,6 +141,8 @@ private:
     AgentConfig config_;
     ToolRegistry tools_;
     std::unique_ptr<OutputHandler> console_;
+    LemonadeClient lemonade_;
+    bool modelEnsured_ = false;
 
     AgentState executionState_ = AgentState::PLANNING;
     json currentPlan_;

@@ -1,0 +1,49 @@
+{
+  "$comment": "Example Claude Code settings for GAIA devcontainer with MCP servers",
+  "$usage": "Copy to settings.local.json and customize (settings.local.json is gitignored; settings.json is committed as team defaults)",
+
+  "enableAllProjectMcpServers": true,
+  "$enableAllProjectMcpServers_comment": "Auto-approve all MCP servers defined in .mcp.json. Recommended for trusted projects.",
+
+  "enabledMcpjsonServers": [
+    "github",
+    "context7"
+  ],
+  "$enabledMcpjsonServers_comment": "Alternatively, whitelist specific MCP servers by name. Remove 'enableAllProjectMcpServers' if using this.",
+
+  "disabledMcpjsonServers": [],
+  "$disabledMcpjsonServers_comment": "Blacklist specific MCP servers. Useful if you want most servers enabled but not all.",
+
+  "permissions": {
+    "allow": [
+      "Bash(pip install*)",
+      "Bash(gaia*)",
+      "Bash(lemonade-server*)",
+      "Bash(python -m pytest*)",
+      "Bash(python util/lint.py*)",
+      "mcp__github__get_pull_request"
+    ],
+    "$comment": "Pre-approve specific tool calls. Reduces permission prompts for common GAIA dev commands."
+  },
+
+  "$mcp_security_notes": [
+    "MCP servers have access to your workspace and can execute code",
+    "Only enable MCP servers from trusted sources",
+    "Review .mcp.json before enabling enableAllProjectMcpServers",
+    "Use enabledMcpjsonServers for granular control",
+    "Environment variables in .mcp.json can expose secrets"
+  ],
+
+  "$devcontainer_specific": {
+    "host_mcp_servers": "Use HTTP transport with host.docker.internal URL",
+    "container_mcp_servers": "Use stdio transport with npx or python commands",
+    "firewall": "Host network already whitelisted via --add-host=host.docker.internal:host-gateway",
+    "security": "MCP servers run with 'gaia' user permissions (non-root)"
+  },
+
+  "statusLine": {
+    "type": "command",
+    "command": "bash -c 'input=$(cat); MODEL=$(echo \"$input\" | jq -r \".model.display_name\"); DIR=$(echo \"$input\" | jq -r \".workspace.current_dir\"); BRANCH=\"\"; if git rev-parse --git-dir >/dev/null 2>&1; then BRANCH=\" | $(git branch --show-current 2>/dev/null)\"; fi; echo \"[$MODEL] ${DIR##*/}$BRANCH\"'"
+  },
+  "$statusLine_comment": "Custom status line showing model, directory, and git branch"
+}

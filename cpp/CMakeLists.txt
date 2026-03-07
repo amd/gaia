@@ -2,6 +2,11 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.14)
+
+# Auto-detect or bootstrap vcpkg for optional OpenSSL support.
+# Must be included before project() so the toolchain is set in time.
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/vcpkg-auto-setup.cmake)
+
 project(gaia-cpp VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -23,10 +28,6 @@ endif()
 # Integration tests require a running Lemonade server -- always OFF by default.
 option(GAIA_BUILD_INTEGRATION_TESTS
     "Build LLM integration tests (requires lemonade-server with Qwen3-4B-GGUF loaded)" OFF)
-
-# HTTPS support for LLM endpoints -- ON by default (required for remote/cloud Lemonade).
-option(GAIA_ENABLE_SSL
-    "Enable HTTPS support for LLM endpoints (requires OpenSSL)" ON)
 
 # ---------------------------------------------------------------------------
 # Dependencies -- prefer system packages, fall back to FetchContent
@@ -87,6 +88,7 @@ add_library(gaia_core
     src/console.cpp
     src/clean_console.cpp
     src/json_utils.cpp
+    src/lemonade_client.cpp
     src/agent.cpp
     src/mcp_client.cpp
 )
@@ -149,19 +151,16 @@ if(WIN32)
     target_link_libraries(gaia_core PRIVATE ws2_32)
 endif()
 
-# HTTPS support for LLM endpoints (on by default; disable with -DGAIA_ENABLE_SSL=OFF)
-if(GAIA_ENABLE_SSL)
-    find_package(OpenSSL QUIET)
-    if(OpenSSL_FOUND)
-        target_compile_definitions(gaia_core PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
-        target_link_libraries(gaia_core PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-        message(STATUS "GAIA SSL: enabled -- HTTPS LLM endpoints supported")
-    else()
-        message(WARNING "GAIA SSL: OpenSSL not found -- HTTPS disabled. "
-                        "Install libssl-dev (Linux) or OpenSSL (Windows) for HTTPS support.")
-    endif()
+# HTTPS support — auto-detected. No flags required; OpenSSL is used when available.
+find_package(OpenSSL QUIET)
+if(OpenSSL_FOUND)
+    target_compile_definitions(gaia_core PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+    target_link_libraries(gaia_core PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    set(GAIA_REQUIRE_FIND_OPENSSL TRUE)
+    message(STATUS "GAIA SSL: enabled")
 else()
-    message(STATUS "GAIA SSL: disabled -- HTTP only (set -DGAIA_ENABLE_SSL=ON for HTTPS)")
+    set(GAIA_REQUIRE_FIND_OPENSSL FALSE)
+    message(STATUS "GAIA SSL: not available (HTTP only)")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -173,6 +172,13 @@ if(GAIA_BUILD_EXAMPLES AND WIN32)
 
     add_executable(wifi_agent examples/wifi_agent.cpp)
     target_link_libraries(wifi_agent PRIVATE gaia::gaia_core)
+
+    add_executable(process_agent examples/process_agent.cpp)
+    target_link_libraries(process_agent PRIVATE gaia::gaia_core psapi advapi32 version)
+
+    # Unsigned test binary for process agent suspicious-item detection
+    add_executable(svc_helper examples/svc_helper.cpp)
+    target_link_libraries(svc_helper PRIVATE)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -188,8 +194,10 @@ if(GAIA_BUILD_TESTS)
         tests/test_agent.cpp
         tests/test_mcp_client.cpp
         tests/test_console.cpp
+        tests/test_lemonade_client.cpp
         tests/test_clean_console.cpp
         tests/test_tool_integration.cpp
+        tests/test_decision.cpp
     )
 
     target_link_libraries(tests_mock PRIVATE
@@ -261,13 +269,6 @@ if(GAIA_JSON_FETCHED)
     set(GAIA_REQUIRE_FIND_JSON FALSE)
 else()
     set(GAIA_REQUIRE_FIND_JSON TRUE)
-endif()
-
-# Record whether OpenSSL was found so the config template can require it.
-if(GAIA_ENABLE_SSL AND OpenSSL_FOUND)
-    set(GAIA_REQUIRE_FIND_OPENSSL TRUE)
-else()
-    set(GAIA_REQUIRE_FIND_OPENSSL FALSE)
 endif()
 
 configure_package_config_file(
