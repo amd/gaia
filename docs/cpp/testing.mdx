@@ -1,0 +1,228 @@
+---
+title: "Testing"
+description: "Run unit and integration tests for the GAIA C++ agent framework"
+icon: "flask-vial"
+---
+
+## Overview
+
+The C++ framework has two test suites:
+
+| Suite | Binary | LLM Required | Hardware | What it tests |
+|-------|--------|-------------|----------|---------------|
+| **Unit tests** | `tests_mock` | No | Any | All core modules with mocked dependencies |
+| **Integration tests** | `tests_integration` | Yes | Windows + LLM server | Real LLM calls, MCP connections, agent workflows |
+
+Both suites use [Google Test](https://github.com/google/googletest) (fetched automatically by CMake).
+
+---
+
+## Unit Tests
+
+Unit tests are built by default and run without an LLM server. They cover all eight core modules:
+
+| Module | Test file | What it covers |
+|--------|-----------|----------------|
+| Agent loop | `test_agent.cpp` | State machine, multi-step planning, error recovery |
+| Tool registry | `test_tool_registry.cpp` | Registration, lookup, execution, parameter schemas |
+| Tool integration | `test_tool_integration.cpp` | End-to-end tool calling with mocked LLM |
+| JSON utilities | `test_json_utils.cpp` | Multi-strategy JSON extraction, fallback parsing |
+| MCP client | `test_mcp_client.cpp` | JSON-RPC protocol, stdio transport, tool discovery |
+| Console | `test_console.cpp` | TerminalConsole and SilentConsole output |
+| Clean console | `test_clean_console.cpp` | CleanConsole TUI, word-wrap, ANSI colors |
+| Types | `test_types.cpp` | AgentConfig, Message, ToolInfo, ParsedResponse |
+
+### Building Unit Tests
+
+Unit tests are built by default when building the C++ framework as a standalone project (`GAIA_BUILD_TESTS=ON`). The standard build commands from the [Quickstart](/cpp/quickstart) produce the `tests_mock` binary automatically:
+
+<Tabs>
+  <Tab title="Windows (MSVC)">
+    ```bat
+    cd cpp
+    ```
+    ```bat
+    cmake -B build -G "Visual Studio 17 2022" -A x64
+    ```
+    ```bat
+    cmake --build build --config Release
+    ```
+    Binary: `build\Release\tests_mock.exe`
+  </Tab>
+  <Tab title="Linux">
+    ```bash
+    cd cpp
+    ```
+    ```bash
+    cmake -B build -DCMAKE_BUILD_TYPE=Release
+    ```
+    ```bash
+    cmake --build build
+    ```
+    Binary: `build/tests_mock`
+  </Tab>
+</Tabs>
+
+<Note>
+  If you're consuming `gaia_core` as a sub-project (via FetchContent or add_subdirectory), tests are **off** by default. Pass `-DGAIA_BUILD_TESTS=ON` to enable them.
+</Note>
+
+### Running Unit Tests
+
+<Tabs>
+  <Tab title="Windows">
+    Run the test binary directly:
+    ```bat
+    build\Release\tests_mock.exe --gtest_color=yes
+    ```
+
+    Or via CTest:
+    ```bat
+    ctest --test-dir build -C Release --output-on-failure
+    ```
+  </Tab>
+  <Tab title="Linux">
+    Run the test binary directly:
+    ```bash
+    ./build/tests_mock --gtest_color=yes
+    ```
+
+    Or via CTest:
+    ```bash
+    ctest --test-dir build --output-on-failure
+    ```
+  </Tab>
+</Tabs>
+
+### Filtering Tests
+
+Google Test supports test filtering via `--gtest_filter`:
+
+```bash
+# Run only agent tests
+tests_mock --gtest_filter="AgentTest.*"
+
+# Run only JSON utility tests
+tests_mock --gtest_filter="JsonUtils.*"
+
+# Run a specific test
+tests_mock --gtest_filter="ToolRegistryTest.RegisterAndExecute"
+```
+
+---
+
+## Integration Tests
+
+Integration tests exercise the full stack — real LLM inference, live MCP server connections, and actual agent workflows. They require:
+
+- A running LLM server (Lemonade recommended) with a model loaded
+- Windows (the tested agents use PowerShell)
+- `uvx` on PATH (for MCP tests)
+
+| Test file | What it covers |
+|-----------|----------------|
+| `test_integration_llm.cpp` | LLM chat completions, tool-calling responses |
+| `test_integration_mcp.cpp` | MCP server connection, tool discovery, tool execution |
+| `test_integration_wifi.cpp` | Wi-Fi agent end-to-end diagnostic flow |
+| `test_integration_health.cpp` | Health agent MCP-based system diagnostics |
+
+### Building Integration Tests
+
+Integration tests are **not built by default**. Enable them with the `GAIA_BUILD_INTEGRATION_TESTS` CMake option:
+
+```bat
+cmake -B build -G "Visual Studio 17 2022" -A x64 -DGAIA_BUILD_INTEGRATION_TESTS=ON
+```
+```bat
+cmake --build build --config Release
+```
+
+This produces the `tests_integration` binary alongside the unit test binary.
+
+<Warning>
+  **Do not mix unit and integration tests in CTest.** If you enable integration tests, CTest will discover both suites. Run `tests_integration` separately with an LLM server running — otherwise CTest will hang waiting for the LLM connection.
+</Warning>
+
+### Running Integration Tests
+
+1. Start an LLM server with a model loaded:
+   ```bat
+   lemonade-server serve
+   ```
+
+2. Set environment variables (optional — defaults shown):
+   ```bat
+   set GAIA_CPP_BASE_URL=http://localhost:8000/api/v1
+   ```
+   ```bat
+   set GAIA_CPP_TEST_MODEL=Qwen3-4B-Instruct-2507-GGUF
+   ```
+
+3. Run the tests:
+   ```bat
+   build\Release\tests_integration.exe --gtest_color=yes
+   ```
+
+<Tip>
+  Integration tests have a 300-second timeout per test. If a test hangs, verify the LLM server is responding at the configured URL.
+</Tip>
+
+---
+
+## CI Pipeline
+
+The C++ CI workflow (`.github/workflows/build_cpp.yml`) runs four jobs on every PR that touches `cpp/`:
+
+| Job | Runs on | What it validates |
+|-----|---------|-------------------|
+| **Build & Test** | Ubuntu + Windows (cloud) | CMake build + unit tests |
+| **Install Test** | Ubuntu + Windows (cloud) | `cmake --install` + `find_package` round-trip |
+| **Shared Library** | Ubuntu + Windows (cloud) | `BUILD_SHARED_LIBS=ON` compiles cleanly |
+| **Integration Tests** | STX hardware (self-hosted) | Full stack: LLM + MCP + WiFi + Health |
+
+The integration test job runs on AMD STX hardware with a real Lemonade Server and Qwen3-4B model. It is treated as non-blocking in CI (infrastructure issues on self-hosted runners don't fail the PR).
+
+---
+
+## Adding New Tests
+
+### Unit Tests
+
+Add your test file to `cpp/tests/` and register it in `CMakeLists.txt`:
+
+```cmake
+add_executable(tests_mock
+    # ... existing test files ...
+    tests/test_your_module.cpp   # Add here
+)
+```
+
+Follow the existing pattern — include `<gtest/gtest.h>`, use `TEST()` or `TEST_F()` macros, and mock LLM responses where needed. See `test_agent.cpp` for mocking examples.
+
+### Integration Tests
+
+Add your test file to `cpp/tests/integration/` and register it in the `tests_integration` target in `CMakeLists.txt`:
+
+```cmake
+add_executable(tests_integration
+    # ... existing test files ...
+    tests/integration/test_integration_your_feature.cpp   # Add here
+)
+```
+
+Integration tests should:
+- Read `GAIA_CPP_BASE_URL` and `GAIA_CPP_TEST_MODEL` from environment variables
+- Use reasonable timeouts (the CI sets 300s per test)
+- Be idempotent — no permanent side effects
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

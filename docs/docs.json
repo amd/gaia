@@ -36,15 +36,16 @@
               "cpp/quickstart",
               "cpp/overview",
               "cpp/integration",
+              "cpp/testing",
+              "cpp/api-reference",
               {
                 "group": "User Guides",
                 "pages": [
-                  "cpp/custom-agent",
                   "cpp/health-agent",
-                  "cpp/wifi-agent"
+                  "cpp/wifi-agent",
+                  "cpp/custom-agent"
                 ]
-              },
-              "cpp/api-reference"
+              }
             ]
           },
           {

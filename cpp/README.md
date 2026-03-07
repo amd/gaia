@@ -28,10 +28,26 @@ Included demos:
 
 The agent connects to an OpenAI-compatible LLM server at `http://localhost:8000/api/v1` by default. The reference backend is [Lemonade Server](https://github.com/amd/lemonade), which runs models locally on AMD hardware.
 
-Install and start Lemonade before running the agent:
+Download and install Lemonade Server v9.3.0, then start it:
 
+**Windows:**
+```powershell
+# Download and run the MSI installer
+curl -L -o lemonade-server-minimal.msi https://github.com/lemonade-sdk/lemonade/releases/download/v9.3.0/lemonade-server-minimal.msi
+msiexec /i lemonade-server-minimal.msi
+```
+
+**Linux:**
 ```bash
-pip install lemonade-server
+# Download and install the .deb package
+curl -L -o lemonade_9.3.0_amd64.deb https://github.com/lemonade-sdk/lemonade/releases/download/v9.3.0/lemonade_9.3.0_amd64.deb
+sudo dpkg -i lemonade_9.3.0_amd64.deb
+```
+
+Or download directly from the [Lemonade v9.3.0 release page](https://github.com/lemonade-sdk/lemonade/releases/tag/v9.3.0).
+
+After installation, start the server:
+```bash
 lemonade-server serve
 ```
 
