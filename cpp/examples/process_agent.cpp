@@ -479,9 +479,8 @@ static gaia::json getTopProcesses(int topN = 20) {
 }
 
 // ---------------------------------------------------------------------------
-// Format a JSON process-by-memory array as a human-readable string
-// Handles both grouped format (instance_count, total_memory_human, parent_name)
-// and legacy flat format (memory_human) for backward compatibility.
+// Format a JSON process-by-memory array as a human-readable string.
+// Expects grouped format from getTopProcesses(): instance_count, total_memory_human, parent_name.
 // ---------------------------------------------------------------------------
 static std::string formatProcessList(const gaia::json& procs) {
     std::string out;
@@ -509,10 +508,6 @@ static std::string formatProcessList(const gaia::json& procs) {
                         nm.c_str(), mem.c_str());
                 }
             }
-        } else {
-            // Legacy flat format
-            std::string mem = p.value("memory_human", std::string("?"));
-            std::snprintf(buf, sizeof(buf), "  %-30s %s\n", nm.c_str(), mem.c_str());
         }
         out += buf;
 
@@ -828,8 +823,6 @@ Memory: [amount]
 CPU time: [seconds]
 Started: [timestamp]
 Network: [connection summary or "No active connections"]
-
-[1-2 sentence plain-text assessment]
 
 When reporting action results (kill, restart, quarantine), use:
 Action: [what was done]
@@ -1339,7 +1332,7 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
                     std::string psCmd =
                         "$svc=Get-Service -Name '" + name + "' -EA 0; "
                         "if($svc) {"
-                        "  $wmi=Get-WmiObject Win32_Service -Filter \"Name='" + name + "'\" -EA 0; "
+                        "  $wmi=Get-CimInstance Win32_Service -Filter \"Name='" + name + "'\" -EA 0; "
                         "  @{type='service';name=$svc.Name;"
                         "  displayName=[string]$svc.DisplayName;"
                         "  status=[string]$svc.Status;"
@@ -2096,7 +2089,7 @@ int main(int argc, char* argv[]) {
                         continue;
                     }
 
-                    // Actions 1–5: send the action prompt, keep history
+                    // Actions 1–4: send the action prompt, keep history
                     query = kActions[idx].prompt;
                     std::cout << color::CYAN << "  > " << kActions[idx].label
                               << color::RESET << std::endl;
