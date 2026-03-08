@@ -1,6 +1,6 @@
 ---
 title: "System Health Agent"
-description: "A C++ agent that connects to Windows MCP for system diagnostics — CPU, memory, disk, GPU, and full report generation via PowerShell"
+description: "A C++ agent that connects to Windows MCP for system diagnostics — investigative multi-tool reasoning across CPU, memory, disk, processes, and more"
 icon: "desktop"
 ---
 
@@ -17,115 +17,30 @@ icon: "desktop"
 
 ## What This Agent Does
 
-The System Health Agent connects to the Windows MCP server via stdio, then uses PowerShell commands to gather system metrics and generate health reports. See the [Windows System Health guide](/guides/mcp/windows-system-health) for a walkthrough of the approach.
+The System Health Agent is an **investigative AI agent** that diagnoses system problems by gathering data from multiple sources, correlating findings, and reasoning about root causes. When you ask *"Why is my system slow?"*, it doesn't just check one metric — it runs 4 PowerShell commands in sequence (CPU, processes, memory, disk), reasons about each result, and delivers a correlated diagnosis.
 
 Key differences from the [Wi-Fi Troubleshooter](/cpp/wifi-agent):
 
 - **MCP-based** — all tools come from the Windows MCP server, not registered C++ lambdas
-- **Broader scope** — CPU, memory, disk, GPU, processes, network, battery, SMART, Windows Update, and more
-- **Report generation** — can write formatted reports to temp files and open them in Notepad
-- **LLM model recommendations** — analyzes hardware specs and suggests which models your system can run
+- **Multi-tool investigations** — each query triggers 3-4 correlated tool calls with reasoning between each
+- **Broader scope** — CPU, memory, disk, processes, network, battery, SMART, Windows Update, and more
+- **Report generation** — full diagnostics can write a formatted report to Notepad
 
 ---
 
-## Architecture
+## Demo
 
-```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'16px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
-graph TB
-    User("User query")
-    Agent("WindowsSystemHealthAgent<br/>gaia::Agent subclass")
-    LLM("LLM<br/>http://localhost:8000")
-    MCP("Windows MCP Server<br/>uvx windows-mcp")
+<video
+  controls
+  autoPlay
+  loop
+  muted
+  playsInline
+  className="w-full rounded-lg"
+  src="https://assets.amd-gaia.ai/videos/health-agent-cpp-gpu.webm"
+/>
 
-    User --> Agent
-    Agent -->|"chat/completions"| LLM
-    LLM -->|"plan + tool calls"| Agent
-    Agent -->|"JSON-RPC 2.0 stdio"| MCP
-
-    MCP --> Shell1("mcp_windows_Shell<br/>Get-CimInstance (Memory)")
-    MCP --> Shell2("mcp_windows_Shell<br/>Get-PSDrive (Disk)")
-    MCP --> Shell3("mcp_windows_Shell<br/>Get-CimInstance (CPU)")
-    MCP --> Shell4("mcp_windows_Shell<br/>Get-CimInstance (GPU)")
-
-    style User fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Agent fill:#ED1C24,stroke:#F4484D,stroke-width:3px,color:#fff
-    style LLM fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style MCP fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell1 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell2 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell3 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell4 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-
-    linkStyle default stroke:#ED1C24,stroke-width:2px
-```
-
-The agent subclasses `gaia::Agent` and connects to the Windows MCP server at construction time. Unlike the Wi-Fi agent (which registers tools as C++ lambdas), this agent gets all its tools from the MCP server — every diagnostic runs through `mcp_windows_Shell`.
-
----
-
-## How It Works
-
-The agent has no `registerTools()` override — all tools come from MCP. The system prompt teaches the LLM which PowerShell commands to run for each type of query:
-
-```cpp
-class WindowsSystemHealthAgent : public gaia::Agent {
-public:
-    explicit WindowsSystemHealthAgent(const std::string& modelId)
-        : Agent(makeConfig(modelId)) {
-        setOutputHandler(std::make_unique<gaia::CleanConsole>());
-        init();
-
-        // All tools come from the Windows MCP server
-        connectMcpServer("windows", {
-            {"command", "uvx"},
-            {"args", {"windows-mcp"}}
-        });
-    }
-
-protected:
-    std::string getSystemPrompt() const override {
-        return R"(You are an expert Windows system administrator...
-            // PowerShell commands for memory, disk, CPU, GPU, etc.
-            // Query routing: "quick check" vs "full report"
-            // LLM model recommendations by hardware tier
-        )";
-    }
-
-private:
-    static gaia::AgentConfig makeConfig(const std::string& modelId) {
-        gaia::AgentConfig config;
-        config.maxSteps = 75;       // full diagnostics needs many tool calls
-        config.modelId = modelId;
-        config.contextSize = 32768; // 32K for 12+ tool calls with output
-        return config;
-    }
-};
-```
-
-The system prompt includes:
-- **12 PowerShell command templates** — memory, disk, CPU, GPU, processes, network, startup programs, event logs, Windows Update, battery, installed software, SMART status
-- **Query routing** — "quick health check" runs 4 core metrics; "full diagnostics" runs all 12 and generates a Notepad report
-- **LLM model recommendations** — a hardware-to-model reference table so the agent can suggest which models your system can run
-
----
-
-## Available Diagnostics
-
-| Diagnostic | PowerShell Command | Output |
-|-----------|-------------------|--------|
-| Memory | `Get-CimInstance Win32_OperatingSystem` | Total/free RAM in GB |
-| Disk | `Get-PSDrive -PSProvider FileSystem` | Used/free space per drive |
-| CPU | `Get-CimInstance Win32_Processor` | Name, cores, load % |
-| GPU | `Get-CimInstance Win32_VideoController` | Name, VRAM, driver version |
-| Top Processes | `Get-Process \| Sort-Object CPU` | Top 10 by CPU time |
-| Network | `Get-NetIPConfiguration` | IP, gateway, DNS per interface |
-| Startup Programs | `Get-CimInstance Win32_StartupCommand` | Name, command, location |
-| System Errors | `Get-WinEvent` (last 24h) | Time, event ID, message |
-| Windows Update | `Get-HotFix` | Recent hotfixes with dates |
-| Battery | `Get-CimInstance Win32_Battery` | Charge %, chemistry, status |
-| Installed Software | Registry query | Top 20 by install date |
-| Storage Health | `Get-PhysicalDisk` | SMART status per disk |
+Full diagnostic run on a Ryzen AI PC: the agent gathers CPU, memory, disk, and process data via MCP, reasons about each result, and delivers a correlated diagnosis — all powered by a local LLM on the GPU.
 
 ---
 
@@ -171,72 +86,136 @@ The system prompt includes:
     cpp\build\Release\health_agent.exe
     ```
 
-    Select GPU or NPU backend, then choose from the diagnostic menu:
+    Select GPU or NPU backend, then choose from the investigation menu:
     ```
-     [1] Quick health check (console summary)
-     [2] Check memory usage
-     [3] Check disk space
-     [4] Check CPU info
-     [5] Check GPU info
-     ...
-    [14] What LLM models can my system run?
-    [15] Run ALL diagnostics + generate report
+    [1] Why is my system slow?
+    [2] Is my system secure and up to date?
+    [3] Can I free up disk space?
+    [4] Diagnose recent system errors
+    [5] How's my battery holding up?
+    [6] Full system health report
     ```
+
+    Or type your own question — the agent will reason about what data to gather.
   </Step>
 </Steps>
 
 ---
 
-## Sample Session
+## Architecture
 
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'16px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
+graph TB
+    User("User query")
+    Agent("WindowsSystemHealthAgent<br/>gaia::Agent subclass")
+    LLM("LLM<br/>http://localhost:8000")
+    MCP("Windows MCP Server<br/>uvx windows-mcp")
+
+    User --> Agent
+    Agent -->|"chat/completions"| LLM
+    LLM -->|"plan + tool calls"| Agent
+    Agent -->|"JSON-RPC 2.0 stdio"| MCP
+
+    MCP --> Shell1("mcp_windows_Shell<br/>Get-CimInstance (CPU)")
+    MCP --> Shell2("mcp_windows_Shell<br/>Get-Process (Top 10)")
+    MCP --> Shell3("mcp_windows_Shell<br/>Get-CimInstance (Memory)")
+    MCP --> Shell4("mcp_windows_Shell<br/>Get-PSDrive (Disk)")
+
+    style User fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Agent fill:#ED1C24,stroke:#F4484D,stroke-width:3px,color:#fff
+    style LLM fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style MCP fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Shell1 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Shell2 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Shell3 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style Shell4 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+
+    linkStyle default stroke:#ED1C24,stroke-width:2px
 ```
-  ========================================================================================
-   System Health Agent  |  GAIA C++ Agent Framework  |  Local Inference
-  ========================================================================================
 
-  Select inference backend:
-  [1] GPU  - Qwen3-4B-Instruct-2507-GGUF
-  [2] NPU  - Qwen3-4B-Instruct-2507-FLM
+The agent subclasses `gaia::Agent` and connects to the Windows MCP server at construction time. Unlike the Wi-Fi agent (which registers tools as C++ lambdas), this agent gets all its tools from the MCP server — every diagnostic runs through `mcp_windows_Shell`.
 
-  > 1
-  Using GPU backend: Qwen3-4B-Instruct-2507-GGUF
-  Connecting to Windows MCP server...
-  Connected to Windows MCP server
+---
 
-  Ready!
+## How It Works
 
-   [1] Quick health check (console summary)
-   [2] Check memory usage
-   ...
+The agent has no `registerTools()` override — all tools come from MCP. The system prompt teaches the LLM **investigation strategies**: which PowerShell commands to run for each query type, and how to correlate findings:
 
-  > 1
-  > Quick health check (console summary)
+```cpp
+class WindowsSystemHealthAgent : public gaia::Agent {
+public:
+    explicit WindowsSystemHealthAgent(const std::string& modelId)
+        : Agent(makeConfig(modelId)) {
+        setOutputHandler(std::make_unique<gaia::CleanConsole>());
+        init();
 
-  [1/75] mcp_windows_Shell
-      Command: Get-CimInstance Win32_OperatingSystem | ...
-  Finding: 128 GB total RAM, 98 GB free (76% available).
-  Decision: Memory healthy. Checking disk space next.
+        // All tools come from the Windows MCP server
+        connectMcpServer("windows", {
+            {"command", "uvx"},
+            {"args", {"windows-mcp"}}
+        });
+    }
 
-  [2/75] mcp_windows_Shell
-      Command: Get-PSDrive -PSProvider FileSystem | ...
-  Finding: C: drive has 412 GB free of 952 GB total.
-  Decision: Disk OK. Checking CPU.
+protected:
+    std::string getSystemPrompt() const override {
+        return R"(You are an expert Windows system administrator...
+            // Investigation strategies per query type
+            // PowerShell commands for memory, disk, CPU, processes, etc.
+            // Reasoning protocol: FINDING/DECISION after each tool
+        )";
+    }
 
-  [3/75] mcp_windows_Shell
-      ...
-
-  [4/75] mcp_windows_Shell
-      ...
-
-  ========================================================================================
-   System Health Summary:
-   - Memory: 128 GB total, 98 GB free
-   - Disk: C: 412 GB free / 952 GB
-   - CPU: AMD Ryzen AI MAX+ 395, 16 cores, 8% load
-   - GPU: AMD Radeon 8060S, 32 GB VRAM
-   Assessment: Excellent - can run 30B+ parameter models
-  ========================================================================================
+private:
+    static gaia::AgentConfig makeConfig(const std::string& modelId) {
+        gaia::AgentConfig config;
+        config.maxSteps = 75;       // full diagnostics needs many tool calls
+        config.modelId = modelId;
+        config.contextSize = 32768; // 32K for 12+ tool calls with output
+        return config;
+    }
+};
 ```
+
+The system prompt contains **investigation strategies** — each query type maps to a specific sequence of PowerShell commands. The LLM follows the strategy, uses FINDING/DECISION reasoning after each tool result, and delivers a correlated conclusion.
+
+---
+
+## Investigations
+
+Each menu option triggers a multi-tool investigation. The LLM gathers data, reasons about each result, and correlates findings before answering.
+
+| Investigation | Tools Called | What It Checks |
+|--------------|-------------|----------------|
+| **Why is my system slow?** | 4 | CPU load, top processes, memory, disk space |
+| **Is my system secure?** | 3 | Windows updates, system errors, startup programs |
+| **Can I free up disk space?** | 3 | Drive usage, temp folder size, largest installed software |
+| **Diagnose system errors** | 3 | Event log errors, disk SMART health, memory status |
+| **Battery health** | 3 | Battery status, top CPU processes, CPU load |
+| **Full health report** | 12+ | All metrics, then writes a report to Notepad |
+
+---
+
+## Available PowerShell Commands
+
+The system prompt provides these commands for the LLM to use via `mcp_windows_Shell`:
+
+| Category | PowerShell Command | Output |
+|----------|-------------------|--------|
+| Memory | `Get-CimInstance Win32_OperatingSystem` | Total/free RAM in GB |
+| Disk | `Get-PSDrive -PSProvider FileSystem` | Used/free space per drive |
+| CPU | `Get-CimInstance Win32_Processor` | Name, cores, load % |
+| GPU | `Get-CimInstance Win32_VideoController` | Name, VRAM, driver version |
+| Top Processes (CPU) | `Get-Process \| Sort-Object CPU` | Top 10 by CPU time |
+| Top Processes (Memory) | `Get-Process \| Sort-Object WorkingSet64` | Top 10 by memory |
+| Network | `Get-NetIPConfiguration` | IP, gateway, DNS per interface |
+| Startup Programs | `Get-CimInstance Win32_StartupCommand` | Name, command, location |
+| System Errors | `Get-WinEvent` (last 24h) | Time, event ID, message |
+| Windows Update | `Get-HotFix` | Recent hotfixes with dates |
+| Battery | `Get-CimInstance Win32_Battery` | Charge %, chemistry, status |
+| Installed Software | Registry query | Top 20 by size or install date |
+| Temp Folder | `Get-ChildItem $env:TEMP` | Total size and file count |
+| Storage Health | `Get-PhysicalDisk` | SMART status per disk |
 
 ---
 

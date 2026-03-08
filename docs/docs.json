@@ -36,15 +36,16 @@
               "cpp/quickstart",
               "cpp/overview",
               "cpp/integration",
+              "cpp/testing",
+              "cpp/api-reference",
               {
                 "group": "User Guides",
                 "pages": [
-                  "cpp/custom-agent",
                   "cpp/health-agent",
-                  "cpp/wifi-agent"
+                  "cpp/wifi-agent",
+                  "cpp/custom-agent"
                 ]
-              },
-              "cpp/api-reference"
+              }
             ]
           },
           {
@@ -364,6 +365,7 @@
           {
             "group": "Release Notes",
             "pages": [
+              "releases/v0.16.0",
               "releases/v0.15.4.1",
               "releases/v0.15.4",
               "releases/v0.15.3.2",
@@ -405,7 +407,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.15.4.1 · Lemonade 9.3.0",
+        "label": "v0.16.0 · Lemonade 9.3.0",
         "href": "https://github.com/amd/gaia/releases"
       },
       {
