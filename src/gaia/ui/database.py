@@ -244,7 +244,8 @@ class ChatDatabase:
             cursor = self._conn.execute(
                 "DELETE FROM sessions WHERE id = ?", (session_id,)
             )
-        return cursor.rowcount > 0
+            deleted = cursor.rowcount > 0
+        return deleted
 
     def touch_session(self, session_id: str):
         """Update the session's updated_at timestamp."""
@@ -290,8 +291,9 @@ class ChatDatabase:
                 "UPDATE sessions SET updated_at = ? WHERE id = ?",
                 (self._now(), session_id),
             )
+            msg_id = cursor.lastrowid
 
-        return cursor.lastrowid
+        return msg_id
 
     def get_messages(
         self, session_id: str, limit: int = 100, offset: int = 0
@@ -426,7 +428,8 @@ class ChatDatabase:
         """Delete a document from the library."""
         with self._transaction():
             cursor = self._conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
-        return cursor.rowcount > 0
+            deleted = cursor.rowcount > 0
+        return deleted
 
     # ── Session-Document Attachments ────────────────────────────────────
 
@@ -452,7 +455,8 @@ class ChatDatabase:
                    WHERE session_id = ? AND document_id = ?""",
                 (session_id, document_id),
             )
-        return cursor.rowcount > 0
+            detached = cursor.rowcount > 0
+        return detached
 
     def get_session_documents(self, session_id: str) -> List[Dict[str, Any]]:
         """Get all documents attached to a session."""

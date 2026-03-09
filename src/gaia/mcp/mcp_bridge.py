@@ -570,13 +570,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             if not boundary:
                 raise ValueError("Missing multipart boundary")
 
-            # boundary is bytes, decode for parser if needed
-            boundary = boundary.decode("latin-1").strip('"')
-            boundary_bytes = (
-                boundary
-                if isinstance(boundary, (bytes, bytearray))
-                else str(boundary).encode("utf-8")
-            )
+            # boundary is bytes from parse_options_header; encode to UTF-8 for parser
+            boundary_bytes = boundary.decode("latin-1").strip('"').encode("utf-8")
 
             collector = MultipartCollector()
             mp = MultipartParser(boundary_bytes, callbacks=collector.callbacks())

@@ -197,7 +197,7 @@ class RoutingAgent:
 Conversation:
 {full_context}
 
-{ROUTING_ANALYSIS_PROMPT.split('User Request: "{query}"')[1]}"""
+{ROUTING_ANALYSIS_PROMPT.split('User Request: "{query}"')[-1]}"""
 
         # Wrap in Qwen chat format
         prompt = (
