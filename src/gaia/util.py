@@ -59,9 +59,7 @@ def kill_process_on_port(port):
                     if pid:
                         print(f"Found process with PID {pid} on port {port}")
                         try:
-                            subprocess.run(
-                                f"kill -9 {pid}", shell=True, check=False
-                            )
+                            subprocess.run(f"kill -9 {pid}", shell=True, check=False)
                             print(f"Killed process with PID {pid}")
                         except Exception as e:
                             print(f"Error killing PID {pid}: {e}")

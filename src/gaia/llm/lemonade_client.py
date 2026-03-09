@@ -638,6 +638,7 @@ class LemonadeClient:
         self.server_process = None
         self.log = get_logger(__name__)
         self.keep_alive = keep_alive
+        self._log_file = None
 
         # Track active downloads for cancellation support
         self.active_downloads: Dict[str, DownloadTask] = {}
