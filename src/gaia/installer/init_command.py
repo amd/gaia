@@ -757,9 +757,7 @@ class InitCommand:
             self.console.print(
                 "   [bold]Please install Lemonade Server manually:[/bold]"
             )
-            self.console.print(
-                "   [cyan]https://lemonade-server.ai[/cyan]"
-            )
+            self.console.print("   [cyan]https://lemonade-server.ai[/cyan]")
             self.console.print("")
             self.console.print(
                 "   [dim]After installing, re-run:[/dim] [cyan]gaia init[/cyan]"
