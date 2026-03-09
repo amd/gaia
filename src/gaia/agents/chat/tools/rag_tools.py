@@ -1705,8 +1705,8 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                     if file_path.suffix.lower() in supported_extensions:
                         try:
                             # Use the RAG SDK to index the file
-                            success = self.rag.index_document(str(file_path))
-                            if success:
+                            result = self.rag.index_document(str(file_path))
+                            if result.get("success"):
                                 indexed_files.append(str(file_path))
                                 logger.info(f"Indexed: {file_path.name}")
                             else:
