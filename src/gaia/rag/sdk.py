@@ -1979,8 +1979,9 @@ These positions indicate where to split the text."""
         scores = [1.0 / (1.0 + dist) for dist in distances[0]]
 
         if self.config.show_stats:
+            avg_relevance = sum(scores) / len(scores) if scores else 0.0
             print(
-                f"  ✅ Retrieved {len(retrieved_chunks)} chunks (avg relevance: {sum(scores)/len(scores):.3f})"
+                f"  ✅ Retrieved {len(retrieved_chunks)} chunks (avg relevance: {avg_relevance:.3f})"
             )
 
         self.log.debug(
