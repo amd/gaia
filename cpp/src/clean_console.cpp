@@ -126,7 +126,7 @@ void CleanConsole::prettyPrintJson(const json& data,
 
     if (title != "Tool Result" || !data.is_object()) return;
 
-    // Show the command that was executed
+    // Show the command that was executed (registered-tool format)
     if (data.contains("command")) {
         std::string cmd = data["command"].get<std::string>();
         std::cout << color::CYAN << "      Cmd: " << color::RESET
@@ -144,7 +144,7 @@ void CleanConsole::prettyPrintJson(const json& data,
         return;
     }
 
-    // Show tool output preview
+    // Show tool output preview — registered-tool format: {"output": "..."}
     if (data.contains("output")) {
         std::string output = data["output"].get<std::string>();
         if (output.empty() || output.find("(no output)") != std::string::npos) {
@@ -158,7 +158,28 @@ void CleanConsole::prettyPrintJson(const json& data,
         printOutputPreview(output);
     }
 
-    // Show status
+    // Show tool output preview — MCP format: {"content": [{"type": "text", "text": "..."}]}
+    if (data.contains("content") && data["content"].is_array()) {
+        std::string output;
+        for (const auto& item : data["content"]) {
+            if (item.is_object() && item.value("type", "") == "text" &&
+                item.contains("text") && item["text"].is_string()) {
+                if (!output.empty()) output += "\n";
+                output += item["text"].get<std::string>();
+            }
+        }
+        if (output.empty() || output.find("(no output)") != std::string::npos) {
+            std::cout << color::GREEN << "      Result: "
+                      << color::RESET << color::GRAY << "(no output)"
+                      << color::RESET << std::endl;
+        } else {
+            std::cout << color::GREEN << "      Output:" << color::RESET
+                      << std::endl;
+            printOutputPreview(output);
+        }
+    }
+
+    // Show status (registered-tool format)
     if (data.contains("status")) {
         auto status = data["status"].get<std::string>();
         const char* statusColor = (status == "completed")
@@ -189,22 +210,91 @@ void CleanConsole::stopProgress() {}
 void CleanConsole::printFinalAnswer(const std::string& answer) {
     if (answer.empty()) return;
 
-    // Extract clean text — the LLM sometimes returns raw JSON
-    std::string cleanAnswer = answer;
-    if (!answer.empty() && answer.front() == '{') {
-        try {
-            auto j = json::parse(answer);
-            if (j.is_object()) {
-                if (j.contains("answer") && j["answer"].is_string()) {
-                    cleanAnswer = j["answer"].get<std::string>();
-                } else if (j.contains("thought") && j["thought"].is_string()) {
-                    cleanAnswer = j["thought"].get<std::string>();
-                }
+    // Extract clean text from the LLM's final response.
+    // The LLM may produce: FINDING/DECISION text + {"thought":..., "answer":...}
+    // We want only the "answer" field, cleaned up.
+    std::string cleanAnswer;
+
+    // 1. Try to find embedded JSON with an "answer" or "thought" field
+    std::string fallbackThought;
+    auto jsonStart = answer.find('{');
+    while (jsonStart != std::string::npos) {
+        // Find matching closing brace
+        int depth = 0;
+        size_t jsonEnd = std::string::npos;
+        for (size_t i = jsonStart; i < answer.size(); ++i) {
+            if (answer[i] == '{') ++depth;
+            else if (answer[i] == '}') {
+                --depth;
+                if (depth == 0) { jsonEnd = i; break; }
             }
-        } catch (...) {
-            // Not valid JSON — use as-is
+        }
+        if (jsonEnd != std::string::npos) {
+            std::string candidate = answer.substr(jsonStart, jsonEnd - jsonStart + 1);
+            try {
+                auto j = json::parse(candidate);
+                if (j.is_object()) {
+                    // Best case: explicit "answer" field
+                    if (j.contains("answer") && j["answer"].is_string()) {
+                        cleanAnswer = j["answer"].get<std::string>();
+                        break;
+                    }
+                    // Fallback: "thought" field (LLM included reasoning as JSON)
+                    if (fallbackThought.empty() &&
+                        j.contains("thought") && j["thought"].is_string()) {
+                        fallbackThought = j["thought"].get<std::string>();
+                    }
+                }
+            } catch (...) {
+                // Not valid JSON — keep searching
+            }
+        }
+        jsonStart = answer.find('{', jsonStart + 1);
+    }
+
+    // Use thought as fallback if no answer was found
+    if (cleanAnswer.empty() && !fallbackThought.empty()) {
+        cleanAnswer = fallbackThought;
+    }
+
+    // 2. If no JSON answer found, use the raw text but strip FINDING/DECISION lines
+    if (cleanAnswer.empty()) {
+        std::istringstream raw(answer);
+        std::string rawLine;
+        while (std::getline(raw, rawLine)) {
+            // Skip lines that are reasoning artifacts
+            std::string trimmed = rawLine;
+            size_t f = trimmed.find_first_not_of(" \t\r\n");
+            if (f != std::string::npos) trimmed = trimmed.substr(f);
+
+            if (trimmed.find("FINDING:") == 0 || trimmed.find("Finding:") == 0 ||
+                trimmed.find("DECISION:") == 0 || trimmed.find("Decision:") == 0) {
+                continue;  // Skip reasoning lines
+            }
+            if (trimmed.front() == '{' && trimmed.back() == '}') {
+                continue;  // Skip raw JSON lines
+            }
+            if (!cleanAnswer.empty()) cleanAnswer += "\n";
+            cleanAnswer += rawLine;
         }
     }
+
+    // 3. If still empty, fall back to original
+    if (cleanAnswer.empty()) {
+        cleanAnswer = answer;
+    }
+
+    // 4. Replace literal \n with actual newlines (LLM sometimes returns escaped newlines)
+    std::string processed;
+    for (size_t i = 0; i < cleanAnswer.size(); ++i) {
+        if (i + 1 < cleanAnswer.size() && cleanAnswer[i] == '\\' && cleanAnswer[i + 1] == 'n') {
+            processed += '\n';
+            ++i;
+        } else {
+            processed += cleanAnswer[i];
+        }
+    }
+    cleanAnswer = processed;
 
     std::cout << std::endl;
     std::cout << color::GREEN

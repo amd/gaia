@@ -1,60 +1,105 @@
 ---
 title: "Welcome"
-description: "Build custom, private AI agents for your PC."
+description: "Build local AI agents in Python and C++ for AMD hardware."
+icon: "hand-wave"
 ---
 
 <div style={{textAlign: 'center', padding: '48px 0 24px 0'}}>
   <h1 style={{fontSize: '3.2rem', fontWeight: 900, marginBottom: '24px', lineHeight: 1.1}}>
-    Stop Renting AI.<br/>Start <span style={{color: '#ED1C24'}}>Owning</span> It.
+    Build AI Agents That Run <span style={{color: '#ED1C24'}}>Locally</span>
   </h1>
   <p style={{fontSize: '1.3rem', maxWidth: '780px', margin: '0 auto', lineHeight: 1.8}}>
-    <strong style={{color: '#ED1C24'}}>Private by design.</strong> No API fees. Your workflow, your way.<br/><br/>
-    GAIA is an open-source SDK for building AI agents—programs that reason, search your files, and take action—running <strong>100% on your PC</strong>.
+    GAIA is an open-source framework for building AI agents in Python and C++ that run entirely on local hardware. Agents reason, call tools, search documents, and take action — with no cloud dependency and no data leaving the device.
   </p>
 </div>
 
 <CardGroup cols={4}>
-  <Card title="Private" icon="lock">
-    Data never leaves your PC
+  <Card title="Local Inference" icon="lock">
+    All processing stays on-device
   </Card>
-  <Card title="No API Fees" icon="dollar-sign">
-    One-time hardware, unlimited use
+  <Card title="No Cloud Dependency" icon="server">
+    No API keys or external services required
   </Card>
-  <Card title="Custom" icon="wand-magic-sparkles">
-    Your workflow, your rules
+  <Card title="Python & C++" icon="code">
+    Full SDK in both languages
   </Card>
-  <Card title="Fast" icon="bolt">
-    AMD NPU acceleration
+  <Card title="AMD Optimized" icon="bolt">
+    NPU and GPU acceleration on Ryzen AI
   </Card>
 </CardGroup>
 
-```python
-from gaia.agents.base.agent import Agent
+<Tabs>
+  <Tab title="Python">
+    ```python
+    from gaia.agents.base.agent import Agent
 
-agent = Agent()
-response = agent.process_query("Summarize my meeting notes")
-```
+    agent = Agent()
+    response = agent.process_query("Summarize my meeting notes")
+    ```
+  </Tab>
+  <Tab title="C++">
+    ```cpp
+    #include <gaia/agent.h>
 
-## What You Can Build
+    gaia::Agent agent;
+    auto result = agent.processQuery("Summarize my meeting notes");
+    ```
+  </Tab>
+</Tabs>
+
+## Get Started
 
 <CardGroup cols={2}>
-  <Card title="Document Intelligence" icon="file-lines" href="/guides/rag">
-    Search, summarize, and answer questions from your PDFs, docs, and files.
+  <Card title="Python Quick Start" icon="python" href="/quickstart">
+    Install GAIA, start Lemonade Server, and run your first agent.
   </Card>
-  <Card title="Voice Assistants" icon="microphone" href="/guides/talk">
-    Speech-to-text and text-to-speech that works offline.
-  </Card>
-  <Card title="Code Agents" icon="code" href="/guides/code">
-    AI that writes, debugs, and ships code with full codebase context.
-  </Card>
-  <Card title="Custom Workflows" icon="wand-magic-sparkles" href="/sdk">
-    Database queries, image processing, API integrations—anything you need.
+  <Card title="C++ Quickstart" icon="code" href="/cpp/quickstart">
+    Build a native C++17 agent binary — no Python runtime required.
   </Card>
 </CardGroup>
 
-<Card title="Build Your First Agent" icon="rocket" href="/quickstart">
-  Get started in 5 minutes →
-</Card>
+## Capabilities
+
+<Tabs>
+  <Tab title="Python">
+    <CardGroup cols={2}>
+      <Card title="Document Q&A (RAG)" icon="file-lines" href="/guides/chat">
+        Retrieve, index, and answer questions over local PDFs, code, and text files.
+      </Card>
+      <Card title="Speech-to-Speech" icon="microphone" href="/guides/talk">
+        Whisper ASR and Kokoro TTS — offline voice interaction pipeline.
+      </Card>
+      <Card title="Code Generation" icon="code" href="/guides/code">
+        Multi-file code generation with validation, testing, and orchestration.
+      </Card>
+      <Card title="Image Generation" icon="image" href="/guides/sd">
+        Multi-modal image generation with LLM prompt enhancement.
+      </Card>
+      <Card title="MCP Integration" icon="plug" href="/sdk/sdks/mcp">
+        Connect agents to external tools via Model Context Protocol.
+      </Card>
+      <Card title="Agent Routing" icon="route" href="/guides/routing">
+        Intelligent request routing across multiple specialized agents.
+      </Card>
+    </CardGroup>
+  </Tab>
+  <Tab title="C++">
+    <CardGroup cols={2}>
+      <Card title="System Health Agent" icon="heart-pulse" href="/cpp/health-agent">
+        MCP-powered diagnostics — CPU, memory, disk, network, and GPU monitoring.
+      </Card>
+      <Card title="Wi-Fi Troubleshooter" icon="wifi" href="/cpp/wifi-agent">
+        Diagnose and resolve wireless connectivity issues with registered tools.
+      </Card>
+      <Card title="Custom Agents" icon="robot" href="/cpp/custom-agent">
+        Build your own C++17 agent with tool registration and state management.
+      </Card>
+      <Card title="MCP Integration" icon="plug" href="/cpp/overview">
+        Connect to MCP servers for extensible tool access.
+      </Card>
+    </CardGroup>
+  </Tab>
+</Tabs>
 
 ## Resources
 
@@ -82,7 +127,7 @@ response = agent.process_query("Summarize my meeting notes")
 
 **License**
 
-Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 
 SPDX-License-Identifier: MIT
 

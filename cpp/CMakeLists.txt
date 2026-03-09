@@ -27,7 +27,7 @@ endif()
 
 # Integration tests require a running Lemonade server -- always OFF by default.
 option(GAIA_BUILD_INTEGRATION_TESTS
-    "Build LLM integration tests (requires lemonade-server with Qwen3-4B-GGUF loaded)" ON)
+    "Build LLM integration tests (requires lemonade-server with Qwen3-4B-GGUF loaded)" OFF)
 
 # ---------------------------------------------------------------------------
 # Dependencies -- prefer system packages, fall back to FetchContent

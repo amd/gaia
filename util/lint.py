@@ -79,7 +79,7 @@ def check_black(fix: bool = False) -> CheckResult:
     if fix:
         print("\n[1/2] Fixing code formatting with Black...")
     else:
-        print("\n[1/7] Checking code formatting with Black...")
+        print("\n[1/8] Checking code formatting with Black...")
     print("-" * 40)
 
     if fix:
@@ -153,7 +153,7 @@ def check_isort(fix: bool = False) -> CheckResult:
     if fix:
         print("\n[2/2] Fixing import sorting with isort...")
     else:
-        print("\n[2/7] Checking import sorting with isort...")
+        print("\n[2/8] Checking import sorting with isort...")
     print("-" * 40)
 
     if fix:
@@ -198,7 +198,7 @@ def check_isort(fix: bool = False) -> CheckResult:
 
 def check_pylint() -> CheckResult:
     """Run Pylint (errors only)."""
-    print("\n[3/7] Running Pylint (errors only)...")
+    print("\n[3/8] Running Pylint (errors only)...")
     print("-" * 40)
 
     cmd = uvx(
@@ -223,7 +223,7 @@ def check_pylint() -> CheckResult:
 
 def check_flake8() -> CheckResult:
     """Run Flake8."""
-    print("\n[4/7] Running Flake8...")
+    print("\n[4/8] Running Flake8...")
     print("-" * 40)
 
     cmd = uvx(
@@ -256,7 +256,7 @@ def check_flake8() -> CheckResult:
 
 def check_mypy() -> CheckResult:
     """Run MyPy type checking (warning only)."""
-    print("\n[5/7] Running MyPy type checking (warning only)...")
+    print("\n[5/8] Running MyPy type checking (warning only)...")
     print("-" * 40)
 
     cmd = uvx("mypy", SRC_DIR, "--ignore-missing-imports")
@@ -283,7 +283,7 @@ def check_mypy() -> CheckResult:
 
 def check_bandit() -> CheckResult:
     """Run Bandit security check (warning only)."""
-    print("\n[6/7] Running security check with Bandit (warning only)...")
+    print("\n[6/8] Running security check with Bandit (warning only)...")
     print("-" * 40)
 
     cmd = uvx("bandit", "-r", SRC_DIR, "-ll", "--exclude", EXCLUDE_DIRS)
@@ -309,7 +309,7 @@ def check_bandit() -> CheckResult:
 
 def check_imports() -> CheckResult:
     """Test comprehensive SDK imports."""
-    print("\n[7/7] Testing comprehensive SDK imports...")
+    print("\n[7/8] Testing comprehensive SDK imports...")
     print("-" * 40)
 
     # Pre-check: verify gaia is installed
@@ -423,6 +423,37 @@ def check_imports() -> CheckResult:
 
     print(f"\n[OK] All required imports working!")
     return CheckResult("Import Validation", True, False, 0, "")
+
+
+def check_doc_versions() -> CheckResult:
+    """Check documentation version consistency."""
+    print("\n[8/8] Checking documentation version consistency...")
+    print("-" * 40)
+
+    # Import and run the check
+    try:
+        from check_doc_versions import run_check
+    except ImportError:
+        # Try importing from util/ directory
+        util_dir = str(Path(__file__).parent)
+        if util_dir not in sys.path:
+            sys.path.insert(0, util_dir)
+        try:
+            from check_doc_versions import run_check
+        except ImportError:
+            print("[!] Could not import check_doc_versions.py")
+            return CheckResult("Doc Version Consistency", False, False, 1, "")
+
+    # Capture the exit code (0 = pass, 1 = fail)
+    exit_code = run_check()
+
+    if exit_code != 0:
+        return CheckResult(
+            "Doc Version Consistency", False, False, 1,
+            "Version mismatches found in documentation"
+        )
+
+    return CheckResult("Doc Version Consistency", True, False, 0, "")
 
 
 def count_python_files() -> tuple[int, int]:
@@ -556,6 +587,11 @@ def main():
     parser.add_argument("--mypy", action="store_true", help="Run MyPy")
     parser.add_argument("--bandit", action="store_true", help="Run Bandit")
     parser.add_argument("--imports", action="store_true", help="Test imports")
+    parser.add_argument(
+        "--doc-versions",
+        action="store_true",
+        help="Check doc version consistency",
+    )
     parser.add_argument("--all", action="store_true", help="Run all checks")
     parser.add_argument(
         "--fix", action="store_true", help="Auto-fix issues where possible"
@@ -572,6 +608,7 @@ def main():
             args.mypy,
             args.bandit,
             args.imports,
+            args.doc_versions,
             args.all,
         ]
     )
@@ -616,6 +653,9 @@ def main():
 
     if args.bandit or run_all:
         results.append(check_bandit())
+
+    if args.doc_versions or run_all:
+        results.append(check_doc_versions())
 
     exit_code = print_summary(results)
     sys.exit(exit_code)

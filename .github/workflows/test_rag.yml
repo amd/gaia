@@ -142,12 +142,12 @@ jobs:
             Write-Host "`n=== Pulling Required Models ==="
 
             # Pull LLM model
-            Write-Host "Pulling Qwen3-0.6B-GGUF..."
+            Write-Host "Pulling Qwen3-4B-Instruct-2507-GGUF..."
             try {
-                $body = @{ model_name = "Qwen3-0.6B-GGUF" } | ConvertTo-Json
+                $body = @{ model_name = "Qwen3-4B-Instruct-2507-GGUF" } | ConvertTo-Json
                 $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/pull" `
                     -Method POST -ContentType "application/json" -Body $body -TimeoutSec 600
-                Write-Host "   [OK] Qwen3-0.6B-GGUF pull initiated"
+                Write-Host "   [OK] Qwen3-4B-Instruct-2507-GGUF pull initiated"
             } catch {
                 Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
             }
