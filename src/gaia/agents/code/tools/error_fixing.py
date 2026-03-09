@@ -1233,11 +1233,13 @@ Return ONLY the corrected Python code, no explanations."""
 
                     # Extract code from markdown blocks if present
                     if "```python" in fixed_code:
-                        fixed_code = (
-                            fixed_code.split("```python")[1].split("```")[0].strip()
-                        )
+                        parts = fixed_code.split("```python")
+                        if len(parts) > 1:
+                            fixed_code = parts[1].split("```")[0].strip()
                     elif "```" in fixed_code:
-                        fixed_code = fixed_code.split("```")[1].split("```")[0].strip()
+                        parts = fixed_code.split("```")
+                        if len(parts) > 1:
+                            fixed_code = parts[1].split("```")[0].strip()
 
                     # Validate the fixed code
                     validation = self.syntax_validator.validate_dict(fixed_code)

@@ -1488,3 +1488,106 @@ class TestStreamingGeneratorEdgeCases:
         assert msgs[0]["content"] == "The user question."
         assert msgs[1]["role"] == "assistant"
         assert msgs[1]["content"] == "The assistant reply."
+
+
+class TestMessageDeletion:
+    """Tests for message deletion and resend (delete-and-below) endpoints."""
+
+    @patch("gaia.ui.server._get_chat_response")
+    def test_delete_single_message(self, mock_chat, client, db, session_id):
+        """DELETE /api/sessions/{id}/messages/{msg_id} removes one message."""
+        mock_chat.return_value = "Reply"
+
+        # Send a message pair
+        client.post(
+            "/api/chat/send",
+            json={"session_id": session_id, "message": "Hello", "stream": False},
+        )
+        msgs = db.get_messages(session_id)
+        assert len(msgs) == 2
+        user_msg_id = msgs[0]["id"]
+
+        # Delete the user message
+        resp = client.delete(f"/api/sessions/{session_id}/messages/{user_msg_id}")
+        assert resp.status_code == 200
+        assert resp.json()["deleted"] is True
+
+        # Only the assistant message remains
+        remaining = db.get_messages(session_id)
+        assert len(remaining) == 1
+        assert remaining[0]["role"] == "assistant"
+
+    def test_delete_message_not_found(self, client, session_id):
+        """DELETE returns 404 for non-existent message."""
+        resp = client.delete(f"/api/sessions/{session_id}/messages/99999")
+        assert resp.status_code == 404
+
+    def test_delete_message_session_not_found(self, client):
+        """DELETE returns 404 for non-existent session."""
+        resp = client.delete("/api/sessions/nonexistent/messages/1")
+        assert resp.status_code == 404
+
+    @patch("gaia.ui.server._get_chat_response")
+    def test_delete_messages_from(self, mock_chat, client, db, session_id):
+        """DELETE .../and-below removes the target and all subsequent messages."""
+        mock_chat.return_value = "Reply"
+
+        # Send two message pairs
+        client.post(
+            "/api/chat/send",
+            json={"session_id": session_id, "message": "First", "stream": False},
+        )
+        client.post(
+            "/api/chat/send",
+            json={"session_id": session_id, "message": "Second", "stream": False},
+        )
+        msgs = db.get_messages(session_id)
+        assert len(msgs) == 4
+
+        # Delete from the second user message onward (msg index 2)
+        second_user_id = msgs[2]["id"]
+        resp = client.delete(
+            f"/api/sessions/{session_id}/messages/{second_user_id}/and-below"
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["deleted"] is True
+        assert data["count"] == 2  # second user + second assistant
+
+        # Only the first pair remains
+        remaining = db.get_messages(session_id)
+        assert len(remaining) == 2
+        assert remaining[0]["content"] == "First"
+        assert remaining[1]["content"] == "Reply"
+
+    @patch("gaia.ui.server._get_chat_response")
+    def test_delete_messages_from_first_clears_all(
+        self, mock_chat, client, db, session_id
+    ):
+        """Deleting from the first message clears the entire conversation."""
+        mock_chat.return_value = "Reply"
+
+        client.post(
+            "/api/chat/send",
+            json={"session_id": session_id, "message": "Hello", "stream": False},
+        )
+        msgs = db.get_messages(session_id)
+        first_id = msgs[0]["id"]
+
+        resp = client.delete(
+            f"/api/sessions/{session_id}/messages/{first_id}/and-below"
+        )
+        assert resp.status_code == 200
+        assert resp.json()["count"] == 2
+
+        assert db.count_messages(session_id) == 0
+
+    def test_delete_messages_from_not_found(self, client, session_id):
+        """DELETE .../and-below returns 404 for non-existent message."""
+        resp = client.delete(f"/api/sessions/{session_id}/messages/99999/and-below")
+        assert resp.status_code == 404
+
+    def test_delete_messages_from_session_not_found(self, client):
+        """DELETE .../and-below returns 404 for non-existent session."""
+        resp = client.delete("/api/sessions/nonexistent/messages/1/and-below")
+        assert resp.status_code == 404

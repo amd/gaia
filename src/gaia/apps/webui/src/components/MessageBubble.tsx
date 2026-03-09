@@ -2,13 +2,17 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useRef, useState, useEffect } from 'react';
-import { Copy, Check, AlertTriangle } from 'lucide-react';
+import { Copy, Check, AlertTriangle, Trash2, RefreshCw } from 'lucide-react';
 import type { Message } from '../types';
 import './MessageBubble.css';
 
 interface MessageBubbleProps {
     message: Message;
     isStreaming?: boolean;
+    /** Called when user clicks the delete button. */
+    onDelete?: (messageId: number) => void;
+    /** Called when user clicks the resend button (user messages only). */
+    onResend?: (message: Message) => void;
 }
 
 /** Detect if message content looks like an error. */
@@ -26,15 +30,18 @@ function isErrorContent(content: string): boolean {
     );
 }
 
-export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, onDelete, onResend }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     const [copied, setCopied] = useState(false);
+    const [confirmDelete, setConfirmDelete] = useState(false);
     const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    // Clean up copy timer on unmount to avoid setState on unmounted component
+    // Clean up timers on unmount to avoid setState on unmounted component
     useEffect(() => {
         return () => {
             if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+            if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
         };
     }, []);
 
@@ -47,6 +54,23 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
         copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
     }, [message.content]);
 
+    const handleDelete = useCallback(() => {
+        if (!confirmDelete) {
+            setConfirmDelete(true);
+            if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
+            deleteTimerRef.current = setTimeout(() => setConfirmDelete(false), 3000);
+            return;
+        }
+        // Second click = confirmed
+        setConfirmDelete(false);
+        if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
+        onDelete?.(message.id);
+    }, [confirmDelete, message.id, onDelete]);
+
+    const handleResend = useCallback(() => {
+        onResend?.(message);
+    }, [message, onResend]);
+
     return (
         <div className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}`}>
             <div className="msg-inner">
@@ -56,6 +80,17 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
                     </div>
                     {!isStreaming && (
                         <div className="msg-actions">
+                            {/* Resend button - user messages only */}
+                            {message.role === 'user' && onResend && (
+                                <button
+                                    className="msg-action-btn"
+                                    onClick={handleResend}
+                                    title="Resend message"
+                                    aria-label="Resend message"
+                                >
+                                    <RefreshCw size={12} />
+                                </button>
+                            )}
                             <button
                                 className={`msg-copy ${copied ? 'copied' : ''}`}
                                 onClick={handleCopy}
@@ -64,6 +99,17 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
                             >
                                 {copied ? <Check size={12} /> : <Copy size={12} />}
                             </button>
+                            {/* Delete button */}
+                            {onDelete && (
+                                <button
+                                    className={`msg-action-btn msg-delete ${confirmDelete ? 'confirm' : ''}`}
+                                    onClick={handleDelete}
+                                    title={confirmDelete ? 'Click again to confirm' : 'Delete message'}
+                                    aria-label={confirmDelete ? 'Confirm delete message' : 'Delete message'}
+                                >
+                                    <Trash2 size={12} />
+                                </button>
+                            )}
                         </div>
                     )}
                 </div>

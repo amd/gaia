@@ -184,6 +184,56 @@ class TestMessages:
         assert messages[0]["rag_sources"] is not None
         assert messages[0]["rag_sources"][0]["document_id"] == "doc1"
 
+    def test_delete_message(self, db):
+        session = db.create_session()
+        msg_id = db.add_message(session["id"], "user", "Hello")
+        assert db.count_messages(session["id"]) == 1
+        assert db.delete_message(session["id"], msg_id) is True
+        assert db.count_messages(session["id"]) == 0
+
+    def test_delete_message_not_found(self, db):
+        session = db.create_session()
+        assert db.delete_message(session["id"], 99999) is False
+
+    def test_delete_message_wrong_session(self, db):
+        """Deleting a message with wrong session_id should fail."""
+        s1 = db.create_session()
+        s2 = db.create_session()
+        msg_id = db.add_message(s1["id"], "user", "Hello")
+        # Should not delete when session_id doesn't match
+        assert db.delete_message(s2["id"], msg_id) is False
+        # Original message still exists
+        assert db.count_messages(s1["id"]) == 1
+
+    def test_delete_messages_from(self, db):
+        session = db.create_session()
+        id1 = db.add_message(session["id"], "user", "First")
+        id2 = db.add_message(session["id"], "assistant", "Reply 1")
+        id3 = db.add_message(session["id"], "user", "Second")
+        id4 = db.add_message(session["id"], "assistant", "Reply 2")
+
+        # Delete from message 3 onward (user "Second" + assistant "Reply 2")
+        count = db.delete_messages_from(session["id"], id3)
+        assert count == 2
+        remaining = db.get_messages(session["id"])
+        assert len(remaining) == 2
+        assert remaining[0]["content"] == "First"
+        assert remaining[1]["content"] == "Reply 1"
+
+    def test_delete_messages_from_all(self, db):
+        """Deleting from the first message removes everything."""
+        session = db.create_session()
+        id1 = db.add_message(session["id"], "user", "First")
+        db.add_message(session["id"], "assistant", "Reply")
+        count = db.delete_messages_from(session["id"], id1)
+        assert count == 2
+        assert db.count_messages(session["id"]) == 0
+
+    def test_delete_messages_from_not_found(self, db):
+        session = db.create_session()
+        count = db.delete_messages_from(session["id"], 99999)
+        assert count == 0
+
     def test_cascade_delete(self, db):
         session = db.create_session()
         db.add_message(session["id"], "user", "Hello")

@@ -318,9 +318,10 @@ class Context7Service(ExternalMCPService):
 
         # Success - cache and return
         self._rate_limiter.record_success()
+        content = result.get("content")
         docs = (
-            result.get("content", [{}])[0].get("text", "")
-            if result.get("content")
+            content[0].get("text", "")
+            if content and len(content) > 0
             else ""
         )
         self._cache.set_documentation(cache_key_lib, query, docs)

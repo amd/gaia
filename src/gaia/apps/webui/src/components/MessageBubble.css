@@ -39,6 +39,7 @@
 }
 .msg:hover .msg-actions { opacity: 1; }
 
+.msg-action-btn,
 .msg-copy {
     display: flex;
     align-items: center;
@@ -49,8 +50,17 @@
     color: var(--text-muted);
     transition: all 150ms var(--ease);
 }
+.msg-action-btn:hover,
 .msg-copy:hover { background: var(--bg-hover); color: var(--text-primary); }
 .msg-copy.copied { color: #22c55e; }
+
+/* Delete button */
+.msg-delete:hover { color: #ef4444; }
+.msg-delete.confirm {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.1);
+    opacity: 1;
+}
 
 .msg-body {
     font-size: 14px;

@@ -66,7 +66,7 @@ interface ChatViewProps {
 
 export function ChatView({ sessionId }: ChatViewProps) {
     const {
-        sessions, messages, setMessages, addMessage, updateSessionInList,
+        sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, appendStreamContent, clearStreamContent,
         agentSteps, addAgentStep, updateLastAgentStep, clearAgentSteps,
         documents, setDocuments, setShowDocLibrary, isLoadingMessages, setLoadingMessages,
@@ -338,6 +338,47 @@ export function ChatView({ sessionId }: ChatViewProps) {
         abortRef.current = controller;
     }, [input, isStreaming, sessionId, session, addMessage, setStreaming, appendStreamContent, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, clearAgentSteps]);
 
+    // Delete a single message
+    const handleDeleteMessage = useCallback(async (messageId: number) => {
+        if (isStreaming) return;
+        log.chat.info(`Deleting message ${messageId} from session=${sessionId}`);
+        // Optimistic removal
+        removeMessage(messageId);
+        try {
+            await api.deleteMessage(sessionId, messageId);
+        } catch (err) {
+            log.chat.error(`Failed to delete message ${messageId}`, err);
+            // Reload messages on error to restore accurate state
+            api.getMessages(sessionId)
+                .then((data) => setMessages(data.messages || []))
+                .catch(() => {});
+        }
+    }, [sessionId, isStreaming, removeMessage, setMessages]);
+
+    // Resend a user message: delete it and everything below, then re-send
+    const handleResendMessage = useCallback(async (message: Message) => {
+        if (isStreaming || message.role !== 'user') return;
+        const text = message.content;
+        log.chat.info(`Resending message ${message.id} from session=${sessionId}`, { preview: text.slice(0, 80) });
+
+        // Optimistic removal of this message and all below
+        removeMessagesFrom(message.id);
+
+        try {
+            await api.deleteMessagesFrom(sessionId, message.id);
+        } catch (err) {
+            log.chat.error(`Failed to delete messages from ${message.id}`, err);
+            // Reload messages on error
+            api.getMessages(sessionId)
+                .then((data) => setMessages(data.messages || []))
+                .catch(() => {});
+            return;
+        }
+
+        // Re-send the same message text
+        sendMessage(text);
+    }, [sessionId, isStreaming, removeMessagesFrom, setMessages, sendMessage]);
+
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -503,7 +544,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 variant="summary"
                             />
                         )}
-                        <MessageBubble message={msg} />
+                        <MessageBubble
+                            message={msg}
+                            onDelete={!isStreaming ? handleDeleteMessage : undefined}
+                            onResend={!isStreaming && msg.role === 'user' ? handleResendMessage : undefined}
+                        />
                     </div>
                 ))}
 

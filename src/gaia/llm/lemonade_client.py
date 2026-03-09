@@ -67,11 +67,14 @@ def _get_lemonade_config() -> tuple:
     # Parse the URL to extract host and port for backwards compatibility
     parsed = urlparse(base_url)
     host = parsed.hostname or DEFAULT_HOST
-    port = (
-        80
-        if (parsed.port is None and host is not None)
-        else (parsed.port or DEFAULT_PORT)
-    )
+    if parsed.port is not None:
+        port = parsed.port
+    elif parsed.scheme == "https":
+        port = 443
+    elif host != DEFAULT_HOST:
+        port = 80
+    else:
+        port = DEFAULT_PORT
     return (host, port, base_url)
 
 

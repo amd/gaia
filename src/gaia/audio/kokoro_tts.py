@@ -225,7 +225,9 @@ class KokoroTTS:
                 # For list items, ensure we add pause regardless of existing punctuation
                 if line[-1] in ".!?:":
                     line = line[:-1]  # Remove existing punctuation
-                line = line.replace(")", "...")  # Add pause after list items
+                # Replace only the list marker paren, not all parens in the line
+                if len(line) > 1 and line[1] == ")":
+                    line = line[0] + "..." + line[2:]
                 processed_lines.append(f"{line}...")
             else:
                 # Add a period at the end of non-empty lines if they don't already have ending punctuation
@@ -310,7 +312,7 @@ class KokoroTTS:
         stats = {
             "processing_time": round(processing_time, 3),
             "audio_duration": round(total_duration, 3),
-            "realtime_ratio": round(processing_time / total_duration, 2),
+            "realtime_ratio": round(processing_time / total_duration, 2) if total_duration > 0 else 0.0,
             "peak_memory": round(peak_memory, 2),
         }
 
@@ -487,6 +489,12 @@ class KokoroTTS:
 
             print("\nAnalyzing text length...")
             self.generate_speech(test_text, stream_callback=count_chunks)
+
+            if total_chunks == 0:
+                print("No audio chunks generated from input text.")
+                stream.stop()
+                stream.close()
+                return
 
             # Define and start streaming thread
             def stream_audio():

@@ -89,6 +89,14 @@ export async function exportSession(sessionId: string): Promise<{ content: strin
     return apiFetch('GET', `/sessions/${sessionId}/export?format=markdown`);
 }
 
+export async function deleteMessage(sessionId: string, messageId: number): Promise<void> {
+    return apiFetch('DELETE', `/sessions/${sessionId}/messages/${messageId}`);
+}
+
+export async function deleteMessagesFrom(sessionId: string, messageId: number): Promise<{ deleted: boolean; count: number }> {
+    return apiFetch('DELETE', `/sessions/${sessionId}/messages/${messageId}/and-below`);
+}
+
 // -- Chat (Streaming with Agent Events) ----------------------------------------
 
 /**

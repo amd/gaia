@@ -320,6 +320,59 @@ class ChatDatabase:
 
         return messages
 
+    def delete_message(self, session_id: str, message_id: int) -> bool:
+        """Delete a single message by ID.
+
+        Args:
+            session_id: Session the message belongs to (for safety).
+            message_id: ID of the message to delete.
+
+        Returns:
+            True if a message was deleted, False if not found.
+        """
+        with self._transaction():
+            cursor = self._conn.execute(
+                "DELETE FROM messages WHERE id = ? AND session_id = ?",
+                (message_id, session_id),
+            )
+            deleted = cursor.rowcount > 0
+
+        if deleted:
+            logger.info("Deleted message %d from session %s", message_id, session_id)
+
+        return deleted
+
+    def delete_messages_from(self, session_id: str, message_id: int) -> int:
+        """Delete a message and all subsequent messages in the session.
+
+        Used for the "resend" flow: removes the target message and everything
+        after it so the user can re-submit from that point.
+
+        Args:
+            session_id: Session the messages belong to.
+            message_id: ID of the first message to delete. All messages with
+                        id >= this value in the same session are removed.
+
+        Returns:
+            Number of messages deleted.
+        """
+        with self._transaction():
+            cursor = self._conn.execute(
+                "DELETE FROM messages WHERE session_id = ? AND id >= ?",
+                (session_id, message_id),
+            )
+            count = cursor.rowcount
+
+        if count:
+            logger.info(
+                "Deleted %d message(s) from session %s starting at id %d",
+                count,
+                session_id,
+                message_id,
+            )
+
+        return count
+
     def count_messages(self, session_id: str) -> int:
         """Count messages in a session."""
         with self._lock:

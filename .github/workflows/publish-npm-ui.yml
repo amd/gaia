@@ -126,6 +126,9 @@ jobs:
     name: Publish to npm
     needs: build-and-test
     runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@amd-gaia/agent-ui
     permissions:
       contents: read
       id-token: write

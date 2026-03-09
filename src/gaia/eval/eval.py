@@ -457,12 +457,14 @@ class Evaluator:
                     usage = response_data["usage"]
                     cost = response_data["cost"]
 
-                    if isinstance(response, list):
+                    if isinstance(response, list) and response:
                         response_text = (
                             response[0].text
                             if hasattr(response[0], "text")
                             else str(response[0])
                         )
+                    elif isinstance(response, list):
+                        response_text = ""
                     else:
                         response_text = (
                             response.text
@@ -702,12 +704,14 @@ class Evaluator:
                 overall_usage = overall_response_data["usage"]
                 overall_cost = overall_response_data["cost"]
 
-                if isinstance(overall_response, list):
+                if isinstance(overall_response, list) and overall_response:
                     response_text = (
                         overall_response[0].text
                         if hasattr(overall_response[0], "text")
                         else str(overall_response[0])
                     )
+                elif isinstance(overall_response, list):
+                    response_text = ""
                 else:
                     response_text = (
                         overall_response.text
@@ -1288,12 +1292,14 @@ class Evaluator:
                     cost = response_data["cost"]
 
                     # Extract text from response
-                    if isinstance(response, list):
+                    if isinstance(response, list) and response:
                         response_text = (
                             response[0].text
                             if hasattr(response[0], "text")
                             else str(response[0])
                         )
+                    elif isinstance(response, list):
+                        response_text = ""
                     else:
                         response_text = (
                             response.text
@@ -1630,12 +1636,14 @@ class Evaluator:
                 overall_usage = overall_response_data["usage"]
                 overall_cost = overall_response_data["cost"]
 
-                if isinstance(overall_response, list):
+                if isinstance(overall_response, list) and overall_response:
                     response_text = (
                         overall_response[0].text
                         if hasattr(overall_response[0], "text")
                         else str(overall_response[0])
                     )
+                elif isinstance(overall_response, list):
+                    response_text = ""
                 else:
                     response_text = (
                         overall_response.text

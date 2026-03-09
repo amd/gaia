@@ -252,6 +252,33 @@ def create_app(db_path: str = None) -> FastAPI:
             total=total,
         )
 
+    @app.delete("/api/sessions/{session_id}/messages/{message_id}")
+    async def delete_message(session_id: str, message_id: int):
+        """Delete a single message from a session."""
+        session = db.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        if not db.delete_message(session_id, message_id):
+            raise HTTPException(status_code=404, detail="Message not found")
+        return {"deleted": True}
+
+    @app.delete("/api/sessions/{session_id}/messages/{message_id}/and-below")
+    async def delete_messages_from(session_id: str, message_id: int):
+        """Delete a message and all subsequent messages in the session.
+
+        Used by the "resend" feature: removes the target user message and
+        everything below it so the conversation can be replayed.
+        """
+        session = db.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        count = db.delete_messages_from(session_id, message_id)
+        if count == 0:
+            raise HTTPException(status_code=404, detail="Message not found")
+        return {"deleted": True, "count": count}
+
     @app.get("/api/sessions/{session_id}/export")
     async def export_session(session_id: str, format: str = "markdown"):  # noqa: A002
         """Export session to markdown or JSON."""
@@ -488,7 +515,7 @@ def _message_to_response(msg: dict) -> MessageResponse:
             if isinstance(raw_sources, str):
                 raw_sources = json.loads(raw_sources)
             sources = [SourceInfo(**s) for s in raw_sources]
-        except (json.JSONDecodeError, TypeError, KeyError):
+        except Exception:
             sources = None
 
     return MessageResponse(

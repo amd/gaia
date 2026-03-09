@@ -75,9 +75,7 @@ def extract_images_from_page_pymupdf(pdf_path: str, page_num: int) -> List[dict]
 
                     # Save as optimized PNG
                     png_buffer = io.BytesIO()
-                    img.save(
-                        png_buffer, format="PNG", optimize=True, compress_level=6
-                    )
+                    img.save(png_buffer, format="PNG", optimize=True, compress_level=6)
                     png_bytes = png_buffer.getvalue()
                     size_kb = len(png_bytes) / 1024
 

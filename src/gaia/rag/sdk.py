@@ -6,6 +6,7 @@
 GAIA RAG SDK - Simple PDF document retrieval and Q&A
 """
 
+import errno
 import hashlib
 import os
 import pickle
@@ -221,7 +222,7 @@ class RAGSDK:
             # Open file descriptor with O_NOFOLLOW
             fd = os.open(str(file_path), flags)
         except OSError as e:
-            if e.errno == 40:  # ELOOP - too many symbolic links
+            if e.errno == errno.ELOOP:  # too many symbolic links
                 raise PermissionError(f"Symlinks not allowed: {file_path}")
             raise IOError(f"Cannot open file {file_path}: {e}")
 
@@ -229,7 +230,6 @@ class RAGSDK:
         try:
             file_stat = os.fstat(fd)
             if not stat.S_ISREG(file_stat.st_mode):
-                os.close(fd)
                 raise PermissionError(f"Not a regular file: {file_path}")
 
             # Convert to file object with appropriate mode
@@ -552,8 +552,9 @@ class RAGSDK:
                 print(
                     f"\n  ✅ Extracted {len(full_text):,} characters from {total_pages} pages"
                 )
+                pages_per_sec = total_pages / extract_duration if extract_duration > 0 else float('inf')
                 print(
-                    f"  ⏱️  Total extraction time: {extract_duration:.2f}s ({total_pages/extract_duration:.1f} pages/sec)"
+                    f"  ⏱️  Total extraction time: {extract_duration:.2f}s ({pages_per_sec:.1f} pages/sec)"
                 )
                 print(f"  💾 Text size: {len(full_text) / 1024:.1f} KB")
                 if vlm_pages_count > 0:

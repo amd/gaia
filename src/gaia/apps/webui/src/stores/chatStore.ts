@@ -20,6 +20,8 @@ interface ChatState {
     messages: Message[];
     setMessages: (messages: Message[]) => void;
     addMessage: (message: Message) => void;
+    removeMessage: (id: number) => void;
+    removeMessagesFrom: (id: number) => void;
 
     // Streaming state
     isStreaming: boolean;
@@ -87,6 +89,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setMessages: (messages) => set({ messages }),
     addMessage: (message) =>
         set((state) => ({ messages: [...state.messages, message] })),
+    removeMessage: (id) =>
+        set((state) => ({ messages: state.messages.filter((m) => m.id !== id) })),
+    removeMessagesFrom: (id) =>
+        set((state) => {
+            const idx = state.messages.findIndex((m) => m.id === id);
+            if (idx === -1) return state;
+            return { messages: state.messages.slice(0, idx) };
+        }),
 
     // Streaming
     isStreaming: false,

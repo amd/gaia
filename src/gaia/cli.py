@@ -96,6 +96,7 @@ def initialize_lemonade_for_agent(
     use_chatgpt: bool = False,
     host: str | None = None,
     port: int | None = None,
+    base_url: str | None = None,
 ):
     """
     Initialize Lemonade Server for a specific GAIA agent.
@@ -111,12 +112,15 @@ def initialize_lemonade_for_agent(
         use_chatgpt: Whether ChatGPT API is being used
         host: Host address of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
         port: Port number of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
+        base_url: Full base URL for the Lemonade server (e.g., https://abc.ngrok-free.app).
+                  When provided, takes priority over host/port.
 
     Returns:
         Tuple of (success: bool, base_url: str | None)
 
     Note:
-        Host and port can be configured via LEMONADE_BASE_URL environment variable.
+        Host and port can be configured via LEMONADE_BASE_URL environment variable,
+        or pass a full URL via base_url for remote servers (e.g., ngrok).
 
     Example:
         success, base_url = initialize_lemonade_for_agent("chat")
@@ -125,14 +129,18 @@ def initialize_lemonade_for_agent(
     """
     from gaia.llm.lemonade_manager import LemonadeManager
 
-    # Use provided host/port, or get from env var, or use defaults
+    # Use provided base_url, or host/port, or get from env var, or use defaults
     env_host, env_port, env_base_url = _get_lemonade_config()
-    host = host if host is not None else env_host
-    port = port if port is not None else env_port
+
+    # If base_url is provided (e.g., --base-url), use it directly
+    # This preserves https:// URLs (e.g., ngrok) without mangling
+    if base_url is None:
+        host = host if host is not None else env_host
+        port = port if port is not None else env_port
 
     # Skip initialization if using external API
     if skip_if_external and (use_claude or use_chatgpt):
-        return True, env_base_url
+        return True, base_url or env_base_url
 
     # Map agent names to context size requirements
     # Complex agents need 32768+, simple ones can use default 4096
@@ -152,19 +160,32 @@ def initialize_lemonade_for_agent(
     required_ctx = agent_context_sizes.get(agent.lower(), 32768)
 
     # LemonadeManager handles all validation and error printing
-    success = LemonadeManager.ensure_ready(
-        min_context_size=required_ctx,
-        quiet=quiet,
-        host=host,
-        port=port,
-    )
+    # Pass base_url directly when provided to preserve full URL (https, ngrok, etc.)
+    if base_url:
+        success = LemonadeManager.ensure_ready(
+            min_context_size=required_ctx,
+            quiet=quiet,
+            base_url=base_url,
+        )
+    else:
+        success = LemonadeManager.ensure_ready(
+            min_context_size=required_ctx,
+            quiet=quiet,
+            host=host,
+            port=port,
+        )
 
     if not success:
         return False, None
 
     # Get base_url from LemonadeManager
-    base_url = LemonadeManager.get_base_url() or f"http://{host}:{port}/api/v1"
-    return True, base_url
+    resolved_url = LemonadeManager.get_base_url()
+    if resolved_url is None:
+        if base_url:
+            resolved_url = base_url
+        else:
+            resolved_url = f"http://{host}:{port}/api/v1"
+    return True, resolved_url
 
 
 def ensure_agent_models(
@@ -480,6 +501,7 @@ async def async_main(action, **kwargs):
             skip_if_external=True,
             use_claude=use_claude,
             use_chatgpt=use_chatgpt,
+            base_url=lemonade_base_url,
         )
         if not success:
             sys.exit(1)
@@ -2287,6 +2309,15 @@ Examples:
             from gaia.ui.server import create_app
 
             port = getattr(args, "ui_port", 4200)
+
+            # Forward --base-url to the UI server via environment variable
+            # so it connects to the correct Lemonade server (local or remote)
+            cli_base_url = getattr(args, "base_url", None)
+            if cli_base_url:
+                os.environ["LEMONADE_BASE_URL"] = cli_base_url
+                log.info(f"Using remote Lemonade server: {cli_base_url}")
+                print(f"🔗 Remote Lemonade server: {cli_base_url}")
+
             log.info(f"Starting GAIA Agent UI on http://localhost:{port}")
             print(f"🚀 Starting GAIA Agent UI on http://localhost:{port}")
             print(f"   Open your browser to http://localhost:{port}")
@@ -3254,6 +3285,7 @@ Let me know your answer!
         success, _ = initialize_lemonade_for_agent(
             agent="minimal",
             quiet=False,
+            base_url=getattr(args, "base_url", None),
         )
         if not success:
             return
@@ -4765,6 +4797,7 @@ def handle_jira_command(args):
             skip_if_external=True,
             use_claude=getattr(args, "use_claude", False),
             use_chatgpt=getattr(args, "use_chatgpt", False),
+            base_url=getattr(args, "base_url", None),
         )
         if not success:
             sys.exit(1)
@@ -4814,6 +4847,7 @@ def handle_docker_command(args):
             skip_if_external=True,
             use_claude=getattr(args, "use_claude", False),
             use_chatgpt=getattr(args, "use_chatgpt", False),
+            base_url=getattr(args, "base_url", None),
         )
         if not success:
             sys.exit(1)
@@ -4863,6 +4897,7 @@ def handle_api_command(args):
             success, _ = initialize_lemonade_for_agent(
                 agent="mcp",
                 quiet=False,
+                base_url=getattr(args, "base_url", None),
             )
             if not success:
                 return
@@ -5189,6 +5224,7 @@ def handle_sd_command(args):
         use_claude=getattr(args, "use_claude", False),
         use_chatgpt=getattr(args, "use_chatgpt", False),
         quiet=False,
+        base_url=getattr(args, "base_url", None),
     )
 
     if not success and not (
@@ -5358,6 +5394,7 @@ def handle_blender_command(args):
             skip_if_external=True,
             use_claude=getattr(args, "use_claude", False),
             use_chatgpt=getattr(args, "use_chatgpt", False),
+            base_url=getattr(args, "base_url", None),
         )
         if not success:
             sys.exit(1)
@@ -5564,6 +5601,7 @@ def handle_mcp_start(args):
             success, _ = initialize_lemonade_for_agent(
                 agent="mcp",
                 quiet=False,
+                base_url=getattr(args, "base_url", None),
             )
             if not success:
                 return

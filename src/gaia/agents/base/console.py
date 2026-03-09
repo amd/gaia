@@ -24,6 +24,13 @@ try:
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
+    rprint = print
+    Panel = None
+    Console = None
+    Live = None
+    Spinner = None
+    Syntax = None
+    Table = None
     print(
         "Rich library not found. Install with 'uv pip install rich' for syntax highlighting."
     )
