@@ -388,7 +388,6 @@ Diagnostic nodes (dark) gather data. Red nodes are destructive actions requiring
   Shortcuts: '1 A3' = Explain A3,  '2 B1' = Stop B1,  '4 C1' = Quarantine C1
 
   > 4 C1
-  > Quarantine C1
 
   [3/20] explain_item
       Command: Win32 API + PowerShell: explain unknown_app.exe
@@ -421,7 +420,6 @@ Diagnostic nodes (dark) gather data. Red nodes are destructive actions requiring
   [2] No
 
   > 1
-  > Yes
 
   [4/20] quarantine_item
       Command: Win32 API: TerminateProcess + MoveFileExW(... -> C:\ProgramData\GAIA\quarantine\...)
@@ -472,9 +470,7 @@ toolRegistry().registerTool(
 );
 ```
 
-Then update the system prompt's `## AVAILABLE TOOLS` section to reference the new tool so the LLM knows when to use it. Optionally, add an `ActionEntry` to `kActions[]` if you want a new numbered menu item (e.g., `[6] Startup Items`).
-
-The framework handles everything else — the new tool appears in the LLM's system prompt automatically via the tool registry.
+The framework automatically appends registered tools to the system prompt — the new tool is available to the LLM immediately. Optionally, add an `ActionEntry` to `kActions[]` if you want a new numbered menu item (e.g., `[6] Startup Items`).
 
 ---
 
