@@ -378,9 +378,97 @@ class LemonadeInstaller:
         except Exception as e:
             return InstallResult(success=False, error=str(e))
 
+    def wait_for_msi_mutex(self, timeout: int = 30) -> bool:
+        """
+        Wait for any running MSI installations to complete.
+
+        Args:
+            timeout: Maximum seconds to wait
+
+        Returns:
+            True if no MSI operations are running, False if timed out
+        """
+        if self.system != "windows":
+            return True
+
+        import time
+
+        waited = 0
+        while waited < timeout:
+            try:
+                result = subprocess.run(
+                    ["tasklist", "/FI", "IMAGENAME eq msiexec.exe", "/NH"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                if "msiexec.exe" not in result.stdout:
+                    return True
+                self._print_status(
+                    f"Waiting for existing MSI operation to finish... ({waited}s)"
+                )
+                time.sleep(2)
+                waited += 2
+            except Exception:
+                return True  # Can't check, proceed anyway
+        return False
+
+    def find_product_code(self) -> Optional[str]:
+        """
+        Find the MSI ProductCode for Lemonade Server from the Windows registry.
+
+        This is more reliable than downloading an MSI for uninstall, because
+        msiexec /x {ProductCode} works regardless of which MSI variant
+        (full vs minimal) was used for installation.
+
+        Returns:
+            ProductCode GUID string (e.g. "{XXXXXXXX-...}"), or None if not found
+        """
+        if self.system != "windows":
+            return None
+        try:
+            import winreg
+
+            uninstall_key = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+            for root in [winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER]:
+                try:
+                    with winreg.OpenKey(root, uninstall_key) as key:
+                        for i in range(winreg.QueryInfoKey(key)[0]):
+                            try:
+                                subkey_name = winreg.EnumKey(key, i)
+                                with winreg.OpenKey(key, subkey_name) as subkey:
+                                    try:
+                                        name, _ = winreg.QueryValueEx(
+                                            subkey, "DisplayName"
+                                        )
+                                        if "lemonade" in name.lower():
+                                            log.debug(
+                                                f"Found Lemonade product: '{name}' "
+                                                f"with code {subkey_name}"
+                                            )
+                                            return subkey_name
+                                    except (FileNotFoundError, OSError):
+                                        continue
+                            except (FileNotFoundError, OSError):
+                                continue
+                except (FileNotFoundError, OSError):
+                    continue
+        except Exception as e:
+            log.debug(f"Failed to find product code: {e}")
+        return None
+
     def _install_windows(self, installer_path: Path, silent: bool) -> InstallResult:
         """Install on Windows using msiexec."""
         try:
+            # Wait for any running MSI operations before starting
+            if not self.wait_for_msi_mutex(timeout=30):
+                return InstallResult(
+                    success=False,
+                    error="Another MSI installation is in progress. "
+                    "Please wait for it to finish or close Windows Installer.",
+                )
+
             cmd = ["msiexec", "/i", str(installer_path)]
 
             if silent:
@@ -392,26 +480,6 @@ class LemonadeInstaller:
             cmd.extend(["/l*v", str(msi_log)])  # Verbose logging to file
 
             log.debug(f"Running: {' '.join(cmd)}")
-
-            # Check for other msiexec processes before starting (helps diagnose hangs)
-            try:
-                check_result = subprocess.run(
-                    ["tasklist", "/FI", "IMAGENAME eq msiexec.exe", "/NH"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    check=False,
-                )
-                if (
-                    check_result.returncode == 0
-                    and "msiexec.exe" in check_result.stdout
-                ):
-                    msi_count = check_result.stdout.count("msiexec.exe")
-                    log.warning(
-                        f"Found {msi_count} existing msiexec process(es) - installation may be blocked"
-                    )
-            except Exception:
-                pass  # Skip check if tasklist fails
 
             if silent:
                 self._print_status(
@@ -443,6 +511,12 @@ class LemonadeInstaller:
                 return InstallResult(
                     success=False,
                     error="Installation failed. Check Windows Event Log for details.",
+                )
+            elif result.returncode == 1618:
+                return InstallResult(
+                    success=False,
+                    error="Another installation is in progress (error 1618). "
+                    "Wait a moment and try again.",
                 )
             else:
                 return InstallResult(
@@ -627,9 +701,56 @@ class LemonadeInstaller:
             return InstallResult(success=False, error=str(e))
 
     def _uninstall_windows(self, silent: bool) -> InstallResult:
-        """Uninstall on Windows using msiexec."""
+        """Uninstall on Windows using msiexec.
+
+        Uses registry-based ProductCode lookup first (most reliable), then
+        falls back to downloading the matching MSI for uninstall.
+        """
         try:
-            # Get currently installed version - we need matching MSI to uninstall
+            # Wait for any running MSI operations
+            if not self.wait_for_msi_mutex(timeout=30):
+                return InstallResult(
+                    success=False,
+                    error="Another MSI installation is in progress. "
+                    "Please wait for it to finish or close Windows Installer.",
+                )
+
+            # Strategy 1: Use ProductCode from registry (works regardless of
+            # which MSI variant was used for install - full or minimal)
+            product_code = self.find_product_code()
+            if product_code:
+                self._print_status(f"Found product code: {product_code}")
+                cmd = ["msiexec", "/x", product_code]
+                if silent:
+                    cmd.extend(["/qn", "/norestart"])
+
+                log.debug(f"Running: {' '.join(cmd)}")
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                    check=False,
+                )
+
+                if result.returncode == 0:
+                    return InstallResult(
+                        success=True,
+                        message="Lemonade Server uninstalled successfully",
+                    )
+                elif result.returncode == 1618:
+                    return InstallResult(
+                        success=False,
+                        error="Another installation is in progress (error 1618). "
+                        "Wait a moment and try again.",
+                    )
+                # If ProductCode approach fails, fall through to MSI download
+                log.debug(
+                    f"ProductCode uninstall failed (code {result.returncode}), "
+                    "trying MSI download fallback"
+                )
+
+            # Strategy 2: Download matching MSI for uninstall (original approach)
             info = self.check_installation()
             if not info.installed or not info.version:
                 return InstallResult(
@@ -638,46 +759,66 @@ class LemonadeInstaller:
 
             installed_version = info.version.lstrip("v")
 
-            # Create installer for the installed version (not target version)
-            # Use minimal=True (lemonade-server-minimal.msi exists for all versions)
-            # Pass console to child installer for consistent output
-            uninstall_installer = LemonadeInstaller(
-                target_version=installed_version, minimal=True, console=self.console
+            # Try both minimal and full MSI variants
+            for use_minimal in [True, False]:
+                variant = "minimal" if use_minimal else "full"
+                try:
+                    uninstall_installer = LemonadeInstaller(
+                        target_version=installed_version,
+                        minimal=use_minimal,
+                        console=self.console,
+                    )
+                    self._print_status(
+                        f"Downloading {variant} MSI v{installed_version} for uninstall..."
+                    )
+                    msi_path = uninstall_installer.download_installer()
+
+                    cmd = ["msiexec", "/x", str(msi_path)]
+                    if silent:
+                        cmd.extend(["/qn", "/norestart"])
+
+                    log.debug(f"Running: {' '.join(cmd)}")
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                        check=False,
+                    )
+
+                    if result.returncode == 0:
+                        return InstallResult(
+                            success=True,
+                            message="Lemonade Server uninstalled successfully",
+                        )
+                    elif result.returncode == 1605:
+                        # Wrong MSI variant — try the other one
+                        log.debug(
+                            f"{variant} MSI didn't match installed product, "
+                            "trying other variant"
+                        )
+                        continue
+                    elif result.returncode == 1618:
+                        return InstallResult(
+                            success=False,
+                            error="Another installation is in progress (error 1618). "
+                            "Wait a moment and try again.",
+                        )
+                    else:
+                        return InstallResult(
+                            success=False,
+                            error=f"msiexec failed with code {result.returncode}: {result.stderr}",
+                        )
+                except Exception as e:
+                    log.debug(f"Failed to uninstall with {variant} MSI: {e}")
+                    continue
+
+            # Both strategies failed
+            return InstallResult(
+                success=False,
+                error="Could not uninstall: product not found in Windows Installer registry. "
+                "Try uninstalling manually via Windows Settings > Apps.",
             )
-
-            # Download the MSI matching the installed version
-            self._print_status(f"Downloading MSI v{installed_version} for uninstall...")
-            msi_path = uninstall_installer.download_installer()
-
-            cmd = ["msiexec", "/x", str(msi_path)]
-
-            if silent:
-                cmd.extend(["/qn", "/norestart"])
-
-            log.debug(f"Running: {' '.join(cmd)}")
-
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300,
-                check=False,
-            )
-
-            if result.returncode == 0:
-                return InstallResult(
-                    success=True,
-                    message="Lemonade Server uninstalled successfully",
-                )
-            elif result.returncode == 1605:
-                return InstallResult(
-                    success=False, error="Lemonade Server is not installed"
-                )
-            else:
-                return InstallResult(
-                    success=False,
-                    error=f"msiexec failed with code {result.returncode}: {result.stderr}",
-                )
 
         except subprocess.TimeoutExpired:
             return InstallResult(success=False, error="Uninstall timed out")

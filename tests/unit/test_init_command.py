@@ -424,5 +424,127 @@ class TestDownloadModels(unittest.TestCase):
             self.assertGreaterEqual(mock_client.ensure_model_downloaded.call_count, 1)
 
 
+class TestVersionCompatibility(unittest.TestCase):
+    """Test _check_version_compatibility version policy.
+
+    Version policy:
+    - Newer or equal: always accepted (no downgrade prompt)
+    - Older >= profile minimum: accepted with optional upgrade
+    - Older < profile minimum: upgrade required
+    """
+
+    def _make_cmd(self, profile="minimal"):
+        """Create an InitCommand with mocked installer."""
+        from gaia.installer.init_command import InitCommand
+
+        with patch("gaia.installer.init_command.LemonadeInstaller"):
+            cmd = InitCommand(profile=profile, yes=True)
+        return cmd
+
+    def test_newer_version_accepted(self):
+        """v9.3.4 installed, v9.3.0 expected -> accepted without prompt."""
+        cmd = self._make_cmd()
+        info = LemonadeInfo(installed=True, version="9.3.4")
+        result = cmd._check_version_compatibility(info)
+        self.assertTrue(result)
+
+    def test_same_version_accepted(self):
+        """Same version -> accepted."""
+        cmd = self._make_cmd()
+        info = LemonadeInfo(installed=True, version=LEMONADE_VERSION)
+        result = cmd._check_version_compatibility(info)
+        self.assertTrue(result)
+
+    def test_newer_major_version_accepted(self):
+        """v10.0.0 installed, v9.3.0 expected -> accepted."""
+        cmd = self._make_cmd()
+        info = LemonadeInfo(installed=True, version="10.0.0")
+        result = cmd._check_version_compatibility(info)
+        self.assertTrue(result)
+
+    def test_older_version_meets_minimum_accepted_in_ci(self):
+        """v9.1.0 installed, v9.3.0 expected, min 9.0.4 -> accepted in CI (--yes)."""
+        cmd = self._make_cmd(profile="minimal")
+        info = LemonadeInfo(installed=True, version="9.1.0")
+        result = cmd._check_version_compatibility(info)
+        self.assertTrue(result)
+
+    def test_older_version_below_minimum_triggers_upgrade(self):
+        """v8.5.0 installed, min 9.0.4 -> triggers upgrade in CI (--yes)."""
+        cmd = self._make_cmd(profile="minimal")
+        # Mock the upgrade to succeed
+        cmd._upgrade_lemonade = MagicMock(return_value=True)
+        info = LemonadeInfo(installed=True, version="8.5.0")
+        result = cmd._check_version_compatibility(info)
+        # In CI mode (yes=True), should auto-upgrade
+        cmd._upgrade_lemonade.assert_called_once_with("8.5.0")
+        self.assertTrue(result)
+
+    def test_unparseable_version_accepted(self):
+        """Unparseable version -> accepted (graceful fallback)."""
+        cmd = self._make_cmd()
+        info = LemonadeInfo(installed=True, version="unknown")
+        result = cmd._check_version_compatibility(info)
+        self.assertTrue(result)
+
+    def test_no_downgrade_prompt_for_newer_version(self):
+        """Newer version should never trigger _upgrade_lemonade."""
+        cmd = self._make_cmd()
+        cmd._upgrade_lemonade = MagicMock(return_value=True)
+        info = LemonadeInfo(installed=True, version="9.3.4")
+        cmd._check_version_compatibility(info)
+        cmd._upgrade_lemonade.assert_not_called()
+
+
+class TestNeedsInstallConsistency(unittest.TestCase):
+    """Verify that needs_install and _check_version_compatibility agree."""
+
+    def test_newer_version_needs_no_install(self):
+        """LemonadeInstaller.needs_install returns False for newer versions."""
+        installer = LemonadeInstaller(target_version="9.3.0")
+        info = LemonadeInfo(installed=True, version="9.3.4")
+        self.assertFalse(installer.needs_install(info))
+
+    def test_older_version_needs_install(self):
+        """LemonadeInstaller.needs_install returns True for older versions."""
+        installer = LemonadeInstaller(target_version="9.3.0")
+        info = LemonadeInfo(installed=True, version="9.2.0")
+        self.assertTrue(installer.needs_install(info))
+
+
+class TestWaitForMsiMutex(unittest.TestCase):
+    """Test wait_for_msi_mutex."""
+
+    @patch("platform.system")
+    def test_non_windows_returns_true(self, mock_system):
+        """Non-Windows platforms skip MSI check."""
+        mock_system.return_value = "Linux"
+        installer = LemonadeInstaller()
+        self.assertTrue(installer.wait_for_msi_mutex(timeout=1))
+
+    @patch("platform.system")
+    @patch("subprocess.run")
+    def test_no_msiexec_returns_true(self, mock_run, mock_system):
+        """Returns True immediately when no msiexec is running."""
+        mock_system.return_value = "Windows"
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="INFO: No tasks are running which match the specified criteria.",
+        )
+        installer = LemonadeInstaller()
+        self.assertTrue(installer.wait_for_msi_mutex(timeout=5))
+
+
+class TestFindProductCode(unittest.TestCase):
+    """Test find_product_code."""
+
+    @patch("platform.system")
+    def test_non_windows_returns_none(self, mock_system):
+        """Non-Windows platforms return None."""
+        mock_system.return_value = "Linux"
+        installer = LemonadeInstaller()
+        self.assertIsNone(installer.find_product_code())
+
+
 if __name__ == "__main__":
     unittest.main()
