@@ -2709,7 +2709,8 @@ class Evaluator:
                 "poor": "Poor",
                 "unknown": "Unknown",
             }
-            rating = rating_map.get(model["rating"], model["rating"].title())
+            model_rating = model["rating"] or "unknown"
+            rating = rating_map.get(model_rating, model_rating.title())
 
             table_rows.append(
                 f"| **{model['name']}** | {excellent_rate:.0f}% | {excellent_count}/{total_summaries} | {good_count} | {fair_count} | {poor_count} | {rating} |"
@@ -3084,7 +3085,8 @@ Performance ranking: {ranking_text}
                 "poor": "Poor",
                 "unknown": "Unknown",
             }
-            rating = rating_map.get(model["rating"], model["rating"].title())
+            model_rating = model["rating"] or "unknown"
+            rating = rating_map.get(model_rating, model_rating.title())
             table_rows.append(
                 f"| **{model['name']}** | {model['pass_rate']:.0%} | {model['mean_similarity']:.3f} | {model['std_similarity']:.3f} | {rating} |"
             )
@@ -3112,16 +3114,17 @@ Performance ranking: {ranking_text}
             )
             # Add specific issues from analysis
             for model in accuracy_issues[:3]:  # Limit to top 3 worst performers
+                analysis_text = (model["analysis"] or "").lower()
                 if (
-                    "jurisdictional" in model["analysis"].lower()
-                    or "confusion" in model["analysis"].lower()
+                    "jurisdictional" in analysis_text
+                    or "confusion" in analysis_text
                 ):
                     failure_patterns.append(
                         f"- **{model['name']}**: Jurisdictional confusion (US vs Canadian regulations)"
                     )
                 if (
-                    "incorrect" in model["analysis"].lower()
-                    or "wrong" in model["analysis"].lower()
+                    "incorrect" in analysis_text
+                    or "wrong" in analysis_text
                 ):
                     failure_patterns.append(
                         f"- **{model['name']}**: Incorrect core values, wrong regulatory stages"
