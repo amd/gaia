@@ -3,6 +3,8 @@
 
 """Unit tests for the TunnelManager mobile access feature."""
 
+import asyncio
+
 import pytest
 
 from gaia.ui.tunnel import TunnelManager
@@ -65,28 +67,25 @@ class TestTunnelManager:
         # May be None if ngrok is not installed, that's OK
         assert result is None or isinstance(result, str)
 
-    @pytest.mark.asyncio
-    async def test_start_without_ngrok(self):
+    def test_start_without_ngrok(self):
         """start() returns error status when ngrok is not installed."""
         manager = TunnelManager(port=4200)
         # Mock _find_ngrok to return None (ngrok not installed)
         manager._find_ngrok = lambda: None
 
-        status = await manager.start()
+        status = asyncio.run(manager.start())
         assert status["active"] is False
         assert status["error"] is not None
         assert "ngrok" in status["error"].lower()
 
-    @pytest.mark.asyncio
-    async def test_stop_when_not_running(self):
+    def test_stop_when_not_running(self):
         """stop() is safe to call when tunnel is not running."""
         manager = TunnelManager(port=4200)
         # Should not raise
-        await manager.stop()
+        asyncio.run(manager.stop())
         assert not manager.active
 
-    @pytest.mark.asyncio
-    async def test_start_already_active(self):
+    def test_start_already_active(self):
         """start() returns current status if already active."""
         manager = TunnelManager(port=4200)
         # Fake an active state
@@ -99,6 +98,6 @@ class TestTunnelManager:
 
         manager._process = FakeProcess()
 
-        status = await manager.start()
+        status = asyncio.run(manager.start())
         assert status["active"] is True
         assert status["url"] == "https://test.ngrok-free.app"
