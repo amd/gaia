@@ -830,11 +830,11 @@ class Orchestrator:
     @staticmethod
     def _extract_json(text: str) -> str:
         """Extract JSON blob from arbitrary text (markdown-safe)."""
-        code_block = re.search(r"```(?:json)?\\s*\\n?(.*?)\\n?```", text, re.DOTALL)
+        code_block = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
         if code_block:
             return code_block.group(1).strip()
 
-        json_match = re.search(r"\\{.*\\}", text, re.DOTALL)
+        json_match = re.search(r"\{.*\}", text, re.DOTALL)
         if json_match:
             return json_match.group(0)
 

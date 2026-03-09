@@ -688,14 +688,19 @@ class LemonadeClient:
         elif background == "silent":
             # Run in background with subprocess
             self._log_file = open("lemonade.log", "w", encoding="utf-8")
-            self.server_process = subprocess.Popen(
-                base_cmd,
-                stdout=self._log_file,
-                stderr=self._log_file,
-                text=True,
-                bufsize=1,
-                shell=True,
-            )
+            try:
+                self.server_process = subprocess.Popen(
+                    base_cmd,
+                    stdout=self._log_file,
+                    stderr=self._log_file,
+                    text=True,
+                    bufsize=1,
+                    shell=True,
+                )
+            except Exception:
+                self._log_file.close()
+                self._log_file = None
+                raise
         else:  # "none" or any other value
             # Run in foreground with real-time output
             self.server_process = subprocess.Popen(

@@ -222,6 +222,7 @@ class CodeAgent(
 
         del kwargs  # Unused - accept for CLI compatibility
         # Store workspace root and change to it if provided
+        original_cwd = os.getcwd()
         if workspace_root:
             self.workspace_root = workspace_root
             self.path_validator.add_allowed_path(workspace_root)

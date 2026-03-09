@@ -793,6 +793,7 @@ class FileIOToolsMixin:
                                 break
 
                 # Create backup if requested
+                backup_path = None
                 if backup:
                     backup_path = f"{file_path}.bak"
                     with open(backup_path, "w", encoding="utf-8") as f:
