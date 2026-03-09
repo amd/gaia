@@ -20,7 +20,7 @@ function isErrorContent(content: string): boolean {
         lower.startsWith('error -') ||
         lower.includes('traceback (most recent') ||
         lower.includes("object has no attribute") ||
-        lower.includes('is the gaia chat server running?') ||
+        lower.includes('is lemonade server running') ||
         lower.includes('connection refused') ||
         lower.includes('failed to fetch')
     );

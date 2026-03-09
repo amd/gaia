@@ -10,7 +10,7 @@ on:
 
 # Cancel previous publish when a new version is released
 concurrency:
-  group: npm-publish-chat
+  group: npm-publish-ui
   cancel-in-progress: true
 
 # Restrict default permissions for all jobs

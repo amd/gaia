@@ -36,7 +36,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $REPO_ROOT = (Resolve-Path "$PSScriptRoot\..").Path
-$WEBUI_DIR = "$REPO_ROOT\src\gaia\apps\chat\webui"
+$WEBUI_DIR = "$REPO_ROOT\src\gaia\apps\webui"
 $ELECTRON_DIR = "$REPO_ROOT\src\gaia\electron"
 
 Write-Host ""

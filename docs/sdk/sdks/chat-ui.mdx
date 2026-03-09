@@ -5,7 +5,7 @@ icon: "desktop"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/chat/ui/`](https://github.com/amd/gaia/blob/main/src/gaia/chat/ui/)
+  **Source Code:** [`src/gaia/ui/`](https://github.com/amd/gaia/blob/main/src/gaia/ui/)
 </Info>
 
 <Note>
@@ -412,7 +412,7 @@ class AttachDocumentRequest(BaseModel):
     ```json
     {
       "status": "ok",
-      "service": "gaia-chat-ui",
+      "service": "gaia-agent-ui",
       "stats": {
         "sessions": 12,
         "messages": 245,
@@ -775,10 +775,10 @@ npm install -g @amd-gaia/agent-ui
 This provides the `gaia-ui` CLI command:
 
 ```bash
-gaia-chat              # Start Python backend + open browser
-gaia-chat --serve      # Serve frontend only (Node.js static server)
-gaia-chat --port 8080  # Custom port
-gaia-chat --version    # Show version
+gaia-ui              # Start Python backend + open browser
+gaia-ui --serve      # Serve frontend only (Node.js static server)
+gaia-ui --port 8080  # Custom port
+gaia-ui --version    # Show version
 ```
 
 ### Package Contents
@@ -787,7 +787,7 @@ The npm package includes:
 
 | Path | Description |
 |------|-------------|
-| `bin/gaia-chat.mjs` | CLI entry point (Node.js) |
+| `bin/gaia-ui.mjs` | CLI entry point (Node.js) |
 | `dist/` | Pre-built frontend (React SPA) |
 
 ### Release Management

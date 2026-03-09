@@ -7,6 +7,11 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+try:
+    from gaia.version import __version__ as _gaia_version
+except ImportError:
+    _gaia_version = "0.1.0"
+
 # ── System ──────────────────────────────────────────────────────────────────
 
 
@@ -19,7 +24,7 @@ class SystemStatus(BaseModel):
     disk_space_gb: float = 0.0
     memory_available_gb: float = 0.0
     initialized: bool = False
-    version: str = "0.1.0"
+    version: str = _gaia_version
 
 
 # ── Sessions ────────────────────────────────────────────────────────────────

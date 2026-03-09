@@ -35,7 +35,9 @@ class TestSystemStatus:
         assert status.disk_space_gb == 0.0
         assert status.memory_available_gb == 0.0
         assert status.initialized is False
-        assert status.version == "0.1.0"
+        from gaia.version import __version__
+
+        assert status.version == __version__
 
     def test_custom_values(self):
         status = SystemStatus(

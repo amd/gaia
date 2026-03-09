@@ -63,7 +63,7 @@ if (!/^\d+\.\d+\.\d+/.test(version)) {
   process.exit(1);
 }
 
-const tag = `chat-v${version}`;
+const tag = `v${version}`;
 
 console.log(`\nReleasing ${tag} (from version.py)\n`);
 

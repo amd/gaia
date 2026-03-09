@@ -223,7 +223,7 @@ gaia/
 - **API Server** (`src/gaia/api/`): OpenAI-compatible REST API for agent access
 - **MCP Integration** (`src/gaia/mcp/`): Model Context Protocol for external integrations
 - **RAG System** (`src/gaia/rag/`): Document Q&A with PDF support - see [`docs/guides/chat.mdx`](docs/guides/chat.mdx)
-- **Chat UI** (`src/gaia/chat/ui/`): FastAPI backend for desktop chat app - see [`docs/guides/chat-ui.mdx`](docs/guides/chat-ui.mdx)
+- **Chat UI** (`src/gaia/ui/`): FastAPI backend for desktop chat app - see [`docs/guides/chat-ui.mdx`](docs/guides/chat-ui.mdx)
 - **Evaluation** (`src/gaia/eval/`): Batch experiments and ground truth - see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)
 
 ### Agent Implementations

@@ -92,7 +92,9 @@ class TestSystemStatus:
     def test_system_status_has_version(self, client):
         resp = client.get("/api/system/status")
         data = resp.json()
-        assert data["version"] == "0.1.0"
+        from gaia.version import __version__
+
+        assert data["version"] == __version__
 
     def test_system_status_has_all_fields(self, client):
         resp = client.get("/api/system/status")

@@ -18,8 +18,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-import httpx
-
 logger = logging.getLogger(__name__)
 
 
@@ -228,6 +226,7 @@ class TunnelManager:
     async def _fetch_public_ip(self) -> None:
         """Fetch the server's public IP (for ngrok interstitial password)."""
         try:
+            import httpx
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get("https://api.ipify.org")
                 if resp.status_code == 200:
@@ -275,6 +274,7 @@ class TunnelManager:
                 return None
 
             try:
+                import httpx
                 async with httpx.AsyncClient(timeout=3.0) as client:
                     resp = await client.get("http://127.0.0.1:4040/api/tunnels")
                     if resp.status_code == 200:
