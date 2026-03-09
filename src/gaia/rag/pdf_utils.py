@@ -33,100 +33,114 @@ def extract_images_from_page_pymupdf(pdf_path: str, page_num: int) -> List[dict]
         from PIL import Image
 
         doc = fitz.open(pdf_path)
-        page = doc[page_num - 1]  # PyMuPDF uses 0-indexed
+        try:
+            page = doc[page_num - 1]  # PyMuPDF uses 0-indexed
 
-        image_list = page.get_images()
+            image_list = page.get_images()
 
-        for img_index, img_info in enumerate(image_list):
-            try:
-                xref = img_info[0]
+            for img_index, img_info in enumerate(image_list):
+                try:
+                    xref = img_info[0]
 
-                # Extract image bytes (PyMuPDF handles decoding)
-                base_image = doc.extract_image(xref)
-                image_bytes = base_image["image"]
-                _img_ext = base_image["ext"]  # jpg, png, etc.
+                    # Extract image bytes (PyMuPDF handles decoding)
+                    base_image = doc.extract_image(xref)
+                    image_bytes = base_image["image"]
+                    _img_ext = base_image["ext"]  # jpg, png, etc.
 
-                # Open with PIL for processing
-                img = Image.open(io.BytesIO(image_bytes))
+                    # Open with PIL for processing
+                    img = Image.open(io.BytesIO(image_bytes))
 
-                # Get dimensions
-                width, height = img.size
-                size_kb = len(image_bytes) / 1024
+                    # Get dimensions
+                    width, height = img.size
+                    size_kb = len(image_bytes) / 1024
 
-                # Convert to RGB if needed
-                if img.mode not in ["RGB", "RGBA"]:
-                    logger.debug(f"Converting {img.mode} to RGB")
-                    img = img.convert("RGB")
+                    # Convert to RGB if needed
+                    if img.mode not in ["RGB", "RGBA"]:
+                        logger.debug(f"Converting {img.mode} to RGB")
+                        img = img.convert("RGB")
 
-                # Resize if too large
-                MAX_DIMENSION = 1600
-                if width > MAX_DIMENSION or height > MAX_DIMENSION:
-                    scale = min(MAX_DIMENSION / width, MAX_DIMENSION / height)
-                    new_width = int(width * scale)
-                    new_height = int(height * scale)
+                    # Resize if too large
+                    MAX_DIMENSION = 1600
+                    if width > MAX_DIMENSION or height > MAX_DIMENSION:
+                        scale = min(MAX_DIMENSION / width, MAX_DIMENSION / height)
+                        new_width = int(width * scale)
+                        new_height = int(height * scale)
 
-                    logger.info(
-                        f"   Resizing: {width}x{height} → {new_width}x{new_height}"
-                    )
-                    img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                        logger.info(
+                            f"   Resizing: {width}x{height} → {new_width}x{new_height}"
+                        )
+                        img = img.resize(
+                            (new_width, new_height), Image.Resampling.LANCZOS
+                        )
 
-                # Save as optimized PNG
-                png_buffer = io.BytesIO()
-                img.save(png_buffer, format="PNG", optimize=True, compress_level=6)
-                png_bytes = png_buffer.getvalue()
-                size_kb = len(png_bytes) / 1024
-
-                # Iteratively compress until target size is reached
-                MAX_SIZE_KB = 300
-                compression_iterations = 0
-                MAX_ITERATIONS = 5
-
-                while size_kb > MAX_SIZE_KB and compression_iterations < MAX_ITERATIONS:
-                    compression_iterations += 1
-                    logger.info(
-                        f"   Compressing (iteration {compression_iterations}): {size_kb:.0f}KB → <{MAX_SIZE_KB}KB"
-                    )
-
-                    # Reduce size by 50% each iteration
-                    img = img.resize(
-                        (img.width // 2, img.height // 2), Image.Resampling.LANCZOS
-                    )
-
+                    # Save as optimized PNG
                     png_buffer = io.BytesIO()
-                    img.save(png_buffer, format="PNG", optimize=True, compress_level=9)
+                    img.save(
+                        png_buffer, format="PNG", optimize=True, compress_level=6
+                    )
                     png_bytes = png_buffer.getvalue()
                     size_kb = len(png_bytes) / 1024
 
-                if size_kb <= MAX_SIZE_KB:
-                    logger.info(
-                        f"   ✅ Compressed to {size_kb:.0f}KB ({img.width}x{img.height}) in {compression_iterations} iteration(s)"
+                    # Iteratively compress until target size is reached
+                    MAX_SIZE_KB = 300
+                    compression_iterations = 0
+                    MAX_ITERATIONS = 5
+
+                    while (
+                        size_kb > MAX_SIZE_KB
+                        and compression_iterations < MAX_ITERATIONS
+                    ):
+                        compression_iterations += 1
+                        logger.info(
+                            f"   Compressing (iteration {compression_iterations}): {size_kb:.0f}KB → <{MAX_SIZE_KB}KB"
+                        )
+
+                        # Reduce size by 50% each iteration
+                        img = img.resize(
+                            (img.width // 2, img.height // 2),
+                            Image.Resampling.LANCZOS,
+                        )
+
+                        png_buffer = io.BytesIO()
+                        img.save(
+                            png_buffer,
+                            format="PNG",
+                            optimize=True,
+                            compress_level=9,
+                        )
+                        png_bytes = png_buffer.getvalue()
+                        size_kb = len(png_bytes) / 1024
+
+                    if size_kb <= MAX_SIZE_KB:
+                        logger.info(
+                            f"   ✅ Compressed to {size_kb:.0f}KB ({img.width}x{img.height}) in {compression_iterations} iteration(s)"
+                        )
+                    else:
+                        logger.warning(
+                            f"   ⚠️  Could not compress below {MAX_SIZE_KB}KB after {MAX_ITERATIONS} iterations (final: {size_kb:.0f}KB)"
+                        )
+
+                    images.append(
+                        {
+                            "image_bytes": png_bytes,
+                            "width": img.width,
+                            "height": img.height,
+                            "format": "png",
+                            "size_kb": size_kb,
+                        }
                     )
-                else:
+
+                    logger.debug(
+                        f"Extracted image {img_index + 1}: {img.width}x{img.height}, {size_kb:.1f}KB"
+                    )
+
+                except Exception as e:
                     logger.warning(
-                        f"   ⚠️  Could not compress below {MAX_SIZE_KB}KB after {MAX_ITERATIONS} iterations (final: {size_kb:.0f}KB)"
+                        f"Failed to extract image {img_index + 1} from page {page_num}: {e}"
                     )
-
-                images.append(
-                    {
-                        "image_bytes": png_bytes,
-                        "width": img.width,
-                        "height": img.height,
-                        "format": "png",
-                        "size_kb": size_kb,
-                    }
-                )
-
-                logger.debug(
-                    f"Extracted image {img_index + 1}: {img.width}x{img.height}, {size_kb:.1f}KB"
-                )
-
-            except Exception as e:
-                logger.warning(
-                    f"Failed to extract image {img_index + 1} from page {page_num}: {e}"
-                )
-                continue
-
-        doc.close()
+                    continue
+        finally:
+            doc.close()
 
     except ImportError:
         logger.error("PyMuPDF not installed. Install: uv pip install pymupdf")
@@ -204,30 +218,31 @@ def get_image_positions_on_page(pdf_path: str, page_num: int) -> List[dict]:
 
     try:
         doc = fitz.open(pdf_path)
-        page = doc[page_num]
+        try:
+            page = doc[page_num]
 
-        image_list = page.get_images()
+            image_list = page.get_images()
 
-        for img_index, img_info in enumerate(image_list):
-            # Get image bounding box
-            xref = img_info[0]
-            image_rects = page.get_image_rects(xref)
+            for img_index, img_info in enumerate(image_list):
+                # Get image bounding box
+                xref = img_info[0]
+                image_rects = page.get_image_rects(xref)
 
-            if image_rects:
-                rect = image_rects[0]  # First occurrence
-                bbox = [rect.x0, rect.y0, rect.x1, rect.y1]
+                if image_rects:
+                    rect = image_rects[0]  # First occurrence
+                    bbox = [rect.x0, rect.y0, rect.x1, rect.y1]
 
-                positions.append(
-                    {
-                        "image_index": img_index,
-                        "bbox": bbox,
-                        "position_y": rect.y0,  # Top Y coordinate
-                        "width": int(rect.width),
-                        "height": int(rect.height),
-                    }
-                )
-
-        doc.close()
+                    positions.append(
+                        {
+                            "image_index": img_index,
+                            "bbox": bbox,
+                            "position_y": rect.y0,  # Top Y coordinate
+                            "width": int(rect.width),
+                            "height": int(rect.height),
+                        }
+                    )
+        finally:
+            doc.close()
 
     except Exception as e:
         logger.warning(f"Could not get image positions for page {page_num}: {e}")

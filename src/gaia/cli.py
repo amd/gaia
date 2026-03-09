@@ -5636,28 +5636,32 @@ def handle_mcp_start(args):
             log_handle = open(log_file_path, "a", encoding="utf-8")
 
             # Start the process
-            if sys.platform.startswith("win"):
-                # Windows
-                process = subprocess.Popen(
-                    cmd_args,
-                    stdin=subprocess.DEVNULL,
-                    stdout=log_handle,
-                    stderr=subprocess.STDOUT,
-                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
-                    cwd=os.getcwd(),
-                    text=True,
-                )
-            else:
-                # Unix-like systems
-                process = subprocess.Popen(
-                    cmd_args,
-                    stdin=subprocess.DEVNULL,
-                    stdout=log_handle,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=True,
-                    cwd=os.getcwd(),
-                    text=True,
-                )
+            try:
+                if sys.platform.startswith("win"):
+                    # Windows
+                    process = subprocess.Popen(
+                        cmd_args,
+                        stdin=subprocess.DEVNULL,
+                        stdout=log_handle,
+                        stderr=subprocess.STDOUT,
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                        cwd=os.getcwd(),
+                        text=True,
+                    )
+                else:
+                    # Unix-like systems
+                    process = subprocess.Popen(
+                        cmd_args,
+                        stdin=subprocess.DEVNULL,
+                        stdout=log_handle,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                        cwd=os.getcwd(),
+                        text=True,
+                    )
+            except Exception:
+                log_handle.close()
+                raise
 
             # Write PID to dedicated PID file
             pid_file_path = os.path.abspath("gaia.mcp.pid")
