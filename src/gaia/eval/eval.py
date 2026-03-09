@@ -1554,6 +1554,12 @@ class Evaluator:
                 else:
                     self.log.warning("No summaries found for analysis")
                     overall_rating = "unknown"
+                # Skip LLM overall analysis when there are no valid summaries
+                analysis["overall_rating"] = overall_rating
+                analysis["overall_analysis"] = (
+                    "No valid summaries available for analysis."
+                )
+                return analysis
             elif excellent_count >= total_summaries * 0.7:
                 overall_rating = "excellent"
             elif (excellent_count + good_count) >= total_summaries * 0.7:
@@ -3281,20 +3287,27 @@ if __name__ == "__main__":
         # Print metrics if available
         metrics = overall_rating.get("metrics", {})
         if metrics:
+
+            def _fmt(val, spec=".3f"):
+                """Format a numeric value or return 'N/A' for missing data."""
+                if val is None or val == "N/A":
+                    return "N/A"
+                return f"{val:{spec}}"
+
             print("\nMetrics:")
             print(f"Number of questions: {metrics.get('num_questions', 'N/A')}")
             print(
-                f"Similarity threshold: {metrics.get('similarity_threshold', 'N/A'):.3f}"
+                f"Similarity threshold: {_fmt(metrics.get('similarity_threshold'))}"
             )
-            print(f"Pass rate: {metrics.get('pass_rate', 'N/A'):.3f}")
+            print(f"Pass rate: {_fmt(metrics.get('pass_rate'))}")
             print(f"Passed threshold: {metrics.get('num_passed', 'N/A')}")
             print(f"Failed threshold: {metrics.get('num_failed', 'N/A')}")
             print("\nSimilarity Statistics:")
-            print(f"Mean: {metrics.get('mean_similarity', 'N/A'):.3f}")
-            print(f"Median: {metrics.get('median_similarity', 'N/A'):.3f}")
-            print(f"Min: {metrics.get('min_similarity', 'N/A'):.3f}")
-            print(f"Max: {metrics.get('max_similarity', 'N/A'):.3f}")
-            print(f"Standard deviation: {metrics.get('std_similarity', 'N/A'):.3f}")
+            print(f"Mean: {_fmt(metrics.get('mean_similarity'))}")
+            print(f"Median: {_fmt(metrics.get('median_similarity'))}")
+            print(f"Min: {_fmt(metrics.get('min_similarity'))}")
+            print(f"Max: {_fmt(metrics.get('max_similarity'))}")
+            print(f"Standard deviation: {_fmt(metrics.get('std_similarity'))}")
 
         print("\nAnalysis:", evaluation_data.get("overall_analysis", "N/A"))
 
