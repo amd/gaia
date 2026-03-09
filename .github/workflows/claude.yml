@@ -650,7 +650,9 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           max_turns: 30
           model: claude-opus-4-5-20251101
-          prompt: |
+          # Note: claude-code-action@beta does not support workflow_run events natively.
+          # Using direct_prompt mode to bypass event type validation.
+          direct_prompt: |
             Generate comprehensive release notes for GAIA version ${{ steps.tag.outputs.TAG_NAME }}.
 
             ## FIRST ACTIONS
