@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from gaia.chat.ui.database import ChatDatabase
+from gaia.ui.database import ChatDatabase
 
 
 @pytest.fixture

@@ -6,7 +6,7 @@
 Tests model validation, defaults, and serialization.
 """
 
-from gaia.chat.ui.models import (
+from gaia.ui.models import (
     AttachDocumentRequest,
     ChatRequest,
     ChatResponse,

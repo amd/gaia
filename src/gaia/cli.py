@@ -2281,14 +2281,14 @@ Examples:
     if hasattr(args, "logging_level"):
         log_manager.set_level("gaia", getattr(logging, args.logging_level))
 
-    # Handle chat --ui: launch Chat Web UI server
+    # Handle chat --ui: launch Agent UI server
     if args.action == "chat" and getattr(args, "ui", False):
         try:
-            from gaia.chat.ui.server import create_app
+            from gaia.ui.server import create_app
 
             port = getattr(args, "ui_port", 4200)
-            log.info(f"Starting Chat Web UI on http://localhost:{port}")
-            print(f"🚀 Starting GAIA Chat UI on http://localhost:{port}")
+            log.info(f"Starting GAIA Agent UI on http://localhost:{port}")
+            print(f"🚀 Starting GAIA Agent UI on http://localhost:{port}")
             print(f"   Open your browser to http://localhost:{port}")
             print("   Press Ctrl+C to stop\n")
 
@@ -2297,11 +2297,11 @@ Examples:
             app = create_app()
             uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
         except ImportError as e:
-            print(f"❌ Missing dependencies for Chat UI: {e}")
+            print(f"❌ Missing dependencies for Agent UI: {e}")
             print("   Install with: uv pip install uvicorn fastapi")
             sys.exit(1)
         except Exception as e:
-            log.error(f"Error starting Chat UI: {e}")
+            log.error(f"Error starting Agent UI: {e}")
             print(f"❌ Error: {e}")
             sys.exit(1)
         return

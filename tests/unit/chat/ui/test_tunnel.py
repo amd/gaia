@@ -7,7 +7,7 @@ import asyncio
 
 import pytest
 
-from gaia.chat.ui.tunnel import TunnelManager
+from gaia.ui.tunnel import TunnelManager
 
 
 class TestTunnelManager:

@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// GAIA Chat - Electron main process
+// GAIA Agent UI - Electron main process
 // Self-contained entry point for the desktop installer.
 // Starts the Python backend (gaia chat --ui) and loads the frontend.
 
@@ -12,7 +12,7 @@ const { spawn } = require("child_process");
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
-const APP_NAME = "GAIA Chat";
+const APP_NAME = "GAIA Agent UI";
 const BACKEND_PORT = 4200;
 const HEALTH_CHECK_URL = `http://localhost:${BACKEND_PORT}/api/health`;
 const STARTUP_TIMEOUT = 30000;

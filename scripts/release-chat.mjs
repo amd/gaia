@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * One-command release for GAIA Chat npm package.
+ * One-command release for GAIA Agent UI npm package.
  * Reads version from src/gaia/version.py, syncs package.json, commits, tags, and pushes.
  * The CI pipeline handles the rest (build, test, publish to npm).
  *
@@ -28,13 +28,12 @@ const PACKAGE_PATH = resolve(
   "src",
   "gaia",
   "apps",
-  "chat",
   "webui",
   "package.json"
 );
 
 // Relative path for git commands
-const PACKAGE_REL = "src/gaia/apps/chat/webui/package.json";
+const PACKAGE_REL = "src/gaia/apps/webui/package.json";
 
 function run(cmd, opts = {}) {
   console.log(`  $ ${cmd}`);

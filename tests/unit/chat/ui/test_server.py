@@ -16,7 +16,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from gaia.chat.ui.server import (
+from gaia.ui.server import (
     _compute_file_hash,
     _sanitize_document_path,
     _sanitize_static_path,
@@ -398,7 +398,7 @@ class TestChatSendEndpoint:
         )
         assert resp.status_code == 404
 
-    @patch("gaia.chat.ui.server._get_chat_response")
+    @patch("gaia.ui.server._get_chat_response")
     def test_send_message_non_streaming(self, mock_chat, client):
         mock_chat.return_value = "This is a response."
 
@@ -419,7 +419,7 @@ class TestChatSendEndpoint:
         assert data["content"] == "This is a response."
         assert "message_id" in data
 
-    @patch("gaia.chat.ui.server._get_chat_response")
+    @patch("gaia.ui.server._get_chat_response")
     def test_non_streaming_saves_both_messages(self, mock_chat, client, db):
         mock_chat.return_value = "Bot reply"
 
@@ -446,7 +446,7 @@ class TestChatSendEndpoint:
 
         # Send with stream=True but we don't consume the stream
         # The user message should still be saved
-        with patch("gaia.chat.ui.server._stream_chat_response") as mock_stream:
+        with patch("gaia.ui.server._stream_chat_response") as mock_stream:
 
             async def fake_stream(*args, **kwargs):
                 yield 'data: {"type": "done", "content": "test"}\n\n'
@@ -472,7 +472,7 @@ class TestChatSendEndpoint:
         create_resp = client.post("/api/sessions", json={})
         session_id = create_resp.json()["id"]
 
-        with patch("gaia.chat.ui.server._stream_chat_response") as mock_stream:
+        with patch("gaia.ui.server._stream_chat_response") as mock_stream:
 
             async def fake_stream(*args, **kwargs):
                 yield 'data: {"type": "chunk", "content": "Hi"}\n\n'
@@ -533,14 +533,14 @@ class TestDocumentEndpoints:
         ]:
             assert field in doc, f"Missing field: {field}"
 
-    @patch("gaia.chat.ui.server._index_document")
+    @patch("gaia.ui.server._index_document")
     def test_upload_by_path_file_not_found(self, mock_index, client):
         resp = client.post(
             "/api/documents/upload-path", json={"filepath": "/nonexistent/file.pdf"}
         )
         assert resp.status_code == 404
 
-    @patch("gaia.chat.ui.server._index_document")
+    @patch("gaia.ui.server._index_document")
     def test_upload_by_path_success(self, mock_index, client):
         mock_index.return_value = 15
 
@@ -560,7 +560,7 @@ class TestDocumentEndpoints:
         finally:
             os.unlink(tmp_path)
 
-    @patch("gaia.chat.ui.server._index_document")
+    @patch("gaia.ui.server._index_document")
     def test_upload_by_path_directory_returns_400(self, mock_index, client):
         with tempfile.TemporaryDirectory() as tmp_dir:
             resp = client.post("/api/documents/upload-path", json={"filepath": tmp_dir})
@@ -675,7 +675,7 @@ class TestServerMetadata:
         assert "privacy" in app.description.lower() or "chat" in app.description.lower()
 
     def test_default_port_is_4200(self):
-        from gaia.chat.ui.server import DEFAULT_PORT
+        from gaia.ui.server import DEFAULT_PORT
 
         assert DEFAULT_PORT == 4200
 
@@ -774,7 +774,7 @@ class TestValidateFilePath:
             # Should not raise
             _validate_file_path(Path(f"/home/user/file{ext}").resolve())
 
-    @patch("gaia.chat.ui.server._index_document")
+    @patch("gaia.ui.server._index_document")
     def test_upload_rejects_unsafe_extension(self, mock_index, client):
         """Integration test: upload endpoint rejects unsafe file types."""
         with tempfile.NamedTemporaryFile(suffix=".exe", delete=False) as f:

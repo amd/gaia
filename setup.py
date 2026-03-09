@@ -28,7 +28,7 @@ setup(
         "gaia.llm.providers",
         "gaia.audio",
         "gaia.chat",
-        "gaia.chat.ui",
+        "gaia.ui",
         "gaia.database",
         "gaia.talk",
         "gaia.testing",

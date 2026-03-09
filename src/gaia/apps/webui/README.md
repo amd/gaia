@@ -1,18 +1,18 @@
-# @amd-gaia/chat
+# @amd-gaia/agent-ui
 
-Privacy-first AI chat with document Q&A — runs **100% locally** on AMD Ryzen AI hardware.
+Privacy-first agentic AI interface with document Q&A — runs **100% locally** on AMD Ryzen AI hardware.
 
 No cloud. No API keys. No data leaves your device.
 
 ## Install
 
 ```bash
-npm install -g @amd-gaia/chat
+npm install -g @amd-gaia/agent-ui
 ```
 
 ## Prerequisites
 
-GAIA Chat requires the Python backend running locally:
+GAIA Agent UI requires the Python backend running locally:
 
 ```bash
 # Install the GAIA Python package
@@ -25,17 +25,17 @@ lemonade-server serve
 ## Usage
 
 ```bash
-# Start GAIA Chat (launches backend + opens browser)
-gaia-chat
+# Start GAIA Agent UI (launches backend + opens browser)
+gaia-ui
 
 # Custom port
-gaia-chat --port 4200
+gaia-ui --port 4200
 
 # Frontend-only mode (if backend is already running)
-gaia-chat --serve
+gaia-ui --serve
 
 # Don't auto-open browser
-gaia-chat --no-open
+gaia-ui --no-open
 ```
 
 Then open [http://localhost:4200](http://localhost:4200) in your browser.
@@ -62,7 +62,7 @@ Browser  <-->  Python Backend (FastAPI, port 4200)  <-->  Lemonade Server (LLM, 
 
 The npm package includes:
 - **Pre-built React frontend** served by the Python backend
-- **CLI launcher** (`gaia-chat`) that starts the backend and opens the browser
+- **CLI launcher** (`gaia-ui`) that starts the backend and opens the browser
 - **Standalone serve mode** (`--serve`) for serving the frontend independently
 
 ## Desktop Installers
@@ -70,7 +70,7 @@ The npm package includes:
 For a native desktop experience, download the installer from
 [GitHub Releases](https://github.com/amd/gaia/releases):
 
-- **Windows**: `gaia-chat-setup.exe`
+- **Windows**: `gaia-ui-setup.exe`
 - **Ubuntu/Linux**: `gaia-ui-setup.deb`
 
 ## Documentation
@@ -84,7 +84,7 @@ For a native desktop experience, download the installer from
 ```bash
 # Clone the repo
 git clone https://github.com/amd/gaia.git
-cd gaia/src/gaia/apps/chat/webui
+cd gaia/src/gaia/apps/webui
 
 # Install dependencies
 npm install

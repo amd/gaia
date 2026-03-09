@@ -28,8 +28,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from gaia.chat.ui.database import ChatDatabase
-from gaia.chat.ui.server import create_app
+from gaia.ui.database import ChatDatabase
+from gaia.ui.server import create_app
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ def doc_id(client, db):
 class TestSessionLifecycle:
     """End-to-end session lifecycle: create -> chat -> export -> delete."""
 
-    @patch("gaia.chat.ui.server._get_chat_response")
+    @patch("gaia.ui.server._get_chat_response")
     def test_full_lifecycle(self, mock_chat, client):
         """Create session, send messages, export, then delete."""
         mock_chat.return_value = "Hello! I'm the GAIA assistant."
@@ -179,7 +179,7 @@ class TestSessionLifecycle:
         msgs_resp = client.get(f"/api/sessions/{session_id}/messages")
         assert msgs_resp.status_code == 404
 
-    @patch("gaia.chat.ui.server._get_chat_response")
+    @patch("gaia.ui.server._get_chat_response")
     def test_multi_turn_conversation(self, mock_chat, client):
         """Verify multi-turn conversation history is preserved in order."""
         responses = iter(
@@ -239,7 +239,7 @@ class TestSessionLifecycle:
 class TestDocumentWorkflow:
     """End-to-end document management and session attachment workflows."""
 
-    @patch("gaia.chat.ui.server._index_document")
+    @patch("gaia.ui.server._index_document")
     def test_upload_attach_detach_delete(self, mock_index, client):
         """Full document lifecycle: upload -> attach to session -> detach -> delete."""
         mock_index.return_value = 25
@@ -372,7 +372,7 @@ class TestDocumentWorkflow:
         assert doc1["id"] in session["document_ids"]
         assert doc2["id"] in session["document_ids"]
 
-    @patch("gaia.chat.ui.server._index_document")
+    @patch("gaia.ui.server._index_document")
     def test_duplicate_document_upload_returns_existing(self, mock_index, client):
         """Uploading the same file twice returns the existing document."""
         mock_index.return_value = 10
@@ -405,7 +405,7 @@ class TestSSEStreaming:
 
     def test_streaming_response_format(self, client, session_id):
         """Verify SSE events have correct format: 'data: {...}\\n\\n'."""
-        with patch("gaia.chat.ui.server._stream_chat_response") as mock_stream:
+        with patch("gaia.ui.server._stream_chat_response") as mock_stream:
 
             async def fake_stream(*args, **kwargs):
                 yield 'data: {"type": "chunk", "content": "Hello"}\n\n'
@@ -452,7 +452,7 @@ class TestSSEStreaming:
 
     def test_streaming_error_event(self, client, session_id):
         """Verify error events in SSE stream."""
-        with patch("gaia.chat.ui.server._stream_chat_response") as mock_stream:
+        with patch("gaia.ui.server._stream_chat_response") as mock_stream:
 
             async def fake_error_stream(*args, **kwargs):
                 yield 'data: {"type": "error", "content": "LLM not available"}\n\n'
@@ -481,7 +481,7 @@ class TestSSEStreaming:
 
     def test_streaming_headers(self, client, session_id):
         """Verify streaming response has correct cache and connection headers."""
-        with patch("gaia.chat.ui.server._stream_chat_response") as mock_stream:
+        with patch("gaia.ui.server._stream_chat_response") as mock_stream:
 
             async def fake_stream(*args, **kwargs):
                 yield 'data: {"type": "done", "content": "test"}\n\n'
@@ -543,7 +543,7 @@ class TestEdgeCases:
         titles = [s["title"] for s in list_resp.json()["sessions"]]
         assert title in titles
 
-    @patch("gaia.chat.ui.server._get_chat_response")
+    @patch("gaia.ui.server._get_chat_response")
     def test_unicode_in_messages(self, mock_chat, client, session_id):
         """Messages support unicode and multi-byte characters."""
         user_msg = "\u00bfHablas espa\u00f1ol? \u2014 \u5217\u738b\u7cfb\u5217 \u041c\u0438\u0440"
@@ -566,7 +566,7 @@ class TestEdgeCases:
         assert msgs["messages"][0]["content"] == user_msg
         assert msgs["messages"][1]["content"] == assistant_msg
 
-    @patch("gaia.chat.ui.server._get_chat_response")
+    @patch("gaia.ui.server._get_chat_response")
     def test_large_message_content(self, mock_chat, client, session_id):
         """Large messages are handled correctly."""
         large_content = "x" * 50_000
@@ -698,7 +698,7 @@ class TestEdgeCases:
 class TestSystemStatus:
     """Test system status endpoint with mocked backends."""
 
-    @patch("gaia.chat.ui.server.shutil.disk_usage")
+    @patch("gaia.ui.server.shutil.disk_usage")
     def test_system_status_disk_space(self, mock_disk, client):
         """Disk space is reported from shutil.disk_usage."""
         mock_disk.return_value = MagicMock(free=100 * (1024**3))
@@ -781,7 +781,7 @@ class TestHealthIntegration:
 class TestSecurityIntegration:
     """Security-focused integration tests."""
 
-    @patch("gaia.chat.ui.server._index_document")
+    @patch("gaia.ui.server._index_document")
     def test_upload_path_traversal_rejected(self, mock_index, client):
         """Path traversal in upload filepath is blocked."""
         resp = client.post(
@@ -791,7 +791,7 @@ class TestSecurityIntegration:
         # Either 400 (bad extension) or 404 (file not found after resolve)
         assert resp.status_code in (400, 404)
 
-    @patch("gaia.chat.ui.server._index_document")
+    @patch("gaia.ui.server._index_document")
     def test_upload_null_byte_injection(self, mock_index, client):
         """Null byte injection in filepath is rejected."""
         resp = client.post(
@@ -800,7 +800,7 @@ class TestSecurityIntegration:
         )
         assert resp.status_code == 400
 
-    @patch("gaia.chat.ui.server._index_document")
+    @patch("gaia.ui.server._index_document")
     def test_upload_disallowed_extension(self, mock_index, client):
         """Various dangerous extensions are rejected.
 
@@ -1006,7 +1006,7 @@ class TestRAGSourcesIntegration:
 class TestSessionTimestamps:
     """Verify session timestamps update correctly."""
 
-    @patch("gaia.chat.ui.server._get_chat_response")
+    @patch("gaia.ui.server._get_chat_response")
     def test_updated_at_changes_on_message(self, mock_chat, client):
         """Session updated_at advances after a new message."""
         mock_chat.return_value = "Reply"
@@ -1105,7 +1105,7 @@ class TestCLIUIFlag:
         """
         # The server module has its own argparse-based main()
         # Verify it accepts --host, --port, --debug
-        from gaia.chat.ui.server import DEFAULT_PORT
+        from gaia.ui.server import DEFAULT_PORT
 
         assert DEFAULT_PORT == 4200
 
@@ -1407,7 +1407,7 @@ class TestStreamingGeneratorEdgeCases:
 
     def test_streaming_import_error_yields_error_event(self, client, session_id):
         """When ChatSDK import fails, the stream yields an error SSE event."""
-        with patch("gaia.chat.ui.server._stream_chat_response") as mock_stream:
+        with patch("gaia.ui.server._stream_chat_response") as mock_stream:
 
             async def error_stream(*args, **kwargs):
                 error_msg = (
@@ -1443,7 +1443,7 @@ class TestStreamingGeneratorEdgeCases:
 
     def test_streaming_saves_user_message_to_db(self, client, db, session_id):
         """The user message is saved to the DB even for streaming requests."""
-        with patch("gaia.chat.ui.server._stream_chat_response") as mock_stream:
+        with patch("gaia.ui.server._stream_chat_response") as mock_stream:
 
             async def fake_stream(*args, **kwargs):
                 yield 'data: {"type": "done", "content": "ok"}\n\n'
@@ -1467,7 +1467,7 @@ class TestStreamingGeneratorEdgeCases:
         assert msgs[0]["role"] == "user"
         assert msgs[0]["content"] == "Should be saved"
 
-    @patch("gaia.chat.ui.server._get_chat_response")
+    @patch("gaia.ui.server._get_chat_response")
     def test_non_streaming_saves_both_messages(self, mock_chat, client, db, session_id):
         """Non-streaming saves both user and assistant messages to DB."""
         mock_chat.return_value = "The assistant reply."

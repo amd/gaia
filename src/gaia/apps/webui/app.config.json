@@ -1,8 +1,8 @@
 {
-  "name": "chat",
-  "displayName": "GAIA Chat",
+  "name": "agent-ui",
+  "displayName": "GAIA Agent UI",
   "version": "0.1.0",
-  "description": "Privacy-first AI chat with document Q&A - runs 100% locally on AMD Ryzen AI",
+  "description": "Privacy-first agentic AI interface with document Q&A - runs 100% locally on AMD Ryzen AI",
   "author": "AMD AI Group",
   "license": "MIT",
   "window": {
@@ -30,8 +30,8 @@
       "uninstallerIcon": "assets/icon.ico",
       "installerHeaderIcon": "assets/icon.ico"
     },
-    "appId": "com.amd.gaia.chat",
-    "productName": "GAIA Chat",
+    "appId": "com.amd.gaia.agent-ui",
+    "productName": "GAIA Agent UI",
     "copyright": "Copyright (C) 2025-2026 Advanced Micro Devices, Inc."
   }
 }

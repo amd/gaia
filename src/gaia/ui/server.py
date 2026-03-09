@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""FastAPI server for GAIA Chat UI.
+"""FastAPI server for GAIA Agent UI.
 
 Provides REST API endpoints for the chat desktop application:
 - System status and health
@@ -59,7 +59,7 @@ def create_app(db_path: str = None) -> FastAPI:
         Configured FastAPI application.
     """
     app = FastAPI(
-        title="GAIA Chat UI API",
+        title="GAIA Agent UI API",
         description="Privacy-first local chat application API",
         version="0.1.0",
     )
@@ -174,7 +174,7 @@ def create_app(db_path: str = None) -> FastAPI:
         stats = db.get_stats()
         return {
             "status": "ok",
-            "service": "gaia-chat-ui",
+            "service": "gaia-agent-ui",
             "stats": stats,
         }
 
@@ -422,9 +422,8 @@ def create_app(db_path: str = None) -> FastAPI:
     # ── Serve Frontend Static Files ──────────────────────────────────────
     # Look for built frontend assets in the webui dist directory
     _webui_dist = (
-        Path(__file__).resolve().parent.parent.parent
+        Path(__file__).resolve().parent.parent
         / "apps"
-        / "chat"
         / "webui"
         / "dist"
     )
@@ -461,8 +460,8 @@ def create_app(db_path: str = None) -> FastAPI:
         async def no_frontend():
             """Inform user that frontend needs to be built."""
             return {
-                "message": "GAIA Chat API is running. Frontend not built yet.",
-                "hint": "Run 'npm run build' in src/gaia/apps/chat/webui/ to build the frontend.",
+                "message": "GAIA Agent UI API is running. Frontend not built yet.",
+                "hint": "Run 'npm run build' in src/gaia/apps/webui/ to build the frontend.",
             }
 
     return app
@@ -769,7 +768,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
     import queue
     import threading
 
-    from gaia.chat.ui.sse_handler import SSEOutputHandler
+    from gaia.ui.sse_handler import SSEOutputHandler
 
     try:
         from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
@@ -900,7 +899,7 @@ def main():
 
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="GAIA Chat UI Server")
+    parser = argparse.ArgumentParser(description="GAIA Agent UI Server")
     parser.add_argument("--host", default="localhost", help="Host (default: localhost)")
     parser.add_argument(
         "--port", type=int, default=DEFAULT_PORT, help=f"Port (default: {DEFAULT_PORT})"
@@ -909,7 +908,7 @@ def main():
     args = parser.parse_args()
 
     log_level = "debug" if args.debug else "info"
-    print(f"Starting GAIA Chat UI server on http://{args.host}:{args.port}")
+    print(f"Starting GAIA Agent UI server on http://{args.host}:{args.port}")
     server_app = create_app()
     uvicorn.run(
         server_app,

@@ -1,15 +1,15 @@
 {
-  "name": "@amd-gaia/chat",
+  "name": "@amd-gaia/agent-ui",
   "version": "0.16.0",
   "type": "module",
-  "productName": "GAIA Chat",
-  "description": "Privacy-first AI chat with document Q&A - runs 100% locally on AMD Ryzen AI",
+  "productName": "GAIA Agent UI",
+  "description": "Privacy-first agentic AI interface with document Q&A - runs 100% locally on AMD Ryzen AI",
   "author": "AMD AI Group",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/amd/gaia.git",
-    "directory": "src/gaia/apps/chat/webui"
+    "directory": "src/gaia/apps/webui"
   },
   "homepage": "https://amd-gaia.ai/guides/chat-ui",
   "bugs": {
@@ -19,7 +19,7 @@
     "gaia",
     "amd",
     "ryzen-ai",
-    "chat",
+    "agent",
     "ai",
     "local-llm",
     "privacy",
@@ -29,7 +29,7 @@
   ],
   "main": "main.cjs",
   "bin": {
-    "gaia-chat": "bin/gaia-chat.mjs"
+    "gaia-ui": "bin/gaia-ui.mjs"
   },
   "files": [
     "bin/",

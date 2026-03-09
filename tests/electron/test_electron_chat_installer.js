@@ -19,7 +19,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
-const CHAT_APP_PATH = path.join(__dirname, '../../src/gaia/apps/chat/webui');
+const CHAT_APP_PATH = path.join(__dirname, '../../src/gaia/apps/webui');
 const FRAMEWORK_PATH = path.join(__dirname, '../../src/gaia/electron');
 const BACKEND_PATH = path.join(__dirname, '../../src/gaia/chat/ui');
 

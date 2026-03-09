@@ -12,8 +12,8 @@ icon: "server"
 
 <Note>
 - **Component:** Chat UI Server - FastAPI backend for the desktop chat application
-- **Module:** `gaia.chat.ui`
-- **Import:** `from gaia.chat.ui.server import create_app`
+- **Module:** `gaia.ui`
+- **Import:** `from gaia.ui.server import create_app`
 - **Source:** [`src/gaia/chat/ui/`](https://github.com/amd/gaia/blob/main/src/gaia/chat/ui/)
 </Note>
 
@@ -202,7 +202,7 @@ All 14 Pydantic models:
 
 ## Security Considerations
 
-- **CORS:** Allows all origins (`*`). The standalone server (`python -m gaia.chat.ui.server`) binds to `localhost` by default. Note: `gaia chat --ui` binds to `0.0.0.0` for Electron/browser access
+- **CORS:** Allows all origins (`*`). The standalone server (`python -m gaia.ui.server`) binds to `localhost` by default. Note: `gaia chat --ui` binds to `0.0.0.0` for Electron/browser access
 - **No authentication:** Designed for single-user local use. Do not expose to untrusted networks
 - **File path validation:** The `upload-path` endpoint sanitizes all user-provided paths:
   - Null byte rejection (prevents path injection)

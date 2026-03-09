@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Pydantic models for GAIA Chat UI API."""
+"""Pydantic models for GAIA Agent UI API."""
 
 from typing import Dict, List, Optional
 

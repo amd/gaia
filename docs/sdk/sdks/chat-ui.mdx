@@ -11,9 +11,9 @@ icon: "desktop"
 <Note>
 **Import:**
 ```python
-from gaia.chat.ui.server import create_app, DEFAULT_PORT
-from gaia.chat.ui.database import ChatDatabase, DEFAULT_DB_PATH
-from gaia.chat.ui.models import SystemStatus, ChatRequest, SessionResponse, DocumentResponse
+from gaia.ui.server import create_app, DEFAULT_PORT
+from gaia.ui.database import ChatDatabase, DEFAULT_DB_PATH
+from gaia.ui.models import SystemStatus, ChatRequest, SessionResponse, DocumentResponse
 ```
 </Note>
 
@@ -40,7 +40,7 @@ The backend runs on port `4200` by default and serves both the Electron desktop 
 ### Start the Server
 
 ```python
-from gaia.chat.ui.server import create_app
+from gaia.ui.server import create_app
 
 # Create with default database (~/.gaia/chat/gaia_chat.db)
 app = create_app()
@@ -56,7 +56,7 @@ Run with uvicorn:
 
 ```python
 import uvicorn
-from gaia.chat.ui.server import create_app
+from gaia.ui.server import create_app
 
 app = create_app()
 uvicorn.run(app, host="localhost", port=4200)
@@ -65,13 +65,13 @@ uvicorn.run(app, host="localhost", port=4200)
 Or from the command line:
 
 ```bash
-python -m gaia.chat.ui.server --port 4200
+python -m gaia.ui.server --port 4200
 ```
 
 ### Use the Database Directly
 
 ```python
-from gaia.chat.ui.database import ChatDatabase
+from gaia.ui.database import ChatDatabase
 
 db = ChatDatabase()  # Uses default path ~/.gaia/chat/gaia_chat.db
 
@@ -101,7 +101,7 @@ db.close()
 The persistence layer for all Chat UI data. Uses SQLite with WAL mode for concurrent read access.
 
 ```python
-from gaia.chat.ui.database import ChatDatabase, DEFAULT_DB_PATH
+from gaia.ui.database import ChatDatabase, DEFAULT_DB_PATH
 ```
 
 **Constructor:**
@@ -236,7 +236,7 @@ print(f"Total size: {stats['total_size_bytes']} bytes")
 Factory function that creates and configures the FastAPI application with all endpoints.
 
 ```python
-from gaia.chat.ui.server import create_app
+from gaia.ui.server import create_app
 
 def create_app(db_path: str = None) -> FastAPI:
     """Create and configure the FastAPI application.
@@ -262,7 +262,7 @@ db = app.state.db
 
 ## Pydantic Models
 
-All request and response bodies use Pydantic models from `gaia.chat.ui.models`.
+All request and response bodies use Pydantic models from `gaia.ui.models`.
 
 ### System
 
@@ -646,7 +646,7 @@ CREATE TABLE messages (
 ```python
 import pytest
 from fastapi.testclient import TestClient
-from gaia.chat.ui.server import create_app
+from gaia.ui.server import create_app
 
 @pytest.fixture
 def client():
@@ -687,7 +687,7 @@ def test_health_check(client):
 ### Database Testing
 
 ```python
-from gaia.chat.ui.database import ChatDatabase
+from gaia.ui.database import ChatDatabase
 
 def test_session_crud():
     db = ChatDatabase(":memory:")

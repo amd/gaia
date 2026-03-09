@@ -7,7 +7,7 @@ import { resolve } from 'path';
 function getGaiaVersion(): string {
     try {
         const versionPy = readFileSync(
-            resolve(__dirname, '..', '..', '..', 'version.py'),
+            resolve(__dirname, '..', '..', 'version.py'),
             'utf-8'
         );
         const match = versionPy.match(/__version__\s*=\s*"([^"]+)"/);

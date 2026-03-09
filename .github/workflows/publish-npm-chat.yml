@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-name: Publish GAIA Chat to npm
+name: Publish GAIA Agent UI to npm
 
 on:
   push:
@@ -47,15 +47,15 @@ jobs:
           python-version: '3.11'
 
       - name: Install frontend dependencies
-        working-directory: src/gaia/apps/chat/webui
+        working-directory: src/gaia/apps/webui
         run: npm ci 2>/dev/null || npm install
 
       - name: Build frontend
-        working-directory: src/gaia/apps/chat/webui
+        working-directory: src/gaia/apps/webui
         run: npm run build
 
       - name: Verify build output
-        working-directory: src/gaia/apps/chat/webui
+        working-directory: src/gaia/apps/webui
         run: |
           if [ ! -f dist/index.html ]; then
             echo "ERROR: dist/index.html not found"
@@ -70,23 +70,23 @@ jobs:
           echo "  CSS: $((CSS_SIZE / 1024))KB"
 
       - name: Verify CLI entry point
-        working-directory: src/gaia/apps/chat/webui
+        working-directory: src/gaia/apps/webui
         run: |
-          if [ ! -f bin/gaia-chat.mjs ]; then
-            echo "ERROR: bin/gaia-chat.mjs not found"
+          if [ ! -f bin/gaia-ui.mjs ]; then
+            echo "ERROR: bin/gaia-ui.mjs not found"
             exit 1
           fi
           # Verify it's valid JS (syntax check)
-          node --check bin/gaia-chat.mjs
+          node --check bin/gaia-ui.mjs
           echo "CLI entry point verified"
 
       - name: Verify all versions match (tag, version.py, package.json, built app)
         run: |
           TAG_VERSION=${GITHUB_REF#refs/tags/v}
           PY_VERSION=$(python -c "import re; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('src/gaia/version.py').read()).group(1))")
-          PKG_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('src/gaia/apps/chat/webui/package.json','utf8')).version)")
+          PKG_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('src/gaia/apps/webui/package.json','utf8')).version)")
           ESCAPED=$(echo "$PY_VERSION" | sed 's/\./\\./g')
-          APP_VERSION=$(grep -o "\"${ESCAPED}\"" src/gaia/apps/chat/webui/dist/assets/index-*.js | head -1 | tr -d '"' || echo "NOT_FOUND")
+          APP_VERSION=$(grep -o "\"${ESCAPED}\"" src/gaia/apps/webui/dist/assets/index-*.js | head -1 | tr -d '"' || echo "NOT_FOUND")
 
           echo "=== Version Check ==="
           echo "  Git tag:      v$TAG_VERSION"
@@ -141,15 +141,15 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
-        working-directory: src/gaia/apps/chat/webui
+        working-directory: src/gaia/apps/webui
         run: npm ci 2>/dev/null || npm install
 
       - name: Build frontend
-        working-directory: src/gaia/apps/chat/webui
+        working-directory: src/gaia/apps/webui
         run: npm run build
 
-      - name: Publish @amd-gaia/chat
-        working-directory: src/gaia/apps/chat/webui
+      - name: Publish @amd-gaia/agent-ui
+        working-directory: src/gaia/apps/webui
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -157,7 +157,7 @@ jobs:
       - name: Published successfully
         run: |
           TAG_VERSION=${GITHUB_REF#refs/tags/v}
-          echo "Successfully published @amd-gaia/chat@$TAG_VERSION to npm"
+          echo "Successfully published @amd-gaia/agent-ui@$TAG_VERSION to npm"
           echo ""
           echo "Install with:"
-          echo "  npm install -g @amd-gaia/chat@$TAG_VERSION"
+          echo "  npm install -g @amd-gaia/agent-ui@$TAG_VERSION"

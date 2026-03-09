@@ -1,9 +1,9 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Tunnel manager for mobile access to GAIA Chat UI.
+"""Tunnel manager for mobile access to GAIA Agent UI.
 
-Manages an ngrok tunnel to expose the local chat server for remote/mobile
+Manages an ngrok tunnel to expose the local GAIA server for remote/mobile
 access. Generates a UUID-based authentication token and provides QR code
 data for easy mobile onboarding.
 """

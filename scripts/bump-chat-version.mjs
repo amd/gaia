@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Syncs the version from src/gaia/version.py into the chat webui package.json.
+ * Syncs the version from src/gaia/version.py into the agent-ui webui package.json.
  * GAIA uses a single version source of truth in version.py.
  *
  * Usage:
@@ -25,7 +25,6 @@ const PACKAGE_PATH = resolve(
   "src",
   "gaia",
   "apps",
-  "chat",
   "webui",
   "package.json"
 );

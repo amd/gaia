@@ -116,7 +116,7 @@ If you have GAIA installed from source, launch the Chat UI server directly:
 
   <Step title="Start the Chat UI server">
     ```bash
-    python -m gaia.chat.ui.server
+    python -m gaia.ui.server
     ```
 
     The server starts on `http://localhost:4200` by default.
@@ -126,7 +126,7 @@ If you have GAIA installed from source, launch the Chat UI server directly:
     Open `http://localhost:4200` in your browser, or launch via Electron:
 
     ```bash
-    cd src/gaia/apps/chat/webui
+    cd src/gaia/apps/webui
     npm start
     ```
   </Step>
@@ -136,10 +136,10 @@ If you have GAIA installed from source, launch the Chat UI server directly:
 
 ```bash
 # Custom host and port
-python -m gaia.chat.ui.server --host 0.0.0.0 --port 8080
+python -m gaia.ui.server --host 0.0.0.0 --port 8080
 
 # Debug mode with verbose logging
-python -m gaia.chat.ui.server --debug
+python -m gaia.ui.server --debug
 ```
 
 ---
@@ -247,7 +247,7 @@ Documents are referenced by their original file path on disk and are not copied 
 The CLI (`gaia chat`) and the desktop app share the same SQLite database. Sessions started in the terminal can be continued in the desktop app, and vice versa.
 
 ```python
-from gaia.chat.ui.database import ChatDatabase, DEFAULT_DB_PATH
+from gaia.ui.database import ChatDatabase, DEFAULT_DB_PATH
 
 # Both CLI and UI use the same database path
 db = ChatDatabase()  # ~/.gaia/chat/gaia_chat.db
@@ -331,7 +331,7 @@ The settings panel shows:
     Use a different port:
 
     ```bash
-    python -m gaia.chat.ui.server --port 8080
+    python -m gaia.ui.server --port 8080
     ```
   </Accordion>
 

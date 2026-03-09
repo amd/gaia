@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Electron Forge configuration for GAIA Chat.
+ * Electron Forge configuration for GAIA Agent UI.
  *
  * Uses a JS config file (instead of inline package.json) to handle
  * dynamic version conversion. GAIA uses 4-part versions (e.g. 0.15.4.1)
@@ -29,8 +29,8 @@ const semverVersion = toSemVer(pkg.version);
 
 module.exports = {
     packagerConfig: {
-        name: 'GAIA Chat',
-        executableName: 'gaia-chat',
+        name: 'GAIA Agent UI',
+        executableName: 'gaia-ui',
         icon: './assets/icon',
         extraResource: ['./dist'],
         appVersion: semverVersion,
@@ -39,8 +39,8 @@ module.exports = {
         {
             name: '@electron-forge/maker-squirrel',
             config: {
-                name: 'gaia-chat',
-                setupExe: 'gaia-chat-setup.exe',
+                name: 'gaia-ui',
+                setupExe: 'gaia-ui-setup.exe',
                 setupIcon: './assets/icon.ico',
                 version: semverVersion,
             },

@@ -13,7 +13,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-WEBUI_DIR="$REPO_ROOT/src/gaia/apps/chat/webui"
+WEBUI_DIR="$REPO_ROOT/src/gaia/apps/webui"
 ELECTRON_DIR="$REPO_ROOT/src/gaia/electron"
 
 MODE="electron"

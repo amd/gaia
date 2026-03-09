@@ -3,12 +3,12 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// GAIA Chat CLI
+// GAIA Agent UI CLI
 // Usage:
-//   gaia-chat                Start the app (backend + browser)
-//   gaia-chat --serve        Serve frontend only (no backend auto-start)
-//   gaia-chat --port 4200    Custom backend port
-//   gaia-chat --help         Show help
+//   gaia-ui                Start the app (backend + browser)
+//   gaia-ui --serve        Serve frontend only (no backend auto-start)
+//   gaia-ui --port 4200    Custom backend port
+//   gaia-ui --help         Show help
 
 import { spawn, exec, execSync } from "child_process";
 import { dirname, join, extname, resolve } from "path";
@@ -46,10 +46,10 @@ function readPkg() {
 function printHelp() {
   const pkg = readPkg();
   console.log(`
-GAIA Chat - Privacy-first AI chat desktop application
+GAIA Agent UI - Privacy-first agentic AI interface
 Version: ${pkg.version}
 
-Usage: gaia-chat [options]
+Usage: gaia-ui [options]
 
 Options:
   --port <port>   Backend port (default: 4200)
@@ -73,7 +73,7 @@ Documentation: https://amd-gaia.ai/guides/chat-ui
 
 function printVersion() {
   const pkg = readPkg();
-  console.log(`gaia-chat v${pkg.version}`);
+  console.log(`gaia-ui v${pkg.version}`);
 }
 
 /**
@@ -142,11 +142,11 @@ function startBackend(port) {
     console.error("  pip install amd-gaia");
     console.error("");
     console.error("Or run in serve-only mode (requires backend running separately):");
-    console.error("  gaia-chat --serve");
+    console.error("  gaia-ui --serve");
     process.exit(1);
   }
 
-  console.log(`Starting GAIA Chat backend on port ${port}...`);
+  console.log(`Starting GAIA Agent UI backend on port ${port}...`);
 
   const child = spawn(gaiaCmd, ["chat", "--ui", "--ui-port", String(port)], {
     stdio: ["ignore", "pipe", "pipe"],
@@ -192,7 +192,7 @@ async function serveFrontend(port) {
     console.error(`Expected: ${join(distDir, "index.html")}`);
     console.error("");
     console.error("The npm package may be corrupted. Try reinstalling:");
-    console.error("  npm install -g @amd-gaia/chat@latest");
+    console.error("  npm install -g @amd-gaia/agent-ui@latest");
     process.exit(1);
   }
 
@@ -263,7 +263,7 @@ async function serveFrontend(port) {
   });
 
   server.listen(port, () => {
-    console.log(`GAIA Chat frontend serving at http://localhost:${port}`);
+    console.log(`GAIA Agent UI serving at http://localhost:${port}`);
   });
 
   return server;
@@ -284,8 +284,8 @@ if (hasFlag("--version") || hasFlag("-v")) {
 const pkg = readPkg();
 console.log("");
 console.log("========================================");
-console.log(`  GAIA Chat v${pkg.version}`);
-console.log("  Privacy-first AI chat");
+console.log(`  GAIA Agent UI v${pkg.version}`);
+console.log("  Privacy-first agentic AI");
 console.log("========================================");
 console.log("");
 
@@ -336,7 +336,7 @@ if (SERVE_ONLY) {
 // Graceful shutdown
 function cleanup() {
   if (backendProcess) {
-    console.log("\nShutting down GAIA Chat...");
+    console.log("\nShutting down GAIA Agent UI...");
     backendProcess.kill("SIGTERM");
     setTimeout(() => {
       try {
