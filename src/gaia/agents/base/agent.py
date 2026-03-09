@@ -399,41 +399,9 @@ You must respond ONLY in valid JSON. No text before { or after }.
             >>> agent.connect_mcp_server("filesystem", "npx @modelcontextprotocol/server-filesystem /tmp")
             >>> # rebuild_system_prompt() is called automatically
         """
-        # Get base prompt from subclass
-        self.system_prompt = self._get_system_prompt()
-
-        # Append tools description
-        tools_description = self._format_tools_for_prompt()
-        self.system_prompt += f"\n\n==== AVAILABLE TOOLS ====\n{tools_description}\n"
-
-        # Add JSON response format instructions (shared across all agents)
-        self.system_prompt += """
-==== RESPONSE FORMAT ====
-You must respond ONLY in valid JSON. No text before { or after }.
-
-**To call a tool:**
-{"thought": "reasoning", "goal": "objective", "tool": "tool_name", "tool_args": {"arg1": "value1"}}
-
-**To create a multi-step plan:**
-{
-  "thought": "reasoning",
-  "goal": "objective",
-  "plan": [
-    {"tool": "tool1", "tool_args": {"arg": "val"}},
-    {"tool": "tool2", "tool_args": {"arg": "val"}}
-  ],
-  "tool": "tool1",
-  "tool_args": {"arg": "val"}
-}
-
-**To provide a final answer:**
-{"thought": "reasoning", "goal": "achieved", "answer": "response to user"}
-
-**RULES:**
-1. ALWAYS use tools for real data - NEVER hallucinate
-2. Plan steps MUST be objects like {"tool": "x", "tool_args": {}}, NOT strings
-3. After tool results, provide an "answer" summarizing them
-"""
+        # Recompose the full system prompt via _compose_system_prompt() so that
+        # mixin prompts, tool descriptions, and response format are all included.
+        self._system_prompt_cache = self._compose_system_prompt()
 
     def list_tools(self, verbose: bool = True) -> None:
         """
@@ -1901,6 +1869,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     response = chat_response.text
                     response_stats = chat_response.stats
                 except ConnectionError as e:
+                    self.console.stop_progress()
                     error_msg = f"LLM Server Connection Failed: {str(e)}"
                     logger.error(error_msg)
                     self.console.print_error(error_msg)
@@ -1920,6 +1889,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     )
                     break
                 except Exception as e:
+                    self.console.stop_progress()
                     if self.debug:
                         print(f"[DEBUG] Error calling LLM: {e}")
                     logger.error(f"Unexpected error calling LLM: {e}")

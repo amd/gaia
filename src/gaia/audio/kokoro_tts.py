@@ -295,8 +295,11 @@ class KokoroTTS:
                 if stream_callback and callable(stream_callback):
                     stream_callback(audio)
 
-        # Combine all audio chunks
-        audio = np.concatenate(audio_chunks)
+        # Combine all audio chunks; handle empty input gracefully
+        if not audio_chunks:
+            audio = np.zeros(2400, dtype=np.float32)  # 100ms silence at 24kHz
+        else:
+            audio = np.concatenate(audio_chunks)
         combined_phonemes = " ".join(phonemes)
 
         end_time = time.time()
@@ -404,7 +407,6 @@ class KokoroTTS:
 
         except Exception as e:
             self.log.error(f"Error in streaming: {e}")
-            audio_buffer.put(None)  # Ensure playback thread exits
         finally:
             audio_buffer.put(None)  # Ensure playback thread exits
             playback_thread.join(timeout=2.0)
