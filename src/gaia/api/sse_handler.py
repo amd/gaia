@@ -169,7 +169,9 @@ class SSEOutputHandler(OutputHandler):
 
     # === Completion Methods (Required) ===
 
-    def print_final_answer(self, answer: str, streaming: bool = True):
+    def print_final_answer(
+        self, answer: str, streaming: bool = True
+    ):  # pylint: disable=unused-argument
         """Print final answer/result."""
         self._add_event("final_answer", {"answer": answer})
 

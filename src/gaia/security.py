@@ -137,8 +137,9 @@ class PathValidator:
                         if norm_allowed_path.endswith(os.sep)
                         else norm_allowed_path + os.sep
                     )
-                    if norm_real_path == norm_allowed_path or norm_real_path.startswith(
-                        norm_allowed_with_sep
+                    if (
+                        norm_real_path == norm_allowed_path
+                        or norm_real_path.startswith(norm_allowed_with_sep)
                     ):
                         return True
 

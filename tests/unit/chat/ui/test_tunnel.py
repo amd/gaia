@@ -5,8 +5,6 @@
 
 import asyncio
 
-import pytest
-
 from gaia.ui.tunnel import TunnelManager
 
 

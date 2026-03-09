@@ -418,20 +418,30 @@ class TestChatSDKIntegration(unittest.TestCase):
 
         stream_time = time.time() - stream_start
 
-        print(f"   Streaming debug: {chunk_count} content chunks, {total_chunks} total chunks, {stream_time:.2f}s")
+        print(
+            f"   Streaming debug: {chunk_count} content chunks, {total_chunks} total chunks, {stream_time:.2f}s"
+        )
         print(f"   Streaming text received: {repr(full_text[:100])}")
 
         # Verify we got at least the completion chunk; content chunks may be 0
         # if the model uses all tokens on thinking/reasoning
-        self.assertGreater(total_chunks, 0, "Expected at least one chunk from streaming (the completion chunk)")
+        self.assertGreater(
+            total_chunks,
+            0,
+            "Expected at least one chunk from streaming (the completion chunk)",
+        )
         self.assertLess(stream_time, 120.0)  # Allow up to 120s for slow CI runners
 
         # If we got content chunks, verify text is non-empty
         if chunk_count > 0:
-            self.assertGreater(len(full_text), 0, "Got content chunks but text was empty")
+            self.assertGreater(
+                len(full_text), 0, "Got content chunks but text was empty"
+            )
             print(f"✅ Streaming: {chunk_count} content chunks in {stream_time:.2f}s")
         else:
-            print(f"⚠️  Streaming: no content chunks (model may have used all tokens on thinking), but stream completed successfully")
+            print(
+                f"⚠️  Streaming: no content chunks (model may have used all tokens on thinking), but stream completed successfully"
+            )
 
 
 def run_integration_tests():
