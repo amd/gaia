@@ -43,6 +43,7 @@
                 "pages": [
                   "cpp/health-agent",
                   "cpp/wifi-agent",
+                  "cpp/process-agent",
                   "cpp/custom-agent"
                 ]
               }
@@ -449,6 +450,7 @@
     {"source": "/guides/cpp/integration", "destination": "/cpp/integration"},
     {"source": "/guides/cpp/custom-agent", "destination": "/cpp/custom-agent"},
     {"source": "/guides/cpp/wifi-agent", "destination": "/cpp/wifi-agent"},
+    {"source": "/guides/cpp/process-agent", "destination": "/cpp/process-agent"},
     {"source": "/guides/mcp/client", "destination": "/sdk/sdks/mcp"}
   ]
 }
