@@ -684,7 +684,7 @@ These positions indicate where to split the text."""
 
             try:
                 # Get LLM response
-                response_data = self.llm_client.generate(
+                response_data = self.llm_client.generate(  # pylint: disable=no-member
                     model=self.config.model,
                     prompt=prompt,
                     temperature=0.0,  # Low temperature for deterministic chunking

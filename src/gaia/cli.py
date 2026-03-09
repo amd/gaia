@@ -3972,10 +3972,12 @@ Let me know your answer!
                 print(f"  Total tokens used: {total_tokens:,}")
                 print(f"  Total cost: ${total_cost:.4f}")
                 print(f"  Average tokens per file: {avg_tokens:.0f}")
-                avg_cost = total_cost / len(summary["transcripts"]) if summary["transcripts"] else 0
-                print(
-                    f"  Average cost per file: ${avg_cost:.4f}"
+                avg_cost = (
+                    total_cost / len(summary["transcripts"])
+                    if summary["transcripts"]
+                    else 0
                 )
+                print(f"  Average cost per file: ${avg_cost:.4f}")
                 print(f"  Meeting types: {', '.join(generation_info['meeting_types'])}")
                 print(f"  Claude model: {generation_info['claude_model']}")
 
@@ -4046,10 +4048,10 @@ Let me know your answer!
                 print(f"  Total tokens used: {total_tokens:,}")
                 print(f"  Total cost: ${total_cost:.4f}")
                 print(f"  Average tokens per file: {avg_tokens:.0f}")
-                avg_cost = total_cost / len(summary["emails"]) if summary["emails"] else 0
-                print(
-                    f"  Average cost per file: ${avg_cost:.4f}"
+                avg_cost = (
+                    total_cost / len(summary["emails"]) if summary["emails"] else 0
                 )
+                print(f"  Average cost per file: ${avg_cost:.4f}")
                 print(f"  Email types: {', '.join(generation_info['email_types'])}")
                 print(f"  Claude model: {generation_info['claude_model']}")
 
@@ -4121,10 +4123,12 @@ Let me know your answer!
                 print(f"  Total tokens used: {total_tokens:,}")
                 print(f"  Total cost: ${total_cost:.4f}")
                 print(f"  Average tokens per file: {avg_tokens:.0f}")
-                avg_cost = total_cost / len(summary["documents"]) if summary["documents"] else 0
-                print(
-                    f"  Average cost per file: ${avg_cost:.4f}"
+                avg_cost = (
+                    total_cost / len(summary["documents"])
+                    if summary["documents"]
+                    else 0
                 )
+                print(f"  Average cost per file: ${avg_cost:.4f}")
                 print(f"  PDF types: {', '.join(generation_info['document_types'])}")
                 print(f"  Claude model: {generation_info['claude_model']}")
 
