@@ -60,6 +60,8 @@ jobs:
         shell: pwsh
 
       - name: Verify Docker is available
+        continue-on-error: true
+        id: docker-check
         run: |
           docker --version
           docker info
@@ -78,12 +80,12 @@ jobs:
 
       - name: Run MCPAgent tests (fast tests only)
         run: |
-          pytest tests/mcp/test_agent_mcp_server.py -v -m "not slow and not integration"
+          python -m pytest tests/mcp/test_agent_mcp_server.py -v -m "not slow and not integration"
 
       - name: Run slow tests (with Docker operations)
-        if: success() || failure()  # Run even if fast tests fail
+        if: (success() || failure()) && steps.docker-check.outcome == 'success'
         run: |
-          pytest tests/mcp/test_agent_mcp_server.py -v -m "slow and not integration" --tb=short
+          python -m pytest tests/mcp/test_agent_mcp_server.py -v -m "slow and not integration" --tb=short
 
       # Integration tests require Lemonade server - skip for now
       # - name: Run integration tests (with LLM orchestration)

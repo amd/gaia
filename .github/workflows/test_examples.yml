@@ -75,7 +75,11 @@ jobs:
       - name: Validate Python Syntax
         run: |
           Write-Host "Validating Python syntax for all examples..."
-          python -m py_compile examples/*.py
+          Get-ChildItem examples/*.py | ForEach-Object {
+            Write-Host "  Checking $($_.Name)..."
+            python -m py_compile $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Syntax error in $($_.Name)" }
+          }
           Write-Host "✅ All example files have valid Python syntax"
         shell: pwsh
 
@@ -90,50 +94,52 @@ jobs:
 
       - name: Test Tool Decorator
         run: |
-          echo "Testing tool registration mechanisms..."
-
-          python -c "
-from gaia.agents.base.tools import tool, _TOOL_REGISTRY
-
-@tool
-def test_tool(arg1: str) -> dict:
-    '''Test tool for validation.'''
-    return {'result': arg1}
-
-assert 'test_tool' in _TOOL_REGISTRY, 'Tool decorator not working'
-assert hasattr(_TOOL_REGISTRY['test_tool'], '__doc__'), 'Tool missing docstring'
-print('✅ Tool decorator working correctly')
-"
+          Write-Host "Testing tool registration mechanisms..."
+          @(
+            "from gaia.agents.base.tools import tool, _TOOL_REGISTRY",
+            "",
+            "@tool",
+            "def test_tool(arg1: str) -> dict:",
+            "    '''Test tool for validation.'''",
+            "    return {'result': arg1}",
+            "",
+            "assert 'test_tool' in _TOOL_REGISTRY, 'Tool decorator not working'",
+            "assert hasattr(_TOOL_REGISTRY['test_tool'], '__doc__'), 'Tool missing docstring'",
+            "print('Tool decorator working correctly')"
+          ) | Set-Content -Path _test_tool.py -Encoding utf8
+          python _test_tool.py
+          Remove-Item _test_tool.py
+        shell: pwsh
 
       - name: Validate Example File Structure
         run: |
-          echo "Validating example file structure and documentation..."
-
-          # Check that all examples have docstrings
-          for file in examples/*.py; do
-              if ! grep -q '"""' "$file"; then
-                  echo "❌ Missing module docstring: $file"
-                  exit 1
-              fi
-          done
-          echo "✅ All examples have docstrings"
+          Write-Host "Validating example file structure and documentation..."
+          $failed = $false
+          Get-ChildItem examples/*.py | ForEach-Object {
+            $content = Get-Content $_.FullName -Raw
+            if ($content -notmatch '"""') {
+              Write-Host "Missing module docstring: $($_.Name)"
+              $failed = $true
+            }
+          }
+          if ($failed) { throw "Some examples are missing docstrings" }
+          Write-Host "All examples have docstrings"
+        shell: pwsh
 
       - name: Summary
         if: always()
         run: |
-          echo "=== Example Agents Integration Test Summary ==="
-          echo "✅ Python syntax validation"
-          echo "✅ Integration tests (pytest)"
-          echo "✅ Tool decorator validation"
-          echo "✅ File structure validation"
-          echo ""
-          echo "Coverage:"
-          echo "  ✅ weather_agent.py - MCP weather integration"
-          echo "  ✅ rag_doc_agent.py - RAG document Q&A"
-          echo "  ✅ product_mockup_agent.py - HTML mockup generation"
-          echo "  ✅ file_watcher_agent.py - File watching automation"
-          echo "  ✅ notes_agent.py - Database CRUD operations"
-          echo "  ✅ hardware_advisor_agent.py - System analysis"
-          echo "  ✅ mcp_config_based_agent.py - MCP config loading"
-          echo ""
-          echo "Note: Full functional tests with LLM queries require Lemonade server"
+          Write-Host "=== Example Agents Integration Test Summary ==="
+          Write-Host "Job status: ${{ job.status }}"
+          Write-Host ""
+          Write-Host "Coverage:"
+          Write-Host "  - weather_agent.py - MCP weather integration"
+          Write-Host "  - rag_doc_agent.py - RAG document Q&A"
+          Write-Host "  - product_mockup_agent.py - HTML mockup generation"
+          Write-Host "  - file_watcher_agent.py - File watching automation"
+          Write-Host "  - notes_agent.py - Database CRUD operations"
+          Write-Host "  - hardware_advisor_agent.py - System analysis"
+          Write-Host "  - mcp_config_based_agent.py - MCP config loading"
+          Write-Host ""
+          Write-Host "Note: Full functional tests with LLM queries require Lemonade server"
+        shell: pwsh

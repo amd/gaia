@@ -8,30 +8,40 @@ These tests actually run the agents and validate their responses.
 Tests require Lemonade server to be running.
 """
 
-import pytest
-import sys
 import os
-from pathlib import Path
+import sys
 import tempfile
-import shutil
+import time
+from pathlib import Path
+
+import pytest
 
 # Add examples directory to Python path
 examples_dir = Path(__file__).parent.parent.parent / "examples"
 sys.path.insert(0, str(examples_dir))
 
-# Check if Lemonade server is available
-LEMONADE_AVAILABLE = False
-try:
-    from gaia.llm.lemonade_client import LemonadeClient
-    client = LemonadeClient()
-    client.get_system_info()
-    LEMONADE_AVAILABLE = True
-except Exception:
-    pass
+
+def _check_lemonade() -> bool:
+    """Check if Lemonade server is available."""
+    try:
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        client = LemonadeClient()
+        client.get_system_info()
+        return True
+    except Exception:
+        return False
+
+
+@pytest.fixture(scope="session")
+def lemonade_available():
+    """Session-scoped fixture that checks Lemonade server once."""
+    return _check_lemonade()
+
 
 requires_lemonade = pytest.mark.skipif(
-    not LEMONADE_AVAILABLE,
-    reason="Lemonade server not running - start with: lemonade-server serve"
+    not _check_lemonade(),
+    reason="Lemonade server not running - start with: lemonade-server serve",
 )
 
 
@@ -49,14 +59,20 @@ class TestNotesAgent:
             agent = NotesAgent(db_path=db_path)
 
             # Create a note
-            result = agent.process_query("Create a note called 'Integration Test' with content 'Testing GAIA'")
+            result = agent.process_query(
+                "Create a note called 'Integration Test' with content 'Testing GAIA'"
+            )
 
             # Validate response structure
-            assert result.get("status") == "success", f"Query failed: {result.get('error', 'Unknown error')}"
+            assert (
+                result.get("status") == "success"
+            ), f"Query failed: {result.get('error', 'Unknown error')}"
             assert "result" in result
 
             response_text = result.get("result", "").lower()
-            assert "note" in response_text or "created" in response_text, "Response doesn't mention note creation"
+            assert (
+                "note" in response_text or "created" in response_text
+            ), "Response doesn't mention note creation"
 
             # List notes to verify creation
             result = agent.process_query("Show me all my notes")
@@ -83,7 +99,9 @@ class TestProductMockupAgent:
             )
 
             # Validate response
-            assert result.get("status") == "success", f"Query failed: {result.get('error')}"
+            assert (
+                result.get("status") == "success"
+            ), f"Query failed: {result.get('error')}"
 
             # Verify HTML file was created
             html_files = list(Path(tmpdir).glob("*.html"))
@@ -92,7 +110,9 @@ class TestProductMockupAgent:
             # Verify HTML content has required elements
             html_content = html_files[0].read_text()
             assert "<!DOCTYPE html>" in html_content, "Missing DOCTYPE"
-            assert "TestApp" in html_content or "testapp" in html_content.lower(), "Product name not in HTML"
+            assert (
+                "TestApp" in html_content or "testapp" in html_content.lower()
+            ), "Product name not in HTML"
             assert "tailwindcss" in html_content.lower(), "Tailwind CSS not included"
 
 
@@ -103,7 +123,6 @@ class TestFileWatcherAgent:
     def test_agent_watches_directory(self):
         """Test that FileWatcherAgent can watch directories."""
         from file_watcher_agent import FileWatcherAgent
-        import time
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create agent watching temp directory
@@ -111,18 +130,26 @@ class TestFileWatcherAgent:
 
             # Verify agent initialized
             assert agent is not None
-            assert len(agent.watching_directories) > 0, "Agent not watching any directories"
+            assert (
+                len(agent.watching_directories) > 0
+            ), "Agent not watching any directories"
 
             # Create a test file
             test_file = Path(tmpdir) / "test.txt"
             test_file.write_text("Hello from integration test")
 
-            # Give watcher time to detect file
-            time.sleep(2)
+            # Wait for watcher to detect file (retry to avoid flakiness on slow CI)
+            detected = False
+            for _ in range(10):
+                time.sleep(1)
+                if any(f["name"] == "test.txt" for f in agent.processed_files):
+                    detected = True
+                    break
 
             # Verify file was processed
-            assert len(agent.processed_files) > 0, "No files were processed"
-            assert any(f["name"] == "test.txt" for f in agent.processed_files), "test.txt not in processed files"
+            assert (
+                detected
+            ), "test.txt was not detected by file watcher within 10 seconds"
 
             agent.stop_all_watchers()
 
@@ -145,18 +172,21 @@ class TestMCPAgents:
     def test_weather_agent_structure(self):
         """Test WeatherAgent has correct structure."""
         from weather_agent import WeatherAgent
+
         assert hasattr(WeatherAgent, "_get_system_prompt")
         assert hasattr(WeatherAgent, "_register_tools")
 
     def test_mcp_config_agent_structure(self):
         """Test MCPAgent has correct structure."""
         from mcp_config_based_agent import MCPAgent
+
         assert hasattr(MCPAgent, "_get_system_prompt")
         assert hasattr(MCPAgent, "_register_tools")
 
     def test_time_agent_structure(self):
         """Test TimeAgent has correct structure."""
         from mcp_time_server_agent import TimeAgent
+
         assert hasattr(TimeAgent, "_get_system_prompt")
         assert hasattr(TimeAgent, "_register_tools")
 
@@ -179,6 +209,7 @@ class TestSDAgentExample:
     def test_import(self):
         """Test that SD example can be imported."""
         import sd_agent_example
+
         assert sd_agent_example is not None
 
 
@@ -188,6 +219,7 @@ class TestWindowsSystemHealthAgent:
     def test_import_and_structure(self):
         """Test that WindowsSystemHealthAgent has correct structure."""
         from mcp_windows_system_health_agent import WindowsSystemHealthAgent
+
         assert hasattr(WindowsSystemHealthAgent, "_get_system_prompt")
         assert hasattr(WindowsSystemHealthAgent, "_register_tools")
 

@@ -21,7 +21,8 @@ Examples:
     You: What's the temperature in Tokyo?
 """
 
-from gaia import Agent, MCPClientMixin
+from gaia import Agent
+from gaia.mcp import MCPClientMixin
 
 
 class WeatherAgent(Agent, MCPClientMixin):
