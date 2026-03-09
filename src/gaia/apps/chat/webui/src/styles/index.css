@@ -1,11 +1,18 @@
 /* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
 /* SPDX-License-Identifier: MIT */
-/* GAIA Chat UI - Global Styles */
+/* GAIA Chat UI - Global Styles
+ * Design inspired by modern dark-mode developer tools with AMD brand accents.
+ */
 
 :root {
     --amd-red: #ED1C24;
     --amd-red-dark: #C8171E;
     --amd-red-light: #F4484D;
+
+    /* Accent colors for status indicators */
+    --accent-green: #22c55e;
+    --accent-yellow: #f59e0b;
+    --accent-blue: #3b82f6;
 
     --bg-primary: #ffffff;
     --bg-secondary: #f8f9fa;
@@ -16,7 +23,7 @@
     --bg-active: #e5e7eb;
     --bg-code: #1e1e1e;
     --bg-user-msg: transparent;
-    --bg-modal-overlay: rgba(0, 0, 0, 0.4);
+    --bg-modal-overlay: rgba(0, 0, 0, 0.5);
 
     --text-primary: #111827;
     --text-secondary: #6b7280;
@@ -36,35 +43,38 @@
     --radius-xl: 24px;
     --radius-full: 9999px;
 
-    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Consolas', 'Monaco', monospace;
 
     --sidebar-w: 300px;
     --ease: cubic-bezier(0.4, 0, 0.2, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
     --duration: 200ms;
+    --duration-fast: 150ms;
 }
 
 [data-theme="dark"] {
-    --bg-primary: #111111;
-    --bg-secondary: #1c1c1c;
-    --bg-tertiary: #272727;
-    --bg-sidebar: #0e0e0e;
-    --bg-input: #1a1a1a;
-    --bg-hover: #2a2a2a;
-    --bg-active: #353535;
-    --bg-code: #0a0a0a;
-    --bg-user-msg: #191919;
+    --bg-primary: #0d0d0d;
+    --bg-secondary: #161616;
+    --bg-tertiary: #1e1e1e;
+    --bg-sidebar: #0a0a0a;
+    --bg-input: #141414;
+    --bg-hover: #222222;
+    --bg-active: #2a2a2a;
+    --bg-code: #080808;
+    --bg-user-msg: #141414;
+    --bg-modal-overlay: rgba(0, 0, 0, 0.65);
 
-    --text-primary: #ececec;
-    --text-secondary: #9ca3af;
-    --text-muted: #6b7280;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #6e7681;
 
-    --border: #303030;
-    --border-light: #222222;
+    --border: #262626;
+    --border-light: #1a1a1a;
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
-    --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.5);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
+    --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.6);
 }
 
 /* Reset */
@@ -87,7 +97,8 @@ a { color: var(--amd-red); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
 /* Layout */
-.app { display: flex; height: 100vh; position: relative; }
+.app { display: flex; height: 100vh; height: 100dvh; position: relative; }
+.main-content { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 
 /* Focus indicators for keyboard accessibility */
 :focus-visible {
@@ -103,12 +114,13 @@ textarea:focus-visible {
 }
 
 /* Scrollbar */
-::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
-/* Shared utilities */
+/* ── Shared Button Utilities ──────────────────────────────────────── */
+
 .btn-primary {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 10px 24px;
@@ -117,7 +129,14 @@ textarea:focus-visible {
     font-weight: 600; font-size: 14px;
     transition: all var(--duration) var(--ease);
 }
-.btn-primary:hover { background: var(--amd-red-dark); transform: translateY(-1px); box-shadow: var(--shadow-md); }
+.btn-primary:hover {
+    background: var(--amd-red-dark);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(237, 28, 36, 0.3);
+}
+.btn-primary:active {
+    transform: translateY(0);
+}
 
 .btn-secondary {
     display: inline-flex; align-items: center; gap: 6px;
@@ -126,7 +145,11 @@ textarea:focus-visible {
     font-weight: 500; font-size: 13px;
     transition: all var(--duration) var(--ease);
 }
-.btn-secondary:hover { border-color: var(--amd-red); color: var(--amd-red); }
+.btn-secondary:hover {
+    border-color: var(--amd-red);
+    color: var(--amd-red);
+    background: rgba(237, 28, 36, 0.04);
+}
 
 .btn-danger {
     display: inline-flex; align-items: center; gap: 6px;
@@ -153,18 +176,22 @@ textarea:focus-visible {
 }
 .btn-icon-sm:hover { background: var(--bg-hover); color: var(--text-primary); }
 
-/* Modal base */
+/* ── Modal Base ──────────────────────────────────────────────────── */
+
 .modal-overlay {
     position: fixed; inset: 0; z-index: 100;
     background: var(--bg-modal-overlay);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
     display: flex; align-items: center; justify-content: center;
-    animation: fadeIn 150ms var(--ease);
+    animation: fadeIn var(--duration-fast) var(--ease);
 }
 
 .modal-panel {
     position: relative;
     width: 560px; max-width: 92%; max-height: 85vh;
     background: var(--bg-primary);
+    border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg);
     display: flex; flex-direction: column;
@@ -181,14 +208,17 @@ textarea:focus-visible {
 
 .modal-body { padding: 20px; overflow-y: auto; flex: 1; }
 
-/* Sidebar overlay for mobile */
+/* ── Sidebar Overlay (Mobile) ────────────────────────────────────── */
+
 .sidebar-overlay {
     display: none;
     position: fixed;
     inset: 0;
     z-index: 49;
-    background: rgba(0, 0, 0, 0.5);
-    animation: fadeIn 150ms var(--ease);
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    animation: fadeIn var(--duration-fast) var(--ease);
 }
 
 /* Hamburger toggle for mobile */
@@ -211,7 +241,8 @@ textarea:focus-visible {
 }
 .sidebar-toggle:hover { background: var(--bg-hover); }
 
-/* Loading spinner */
+/* ── Loading Spinner ─────────────────────────────────────────────── */
+
 .loading-spinner {
     display: flex;
     align-items: center;
@@ -230,7 +261,8 @@ textarea:focus-visible {
     animation: spin 0.8s linear infinite;
 }
 
-/* Toast notification */
+/* ── Toast Notification ──────────────────────────────────────────── */
+
 .toast {
     position: fixed;
     bottom: 24px;
@@ -262,13 +294,12 @@ textarea:focus-visible {
     text-decoration: underline;
 }
 
+/* ── Animations ──────────────────────────────────────────────────── */
+
 @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
 @keyframes toastOut { from { opacity: 1; } to { opacity: 0; } }
-
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-
-/* Animations */
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 @keyframes bounce {
@@ -276,6 +307,10 @@ textarea:focus-visible {
     50% { transform: translateY(-5px); }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes glow {
+    0%, 100% { box-shadow: 0 0 4px rgba(237, 28, 36, 0.2); }
+    50% { box-shadow: 0 0 12px rgba(237, 28, 36, 0.4); }
+}
 
 /* ── Responsive: Tablet (<= 900px) ─────────────────────────────── */
 @media (max-width: 900px) {
@@ -340,6 +375,15 @@ textarea:focus-visible {
     .modal-panel {
         max-width: 96%;
         max-height: 90vh;
+    }
+
+    /* Larger touch targets on mobile */
+    .btn-icon { width: 44px; height: 44px; }
+    .btn-icon-sm { width: 36px; height: 36px; }
+
+    /* Prevent iOS zoom on focus */
+    input, textarea, select {
+        font-size: 16px !important;
     }
 }
 

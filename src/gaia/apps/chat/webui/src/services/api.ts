@@ -3,7 +3,7 @@
 
 /** API client for GAIA Chat UI backend. */
 
-import type { Session, Message, Document, SystemStatus, StreamEvent } from '../types';
+import type { Session, Message, Document, SystemStatus, StreamEvent, TunnelStatus } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -171,6 +171,7 @@ export function sendMessageStream(
 
             const decoder = new TextDecoder();
             let buffer = '';
+            let doneReceived = false;
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -201,6 +202,7 @@ export function sendMessageStream(
                                 // Agent final answer - treat as content
                                 callbacks.onChunk(event);
                             } else if (event.type === 'done') {
+                                doneReceived = true;
                                 log.stream.timed(`Stream complete: ${chunkCount} chunks, ${totalChars} chars, ${agentEventCount} agent events`, t);
                                 callbacks.onDone(event);
                             } else if (event.type === 'error') {
@@ -220,9 +222,11 @@ export function sendMessageStream(
                 }
             }
 
-            // If no explicit done event was sent, signal completion
-            log.stream.timed(`SSE connection closed: ${chunkCount} chunks, ${agentEventCount} agent events`, t);
-            callbacks.onDone({ type: 'done' });
+            // Only signal completion if no explicit done event was received during the stream
+            if (!doneReceived) {
+                log.stream.timed(`SSE connection closed without done event: ${chunkCount} chunks, ${agentEventCount} agent events`, t);
+                callbacks.onDone({ type: 'done' });
+            }
         })
         .catch((err) => {
             if (err.name === 'AbortError') {
@@ -256,4 +260,18 @@ export async function attachDocument(sessionId: string, documentId: string): Pro
 
 export async function detachDocument(sessionId: string, documentId: string): Promise<void> {
     return apiFetch('DELETE', `/sessions/${sessionId}/documents/${documentId}`);
+}
+
+// -- Mobile Access / Tunnel -------------------------------------------------------
+
+export async function startTunnel(): Promise<TunnelStatus> {
+    return apiFetch('POST', '/tunnel/start');
+}
+
+export async function stopTunnel(): Promise<{ active: boolean }> {
+    return apiFetch('POST', '/tunnel/stop');
+}
+
+export async function getTunnelStatus(): Promise<TunnelStatus> {
+    return apiFetch('GET', '/tunnel/status');
 }

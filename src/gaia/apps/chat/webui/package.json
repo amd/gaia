@@ -1,6 +1,6 @@
 {
   "name": "@amd-gaia/chat",
-  "version": "0.15.4.1",
+  "version": "0.16.0",
   "type": "module",
   "productName": "GAIA Chat",
   "description": "Privacy-first AI chat with document Q&A - runs 100% locally on AMD Ryzen AI",
@@ -34,10 +34,14 @@
   "files": [
     "bin/",
     "dist/",
-    "package.json",
+    "main.cjs",
+    "app.config.json",
     "README.md",
     "LICENSE"
   ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
@@ -52,6 +56,7 @@
   },
   "dependencies": {
     "lucide-react": "^0.312.0",
+    "qrcode": "^1.5.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "zustand": "^4.5.0"

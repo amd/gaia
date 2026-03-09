@@ -54,6 +54,18 @@ export interface SystemStatus {
     version: string;
 }
 
+// ── Mobile Access / Tunnel Types ─────────────────────────────────────────
+
+/** Status of the ngrok tunnel for mobile access. */
+export interface TunnelStatus {
+    active: boolean;
+    url: string | null;
+    token: string | null;
+    startedAt: string | null;
+    error: string | null;
+    publicIp: string | null;
+}
+
 // ── Agent Activity Types ──────────────────────────────────────────────────
 
 /** A single step in the agent's execution. */

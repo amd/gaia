@@ -6,7 +6,7 @@ name: Publish GAIA Chat to npm
 on:
   push:
     tags:
-      - 'chat-v*'
+      - 'v*'
 
 # Cancel previous publish when a new version is released
 concurrency:
@@ -25,6 +25,16 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag is on main
+        run: |
+          if ! git merge-base --is-ancestor ${{ github.sha }} origin/main; then
+            echo "ERROR: Tag ${{ github.ref_name }} is not on the main branch. Aborting."
+            exit 1
+          fi
+          echo "Tag ${{ github.ref_name }} verified on main"
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -70,21 +80,41 @@ jobs:
           node --check bin/gaia-chat.mjs
           echo "CLI entry point verified"
 
-      - name: Verify tag matches version.py
+      - name: Verify all versions match (tag, version.py, package.json, built app)
         run: |
-          TAG_VERSION=${GITHUB_REF#refs/tags/chat-v}
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
           PY_VERSION=$(python -c "import re; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('src/gaia/version.py').read()).group(1))")
-          echo "Git tag:    chat-v$TAG_VERSION"
-          echo "version.py: $PY_VERSION"
+          PKG_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('src/gaia/apps/chat/webui/package.json','utf8')).version)")
+          ESCAPED=$(echo "$PY_VERSION" | sed 's/\./\\./g')
+          APP_VERSION=$(grep -o "\"${ESCAPED}\"" src/gaia/apps/chat/webui/dist/assets/index-*.js | head -1 | tr -d '"' || echo "NOT_FOUND")
+
+          echo "=== Version Check ==="
+          echo "  Git tag:      v$TAG_VERSION"
+          echo "  version.py:   $PY_VERSION"
+          echo "  package.json: $PKG_VERSION"
+          echo "  Built app:    $APP_VERSION"
+          echo ""
+
+          FAIL=0
           if [ "$PY_VERSION" != "$TAG_VERSION" ]; then
+            echo "FAIL: version.py ($PY_VERSION) != tag (v$TAG_VERSION)"
+            FAIL=1
+          fi
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "FAIL: package.json ($PKG_VERSION) != tag (v$TAG_VERSION)"
+            FAIL=1
+          fi
+          if [ "$APP_VERSION" != "$PY_VERSION" ]; then
+            echo "FAIL: Built app version ($APP_VERSION) != version.py ($PY_VERSION)"
+            FAIL=1
+          fi
+
+          if [ "$FAIL" -eq 1 ]; then
             echo ""
-            echo "ERROR: version.py ($PY_VERSION) does not match tag (chat-v$TAG_VERSION)"
+            echo 'Run "node scripts/bump-chat-version.mjs" to sync package.json, then rebuild.'
             exit 1
           fi
-          echo "version.py matches tag"
-
-      - name: Verify package.json version matches version.py
-        run: node scripts/bump-chat-version.mjs --check
+          echo "All versions match: v$TAG_VERSION"
 
       - name: Install Python dependencies and run backend tests
         run: |
@@ -96,7 +126,6 @@ jobs:
     name: Publish to npm
     needs: build-and-test
     runs-on: ubuntu-latest
-    environment: npm-publish
     permissions:
       contents: read
       id-token: write
@@ -127,7 +156,7 @@ jobs:
 
       - name: Published successfully
         run: |
-          TAG_VERSION=${GITHUB_REF#refs/tags/chat-v}
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
           echo "Successfully published @amd-gaia/chat@$TAG_VERSION to npm"
           echo ""
           echo "Install with:"

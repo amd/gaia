@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState, useEffect } from 'react';
 import { Copy, Check, AlertTriangle } from 'lucide-react';
 import type { Message } from '../types';
 import './MessageBubble.css';
@@ -29,11 +29,22 @@ function isErrorContent(content: string): boolean {
 export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     const [copied, setCopied] = useState(false);
+    const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Clean up copy timer on unmount to avoid setState on unmounted component
+    useEffect(() => {
+        return () => {
+            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+        };
+    }, []);
 
     const handleCopy = useCallback(() => {
-        navigator.clipboard.writeText(message.content);
+        navigator.clipboard.writeText(message.content).catch(() => {
+            // Fallback: clipboard API may be unavailable in non-secure contexts
+        });
         setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+        if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
     }, [message.content]);
 
     return (
@@ -96,11 +107,21 @@ function CodeBlock({ raw }: { raw: string }) {
     const code = match?.[2]?.trimEnd() || raw.slice(3, -3);
 
     const [copied, setCopied] = useState(false);
+    const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    useEffect(() => {
+        return () => {
+            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+        };
+    }, []);
 
     const handleCopy = useCallback(() => {
-        navigator.clipboard.writeText(code);
+        navigator.clipboard.writeText(code).catch(() => {
+            // Fallback: clipboard API may be unavailable in non-secure contexts
+        });
         setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+        if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
     }, [code]);
 
     return (
@@ -164,12 +185,8 @@ function renderInline(text: string): React.ReactNode {
         if (part.startsWith('`') && part.endsWith('`')) {
             return <code key={i} className="inline-code">{part.slice(1, -1)}</code>;
         }
-        // Bold
-        let processed: string = part;
-        const elements: React.ReactNode[] = [];
-
-        // Simple approach: just return text with bold/italic
-        const boldParts = processed.split(/(\*\*[^*]+\*\*)/g);
+        // Bold/italic parsing
+        const boldParts = part.split(/(\*\*[^*]+\*\*)/g);
         return boldParts.map((bp, j) => {
             if (bp.startsWith('**') && bp.endsWith('**')) {
                 return <strong key={`${i}-${j}`}>{bp.slice(2, -2)}</strong>;

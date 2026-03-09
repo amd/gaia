@@ -4,7 +4,7 @@
 /** Zustand store for GAIA Chat UI state. */
 
 import { create } from 'zustand';
-import type { Session, Message, Document, AgentStep } from '../types';
+import type { Session, Message, Document, AgentStep, SystemStatus } from '../types';
 
 interface ChatState {
     // Sessions
@@ -37,6 +37,12 @@ interface ChatState {
     // Documents
     documents: Document[];
     setDocuments: (docs: Document[]) => void;
+
+    // Connection / system status
+    systemStatus: SystemStatus | null;
+    backendConnected: boolean;
+    setSystemStatus: (status: SystemStatus | null) => void;
+    setBackendConnected: (connected: boolean) => void;
 
     // UI state
     theme: 'light' | 'dark';
@@ -113,24 +119,35 @@ export const useChatStore = create<ChatState>((set, get) => ({
     documents: [],
     setDocuments: (docs) => set({ documents: docs }),
 
+    // Connection / system status
+    systemStatus: null,
+    backendConnected: true, // Assume connected until proven otherwise
+    setSystemStatus: (status) => set({ systemStatus: status }),
+    setBackendConnected: (connected) => set({ backendConnected: connected }),
+
     // UI
-    theme: (localStorage.getItem('gaia-chat-theme') as 'light' | 'dark') || 'dark',
+    theme: (() => {
+        try { return (localStorage.getItem('gaia-chat-theme') as 'light' | 'dark') || 'dark'; }
+        catch { return 'dark'; }
+    })(),
     showDocLibrary: false,
     showSettings: false,
     toggleTheme: () =>
         set((state) => {
             const next = state.theme === 'dark' ? 'light' : 'dark';
-            localStorage.setItem('gaia-chat-theme', next);
+            try { localStorage.setItem('gaia-chat-theme', next); } catch { /* noop */ }
             document.documentElement.setAttribute('data-theme', next);
             return { theme: next };
         }),
     sidebarOpen: typeof window !== 'undefined' ? window.innerWidth > 768 : true,
-    sidebarCollapsed: typeof window !== 'undefined'
-        ? localStorage.getItem('gaia-chat-sidebar-collapsed') === 'true'
-        : false,
-    sidebarWidth: typeof window !== 'undefined'
-        ? parseInt(localStorage.getItem('gaia-chat-sidebar-width') || '300', 10)
-        : 300,
+    sidebarCollapsed: (() => {
+        try { return typeof window !== 'undefined' && localStorage.getItem('gaia-chat-sidebar-collapsed') === 'true'; }
+        catch { return false; }
+    })(),
+    sidebarWidth: (() => {
+        try { return typeof window !== 'undefined' ? parseInt(localStorage.getItem('gaia-chat-sidebar-width') || '300', 10) : 300; }
+        catch { return 300; }
+    })(),
     isLoadingMessages: false,
     setShowDocLibrary: (show) => set({ showDocLibrary: show }),
     setShowSettings: (show) => set({ showSettings: show }),
@@ -139,16 +156,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     toggleSidebarCollapsed: () =>
         set((state) => {
             const next = !state.sidebarCollapsed;
-            localStorage.setItem('gaia-chat-sidebar-collapsed', String(next));
+            try { localStorage.setItem('gaia-chat-sidebar-collapsed', String(next)); } catch { /* noop */ }
             return { sidebarCollapsed: next };
         }),
     setSidebarCollapsed: (collapsed) => {
-        localStorage.setItem('gaia-chat-sidebar-collapsed', String(collapsed));
+        try { localStorage.setItem('gaia-chat-sidebar-collapsed', String(collapsed)); } catch { /* noop */ }
         set({ sidebarCollapsed: collapsed });
     },
     setSidebarWidth: (width) => {
         const clamped = Math.max(200, Math.min(500, width));
-        localStorage.setItem('gaia-chat-sidebar-width', String(clamped));
+        try { localStorage.setItem('gaia-chat-sidebar-width', String(clamped)); } catch { /* noop */ }
         set({ sidebarWidth: clamped });
     },
     setLoadingMessages: (loading) => set({ isLoadingMessages: loading }),

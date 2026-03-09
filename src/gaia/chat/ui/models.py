@@ -68,7 +68,7 @@ class ChatRequest(BaseModel):
     """Request to send a chat message."""
 
     session_id: str
-    message: str
+    message: str = Field(..., max_length=100_000)
     document_ids: Optional[List[str]] = None
     stream: bool = True
 

@@ -18,11 +18,9 @@ const EMPTY_SUGGESTIONS = [
     'Help me brainstorm ideas',
 ];
 
-let stepIdCounter = 0;
-
 /** Map an SSE agent event to an AgentStep for the UI. */
-function agentEventToStep(event: StreamEvent): AgentStep | null {
-    const id = ++stepIdCounter;
+function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<number>): AgentStep | null {
+    const id = ++stepIdRef.current;
     const ts = Date.now();
 
     switch (event.type) {
@@ -86,6 +84,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const messagesScrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const abortRef = useRef<AbortController | null>(null);
+    const stepIdRef = useRef(0);
 
     // Load messages on mount
     useEffect(() => {
@@ -134,6 +133,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     // Focus input
     useEffect(() => { inputRef.current?.focus(); }, [sessionId]);
+
+    // Abort active stream when component unmounts (e.g., switching sessions)
+    useEffect(() => {
+        return () => {
+            if (abortRef.current) {
+                abortRef.current.abort();
+                abortRef.current = null;
+            }
+        };
+    }, [sessionId]);
 
     // Track scroll position for scroll-to-bottom button
     const handleScroll = useCallback(() => {
@@ -211,7 +220,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         clearStreamContent();
         clearAgentSteps();
         setCompletedSteps([]);
-        stepIdCounter = 0;
+        stepIdRef.current = 0;
 
         log.stream.info('Starting agent stream...');
         const streamStart = log.stream.time();
@@ -249,7 +258,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return; // Step headers are redundant with actual tool/thinking steps
                 }
 
-                const step = agentEventToStep(event);
+                const step = agentEventToStep(event, stepIdRef);
                 if (step) addAgentStep(step);
             },
             onDone: (event) => {
@@ -292,11 +301,30 @@ export function ChatView({ sessionId }: ChatViewProps) {
             },
             onError: (err) => {
                 log.chat.error(`Chat error for session=${sessionId}`, err);
+                // Provide a user-friendly error message based on the error type
+                let errorContent: string;
+                const msg = err.message || '';
+                if (msg.includes('Lemonade') || msg.includes('LLM') || msg.includes('Could not get response')) {
+                    errorContent =
+                        'Could not reach the LLM server. Make sure Lemonade Server is running:\n\n' +
+                        '```\nlemonade-server serve\n```\n\n' +
+                        'Then try sending your message again.';
+                } else if (err instanceof TypeError || msg.includes('fetch') || msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+                    errorContent =
+                        'Cannot connect to the GAIA Chat server. Make sure the backend is running:\n\n' +
+                        '```\ngaia chat --ui\n```';
+                } else if (msg.includes('500')) {
+                    errorContent =
+                        'The server encountered an error. This usually means Lemonade Server is not running or the model failed to load.\n\n' +
+                        'Start Lemonade Server with:\n```\nlemonade-server serve\n```';
+                } else {
+                    errorContent = `Error: ${msg}`;
+                }
                 const errMsg: Message = {
                     id: Date.now() + 2,
                     session_id: sessionId,
                     role: 'assistant',
-                    content: `Error: ${err.message}. Is the GAIA Chat server running?`,
+                    content: errorContent,
                     created_at: new Date().toISOString(),
                     rag_sources: null,
                 };
@@ -339,7 +367,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `${session?.title || 'chat'}.md`;
+            // Sanitize title for use as filename: remove path separators and special chars
+            const safeTitle = (session?.title || 'chat').replace(/[/\\:*?"<>|]/g, '_').slice(0, 100);
+            a.download = `${safeTitle}.md`;
             a.click();
             URL.revokeObjectURL(url);
         } catch (err) {

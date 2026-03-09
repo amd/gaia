@@ -41,6 +41,7 @@ from .models import (
     SystemStatus,
     UpdateSessionRequest,
 )
+from .tunnel import TunnelManager
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +64,18 @@ def create_app(db_path: str = None) -> FastAPI:
         version="0.1.0",
     )
 
-    # CORS - allow local connections
+    # CORS - allow local origins and tunnel URLs for mobile access
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=[
+            "http://localhost:4200",
+            "http://127.0.0.1:4200",
+            "http://localhost:5174",
+            "http://127.0.0.1:5174",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ],
+        allow_origin_regex=r"https://.*\.ngrok.*\.app",  # Allow ngrok tunnel origins
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -77,6 +86,10 @@ def create_app(db_path: str = None) -> FastAPI:
 
     # Store db on app state so it's accessible
     app.state.db = db
+
+    # Initialize tunnel manager for mobile access
+    tunnel = TunnelManager(port=DEFAULT_PORT)
+    app.state.tunnel = tunnel
 
     # ── System Endpoints ────────────────────────────────────────────────
 
@@ -170,6 +183,8 @@ def create_app(db_path: str = None) -> FastAPI:
     @app.get("/api/sessions", response_model=SessionListResponse)
     async def list_sessions(limit: int = 50, offset: int = 0):
         """List all chat sessions."""
+        limit = max(1, min(limit, 200))
+        offset = max(0, offset)
         sessions = db.list_sessions(limit=limit, offset=offset)
         total = db.count_sessions()
         return SessionListResponse(
@@ -180,13 +195,20 @@ def create_app(db_path: str = None) -> FastAPI:
     @app.post("/api/sessions", response_model=SessionResponse)
     async def create_session(request: CreateSessionRequest):
         """Create a new chat session."""
-        session = db.create_session(
-            title=request.title,
-            model=request.model,
-            system_prompt=request.system_prompt,
-            document_ids=request.document_ids,
-        )
-        return _session_to_response(session)
+        try:
+            session = db.create_session(
+                title=request.title,
+                model=request.model,
+                system_prompt=request.system_prompt,
+                document_ids=request.document_ids,
+            )
+            return _session_to_response(session)
+        except Exception as e:
+            logger.error("Failed to create session: %s", e, exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to create session: {e}",
+            )
 
     @app.get("/api/sessions/{session_id}", response_model=SessionResponse)
     async def get_session(session_id: str):
@@ -216,6 +238,8 @@ def create_app(db_path: str = None) -> FastAPI:
     @app.get("/api/sessions/{session_id}/messages", response_model=MessageListResponse)
     async def get_messages(session_id: str, limit: int = 100, offset: int = 0):
         """Get messages for a session."""
+        limit = max(1, min(limit, 10000))
+        offset = max(0, offset)
         session = db.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
@@ -229,15 +253,16 @@ def create_app(db_path: str = None) -> FastAPI:
         )
 
     @app.get("/api/sessions/{session_id}/export")
-    async def export_session(session_id: str, format: str = "markdown"):
-        """Export session to markdown."""
+    async def export_session(session_id: str, format: str = "markdown"):  # noqa: A002
+        """Export session to markdown or JSON."""
+        export_format = format  # Avoid shadowing builtin in function body
         session = db.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
 
         messages = db.get_messages(session_id, limit=10000)
 
-        if format == "markdown":
+        if export_format == "markdown":
             lines = [f"# {session['title']}\n"]
             lines.append(f"*Created: {session['created_at']}*\n")
             lines.append(f"*Model: {session['model']}*\n\n---\n")
@@ -248,10 +273,13 @@ def create_app(db_path: str = None) -> FastAPI:
 
             content = "\n".join(lines)
             return {"content": content, "format": "markdown"}
-        elif format == "json":
+        elif export_format == "json":
             return {"session": session, "messages": messages, "format": "json"}
         else:
-            raise HTTPException(status_code=400, detail=f"Unsupported format: {format}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported format: {export_format}",
+            )
 
     # ── Chat Endpoint ───────────────────────────────────────────────────
 
@@ -359,6 +387,37 @@ def create_app(db_path: str = None) -> FastAPI:
         """Detach a document from a session."""
         db.detach_document(session_id, doc_id)
         return {"detached": True}
+
+    # ── Mobile Access / Tunnel Endpoints ─────────────────────────────────
+
+    @app.post("/api/tunnel/start")
+    async def start_tunnel():
+        """Start ngrok tunnel for mobile access."""
+        try:
+            logger.info("Starting mobile access tunnel...")
+            status = await tunnel.start()
+            return status
+        except Exception as e:
+            error_msg = str(e)
+            logger.error("Failed to start tunnel: %s", error_msg)
+            raise HTTPException(status_code=500, detail=error_msg)
+
+    @app.post("/api/tunnel/stop")
+    async def stop_tunnel():
+        """Stop ngrok tunnel."""
+        try:
+            logger.info("Stopping mobile access tunnel...")
+            await tunnel.stop()
+            return {"active": False}
+        except Exception as e:
+            error_msg = str(e)
+            logger.error("Failed to stop tunnel: %s", error_msg)
+            raise HTTPException(status_code=500, detail=error_msg)
+
+    @app.get("/api/tunnel/status")
+    async def tunnel_status():
+        """Get current tunnel status."""
+        return tunnel.get_status()
 
     # ── Serve Frontend Static Files ──────────────────────────────────────
     # Look for built frontend assets in the webui dist directory
@@ -612,38 +671,71 @@ def _compute_file_hash(filepath: Path) -> str:
 
 
 async def _index_document(filepath: Path) -> int:
-    """Index a document using RAG SDK. Returns chunk count."""
-    try:
+    """Index a document using RAG SDK. Returns chunk count.
+
+    Runs the synchronous RAG indexing in a thread pool executor
+    to avoid blocking the async event loop.
+    """
+
+    def _do_index():
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
         config = RAGConfig()
         rag = RAGSDK(config)
         result = rag.index_file(str(filepath))  # pylint: disable=no-member
         return result.get("chunk_count", 0) if isinstance(result, dict) else 0
+
+    try:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _do_index)
     except Exception as e:
         logger.warning("Failed to index document %s: %s", filepath, e)
         return 0
 
 
+def _build_history_pairs(
+    messages: list,
+) -> list:
+    """Build user/assistant conversation pairs from message history.
+
+    Iterates messages sequentially and pairs adjacent user→assistant messages.
+    Unpaired messages (e.g., a user message without a following assistant reply
+    due to a prior streaming error) are safely skipped without misaligning
+    subsequent pairs.
+
+    Returns:
+        List of (user_content, assistant_content) tuples.
+    """
+    pairs = []
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+        if msg["role"] == "user" and i + 1 < len(messages):
+            next_msg = messages[i + 1]
+            if next_msg["role"] == "assistant":
+                pairs.append((msg["content"], next_msg["content"]))
+                i += 2
+                continue
+        # Skip unpaired or system messages
+        i += 1
+    return pairs
+
+
 async def _get_chat_response(
     db: ChatDatabase, session: dict, request: ChatRequest
 ) -> str:
-    """Get a non-streaming chat response from the LLM."""
-    try:
+    """Get a non-streaming chat response from the LLM.
+
+    Runs the synchronous ChatSDK.send() in a thread pool executor
+    to avoid blocking the async event loop.
+    """
+
+    def _do_chat():
         from gaia.chat.sdk import ChatConfig, ChatSDK
 
         # Build conversation history from database
         messages = db.get_messages(request.session_id, limit=20)
-        history_pairs = []
-        for i in range(0, len(messages) - 1, 2):
-            if (
-                i + 1 < len(messages)
-                and messages[i]["role"] == "user"
-                and messages[i + 1]["role"] == "assistant"
-            ):
-                history_pairs.append(
-                    (messages[i]["content"], messages[i + 1]["content"])
-                )
+        history_pairs = _build_history_pairs(messages)
 
         config = ChatConfig(
             model=session.get("model", "Qwen3-Coder-30B-A3B-Instruct-GGUF"),
@@ -659,6 +751,9 @@ async def _get_chat_response(
         response = chat.send(request.message)
         return response.text
 
+    try:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _do_chat)
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
         return "Error: Could not get response from LLM. Is Lemonade Server running? Check server logs for details."
@@ -681,16 +776,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
         # Build conversation history for agent context
         messages = db.get_messages(request.session_id, limit=20)
-        history_pairs = []
-        for i in range(0, len(messages) - 1, 2):
-            if (
-                i + 1 < len(messages)
-                and messages[i]["role"] == "user"
-                and messages[i + 1]["role"] == "assistant"
-            ):
-                history_pairs.append(
-                    (messages[i]["content"], messages[i + 1]["content"])
-                )
+        history_pairs = _build_history_pairs(messages)
 
         # Create SSE output handler to capture agent events
         sse_handler = SSEOutputHandler()
@@ -734,11 +820,13 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
         # Yield SSE events from the handler's queue
         full_response = ""
+        idle_cycles = 0
         while True:
             try:
-                event = await asyncio.get_event_loop().run_in_executor(
+                event = await asyncio.get_running_loop().run_in_executor(
                     None, lambda: sse_handler.event_queue.get(timeout=0.2)
                 )
+                idle_cycles = 0
                 if event is None:
                     # Sentinel - agent is done
                     break
@@ -754,6 +842,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             except queue.Empty:
                 if not producer.is_alive():
                     break
+                # Send SSE comment as keepalive every ~5s (25 cycles × 0.2s)
+                # to prevent proxies/browsers from closing idle connections
+                idle_cycles += 1
+                if idle_cycles % 25 == 0:
+                    yield ": keepalive\n\n"
                 continue
 
         # Check for errors from the agent thread
@@ -761,8 +854,12 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             error_msg = f"Agent error: {result_holder['error']}"
             if not full_response:
                 full_response = error_msg
-                error_data = json.dumps({"type": "error", "content": error_msg})
-                yield f"data: {error_data}\n\n"
+            else:
+                # Partial response exists — append error notice so user knows
+                # the response may be incomplete
+                full_response += f"\n\n[Error: {result_holder['error']}]"
+            error_data = json.dumps({"type": "error", "content": error_msg})
+            yield f"data: {error_data}\n\n"
 
         # Use agent result if no streamed answer was captured
         if not full_response and result_holder["answer"]:

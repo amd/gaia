@@ -9,6 +9,7 @@ Manages sessions, messages, documents, and their relationships using SQLite.
 import json
 import logging
 import sqlite3
+import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -83,6 +84,7 @@ class ChatDatabase:
             db_path = str(DEFAULT_DB_PATH)
 
         self._db_path = db_path
+        self._lock = threading.RLock()
 
         if db_path != ":memory:":
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -106,13 +108,14 @@ class ChatDatabase:
 
     @contextmanager
     def _transaction(self):
-        """Execute operations atomically."""
-        try:
-            yield
-            self._conn.commit()
-        except Exception:
-            self._conn.rollback()
-            raise
+        """Execute operations atomically with thread safety."""
+        with self._lock:
+            try:
+                yield
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def _now(self) -> str:
         """Current UTC timestamp as ISO string."""
@@ -154,54 +157,57 @@ class ChatDatabase:
 
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get session by ID with message count and document IDs."""
-        row = self._conn.execute(
-            """SELECT s.*,
-                      (SELECT COUNT(*) FROM messages WHERE session_id = s.id) as message_count
-               FROM sessions s WHERE s.id = ?""",
-            (session_id,),
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT s.*,
+                          (SELECT COUNT(*) FROM messages WHERE session_id = s.id) as message_count
+                   FROM sessions s WHERE s.id = ?""",
+                (session_id,),
+            ).fetchone()
 
-        if not row:
-            return None
+            if not row:
+                return None
 
-        session = dict(row)
+            session = dict(row)
 
-        # Get attached document IDs
-        doc_rows = self._conn.execute(
-            "SELECT document_id FROM session_documents WHERE session_id = ?",
-            (session_id,),
-        ).fetchall()
-        session["document_ids"] = [r["document_id"] for r in doc_rows]
+            # Get attached document IDs
+            doc_rows = self._conn.execute(
+                "SELECT document_id FROM session_documents WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+            session["document_ids"] = [r["document_id"] for r in doc_rows]
 
-        return session
+            return session
 
     def list_sessions(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
         """List sessions ordered by most recently updated."""
-        rows = self._conn.execute(
-            """SELECT s.*,
-                      (SELECT COUNT(*) FROM messages WHERE session_id = s.id) as message_count
-               FROM sessions s
-               ORDER BY s.updated_at DESC
-               LIMIT ? OFFSET ?""",
-            (limit, offset),
-        ).fetchall()
-
-        sessions = []
-        for row in rows:
-            session = dict(row)
-            doc_rows = self._conn.execute(
-                "SELECT document_id FROM session_documents WHERE session_id = ?",
-                (session["id"],),
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT s.*,
+                          (SELECT COUNT(*) FROM messages WHERE session_id = s.id) as message_count
+                   FROM sessions s
+                   ORDER BY s.updated_at DESC
+                   LIMIT ? OFFSET ?""",
+                (limit, offset),
             ).fetchall()
-            session["document_ids"] = [r["document_id"] for r in doc_rows]
-            sessions.append(session)
 
-        return sessions
+            sessions = []
+            for row in rows:
+                session = dict(row)
+                doc_rows = self._conn.execute(
+                    "SELECT document_id FROM session_documents WHERE session_id = ?",
+                    (session["id"],),
+                ).fetchall()
+                session["document_ids"] = [r["document_id"] for r in doc_rows]
+                sessions.append(session)
+
+            return sessions
 
     def count_sessions(self) -> int:
         """Count total sessions."""
-        row = self._conn.execute("SELECT COUNT(*) as cnt FROM sessions").fetchone()
-        return row["cnt"]
+        with self._lock:
+            row = self._conn.execute("SELECT COUNT(*) as cnt FROM sessions").fetchone()
+            return row["cnt"]
 
     def update_session(
         self, session_id: str, title: str = None, system_prompt: str = None
@@ -242,11 +248,11 @@ class ChatDatabase:
 
     def touch_session(self, session_id: str):
         """Update the session's updated_at timestamp."""
-        self._conn.execute(
-            "UPDATE sessions SET updated_at = ? WHERE id = ?",
-            (self._now(), session_id),
-        )
-        self._conn.commit()
+        with self._transaction():
+            self._conn.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                (self._now(), session_id),
+            )
 
     # ── Messages ────────────────────────────────────────────────────────
 
@@ -291,13 +297,14 @@ class ChatDatabase:
         self, session_id: str, limit: int = 100, offset: int = 0
     ) -> List[Dict[str, Any]]:
         """Get messages for a session, oldest first."""
-        rows = self._conn.execute(
-            """SELECT * FROM messages
-               WHERE session_id = ?
-               ORDER BY created_at ASC
-               LIMIT ? OFFSET ?""",
-            (session_id, limit, offset),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT * FROM messages
+                   WHERE session_id = ?
+                   ORDER BY created_at ASC
+                   LIMIT ? OFFSET ?""",
+                (session_id, limit, offset),
+            ).fetchall()
 
         messages = []
         for row in rows:
@@ -313,11 +320,12 @@ class ChatDatabase:
 
     def count_messages(self, session_id: str) -> int:
         """Count messages in a session."""
-        row = self._conn.execute(
-            "SELECT COUNT(*) as cnt FROM messages WHERE session_id = ?",
-            (session_id,),
-        ).fetchone()
-        return row["cnt"]
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) as cnt FROM messages WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            return row["cnt"]
 
     # ── Documents ───────────────────────────────────────────────────────
 
@@ -329,58 +337,72 @@ class ChatDatabase:
         file_size: int = 0,
         chunk_count: int = 0,
     ) -> Dict[str, Any]:
-        """Add a document to the library. Returns existing doc if hash matches."""
-        # Check if document with same hash already exists
-        existing = self._conn.execute(
-            "SELECT * FROM documents WHERE file_hash = ?", (file_hash,)
-        ).fetchone()
+        """Add a document to the library. Returns existing doc if hash matches.
 
-        if existing:
-            doc = dict(existing)
-            # Update last_accessed_at
-            self._conn.execute(
-                "UPDATE documents SET last_accessed_at = ? WHERE id = ?",
-                (self._now(), doc["id"]),
-            )
-            self._conn.commit()
-            return self._enrich_document(doc)
-
+        Uses a single lock acquisition for the check-then-insert pattern
+        to prevent race conditions with concurrent uploads of the same file.
+        """
         doc_id = str(uuid.uuid4())
         now = self._now()
 
-        with self._transaction():
-            self._conn.execute(
-                """INSERT INTO documents
-                   (id, filename, filepath, file_hash, file_size, chunk_count,
-                    indexed_at, last_accessed_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    doc_id,
-                    filename,
-                    filepath,
-                    file_hash,
-                    file_size,
-                    chunk_count,
-                    now,
-                    now,
-                ),
-            )
+        with self._lock:
+            # Check if document with same hash already exists
+            existing = self._conn.execute(
+                "SELECT * FROM documents WHERE file_hash = ?", (file_hash,)
+            ).fetchone()
+
+            if existing:
+                doc = dict(existing)
+                # Update last_accessed_at
+                self._conn.execute(
+                    "UPDATE documents SET last_accessed_at = ? WHERE id = ?",
+                    (now, doc["id"]),
+                )
+                self._conn.commit()
+                return self._enrich_document(doc)
+
+            # Insert new document (still under lock)
+            try:
+                self._conn.execute(
+                    """INSERT INTO documents
+                       (id, filename, filepath, file_hash, file_size, chunk_count,
+                        indexed_at, last_accessed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        doc_id,
+                        filename,
+                        filepath,
+                        file_hash,
+                        file_size,
+                        chunk_count,
+                        now,
+                        now,
+                    ),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
         return self.get_document(doc_id)
 
     def get_document(self, doc_id: str) -> Optional[Dict[str, Any]]:
         """Get document by ID."""
-        row = self._conn.execute(
-            "SELECT * FROM documents WHERE id = ?", (doc_id,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM documents WHERE id = ?", (doc_id,)
+            ).fetchone()
 
-        if not row:
-            return None
+            if not row:
+                return None
 
-        return self._enrich_document(dict(row))
+            return self._enrich_document(dict(row))
 
     def _enrich_document(self, doc: Dict[str, Any]) -> Dict[str, Any]:
-        """Add sessions_using count to document dict."""
+        """Add sessions_using count to document dict.
+
+        NOTE: Caller must hold self._lock.
+        """
         row = self._conn.execute(
             "SELECT COUNT(*) as cnt FROM session_documents WHERE document_id = ?",
             (doc["id"],),
@@ -390,14 +412,15 @@ class ChatDatabase:
 
     def list_documents(self) -> List[Dict[str, Any]]:
         """List all documents in the library."""
-        rows = self._conn.execute(
-            "SELECT * FROM documents ORDER BY indexed_at DESC"
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM documents ORDER BY indexed_at DESC"
+            ).fetchall()
 
-        docs = []
-        for row in rows:
-            docs.append(self._enrich_document(dict(row)))
-        return docs
+            docs = []
+            for row in rows:
+                docs.append(self._enrich_document(dict(row)))
+            return docs
 
     def delete_document(self, doc_id: str) -> bool:
         """Delete a document from the library."""
@@ -433,39 +456,41 @@ class ChatDatabase:
 
     def get_session_documents(self, session_id: str) -> List[Dict[str, Any]]:
         """Get all documents attached to a session."""
-        rows = self._conn.execute(
-            """SELECT d.* FROM documents d
-               INNER JOIN session_documents sd ON d.id = sd.document_id
-               WHERE sd.session_id = ?
-               ORDER BY sd.attached_at DESC""",
-            (session_id,),
-        ).fetchall()
-        return [self._enrich_document(dict(row)) for row in rows]
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT d.* FROM documents d
+                   INNER JOIN session_documents sd ON d.id = sd.document_id
+                   WHERE sd.session_id = ?
+                   ORDER BY sd.attached_at DESC""",
+                (session_id,),
+            ).fetchall()
+            return [self._enrich_document(dict(row)) for row in rows]
 
     # ── Stats ───────────────────────────────────────────────────────────
 
     def get_stats(self) -> Dict[str, Any]:
         """Get overall database statistics."""
-        sessions = self._conn.execute(
-            "SELECT COUNT(*) as cnt FROM sessions"
-        ).fetchone()["cnt"]
-        messages = self._conn.execute(
-            "SELECT COUNT(*) as cnt FROM messages"
-        ).fetchone()["cnt"]
-        documents = self._conn.execute(
-            "SELECT COUNT(*) as cnt FROM documents"
-        ).fetchone()["cnt"]
-        total_chunks = self._conn.execute(
-            "SELECT COALESCE(SUM(chunk_count), 0) as total FROM documents"
-        ).fetchone()["total"]
-        total_size = self._conn.execute(
-            "SELECT COALESCE(SUM(file_size), 0) as total FROM documents"
-        ).fetchone()["total"]
+        with self._lock:
+            sessions = self._conn.execute(
+                "SELECT COUNT(*) as cnt FROM sessions"
+            ).fetchone()["cnt"]
+            messages = self._conn.execute(
+                "SELECT COUNT(*) as cnt FROM messages"
+            ).fetchone()["cnt"]
+            documents = self._conn.execute(
+                "SELECT COUNT(*) as cnt FROM documents"
+            ).fetchone()["cnt"]
+            total_chunks = self._conn.execute(
+                "SELECT COALESCE(SUM(chunk_count), 0) as total FROM documents"
+            ).fetchone()["total"]
+            total_size = self._conn.execute(
+                "SELECT COALESCE(SUM(file_size), 0) as total FROM documents"
+            ).fetchone()["total"]
 
-        return {
-            "sessions": sessions,
-            "messages": messages,
-            "documents": documents,
-            "total_chunks": total_chunks,
-            "total_size_bytes": total_size,
-        }
+            return {
+                "sessions": sessions,
+                "messages": messages,
+                "documents": documents,
+                "total_chunks": total_chunks,
+                "total_size_bytes": total_size,
+            }

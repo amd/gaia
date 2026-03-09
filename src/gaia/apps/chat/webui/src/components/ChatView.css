@@ -1,4 +1,7 @@
-/* Chat View */
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+/* Chat View - Main conversation interface */
+
 .chat-view {
     flex: 1;
     display: flex;
@@ -14,7 +17,8 @@
     outline-offset: -4px;
 }
 
-/* Header */
+/* ── Header ──────────────────────────────────────────────────────── */
+
 .chat-header {
     display: flex;
     align-items: center;
@@ -23,6 +27,8 @@
     border-bottom: 1px solid var(--border-light);
     min-height: 50px;
     flex-shrink: 0;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
 }
 
 .chat-header-left { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -45,6 +51,11 @@
     outline: none;
     width: 280px;
     max-width: 100%;
+    transition: box-shadow var(--duration) var(--ease);
+}
+
+.title-edit:focus {
+    box-shadow: 0 0 0 3px rgba(237, 28, 36, 0.15);
 }
 
 .model-badge {
@@ -55,9 +66,11 @@
     color: var(--text-secondary);
     font-weight: 500;
     white-space: nowrap;
+    border: 1px solid var(--border);
 }
 
-/* ── Indexed documents context bar ────────────────────────────── */
+/* ── Indexed documents context bar ───────────────────────────────── */
+
 .doc-context-bar {
     display: flex;
     align-items: center;
@@ -93,14 +106,17 @@
     font-style: italic;
 }
 
-/* Messages */
+/* ── Messages area ───────────────────────────────────────────────── */
+
 .messages-scroll {
     flex: 1;
     overflow-y: auto;
     padding: 16px 0;
+    scroll-behavior: smooth;
 }
 
-/* ── Empty chat state ─────────────────────────────────────────── */
+/* ── Empty chat state ────────────────────────────────────────────── */
+
 .empty-chat {
     display: flex;
     flex-direction: column;
@@ -115,21 +131,23 @@
 .empty-chat-icon {
     color: var(--text-muted);
     margin-bottom: 16px;
-    opacity: 0.6;
+    opacity: 0.5;
 }
 
 .empty-chat-title {
-    font-size: 18px;
-    font-weight: 600;
-    margin-bottom: 6px;
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 8px;
     color: var(--text-primary);
+    letter-spacing: -0.3px;
 }
 
 .empty-chat-desc {
     font-size: 14px;
     color: var(--text-secondary);
     margin-bottom: 28px;
-    line-height: 1.5;
+    line-height: 1.6;
+    max-width: 400px;
 }
 
 .empty-chat-suggestions {
@@ -141,7 +159,7 @@
 }
 
 .empty-chat-chip {
-    padding: 7px 16px;
+    padding: 8px 18px;
     border: 1px solid var(--border);
     border-radius: var(--radius-full);
     font-size: 13px;
@@ -152,9 +170,13 @@
 .empty-chat-chip:hover {
     border-color: var(--amd-red);
     color: var(--amd-red);
+    background: rgba(237, 28, 36, 0.04);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-sm);
 }
 
-/* ── Drag overlay ─────────────────────────────────────────────── */
+/* ── Drag overlay ────────────────────────────────────────────────── */
+
 .drag-overlay {
     position: absolute;
     inset: 0;
@@ -163,19 +185,21 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    gap: 10px;
     background: rgba(237, 28, 36, 0.04);
     border: 2px dashed var(--amd-red);
     border-radius: var(--radius-md);
     margin: 8px;
     color: var(--amd-red);
-    font-weight: 500;
-    font-size: 14px;
+    font-weight: 600;
+    font-size: 15px;
     pointer-events: none;
     animation: fadeIn 150ms var(--ease);
+    backdrop-filter: blur(2px);
 }
 
-/* Typing indicator */
+/* ── Typing indicator ────────────────────────────────────────────── */
+
 .typing-row {
     padding: 16px 24px;
     max-width: 900px;
@@ -201,13 +225,15 @@
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--text-muted);
+    background: var(--amd-red);
+    opacity: 0.6;
     animation: bounce 1.4s infinite;
 }
 .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
 .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
 
-/* Input */
+/* ── Input Area ──────────────────────────────────────────────────── */
+
 .input-area {
     padding: 16px 24px 14px;
     flex-shrink: 0;
@@ -226,9 +252,10 @@
     box-shadow: var(--shadow-sm);
     transition: border-color var(--duration) var(--ease), box-shadow var(--duration) var(--ease);
 }
+
 .input-box:focus-within {
-    border-color: var(--text-muted);
-    box-shadow: var(--shadow-md);
+    border-color: var(--amd-red);
+    box-shadow: 0 0 0 3px rgba(237, 28, 36, 0.1), var(--shadow-md);
 }
 
 .msg-input {
@@ -247,11 +274,12 @@
 
 .input-btns {
     display: flex;
-    gap: 2px;
+    gap: 4px;
     flex-shrink: 0;
     align-items: center;
 }
 
+/* Send button */
 .send-btn {
     display: flex;
     align-items: center;
@@ -263,13 +291,21 @@
     color: white;
     transition: all var(--duration) var(--ease);
 }
-.send-btn:hover { background: var(--amd-red-dark); transform: scale(1.05); }
+.send-btn:hover {
+    background: var(--amd-red-dark);
+    transform: scale(1.05);
+    box-shadow: 0 2px 8px rgba(237, 28, 36, 0.3);
+}
+.send-btn:active {
+    transform: scale(0.95);
+}
 .send-btn:disabled {
     background: var(--bg-tertiary);
     color: var(--text-muted);
     transform: none;
     cursor: not-allowed;
     opacity: 0.5;
+    box-shadow: none;
 }
 
 /* Stop streaming button */
@@ -284,10 +320,12 @@
     color: var(--text-secondary);
     background: var(--bg-input);
     transition: all var(--duration) var(--ease);
+    animation: pulse 2s ease-in-out infinite;
 }
 .stop-btn:hover {
     border-color: var(--amd-red);
     color: var(--amd-red);
+    animation: none;
 }
 
 /* Scroll to bottom FAB */
@@ -314,6 +352,8 @@
     background: var(--bg-hover);
     color: var(--text-primary);
     border-color: var(--amd-red);
+    transform: translateX(-50%) translateY(-2px);
+    box-shadow: var(--shadow-lg);
 }
 
 .input-footer {
@@ -326,7 +366,8 @@
     color: var(--text-muted);
 }
 
-/* ── Responsive ───────────────────────────────────────────────── */
+/* ── Responsive ──────────────────────────────────────────────────── */
+
 @media (max-width: 768px) {
     .chat-header {
         padding: 10px 16px;
@@ -335,7 +376,7 @@
     .model-badge { display: none; }
 
     .input-area {
-        padding: 10px 12px 10px;
+        padding: 10px 12px max(10px, env(safe-area-inset-bottom));
     }
 
     .empty-chat {
@@ -344,5 +385,11 @@
 
     .title-edit {
         width: 180px;
+    }
+
+    .send-btn,
+    .stop-btn {
+        width: 44px;
+        height: 44px;
     }
 }

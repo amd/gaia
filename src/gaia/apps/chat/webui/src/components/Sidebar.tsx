@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Plus, Search, FileText, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Plus, Search, FileText, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -11,9 +11,12 @@ import './Sidebar.css';
 
 interface SidebarProps {
     onNewChat: () => void;
+    tunnelActive?: boolean;
+    tunnelLoading?: boolean;
+    onMobileToggle?: () => void;
 }
 
-export function Sidebar({ onNewChat }: SidebarProps) {
+export function Sidebar({ onNewChat, tunnelActive, tunnelLoading, onMobileToggle }: SidebarProps) {
     const {
         sessions, currentSessionId, setCurrentSession, removeSession,
         setMessages, theme, toggleTheme, setShowDocLibrary, setShowSettings,
@@ -36,11 +39,19 @@ export function Sidebar({ onNewChat }: SidebarProps) {
         const title = sessions.find((s) => s.id === id)?.title || '?';
         log.nav.info(`Selecting session: "${title}" (${id})`);
         setCurrentSession(id);
+        setMessages([]);
         setLoadingMessages(true);
         // Auto-close sidebar on mobile
         if (window.innerWidth <= 768) setSidebarOpen(false);
         try {
             const data = await api.getMessages(id);
+            // Guard: only apply if this session is still the current one
+            // (prevents stale data from overwriting when user rapidly switches)
+            const stillCurrent = useChatStore.getState().currentSessionId === id;
+            if (!stillCurrent) {
+                log.nav.debug(`Discarding stale message load for session=${id} (user switched away)`);
+                return;
+            }
             setMessages(data.messages || []);
             log.nav.info(`Loaded ${(data.messages || []).length} message(s) for "${title}"`);
         } catch (err) {
@@ -235,6 +246,18 @@ export function Sidebar({ onNewChat }: SidebarProps) {
                     <span className="version-badge">v{__APP_VERSION__}</span>
                 </div>
                 <div className="sidebar-actions">
+                    {/* Mobile Access Gateway */}
+                    {onMobileToggle && (
+                        <button
+                            className={`btn-icon mobile-toggle-btn ${tunnelActive ? 'active' : ''} ${tunnelLoading ? 'loading' : ''}`}
+                            onClick={onMobileToggle}
+                            disabled={tunnelLoading}
+                            title={tunnelActive ? 'Stop mobile access' : 'Enable mobile access'}
+                            aria-label={tunnelActive ? 'Stop mobile access' : 'Enable mobile access'}
+                        >
+                            <Smartphone size={17} />
+                        </button>
+                    )}
                     <button className="btn-icon" onClick={() => setShowDocLibrary(true)} title="Documents" aria-label="Document Library">
                         <FileText size={17} />
                     </button>
