@@ -414,6 +414,17 @@ class LemonadeInstaller:
                 return True  # Can't check, proceed anyway
         return False
 
+    @staticmethod
+    def _is_valid_product_code(value: str) -> bool:
+        """Validate that a string looks like an MSI ProductCode GUID."""
+        return bool(
+            re.match(
+                r"^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}"
+                r"-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$",
+                value,
+            )
+        )
+
     def find_product_code(self) -> Optional[str]:
         """
         Find the MSI ProductCode for Lemonade Server from the Windows registry.
@@ -442,7 +453,14 @@ class LemonadeInstaller:
                                         name, _ = winreg.QueryValueEx(
                                             subkey, "DisplayName"
                                         )
-                                        if "lemonade" in name.lower():
+                                        if "lemonade server" in name.lower():
+                                            if not self._is_valid_product_code(
+                                                subkey_name
+                                            ):
+                                                log.debug(
+                                                    f"Skipping non-GUID subkey: {subkey_name}"
+                                                )
+                                                continue
                                             log.debug(
                                                 f"Found Lemonade product: '{name}' "
                                                 f"with code {subkey_name}"

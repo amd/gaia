@@ -4281,13 +4281,10 @@ Let me know your answer!
             # Check if already installed
             info = installer.check_installation()
             if info.installed and info.version:
-                # Compare versions as tuples (not strings) so 9.3.4 >= 9.3.0
-                installed_tuple = installer._parse_version(info.version)
-                target_tuple = installer._parse_version(LEMONADE_VERSION)
-
-                if installed_tuple and target_tuple and installed_tuple >= target_tuple:
+                # Use needs_install (returns True if current < target)
+                if not installer.needs_install(info):
                     print(
-                        f"Lemonade Server v{info.version} is already installed"
+                        f"✅ Lemonade Server v{info.version} is already installed"
                         f" (>= v{LEMONADE_VERSION})"
                     )
                     sys.exit(0)

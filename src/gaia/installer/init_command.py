@@ -465,7 +465,11 @@ class InitCommand:
                 self._print("   Force reinstall requested.")
                 return self._install_lemonade()
 
-            self._print_success("Version is compatible")
+            # Only print "compatible" for exact match; mismatch cases
+            # already print their own status in _check_version_compatibility
+            if info.version_tuple == self._parse_version(LEMONADE_VERSION):
+                self._print_success("Version is compatible")
+
             return True
 
         elif info.installed:
@@ -531,6 +535,10 @@ class InitCommand:
         target = self._parse_version(LEMONADE_VERSION)
 
         if not current or not target:
+            log.warning(
+                f"Could not parse version(s) for comparison: "
+                f"installed={info.version!r}, expected={LEMONADE_VERSION!r}"
+            )
             return True
 
         current_ver = info.version
@@ -539,9 +547,19 @@ class InitCommand:
         # --- Newer or equal: always accept ---
         if current >= target:
             if current > target:
-                self._print_success(
-                    f"Lemonade v{current_ver} installed (newer than expected v{target_ver})"
+                self._print_warning(
+                    f"Lemonade v{current_ver} is newer than expected v{target_ver}"
                 )
+                if RICH_AVAILABLE and self.console:
+                    self.console.print(
+                        "   [dim]This should work fine, but if you encounter issues, "
+                        f"consider installing v{target_ver}.[/dim]"
+                    )
+                else:
+                    self._print(
+                        "   This should work fine, but if you encounter issues, "
+                        f"consider installing v{target_ver}."
+                    )
             return True
 
         # --- Older version: check against profile minimum ---
@@ -724,23 +742,33 @@ class InitCommand:
                 return True
             else:
                 self._print_error(f"Installation failed: {result.error}")
-
-                if "Administrator" in str(result.error) or "sudo" in str(result.error):
-                    self._print("")
-                    if RICH_AVAILABLE and self.console:
-                        self.console.print(
-                            "   [yellow]Try running as Administrator (Windows) or with sudo (Linux)[/yellow]"
-                        )
-                    else:
-                        self._print(
-                            "   Try running as Administrator (Windows) or with sudo (Linux)"
-                        )
-
+                self._print_install_fallback_help()
                 return False
 
         except Exception as e:
             self._print_error(f"Failed to install: {e}")
+            self._print_install_fallback_help()
             return False
+
+    def _print_install_fallback_help(self):
+        """Print manual install instructions when automatic installation fails."""
+        self._print("")
+        if RICH_AVAILABLE and self.console:
+            self.console.print(
+                "   [bold]Please install Lemonade Server manually:[/bold]"
+            )
+            self.console.print(
+                "   [cyan]https://lemonade-server.ai[/cyan]"
+            )
+            self.console.print("")
+            self.console.print(
+                "   [dim]After installing, re-run:[/dim] [cyan]gaia init[/cyan]"
+            )
+        else:
+            self._print("   Please install Lemonade Server manually:")
+            self._print("   https://lemonade-server.ai")
+            self._print("")
+            self._print("   After installing, re-run: gaia init")
 
     def _find_lemonade_server(self) -> Optional[str]:
         """
