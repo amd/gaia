@@ -3,8 +3,6 @@
 
 """Unit tests for the TunnelManager mobile access feature."""
 
-import asyncio
-
 import pytest
 
 from gaia.ui.tunnel import TunnelManager

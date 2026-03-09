@@ -9,7 +9,6 @@ data for easy mobile onboarding.
 """
 
 import asyncio
-import json
 import logging
 import platform
 import shutil
@@ -211,12 +210,14 @@ class TunnelManager:
                     ["taskkill", "/f", "/im", "ngrok.exe"],
                     capture_output=True,
                     timeout=5,
+                    check=False,
                 )
             else:
                 subprocess.run(
                     ["pkill", "-f", "ngrok"],
                     capture_output=True,
                     timeout=5,
+                    check=False,
                 )
             # Brief pause to let the process fully die
             await asyncio.sleep(0.5)
@@ -227,6 +228,7 @@ class TunnelManager:
         """Fetch the server's public IP (for ngrok interstitial password)."""
         try:
             import httpx
+
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get("https://api.ipify.org")
                 if resp.status_code == 200:
@@ -275,6 +277,7 @@ class TunnelManager:
 
             try:
                 import httpx
+
                 async with httpx.AsyncClient(timeout=3.0) as client:
                     resp = await client.get("http://127.0.0.1:4040/api/tunnels")
                     if resp.status_code == 200:

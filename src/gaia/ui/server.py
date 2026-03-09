@@ -421,12 +421,7 @@ def create_app(db_path: str = None) -> FastAPI:
 
     # ── Serve Frontend Static Files ──────────────────────────────────────
     # Look for built frontend assets in the webui dist directory
-    _webui_dist = (
-        Path(__file__).resolve().parent.parent
-        / "apps"
-        / "webui"
-        / "dist"
-    )
+    _webui_dist = Path(__file__).resolve().parent.parent / "apps" / "webui" / "dist"
     if _webui_dist.is_dir():
         logger.info("Serving frontend from %s", _webui_dist)
 

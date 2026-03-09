@@ -112,7 +112,7 @@ describe('Chat App Installer Readiness', () => {
       expect(fs.existsSync(configPath)).toBe(true);
 
       const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      expect(config.name).toBe('chat');
+      expect(config.name).toBe('agent-ui');
       expect(config.displayName).toBeDefined();
     });
 

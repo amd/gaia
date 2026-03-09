@@ -31,7 +31,7 @@ describe('Chat App Integration', () => {
       expect(fs.existsSync(configPath)).toBe(true);
 
       const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      expect(config).toHaveProperty('name', 'chat');
+      expect(config).toHaveProperty('name', 'agent-ui');
       expect(config).toHaveProperty('displayName', 'GAIA Agent UI');
       expect(config).toHaveProperty('version');
       expect(config).toHaveProperty('description');
@@ -1315,7 +1315,7 @@ describe('Chat App Integration', () => {
       expect(fs.existsSync(configPath)).toBe(true);
 
       const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      expect(config.name).toBe('chat');
+      expect(config.name).toBe('agent-ui');
       expect(config.displayName).toBeDefined();
     });
 
