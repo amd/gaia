@@ -3972,8 +3972,9 @@ Let me know your answer!
                 print(f"  Total tokens used: {total_tokens:,}")
                 print(f"  Total cost: ${total_cost:.4f}")
                 print(f"  Average tokens per file: {avg_tokens:.0f}")
+                avg_cost = total_cost / len(summary["transcripts"]) if summary["transcripts"] else 0
                 print(
-                    f"  Average cost per file: ${total_cost/len(summary['transcripts']):.4f}"
+                    f"  Average cost per file: ${avg_cost:.4f}"
                 )
                 print(f"  Meeting types: {', '.join(generation_info['meeting_types'])}")
                 print(f"  Claude model: {generation_info['claude_model']}")
@@ -4045,8 +4046,9 @@ Let me know your answer!
                 print(f"  Total tokens used: {total_tokens:,}")
                 print(f"  Total cost: ${total_cost:.4f}")
                 print(f"  Average tokens per file: {avg_tokens:.0f}")
+                avg_cost = total_cost / len(summary["emails"]) if summary["emails"] else 0
                 print(
-                    f"  Average cost per file: ${total_cost/len(summary['emails']):.4f}"
+                    f"  Average cost per file: ${avg_cost:.4f}"
                 )
                 print(f"  Email types: {', '.join(generation_info['email_types'])}")
                 print(f"  Claude model: {generation_info['claude_model']}")
@@ -4119,8 +4121,9 @@ Let me know your answer!
                 print(f"  Total tokens used: {total_tokens:,}")
                 print(f"  Total cost: ${total_cost:.4f}")
                 print(f"  Average tokens per file: {avg_tokens:.0f}")
+                avg_cost = total_cost / len(summary["documents"]) if summary["documents"] else 0
                 print(
-                    f"  Average cost per file: ${total_cost/len(summary['documents']):.4f}"
+                    f"  Average cost per file: ${avg_cost:.4f}"
                 )
                 print(f"  PDF types: {', '.join(generation_info['document_types'])}")
                 print(f"  Claude model: {generation_info['claude_model']}")
@@ -5661,6 +5664,8 @@ def handle_mcp_start(args):
             ts = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
             log_handle.write(f"{ts} | INFO | Process ID: {process.pid}\n")
             log_handle.flush()
+            # Close parent's handle — subprocess inherited its own fd copy
+            log_handle.close()
 
             print("✅ MCP bridge started in background")
             print(f"📍 Listening on: {args.host}:{args.port}")

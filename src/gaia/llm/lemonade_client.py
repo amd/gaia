@@ -687,11 +687,11 @@ class LemonadeClient:
             self.server_process = subprocess.Popen(cmd, shell=True)
         elif background == "silent":
             # Run in background with subprocess
-            log_file = open("lemonade.log", "w", encoding="utf-8")
+            self._log_file = open("lemonade.log", "w", encoding="utf-8")
             self.server_process = subprocess.Popen(
                 base_cmd,
-                stdout=log_file,
-                stderr=log_file,
+                stdout=self._log_file,
+                stderr=self._log_file,
                 text=True,
                 bufsize=1,
                 shell=True,
@@ -795,6 +795,14 @@ class LemonadeClient:
                     self.server_process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     self.log.warning("Process did not terminate within timeout")
+
+            # Close log file handle if it was opened for silent mode
+            if hasattr(self, "_log_file") and self._log_file:
+                try:
+                    self._log_file.close()
+                except Exception:
+                    pass
+                self._log_file = None
 
             # Ensure port is free
             kill_process_on_port(self.port)

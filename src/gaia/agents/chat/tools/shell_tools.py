@@ -12,7 +12,6 @@ import shlex
 import subprocess
 import time
 from collections import deque
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -382,7 +381,7 @@ class ShellToolsMixin:
                             cmd_parts[0] = win_cmd
 
                 # Execute command
-                start_time = datetime.utcnow()
+                start_time = time.monotonic()
                 try:
                     result = subprocess.run(
                         cmd_parts if not use_shell else " ".join(cmd_parts),
@@ -394,12 +393,12 @@ class ShellToolsMixin:
                         env=os.environ.copy(),
                         shell=use_shell,
                     )
-                    duration = (datetime.utcnow() - start_time).total_seconds()
+                    duration = time.monotonic() - start_time
 
                     # Record successful command execution for rate limiting
                     self._record_command_execution()
                 except subprocess.TimeoutExpired as exc:
-                    duration = (datetime.utcnow() - start_time).total_seconds()
+                    duration = time.monotonic() - start_time
 
                     # Handle timeout gracefully
                     stdout_str = ""

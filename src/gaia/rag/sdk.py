@@ -659,7 +659,9 @@ class RAGSDK:
             segment = text[position:segment_end]
 
             # Ask LLM to identify good chunk boundaries
-            prompt = """You are a document chunking expert. Your task is to identify optimal points to split the following text into chunks.
+            segment_preview = segment[:2000]
+            ellipsis = "..." if len(segment) > 2000 else ""
+            prompt = f"""You are a document chunking expert. Your task is to identify optimal points to split the following text into chunks.
 
 The text should be split into chunks of approximately {chunk_size} tokens (roughly {chunk_size * 4} characters each).
 
@@ -672,8 +674,8 @@ IMPORTANT RULES:
 
 Text to chunk:
 ---
-{segment[:2000]}  # Limit prompt size
-{"..." if len(segment) > 2000 else ""}
+{segment_preview}
+{ellipsis}
 ---
 
 Please identify the CHARACTER POSITIONS where the text should be split.
@@ -682,7 +684,7 @@ These positions indicate where to split the text."""
 
             try:
                 # Get LLM response
-                response_data = self.llm_client.completions(
+                response_data = self.llm_client.generate(
                     model=self.config.model,
                     prompt=prompt,
                     temperature=0.0,  # Low temperature for deterministic chunking

@@ -228,11 +228,11 @@ class Evaluator:
             "threshold": results["metadata"]["similarity_threshold"],
             "num_questions": len(qa_results),
             "similarity_scores": {
-                "mean": float(np.mean(similarities)),
-                "median": float(np.median(similarities)),
-                "std": float(np.std(similarities)),
-                "min": float(np.min(similarities)),
-                "max": float(np.max(similarities)),
+                "mean": float(np.mean(similarities)) if similarities else 0.0,
+                "median": float(np.median(similarities)) if similarities else 0.0,
+                "std": float(np.std(similarities)) if similarities else 0.0,
+                "min": float(np.min(similarities)) if similarities else 0.0,
+                "max": float(np.max(similarities)) if similarities else 0.0,
             },
             "threshold_metrics": {
                 "num_passed": passed_questions,
@@ -648,11 +648,11 @@ class Evaluator:
                 Accuracy: {accuracy * 100:.1f}%
 
                 Similarity statistics:
-                - Mean: {np.mean(calculated_similarities):.3f}
-                - Median: {np.median(calculated_similarities):.3f}
-                - Min: {np.min(calculated_similarities):.3f}
-                - Max: {np.max(calculated_similarities):.3f}
-                - Standard Deviation: {np.std(calculated_similarities):.3f}
+                - Mean: {(np.mean(calculated_similarities) if calculated_similarities else 0.0):.3f}
+                - Median: {(np.median(calculated_similarities) if calculated_similarities else 0.0):.3f}
+                - Min: {(np.min(calculated_similarities) if calculated_similarities else 0.0):.3f}
+                - Max: {(np.max(calculated_similarities) if calculated_similarities else 0.0):.3f}
+                - Standard Deviation: {(np.std(calculated_similarities) if calculated_similarities else 0.0):.3f}
 
                 Individual analyses: {json.dumps(analysis['per_question'], indent=2)}
 
