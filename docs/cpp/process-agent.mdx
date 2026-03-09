@@ -82,17 +82,45 @@ The agent auto-runs a full system scan on startup, then waits for your input. Yo
     cpp\build\Release\process_agent.exe
     ```
 
-    The agent auto-analyzes on startup. After the analysis completes, you'll see the action menu.
+    The agent auto-analyzes on startup. After the scan completes, you'll see a summary followed by an action menu:
 
-    Try these inputs:
     ```
-    1           (Explain all items)
-    1 A3        (Explain task A3)
-    2 A1        (Stop task A1)
-    4 C1        (Quarantine suspicious item C1)
-    5           (Reanalyze)
-    What is svchost.exe?   (free-form question)
+    A. Processes
+    A1  msedge.exe (x28) - 2.1 GB RAM - Microsoft Edge [NORMAL]
+    A2  Teams.exe (x8) - 1.4 GB RAM - Microsoft Teams [HIGH]
+    A3  cpptools-srv.exe (x2) - 890 MB RAM - C/C++ IntelliSense [NORMAL]
+
+    B. Services
+    All services running normally
+
+    C. Suspicious Items
+    C1  unknown_app.exe - C:\Users\user\Downloads\unknown_app.exe
+        flags: unknown_company, unknown_description, temp_path
+
+    ──────────────────────────────────────────────────────────────
+    Available Actions:
+
+    [1] Explain    -- Get details on a process or service
+    [2] Stop       -- Kill a process or stop a service
+    [3] Restart    -- Restart an app or service
+    [4] Quarantine -- Move a suspicious file to quarantine
+    [5] Reanalyze  -- Run a fresh system analysis
+
+    Shortcuts: '1 A3' = Explain A3,  '2 B1' = Stop B1,  '4 C1' = Quarantine C1
+
+    >
     ```
+
+    Each item gets a label (A1, A2, C1, etc.) you can use in any command:
+
+    | What you type | What happens |
+    |---|---|
+    | `1` | Explain all items |
+    | `1 A3` | Explain cpptools-srv.exe |
+    | `2 A1` | Stop msedge.exe |
+    | `4 C1` | Quarantine unknown_app.exe |
+    | `5` | Reanalyze the system |
+    | `What is svchost.exe?` | Ask a free-form question |
 
     <Note>
     For full process visibility and quarantine access, right-click your terminal and select **Run as administrator** before launching the agent.
@@ -127,261 +155,68 @@ flowchart LR
 
 ## How It Works
 
-The entire agent is a single `.cpp` file with five sections. Let's walk through each one.
-
-1. **Shell Helper** — bridges C++ and PowerShell for command execution and validates inputs
-2. **Win32 Process Intelligence** — native API for fast process snapshots with file version info
-3. **Tool Registration** — 7 tools the LLM can call (3 read-only + 4 destructive)
-4. **System Prompt** — teaches the LLM the A/B/C classification protocol
-5. **ProcessConsole** — custom TUI that formats A/B/C sections with color coding
-
-### 1. The Shell Helper: Bridging C++ and PowerShell
-
-The `runShell()` function wraps PowerShell execution, identical in pattern to the [Wi-Fi Troubleshooter](/guides/cpp/wifi-agent):
+The agent subclasses `gaia::Agent` with three pieces: a config, registered tools, and a system prompt.
 
 ```cpp
-static std::string runShell(const std::string& command) {
-    std::string fullCmd = "powershell -NoProfile -NonInteractive -Command \"& { "
-                          + command + " }\" 2>&1";
-    std::array<char, 4096> buffer;
-    std::string result;
-
-    struct PipeCloser {
-        void operator()(FILE* f) const { if (f) _pclose(f); }
-    };
-    std::unique_ptr<FILE, PipeCloser> pipe(_popen(fullCmd.c_str(), "r"));
-
-    if (!pipe) return R"({"error": "Failed to execute command"})";
-    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe.get()) != nullptr) {
-        result += buffer.data();
+class ProcessAnalystAgent : public gaia::Agent {
+public:
+    explicit ProcessAnalystAgent(const std::string& modelId)
+        : Agent(makeConfig(modelId)) {
+        setOutputHandler(std::make_unique<ProcessConsole>());  // custom TUI
+        init();  // calls registerTools() + composes system prompt
     }
-    return result.empty()
-        ? R"json({"status": "completed", "output": "(no output)"})json"
-        : result;
-}
-```
 
-The agent also includes a dedicated path validator for quarantine operations:
-
-```cpp
-static bool isSafePath(const std::string& path) {
-    if (path.size() < 3) return false;
-    if (!std::isalpha(static_cast<unsigned char>(path[0])) ||
-        path[1] != ':' || path[2] != '\\') return false;
-    const std::string dangerous = "\"`;|&{}<>$";
-    for (char c : path) {
-        if (dangerous.find(c) != std::string::npos) return false;
+protected:
+    std::string getSystemPrompt() const override {
+        return R"(You are an expert Windows system analyst...
+            // A/B/C classification protocol, action behavior, quarantine protocol
+        )";
     }
-    return true;
-}
-```
 
-**Why a separate path validator?** File paths need drive-letter validation and a different dangerous character set than shell arguments. `isSafeShellArg()` rejects single quotes (valid in Windows paths), while `isSafePath()` requires the `X:\` prefix and allows single quotes but blocks shell metacharacters. Two validators, two threat models.
-
----
-
-### 2. Win32 Process Intelligence
-
-This is where the agent fundamentally differs from the [Wi-Fi Troubleshooter](/guides/cpp/wifi-agent). Instead of relying on PowerShell for everything, the System Analyst uses native Win32 APIs for its hot path — process enumeration and memory measurement.
-
-Here's the core of `getTopProcesses()`, which combines snapshot enumeration, process grouping, file version info, and factual flag computation:
-
-```cpp
-static gaia::json getTopProcesses(int topN = 20) {
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    // ... enumerate all processes, measure memory via K32GetProcessMemoryInfo ...
-
-    // Group by exe name, accumulating total memory
-    struct GroupedProc {
-        std::string name;
-        uint64_t totalMemory = 0;
-        std::string parentName;
-        std::wstring path;
-        gaia::json pids = gaia::json::array();
-    };
-    std::map<std::string, GroupedProc> groups;
-    // ... group processes, resolve parent names via pid-to-name map ...
-
-    // Sort by total memory descending, enrich with version info
-    for (int i = 0; i < limit; ++i) {
-        const auto* g = sorted[i];
-
-        // File version info (company, description) via GetFileVersionInfoW
-        std::string desc, company;
-        if (!g->path.empty())
-            getFileVersionStrings(g->path, desc, company);
-
-        entry["description"] = desc.empty() ? "Unknown" : desc;
-        entry["company"]     = company.empty() ? "Unknown" : company;
-
-        // Factual flags for LLM classification
-        gaia::json flags = gaia::json::array();
-        if (company.empty()) flags.push_back("unknown_company");
-        if (desc.empty())    flags.push_back("unknown_description");
-        if (lowerPath.find("\\Temp\\") != std::string::npos ||
-            lowerPath.find("\\Downloads\\") != std::string::npos)
-            flags.push_back("temp_path");
-        entry["flags"] = flags;
+    void registerTools() override {
+        // 7 tools: 3 read-only + 4 destructive (see Tool Reference below)
+        toolRegistry().registerTool("system_snapshot", ...);
+        toolRegistry().registerTool("kill_process", ...);
+        // ...
     }
-    return result;
-}
+
+private:
+    static gaia::AgentConfig makeConfig(const std::string& modelId) {
+        gaia::AgentConfig config;
+        config.maxSteps = 20;
+        config.modelId = modelId;
+        return config;
+    }
+};
 ```
 
-Three design choices worth understanding:
-
-- **Performance** — `CreateToolhelp32Snapshot` + `K32GetProcessMemoryInfo` returns data in ~20ms for 200+ processes. `Get-Process | ConvertTo-Json` takes 2-3 seconds for the same data. When the agent needs to scan on every startup, that difference matters.
-- **Process grouping** — Instead of listing 45 separate `chrome.exe` entries, the agent groups by exe name with instance count and total memory. The LLM sees "chrome.exe x45 -- 3.2 GB" which is far more actionable than 45 lines of individual PIDs.
-- **Factual flags** — `unknown_company`, `unknown_description`, `temp_path` are computed as structured metadata from Win32 `GetFileVersionInfoW` and path analysis. The LLM uses these as input to classification, not as final verdicts.
-
----
-
-### 3. Tool Registration: Teaching the Agent What It Can Do
-
-Tools are registered with the same pattern as the [Wi-Fi Troubleshooter](/guides/cpp/wifi-agent): a name, description, callback, and typed parameter list. The framework automatically includes these in the system prompt sent to the LLM.
-
-Here's `system_snapshot`, which demonstrates the hybrid Win32 + PowerShell approach:
-
-```cpp
-toolRegistry().registerTool(
-    "system_snapshot",
-    "System overview: CPU load, memory, disk, uptime, top processes by memory "
-    "(with company, description, path, and factual flags), problematic services, "
-    "and network connection count. Use first during analysis.",
-    [](const gaia::json& /*args*/) -> gaia::json {
-        gaia::json result;
-        result["tool"]          = "system_snapshot";
-        result["disk"]          = getDiskUsageInfo();     // Win32: GetDiskFreeSpaceExW
-        result["memory"]        = getMemoryInfo();        // Win32: GlobalMemoryStatusEx
-        result["top_processes"] = getTopProcesses(30);    // Win32: CreateToolhelp32Snapshot
-
-        // PowerShell: CPU load, uptime, services, connections
-        std::string psCmd = "$o=@{}; $c=Get-CimInstance Win32_Processor; ...";
-        // ... merge PowerShell results into result ...
-
-        result["command"] = "Win32 API: memory, disk, processes + PowerShell: CPU, services, connections";
-        return result;
-    },
-    {}  // no parameters
-);
-```
-
-And `kill_process`, which shows parameter validation and the `command` + `output` contract:
+Each tool is a C++ lambda using Win32 APIs or PowerShell and returns a structured result:
 
 ```cpp
 toolRegistry().registerTool(
     "kill_process",
-    "Terminate a running process by name. Reports instances found, terminated "
-    "count, and memory freed. ONLY use after explicit user confirmation.",
+    "Terminate a running process by name. ONLY use after explicit user confirmation.",
     [](const gaia::json& args) -> gaia::json {
         std::string name = args.value("name", "");
         if (name.empty())
-            return {{"error", "Process name is required"},
-                    {"tool", "kill_process"},
-                    {"command", "Win32 API: TerminateProcess(?)"},
-                    {"output", "Error: process name is required"}};
+            return {{"error", "Process name is required"}};
 
-        // Validate: only alphanumeric + . - _
-        for (char c : name) {
-            if (!std::isalnum(static_cast<unsigned char>(c)) &&
-                c != '.' && c != '-' && c != '_')
-                return {{"error", "Invalid process name: " + name},
-                        {"tool", "kill_process"},
-                        {"command", "Win32 API: TerminateProcess(" + name + ")"},
-                        {"output", "Error: invalid process name '" + name + "'"}};
-        }
-
-        // Auto-append .exe if missing
-        if (lower.substr(lower.size() - 4) != ".exe") target += ".exe";
-
-        KillResult kr = killProcessesByName(target);
+        KillResult kr = killProcessesByName(name);
         return {
-            {"tool", "kill_process"}, {"process", name},
-            {"terminated", kr.terminated},
+            {"tool",               "kill_process"},
+            {"terminated",         kr.terminated},
             {"memory_freed_human", formatBytes(kr.memoryFreed)},
-            {"command", "Win32 API: TerminateProcess(" + target + ")"},
-            {"output", "Found N instances, terminated N, freed X MB"}
+            {"command",            "Win32 API: TerminateProcess(" + name + ")"},
+            {"output",             "Found N instances, terminated N, freed X MB"}
         };
     },
-    {{"name", gaia::ToolParamType::STRING, true,
-      "Process name to terminate (e.g., 'chrome.exe')"}}
+    {{"name", gaia::ToolParamType::STRING, true, "Process name (e.g., 'chrome.exe')"}}
 );
 ```
 
-**Why `command` + `output` keys?** Every tool returns both a `command` string and an `output` string. The `ProcessConsole` (and its base `CleanConsole`) uses these for its TUI display — the `command` appears in the tool header, and `output` appears in the preview box. This consistent contract means the output handler doesn't need to understand tool-specific JSON structures.
-
----
-
-### 4. The System Prompt: Classification Protocol
-
-The system prompt teaches the LLM how to classify processes into three labeled sections and how to respond to user actions. Here are the core classification criteria:
-
-```
-### A. Processes (resource consumers)
-Select the most significant resource consumers. Consider:
-- Memory usage relative to total system RAM
-- Instance count (many instances = noteworthy)
-- Whether the resource usage is expected for that application type
-Tag each: [NORMAL] expected, [HIGH] unexpectedly high, [SUSPICIOUS]
-
-### B. Services (problematic)
-Report services with Status not "OK" or Memory > 200 MB.
-If none: "All services running normally"
-
-### C. Suspicious Items
-The flags array provides factual signals — use as INPUT, not verdicts:
-- unknown_company + unknown_description = STRONG signal
-- temp_path = STRONG signal for non-installers
-- EXCEPTIONS: svchost.exe, csrss.exe, smss.exe may show empty company — NORMAL
-```
-
-The system prompt also defines the action behavior protocol, including the multi-step quarantine confirmation:
-
-```
-## ACTION BEHAVIOR
-
-Users reference items by group letter + number (e.g., "Explain A3", "Stop B1").
-
-- **Quarantine**: Before calling quarantine_item, you MUST:
-  1. Call explain_item to get full details
-  2. Present confirmation in Key: Value format
-  3. Ask: Kill [name] and move it to quarantine? (yes / no)
-  4. Wait for response. If NO, abort. If YES, call quarantine_item.
-```
-
-**Why A/B/C labels?** They create a shared vocabulary between the LLM and the user. "Explain A3" unambiguously maps to the third process in the resource consumers section — no re-scanning required.
-
-**Why explicit quarantine protocol?** Quarantine is irreversible — it kills the process AND moves the executable file. The multi-step protocol (explain, confirm, wait for yes/no) prevents accidental data loss from an LLM hallucination.
-
----
-
-### 5. ProcessConsole: Section-Aware Formatting
-
-The `ProcessConsole` overrides `CleanConsole::printFinalAnswer()` to render the LLM's structured A/B/C output with visual hierarchy. It applies six line detection rules in order (first match wins):
-
-1. **Blank line** — suppresses consecutive blanks to keep output tight
-2. **Section header** — "A. Processes", "B. Services", "C. Suspicious Items" — rendered as bold white label with a gray description line underneath
-3. **Item reference** — `A4: cpptools-srv.exe` — bold cyan tag, bold white name
-4. **Key: Value** — first colon within 20 chars with alpha key — bold white key, normal value
-5. **Numbered item** — `1. chrome.exe ...` — normal rendering with markdown bold support
-6. **Default paragraph** — everything else — gray (dimmed) prose
-
-Here's how Rule 3 handles item reference lines:
-
-```cpp
-// Rule 3: Item reference title (A4: cpptools-srv.exe)
-if (line.size() >= 4 && line[0] >= 'A' && line[0] <= 'C' &&
-    std::isdigit(static_cast<unsigned char>(line[1]))) {
-    auto colon = line.find(": ");
-    if (colon != std::string::npos && colon <= 4) {
-        std::string tag  = line.substr(0, colon);
-        std::string rest = line.substr(colon + 2);
-        std::cout << color::BOLD << color::CYAN << tag << color::RESET
-                  << "  " << color::BOLD << color::WHITE << rest << color::RESET;
-    }
-}
-```
-
-**Why override `printFinalAnswer()`?** The LLM outputs structured sections that need visual hierarchy. Default `CleanConsole` treats all text equally — `ProcessConsole` adds section headers with descriptions, color-coded item tags, and Key: Value formatting that makes the output scannable at a glance.
+<Note>
+All arguments from the LLM are validated before use — process names allow only alphanumeric characters plus `.`, `-`, and `_`. File paths for quarantine operations are validated separately for drive-letter format and shell metacharacters.
+</Note>
 
 ---
 
@@ -646,20 +481,20 @@ The framework handles everything else — the new tool appears in the LLM's syst
 ## Next Steps
 
 <CardGroup cols={2}>
-  <Card title="C++ Framework Overview" icon="code" href="/guides/cpp/overview">
+  <Card title="C++ Framework Overview" icon="code" href="/cpp/overview">
     AgentConfig reference, project structure, and how the agent loop works
   </Card>
 
-  <Card title="Customizing Your Agent" icon="sliders" href="/guides/cpp/custom-agent">
+  <Card title="Customizing Your Agent" icon="sliders" href="/cpp/custom-agent">
     Custom prompts, typed tools, MCP servers, output capture, and tuning
   </Card>
 
-  <Card title="Integration Guide" icon="puzzle-piece" href="/guides/cpp/integration">
+  <Card title="Integration Guide" icon="puzzle-piece" href="/cpp/integration">
     Use gaia_core in your own CMake project via FetchContent or find_package
   </Card>
 
-  <Card title="Wi-Fi Troubleshooter Agent" icon="wifi" href="/guides/cpp/wifi-agent">
-    Compare single-phase diagnostic flow with the two-phase workflow used here
+  <Card title="Wi-Fi Troubleshooter Agent" icon="wifi" href="/cpp/wifi-agent">
+    Single-phase diagnostic agent with registered C++ tools
   </Card>
 </CardGroup>
 
