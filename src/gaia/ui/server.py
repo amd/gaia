@@ -681,7 +681,7 @@ async def _index_document(filepath: Path) -> int:
 
         config = RAGConfig()
         rag = RAGSDK(config)
-        result = rag.index_file(str(filepath))  # pylint: disable=no-member
+        result = rag.index_document(str(filepath))
         return result.get("chunk_count", 0) if isinstance(result, dict) else 0
 
     try:
@@ -781,11 +781,13 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         sse_handler = SSEOutputHandler()
 
         # Create ChatAgent with SSE handler
+        document_ids = session.get("document_ids", [])
         config = ChatAgentConfig(
             model_id=session.get("model"),
             max_steps=10,
             silent_mode=False,
             debug=False,
+            rag_documents=document_ids,
         )
         agent = ChatAgent(config)
         agent.console = sse_handler  # Replace console with SSE handler

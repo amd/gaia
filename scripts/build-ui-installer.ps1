@@ -23,9 +23,9 @@
     Skip npm install step (use existing node_modules)
 
 .EXAMPLE
-    .\build-chat-installer.ps1
-    .\build-chat-installer.ps1 -Mode browser
-    .\build-chat-installer.ps1 -SkipNodeInstall
+    .\build-ui-installer.ps1
+    .\build-ui-installer.ps1 -Mode browser
+    .\build-ui-installer.ps1 -SkipNodeInstall
 #>
 
 param(

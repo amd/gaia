@@ -111,7 +111,7 @@ jobs:
 
           if [ "$FAIL" -eq 1 ]; then
             echo ""
-            echo 'Run "node scripts/bump-chat-version.mjs" to sync package.json, then rebuild.'
+            echo 'Run "node scripts/bump-ui-version.mjs" to sync package.json, then rebuild.'
             exit 1
           fi
           echo "All versions match: v$TAG_VERSION"

@@ -8,8 +8,8 @@
  * GAIA uses a single version source of truth in version.py.
  *
  * Usage:
- *   node scripts/bump-chat-version.mjs          # reads version.py and syncs package.json
- *   node scripts/bump-chat-version.mjs --check  # verify package.json matches version.py (used in CI)
+ *   node scripts/bump-ui-version.mjs          # reads version.py and syncs package.json
+ *   node scripts/bump-ui-version.mjs --check  # verify package.json matches version.py (used in CI)
  */
 
 import { readFileSync, writeFileSync } from "fs";
@@ -58,7 +58,7 @@ if (checkOnly) {
   if (pkg.version !== version) {
     console.log(`FAIL: ${pkg.name}@${pkg.version} -- expected ${version}`);
     console.log(
-      '\nRun "node scripts/bump-chat-version.mjs" to sync package.json to version.py.'
+      '\nRun "node scripts/bump-ui-version.mjs" to sync package.json to version.py.'
     );
     process.exit(1);
   } else {

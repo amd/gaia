@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 # GAIA Agent UI - Install Script (PowerShell)
-# Usage: irm https://raw.githubusercontent.com/amd/gaia/main/scripts/install-chat.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/amd/gaia/main/scripts/install-ui.ps1 | iex
 #
 # Installs GAIA Agent UI globally via npm. After install, run `gaia-ui` from anywhere.
 

@@ -766,13 +766,13 @@ chunk_count = result.get("chunk_count", 0)
 
 ## npm Package
 
-GAIA Chat is also available as an npm package for quick installation:
+GAIA Agent UI is also available as an npm package for quick installation:
 
 ```bash
-npm install -g @amd-gaia/chat
+npm install -g @amd-gaia/agent-ui
 ```
 
-This provides the `gaia-chat` CLI command:
+This provides the `gaia-ui` CLI command:
 
 ```bash
 gaia-chat              # Start Python backend + open browser
@@ -796,16 +796,16 @@ The package version is sourced from `src/gaia/version.py` (single source of trut
 
 ```bash
 # Check version consistency (package.json matches version.py)
-node scripts/bump-chat-version.mjs --check
+node scripts/bump-ui-version.mjs --check
 
 # Sync package.json to version.py
-node scripts/bump-chat-version.mjs
+node scripts/bump-ui-version.mjs
 
 # Full release (sync, commit, tag, push)
-node scripts/release-chat.mjs
+node scripts/release-ui.mjs
 ```
 
-Tags matching `chat-v*` trigger the automated npm publish workflow.
+Tags matching `v*` trigger the automated npm publish workflow.
 
 ---
 

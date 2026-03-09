@@ -9,7 +9,7 @@
  * The CI pipeline handles the rest (build, test, publish to npm).
  *
  * Usage:
- *   node scripts/release-chat.mjs
+ *   node scripts/release-ui.mjs
  *
  * The version comes from src/gaia/version.py (single source of truth for all of GAIA).
  */

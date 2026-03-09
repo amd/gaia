@@ -5,9 +5,9 @@
 # Build GAIA Agent UI installer for Linux (.deb package)
 #
 # Usage:
-#   ./build-chat-installer.sh                # Full Electron + .deb build
-#   ./build-chat-installer.sh --browser      # Browser-only build (for gaia chat --ui)
-#   ./build-chat-installer.sh --skip-install # Skip npm install
+#   ./build-ui-installer.sh                # Full Electron + .deb build
+#   ./build-ui-installer.sh --browser      # Browser-only build (for gaia chat --ui)
+#   ./build-ui-installer.sh --skip-install # Skip npm install
 
 set -euo pipefail
 

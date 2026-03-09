@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: MIT
 
 # GAIA Agent UI - Install Script
-# Usage: curl -fsSL https://raw.githubusercontent.com/amd/gaia/main/scripts/install-chat.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/amd/gaia/main/scripts/install-ui.sh | bash
 #
 # Installs GAIA Agent UI globally via npm. After install, run `gaia-ui` from anywhere.
 
