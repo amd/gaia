@@ -2,7 +2,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# Build GAIA Chat installer for Linux (.deb package)
+# Build GAIA Agent UI installer for Linux (.deb package)
 #
 # Usage:
 #   ./build-chat-installer.sh                # Full Electron + .deb build
@@ -38,7 +38,7 @@ done
 
 echo ""
 echo "========================================"
-echo "  GAIA Chat Installer Builder (Linux)"
+echo "  GAIA Agent UI Installer Builder (Linux)"
 echo "  Mode: $MODE"
 echo "========================================"
 echo ""
@@ -148,5 +148,5 @@ fi
 
 echo ""
 echo "========================================"
-echo "  GAIA Chat installer build complete!"
+echo "  GAIA Agent UI installer build complete!"
 echo "========================================"

@@ -1,16 +1,16 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# GAIA Chat - Install Script (PowerShell)
+# GAIA Agent UI - Install Script (PowerShell)
 # Usage: irm https://raw.githubusercontent.com/amd/gaia/main/scripts/install-chat.ps1 | iex
 #
-# Installs GAIA Chat globally via npm. After install, run `gaia-chat` from anywhere.
+# Installs GAIA Agent UI globally via npm. After install, run `gaia-ui` from anywhere.
 
 $ErrorActionPreference = "Stop"
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  GAIA Chat Installer" -ForegroundColor Cyan
+Write-Host "  GAIA Agent UI Installer" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -57,19 +57,19 @@ Write-Host ""
 
 # ── Install ──────────────────────────────────────────────────────────────────
 
-Write-Host "Installing GAIA Chat..." -ForegroundColor Yellow
-& npm.cmd install -g @amd-gaia/chat@latest
-if ($LASTEXITCODE -ne 0) { throw "Failed to install GAIA Chat" }
+Write-Host "Installing GAIA Agent UI..." -ForegroundColor Yellow
+& npm.cmd install -g @amd-gaia/agent-ui@latest
+if ($LASTEXITCODE -ne 0) { throw "Failed to install GAIA Agent UI" }
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
-Write-Host "  GAIA Chat installed successfully!" -ForegroundColor Green
+Write-Host "  GAIA Agent UI installed successfully!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Usage:"
-Write-Host "    gaia-chat              Start the app (backend + browser)"
-Write-Host "    gaia-chat --serve      Serve frontend only"
-Write-Host "    gaia-chat --help       Show all options"
+Write-Host "    gaia-ui              Start the app (backend + browser)"
+Write-Host "    gaia-ui --serve      Serve frontend only"
+Write-Host "    gaia-ui --help       Show all options"
 Write-Host ""
 Write-Host "  Prerequisites for full functionality:"
 Write-Host "    pip install amd-gaia   Install Python backend"

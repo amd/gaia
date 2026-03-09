@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-/** Types shared across the GAIA Chat UI frontend. */
+/** Types shared across the GAIA Agent UI frontend. */
 
 export interface Session {
     id: string;

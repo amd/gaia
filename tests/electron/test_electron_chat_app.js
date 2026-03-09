@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Integration tests for GAIA Chat App (Electron / React+Vite)
+ * Integration tests for GAIA Agent UI App (Electron / React+Vite)
  *
  * Validates:
  * - App configuration and structure
@@ -32,7 +32,7 @@ describe('Chat App Integration', () => {
 
       const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       expect(config).toHaveProperty('name', 'chat');
-      expect(config).toHaveProperty('displayName', 'GAIA Chat');
+      expect(config).toHaveProperty('displayName', 'GAIA Agent UI');
       expect(config).toHaveProperty('version');
       expect(config).toHaveProperty('description');
       expect(config).toHaveProperty('window');
@@ -165,8 +165,8 @@ describe('Chat App Integration', () => {
       expect(htmlContent).toContain('viewport');
     });
 
-    it('should have GAIA Chat title', () => {
-      expect(htmlContent).toContain('GAIA Chat');
+    it('should have GAIA Agent UI title', () => {
+      expect(htmlContent).toContain('GAIA Agent UI');
     });
 
     it('should have React root div', () => {

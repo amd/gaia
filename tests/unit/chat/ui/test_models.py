@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Unit tests for GAIA Chat UI Pydantic models.
+"""Unit tests for GAIA Agent UI Pydantic models.
 
 Tests model validation, defaults, and serialization.
 """

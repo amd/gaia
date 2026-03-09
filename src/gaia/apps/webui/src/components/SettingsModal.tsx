@@ -88,7 +88,7 @@ export function SettingsModal() {
                         ) : (
                             <div className="status-error">
                                 <p>Could not connect to server</p>
-                                <code>gaia chat ui</code>
+                                <code>gaia chat --ui</code>
                             </div>
                         )}
                     </section>
@@ -97,7 +97,7 @@ export function SettingsModal() {
                     <section className="settings-section">
                         <h4>About</h4>
                         <div className="about-info">
-                            <p>GAIA Chat v{version}</p>
+                            <p>GAIA Agent UI v{version}</p>
                             <p className="about-sub">
                                 Privacy-first AI chat for AMD Ryzen AI PCs.
                                 <br />

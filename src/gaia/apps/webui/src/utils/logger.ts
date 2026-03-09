@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Structured console logger for GAIA Chat UI.
+ * Structured console logger for GAIA Agent UI.
  *
  * Provides color-coded, categorized logging with timing information.
  * All output goes to the browser dev console for easy debugging.
@@ -102,7 +102,7 @@ export const log = {
 /** Log app startup banner */
 export function logBanner(version: string) {
     console.log(
-        '%c GAIA Chat %c v' + version + ' %c Local AI Desktop',
+        '%c GAIA Agent UI %c v' + version + ' %c Local AI Desktop',
         'background: #ED1C24; color: white; font-weight: bold; padding: 4px 8px; border-radius: 4px 0 0 4px;',
         'background: #333; color: #fff; padding: 4px 8px;',
         'background: #1a1a1a; color: #888; padding: 4px 8px; border-radius: 0 4px 4px 0;',

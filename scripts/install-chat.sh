@@ -3,16 +3,16 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# GAIA Chat - Install Script
+# GAIA Agent UI - Install Script
 # Usage: curl -fsSL https://raw.githubusercontent.com/amd/gaia/main/scripts/install-chat.sh | bash
 #
-# Installs GAIA Chat globally via npm. After install, run `gaia-chat` from anywhere.
+# Installs GAIA Agent UI globally via npm. After install, run `gaia-ui` from anywhere.
 
 set -e
 
 echo ""
 echo "========================================"
-echo "  GAIA Chat Installer"
+echo "  GAIA Agent UI Installer"
 echo "========================================"
 echo ""
 
@@ -55,18 +55,18 @@ echo ""
 
 # ── Install ──────────────────────────────────────────────────────────────────
 
-echo "Installing GAIA Chat..."
-npm install -g @amd-gaia/chat@latest
+echo "Installing GAIA Agent UI..."
+npm install -g @amd-gaia/agent-ui@latest
 
 echo ""
 echo "========================================"
-echo "  GAIA Chat installed successfully!"
+echo "  GAIA Agent UI installed successfully!"
 echo "========================================"
 echo ""
 echo "  Usage:"
-echo "    gaia-chat              Start the app (backend + browser)"
-echo "    gaia-chat --serve      Serve frontend only"
-echo "    gaia-chat --help       Show all options"
+echo "    gaia-ui              Start the app (backend + browser)"
+echo "    gaia-ui --serve      Serve frontend only"
+echo "    gaia-ui --help       Show all options"
 echo ""
 echo "  Prerequisites for full functionality:"
 echo "    pip install amd-gaia   Install Python backend"

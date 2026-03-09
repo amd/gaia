@@ -27,7 +27,7 @@ class TunnelManager:
     """Manages an ngrok tunnel for mobile access.
 
     Spawns an ngrok process to create a public HTTPS URL pointing to the
-    local GAIA Chat server. Generates a random UUID token for authentication.
+    local GAIA Agent UI server. Generates a random UUID token for authentication.
 
     Usage:
         manager = TunnelManager(port=4200)

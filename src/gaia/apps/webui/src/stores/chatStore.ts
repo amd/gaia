@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-/** Zustand store for GAIA Chat UI state. */
+/** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
 import type { Session, Message, Document, AgentStep, SystemStatus } from '../types';

@@ -3,10 +3,10 @@
 
 <#
 .SYNOPSIS
-    Build GAIA Chat installer for Windows.
+    Build GAIA Agent UI installer for Windows.
 
 .DESCRIPTION
-    Builds the GAIA Chat desktop application and creates a Windows installer.
+    Builds the GAIA Agent UI desktop application and creates a Windows installer.
 
     Two distribution modes:
     1. Electron Desktop App (via electron-forge, produces .exe installer)
@@ -41,7 +41,7 @@ $ELECTRON_DIR = "$REPO_ROOT\src\gaia\electron"
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  GAIA Chat Installer Builder" -ForegroundColor Cyan
+Write-Host "  GAIA Agent UI Installer Builder" -ForegroundColor Cyan
 Write-Host "  Mode: $Mode" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
@@ -173,5 +173,5 @@ try {
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
-Write-Host "  GAIA Chat installer build complete!" -ForegroundColor Green
+Write-Host "  GAIA Agent UI installer build complete!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green

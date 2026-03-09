@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Unit tests for GAIA Chat UI FastAPI server.
+"""Unit tests for GAIA Agent UI FastAPI server.
 
 Tests all API endpoints using TestClient with an in-memory database.
 LLM and RAG calls are mocked - these tests validate HTTP layer behavior.
@@ -53,7 +53,7 @@ class TestHealthEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
-        assert data["service"] == "gaia-chat-ui"
+        assert data["service"] == "gaia-agent-ui"
         assert "stats" in data
 
     def test_health_includes_stats(self, client):
@@ -662,7 +662,7 @@ class TestServerMetadata:
     """Tests for server configuration and metadata."""
 
     def test_app_title(self, app):
-        assert app.title == "GAIA Chat UI API"
+        assert app.title == "GAIA Agent UI API"
 
     def test_app_version(self, app):
         assert app.version == "0.1.0"

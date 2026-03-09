@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Unit tests for GAIA Chat UI database layer."""
+"""Unit tests for GAIA Agent UI database layer."""
 
 import sqlite3
 import time

@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Integration tests for GAIA Chat UI.
+"""Integration tests for GAIA Agent UI.
 
 Tests full end-to-end workflows through the HTTP API layer:
 - Session lifecycle (create -> chat -> export -> delete)
@@ -1127,7 +1127,7 @@ class TestCLIUIFlag:
     def test_create_app_returns_fastapi_instance(self):
         """create_app returns a configured FastAPI app."""
         app = create_app(db_path=":memory:")
-        assert app.title == "GAIA Chat UI API"
+        assert app.title == "GAIA Agent UI API"
         assert hasattr(app.state, "db")
         assert app.state.db is not None
 

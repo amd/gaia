@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Installer Readiness Tests for GAIA Chat App
+ * Installer Readiness Tests for GAIA Agent UI App
  *
  * Validates that the Chat app is properly structured for:
  * - Vite build output for Electron packaging
@@ -21,7 +21,7 @@ const os = require('os');
 
 const CHAT_APP_PATH = path.join(__dirname, '../../src/gaia/apps/webui');
 const FRAMEWORK_PATH = path.join(__dirname, '../../src/gaia/electron');
-const BACKEND_PATH = path.join(__dirname, '../../src/gaia/chat/ui');
+const BACKEND_PATH = path.join(__dirname, '../../src/gaia/ui');
 
 describe('Chat App Installer Readiness', () => {
 
@@ -596,10 +596,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       expect(pkg.name).toMatch(/^@[\w-]+\/[\w-]+$/);
     });
 
-    it('should have bin field with gaia-chat CLI entry', () => {
+    it('should have bin field with gaia-ui CLI entry', () => {
       expect(pkg.bin).toBeDefined();
-      expect(pkg.bin['gaia-chat']).toBeDefined();
-      expect(pkg.bin['gaia-chat']).toContain('bin/gaia-chat.mjs');
+      expect(pkg.bin['gaia-ui']).toBeDefined();
+      expect(pkg.bin['gaia-ui']).toContain('bin/gaia-ui.mjs');
     });
 
     it('should have files field for npm publish', () => {
@@ -632,18 +632,18 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     });
 
     it('should have CLI entry point file', () => {
-      const cliPath = path.join(CHAT_APP_PATH, 'bin', 'gaia-chat.mjs');
+      const cliPath = path.join(CHAT_APP_PATH, 'bin', 'gaia-ui.mjs');
       expect(fs.existsSync(cliPath)).toBe(true);
     });
 
     it('should have valid CLI entry with shebang', () => {
-      const cliPath = path.join(CHAT_APP_PATH, 'bin', 'gaia-chat.mjs');
+      const cliPath = path.join(CHAT_APP_PATH, 'bin', 'gaia-ui.mjs');
       const content = fs.readFileSync(cliPath, 'utf8');
       expect(content.startsWith('#!/usr/bin/env node')).toBe(true);
     });
 
     it('should use version from version.py (single source of truth)', () => {
-      const versionPyPath = path.join(CHAT_APP_PATH, '..', '..', '..', 'version.py');
+      const versionPyPath = path.join(CHAT_APP_PATH, '..', '..', 'version.py');
       expect(fs.existsSync(versionPyPath)).toBe(true);
 
       const content = fs.readFileSync(versionPyPath, 'utf8');
