@@ -86,3 +86,32 @@ def tool(
     else:
         # Called as @tool(...) with arguments - return the decorator
         return decorator
+
+
+def get_tool_display_name(tool_name: str) -> str:
+    """Return a human-readable display name for a tool.
+
+    For MCP tools the registry stores ``_mcp_tool_name`` and ``_mcp_server``
+    metadata.  When present, this returns ``'{mcp_tool_name} ({mcp_server})'``
+    so that e.g. ``mcp_myserver_get_stats`` is shown as
+    ``get_stats (myserver)``.
+
+    For native (non-MCP) tools the original ``tool_name`` is returned.
+
+    Args:
+        tool_name: The internal tool name as stored in ``_TOOL_REGISTRY``.
+
+    Returns:
+        A human-readable display name.
+    """
+    tool = _TOOL_REGISTRY.get(tool_name)
+    if not tool:
+        return tool_name
+
+    mcp_tool_name = tool.get("_mcp_tool_name")
+    mcp_server = tool.get("_mcp_server")
+
+    if mcp_tool_name and mcp_server:
+        return f"{mcp_tool_name} ({mcp_server})"
+
+    return tool_name

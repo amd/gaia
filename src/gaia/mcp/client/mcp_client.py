@@ -144,11 +144,11 @@ class MCPClient:
                 self.last_error = (
                     f"Failed to establish transport connection to '{self.name}'"
                 )
-                logger.warning(self.last_error)
+                logger.debug(self.last_error)
                 return False
         except Exception as e:
             self.last_error = f"Transport error for '{self.name}': {e}"
-            logger.warning(self.last_error)
+            logger.debug(self.last_error)
             return False
 
         try:
@@ -170,7 +170,7 @@ class MCPClient:
                 self.last_error = (
                     f"Initialization failed: {error.get('message', 'Unknown error')}"
                 )
-                logger.warning(f"MCP server '{self.name}': {self.last_error}")
+                logger.debug(f"MCP server '{self.name}': {self.last_error}")
                 return False
 
             result = response.get("result", {})
@@ -183,7 +183,7 @@ class MCPClient:
 
         except Exception as e:
             self.last_error = f"Error during initialization: {e}"
-            logger.warning(f"MCP server '{self.name}': {self.last_error}")
+            logger.debug(f"MCP server '{self.name}': {self.last_error}")
             self.disconnect()
             return False
 

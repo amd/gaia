@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.tools import _TOOL_REGISTRY, get_tool_display_name
 from gaia.mcp import MCPClientMixin
 from gaia.mcp.client.mcp_client import MCPTool
 
@@ -91,6 +91,32 @@ class TestMCPClientMixin:
         # Function is wrapped, not the same as mock_wrapper
         assert callable(registered_tool["function"])
         assert registered_tool["parameters"]["param"]["required"] is True
+
+    @patch("gaia.mcp.mixin.MCPClientManager")
+    def test_tool_display_name_via_full_registration_path(self, mock_manager_class):
+        """get_tool_display_name returns readable name after full registration."""
+        mock_manager = Mock()
+        mock_client = Mock()
+        mock_client.is_connected.return_value = True
+        mock_client.name = "oem"
+        mock_client.server_info = {"name": "OEM Experience Zone"}
+
+        mock_tool = MCPTool(
+            name="launch_experience_zone",
+            description="Launch the experience zone",
+            input_schema={"type": "object", "properties": {}, "required": []},
+        )
+        mock_client.list_tools.return_value = [mock_tool]
+        mock_client.create_tool_wrapper.return_value = Mock(return_value="ok")
+
+        mock_manager.add_server.return_value = mock_client
+        mock_manager_class.return_value = mock_manager
+
+        agent = MockAgent()
+        agent.connect_mcp_server("oem", {"command": "dotnet", "args": ["run"]})
+
+        display = get_tool_display_name("mcp_oem_launch_experience_zone")
+        assert display == "launch_experience_zone (oem)"
 
     @patch("gaia.mcp.mixin.MCPClientManager")
     def test_disconnect_mcp_server_unregisters_tools(self, mock_manager_class):
@@ -428,3 +454,183 @@ class TestMCPToolResponseWrapper:
 
         # List should pass through unchanged
         assert result == ["item1", "item2", "item3"]
+
+
+class TestMCPLoadSummary:
+    """Tests for _print_mcp_load_summary output."""
+
+    def setup_method(self):
+        _TOOL_REGISTRY.clear()
+
+    def teardown_method(self):
+        _TOOL_REGISTRY.clear()
+
+    @patch("gaia.mcp.mixin.MCPClientManager")
+    def test_explicit_config_shows_connected_servers(self, mock_manager_class):
+        """Explicit config: connected server shown with ✓ and tool count."""
+        mock_client = Mock()
+        mock_client.list_tools.return_value = [Mock(), Mock()]
+
+        mock_manager = Mock()
+        mock_manager.config.load_report = {
+            "mode": "explicit",
+            "config_file": "/path/to/mcp_servers.json",
+            "servers": ["oem"],
+        }
+        mock_manager.config.get_servers.return_value = {"oem": {}}
+        mock_manager.list_servers.return_value = ["oem"]
+        mock_manager.get_client.return_value = mock_client
+        mock_manager_class.return_value = mock_manager
+
+        console = Mock()
+        agent = MockAgent()
+        agent.console = console
+
+        agent._print_mcp_load_summary()
+
+        console.print_info.assert_called_once()
+        message = console.print_info.call_args[0][0]
+        assert "✓" in message
+        assert "oem" in message
+        assert "2 tools" in message
+
+    @patch("gaia.mcp.mixin.MCPClientManager")
+    def test_failed_server_shown_with_cross(self, mock_manager_class):
+        """Server that failed to connect is shown with ✗."""
+        mock_manager = Mock()
+        mock_manager.config.load_report = {
+            "mode": "explicit",
+            "config_file": "/path/to/mcp_servers.json",
+            "servers": ["windows"],
+        }
+        mock_manager.config.get_servers.return_value = {"windows": {}}
+        mock_manager.list_servers.return_value = []  # none connected
+        mock_manager_class.return_value = mock_manager
+
+        console = Mock()
+        agent = MockAgent()
+        agent.console = console
+
+        agent._print_mcp_load_summary()
+
+        message = console.print_info.call_args[0][0]
+        assert "✗" in message
+        assert "windows" in message
+        assert "failed to connect" in message
+
+    @patch("gaia.mcp.mixin.MCPClientManager")
+    def test_auto_config_shows_both_paths(self, mock_manager_class):
+        """Auto-load: both global and local paths appear in the summary."""
+        from pathlib import Path
+
+        mock_client = Mock()
+        mock_client.list_tools.return_value = []
+
+        mock_manager = Mock()
+        mock_manager.config.load_report = {
+            "mode": "auto",
+            "config_file": Path("/tmp/local/mcp_servers.json"),
+            "global": {
+                "path": Path("/tmp/global/.gaia/mcp_servers.json"),
+                "exists": True,
+                "servers": ["github"],
+            },
+            "local": {
+                "path": Path("/tmp/local/mcp_servers.json"),
+                "exists": True,
+                "servers": ["oem"],
+            },
+            "overrides": [],
+        }
+        mock_manager.config.get_servers.return_value = {"github": {}, "oem": {}}
+        mock_manager.list_servers.return_value = ["github", "oem"]
+        mock_manager.get_client.return_value = mock_client
+        mock_manager_class.return_value = mock_manager
+
+        console = Mock()
+        agent = MockAgent()
+        agent.console = console
+
+        agent._print_mcp_load_summary()
+
+        message = console.print_info.call_args[0][0]
+        assert "local" in message
+        assert "global" in message
+        assert "github" in message
+        assert "oem" in message
+
+    @patch("gaia.mcp.mixin.MCPClientManager")
+    def test_auto_config_shows_overrides(self, mock_manager_class):
+        """Auto-load report highlights servers that local overrides from global."""
+        from pathlib import Path
+
+        mock_client = Mock()
+        mock_client.list_tools.return_value = []
+
+        mock_manager = Mock()
+        mock_manager.config.load_report = {
+            "mode": "auto",
+            "config_file": Path("/tmp/local/mcp_servers.json"),
+            "global": {
+                "path": Path("/tmp/global/.gaia/mcp_servers.json"),
+                "exists": True,
+                "servers": ["shared"],
+            },
+            "local": {
+                "path": Path("/tmp/local/mcp_servers.json"),
+                "exists": True,
+                "servers": ["shared"],
+            },
+            "overrides": ["shared"],
+        }
+        mock_manager.config.get_servers.return_value = {"shared": {}}
+        mock_manager.list_servers.return_value = ["shared"]
+        mock_manager.get_client.return_value = mock_client
+        mock_manager_class.return_value = mock_manager
+
+        console = Mock()
+        agent = MockAgent()
+        agent.console = console
+
+        agent._print_mcp_load_summary()
+
+        message = console.print_info.call_args[0][0]
+        assert "overrides" in message
+        assert "shared" in message
+
+
+class TestToolDisplayName:
+    """Tests for get_tool_display_name utility."""
+
+    def setup_method(self):
+        _TOOL_REGISTRY.clear()
+
+    def teardown_method(self):
+        _TOOL_REGISTRY.clear()
+
+    def test_tool_display_name_for_mcp_tools(self):
+        """MCP tools show '{mcp_tool_name} ({mcp_server})' as display name."""
+        _TOOL_REGISTRY["mcp_oem_launch_experience_zone"] = {
+            "name": "mcp_oem_launch_experience_zone",
+            "description": "[MCP:oem] Launch the experience zone",
+            "parameters": {},
+            "_mcp_server": "oem",
+            "_mcp_tool_name": "launch_experience_zone",
+        }
+
+        display = get_tool_display_name("mcp_oem_launch_experience_zone")
+        assert display == "launch_experience_zone (oem)"
+
+    def test_tool_display_name_for_native_tools(self):
+        """Native tools return their name unchanged."""
+        _TOOL_REGISTRY["read_file"] = {
+            "name": "read_file",
+            "description": "Read a file",
+            "parameters": {},
+        }
+
+        assert get_tool_display_name("read_file") == "read_file"
+
+    def test_tool_display_name_unknown_tool(self):
+        """Unknown tool names (not in registry) are returned unchanged."""
+        assert get_tool_display_name("nonexistent_tool") == "nonexistent_tool"

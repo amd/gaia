@@ -1,16 +1,8 @@
 {
   "mcpServers": {
-    "time": {
-      "command": "uvx",
-      "args": [
-        "mcp-server-time"
-      ]
-    },
-    "windows": {
-      "command": "uvx",
-      "args": [
-        "windows-mcp"
-      ]
+    "oem": {
+      "command": "dotnet",
+      "args": ["run", "--project", "/Users/tomasz/src/test/oem01"]
     }
   }
 }

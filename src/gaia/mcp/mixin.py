@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Mixin for adding MCP client support to agents."""
 
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -37,7 +38,7 @@ class MCPClientMixin:
         config_file: Optional[str] = None,
     ):
         super().__init__()
-        config = MCPConfig(config_file=config_file) if config_file else None
+        config = MCPConfig(config_file=config_file)
         self._mcp_manager = MCPClientManager(
             config=config, debug=getattr(self, "debug", debug)
         )
@@ -124,6 +125,61 @@ class MCPClientMixin:
             )
             return False
 
+    def _print_mcp_load_summary(self) -> None:
+        """Print a post-connection summary: config source + per-server ✓/✗ status."""
+        report = self._mcp_manager.config.load_report
+        if not report:
+            return
+
+        home = Path.home()
+
+        def fmt_path(p) -> str:
+            try:
+                return "~/" + str(Path(p).relative_to(home))
+            except ValueError:
+                return str(p)
+
+        lines = []
+
+        # Config source line
+        if report["mode"] == "explicit":
+            lines.append(f"Config file: {fmt_path(report['config_file'])}")
+        else:
+            g = report["global"]
+            lc = report["local"]
+            if g["exists"] and lc["exists"]:
+                lines.append(
+                    f"Config: {fmt_path(lc['path'])} (local)"
+                    f" + {fmt_path(g['path'])} (global)"
+                )
+                if report["overrides"]:
+                    lines.append(f"  Local overrides: {', '.join(report['overrides'])}")
+            elif lc["exists"]:
+                lines.append(f"Config: {fmt_path(lc['path'])} (local)")
+            elif g["exists"]:
+                lines.append(f"Config: {fmt_path(g['path'])} (global)")
+            else:
+                lines.append("No MCP config files found")
+
+        # Per-server connection results
+        configured = list(self._mcp_manager.config.get_servers().keys())
+        connected = set(self._mcp_manager.list_servers())
+
+        if configured:
+            lines.append("")
+            for name in configured:
+                if name in connected:
+                    client = self._mcp_manager.get_client(name)
+                    tools = client.list_tools() if client else []
+                    n = len(tools)
+                    lines.append(f"  ✓ {name} ({n} tool{'s' if n != 1 else ''})")
+                else:
+                    lines.append(f"  ✗ {name} (failed to connect)")
+        else:
+            lines.append("No servers configured")
+
+        self._console_print("print_info", "\n".join(lines))
+
     def load_mcp_servers_from_config(self) -> int:
         """Load and register MCP servers from configuration file.
 
@@ -139,8 +195,11 @@ class MCPClientMixin:
             >>> count = agent.load_mcp_servers_from_config()
             >>> print(f"Loaded {count} MCP servers")
         """
-        # Load servers from config
+        # Load servers from config (quiet — summary printed after)
         self._mcp_manager.load_from_config()
+
+        # Print config source + per-server connection results
+        self._print_mcp_load_summary()
 
         # Register tools from all loaded servers
         server_count = 0
