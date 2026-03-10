@@ -72,7 +72,9 @@ class MCPConfig:
             self.config_file = local_path if local_path else global_path
 
             # Use found local path for display, or CWD fallback if none found.
-            display_local_path = local_path if local_path else Path.cwd() / "mcp_servers.json"
+            display_local_path = (
+                local_path if local_path else Path.cwd() / "mcp_servers.json"
+            )
 
             self.load_report = {
                 "mode": "auto",

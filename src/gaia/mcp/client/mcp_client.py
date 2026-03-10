@@ -316,7 +316,6 @@ class MCPClient:
             logger.debug(f"Tool {tool_name} completed successfully")
             logger.debug(f"  Response: {json.dumps(result, indent=2)}")
 
-        logger.debug(f"Tool {tool_name} completed successfully")
         return result
 
     def create_tool_wrapper(self, tool: MCPTool) -> Callable[..., Dict[str, Any]]:

@@ -92,10 +92,16 @@ class TestMCPConfigStacking:
     def test_global_and_local_merge(self, tmp_path, monkeypatch):
         """Global and local configs are merged; local wins on conflicts."""
         global_path = tmp_path / ".gaia" / "mcp_servers.json"
-        self._write_config(global_path, {"global_server": {"command": "g"}, "shared": {"command": "global"}})
+        self._write_config(
+            global_path,
+            {"global_server": {"command": "g"}, "shared": {"command": "global"}},
+        )
 
         local_path = tmp_path / "project" / "mcp_servers.json"
-        self._write_config(local_path, {"local_server": {"command": "l"}, "shared": {"command": "local"}})
+        self._write_config(
+            local_path,
+            {"local_server": {"command": "l"}, "shared": {"command": "local"}},
+        )
 
         monkeypatch.chdir(local_path.parent)
 
@@ -152,7 +158,9 @@ class TestMCPConfigStacking:
     def test_overrides_reported_correctly(self, tmp_path, monkeypatch):
         """load_report lists servers overridden by local config."""
         global_path = tmp_path / ".gaia" / "mcp_servers.json"
-        self._write_config(global_path, {"alpha": {"command": "ga"}, "beta": {"command": "gb"}})
+        self._write_config(
+            global_path, {"alpha": {"command": "ga"}, "beta": {"command": "gb"}}
+        )
 
         local_path = tmp_path / "project" / "mcp_servers.json"
         self._write_config(local_path, {"alpha": {"command": "la"}})
@@ -204,7 +212,9 @@ class TestMCPConfigStacking:
         empty_home = tmp_path / "home"
         empty_home.mkdir()
 
-        fake_main = SimpleNamespace(__file__=str(script_dir / "mcp_config_based_agent.py"))
+        fake_main = SimpleNamespace(
+            __file__=str(script_dir / "mcp_config_based_agent.py")
+        )
         with patch.dict(sys.modules, {"__main__": fake_main}):
             with patch("pathlib.Path.home", return_value=empty_home):
                 config = MCPConfig()

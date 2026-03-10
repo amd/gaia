@@ -329,7 +329,9 @@ class TestMCPClientMixinConfigFile:
         class ConfigFileAgent(MCPClientMixin):
             def __init__(self):
                 self.debug = False
-                super().__init__(auto_load_config=False, config_file="/path/to/mcp_servers.json")
+                super().__init__(
+                    auto_load_config=False, config_file="/path/to/mcp_servers.json"
+                )
 
         agent = ConfigFileAgent()
         mock_manager.load_from_config.assert_called_once()

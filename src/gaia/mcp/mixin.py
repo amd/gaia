@@ -37,6 +37,18 @@ class MCPClientMixin:
         debug: bool = False,
         config_file: Optional[str] = None,
     ):
+        """Initialize the MCP client mixin.
+
+        Args:
+            auto_load_config: When True, automatically load servers from the
+                stacked config files (``~/.gaia/mcp_servers.json`` + local
+                ``mcp_servers.json``).  Ignored when ``config_file`` is
+                provided — loading always occurs in that case.
+            debug: Enable debug logging for MCP client connections.
+            config_file: Path to an explicit config file.  When set, only that
+                file is loaded (no global/local stacking) and loading is always
+                triggered regardless of ``auto_load_config``.
+        """
         super().__init__()
         config = MCPConfig(config_file=config_file)
         self._mcp_manager = MCPClientManager(
