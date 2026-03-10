@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS messages (
     content TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now')),
     rag_sources TEXT,
+    agent_steps TEXT,
     tokens_prompt INTEGER,
     tokens_completion INTEGER
 );
@@ -97,8 +98,24 @@ class ChatDatabase:
         logger.info("Chat database initialized: %s", db_path)
 
     def _init_schema(self):
-        """Create tables if they don't exist."""
+        """Create tables if they don't exist and run migrations."""
         self._conn.executescript(SCHEMA_SQL)
+        self._migrate()
+
+    def _migrate(self):
+        """Apply incremental schema migrations for existing databases."""
+        # Add agent_steps column if it doesn't exist (added for observability persistence)
+        try:
+            cols = [
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(messages)").fetchall()
+            ]
+            if "agent_steps" not in cols:
+                self._conn.execute("ALTER TABLE messages ADD COLUMN agent_steps TEXT")
+                self._conn.commit()
+                logger.info("Migrated messages table: added agent_steps column")
+        except Exception as e:
+            logger.debug("Migration check for agent_steps: %s", e)
 
     def close(self):
         """Close database connection."""
@@ -263,24 +280,27 @@ class ChatDatabase:
         role: str,
         content: str,
         rag_sources: List[Dict] = None,
+        agent_steps: List[Dict] = None,
         tokens_prompt: int = None,
         tokens_completion: int = None,
     ) -> int:
         """Add a message to a session. Returns message ID."""
         sources_json = json.dumps(rag_sources) if rag_sources else None
+        steps_json = json.dumps(agent_steps) if agent_steps else None
 
         with self._transaction():
             cursor = self._conn.execute(
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
-                    tokens_prompt, tokens_completion)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    agent_steps, tokens_prompt, tokens_completion)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
                     content,
                     self._now(),
                     sources_json,
+                    steps_json,
                     tokens_prompt,
                     tokens_completion,
                 ),
@@ -316,6 +336,11 @@ class ChatDatabase:
                     msg["rag_sources"] = json.loads(msg["rag_sources"])
                 except (json.JSONDecodeError, TypeError):
                     msg["rag_sources"] = None
+            if msg.get("agent_steps"):
+                try:
+                    msg["agent_steps"] = json.loads(msg["agent_steps"])
+                except (json.JSONDecodeError, TypeError):
+                    msg["agent_steps"] = None
             messages.append(msg)
 
         return messages

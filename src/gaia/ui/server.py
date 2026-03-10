@@ -980,6 +980,8 @@ def _session_to_response(session: dict) -> SessionResponse:
 
 def _message_to_response(msg: dict) -> MessageResponse:
     """Convert database message dict to response model."""
+    from .models import AgentStepResponse
+
     sources = None
     if msg.get("rag_sources"):
         try:
@@ -990,6 +992,16 @@ def _message_to_response(msg: dict) -> MessageResponse:
         except Exception:
             sources = None
 
+    agent_steps = None
+    if msg.get("agent_steps"):
+        try:
+            raw_steps = msg["agent_steps"]
+            if isinstance(raw_steps, str):
+                raw_steps = json.loads(raw_steps)
+            agent_steps = [AgentStepResponse(**s) for s in raw_steps]
+        except Exception:
+            agent_steps = None
+
     return MessageResponse(
         id=msg["id"],
         session_id=msg["session_id"],
@@ -997,6 +1009,7 @@ def _message_to_response(msg: dict) -> MessageResponse:
         content=msg["content"],
         created_at=msg["created_at"],
         rag_sources=sources,
+        agent_steps=agent_steps,
     )
 
 
@@ -1233,20 +1246,41 @@ async def _index_document(filepath: Path) -> int:
     def _do_index():
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
-        config = RAGConfig()
+        # Allow access to the file's directory (and user home) since the UI
+        # explicitly selected this file via the file browser.
+        allowed = [str(filepath.parent), str(Path.home())]
+        config = RAGConfig(allowed_paths=allowed)
         rag = RAGSDK(config)
         result = rag.index_document(str(filepath))
         logger.info("RAG index_document result for %s: %s", filepath, result)
         if isinstance(result, dict):
+            if result.get("error"):
+                logger.warning(
+                    "RAG returned error for %s: %s", filepath, result["error"]
+                )
+            if not result.get("success"):
+                logger.warning(
+                    "RAG indexing unsuccessful for %s (success=False)", filepath
+                )
             # RAG SDK returns "num_chunks", not "chunk_count"
-            return result.get("num_chunks", 0) or result.get("chunk_count", 0)
+            chunks = result.get("num_chunks", 0) or result.get("chunk_count", 0)
+            logger.info(
+                "Indexed %s: %d chunks (success=%s)",
+                filepath,
+                chunks,
+                result.get("success"),
+            )
+            return chunks
+        logger.warning(
+            "RAG index_document returned non-dict for %s: %r", filepath, result
+        )
         return 0
 
     try:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _do_index)
     except Exception as e:
-        logger.warning("Failed to index document %s: %s", filepath, e)
+        logger.error("Failed to index document %s: %s", filepath, e, exc_info=True)
         return 0
 
 
@@ -1306,6 +1340,20 @@ def _resolve_rag_paths(db: ChatDatabase, document_ids: list) -> list:
     return rag_file_paths
 
 
+def _compute_allowed_paths(rag_file_paths: list) -> list:
+    """Derive allowed filesystem paths from document locations.
+
+    Collects the unique parent directories of all RAG document paths
+    plus the user home directory, so the agent (and its RAG SDK) are
+    permitted to read the indexed files.
+    """
+    dirs = {str(Path.home())}
+    for fp in rag_file_paths:
+        parent = str(Path(fp).parent)
+        dirs.add(parent)
+    return list(dirs)
+
+
 async def _get_chat_response(
     db: ChatDatabase, session: dict, request: ChatRequest
 ) -> str:
@@ -1335,12 +1383,14 @@ async def _get_chat_response(
         if rag_file_paths:
             logger.info("Chat using %d document(s) for RAG", len(rag_file_paths))
 
+        allowed = _compute_allowed_paths(rag_file_paths)
         config = ChatAgentConfig(
             model_id=session.get("model"),
             max_steps=10,
             silent_mode=True,
             debug=False,
             rag_documents=rag_file_paths,
+            allowed_paths=allowed,
         )
         agent = ChatAgent(config)
 
@@ -1394,15 +1444,19 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         rag_file_paths = _resolve_rag_paths(db, document_ids)
 
         if rag_file_paths:
-            logger.info("Streaming chat using %d document(s) for RAG", len(rag_file_paths))
+            logger.info(
+                "Streaming chat using %d document(s) for RAG", len(rag_file_paths)
+            )
 
+        allowed = _compute_allowed_paths(rag_file_paths)
         config = ChatAgentConfig(
             model_id=session.get("model"),
             max_steps=10,
-            streaming=True,
+            streaming=False,  # Keep False so raw LLM JSON isn't streamed to frontend
             silent_mode=False,
             debug=False,
             rag_documents=rag_file_paths,
+            allowed_paths=allowed,
         )
         agent = ChatAgent(config)
         agent.console = sse_handler  # Replace console with SSE handler
@@ -1438,7 +1492,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         producer.start()
 
         # Yield SSE events from the handler's queue
+        # Also capture agent steps for persistence
         full_response = ""
+        captured_steps = []  # Collect agent steps for DB persistence
+        step_id = 0
         idle_cycles = 0
         while True:
             try:
@@ -1450,11 +1507,87 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     # Sentinel - agent is done
                     break
 
+                event_type = event.get("type", "")
+
                 # Capture answer content for DB storage
-                if event.get("type") == "answer":
+                if event_type == "answer":
                     full_response = event.get("content", "")
-                elif event.get("type") == "chunk":
+                elif event_type == "chunk":
                     full_response += event.get("content", "")
+
+                # Capture agent steps for persistence
+                if event_type == "thinking":
+                    step_id += 1
+                    # Deactivate previous steps
+                    for s in captured_steps:
+                        s["active"] = False
+                    captured_steps.append(
+                        {
+                            "id": step_id,
+                            "type": "thinking",
+                            "label": "Thinking",
+                            "detail": event.get("content"),
+                            "active": True,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        }
+                    )
+                elif event_type == "tool_start":
+                    step_id += 1
+                    for s in captured_steps:
+                        s["active"] = False
+                    captured_steps.append(
+                        {
+                            "id": step_id,
+                            "type": "tool",
+                            "label": f"Using {event.get('tool', 'tool')}",
+                            "tool": event.get("tool"),
+                            "detail": event.get("detail"),
+                            "active": True,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        }
+                    )
+                elif event_type == "tool_args" and captured_steps:
+                    # Update the last tool step with argument detail
+                    captured_steps[-1]["detail"] = event.get("detail", "")
+                elif event_type == "tool_end" and captured_steps:
+                    captured_steps[-1]["active"] = False
+                    captured_steps[-1]["success"] = event.get("success", True)
+                elif event_type == "tool_result" and captured_steps:
+                    captured_steps[-1]["active"] = False
+                    captured_steps[-1]["result"] = (
+                        event.get("summary") or event.get("title") or "Done"
+                    )
+                    captured_steps[-1]["success"] = event.get("success", True)
+                elif event_type == "plan":
+                    step_id += 1
+                    for s in captured_steps:
+                        s["active"] = False
+                    captured_steps.append(
+                        {
+                            "id": step_id,
+                            "type": "plan",
+                            "label": "Created plan",
+                            "planSteps": event.get("steps"),
+                            "active": False,
+                            "success": True,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        }
+                    )
+                elif event_type == "agent_error":
+                    step_id += 1
+                    for s in captured_steps:
+                        s["active"] = False
+                    captured_steps.append(
+                        {
+                            "id": step_id,
+                            "type": "error",
+                            "label": "Error",
+                            "detail": event.get("content"),
+                            "active": False,
+                            "success": False,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        }
+                    )
 
                 yield f"data: {json.dumps(event)}\n\n"
 
@@ -1467,6 +1600,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 if idle_cycles % 25 == 0:
                     yield ": keepalive\n\n"
                 continue
+
+        # Finalize all captured steps (mark as inactive)
+        for s in captured_steps:
+            s["active"] = False
 
         # Check for errors from the agent thread
         if result_holder["error"]:
@@ -1486,9 +1623,14 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             # Send as answer event since it wasn't streamed
             yield f"data: {json.dumps({'type': 'answer', 'content': full_response})}\n\n"
 
-        # Save complete response to DB
+        # Save complete response to DB (including captured agent steps)
         if full_response:
-            msg_id = db.add_message(request.session_id, "assistant", full_response)
+            msg_id = db.add_message(
+                request.session_id,
+                "assistant",
+                full_response,
+                agent_steps=captured_steps if captured_steps else None,
+            )
             done_data = json.dumps(
                 {"type": "done", "message_id": msg_id, "content": full_response}
             )

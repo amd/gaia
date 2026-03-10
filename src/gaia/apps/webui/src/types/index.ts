@@ -103,6 +103,17 @@ export interface TunnelStatus {
 
 // ── Agent Activity Types ──────────────────────────────────────────────────
 
+/** Structured command output for shell command results. */
+export interface CommandOutput {
+    command: string;
+    stdout: string;
+    stderr: string;
+    returnCode: number;
+    cwd?: string;
+    durationSeconds?: number;
+    truncated?: boolean;
+}
+
 /** A single step in the agent's execution. */
 export interface AgentStep {
     id: number;
@@ -123,6 +134,8 @@ export interface AgentStep {
     planSteps?: string[];
     /** Timestamp when this step started. */
     timestamp: number;
+    /** Structured command output (for run_shell_command). */
+    commandOutput?: CommandOutput;
 }
 
 /** Extended SSE event types for agent communication. */
@@ -137,6 +150,7 @@ export type StreamEventType =
     | 'tool_start'  // Tool execution started
     | 'tool_end'    // Tool execution completed
     | 'tool_result' // Tool result summary
+    | 'tool_args'   // Tool arguments detail
     | 'answer'      // Final answer from agent
     | 'agent_error';// Agent-level error (non-fatal)
 
@@ -156,7 +170,18 @@ export interface StreamEvent {
     current_step?: number;
     title?: string;
     detail?: string;
+    args?: Record<string, unknown>;
     model?: string;
     elapsed?: number;
     tools_used?: number;
+    /** Structured command output (for tool_result of run_shell_command). */
+    command_output?: {
+        command: string;
+        stdout: string;
+        stderr: string;
+        return_code: number;
+        cwd?: string;
+        duration_seconds?: number;
+        truncated?: boolean;
+    };
 }

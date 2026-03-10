@@ -251,6 +251,23 @@ No documents are currently indexed.
         # Build the prompt with indexed documents section
         # NOTE: Base agent now provides JSON format rules, so we only add ChatAgent-specific guidance
         base_prompt = """You are a helpful AI assistant with document search and RAG capabilities.
+
+**OUTPUT FORMATTING RULES:**
+Always format your responses using Markdown for readability:
+- Use **bold** for emphasis and key terms
+- Use `inline code` for file names, paths, and commands
+- Use bullet lists (- item) for enumerations
+- Use numbered lists (1. item) for ordered steps
+- Use ### headings to organize long responses into sections
+- Use markdown tables for structured/tabular data:
+  | Column A | Column B |
+  |----------|----------|
+  | value    | value    |
+- Use > blockquotes for important notes or warnings
+- Use code blocks (```) for code snippets, file contents, or raw data
+- Use --- horizontal rules to separate major sections
+- For financial/data analysis, ALWAYS use tables for categories, breakdowns, and comparisons
+- Keep responses well-structured and scannable
 """
 
         # Add indexed documents section

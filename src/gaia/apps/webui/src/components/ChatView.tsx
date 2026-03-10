@@ -31,7 +31,8 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
         case 'tool_start':
             return {
                 id, type: 'tool',
-                label: event.detail ? `Running command` : `Using tool`,
+                // Label is determined by AgentActivity based on tool name
+                label: 'Using tool',
                 tool: event.tool,
                 detail: event.detail,
                 active: true, timestamp: ts,
@@ -115,7 +116,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setLoadingMessages(true);
         api.getMessages(sessionId)
             .then((data) => {
-                const msgs = data.messages || [];
+                const msgs = (data.messages || []).map((m: any) => ({
+                    ...m,
+                    // Map snake_case agent_steps from API to camelCase agentSteps
+                    agentSteps: m.agentSteps || m.agent_steps || undefined,
+                }));
                 setMessages(msgs);
                 log.chat.timed(`Loaded ${msgs.length} message(s) for session=${sessionId}`, t);
             })
@@ -276,9 +281,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 const content = event.content || '';
                 if (content) {
                     fullContent += content;
+                    // Filter raw tool-call JSON that LLMs sometimes emit as text.
+                    // This is a frontend safety net (backend also filters these).
+                    const cleaned = fullContent.replace(
+                        /^\s*\{"?\s*tool"?\s*:\s*"[^"]+"\s*,\s*"?tool_args"?\s*:\s*\{.*\}\s*\}\s*$/s,
+                        ''
+                    ).trim();
                     // Buffer chunks and flush to store at most once per frame (~60fps)
                     // instead of triggering a React re-render on every single SSE chunk
-                    streamBufferRef.current = fullContent;
+                    streamBufferRef.current = cleaned;
                     if (rafRef.current === null) {
                         rafRef.current = requestAnimationFrame(flushStreamBuffer);
                     }

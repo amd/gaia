@@ -1,4 +1,4 @@
-/* Agent Activity - collapsible step display */
+/* Agent Activity - collapsible step display with timeline */
 
 .agent-activity {
     max-width: 900px;
@@ -13,8 +13,8 @@
     align-items: center;
     justify-content: space-between;
     width: 100%;
-    padding: 6px 10px;
-    border-radius: 8px;
+    padding: 8px 12px;
+    border-radius: 10px;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-light);
     font-size: 12px;
@@ -30,13 +30,14 @@
 .agent-summary-left {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
 }
 
 .agent-summary-right {
     display: flex;
     align-items: center;
     color: var(--text-muted);
+    transition: transform var(--duration-fast) var(--ease);
 }
 
 .agent-summary-text {
@@ -46,7 +47,13 @@
 .agent-icon-done { color: var(--text-muted); }
 .agent-icon-error { color: #ef4444; }
 
-/* Spinner animation */
+/* Spinner wrap with subtle glow */
+.agent-spinner-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
 .agent-spinner {
     animation: spin 1s linear infinite;
     color: var(--amd-red);
@@ -58,11 +65,13 @@
 
 /* Active state */
 .agent-activity.active .agent-summary-bar {
-    border-color: rgba(237, 28, 36, 0.2);
+    border-color: rgba(237, 28, 36, 0.25);
     background: rgba(237, 28, 36, 0.04);
+    box-shadow: 0 0 0 1px rgba(237, 28, 36, 0.06);
 }
 [data-theme="dark"] .agent-activity.active .agent-summary-bar {
     background: rgba(237, 28, 36, 0.06);
+    box-shadow: 0 0 12px rgba(237, 28, 36, 0.06);
 }
 
 /* Summary variant (post-completion) */
@@ -73,7 +82,7 @@
 .agent-activity.summary .agent-summary-bar {
     background: transparent;
     border-color: transparent;
-    padding: 4px 0;
+    padding: 5px 0;
     font-size: 11px;
     color: var(--text-muted);
 }
@@ -84,18 +93,15 @@
 
 /* ── Step list ────────────────────────────────────────────────── */
 .agent-steps {
-    margin-top: 4px;
-    border: 1px solid var(--border-light);
-    border-radius: 8px;
-    overflow: hidden;
-    background: var(--bg-secondary);
-    animation: slideDown 150ms var(--ease);
+    margin-top: 6px;
+    padding: 4px 0 4px 4px;
+    animation: slideDown 200ms var(--ease);
 }
 
 @keyframes slideDown {
     from {
         opacity: 0;
-        transform: translateY(-4px);
+        transform: translateY(-6px);
     }
     to {
         opacity: 1;
@@ -103,12 +109,88 @@
     }
 }
 
-/* ── Individual step ──────────────────────────────────────────── */
+/* ── Individual step with timeline ────────────────────────────── */
 .agent-step-row {
-    border-bottom: 1px solid var(--border-light);
+    display: flex;
+    gap: 0;
+    min-height: 32px;
 }
-.agent-step-row:last-child {
-    border-bottom: none;
+
+/* ── Timeline (left column) ───────────────────────────────────── */
+.step-timeline {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 24px;
+    flex-shrink: 0;
+    padding-top: 2px;
+}
+
+.step-dot {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-tertiary);
+    border: 1.5px solid var(--border);
+    color: var(--text-muted);
+    flex-shrink: 0;
+    transition: all var(--duration) var(--ease);
+    z-index: 1;
+}
+
+/* Color the dot based on the tool's color */
+.step-dot:not(.dot-active):not(.dot-error) {
+    border-color: var(--dot-color, var(--border));
+    color: var(--dot-color, var(--text-muted));
+}
+
+.step-dot.dot-active {
+    border-color: var(--amd-red);
+    background: rgba(237, 28, 36, 0.1);
+    color: var(--amd-red);
+    box-shadow: 0 0 8px rgba(237, 28, 36, 0.2);
+}
+
+.step-dot.dot-error {
+    border-color: #ef4444;
+    background: rgba(239, 68, 68, 0.1);
+    color: #ef4444;
+}
+
+.dot-spinner {
+    animation: spin 1s linear infinite;
+}
+
+/* Completed dots with success */
+.agent-step-row:not(.active) .step-dot .lucide-check-circle-2 {
+    color: #22c55e;
+}
+
+.step-line {
+    width: 1.5px;
+    flex: 1;
+    min-height: 8px;
+    background: var(--border-light);
+    margin: 2px 0;
+}
+
+[data-theme="dark"] .step-line {
+    background: var(--border);
+    opacity: 0.5;
+}
+
+.agent-step-row.last .step-line {
+    display: none;
+}
+
+/* ── Step content (right column) ──────────────────────────────── */
+.step-content {
+    flex: 1;
+    min-width: 0;
+    padding-bottom: 4px;
 }
 
 .step-header {
@@ -116,10 +198,11 @@
     align-items: center;
     justify-content: space-between;
     width: 100%;
-    padding: 7px 10px;
-    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 8px;
+    font-size: 12.5px;
     color: var(--text-secondary);
-    transition: background var(--duration) var(--ease);
+    transition: background var(--duration-fast) var(--ease);
 }
 .step-header:hover {
     background: var(--bg-hover);
@@ -128,95 +211,232 @@
 .step-left {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 7px;
     min-width: 0;
 }
 
 .step-right {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 5px;
     flex-shrink: 0;
+}
+
+.step-icon {
+    flex-shrink: 0;
+    opacity: 0.85;
 }
 
 .step-label {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    font-weight: 500;
+    color: var(--text-primary);
 }
 
-.step-tool-name {
+/* Active step label emphasis */
+.agent-step-row.active .step-label {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+/* Tool badge - styled code pill */
+.step-tool-badge {
     font-family: var(--font-mono);
-    font-size: 11px;
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: var(--bg-tertiary);
-    color: var(--text-muted);
+    font-size: 10.5px;
+    padding: 1px 7px;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--badge-color, #3b82f6) 8%, transparent);
+    color: var(--badge-color, #3b82f6);
     white-space: nowrap;
+    border: 1px solid color-mix(in srgb, var(--badge-color, #3b82f6) 15%, transparent);
+    font-weight: 500;
+    letter-spacing: -0.01em;
 }
 
-/* Step icons by type */
-.step-icon-thinking { color: #8b5cf6; }
-.step-icon-tool { color: #3b82f6; }
-.step-icon-plan { color: #f59e0b; }
-.step-icon-error { color: #ef4444; }
-.step-icon-status { color: var(--text-muted); }
+/* Fallback for browsers without color-mix */
+@supports not (background: color-mix(in srgb, red 50%, blue)) {
+    .step-tool-badge {
+        background: var(--bg-tertiary);
+        color: var(--text-muted);
+        border-color: var(--border-light);
+    }
+}
 
 .step-check { color: #22c55e; }
 .step-error-icon { color: #ef4444; }
-.step-chevron { color: var(--text-muted); }
 
-/* Active step highlight */
-.agent-step-row.active {
-    background: rgba(237, 28, 36, 0.03);
+/* Chevron rotation */
+.step-chevron-wrap {
+    display: flex;
+    align-items: center;
+    transition: transform var(--duration-fast) var(--ease);
 }
-.agent-step-row.active .step-label {
-    color: var(--text-primary);
-    font-weight: 500;
+.step-chevron-wrap.expanded {
+    transform: rotate(90deg);
 }
+.step-chevron { color: var(--text-muted); }
 
 /* ── Step detail (expanded) ───────────────────────────────────── */
 .step-detail {
-    padding: 6px 10px 10px 32px;
-    font-size: 12px;
-    color: var(--text-secondary);
-    border-top: 1px solid var(--border-light);
-    background: var(--bg-primary);
-    animation: slideDown 100ms var(--ease);
+    margin: 4px 0 6px 8px;
+    padding: 0;
+    animation: fadeIn 150ms var(--ease);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
 }
 
-.step-detail-text {
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.detail-section-label {
+    display: block;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+}
+
+/* Arguments display */
+.step-detail-args {
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+}
+
+.detail-args-content {
+    font-size: 12px;
+    color: var(--text-secondary);
     line-height: 1.5;
+}
+
+.args-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.arg-row {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+}
+
+.arg-key {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    min-width: 60px;
+}
+
+.arg-key::after {
+    content: ':';
+}
+
+.arg-value {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-primary);
+    word-break: break-word;
+}
+
+/* Result display */
+.step-detail-result {
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.step-detail-result.result-success {
+    background: rgba(34, 197, 94, 0.04);
+    border: 1px solid rgba(34, 197, 94, 0.12);
+}
+
+.step-detail-result.result-error {
+    background: rgba(239, 68, 68, 0.04);
+    border: 1px solid rgba(239, 68, 68, 0.12);
+}
+
+[data-theme="dark"] .step-detail-result.result-success {
+    background: rgba(34, 197, 94, 0.06);
+    border-color: rgba(34, 197, 94, 0.15);
+}
+
+[data-theme="dark"] .step-detail-result.result-error {
+    background: rgba(239, 68, 68, 0.06);
+    border-color: rgba(239, 68, 68, 0.15);
+}
+
+.detail-result-content {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-primary);
     white-space: pre-wrap;
     word-break: break-word;
 }
 
-.step-detail-result {
-    margin-top: 4px;
-    padding: 4px 8px;
-    border-radius: 4px;
-    background: var(--bg-tertiary);
-    font-family: var(--font-mono);
-    font-size: 11px;
+/* Plan steps */
+.step-detail-plan {
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(245, 158, 11, 0.04);
+    border: 1px solid rgba(245, 158, 11, 0.12);
 }
 
-.result-label {
-    font-weight: 600;
-    color: var(--text-muted);
+[data-theme="dark"] .step-detail-plan {
+    background: rgba(245, 158, 11, 0.06);
+    border-color: rgba(245, 158, 11, 0.15);
 }
 
 .step-plan-list {
-    margin: 4px 0 0 16px;
+    margin: 0 0 0 18px;
     padding: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
 }
 .step-plan-item {
-    margin-bottom: 2px;
+    margin-bottom: 3px;
     line-height: 1.5;
+}
+
+/* ── Accessibility: reduced motion ────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+    .agent-spinner,
+    .dot-spinner {
+        animation: none;
+    }
+
+    .agent-steps,
+    .step-detail {
+        animation: none;
+    }
+
+    .step-chevron-wrap {
+        transition: none;
+    }
+
+    .step-dot.dot-active {
+        box-shadow: none;
+    }
 }
 
 /* ── Responsive ───────────────────────────────────────────────── */
 @media (max-width: 768px) {
     .agent-activity {
         padding: 0 16px;
+    }
+
+    .step-tool-badge {
+        display: none;
     }
 }

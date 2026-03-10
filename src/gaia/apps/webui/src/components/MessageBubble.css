@@ -97,27 +97,185 @@
 }
 
 .msg-error .msg-body .md-p,
-.msg-error .msg-body .inline-content {
+.msg-error .msg-body .md-content {
     font-family: var(--font-mono);
     font-size: 13px;
 }
 
-/* ── Inline markdown ──────────────────────────────────────────── */
-.inline-content { }
+/* ── Markdown content (react-markdown) ───────────────────────── */
+.md-content {
+    color: var(--text-primary);
+}
 
-.md-p { margin-bottom: 10px; }
-.md-p:last-child { margin-bottom: 0; }
-.md-h2 { font-size: 18px; font-weight: 700; margin: 16px 0 8px; }
-.md-h3 { font-size: 16px; font-weight: 600; margin: 14px 0 6px; }
-.md-h4 { font-size: 14px; font-weight: 600; margin: 12px 0 4px; }
-.md-li { padding-left: 16px; margin-bottom: 4px; }
+.md-content > :first-child {
+    margin-top: 0;
+}
+.md-content > :last-child {
+    margin-bottom: 0;
+}
 
+/* Paragraphs */
+.md-p {
+    margin-bottom: 10px;
+}
+.md-p:last-child {
+    margin-bottom: 0;
+}
+
+/* Headers */
+.md-h2 {
+    font-size: 18px;
+    font-weight: 700;
+    margin: 16px 0 8px;
+    color: var(--text-primary);
+}
+.md-h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 14px 0 6px;
+    color: var(--text-primary);
+}
+.md-h4 {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 12px 0 4px;
+    color: var(--text-primary);
+}
+
+/* Lists */
+.md-ul,
+.md-ol {
+    margin: 8px 0;
+    padding-left: 24px;
+}
+.md-ul {
+    list-style-type: disc;
+}
+.md-ol {
+    list-style-type: decimal;
+}
+.md-li {
+    margin-bottom: 4px;
+    padding-left: 4px;
+}
+.md-li > .md-p {
+    margin-bottom: 4px;
+}
+/* Nested lists */
+.md-li > .md-ul,
+.md-li > .md-ol {
+    margin: 4px 0;
+}
+
+/* Bold & italic (handled automatically by react-markdown) */
+.md-content strong {
+    font-weight: 700;
+    color: var(--text-primary);
+}
+.md-content em {
+    font-style: italic;
+}
+
+/* Inline code */
 .inline-code {
     font-family: var(--font-mono);
     font-size: 12.5px;
     padding: 2px 6px;
     border-radius: 4px;
     background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+/* ── Links ────────────────────────────────────────────────────── */
+.md-link {
+    color: var(--amd-red);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 150ms var(--ease);
+}
+.md-link:hover {
+    border-bottom-color: var(--amd-red);
+}
+
+/* ── Blockquotes ──────────────────────────────────────────────── */
+.md-blockquote {
+    margin: 12px 0;
+    padding: 8px 16px;
+    border-left: 3px solid var(--amd-red);
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 0 6px 6px 0;
+    color: var(--text-secondary);
+}
+.md-blockquote .md-p {
+    margin-bottom: 6px;
+}
+.md-blockquote .md-p:last-child {
+    margin-bottom: 0;
+}
+
+/* ── Horizontal rule ──────────────────────────────────────────── */
+.md-hr {
+    margin: 16px 0;
+    border: none;
+    border-top: 1px solid var(--border);
+}
+
+/* ── Tables (GFM) ────────────────────────────────────────────── */
+.md-table-wrap {
+    margin: 12px 0;
+    overflow-x: auto;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+}
+.md-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.md-table th {
+    text-align: left;
+    padding: 8px 12px;
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.04);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}
+.md-table td {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border-light);
+    color: var(--text-primary);
+}
+.md-table tr:last-child td {
+    border-bottom: none;
+}
+.md-table tr:hover td {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+/* Right-align numeric columns (convention: last column in financial data) */
+.md-table td:last-child,
+.md-table th:last-child {
+    text-align: right;
+}
+
+/* ── Strikethrough (GFM) ─────────────────────────────────────── */
+.md-content del {
+    text-decoration: line-through;
+    color: var(--text-muted);
+}
+
+/* ── Task lists (GFM) ────────────────────────────────────────── */
+.md-content .task-list-item {
+    list-style: none;
+    margin-left: -20px;
+}
+.md-content .task-list-item input[type="checkbox"] {
+    margin-right: 6px;
 }
 
 /* ── Code blocks ──────────────────────────────────────────────── */
@@ -193,5 +351,11 @@
 @media (max-width: 768px) {
     .msg {
         padding: 12px 16px;
+    }
+    .md-table-wrap {
+        margin: 8px -8px;
+        border-radius: 0;
+        border-left: none;
+        border-right: none;
     }
 }

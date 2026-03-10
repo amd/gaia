@@ -3,7 +3,7 @@
 
 """Pydantic models for GAIA Agent UI API."""
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -97,6 +97,21 @@ class ChatResponse(BaseModel):
     tokens: Optional[Dict[str, int]] = None
 
 
+class AgentStepResponse(BaseModel):
+    """A single step in the agent's execution (persisted)."""
+
+    id: int
+    type: str  # 'thinking' | 'tool' | 'plan' | 'status' | 'error'
+    label: str
+    detail: Optional[str] = None
+    tool: Optional[str] = None
+    result: Optional[str] = None
+    success: Optional[bool] = None
+    active: bool = False
+    planSteps: Optional[List[str]] = None
+    timestamp: int = 0
+
+
 class MessageResponse(BaseModel):
     """A single message."""
 
@@ -106,6 +121,7 @@ class MessageResponse(BaseModel):
     content: str
     created_at: str
     rag_sources: Optional[List[SourceInfo]] = None
+    agent_steps: Optional[List[AgentStepResponse]] = None
 
 
 class MessageListResponse(BaseModel):

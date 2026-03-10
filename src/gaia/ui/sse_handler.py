@@ -11,12 +11,20 @@ to JSON events that the streaming endpoint sends to the frontend.
 import json
 import logging
 import queue
+import re
 import time
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.console import OutputHandler
 
 logger = logging.getLogger(__name__)
+
+# Regex to detect raw tool-call JSON that LLMs sometimes emit as text content.
+# Matches patterns like: {"tool": "search_file", "tool_args": {...}}
+_TOOL_CALL_JSON_RE = re.compile(
+    r'^\s*\{["\s]*tool["\s]*:\s*"[^"]+"\s*,\s*["\s]*tool_args["\s]*:\s*\{.*\}\s*\}\s*$',
+    re.DOTALL,
+)
 
 
 class SSEOutputHandler(OutputHandler):
@@ -33,6 +41,7 @@ class SSEOutputHandler(OutputHandler):
         self._step_count = 0
         self._tool_count = 0
         self._last_tool_name: Optional[str] = None
+        self._stream_buffer = ""  # Buffer to detect and filter tool-call JSON
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -49,12 +58,12 @@ class SSEOutputHandler(OutputHandler):
         self._start_time = time.time()
         self._step_count = 0
         self._tool_count = 0
+        # Emit as "thinking" so the frontend immediately shows a visible
+        # spinner when the agent starts processing.
         self._emit(
             {
-                "type": "status",
-                "status": "started",
-                "message": "Processing your request...",
-                "model": model_id,
+                "type": "thinking",
+                "content": "Processing your request...",
             }
         )
 
@@ -87,12 +96,16 @@ class SSEOutputHandler(OutputHandler):
         )
 
     def print_goal(self, goal: str):
-        self._emit(
-            {
-                "type": "thinking",
-                "content": goal,
-            }
-        )
+        # Goals are less important than thoughts - emit as status
+        # so they don't create redundant "thinking" steps in the UI.
+        if goal:
+            self._emit(
+                {
+                    "type": "status",
+                    "status": "working",
+                    "message": goal,
+                }
+            )
 
     def print_plan(self, plan: List[Any], current_step: int = None):
         # Convert plan items to strings for JSON serialization
@@ -198,11 +211,12 @@ class SSEOutputHandler(OutputHandler):
     # === Progress Indicators ===
 
     def start_progress(self, message: str):
+        # Emit as "thinking" so the frontend shows a visible spinner
+        # while the LLM is working (instead of filtered "status" events).
         self._emit(
             {
-                "type": "status",
-                "status": "working",
-                "message": message,
+                "type": "thinking",
+                "content": message,
             }
         )
 
@@ -269,15 +283,53 @@ class SSEOutputHandler(OutputHandler):
 
     def print_streaming_text(self, text_chunk: str, end_of_stream: bool = False):
         if text_chunk:
-            self._emit(
-                {
-                    "type": "chunk",
-                    "content": text_chunk,
-                }
-            )
+            # Buffer text to detect and suppress raw tool-call JSON that
+            # LLMs sometimes emit as text content before the tool is invoked.
+            self._stream_buffer += text_chunk
+
+            # Check if the buffer looks like it's accumulating a tool-call JSON.
+            # Wait for more data if it looks like an incomplete JSON object.
+            stripped = self._stream_buffer.strip()
+            if stripped.startswith("{") and '"tool"' in stripped:
+                # Safety: don't buffer more than 2KB (tool-call JSON is typically small)
+                if len(self._stream_buffer) > 2048:
+                    self._emit({"type": "chunk", "content": self._stream_buffer})
+                    self._stream_buffer = ""
+                    return
+                # Looks like it might be tool-call JSON - hold in buffer.
+                # If we have a complete JSON object, check if it's a tool call.
+                if stripped.endswith("}"):
+                    if _TOOL_CALL_JSON_RE.match(stripped):
+                        # Confirmed tool-call JSON — suppress it entirely
+                        logger.debug(
+                            "Filtered raw tool-call JSON from stream: %s",
+                            stripped[:100],
+                        )
+                        self._stream_buffer = ""
+                        return
+                    # Not a tool call — flush it
+                    self._emit({"type": "chunk", "content": self._stream_buffer})
+                    self._stream_buffer = ""
+                # Still accumulating — don't emit yet (wait for closing brace)
+                return
+
+            # Not tool-call JSON — emit the buffered content
+            self._emit({"type": "chunk", "content": self._stream_buffer})
+            self._stream_buffer = ""
+
+        if end_of_stream and self._stream_buffer:
+            # Flush any remaining buffer at end of stream
+            self._emit({"type": "chunk", "content": self._stream_buffer})
+            self._stream_buffer = ""
 
     def signal_done(self):
         """Signal that the agent has finished processing."""
+        # Flush any remaining stream buffer before signaling done
+        if self._stream_buffer:
+            stripped = self._stream_buffer.strip()
+            if not _TOOL_CALL_JSON_RE.match(stripped):
+                self._emit({"type": "chunk", "content": self._stream_buffer})
+            self._stream_buffer = ""
         self._emit(None)  # Sentinel value
 
 
@@ -292,12 +344,12 @@ def _format_tool_args(tool_name: str, args: Dict[str, Any]) -> str:
             continue
         if value is True:
             parts.append(key)
-        elif isinstance(value, str) and len(value) > 100:
-            parts.append(f"{key}: {value[:100]}...")
+        elif isinstance(value, str) and len(value) > 150:
+            parts.append(f"{key}: {value[:150]}...")
         else:
             parts.append(f"{key}: {value}")
 
-    return ", ".join(parts)
+    return "\n".join(parts) if len(parts) > 2 else ", ".join(parts)
 
 
 def _summarize_tool_result(data: Dict[str, Any]) -> str:
@@ -312,7 +364,9 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         lines = stdout.strip().split("\n") if stdout.strip() else []
         if rc != 0:
             stderr = data.get("stderr", "")
-            return f"Command failed (exit {rc})" + (f": {stderr[:150]}" if stderr else "")
+            return f"Command failed (exit {rc})" + (
+                f": {stderr[:150]}" if stderr else ""
+            )
         if lines:
             # Show first few lines of output
             preview = "\n".join(lines[:5])
@@ -341,7 +395,11 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
             result = "\n".join(f"  {name}" for name in file_names)
             if count > 5:
                 result += f"\n  ... +{count - 5} more"
-            return (display_msg + "\n" + result) if display_msg else f"Found {count} file(s):\n{result}"
+            return (
+                (display_msg + "\n" + result)
+                if display_msg
+                else f"Found {count} file(s):\n{result}"
+            )
         if display_msg:
             return display_msg
         return f"Found {count} file(s)"
@@ -357,7 +415,7 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
             # Show brief preview of top chunk
             if chunks and isinstance(chunks[0], str):
                 preview = chunks[0][:120].replace("\n", " ")
-                result += f"\n  Top match: \"{preview}...\""
+                result += f'\n  Top match: "{preview}..."'
             return result
 
     # Search/query results generic

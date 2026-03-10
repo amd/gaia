@@ -5,9 +5,9 @@
  */
 
 :root {
-    --amd-red: #ED1C24;
-    --amd-red-dark: #C8171E;
-    --amd-red-light: #F4484D;
+    --amd-red: #E23C40;
+    --amd-red-dark: #C42A30;
+    --amd-red-light: #E86266;
 
     /* Accent colors for status indicators */
     --accent-green: #22c55e;
