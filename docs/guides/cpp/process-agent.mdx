@@ -411,12 +411,14 @@ The monitor is a background thread that periodically re-scans the system and com
 | New suspicious item | LLM flags a new item in section C | CRITICAL |
 | Health status change | Overall health classification changes | WARNING or CRITICAL |
 
-**Alert delivery.** Pending alerts are displayed before the next menu prompt, so you see them naturally between actions. For CRITICAL and NEW_SUSPICIOUS alerts, the agent also sends a Windows balloon notification via `Shell_NotifyIconW` so you get notified even if the terminal is in the background.
+**Alert delivery.** Pending alerts are displayed before the next menu prompt, so you see them naturally between actions. For CRITICAL and NEW_SUSPICIOUS alerts, the agent also sends a Windows notification so you get alerted even if the terminal is in the background.
 
 **Design choices:**
 - **Separate agent instance** — the monitor's `ProcessAgent` has its own conversation history and LLM connection. This avoids corrupting the interactive agent's context with monitoring chatter.
 - **SilentConsole** — suppresses all tool output and conclusions from the background scan. Only the diff-based alerts reach the user.
+- **Deterministic scans** — the monitor agent uses `temperature=0` for consistent health classifications across consecutive scans when system state hasn't changed.
 - **Toggle, not a mode** — the interactive menu stays fully functional while the monitor runs. There is no "monitor mode" to enter or exit.
+- **NPU-friendly** — background monitoring is an ideal workload for AMD Ryzen AI NPU inference. The monitor runs periodic scans without tying up the CPU or GPU, leaving them free for your other work.
 
 ---
 
