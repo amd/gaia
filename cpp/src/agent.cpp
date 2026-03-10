@@ -121,6 +121,7 @@ std::string Agent::callLlm(const std::vector<Message>& messages, const std::stri
     json requestBody;
     requestBody["model"] = config_.modelId;
     requestBody["max_tokens"] = 4096;
+    requestBody["temperature"] = config_.temperature;
 
     json msgArray = json::array();
 

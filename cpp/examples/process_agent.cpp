@@ -21,22 +21,32 @@
 #include <windows.h>
 #include <psapi.h>
 #include <tlhelp32.h>
+#include <shellapi.h>
+#include <shobjidl_core.h>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cctype>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <iostream>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <queue>
+#include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <gaia/agent.h>
 #include <gaia/clean_console.h>
+#include <gaia/console.h>
 #include <gaia/types.h>
 
 namespace color = gaia::color;
@@ -139,6 +149,46 @@ struct KillResult {
     int      failed      = 0;
     uint64_t memoryFreed = 0;
     std::string firstPath;   // exe path of first match (for restart_process relaunch)
+};
+
+// ---------------------------------------------------------------------------
+// Monitor data types — snapshot for diff-based alerting
+// ---------------------------------------------------------------------------
+
+struct MonitorSnapshot {
+    std::chrono::system_clock::time_point timestamp;
+
+    // Direct system data (from Win32 APIs — no LLM needed)
+    int      memoryUsedPercent = 0;
+    uint64_t memoryUsedBytes   = 0;
+    std::vector<std::pair<std::string, uint64_t>> topProcesses;  // name, totalMemory
+
+    // LLM-classified data (from processQuery "result" key)
+    std::string              healthStatus;       // "Healthy" / "Warning" / "Critical"
+    std::string              healthDetail;       // LLM's one-sentence explanation
+    std::vector<std::string> suspiciousItems;    // raw lines from C. section
+    std::string              rawLlmAnswer;
+};
+
+struct MonitorAlert {
+    enum class Severity { INFO, WARNING, CRITICAL };
+    enum class Type {
+        MEMORY_SPIKE,       // system-wide memory jump >10 pp
+        MEMORY_SURGE,       // single process >500 MB growth
+        NEW_PROCESS,        // new entry in top-20 resource consumers
+        PROCESS_GONE,       // left top-20
+        NEW_SUSPICIOUS,     // LLM flagged new suspicious item
+        HEALTH_CHANGED,     // system health status changed
+        BASELINE_COMPLETE,  // first scan finished — baseline captured
+        SCAN_COMPLETE,      // subsequent scan finished with no diff alerts
+        MONITOR_ERROR       // scan or agent failure
+    };
+
+    Severity    severity;
+    Type        type;
+    std::string title;      // short — also used for balloon notification (max 63 chars)
+    std::string detail;     // multiline context for console display
+    std::chrono::system_clock::time_point timestamp;
 };
 
 // Kill all processes matching exeName (case-insensitive, skips self).
@@ -550,6 +600,91 @@ static std::string formatProcessList(const gaia::json& procs) {
 }
 
 // ---------------------------------------------------------------------------
+// Monitor — Windows notification (toast + Action Center)
+// ---------------------------------------------------------------------------
+static HWND         g_notifyHwnd = nullptr;
+static NOTIFYICONDATAW g_notifyNid{};
+static bool          g_notifyActive = false;
+
+static constexpr UINT WM_TRAYICON = WM_APP + 1;
+
+// {7B3A8E1F-4C2D-4F5E-9A1B-3D6E8F2C7A4B}
+static const GUID kMonitorGuid =
+    {0x7B3A8E1F, 0x4C2D, 0x4F5E, {0x9A,0x1B,0x3D,0x6E,0x8F,0x2C,0x7A,0x4B}};
+
+static LRESULT CALLBACK notifyWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_TRAYICON && lp == NIN_BALLOONUSERCLICK) {
+        HWND console = GetConsoleWindow();
+        if (console) {
+            ShowWindow(console, SW_RESTORE);
+            SetForegroundWindow(console);
+        }
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+static void initBalloonNotify() {
+    if (g_notifyActive) return;
+
+    // Set AppUserModelID — required for Action Center persistence on Win10/11
+    SetCurrentProcessExplicitAppUserModelID(L"AMD.GAIA.SystemMonitor");
+
+    // Register window class with our WndProc so we can handle notification clicks
+    static const wchar_t* kClassName = L"GAIAMonitorNotify";
+    WNDCLASSEXW wc{};
+    wc.cbSize        = sizeof(wc);
+    wc.lpfnWndProc   = notifyWndProc;
+    wc.hInstance      = GetModuleHandle(nullptr);
+    wc.lpszClassName  = kClassName;
+    RegisterClassExW(&wc);  // OK if already registered
+
+    g_notifyHwnd = CreateWindowExW(0, kClassName, L"", 0,
+                                   0, 0, 0, 0,
+                                   HWND_MESSAGE, nullptr,
+                                   wc.hInstance, nullptr);
+    if (!g_notifyHwnd) return;
+
+    ZeroMemory(&g_notifyNid, sizeof(g_notifyNid));
+    g_notifyNid.cbSize           = sizeof(g_notifyNid);
+    g_notifyNid.hWnd             = g_notifyHwnd;
+    g_notifyNid.uID              = 1;
+    g_notifyNid.uFlags           = NIF_ICON | NIF_TIP | NIF_GUID | NIF_MESSAGE | NIF_SHOWTIP;
+    g_notifyNid.uCallbackMessage = WM_TRAYICON;
+    g_notifyNid.guidItem         = kMonitorGuid;
+    g_notifyNid.hIcon            = LoadIcon(nullptr, IDI_WARNING);
+    wcscpy_s(g_notifyNid.szTip, L"GAIA System Monitor");
+    Shell_NotifyIconW(NIM_ADD, &g_notifyNid);
+
+    // Use version 4 for modern notification behavior
+    g_notifyNid.uVersion = NOTIFYICON_VERSION_4;
+    Shell_NotifyIconW(NIM_SETVERSION, &g_notifyNid);
+
+    g_notifyActive = true;
+}
+
+static void showBalloonNotify(const std::string& title, const std::string& body) {
+    if (!g_notifyActive) return;
+    g_notifyNid.uFlags      = NIF_INFO | NIF_GUID;
+    g_notifyNid.dwInfoFlags = NIIF_WARNING;
+
+    std::wstring wTitle = utf8ToWstring(title);
+    std::wstring wBody  = utf8ToWstring(body);
+    wcsncpy_s(g_notifyNid.szInfoTitle, wTitle.c_str(), 63);
+    wcsncpy_s(g_notifyNid.szInfo,      wBody.c_str(), 255);
+    Shell_NotifyIconW(NIM_MODIFY, &g_notifyNid);
+}
+
+static void cleanupBalloonNotify() {
+    if (!g_notifyActive) return;
+    Shell_NotifyIconW(NIM_DELETE, &g_notifyNid);
+    if (g_notifyHwnd) DestroyWindow(g_notifyHwnd);
+    g_notifyHwnd = nullptr;
+    g_notifyActive = false;
+    UnregisterClassW(L"GAIAMonitorNotify", GetModuleHandle(nullptr));
+}
+
+// ---------------------------------------------------------------------------
 // ProcessConsole — unified Conclusion formatter
 // ---------------------------------------------------------------------------
 // Line detection rules (first match wins):
@@ -721,6 +856,12 @@ class ProcessAgent : public gaia::Agent {
 public:
     explicit ProcessAgent(const std::string& modelId)
         : Agent(makeConfig(modelId)) {
+        setOutputHandler(std::make_unique<ProcessConsole>());
+        init();
+    }
+
+    explicit ProcessAgent(const gaia::AgentConfig& config)
+        : Agent(config) {
         setOutputHandler(std::make_unique<ProcessConsole>());
         init();
     }
@@ -1806,11 +1947,19 @@ static const ActionEntry kActions[] = {
         "Run a fresh system analysis",
         ""  // handled specially in main
     },
+    {
+        "Monitor",
+        "Background scan every N min  (e.g. '6 5' = every 5 min, '6' = every 5 min, '6' again = stop)",
+        ""  // handled specially in main
+    },
 };
-static constexpr size_t kActionsSize = sizeof(kActions) / sizeof(kActions[0]);
+static constexpr size_t kActionsSize   = sizeof(kActions) / sizeof(kActions[0]);
+static constexpr int    kActionReanalyze = 5;  // 1-based index
+static constexpr int    kActionMonitor   = 6;  // 1-based index
 
 static const char* kAutoAnalysisPrompt =
-    "Analyze this system now. No user interaction needed.\n\n"
+    "AUTO-SCAN: Perform an automatic system analysis on startup. "
+    "This is NOT a user request — the application triggered this automatically.\n\n"
     "Steps:\n"
     "1. Run system_snapshot (system specs, top processes with company/description/flags, services).\n"
     "2. Run list_processes (detailed memory and CPU data with flags).\n\n"
@@ -1821,9 +1970,529 @@ static const char* kAutoAnalysisPrompt =
     "- Windows system processes (svchost, csrss, smss, lsass) with empty company are NORMAL\n\n"
     "Output format: A/B/C sections as specified in your instructions.\n"
     "Maximum 8 items per section. 1 line each.\n"
-    "System Health: [Healthy/Warning/Critical] - [one sentence]";
+    "System Health: [Healthy/Warning/Critical] - [one sentence]\n"
+    "The count in your System Health line MUST match the actual number of items in section C.";
 
-static void printActionMenu() {
+// ---------------------------------------------------------------------------
+// SystemMonitor — background thread that periodically scans the system,
+// compares consecutive snapshots, and pushes alerts to a thread-safe queue.
+// The main thread drains and displays alerts before each menu prompt.
+// ---------------------------------------------------------------------------
+class SystemMonitor {
+public:
+    explicit SystemMonitor(const std::string& modelId,
+                           std::chrono::seconds interval = std::chrono::seconds(300))
+        : modelId_(modelId), interval_(interval) {}
+
+    ~SystemMonitor() { stop(); }
+
+    SystemMonitor(const SystemMonitor&) = delete;
+    SystemMonitor& operator=(const SystemMonitor&) = delete;
+
+    void start() {
+        if (running_.load()) return;
+        running_.store(true);
+        isFirstScan_ = true;
+        scanCount_.store(0);
+        initBalloonNotify();
+        thread_ = std::thread(&SystemMonitor::monitorLoop, this);
+    }
+
+    void stop() {
+        if (!running_.load()) return;
+        running_.store(false);
+        cv_.notify_all();
+        if (thread_.joinable()) thread_.join();
+        cleanupBalloonNotify();
+    }
+
+    bool isRunning() const { return running_.load(); }
+    int  scanCount()  const { return scanCount_.load(); }
+    std::chrono::seconds interval() const { return interval_; }
+
+    std::vector<MonitorAlert> drainAlerts() {
+        std::vector<MonitorAlert> result;
+        std::lock_guard<std::mutex> lock(alertMutex_);
+        while (!alertQueue_.empty()) {
+            result.push_back(std::move(alertQueue_.front()));
+            alertQueue_.pop();
+        }
+        return result;
+    }
+
+private:
+    // Map health status string to ANSI color
+    static const char* healthColor(const std::string& status) {
+        if (status == "Critical") return color::RED;
+        if (status == "Warning")  return color::YELLOW;
+        return color::GREEN;
+    }
+
+    // Build a short summary string from a snapshot for console/notification output.
+    // E.g. "Health: Warning — 2 suspicious: llama-server.exe, svc_helper.exe"
+    static std::string snapSummary(const MonitorSnapshot& snap) {
+        std::string s = "Health: " + snap.healthStatus;
+        if (!snap.healthDetail.empty())
+            s += " — " + snap.healthDetail;
+        if (!snap.suspiciousItems.empty()) {
+            s += "\n           Suspicious: ";
+            for (size_t i = 0; i < snap.suspiciousItems.size(); ++i) {
+                if (i > 0) s += ", ";
+                // Extract name: "1. foo.exe - path..." → "foo.exe"
+                auto& item = snap.suspiciousItems[i];
+                auto dot = item.find(". ");
+                std::string name = (dot != std::string::npos) ? item.substr(dot + 2) : item;
+                auto dash = name.find(" - ");
+                if (dash != std::string::npos) name = name.substr(0, dash);
+                // Trim whitespace
+                while (!name.empty() && name.back() == ' ') name.pop_back();
+                s += name;
+            }
+        }
+        return s;
+    }
+
+    // ---------------------------------------------------------------
+    // Background thread entry point
+    // ---------------------------------------------------------------
+    void monitorLoop() {
+        try {
+            gaia::AgentConfig monCfg;
+            monCfg.modelId = modelId_;
+            monCfg.temperature = 0.0;  // deterministic scans
+            ProcessAgent monitorAgent(monCfg);
+            monitorAgent.setOutputHandler(
+                std::make_unique<gaia::SilentConsole>(true));
+
+            while (running_.load()) {
+                try {
+                    // Print scan-start indicator so user knows monitor is alive
+                    int scanNum = scanCount_.load() + 1;
+                    std::cout << "\n" << color::DIM
+                              << "  [Monitor] Scan #" << scanNum << " starting..."
+                              << color::RESET << std::endl;
+                    std::cout << color::BOLD << "  > " << color::RESET << std::flush;
+
+                    // Collect direct system data
+                    MonitorSnapshot snap = takeSnapshot();
+
+                    // Run LLM analysis — include previous health for consistency
+                    monitorAgent.clearHistory();
+                    std::string prompt = kAutoAnalysisPrompt;
+                    if (!isFirstScan_ && !lastSnapshot_.healthStatus.empty()) {
+                        prompt += "\n\nPrevious scan result: " + lastSnapshot_.healthStatus + ".";
+                        if (!lastSnapshot_.suspiciousItems.empty()) {
+                            prompt += " Suspicious:";
+                            for (const auto& item : lastSnapshot_.suspiciousItems)
+                                prompt += "\n  - " + item;
+                        }
+                        prompt += "\nIf the same conditions persist, keep the same classification.";
+                    }
+                    auto r = monitorAgent.processQuery(prompt);
+                    std::string answer = r.value("result", "");
+                    parseLlmIntoSnapshot(snap, answer);
+                    scanCount_.fetch_add(1);
+
+                    if (isFirstScan_) {
+                        isFirstScan_ = false;
+                        lastSnapshot_ = std::move(snap);
+
+                        // Notify main thread that baseline is captured
+                        auto mins = std::chrono::duration_cast<std::chrono::minutes>(interval_).count();
+                        pushAlert(MonitorAlert::Severity::INFO,
+                                  MonitorAlert::Type::BASELINE_COMPLETE,
+                                  "Baseline scan complete",
+                                  "Next scan in " + std::to_string(mins) + " min. "
+                                  "Health: " + lastSnapshot_.healthStatus);
+
+                        // Fire notification for baseline if not healthy
+                        if (lastSnapshot_.healthStatus != "Healthy") {
+                            std::string body = lastSnapshot_.healthDetail;
+                            if (!lastSnapshot_.suspiciousItems.empty()) {
+                                body += " (";
+                                for (size_t i = 0; i < lastSnapshot_.suspiciousItems.size(); ++i) {
+                                    if (i > 0) body += ", ";
+                                    auto& item = lastSnapshot_.suspiciousItems[i];
+                                    auto dot = item.find(". ");
+                                    std::string nm = (dot != std::string::npos) ? item.substr(dot + 2) : item;
+                                    auto dash = nm.find(" - ");
+                                    if (dash != std::string::npos) nm = nm.substr(0, dash);
+                                    while (!nm.empty() && nm.back() == ' ') nm.pop_back();
+                                    body += nm;
+                                }
+                                body += ")";
+                            }
+                            showBalloonNotify("Baseline: " + lastSnapshot_.healthStatus, body);
+                        }
+
+                        // Print directly so user sees feedback even without typing
+                        std::cout << "\n" << healthColor(lastSnapshot_.healthStatus)
+                                  << "  [Monitor] Baseline captured. "
+                                  << snapSummary(lastSnapshot_)
+                                  << "\n           Next scan in " << mins << " min."
+                                  << color::RESET << std::endl;
+                        std::cout << color::BOLD << "  > " << color::RESET << std::flush;
+                    } else {
+                        auto alerts = diffSnapshots(lastSnapshot_, snap);
+
+                        // Single notification per scan — only when not healthy
+                        if (snap.healthStatus != "Healthy") {
+                            std::string body = snap.healthDetail;
+                            if (!snap.suspiciousItems.empty()) {
+                                body += " (";
+                                for (size_t i = 0; i < snap.suspiciousItems.size(); ++i) {
+                                    if (i > 0) body += ", ";
+                                    auto& item = snap.suspiciousItems[i];
+                                    auto dot = item.find(". ");
+                                    std::string nm = (dot != std::string::npos) ? item.substr(dot + 2) : item;
+                                    auto dash = nm.find(" - ");
+                                    if (dash != std::string::npos) nm = nm.substr(0, dash);
+                                    while (!nm.empty() && nm.back() == ' ') nm.pop_back();
+                                    body += nm;
+                                }
+                                body += ")";
+                            }
+                            showBalloonNotify("Health: " + snap.healthStatus, body);
+                        }
+
+                        // Push to queue for main thread
+                        if (!alerts.empty()) {
+                            std::lock_guard<std::mutex> lock(alertMutex_);
+                            for (auto& a : alerts)
+                                alertQueue_.push(std::move(a));
+                        } else {
+                            pushAlert(MonitorAlert::Severity::INFO,
+                                      MonitorAlert::Type::SCAN_COMPLETE,
+                                      "Scan complete — no changes",
+                                      "Health: " + snap.healthStatus);
+                        }
+
+                        // Print scan result directly (user may not type to drain queue)
+                        auto mins = std::chrono::duration_cast<std::chrono::minutes>(interval_).count();
+                        std::cout << "\n" << healthColor(snap.healthStatus)
+                                  << "  [Monitor] Scan #" << scanCount_.load()
+                                  << " done. " << snapSummary(snap)
+                                  << "\n           Next scan in " << mins << " min."
+                                  << color::RESET << std::endl;
+                        std::cout << color::BOLD << "  > " << color::RESET << std::flush;
+
+                        lastSnapshot_ = std::move(snap);
+                    }
+
+                } catch (const std::exception& e) {
+                    pushAlert(MonitorAlert::Severity::WARNING,
+                              MonitorAlert::Type::MONITOR_ERROR,
+                              "Monitor scan failed",
+                              std::string("Error: ") + e.what());
+                }
+
+                // Interruptible sleep with visible countdown + message pump
+                {
+                    auto total = std::chrono::duration_cast<
+                        std::chrono::seconds>(interval_).count();
+                    for (long long rem = total; rem > 0 && running_.load(); --rem) {
+                        std::cout << "\r" << color::DIM
+                                  << "  [Monitor] Next scan in " << rem << "s   "
+                                  << color::RESET << std::flush;
+
+                        // Pump notification messages (handles click-to-focus)
+                        MSG msg;
+                        while (PeekMessageW(&msg, g_notifyHwnd, 0, 0, PM_REMOVE))
+                            DispatchMessageW(&msg);
+
+                        std::unique_lock<std::mutex> lock(cvMutex_);
+                        if (cv_.wait_for(lock, std::chrono::seconds(1),
+                                         [this] { return !running_.load(); }))
+                            break;
+                    }
+                    // Clear the countdown line
+                    std::cout << "\r" << std::string(50, ' ')
+                              << "\r" << std::flush;
+                }
+            }
+        } catch (const std::exception& e) {
+            pushAlert(MonitorAlert::Severity::CRITICAL,
+                      MonitorAlert::Type::MONITOR_ERROR,
+                      "Monitor failed to start",
+                      std::string("Could not create monitor agent: ") + e.what());
+            running_.store(false);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Collect direct system data via Win32 APIs (thread-safe statics)
+    // ---------------------------------------------------------------
+    static MonitorSnapshot takeSnapshot() {
+        MonitorSnapshot snap;
+        snap.timestamp = std::chrono::system_clock::now();
+
+        auto mem = getMemoryInfo();
+        snap.memoryUsedPercent = mem.value("used_percent", 0);
+        snap.memoryUsedBytes   = mem.value("used_bytes", uint64_t(0));
+
+        auto procs = getTopProcesses(20);
+        if (procs.is_array()) {
+            for (const auto& p : procs) {
+                snap.topProcesses.emplace_back(
+                    p.value("name", std::string("?")),
+                    p.value("total_memory_bytes", uint64_t(0)));
+            }
+        }
+        return snap;
+    }
+
+    // ---------------------------------------------------------------
+    // Parse LLM output for health status and suspicious items
+    // ---------------------------------------------------------------
+    static void parseLlmIntoSnapshot(MonitorSnapshot& snap,
+                                     const std::string& rawAnswer) {
+        snap.rawLlmAnswer = rawAnswer;
+
+        std::istringstream stream(rawAnswer);
+        std::string line;
+        bool inSuspicious = false;
+
+        while (std::getline(stream, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+
+            // Health status — capture level and description after the dash
+            if (line.find("System Health:") != std::string::npos) {
+                if (line.find("Critical") != std::string::npos)
+                    snap.healthStatus = "Critical";
+                else if (line.find("Warning") != std::string::npos)
+                    snap.healthStatus = "Warning";
+                else
+                    snap.healthStatus = "Healthy";
+                // Extract description after " - " (e.g. "System Health:[Warning] - One high-memory...")
+                auto dashPos = line.find(" - ");
+                if (dashPos != std::string::npos && dashPos + 3 < line.size())
+                    snap.healthDetail = line.substr(dashPos + 3);
+                inSuspicious = false;
+                continue;
+            }
+
+            // C. Suspicious Items section
+            if (line.find("C. Suspicious") != std::string::npos) {
+                inSuspicious = true;
+                continue;
+            }
+
+            // End of C section on next header or "System Health"
+            if (inSuspicious) {
+                if (line.empty() || line.find("System Health") != std::string::npos) {
+                    inSuspicious = false;
+                    continue;
+                }
+                // Skip "None detected" lines
+                if (line.find("None") != std::string::npos ||
+                    line.find("none") != std::string::npos) {
+                    inSuspicious = false;
+                    continue;
+                }
+                // Numbered items (e.g. "1. unknown.exe - ...")
+                if (!line.empty() &&
+                    std::isdigit(static_cast<unsigned char>(line[0]))) {
+                    snap.suspiciousItems.push_back(line);
+                }
+            }
+        }
+
+        if (snap.healthStatus.empty()) snap.healthStatus = "Unknown";
+    }
+
+    // ---------------------------------------------------------------
+    // Compare two snapshots — return alerts for meaningful changes
+    // ---------------------------------------------------------------
+    static std::vector<MonitorAlert> diffSnapshots(const MonitorSnapshot& prev,
+                                                   const MonitorSnapshot& curr) {
+        std::vector<MonitorAlert> alerts;
+        auto now = std::chrono::system_clock::now();
+
+        // Helper: lowercase a string
+        auto toLower = [](std::string s) {
+            for (auto& c : s)
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+
+        // 1. System memory spike (>10 percentage points)
+        int memDelta = curr.memoryUsedPercent - prev.memoryUsedPercent;
+        if (memDelta > 10) {
+            auto sev = (curr.memoryUsedPercent > 90)
+                ? MonitorAlert::Severity::CRITICAL
+                : MonitorAlert::Severity::WARNING;
+            alerts.push_back({sev, MonitorAlert::Type::MEMORY_SPIKE,
+                "Memory usage spike",
+                "Memory increased from " + std::to_string(prev.memoryUsedPercent)
+                    + "% to " + std::to_string(curr.memoryUsedPercent) + "%",
+                now});
+        }
+
+        // Build name -> memory maps (lowercased)
+        std::map<std::string, uint64_t> prevMem, currMem;
+        std::set<std::string> prevNames, currNames;
+        for (const auto& [name, mem] : prev.topProcesses) {
+            auto lower = toLower(name);
+            prevNames.insert(lower);
+            prevMem[lower] = mem;
+        }
+        for (const auto& [name, mem] : curr.topProcesses) {
+            auto lower = toLower(name);
+            currNames.insert(lower);
+            currMem[lower] = mem;
+        }
+
+        // 2. New processes in top-20
+        for (const auto& name : currNames) {
+            if (prevNames.find(name) == prevNames.end()) {
+                alerts.push_back({MonitorAlert::Severity::INFO,
+                    MonitorAlert::Type::NEW_PROCESS,
+                    "New top process: " + name,
+                    name + " appeared in top resource consumers",
+                    now});
+            }
+        }
+
+        // 3. Processes that left top-20
+        for (const auto& name : prevNames) {
+            if (currNames.find(name) == currNames.end()) {
+                alerts.push_back({MonitorAlert::Severity::INFO,
+                    MonitorAlert::Type::PROCESS_GONE,
+                    "Process left top list: " + name,
+                    name + " is no longer a top resource consumer",
+                    now});
+            }
+        }
+
+        // 4. Per-process memory surge (>500 MB growth)
+        for (const auto& [name, mem] : currMem) {
+            auto it = prevMem.find(name);
+            if (it != prevMem.end()) {
+                int64_t delta = static_cast<int64_t>(mem) -
+                                static_cast<int64_t>(it->second);
+                if (delta > 500LL * 1024 * 1024) {
+                    alerts.push_back({MonitorAlert::Severity::WARNING,
+                        MonitorAlert::Type::MEMORY_SURGE,
+                        name + " memory surge",
+                        name + " memory grew by " +
+                            formatBytes(static_cast<uint64_t>(delta)),
+                        now});
+                }
+            }
+        }
+
+        // 5. New suspicious items (CRITICAL + balloon)
+        std::set<std::string> prevSusp(prev.suspiciousItems.begin(),
+                                       prev.suspiciousItems.end());
+        for (const auto& item : curr.suspiciousItems) {
+            if (prevSusp.find(item) == prevSusp.end()) {
+                alerts.push_back({MonitorAlert::Severity::CRITICAL,
+                    MonitorAlert::Type::NEW_SUSPICIOUS,
+                    "Suspicious item detected",
+                    item,
+                    now});
+            }
+        }
+
+        // 6. Health status change
+        if (!prev.healthStatus.empty() && !curr.healthStatus.empty() &&
+            prev.healthStatus != curr.healthStatus) {
+            auto sev = (curr.healthStatus == "Critical")
+                ? MonitorAlert::Severity::CRITICAL
+                : MonitorAlert::Severity::WARNING;
+            alerts.push_back({sev, MonitorAlert::Type::HEALTH_CHANGED,
+                "Health: " + prev.healthStatus + " -> " + curr.healthStatus,
+                "System health changed from " + prev.healthStatus
+                    + " to " + curr.healthStatus,
+                now});
+        }
+
+        return alerts;
+    }
+
+    // ---------------------------------------------------------------
+    // Push a single alert to the queue
+    // ---------------------------------------------------------------
+    void pushAlert(MonitorAlert::Severity sev, MonitorAlert::Type type,
+                   const std::string& title, const std::string& detail) {
+        std::lock_guard<std::mutex> lock(alertMutex_);
+        alertQueue_.push({sev, type, title, detail,
+                          std::chrono::system_clock::now()});
+    }
+
+    // ---------------------------------------------------------------
+    // Data members
+    // ---------------------------------------------------------------
+    std::string          modelId_;
+    std::chrono::seconds interval_;
+
+    std::thread          thread_;
+    std::atomic<bool>    running_{false};
+    std::mutex           cvMutex_;
+    std::condition_variable cv_;
+
+    std::mutex                   alertMutex_;
+    std::queue<MonitorAlert>     alertQueue_;
+
+    std::atomic<int>    scanCount_{0};
+    bool                isFirstScan_ = true;
+    MonitorSnapshot     lastSnapshot_;
+};
+
+// ---------------------------------------------------------------------------
+// printMonitorAlerts — display alerts drained from the background monitor
+// ---------------------------------------------------------------------------
+static void printMonitorAlerts(const std::vector<MonitorAlert>& alerts) {
+    if (alerts.empty()) return;
+
+    std::cout << std::endl;
+    std::cout << color::YELLOW
+              << "  ========================================================================================"
+              << color::RESET << std::endl;
+    std::cout << color::BOLD << color::YELLOW
+              << "  Monitor Alerts (" << alerts.size() << ")"
+              << color::RESET << std::endl;
+    std::cout << color::YELLOW
+              << "  ========================================================================================"
+              << color::RESET << std::endl;
+
+    for (const auto& a : alerts) {
+        const char* sevColor = color::GRAY;
+        const char* sevLabel = "INFO";
+        if (a.severity == MonitorAlert::Severity::WARNING) {
+            sevColor = color::YELLOW;
+            sevLabel = "WARNING";
+        } else if (a.severity == MonitorAlert::Severity::CRITICAL) {
+            sevColor = color::RED;
+            sevLabel = "CRITICAL";
+        }
+
+        auto tt = std::chrono::system_clock::to_time_t(a.timestamp);
+        char timeBuf[16];
+        struct tm tmBuf{};
+        localtime_s(&tmBuf, &tt);
+        std::strftime(timeBuf, sizeof(timeBuf), "%H:%M:%S", &tmBuf);
+
+        std::cout << "  " << color::GRAY << timeBuf << "  "
+                  << sevColor << color::BOLD << "[" << sevLabel << "] "
+                  << color::RESET << color::WHITE << a.title
+                  << color::RESET << std::endl;
+        if (!a.detail.empty()) {
+            std::cout << "  " << color::GRAY << "         " << a.detail
+                      << color::RESET << std::endl;
+        }
+    }
+
+    std::cout << color::YELLOW
+              << "  ========================================================================================"
+              << color::RESET << std::endl;
+    std::cout << std::endl;
+}
+
+// ---------------------------------------------------------------------------
+// printActionMenu — show available actions with optional monitor status
+// ---------------------------------------------------------------------------
+static void printActionMenu(bool isMonitoring = false, int scanCount = 0) {
     std::cout << color::CYAN
               << "  ========================================================================================"
               << color::RESET << std::endl;
@@ -1843,10 +2512,18 @@ static void printActionMenu() {
               << color::RESET << std::endl;
     std::cout << color::GRAY
               << "  Shortcuts: '1 A3' = Explain A3,  '2 B1' = Stop B1,  '4 C1' = Quarantine C1"
+              << "  |  '6 5' = Monitor every 5 min"
               << color::RESET << std::endl;
     std::cout << color::GRAY
               << "  Or type any question directly."
               << color::RESET << std::endl;
+    if (isMonitoring) {
+        std::cout << color::GREEN << color::BOLD
+                  << "  [Monitor active]" << color::RESET
+                  << color::GRAY << " — Background scanning, "
+                  << scanCount << " scans completed"
+                  << color::RESET << std::endl;
+    }
     std::cout << std::endl;
 }
 
@@ -1945,6 +2622,7 @@ int main(int argc, char* argv[]) {
         }
 
         ProcessAgent agent(modelId);
+        std::unique_ptr<SystemMonitor> monitor;
 
         // =====================================================================
         // Phase 1: DETECT — Auto-analyze system on startup
@@ -1967,10 +2645,17 @@ int main(int argc, char* argv[]) {
         std::string userInput;
         std::vector<gaia::Decision> decisions;  // non-empty when LLM awaits yes/no
         while (true) {
+            // Drain background monitor alerts before showing menu
+            if (monitor && monitor->isRunning()) {
+                auto alerts = monitor->drainAlerts();
+                printMonitorAlerts(alerts);
+            }
+
             if (!decisions.empty())
                 agent.console().printDecisionMenu(decisions);
             else
-                printActionMenu();
+                printActionMenu(monitor && monitor->isRunning(),
+                                monitor ? monitor->scanCount() : 0);
 
             std::cout << color::BOLD << "  > " << color::RESET << std::flush;
             if (!std::getline(std::cin, userInput)) break;
@@ -2043,7 +2728,31 @@ int main(int argc, char* argv[]) {
 
                 if (isShorthand) {
                     size_t idx = static_cast<size_t>(shorthandChoice - 1);
-                    if (shorthandChoice == static_cast<int>(kActionsSize)) {
+                    if (shorthandChoice == kActionMonitor) {
+                        // "6 N" — start monitor with N-minute interval, or stop if running
+                        if (monitor && monitor->isRunning()) {
+                            monitor->stop();
+                            monitor.reset();
+                            std::cout << color::YELLOW
+                                      << "  Monitor stopped."
+                                      << color::RESET << std::endl;
+                        } else {
+                            int interval = 5;
+                            try { interval = std::stoi(shorthandItem); } catch (...) {}
+                            if (interval < 1) interval = 1;
+                            if (interval > 60) interval = 60;
+                            monitor = std::make_unique<SystemMonitor>(
+                                modelId, std::chrono::seconds(interval * 60));
+                            monitor->start();
+                            std::cout << color::GREEN
+                                      << "  Monitor started (scanning every "
+                                      << interval << " min). First scan = baseline."
+                                      << color::RESET << std::endl;
+                        }
+                        decisions.clear();
+                        continue;
+                    }
+                    if (shorthandChoice == kActionReanalyze) {
                         // Reanalyze shorthand — ignore item, clear and rerun
                         agent.clearHistory();
                         std::cout << std::endl;
@@ -2075,8 +2784,28 @@ int main(int argc, char* argv[]) {
 
                     size_t idx = static_cast<size_t>(choice - 1);
 
-                    if (choice == static_cast<int>(kActionsSize)) {
-                        // Last action: Reanalyze — clear history and re-run analysis
+                    if (choice == kActionMonitor) {
+                        if (monitor && monitor->isRunning()) {
+                            monitor->stop();
+                            monitor.reset();
+                            std::cout << color::YELLOW
+                                      << "  Monitor stopped."
+                                      << color::RESET << std::endl;
+                        } else {
+                            monitor = std::make_unique<SystemMonitor>(
+                                modelId, std::chrono::seconds(300));
+                            monitor->start();
+                            std::cout << color::GREEN
+                                      << "  Monitor started (scanning every 5 min). "
+                                      << "First scan = baseline."
+                                      << color::RESET << std::endl;
+                        }
+                        decisions.clear();
+                        continue;
+                    }
+
+                    if (choice == kActionReanalyze) {
+                        // Reanalyze — clear history and re-run analysis
                         agent.clearHistory();
                         std::cout << std::endl;
                         std::cout << color::CYAN << color::BOLD
@@ -2096,6 +2825,35 @@ int main(int argc, char* argv[]) {
 
                 } else {
                     // Free-form question — keep history, LLM has full context
+                    // Special case: "monitor" or "monitor N" keyword
+                    std::string lower = userInput;
+                    for (auto& c : lower)
+                        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    if (lower == "monitor" || lower.substr(0, 8) == "monitor ") {
+                        if (monitor && monitor->isRunning()) {
+                            monitor->stop();
+                            monitor.reset();
+                            std::cout << color::YELLOW
+                                      << "  Monitor stopped."
+                                      << color::RESET << std::endl;
+                        } else {
+                            int interval = 5;
+                            if (lower.size() > 8) {
+                                try { interval = std::stoi(lower.substr(8)); } catch (...) {}
+                            }
+                            if (interval < 1) interval = 1;
+                            if (interval > 60) interval = 60;
+                            monitor = std::make_unique<SystemMonitor>(
+                                modelId, std::chrono::seconds(interval * 60));
+                            monitor->start();
+                            std::cout << color::GREEN
+                                      << "  Monitor started (scanning every "
+                                      << interval << " min). First scan = baseline."
+                                      << color::RESET << std::endl;
+                        }
+                        decisions.clear();
+                        continue;
+                    }
                     query = userInput;
                 }
             }
@@ -2103,6 +2861,14 @@ int main(int argc, char* argv[]) {
             auto r = agent.processQuery(query);
             std::string answer = r.value("result", "");
             decisions = agent.detectPendingDecisions(answer);
+        }
+
+        // Clean shutdown of background monitor
+        if (monitor) {
+            std::cout << color::GRAY << "  Stopping monitor..."
+                      << color::RESET << std::endl;
+            monitor->stop();
+            monitor.reset();
         }
 
         std::cout << std::endl;

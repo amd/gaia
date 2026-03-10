@@ -195,6 +195,7 @@ struct AgentConfig {
     bool showPrompts = false;
     bool streaming = false;
     bool silentMode = false;
+    double temperature = 0.7;  // LLM sampling temperature (0.0 = deterministic)
 };
 
 } // namespace gaia

@@ -25,6 +25,7 @@ Here's what makes it interesting:
 - **It explains what's running** — every process gets a plain-English description: what it is, what it does, and whether it looks normal
 - **Ask about any task** — describe an item from the summary and get a clear explanation without needing technical knowledge
 - **Manage processes and services** — stop, restart, or quarantine items; the agent always asks before acting
+- **Background monitoring** — toggle a background watcher that alerts you to memory spikes, new suspicious items, and health changes while you keep working
 - **Everything is local** — no data leaves your machine
 
 ---
@@ -91,6 +92,8 @@ The agent auto-runs a full system scan on startup, then waits for your input. Yo
     2 A1        (Stop task A1)
     4 C1        (Quarantine suspicious item C1)
     5           (Reanalyze)
+    6           (Toggle background monitor — default 2 min interval)
+    6 5         (Toggle monitor with 5-minute interval)
     What is svchost.exe?   (free-form question)
     ```
 
@@ -116,24 +119,28 @@ flowchart LR
     MENU --> ACT["Explain / Stop\nRestart / Quarantine"]
     ACT --> MENU
     MENU -->|"Reanalyze"| START
+    MENU -->|"Monitor"| MON["Background Thread\nSilentConsole + diff alerts"]
+    MON -.->|"alerts before prompt"| MENU
 
     style START fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
     style CLASS fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
     style MENU fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
     style ACT fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style MON fill:#1565C0,stroke:#42A5F5,stroke-width:2px,color:#fff
 ```
 
 ---
 
 ## How It Works
 
-The entire agent is a single `.cpp` file with five sections. Let's walk through each one.
+The entire agent is a single `.cpp` file with six sections. Let's walk through each one.
 
 1. **Shell Helper** — bridges C++ and PowerShell for command execution and validates inputs
 2. **Win32 Process Intelligence** — native API for fast process snapshots with file version info
 3. **Tool Registration** — 7 tools the LLM can call (3 read-only + 4 destructive)
 4. **System Prompt** — teaches the LLM the A/B/C classification protocol
 5. **ProcessConsole** — custom TUI that formats A/B/C sections with color coding
+6. **Monitor Mode** — background thread that diffs snapshots and surfaces alerts
 
 ### 1. The Shell Helper: Bridging C++ and PowerShell
 
@@ -385,6 +392,34 @@ if (line.size() >= 4 && line[0] >= 'A' && line[0] <= 'C' &&
 
 ---
 
+### 6. Monitor Mode: Background Health Watcher
+
+The monitor is a background thread that periodically re-scans the system and compares consecutive snapshots to detect changes. It runs alongside the interactive agent — you can keep explaining, stopping, or restarting processes while the monitor watches for anomalies.
+
+**Starting and stopping.** Monitor is a toggle on `[6]`. Press it once to start, again to stop. You can also specify an interval: `6 5` starts monitoring every 5 minutes. Typing `monitor` or `monitor N` at the prompt does the same thing. The default interval is 2 minutes.
+
+**How it works internally.** When started, the agent spawns a second `ProcessAgent` on a dedicated thread. This background agent uses a `SilentConsole` — it runs the same `system_snapshot` and `list_processes` tools but produces no visible output. After each scan it builds a `MonitorSnapshot` (memory usage, top process list, suspicious items, health status) and diffs it against the previous snapshot. Any meaningful changes become alerts.
+
+**Alert types and thresholds:**
+
+| Alert | Trigger | Severity |
+|-------|---------|----------|
+| Memory spike | System memory use jumps >10 percentage points | WARNING (CRITICAL if >90%) |
+| Per-process memory surge | A single process grows by >500 MB | WARNING |
+| New process in top-20 | A process appears that was not in the previous top-20 | INFO |
+| Process left top-20 | A process drops out of the previous top-20 | INFO |
+| New suspicious item | LLM flags a new item in section C | CRITICAL |
+| Health status change | Overall health classification changes | WARNING or CRITICAL |
+
+**Alert delivery.** Pending alerts are displayed before the next menu prompt, so you see them naturally between actions. For CRITICAL and NEW_SUSPICIOUS alerts, the agent also sends a Windows balloon notification via `Shell_NotifyIconW` so you get notified even if the terminal is in the background.
+
+**Design choices:**
+- **Separate agent instance** — the monitor's `ProcessAgent` has its own conversation history and LLM connection. This avoids corrupting the interactive agent's context with monitoring chatter.
+- **SilentConsole** — suppresses all tool output and conclusions from the background scan. Only the diff-based alerts reach the user.
+- **Toggle, not a mode** — the interactive menu stays fully functional while the monitor runs. There is no "monitor mode" to enter or exit.
+
+---
+
 ## Tool Reference
 
 The agent registers 7 tools in two categories:
@@ -428,6 +463,18 @@ flowchart TD
     MENU -->|"[3] Restart"| CONF_R["Confirm with user"]
     MENU -->|"[4] Quarantine"| EX_Q["explain_item first"]
     MENU -->|"[5] Reanalyze"| CLEAR["clearHistory()"]
+    MENU -->|"[6] Monitor"| MTOG{"Monitor\nrunning?"}
+    MTOG -->|No| MSTART["Start background thread<br/>SilentConsole + ProcessAgent"]
+    MTOG -->|Yes| MSTOP["Stop monitor thread"]
+    MSTART --> MSCAN["system_snapshot +<br/>list_processes (silent)"]
+    MSCAN --> MDIFF["Diff MonitorSnapshot<br/>vs previous"]
+    MDIFF -->|"alerts found"| MALERT["Show alerts before<br/>next menu prompt"]
+    MDIFF -->|"no changes"| MWAIT["Sleep interval"]
+    MALERT -->|"CRITICAL"| MBALLOON["Windows balloon<br/>notification"]
+    MBALLOON --> MWAIT
+    MALERT -->|"INFO/WARNING"| MWAIT
+    MWAIT --> MSCAN
+    MSTOP --> MENU
 
     EX --> ANS1["Explanation displayed"]
     ANS1 --> MENU
@@ -465,13 +512,21 @@ flowchart TD
     style RESTART fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style QUAR fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
     style CLEAR fill:#1565C0,stroke:#42A5F5,stroke-width:2px,color:#fff
+    style MTOG fill:#1565C0,stroke:#42A5F5,stroke-width:2px,color:#fff
+    style MSTART fill:#1565C0,stroke:#42A5F5,stroke-width:2px,color:#fff
+    style MSTOP fill:#1565C0,stroke:#42A5F5,stroke-width:2px,color:#fff
+    style MSCAN fill:#2d2d2d,stroke:#42A5F5,stroke-width:2px,color:#fff
+    style MDIFF fill:#2d2d2d,stroke:#42A5F5,stroke-width:2px,color:#fff
+    style MALERT fill:#FF8F00,stroke:#FFA726,stroke-width:2px,color:#fff
+    style MBALLOON fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style MWAIT fill:#2d2d2d,stroke:#42A5F5,stroke-width:2px,color:#fff
     style ANS1 fill:#2d8a2d,stroke:#4CAF50,stroke-width:2px,color:#fff
     style ANS2 fill:#2d8a2d,stroke:#4CAF50,stroke-width:2px,color:#fff
     style ANS3 fill:#2d8a2d,stroke:#4CAF50,stroke-width:2px,color:#fff
     style ANS4 fill:#2d8a2d,stroke:#4CAF50,stroke-width:2px,color:#fff
 ```
 
-Diagnostic nodes (dark) gather data. Red nodes are destructive actions requiring confirmation. Blue is the Reanalyze path that clears history. Green nodes are conclusion displays where the user reads output.
+Diagnostic nodes (dark) gather data. Red nodes are destructive actions requiring confirmation. Blue nodes are the Reanalyze and Monitor paths. Orange is the alert display. Green nodes are conclusion displays where the user reads output.
 
 ---
 
@@ -549,8 +604,9 @@ Diagnostic nodes (dark) gather data. Red nodes are destructive actions requiring
   [3] Restart  -- Restart an app or service
   [4] Quarantine -- Move a suspicious file to quarantine
   [5] Reanalyze  -- Run a fresh system analysis
+  [6] Monitor    -- Toggle background health watcher
   ========================================================================================
-  Shortcuts: '1 A3' = Explain A3,  '2 B1' = Stop B1,  '4 C1' = Quarantine C1
+  Shortcuts: '1 A3' = Explain A3,  '2 B1' = Stop B1,  '4 C1' = Quarantine C1,  '6 5' = Monitor every 5 min
 
   > 4 C1
   > Quarantine C1
@@ -637,7 +693,7 @@ toolRegistry().registerTool(
 );
 ```
 
-Then update the system prompt's `## AVAILABLE TOOLS` section to reference the new tool so the LLM knows when to use it. Optionally, add an `ActionEntry` to `kActions[]` if you want a new numbered menu item (e.g., `[6] Startup Items`).
+Then update the system prompt's `## AVAILABLE TOOLS` section to reference the new tool so the LLM knows when to use it. Optionally, add an `ActionEntry` to `kActions[]` if you want a new numbered menu item (e.g., `[7] Startup Items`).
 
 The framework handles everything else — the new tool appears in the LLM's system prompt automatically via the tool registry.
 
