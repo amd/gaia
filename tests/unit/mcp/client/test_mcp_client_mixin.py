@@ -300,6 +300,54 @@ class TestMCPClientMixin:
             agent.connect_mcp_server("http_server", config)
 
 
+class TestMCPClientMixinConfigFile:
+    """Tests for config_file behavior in MCPClientMixin."""
+
+    def setup_method(self):
+        _TOOL_REGISTRY.clear()
+
+    def teardown_method(self):
+        _TOOL_REGISTRY.clear()
+
+    @patch("gaia.mcp.mixin.MCPClientManager")
+    @patch("gaia.mcp.mixin.MCPConfig")
+    def test_config_file_forces_loading_even_when_auto_load_false(
+        self, mock_config_class, mock_manager_class
+    ):
+        """config_file triggers load_mcp_servers_from_config even if auto_load_config=False."""
+        mock_config = mock_config_class.return_value
+        mock_config.load_report = {
+            "mode": "explicit",
+            "config_file": "/path/to/mcp_servers.json",
+            "servers": [],
+        }
+        mock_manager = mock_manager_class.return_value
+        mock_manager.config = mock_config
+        mock_manager.list_servers.return_value = []
+        mock_manager.config.get_servers.return_value = {}
+
+        class ConfigFileAgent(MCPClientMixin):
+            def __init__(self):
+                self.debug = False
+                super().__init__(auto_load_config=False, config_file="/path/to/mcp_servers.json")
+
+        agent = ConfigFileAgent()
+        mock_manager.load_from_config.assert_called_once()
+
+    @patch("gaia.mcp.mixin.MCPClientManager")
+    @patch("gaia.mcp.mixin.MCPConfig")
+    def test_auto_load_false_and_no_config_file_skips_loading(
+        self, mock_config_class, mock_manager_class
+    ):
+        """auto_load_config=False with no config_file skips load_mcp_servers_from_config."""
+        mock_config = mock_config_class.return_value
+        mock_manager = mock_manager_class.return_value
+        mock_manager.config = mock_config
+
+        agent = MockAgent(auto_load_config=False)
+        mock_manager.load_from_config.assert_not_called()
+
+
 class TestMCPToolResponseWrapper:
     """Test that MCP tool responses are wrapped in GAIA-style format."""
 

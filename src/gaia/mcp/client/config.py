@@ -3,8 +3,9 @@
 """Configuration management for MCP clients."""
 
 import json
+import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from gaia.logger import get_logger
 
@@ -50,7 +51,7 @@ class MCPConfig:
         else:
             # Auto-load with config stacking: global as base, local on top.
             global_path = Path.home() / ".gaia" / "mcp_servers.json"
-            local_path = Path.cwd() / "mcp_servers.json"
+            local_path = self._find_local_config()
 
             # Ensure the global config directory exists.
             global_path.parent.mkdir(parents=True, exist_ok=True)
@@ -59,9 +60,7 @@ class MCPConfig:
             global_servers = (
                 self._read_servers(global_path) if global_path.exists() else {}
             )
-            local_servers = (
-                self._read_servers(local_path) if local_path.exists() else {}
-            )
+            local_servers = self._read_servers(local_path) if local_path else {}
 
             # Servers defined in both files — local wins.
             overrides: List[str] = [k for k in local_servers if k in global_servers]
@@ -70,7 +69,10 @@ class MCPConfig:
             self._servers = {**global_servers, **local_servers}
 
             # Writes go to local if it exists, otherwise to global.
-            self.config_file = local_path if local_path.exists() else global_path
+            self.config_file = local_path if local_path else global_path
+
+            # Use found local path for display, or CWD fallback if none found.
+            display_local_path = local_path if local_path else Path.cwd() / "mcp_servers.json"
 
             self.load_report = {
                 "mode": "auto",
@@ -81,12 +83,28 @@ class MCPConfig:
                     "servers": list(global_servers.keys()),
                 },
                 "local": {
-                    "path": local_path,
-                    "exists": local_path.exists(),
+                    "path": display_local_path,
+                    "exists": local_path is not None,
                     "servers": list(local_servers.keys()),
                 },
                 "overrides": overrides,
             }
+
+    @staticmethod
+    def _find_local_config() -> Optional[Path]:
+        """Find local mcp_servers.json: check CWD first, then script directory."""
+        cwd_path = Path.cwd() / "mcp_servers.json"
+        if cwd_path.exists():
+            return cwd_path
+
+        main = sys.modules.get("__main__")
+        if main and getattr(main, "__file__", None):
+            script_dir = Path(main.__file__).resolve().parent
+            script_path = script_dir / "mcp_servers.json"
+            if script_path.exists():
+                return script_path
+
+        return None
 
     def _read_servers(self, path: Path) -> Dict[str, Any]:
         """Read and return the server dict from *path* without side effects."""

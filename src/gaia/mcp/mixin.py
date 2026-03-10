@@ -43,7 +43,7 @@ class MCPClientMixin:
             config=config, debug=getattr(self, "debug", debug)
         )
 
-        if auto_load_config:
+        if config_file is not None or auto_load_config:
             self.load_mcp_servers_from_config()
 
     def _console_print(self, method_name: str, message: str) -> None:
