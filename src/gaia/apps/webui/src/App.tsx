@@ -69,24 +69,66 @@ function App() {
         };
     }, [checkSystemStatus]);
 
-    // Startup banner + load sessions on mount
+    // Startup banner + load sessions on mount, then poll for changes
+    const sessionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const lastSessionCountRef = useRef<number>(0);
+
     useEffect(() => {
         logBanner(__APP_VERSION__);
         log.system.info('App mounting, loading sessions...');
         const t = log.system.time();
 
-        api.listSessions()
-            .then((data) => {
-                const sessions = data.sessions || [];
-                setSessions(sessions);
-                setBackendConnected(true);
-                log.system.timed(`Loaded ${sessions.length} session(s)`, t);
-            })
-            .catch((err) => {
-                log.system.error('Failed to load sessions from backend', err);
-                log.system.warn('Is the Python backend running? Start it with: gaia chat --ui');
-            });
+        const loadSessions = (isInitial = false) => {
+            api.listSessions()
+                .then((data) => {
+                    const sessions = data.sessions || [];
+                    if (isInitial) {
+                        setSessions(sessions);
+                        setBackendConnected(true);
+                        log.system.timed(`Loaded ${sessions.length} session(s)`, t);
+                    } else if (sessions.length !== lastSessionCountRef.current) {
+                        // New or deleted session detected — refresh list
+                        log.system.info(`Session list changed: ${lastSessionCountRef.current} -> ${sessions.length}`);
+                        setSessions(sessions);
+                    }
+                    lastSessionCountRef.current = sessions.length;
+                })
+                .catch((err) => {
+                    if (isInitial) {
+                        log.system.error('Failed to load sessions from backend', err);
+                        log.system.warn('Is the Python backend running? Start it with: gaia chat --ui');
+                    }
+                });
+        };
+
+        loadSessions(true);
+
+        // Poll every 5s so sessions created by external tools (MCP, API) appear
+        sessionPollRef.current = setInterval(() => loadSessions(false), 5_000);
+        return () => {
+            if (sessionPollRef.current) clearInterval(sessionPollRef.current);
+        };
     }, [setSessions, setBackendConnected]);
+
+    // Support URL-based session navigation (?session=<id>)
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const sessionParam = params.get('session');
+        if (sessionParam && !currentSessionId) {
+            log.nav.info(`URL session parameter: ${sessionParam}`);
+            // Defer so session list has time to load
+            const timer = setTimeout(() => {
+                const { sessions } = useChatStore.getState();
+                if (sessions.some((s: { id: string }) => s.id === sessionParam)) {
+                    setCurrentSession(sessionParam);
+                    setMessages([]);
+                } else {
+                    log.nav.warn(`Session ${sessionParam} not found in loaded sessions`);
+                }
+            }, 500);
+            return () => clearTimeout(timer);
+        }
+    }, [currentSessionId, setCurrentSession, setMessages]);
 
     // Check tunnel status on mount
     useEffect(() => {

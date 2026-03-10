@@ -37,18 +37,49 @@ function isErrorContent(content: string): boolean {
     );
 }
 
-/** Regex to detect raw tool-call JSON that LLMs sometimes output as text. */
-const TOOL_CALL_JSON_RE = /^\s*\{"?\s*tool"?\s*:\s*"[^"]+"\s*,\s*"?tool_args"?\s*:\s*\{.*\}\s*\}\s*$/s;
+/**
+ * Regex to detect raw tool-call JSON that LLMs sometimes output as text.
+ * Matches {"tool": "name", "tool_args": {...}} anywhere in the content
+ * (not just as the entire content — the LLM often prefixes it with text).
+ * Uses [^}]* for the inner args to avoid matching past the closing braces.
+ */
+const TOOL_CALL_JSON_RE = /\s*\{\s*"?tool"?\s*:\s*"[^"]+"\s*,\s*"?tool_args"?\s*:\s*\{[^}]*\}\s*\}/g;
 
 /**
- * Strip raw tool-call JSON from message content.
+ * Strip raw tool-call JSON and other LLM noise from message content.
  * LLMs sometimes emit the tool call as text before the agent framework
- * intercepts it. This function removes that noise from the displayed message.
+ * intercepts it. They also sometimes output trailing code fences,
+ * thinking tags, or JSON thought blocks. This function cleans all of that.
  */
 function cleanToolCallContent(content: string): string {
     if (!content) return content;
-    // Remove lines that are raw tool-call JSON
-    const cleaned = content.replace(TOOL_CALL_JSON_RE, '').trim();
+    let cleaned = content;
+
+    // Remove all tool-call JSON blocks from the content
+    cleaned = cleaned.replace(TOOL_CALL_JSON_RE, '');
+
+    // Remove trailing unclosed code fences (```\n at end with no matching close)
+    // LLMs sometimes end responses with ``` or ```\n
+    cleaned = cleaned.replace(/\n?```\s*$/, '');
+
+    // Remove thinking/thought JSON blocks the LLM sometimes outputs
+    // e.g. {"thought": "...", "goal": "...", "tool": "...", "tool_args": {...}}
+    cleaned = cleaned.replace(
+        /\s*\{\s*"thought"\s*:\s*"[^"]*"[^}]*\}\s*/g,
+        ''
+    );
+
+    // Remove <think>...</think> tags that some models output
+    cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/g, '');
+
+    // Remove leading/trailing whitespace
+    cleaned = cleaned.trim();
+
+    // If the result is empty after cleaning, show a minimal response
+    if (!cleaned) {
+        cleaned = '*(Response processed — see agent activity above for details)*';
+    }
+
     return cleaned;
 }
 

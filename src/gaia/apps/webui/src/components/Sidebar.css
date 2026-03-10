@@ -74,6 +74,15 @@
     color: var(--text-secondary);
 }
 
+.brand-version {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-muted);
+    opacity: 0.7;
+    align-self: center;
+    margin-left: 2px;
+}
+
 /* Top actions (new chat + collapse) */
 .sidebar-top-actions {
     display: flex;
@@ -320,6 +329,7 @@
 }
 
 /* ── Collapsed state ───────────────────────────────────────────── */
+.sidebar.collapsed .brand-version,
 .sidebar.collapsed .sidebar-brand .brand-text,
 .sidebar.collapsed .sidebar-search,
 .sidebar.collapsed .session-list,

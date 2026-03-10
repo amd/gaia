@@ -326,31 +326,45 @@ class SSEOutputHandler(OutputHandler):
             # LLMs sometimes emit as text content before the tool is invoked.
             self._stream_buffer += text_chunk
 
-            # Check if the buffer looks like it's accumulating a tool-call JSON.
-            # Wait for more data if it looks like an incomplete JSON object.
             stripped = self._stream_buffer.strip()
+
+            # Case 1: Buffer starts with "{" and has "tool" — pure JSON accumulation
             if stripped.startswith("{") and '"tool"' in stripped:
-                # Safety: don't buffer more than 2KB (tool-call JSON is typically small)
                 if len(self._stream_buffer) > 2048:
                     self._emit({"type": "chunk", "content": self._stream_buffer})
                     self._stream_buffer = ""
                     return
-                # Looks like it might be tool-call JSON - hold in buffer.
-                # If we have a complete JSON object, check if it's a tool call.
                 if stripped.endswith("}"):
                     if _TOOL_CALL_JSON_RE.match(stripped):
-                        # Confirmed tool-call JSON — suppress it entirely
-                        logger.debug(
-                            "Filtered raw tool-call JSON from stream: %s",
-                            stripped[:100],
-                        )
+                        logger.debug("Filtered tool-call JSON: %s", stripped[:100])
                         self._stream_buffer = ""
                         return
-                    # Not a tool call — flush it
                     self._emit({"type": "chunk", "content": self._stream_buffer})
                     self._stream_buffer = ""
-                # Still accumulating — don't emit yet (wait for closing brace)
                 return
+
+            # Case 2: Buffer has "tool" embedded after normal text (e.g., "I'll help.\n{"tool":...")
+            # Split at the JSON start and emit the text portion, buffer the JSON portion.
+            if '"tool"' in stripped and '{"tool"' in self._stream_buffer:
+                json_idx = self._stream_buffer.find('{"tool"')
+                if json_idx < 0:
+                    json_idx = self._stream_buffer.find("{\"tool\"")
+                if json_idx > 0:
+                    # Emit the text before the JSON
+                    text_before = self._stream_buffer[:json_idx]
+                    json_part = self._stream_buffer[json_idx:]
+                    self._emit({"type": "chunk", "content": text_before})
+                    self._stream_buffer = json_part
+                    # Check if the JSON part is complete
+                    json_stripped = json_part.strip()
+                    if json_stripped.endswith("}"):
+                        if _TOOL_CALL_JSON_RE.match(json_stripped):
+                            logger.debug("Filtered embedded tool-call JSON: %s", json_stripped[:100])
+                            self._stream_buffer = ""
+                            return
+                        self._emit({"type": "chunk", "content": json_part})
+                        self._stream_buffer = ""
+                    return
 
             # Not tool-call JSON — emit the buffered content
             self._emit({"type": "chunk", "content": self._stream_buffer})
@@ -358,7 +372,9 @@ class SSEOutputHandler(OutputHandler):
 
         if end_of_stream and self._stream_buffer:
             # Flush any remaining buffer at end of stream
-            self._emit({"type": "chunk", "content": self._stream_buffer})
+            stripped = self._stream_buffer.strip()
+            if not _TOOL_CALL_JSON_RE.match(stripped):
+                self._emit({"type": "chunk", "content": self._stream_buffer})
             self._stream_buffer = ""
 
     def signal_done(self):

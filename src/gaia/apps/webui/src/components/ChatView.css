@@ -235,8 +235,9 @@
 /* ── Input Area ──────────────────────────────────────────────────── */
 
 .input-area {
-    padding: 16px 24px 14px;
+    padding: 12px 24px 10px;
     flex-shrink: 0;
+    background: var(--bg-primary);
 }
 
 .input-box {
@@ -245,17 +246,16 @@
     display: flex;
     align-items: flex-end;
     gap: 8px;
-    padding: 10px 12px 10px 18px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-xl);
-    background: var(--bg-secondary);
-    box-shadow: var(--shadow-sm);
+    padding: 8px 10px 8px 16px;
+    border: 1px solid var(--border-light);
+    border-radius: 16px;
+    background: var(--bg-input, var(--bg-secondary));
     transition: border-color var(--duration) var(--ease), box-shadow var(--duration) var(--ease);
 }
 
 .input-box:focus-within {
-    border-color: var(--amd-red);
-    box-shadow: 0 0 0 3px rgba(226, 60, 64, 0.08), var(--shadow-md);
+    border-color: var(--text-muted);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
 .msg-input {
@@ -268,15 +268,27 @@
     max-height: 200px;
     line-height: 1.5;
     font-size: 14px;
+    color: var(--text-primary);
 }
-.msg-input::placeholder { color: var(--text-muted); }
+.msg-input::placeholder { color: var(--text-muted); opacity: 0.6; }
 .msg-input:disabled { opacity: 0.5; }
 
 .input-btns {
     display: flex;
-    gap: 4px;
+    gap: 2px;
     flex-shrink: 0;
     align-items: center;
+}
+
+/* Icon buttons in input area (upload, browse) */
+.input-btns .icon-btn,
+.input-btns button:not(.send-btn):not(.stop-btn) {
+    opacity: 0.4;
+    transition: opacity var(--duration) var(--ease);
+}
+.input-btns .icon-btn:hover,
+.input-btns button:not(.send-btn):not(.stop-btn):hover {
+    opacity: 0.7;
 }
 
 /* Send button */
@@ -284,17 +296,18 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 36px;
-    height: 36px;
+    width: 32px;
+    height: 32px;
     border-radius: var(--radius-full);
-    background: var(--amd-red);
-    color: white;
+    background: var(--text-muted);
+    color: var(--bg-primary);
     transition: all var(--duration) var(--ease);
+    opacity: 0.5;
 }
 .send-btn:hover {
-    background: var(--amd-red-dark);
+    background: var(--text-primary);
+    opacity: 1;
     transform: scale(1.05);
-    box-shadow: 0 2px 8px rgba(226, 60, 64, 0.2);
 }
 .send-btn:active {
     transform: scale(0.95);
@@ -304,7 +317,7 @@
     color: var(--text-muted);
     transform: none;
     cursor: not-allowed;
-    opacity: 0.5;
+    opacity: 0.2;
     box-shadow: none;
 }
 
@@ -313,18 +326,18 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 36px;
-    height: 36px;
+    width: 32px;
+    height: 32px;
     border-radius: var(--radius-full);
-    border: 2px solid var(--border);
+    border: 1.5px solid var(--border);
     color: var(--text-secondary);
     background: var(--bg-input);
     transition: all var(--duration) var(--ease);
     animation: pulse 2s ease-in-out infinite;
 }
 .stop-btn:hover {
-    border-color: var(--amd-red);
-    color: var(--amd-red);
+    border-color: var(--text-secondary);
+    color: var(--text-primary);
     animation: none;
 }
 

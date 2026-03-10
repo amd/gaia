@@ -166,6 +166,7 @@ export function Sidebar({ onNewChat, tunnelActive, tunnelLoading, onMobileToggle
                     <div className="brand-text">
                         <span className="brand-name">GAIA</span>
                         <span className="brand-label">Chat</span>
+                        <span className="brand-version">v{__APP_VERSION__}</span>
                     </div>
                 </div>
                 <div className="sidebar-top-actions">

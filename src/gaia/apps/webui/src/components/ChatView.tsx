@@ -109,26 +109,50 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
     }, [setStreamContent]);
 
-    // Load messages on mount
+    // Load messages on mount, then poll for external changes (MCP, API)
+    const msgPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const lastMsgCountRef = useRef<number>(0);
+
     useEffect(() => {
         log.chat.info(`ChatView mounted for session=${sessionId}, loading messages...`);
         const t = log.chat.time();
         setLoadingMessages(true);
-        api.getMessages(sessionId)
-            .then((data) => {
-                const msgs = (data.messages || []).map((m: any) => ({
-                    ...m,
-                    // Map snake_case agent_steps from API to camelCase agentSteps
-                    agentSteps: m.agentSteps || m.agent_steps || undefined,
-                }));
-                setMessages(msgs);
-                log.chat.timed(`Loaded ${msgs.length} message(s) for session=${sessionId}`, t);
-            })
-            .catch((err) => {
-                log.chat.error(`Failed to load messages for session=${sessionId}`, err);
-                setMessages([]);
-            })
-            .finally(() => setLoadingMessages(false));
+
+        const loadMessages = (isInitial = false) => {
+            api.getMessages(sessionId)
+                .then((data) => {
+                    const msgs = (data.messages || []).map((m: any) => ({
+                        ...m,
+                        // Map snake_case agent_steps from API to camelCase agentSteps
+                        agentSteps: m.agentSteps || m.agent_steps || undefined,
+                    }));
+                    if (isInitial) {
+                        setMessages(msgs);
+                        lastMsgCountRef.current = msgs.length;
+                        log.chat.timed(`Loaded ${msgs.length} message(s) for session=${sessionId}`, t);
+                    } else if (msgs.length !== lastMsgCountRef.current && !useChatStore.getState().isStreaming) {
+                        // New messages from external source (MCP, API) — refresh
+                        log.chat.info(`Messages changed externally: ${lastMsgCountRef.current} -> ${msgs.length}`);
+                        setMessages(msgs);
+                        lastMsgCountRef.current = msgs.length;
+                    }
+                })
+                .catch((err) => {
+                    if (isInitial) {
+                        log.chat.error(`Failed to load messages for session=${sessionId}`, err);
+                        setMessages([]);
+                    }
+                })
+                .finally(() => { if (isInitial) setLoadingMessages(false); });
+        };
+
+        loadMessages(true);
+
+        // Poll every 3s for messages added by external tools (MCP API, etc.)
+        msgPollRef.current = setInterval(() => loadMessages(false), 3_000);
+        return () => {
+            if (msgPollRef.current) clearInterval(msgPollRef.current);
+        };
     }, [sessionId, setMessages, setLoadingMessages]);
 
     // Load indexed documents on mount (so context bar is always up to date)
@@ -283,8 +307,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     fullContent += content;
                     // Filter raw tool-call JSON that LLMs sometimes emit as text.
                     // This is a frontend safety net (backend also filters these).
+                    // Uses [^}]* for inner args to avoid over-matching.
                     const cleaned = fullContent.replace(
-                        /^\s*\{"?\s*tool"?\s*:\s*"[^"]+"\s*,\s*"?tool_args"?\s*:\s*\{.*\}\s*\}\s*$/s,
+                        /\s*\{\s*"?tool"?\s*:\s*"[^"]+"\s*,\s*"?tool_args"?\s*:\s*\{[^}]*\}\s*\}/g,
                         ''
                     ).trim();
                     // Buffer chunks and flush to store at most once per frame (~60fps)
@@ -403,6 +428,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }));
 
                 if (content) {
+                    // Update msg count ref so poll doesn't re-fetch what we just added
+                    lastMsgCountRef.current = useChatStore.getState().messages.length + 1;
                     const assistantMsg: Message = {
                         id: event.message_id || Date.now() + 1,
                         session_id: sessionId,

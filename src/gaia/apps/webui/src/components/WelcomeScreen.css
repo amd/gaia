@@ -24,6 +24,19 @@
     margin-bottom: 8px;
 }
 
+.welcome-version {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    padding: 2px 10px;
+    margin-bottom: 8px;
+    letter-spacing: 0.3px;
+}
+
 .welcome-sub {
     font-size: 16px;
     color: var(--text-secondary);

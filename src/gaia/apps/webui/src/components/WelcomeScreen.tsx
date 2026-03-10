@@ -21,6 +21,7 @@ export function WelcomeScreen({ onNewChat, onSendPrompt }: WelcomeScreenProps) {
         <main className="welcome">
             <div className="welcome-inner">
                 <h1 className="welcome-title">GAIA Agent UI</h1>
+                <span className="welcome-version">v{__APP_VERSION__}</span>
                 <p className="welcome-sub">
                     Your private AI assistant, running 100% locally on AMD Ryzen AI
                 </p>

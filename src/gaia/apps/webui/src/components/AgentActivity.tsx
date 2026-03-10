@@ -38,18 +38,38 @@ interface ToolMeta {
 }
 
 const TOOL_META: Record<string, ToolMeta> = {
-    search_file:       { label: 'Searched files',     activeLabel: 'Searching files',     icon: Search,     color: '#3b82f6' },
-    search_files:      { label: 'Searched files',     activeLabel: 'Searching files',     icon: Search,     color: '#3b82f6' },
-    read_file:         { label: 'Read file',          activeLabel: 'Reading file',        icon: FileText,   color: '#8b5cf6' },
-    write_file:        { label: 'Wrote file',         activeLabel: 'Writing file',        icon: FileEdit,   color: '#f59e0b' },
-    run_shell_command: { label: 'Ran command',        activeLabel: 'Running command',     icon: Terminal,    color: '#22c55e' },
-    semantic_search:   { label: 'Searched documents', activeLabel: 'Searching documents', icon: BookOpen,    color: '#06b6d4' },
-    index_document:    { label: 'Indexed document',   activeLabel: 'Indexing document',   icon: Database,    color: '#f97316' },
-    index_file:        { label: 'Indexed file',       activeLabel: 'Indexing file',       icon: Database,    color: '#f97316' },
-    list_directory:    { label: 'Listed directory',   activeLabel: 'Listing directory',   icon: FolderOpen,  color: '#a78bfa' },
-    analyze_data:      { label: 'Analyzed data',      activeLabel: 'Analyzing data',      icon: BarChart3,   color: '#ec4899' },
-    web_search:        { label: 'Searched web',       activeLabel: 'Searching web',       icon: Globe,       color: '#14b8a6' },
-    execute_code:      { label: 'Executed code',      activeLabel: 'Executing code',      icon: Code2,       color: '#f59e0b' },
+    // File operations
+    search_file:           { label: 'Searched files',     activeLabel: 'Searching files',     icon: Search,     color: '#3b82f6' },
+    search_files:          { label: 'Searched files',     activeLabel: 'Searching files',     icon: Search,     color: '#3b82f6' },
+    search_file_content:   { label: 'Searched content',   activeLabel: 'Searching content',   icon: Search,     color: '#3b82f6' },
+    search_directory:      { label: 'Searched directory', activeLabel: 'Searching directory', icon: Search,     color: '#3b82f6' },
+    read_file:             { label: 'Read file',          activeLabel: 'Reading file',        icon: FileText,   color: '#8b5cf6' },
+    write_file:            { label: 'Wrote file',         activeLabel: 'Writing file',        icon: FileEdit,   color: '#f59e0b' },
+    get_file_info:         { label: 'Got file info',      activeLabel: 'Getting file info',   icon: FileText,   color: '#8b5cf6' },
+    browse_directory:      { label: 'Browsed directory',  activeLabel: 'Browsing directory',  icon: FolderOpen,  color: '#a78bfa' },
+    list_directory:        { label: 'Listed directory',   activeLabel: 'Listing directory',   icon: FolderOpen,  color: '#a78bfa' },
+    list_recent_files:     { label: 'Listed recent files', activeLabel: 'Listing recent files', icon: FolderOpen, color: '#a78bfa' },
+    analyze_data_file:     { label: 'Analyzed data',      activeLabel: 'Analyzing data',      icon: BarChart3,   color: '#ec4899' },
+    // Shell & code
+    run_shell_command:     { label: 'Ran command',        activeLabel: 'Running command',     icon: Terminal,    color: '#22c55e' },
+    execute_code:          { label: 'Executed code',      activeLabel: 'Executing code',      icon: Code2,       color: '#f59e0b' },
+    // RAG & documents
+    query_documents:       { label: 'Queried documents',  activeLabel: 'Querying documents',  icon: BookOpen,    color: '#06b6d4' },
+    query_specific_file:   { label: 'Queried file',       activeLabel: 'Querying file',       icon: BookOpen,    color: '#06b6d4' },
+    search_indexed_chunks: { label: 'Searched chunks',    activeLabel: 'Searching chunks',    icon: BookOpen,    color: '#06b6d4' },
+    semantic_search:       { label: 'Searched documents', activeLabel: 'Searching documents', icon: BookOpen,    color: '#06b6d4' },
+    evaluate_retrieval:    { label: 'Evaluated retrieval', activeLabel: 'Evaluating retrieval', icon: BookOpen,  color: '#06b6d4' },
+    index_document:        { label: 'Indexed document',   activeLabel: 'Indexing document',   icon: Database,    color: '#f97316' },
+    index_directory:       { label: 'Indexed directory',  activeLabel: 'Indexing directory',   icon: Database,    color: '#f97316' },
+    index_file:            { label: 'Indexed file',       activeLabel: 'Indexing file',       icon: Database,    color: '#f97316' },
+    list_indexed_documents: { label: 'Listed documents',  activeLabel: 'Listing documents',   icon: Database,    color: '#f97316' },
+    summarize_document:    { label: 'Summarized',         activeLabel: 'Summarizing',         icon: FileText,    color: '#8b5cf6' },
+    dump_document:         { label: 'Extracted text',     activeLabel: 'Extracting text',     icon: FileText,    color: '#8b5cf6' },
+    rag_status:            { label: 'Checked RAG status', activeLabel: 'Checking RAG',        icon: Database,    color: '#f97316' },
+    add_watch_directory:   { label: 'Added watch dir',    activeLabel: 'Adding watch dir',    icon: FolderOpen,  color: '#a78bfa' },
+    // Web
+    web_search:            { label: 'Searched web',       activeLabel: 'Searching web',       icon: Globe,       color: '#14b8a6' },
+    analyze_data:          { label: 'Analyzed data',      activeLabel: 'Analyzing data',      icon: BarChart3,   color: '#ec4899' },
 };
 
 const DEFAULT_TOOL_META: ToolMeta = {
@@ -73,7 +93,8 @@ interface AgentActivityProps {
 
 /** Displays agent activity as a single expandable "Thinking" panel with tool calls inline. */
 export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActivityProps) {
-    const [expanded, setExpanded] = useState(variant === 'inline');
+    // Default to expanded so all activity is visible
+    const [expanded, setExpanded] = useState(true);
     const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
     const prevStepCountRef = useRef(0);
     const collapseTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
@@ -133,25 +154,22 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
         prevStepCountRef.current = displaySteps.length;
     }, [displaySteps, isActive]);
 
-    // When a tool finishes (active goes from true to false), start a collapse timer
+    // Keep all tools expanded — auto-collapse is disabled for now to
+    // let users observe all activity. Will add adaptive collapse later.
+    // (Auto-collapse timer logic preserved in comments for future use)
     useEffect(() => {
-        for (const step of displaySteps) {
-            if (step.type === 'tool' && !step.active && step.success !== undefined) {
-                // Tool just finished — schedule collapse after 2s minimum display
-                if (expandedTools.has(step.id) && !collapseTimersRef.current.has(step.id)) {
-                    const timer = setTimeout(() => {
-                        setExpandedTools((prev) => {
-                            const next = new Set(prev);
-                            next.delete(step.id);
-                            return next;
-                        });
-                        collapseTimersRef.current.delete(step.id);
-                    }, 2500);
-                    collapseTimersRef.current.set(step.id, timer);
-                }
-            }
+        // Auto-expand all tool steps
+        const toolIds = displaySteps
+            .filter((s) => s.type === 'tool')
+            .map((s) => s.id);
+        if (toolIds.length > 0) {
+            setExpandedTools((prev) => {
+                const next = new Set(prev);
+                toolIds.forEach((id) => next.add(id));
+                return next;
+            });
         }
-    }, [displaySteps, expandedTools]);
+    }, [displaySteps]);
 
     const toggleTool = useCallback((id: number) => {
         // Clear any pending collapse timer when user manually toggles
