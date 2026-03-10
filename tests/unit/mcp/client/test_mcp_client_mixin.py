@@ -94,7 +94,7 @@ class TestMCPClientMixin:
 
     @patch("gaia.mcp.mixin.MCPClientManager")
     def test_tool_display_name_via_full_registration_path(self, mock_manager_class):
-        """get_tool_display_name returns readable name after full registration."""
+        """get_tool_display_name resolves MCP namespacing after full registration."""
         mock_manager = Mock()
         mock_client = Mock()
         mock_client.is_connected.return_value = True
@@ -609,7 +609,7 @@ class TestToolDisplayName:
         _TOOL_REGISTRY.clear()
 
     def test_tool_display_name_for_mcp_tools(self):
-        """MCP tools show '{mcp_tool_name} ({mcp_server})' as display name."""
+        """MCP tools resolve namespaced registry key to '{tool} ({server})' display name."""
         _TOOL_REGISTRY["mcp_oem_launch_experience_zone"] = {
             "name": "mcp_oem_launch_experience_zone",
             "display_name": "launch_experience_zone (oem)",

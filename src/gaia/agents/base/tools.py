@@ -89,16 +89,20 @@ def tool(
 
 
 def get_tool_display_name(tool_name: str) -> str:
-    """Return a human-readable display name for a tool.
+    """Return the display name for a tool, resolving MCP namespacing.
 
-    Tools may carry an optional ``display_name`` field in the registry.
-    When present, that value is returned. Otherwise, ``tool_name`` is returned.
+    MCP tools are registered under a prefixed key (``mcp_{server}_{tool}``) to
+    avoid name conflicts.  Their ``display_name`` field preserves the original
+    tool name together with the server origin, e.g. ``"read_file (myserver)"``,
+    so console output remains meaningful.  Native tools carry no ``display_name``
+    and are returned as-is.
 
     Args:
-        tool_name: The internal tool name as stored in ``_TOOL_REGISTRY``.
+        tool_name: The internal tool name as stored in ``_TOOL_REGISTRY``
+            (e.g. ``"mcp_myserver_read_file"`` or ``"read_file"``).
 
     Returns:
-        A human-readable display name.
+        The ``display_name`` when set (MCP tools), otherwise ``tool_name``.
     """
     tool = _TOOL_REGISTRY.get(tool_name)
     if not tool:
