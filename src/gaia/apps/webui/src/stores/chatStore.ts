@@ -35,6 +35,8 @@ interface ChatState {
     agentSteps: AgentStep[];
     addAgentStep: (step: AgentStep) => void;
     updateLastAgentStep: (updates: Partial<AgentStep>) => void;
+    /** Update the last tool step (not the absolute last step). */
+    updateLastToolStep: (updates: Partial<AgentStep>) => void;
     clearAgentSteps: () => void;
 
     // Documents
@@ -124,6 +126,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((state) => {
             if (state.agentSteps.length === 0) return state;
             const steps = [...state.agentSteps];
+            steps[steps.length - 1] = { ...steps[steps.length - 1], ...updates };
+            return { agentSteps: steps };
+        }),
+    updateLastToolStep: (updates) =>
+        set((state) => {
+            if (state.agentSteps.length === 0) return state;
+            const steps = [...state.agentSteps];
+            // Find the last tool step (searching backwards)
+            for (let i = steps.length - 1; i >= 0; i--) {
+                if (steps[i].type === 'tool') {
+                    steps[i] = { ...steps[i], ...updates };
+                    return { agentSteps: steps };
+                }
+            }
+            // Fallback: update the last step if no tool step found
             steps[steps.length - 1] = { ...steps[steps.length - 1], ...updates };
             return { agentSteps: steps };
         }),

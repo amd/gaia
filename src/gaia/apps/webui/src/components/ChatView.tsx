@@ -75,7 +75,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
-        agentSteps, addAgentStep, updateLastAgentStep, clearAgentSteps,
+        agentSteps, addAgentStep, updateLastAgentStep, updateLastToolStep, clearAgentSteps,
         documents, setDocuments, setShowDocLibrary, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
     } = useChatStore();
 
@@ -321,9 +321,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
             },
             onAgentEvent: (event) => {
-                // Tool completion updates the last tool step
+                // Tool completion updates the last TOOL step (not just the last step,
+                // since thinking/status events may have been interleaved during execution)
                 if (event.type === 'tool_end') {
-                    updateLastAgentStep({ active: false, success: event.success !== false });
+                    updateLastToolStep({ active: false, success: event.success !== false });
                     return;
                 }
                 if (event.type === 'tool_result') {
@@ -344,12 +345,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             truncated: event.command_output.truncated,
                         };
                     }
-                    updateLastAgentStep(updates);
+                    updateLastToolStep(updates);
                     return;
                 }
-                // Tool args update the last tool step with detail
+                // Tool args update the last TOOL step with detail
                 if (event.type === 'tool_args') {
-                    updateLastAgentStep({
+                    updateLastToolStep({
                         detail: event.detail || JSON.stringify(event.args),
                     });
                     return;
@@ -499,7 +500,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         });
 
         abortRef.current = controller;
-    }, [input, isStreaming, sessionId, session, addMessage, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, clearAgentSteps]);
+    }, [input, isStreaming, sessionId, session, addMessage, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, updateLastToolStep, clearAgentSteps]);
 
     // Delete a single message
     const handleDeleteMessage = useCallback(async (messageId: number) => {

@@ -153,7 +153,9 @@ class FileSearchToolsMixin:
 
                     search_recursive(location, 0)
 
-                # Phase 0: Search CURRENT WORKING DIRECTORY first and thoroughly
+                # Phase 0+1: Search CWD AND common locations together
+                # (always search both before returning, so Documents/Downloads
+                # files aren't missed just because CWD had some matches)
                 cwd = Path.cwd()
                 home = Path.home()
 
@@ -171,30 +173,16 @@ class FileSearchToolsMixin:
                 # Search current directory thoroughly (unlimited depth)
                 search_location(cwd, max_depth=999)
 
-                # If found in CWD, return immediately
-                if matching_files:
-                    if hasattr(self, "console") and hasattr(
-                        self.console, "stop_progress"
-                    ):
-                        self.console.stop_progress()
-
-                    # Add helpful context about where it was found
-                    return {
-                        "status": "success",
-                        "files": matching_files[:10],
-                        "file_list": self._format_file_list(matching_files[:10]),
-                        "count": len(matching_files),
-                        "search_context": "current_directory",
-                        "display_message": f"✓ Found {len(matching_files)} file(s) in current directory ({cwd.name})",
-                    }
-
-                # Phase 1: Search common locations
+                # Always also search common locations (Documents, Downloads, etc.)
                 if hasattr(self, "console") and hasattr(self.console, "start_progress"):
                     self.console.start_progress(
                         "🔍 Searching common folders (Documents, Downloads, Desktop)..."
                     )
 
                 logger.debug("Phase 1: Searching common document locations...")
+
+                # Use a set to deduplicate (CWD may overlap with common locations)
+                seen_paths = set(matching_files)
 
                 common_locations = [
                     home / "Documents",
@@ -205,12 +193,29 @@ class FileSearchToolsMixin:
                     home / "Dropbox",
                 ]
 
+                pre_count = len(matching_files)
                 for location in common_locations:
-                    if len(matching_files) >= 10:
+                    if len(matching_files) >= 20:
                         break
+                    # Skip if already searched as part of CWD
+                    try:
+                        if location.resolve() == cwd.resolve() or str(location.resolve()).startswith(str(cwd.resolve())):
+                            continue
+                    except (OSError, ValueError):
+                        pass
                     search_location(location, max_depth=5)
 
-                # If found in common locations, return
+                # Deduplicate results (CWD and common locations may overlap)
+                unique_files = []
+                unique_set = set()
+                for f in matching_files:
+                    resolved = str(Path(f).resolve())
+                    if resolved not in unique_set:
+                        unique_set.add(resolved)
+                        unique_files.append(f)
+                matching_files = unique_files
+
+                # If found in CWD + common locations, return
                 if matching_files:
                     if hasattr(self, "console") and hasattr(
                         self.console, "stop_progress"
@@ -224,7 +229,7 @@ class FileSearchToolsMixin:
                         "count": len(matching_files),
                         "total_locations_searched": len(searched_locations),
                         "search_context": "common_locations",
-                        "display_message": f"✓ Found {len(matching_files)} file(s) in common locations",
+                        "display_message": f"✓ Found {len(matching_files)} file(s)",
                     }
 
                 # Phase 2: Deep drive search if still not found
